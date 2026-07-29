@@ -385,13 +385,17 @@ async def _finding_audit_ids(
 
 
 async def _finding_correction_ids(
-    session: AsyncSession, finding_ids: list[uuid.UUID]
+    session: AsyncSession,
+    finding_ids: list[uuid.UUID],
+    *,
+    as_of: datetime.datetime | None,
 ) -> list[uuid.UUID]:
     """Correction predecessor/successor identifiers embedded by ``dossier._finding_subject``.
 
-    The dossier serializes human identifiers, but the immutable source relation is the Record FK.
-    Include both ends in the dependency set so an R27 erasure of either record invalidates the copy
-    containing that identifier.
+    New seals persist their exact dossier dependency set and do not call this compatibility path.
+    For a legacy sealed pack, bound mutable successor pointers by ``generated_at``: a correction
+    captured after the seal could not have appeared in the frozen dossier and must not retroactively
+    become its dependency. During a build ``as_of`` is None and current relations are intentional.
     """
     if not finding_ids:
         return []
@@ -408,7 +412,15 @@ async def _finding_correction_ids(
             ids.append(predecessor)
         if successor is not None:
             ids.append(successor)
-    return ids
+    if not ids or as_of is None:
+        return ids
+    sealed_ids = await session.scalars(
+        select(Record.id).where(
+            Record.id.in_(ids),
+            Record.captured_at <= as_of,
+        )
+    )
+    return list(sealed_ids.all())
 
 
 async def _pack_embedded_record_ids(session: AsyncSession, pack: EvidencePack) -> list[uuid.UUID]:
@@ -432,10 +444,31 @@ async def _pack_embedded_record_ids(session: AsyncSession, pack: EvidencePack) -
         elif pack.scope_kind is PackScopeKind.FINDING:
             ids.extend(await _finding_linked_capa_ids(session, subject_ids))
             ids.extend(await _finding_audit_ids(session, subject_ids))
-            ids.extend(await _finding_correction_ids(session, subject_ids))
+            ids.extend(
+                await _finding_correction_ids(
+                    session,
+                    subject_ids,
+                    as_of=pack.generated_at,
+                )
+            )
     if pack.pack_record_id is not None:
         ids.append(pack.pack_record_id)
     return ids
+
+
+def _sealed_embedded_record_ids(pack: EvidencePack) -> set[uuid.UUID] | None:
+    """Parse the exact dossier dependency snapshot, or return None for a legacy seal."""
+    raw = pack.embedded_record_ids_at_seal
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise RuntimeError("Evidence Pack embedded dependency snapshot is not a JSON array")
+    try:
+        return {uuid.UUID(str(value)) for value in raw}
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Evidence Pack embedded dependency snapshot contains an invalid UUID"
+        ) from exc
 
 
 async def _count_destroy_tombstones(session: AsyncSession, record_ids: list[uuid.UUID]) -> int:
@@ -484,7 +517,9 @@ async def pack_dependency_record_ids(session: AsyncSession, pack: EvidencePack) 
 
     This is the single dependency resolver used by both the serve-time fail-closed guard and the
     R27 invalidation cascade: INCLUDED members plus dossier subjects/cross-references/correction
-    identifiers and the registered pack Record itself.
+    identifiers and the registered pack Record itself. New seals read the exact dossier dependency
+    snapshot persisted by the builder. Legacy seals fall back to relational discovery, with
+    correction targets bounded by the seal's ``generated_at`` timestamp.
     """
     member_ids = (
         await session.scalars(
@@ -496,9 +531,15 @@ async def pack_dependency_record_ids(session: AsyncSession, pack: EvidencePack) 
             )
         )
     ).all()
-    return {rid for rid in member_ids if rid is not None} | set(
-        await _pack_embedded_record_ids(session, pack)
-    )
+    dependencies = {rid for rid in member_ids if rid is not None}
+    embedded = _sealed_embedded_record_ids(pack)
+    if embedded is None:
+        dependencies.update(await _pack_embedded_record_ids(session, pack))
+    else:
+        dependencies.update(embedded)
+        if pack.pack_record_id is not None:
+            dependencies.add(pack.pack_record_id)
+    return dependencies
 
 
 def _artifact_alias_closure(

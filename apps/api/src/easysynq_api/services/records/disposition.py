@@ -235,9 +235,17 @@ async def _mark_record_evidence_for_purge(
     request_id = worm_destroy_request.id if worm_destroy_request is not None else None
     specs: list[_PurgeSpec] = []
     blobs = {b.sha256: b for _eb, b in await repo.list_evidence_blobs(session, record.id)}
+    rendition_sha = record.structured_pdf_blob_sha256
+    # Evidence and structured-rendition rows share one Blob lock namespace. Acquire the complete
+    # Record set in global SHA order before any liveness decision so an evidence SHA cannot be
+    # followed by a lexically-earlier rendition SHA in a concurrent destroy transaction.
+    record_blob_shas = set(blobs)
+    if rendition_sha is not None:
+        record_blob_shas.add(rendition_sha)
+    for sha in sorted(record_blob_shas):
+        await repo.lock_blob_for_update(session, sha)
     for sha in sorted(blobs):  # consistent lock order across concurrent dispositions
         blob = blobs[sha]
-        await repo.lock_blob_for_update(session, sha)
         if await repo.blob_needed_by_other_live_record(session, sha, record.id):
             await repo.detach_record_evidence_blob(session, record.id, sha)
             continue  # another live Record, document version, rendition, or pack owns the bytes
@@ -254,11 +262,9 @@ async def _mark_record_evidence_for_purge(
         )
         await repo.delete_blob_and_links(session, sha)
         specs.append(_PurgeSpec(purge_id, sha, blob.bucket, blob.object_key, bypass))
-    rendition_sha = record.structured_pdf_blob_sha256
     if rendition_sha is not None:
         record.structured_pdf_blob_sha256 = None
         await session.flush()
-        await repo.lock_blob_for_update(session, rendition_sha)
         rendition_blob = (
             await session.execute(
                 select(Blob)
@@ -702,6 +708,29 @@ async def _lock_pack_records(
     return by_id
 
 
+async def _lock_r27_blob_rows(
+    session: AsyncSession,
+    records: list[Record],
+    artifact_shas: set[str],
+) -> None:
+    """Acquire every source/derivative Blob row in one transaction-global SHA order.
+
+    R27 can dispose several registered pack Records and detached portfolios at once. Per-record
+    ordering is insufficient because UUID-ordered Records can expose their SHA sets in opposite
+    order to another destroy transaction. The caller has already stabilized pack membership under
+    the organization-exclusive artifact lock; Record evidence is immutable after capture.
+    """
+    shas = set(artifact_shas)
+    for record in records:
+        shas.update(
+            blob.sha256 for _link, blob in await repo.list_evidence_blobs(session, record.id)
+        )
+        if record.structured_pdf_blob_sha256 is not None:
+            shas.add(record.structured_pdf_blob_sha256)
+    for sha in sorted(shas):
+        await repo.lock_blob_for_update(session, sha)
+
+
 async def _mark_detached_pack_artifacts(
     session: AsyncSession,
     artifacts: dict[str, tuple[Record, DispositionEvent, bool]],
@@ -763,11 +792,13 @@ async def _invalidate_sealed_packs_for_r27(
     source_event: DispositionEvent,
     request: WormDestroyRequest,
 ) -> list[_PurgeSpec]:
-    """Invalidate every sealed derivative copy inside the source R27 transaction.
+    """Mark the source and invalidate every sealed derivative copy in one R27 transaction.
 
     The caller holds the organization-exclusive pack-artifact lock. Pack headers, links, derived
-    pack-Record tombstones, Blob deletes, and authority-bound markers are therefore one atomic DB
-    state transition. Physical S3 removal remains the shared post-commit phase.
+    pack-Record tombstones, source/derivative Blob deletes, and authority-bound markers are
+    therefore one atomic DB state transition. Every involved Blob row is acquired in global SHA
+    order before any per-Record processing. Physical S3 removal remains the shared post-commit
+    phase.
     """
     # Lazy imports avoid the records.__init__ -> disposition -> packs.__init__ -> build -> records
     # cycle. At use time the records package (including capture_record) is fully initialized.
@@ -780,8 +811,6 @@ async def _invalidate_sealed_packs_for_r27(
     packs = await packs_repo.affected_sealed_packs_for_r27(
         session, source_record.org_id, source_record.id
     )
-    if not packs:
-        return []
 
     now = _now()
     pack_records = await _lock_pack_records(session, packs)
@@ -887,10 +916,22 @@ async def _invalidate_sealed_packs_for_r27(
             },
         )
 
-    specs: list[_PurgeSpec] = []
+    records_by_id = {source_record.id: source_record, **pack_records}
+    await _lock_r27_blob_rows(
+        session,
+        list(records_by_id.values()),
+        set(artifacts),
+    )
+
+    specs = await _mark_record_evidence_for_purge(
+        session,
+        source_record,
+        disposition_event=source_event,
+        worm_destroy_request=request,
+    )
     for record_id in sorted(events_by_record, key=str):
         if record_id == source_record.id:
-            # The source Record was marked by approve_worm_destroy immediately before this cascade.
+            # The source Record was marked immediately above with its root event.
             continue
         specs.extend(
             await _mark_record_evidence_for_purge(
@@ -960,15 +1001,10 @@ async def approve_worm_destroy(
         is_worm_destroy=True,
         legal_basis=req.legal_basis,
     )
-    # MARK the evidence only after the explicit immutable event and executed request exist in this
-    # transaction. All three commit atomically; a rollback leaves neither marker nor authority.
-    specs = await _mark_record_evidence_for_purge(
-        session,
-        record,
-        disposition_event=event,
-        worm_destroy_request=req,
-    )
-    specs.extend(await _invalidate_sealed_packs_for_r27(session, actor, record, event, req))
+    # Resolve every derivative before deleting any source Blob row, then acquire the source +
+    # cascade Blob lock set globally by SHA. The request, event, pack invalidations, and purge
+    # markers commit atomically; a rollback leaves neither erasure state nor authority.
+    specs = await _invalidate_sealed_packs_for_r27(session, actor, record, event, req)
     emit_record_event(
         session,
         actor,

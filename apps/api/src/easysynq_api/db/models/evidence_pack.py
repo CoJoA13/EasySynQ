@@ -66,6 +66,12 @@ class EvidencePack(Base):
     scope_kind: Mapped[PackScopeKind] = mapped_column(pack_scope_kind_enum, nullable=False)
     # {"clause_ids": [...]} for CLAUSE, {"process_ids": [...]} for PROCESS (UUID strings).
     scope_selector: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # Exact dossier-embedded shared-PK Record ids captured by the successful seal. This is distinct
+    # from PackItem membership: FINDING/CAPA subjects and their serialized cross-references live in
+    # dossier JSON, not pack_item rows. NULL means a legacy pre-0082 seal; new seals write a JSON
+    # array (including [] for CLAUSE/PROCESS) so later mutable correction pointers cannot rewrite
+    # the pack's R27 dependency history.
+    embedded_record_ids_at_seal: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     period_start: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
     period_end: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
     status: Mapped[PackStatus] = mapped_column(

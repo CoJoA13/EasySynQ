@@ -183,10 +183,14 @@ permanent retention and relies on the conservative destroyed-dependency serve gu
 **Purge, recovery, and last-copy races stay fail-safe.** The canonical WORM ZIP flows through the
 existing Record evidence marker path; the non-WORM portfolio uses the same content-addressed
 last-live-owner decision over Record evidence, controlled DocumentVersions, structured renditions,
-and non-unavailable pack pointers. Both are removed only after the database tombstone commits, with
-Issue-359 physical-object locking and Issue-360 authority-bound reaper recovery unchanged. A
-derived marker is accepted only when its target is the disposed registered Record of an
-`UNAVAILABLE` pack invalidated by that exact lawful source event. Pack Stage 1/2 take an
+and non-unavailable pack pointers. Archived/transferred Records remain owners until a destructive
+event exists. Finding/CAPA builds persist the exact dossier-only dependency ids at seal, so a
+correction created later cannot retroactively invalidate an older bundle. The source plus all
+derivative Blob rows are acquired in one global SHA order. Both artifacts are removed only after
+the database tombstone commits, with Issue-359 physical-object locking and Issue-360
+authority-bound reaper recovery unchanged. A derived marker is accepted only when its target is the
+disposed registered Record of an `UNAVAILABLE` pack invalidated by that exact lawful source event.
+Pack Stage 1/2 take an
 organization-scoped shared transaction advisory lock before the pack row; R27 takes the exclusive
 side before its request/source Record and affected pack rows. Build-first therefore seals then gets
 invalidated; erase-first makes the worker observe the tombstone—never a surviving post-order copy.
@@ -196,8 +200,9 @@ portfolio, share revocation, dedicated/public/generic routes, and already-issued
 storage failure followed by derived-marker reaping; a direct pack-Record order; a real
 dossier-only Finding subject; shared live-owner liveness; and a deterministic build-vs-R27 race.
 Unit/migration proofs cover enum/constraint/FK parity, one-hop authority rejection, transitive
-artifact aliases, lock order, a populated `UNAVAILABLE → FAILED → head` downgrade, and rejection of
-half-populated invalidation provenance.
+artifact aliases, transaction-global SHA lock order, archived-owner liveness, seal-time correction
+snapshotting, a populated `UNAVAILABLE → FAILED → head` downgrade, and rejection of half-populated
+invalidation provenance.
 
 ### Issue #359 — serialize record capture with pending physical purge (API + integration + docs; NO migration [head stays `0081`]; NO new permission key [catalog 102]; closes [#359](https://github.com/CoJoA13/EasySynQ/issues/359); PR [#412](https://github.com/CoJoA13/EasySynQ/pull/412))
 

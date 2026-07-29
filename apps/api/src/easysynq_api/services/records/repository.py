@@ -16,6 +16,7 @@ from collections.abc import Iterable
 from sqlalchemy import and_, asc, delete, desc, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from ...db.models._evidence_enums import EvidenceForTargetType
 from ...db.models._pack_enums import PackStatus
@@ -519,6 +520,25 @@ async def detach_record_evidence_blob(
     )
 
 
+def _record_content_is_preserved() -> ColumnElement[bool]:
+    """Match Records whose bytes remain lawful owners of a Blob.
+
+    ``DISPOSED`` alone is not an erasure signal: ``ARCHIVE_COLD`` and ``TRANSFER`` deliberately
+    preserve content. Only an immutable destructive disposition event removes Record ownership.
+    """
+    return ~(
+        select(DispositionEvent.id)
+        .where(
+            DispositionEvent.record_id == Record.id,
+            or_(
+                DispositionEvent.is_worm_destroy.is_(True),
+                DispositionEvent.action == DispositionAction.DESTROY,
+            ),
+        )
+        .exists()
+    )
+
+
 async def blob_needed_by_other_live_record(
     session: AsyncSession, blob_sha256: str, exclude_record_id: uuid.UUID
 ) -> bool:
@@ -528,8 +548,9 @@ async def blob_needed_by_other_live_record(
     retained for an unrelated lawful owner.
 
     Four live-owner legs:
-    1. Some OTHER non-``DISPOSED`` record still attaches this blob (records may share a
-       records-bucket WORM blob — the S-rec-1 dedup).
+    1. Some OTHER record whose content was not destructively disposed still attaches this blob
+       (records may share a records-bucket WORM blob — the S-rec-1 dedup). A Record disposed through
+       ``ARCHIVE_COLD`` or ``TRANSFER`` remains an owner because those actions preserve its bytes.
     2. A ``document_version`` references this sha as ``source_blob_sha256`` /
        ``rendition_blob_sha256`` (both RESTRICT FKs onto ``blob.sha256``). CR-1 defense-in-depth:
        the check-in guard (``_assert_documents_worm_blob``) makes this cross-kind sharing
@@ -546,7 +567,7 @@ async def blob_needed_by_other_live_record(
         .where(
             EvidenceBlob.blob_sha256 == blob_sha256,
             EvidenceBlob.record_id != exclude_record_id,
-            Record.disposition_state != RecordDispositionState.DISPOSED,
+            _record_content_is_preserved(),
         )
     )
     if record_leg:
@@ -569,7 +590,7 @@ async def blob_needed_by_other_live_record(
         .where(
             Record.id != exclude_record_id,
             Record.structured_pdf_blob_sha256 == blob_sha256,
-            Record.disposition_state != RecordDispositionState.DISPOSED,
+            _record_content_is_preserved(),
         )
     )
     if structured_leg:
@@ -593,8 +614,10 @@ async def blob_needed_by_any_live_owner(session: AsyncSession, blob_sha256: str)
 
     Issue #361 uses this after clearing every affected pack pointer. Unlike the record-specific
     helper above, a portfolio has no EvidenceBlob parent, so its last-owner decision must cover all
-    four pointer families explicitly: live Record evidence, controlled DocumentVersions, live
-    structured-record renditions, and non-invalidated Evidence Pack ZIP/portfolio pointers.
+    four pointer families explicitly: preserved Record evidence, controlled DocumentVersions,
+    preserved structured-record renditions, and non-invalidated Evidence Pack ZIP/portfolio
+    pointers. ``ARCHIVE_COLD``/``TRANSFER`` Records remain preserved owners despite their terminal
+    ``DISPOSED`` state; only a destructive disposition event removes ownership.
     """
     evidence_leg = await session.scalar(
         select(func.count())
@@ -602,7 +625,7 @@ async def blob_needed_by_any_live_owner(session: AsyncSession, blob_sha256: str)
         .join(Record, EvidenceBlob.record_id == Record.id)
         .where(
             EvidenceBlob.blob_sha256 == blob_sha256,
-            Record.disposition_state != RecordDispositionState.DISPOSED,
+            _record_content_is_preserved(),
         )
     )
     if evidence_leg:
@@ -624,7 +647,7 @@ async def blob_needed_by_any_live_owner(session: AsyncSession, blob_sha256: str)
         .select_from(Record)
         .where(
             Record.structured_pdf_blob_sha256 == blob_sha256,
-            Record.disposition_state != RecordDispositionState.DISPOSED,
+            _record_content_is_preserved(),
         )
     )
     if structured_leg:

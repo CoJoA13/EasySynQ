@@ -319,8 +319,13 @@ A genuine tension exists between **WORM/object-lock immutability** (which guaran
   one-hop event derived from the source event, and schedules both ZIP and portfolio bytes for the
   same authority-bound purge/reaper path. Pack builds take the shared side of an organization-level
   advisory lock and R27 approval takes the exclusive side, so a worker cannot create a new last copy
-  across the legal order. An ordinary policy DESTROY has no such authority: the independent pack is
-  retained under its own policy and the conservative serve-time guard withholds it.
+  across the legal order. Finding/CAPA seals persist the exact shared-PK Record ids serialized into
+  the dossier, so a correction created later cannot retroactively become a dependency of the frozen
+  pack. Blob rows for the source and every affected artifact are acquired in one global SHA order.
+  An ordinary policy DESTROY has no such authority: the independent pack is retained under its own
+  policy and the conservative serve-time guard withholds it. `ARCHIVE_COLD` and `TRANSFER` remain
+  content-preserving custody actions and therefore keep shared Blob ownership even though the
+  Record's terminal state is `DISPOSED`.
 
 ---
 
@@ -439,13 +444,17 @@ sequenceDiagram
 > **Issue #361 / migration `0082`** closes physical legal-erasure completeness without weakening
 > ordinary retention. The R27 dependency resolver covers INCLUDED `pack_item` Records, the pack
 > Record, Finding/CAPA dossier subjects, embedded origin-finding/linked-CAPA/source-audit
-> references, and correction identifiers. Affected sealed headers retain their membership, seal,
-> summaries, and audit history as a tombstone but move to terminal `UNAVAILABLE`; their artifact
-> pointers are cleared, all live share rows are revoked, and `PACK_INVALIDATED` records the source
-> request/event lineage. The ZIP uses the normal Record purge; the portfolio uses the same
-> content-addressed last-live-owner rule. Physical removal remains purge-after-commit and
-> reaper-backstopped, so an object-store outage leaves no application route to the bytes and a
-> durable, lawfully bound retry.
+> references, and correction identifiers. The dossier-only set is persisted exactly at seal in
+> `embedded_record_ids_at_seal`; legacy seals use a `generated_at`-bounded compatibility resolver,
+> preventing a later correction pointer from rewriting the frozen dependency graph. Affected
+> sealed headers retain their membership, seal, summaries, and audit history as a tombstone but
+> move to terminal `UNAVAILABLE`; their artifact pointers are cleared, all live share rows are
+> revoked, and `PACK_INVALIDATED` records the source request/event lineage. The ZIP uses the normal
+> Record purge; the portfolio uses the same content-addressed last-live-owner rule, where archived
+> or transferred Records remain owners unless a destructive disposition event exists. The source
+> and complete derivative Blob set is locked in global SHA order. Physical removal remains
+> purge-after-commit and reaper-backstopped, so an object-store outage leaves no application route
+> to the bytes and a durable, lawfully bound retry.
 
 ### 7.5 Whole-vault portable export (distinct from Evidence Packs)
 

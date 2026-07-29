@@ -98,6 +98,11 @@ pack depends on a Record when it is:
 - a dossier's origin finding, linked CAPA, or source audit; or
 - a correction predecessor/successor whose identifier is copied into a finding dossier.
 
+The successful builder persists the exact dossier-only shared-PK Record set in
+`evidence_pack.embedded_record_ids_at_seal` (`[]` for new non-dossier seals). Runtime serve and R27
+discovery read that immutable snapshot, not current correction pointers. Legacy null snapshots use
+the current relation only when the target Record existed no later than `generated_at`.
+
 The R27 transaction resolves affected `SEALED` packs in its organization, locks them in stable UUID
 order, and re-checks the dependency after locking. Artifact-SHA closure also includes any pack that
 points at the exact same ZIP or portfolio bytes: content-addressed equality means it is another
@@ -106,6 +111,11 @@ copy of the artifact, even if reached through a different header.
 DRAFT and FAILED packs contain no sealed copy and are not invalidated. A BUILDING pack cannot cross
 the exclusive legal-erasure lock; it either finishes before discovery or observes the committed
 tombstone after the lock releases.
+
+Before any liveness decision, the transaction collects source evidence, every affected pack
+Record's evidence/rendition, and detached ZIP/portfolio identities, then locks the complete set in
+lexical SHA order. Liveness treats `ARCHIVE_COLD`/`TRANSFER` Records as preserved owners despite
+their `DISPOSED` state; only a destructive disposition event removes Record ownership.
 
 ## 6. Authority-bound purge
 

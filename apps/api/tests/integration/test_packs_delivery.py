@@ -30,6 +30,7 @@ from easysynq_api.db.models._retention_enums import DispositionAction
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.disposition_event import DispositionEvent
+from easysynq_api.db.models.evidence_blob import EvidenceBlob
 from easysynq_api.db.models.evidence_pack import EvidencePack
 from easysynq_api.db.models.pack_share_link import PackShareLink
 from easysynq_api.db.models.pending_blob_purge import PendingBlobPurge
@@ -130,10 +131,11 @@ async def test_pack_artifact_liveness_preserves_an_unaffected_live_owner(
 ) -> None:
     """Issue #361: clearing an affected pack pointer is not authority to erase another live owner.
 
-    This contrives byte-identical structured-rendition ownership for both artifact families. A
-    shared ZIP stays alive but loses the disposed pack Record's route attachment; a shared portfolio
-    remains needed until the independent pointer is cleared. Removing either the targeted detach or
-    the structured-owner liveness leg makes this test fail.
+    This contrives byte-identical ownership by an ARCHIVE_COLD Record, whose state is DISPOSED but
+    whose content must remain intact. The shared ZIP is attached evidence; the shared portfolio is
+    its structured rendition. The ZIP stays alive but loses the destroyed pack Record's route
+    attachment, and the portfolio remains needed until the archived owner's pointer is cleared.
+    Treating every DISPOSED Record as erased makes both liveness legs fail.
     """
     subject = _subject("pack-r27-live-owner")
     user_id = await _grant(subject, _PACK_PERMS)
@@ -165,10 +167,32 @@ async def test_pack_artifact_liveness_preserves_an_unaffected_live_owner(
             zip_sha = pack.zip_blob_sha256
             portfolio_sha = pack.portfolio_blob_sha256
 
-            # A lawful independent owner keeps shared ZIP bytes alive, but the disposed pack
-            # Record must still lose its own attachment or the generic Record route can mint a new
-            # URL to bytes retained for that other owner.
-            live_record.structured_pdf_blob_sha256 = zip_sha
+            # ARCHIVE_COLD is a custody transition: despite DISPOSED state, its attached evidence
+            # and structured rendition remain lawful owners. Contrive byte-identical ownership of
+            # both pack artifact families, then archive the independent Record.
+            s.add(
+                EvidenceBlob(
+                    org_id=live_record.org_id,
+                    record_id=live_record.id,
+                    blob_sha256=zip_sha,
+                    content_type="application/zip",
+                    created_by=user_id,
+                )
+            )
+            live_record.structured_pdf_blob_sha256 = portfolio_sha
+            disposition._write_tombstone(
+                s,
+                live_record,
+                action=DispositionAction.ARCHIVE_COLD,
+                policy_id=live_record.retention_policy_id,
+                approved_by=None,
+            )
+            await s.flush()
+            assert live_record.disposition_state is RecordDispositionState.DISPOSED
+
+            # The archived owner keeps shared ZIP bytes alive, but the destroyed pack Record must
+            # still lose its own attachment or the generic Record route can mint a new URL to bytes
+            # retained for that other owner.
             event = disposition._write_tombstone(
                 s,
                 pack_record,
@@ -185,13 +209,13 @@ async def test_pack_artifact_liveness_preserves_an_unaffected_live_owner(
                 == []
             )
             assert await records_repo.get_evidence_blob(s, pack_record.id, zip_sha) is None
+            assert await records_repo.get_evidence_blob(s, live_record.id, zip_sha) is not None
             assert await s.get(Blob, zip_sha) is not None
-            assert live_record.structured_pdf_blob_sha256 == zip_sha
+            assert live_record.structured_pdf_blob_sha256 == portfolio_sha
 
             # Remove the pack's ownership exactly as invalidation does, but leave an unrelated
-            # active Record pointing at the same physical content.
+            # archived Record pointing at the same physical content.
             pack.portfolio_blob_sha256 = None
-            live_record.structured_pdf_blob_sha256 = portfolio_sha
             await s.flush()
             assert await records_repo.blob_needed_by_any_live_owner(s, portfolio_sha)
 

@@ -19,6 +19,7 @@ from easysynq_api.problems import ProblemException
 from easysynq_api.services.packs.repository import _artifact_alias_closure
 from easysynq_api.services.records.disposition import (
     _authorized_reaper_bypass,
+    _lock_r27_blob_rows,
     _PendingPurgeSnapshot,
     _r27_authority_matches,
 )
@@ -191,6 +192,47 @@ async def test_r27_approval_takes_exclusive_lock_before_request_row(
 
     assert exc.value.status == 404
     assert events == ["exclusive", "request-row"]
+
+
+async def test_r27_blob_rows_are_locked_once_in_global_sha_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disposition_module = importlib.import_module("easysynq_api.services.records.disposition")
+    org_id = uuid.uuid4()
+    first = Record(
+        id=uuid.uuid4(),
+        org_id=org_id,
+        structured_pdf_blob_sha256="sha-a",
+    )
+    second = Record(
+        id=uuid.uuid4(),
+        org_id=org_id,
+        structured_pdf_blob_sha256="sha-y",
+    )
+    evidence_by_record = {
+        first.id: [SimpleNamespace(sha256="sha-z"), SimpleNamespace(sha256="sha-c")],
+        second.id: [SimpleNamespace(sha256="sha-b")],
+    }
+    locked: list[str] = []
+
+    async def _evidence(
+        _session: object, record_id: uuid.UUID
+    ) -> list[tuple[object, SimpleNamespace]]:
+        return [(object(), blob) for blob in evidence_by_record[record_id]]
+
+    async def _lock(_session: object, sha: str) -> None:
+        locked.append(sha)
+
+    monkeypatch.setattr(disposition_module.repo, "list_evidence_blobs", _evidence)
+    monkeypatch.setattr(disposition_module.repo, "lock_blob_for_update", _lock)
+
+    await _lock_r27_blob_rows(
+        _FakeSession(),
+        [first, second],
+        {"sha-d", "sha-b"},
+    )
+
+    assert locked == ["sha-a", "sha-b", "sha-c", "sha-d", "sha-y", "sha-z"]
 
 
 async def test_derived_reaper_authority_requires_the_bound_unavailable_pack(

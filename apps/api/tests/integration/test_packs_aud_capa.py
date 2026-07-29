@@ -279,6 +279,67 @@ async def test_finding_scope_pack_bundles_dossier(
         await _teardown(cleanup_records, None)
 
 
+async def test_finding_pack_dependency_snapshot_ignores_a_later_correction(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Issue #361: mutable correction pointers cannot rewrite a sealed dossier's dependencies."""
+    subject = _subject("fpack-correction-snapshot")
+    await _grant(
+        subject,
+        (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS),
+    )
+    h = _auth(token_factory, subject)
+
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    finding = await app_client.post(
+        f"/api/v1/audits/{audit_id}/findings",
+        headers=h,
+        json={"finding_type": "OBSERVATION", "summary": "snapshot subject"},
+    )
+    assert finding.status_code == 201, finding.text
+    finding_id = finding.json()["id"]
+
+    pack_uuid: uuid.UUID | None = None
+    try:
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=h,
+            json={"title": "Snapshot pack", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+        )
+        assert created.status_code == 201, created.text
+        pack_uuid = uuid.UUID(created.json()["id"])
+        await _seal(pack_uuid)
+
+        corrected = await app_client.post(
+            f"/api/v1/findings/{finding_id}/correction",
+            headers=h,
+            json={"finding_type": "OFI", "reason": "created after the pack seal"},
+        )
+        assert corrected.status_code == 201, corrected.text
+        successor_id = uuid.UUID(corrected.json()["id"])
+
+        async with get_sessionmaker()() as s:
+            original = await s.get(Record, uuid.UUID(finding_id))
+            pack = await s.get(EvidencePack, pack_uuid)
+            assert original is not None and original.superseded_by_correction == successor_id
+            assert pack is not None and pack.status is PackStatus.SEALED
+            assert pack.embedded_record_ids_at_seal is not None
+            dependencies = await packs_repo.pack_dependency_record_ids(s, pack)
+            assert uuid.UUID(finding_id) in dependencies
+            assert successor_id not in dependencies
+
+            affected = await packs_repo.affected_sealed_packs_for_r27(
+                s,
+                pack.org_id,
+                successor_id,
+            )
+            assert affected == []
+            await s.rollback()
+    finally:
+        await _teardown([], pack_uuid)
+
+
 async def test_sealed_finding_pack_refuses_serving_after_subject_destroyed(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

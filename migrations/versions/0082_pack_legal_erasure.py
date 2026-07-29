@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 revision: str = "0082_pack_legal_erasure"
 down_revision: str | None = "0081_pending_purge_authority"
@@ -48,6 +48,13 @@ def upgrade() -> None:
     op.add_column(
         "evidence_pack",
         sa.Column("invalidated_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    # Exact dossier dependency snapshot for new seals. Existing sealed packs remain NULL and use
+    # the generated_at-bounded compatibility resolver; DRAFT/FAILED rows write the snapshot when
+    # they eventually seal.
+    op.add_column(
+        "evidence_pack",
+        sa.Column("embedded_record_ids_at_seal", JSONB(), nullable=True),
     )
     op.add_column(
         "evidence_pack",
@@ -98,6 +105,7 @@ def downgrade() -> None:
     )
     op.drop_constraint(_PACK_EVENT_FK, "evidence_pack", type_="foreignkey")
     op.drop_column("evidence_pack", "invalidated_by_disposition_event_id")
+    op.drop_column("evidence_pack", "embedded_record_ids_at_seal")
     op.drop_column("evidence_pack", "invalidated_at")
     op.drop_constraint(_DERIVED_EVENT_FK, "disposition_event", type_="foreignkey")
     op.drop_column("disposition_event", "derived_from_disposition_event_id")
