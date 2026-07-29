@@ -121,6 +121,16 @@ supplied membership condition. For example,
 `filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3` requires a document mapped to both
 clauses. The other filters on those two endpoints remain single-valued.
 
+The shared `effective_from` `gte`/`lte` bounds accept either a date or a date-time on both
+endpoints. A bare `YYYY-MM-DD` is a calendar date in the canonical organization timezone: `gte`
+starts at that date's local midnight, while `lte` includes through that date's local end-of-day.
+The server compares the equivalent UTC instants to the stored `timestamptz`; an offset-bearing
+date-time remains the explicit instant supplied by the caller. Relative web buckets derive today's
+date and subtract calendar days in `GET /me`'s `org_timezone`, never by slicing a UTC timestamp.
+The Controlled Document Register materializes raw date bounds using the canonical timezone it
+resolves inside its REPEATABLE READ snapshot, so selection, rendered dates, and provenance cannot
+straddle an organization-timezone configuration change.
+
 ### 3.3 Sorting
 
 `sort=field` (asc) or `sort=-field` (desc); comma-separated multi-key: `sort=-severity,created_at`. Allow-listed sortable fields only (`400 unknown_sort` otherwise). The effective sort always appends `,id` internally to keep the keyset cursor totally ordered.

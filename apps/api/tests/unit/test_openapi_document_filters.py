@@ -42,7 +42,7 @@ def test_repeatable_filters_are_exploded_arrays_and_other_filters_are_scalar(pat
     assert set(parameters) == _FILTER_NAMES
 
     repeatable = {
-        name for name, parameter in parameters.items() if parameter["schema"]["type"] == "array"
+        name for name, parameter in parameters.items() if parameter["schema"].get("type") == "array"
     }
     assert repeatable == _REPEATABLE_FILTERS
 
@@ -55,6 +55,27 @@ def test_repeatable_filters_are_exploded_arrays_and_other_filters_are_scalar(pat
         "filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3"
         in clause_filter["description"]
     )
+
+
+@pytest.mark.parametrize("path", _FILTER_PATHS)
+def test_effective_date_bounds_publish_date_and_date_time_semantics(path: str) -> None:
+    """Generated clients may send either an org-calendar date or an explicit instant."""
+    parameters = _filter_parameters(path)
+    expected_schema = {
+        "oneOf": [
+            {"type": "string", "format": "date"},
+            {"type": "string", "format": "date-time"},
+        ]
+    }
+
+    lower = parameters["filter[effective_from][gte]"]
+    upper = parameters["filter[effective_from][lte]"]
+    for parameter in (lower, upper):
+        assert parameter["schema"] == expected_schema
+        assert "organization timezone" in parameter["description"]
+        assert "explicit instant" in parameter["description"]
+    assert "midnight" in lower["description"]
+    assert "end of that day" in upper["description"]
 
 
 def test_shared_document_filter_serialization_shapes_match_on_both_endpoints() -> None:

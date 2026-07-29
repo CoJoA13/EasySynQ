@@ -29,7 +29,7 @@ from ..services.reports.document_control import (
     compute_document_control_register,
     satisfiable_report_read_allows,
 )
-from .documents import parse_document_filters_with_applied
+from .documents import parse_document_filters_for_snapshot_with_applied
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
 
@@ -144,7 +144,7 @@ async def document_control_register_endpoint(
     # FIX D: echo only the filter[...] keys the parser actually accepted (matched the bracket
     # grammar AND allow-listed) — a malformed/unknown key the parser silently ignores must never
     # appear in provenance.filters as if it had narrowed the row set.
-    filters, applied = parse_document_filters_with_applied(request)
+    filters, applied = parse_document_filters_for_snapshot_with_applied(request)
 
     # FIX C: release connection #1 before the long materialization opens connection #2. After this
     # point ``caller``/``session`` are never touched again — only the captured locals above and the

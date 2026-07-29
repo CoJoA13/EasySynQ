@@ -88,6 +88,10 @@ from ..services.vault import (
     submit_review,
 )
 from ..services.vault import repository as vault_repo
+from ..services.vault.document_filters import (
+    DeferredEffectiveFromFilter,
+    effective_from_filter_condition,
+)
 from ..services.vault.leadership_authorization import (
     release_authorization_status,
     request_leadership_authorization,
@@ -531,7 +535,7 @@ _FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
         ("managed_subtype", "eq"),
         # S-web-2: the library "Effective date" facet — bounds on the CURRENT effective version's
         # effective_from (via the current_effective_version join). The client maps relative buckets
-        # (Last 30 days / This quarter / …) to a gte ISO timestamp.
+        # (Last 30/90/365 days) to a gte organization-calendar ISO date.
         ("effective_from", "gte"),
         ("effective_from", "lte"),
     }
@@ -582,29 +586,7 @@ def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
         return is_managed if flag else ~is_managed
     # filter[effective_from][gte|lte]=<ISO> — bound on the current effective version
     if field == "effective_from":
-        try:
-            ts = datetime.datetime.fromisoformat(value)
-        except ValueError as exc:
-            raise ProblemException(
-                status=422, code="validation_error", title="Invalid effective_from filter value"
-            ) from exc
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=datetime.UTC)
-        bound = (
-            DocumentVersion.effective_from >= ts
-            if op == "gte"
-            else DocumentVersion.effective_from <= ts
-        )
-        return (
-            select(1)
-            .select_from(DocumentVersion)
-            .where(
-                DocumentVersion.id == DocumentedInformation.current_effective_version_id,
-                DocumentVersion.effective_from.is_not(None),
-                bound,
-            )
-            .exists()
-        )
+        return effective_from_filter_condition(op, value)
     if field == "clause_refs":  # filter[clause_refs][has]=8.4 — exact clause-number membership
         # Constrain to the document's OWN framework (clause.number is unique only per framework —
         # uq_clause_framework_id_number): multi-standard safety (D3), matching the clause-map write
@@ -688,6 +670,37 @@ def parse_document_filters_with_applied(
                 status=400, code="unknown_filter", title=f"Unknown filter: {raw_key}"
             )
         conditions.append(_filter_condition(field, op, value))
+        applied.setdefault(raw_key, []).append(value)
+    return conditions, applied
+
+
+def parse_document_filters_for_snapshot_with_applied(
+    request: Request,
+) -> tuple[
+    list[ColumnElement[bool] | DeferredEffectiveFromFilter],
+    dict[str, list[str]],
+]:
+    """Parse register filters while deferring effective-date bounds to its DB snapshot.
+
+    Every other filter is a context-free SQL expression and can be built at the request boundary.
+    Effective date-only values depend on the canonical organization timezone, so the register
+    carries those raw values into its REPEATABLE READ materialization instead.
+    """
+    conditions: list[ColumnElement[bool] | DeferredEffectiveFromFilter] = []
+    applied: dict[str, list[str]] = {}
+    for raw_key, value in request.query_params.multi_items():
+        match = _FILTER_KEY_RE.match(raw_key)
+        if match is None:
+            continue
+        field, op = match.group(1), match.group(2)
+        if (field, op) not in _FILTER_ALLOW:
+            raise ProblemException(
+                status=400, code="unknown_filter", title=f"Unknown filter: {raw_key}"
+            )
+        if field == "effective_from":
+            conditions.append(DeferredEffectiveFromFilter(op=op, value=value))
+        else:
+            conditions.append(_filter_condition(field, op, value))
         applied.setdefault(raw_key, []).append(value)
     return conditions, applied
 

@@ -42,10 +42,21 @@ export function LibraryPage() {
   const size = parsePageSize(params);
   const detailId = params.get("detail");
 
-  const { data, isLoading, isError } = useDocuments(toDocumentFilters(uf), { limit: size, offset });
+  const { data: me, isError: meError } = useMe();
+  const effectiveFilterReady = !uf.eff || Boolean(me?.org_timezone);
+  const {
+    data,
+    isLoading: documentsLoading,
+    isError: documentsError,
+  } = useDocuments(
+    toDocumentFilters(uf, me?.org_timezone),
+    { limit: size, offset },
+    effectiveFilterReady,
+  );
+  const isLoading = documentsLoading || (!effectiveFilterReady && !meError);
+  const isError = documentsError || (Boolean(uf.eff) && meError);
   const { data: types } = useDocumentTypes();
   const { data: directory } = useUserDirectory();
-  const { data: me } = useMe();
   const { can } = usePermissions();
 
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");

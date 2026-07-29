@@ -277,6 +277,120 @@ async def _grant(subject: str, keys: tuple[str, ...]) -> None:
         await s.commit()
 
 
+async def test_date_only_effective_filter_uses_org_calendar_day_on_library_and_register(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+) -> None:
+    """Both consumers of the shared parser use the displayed organization calendar boundary.
+
+    Pacific/Kiritimati's 2026-06-20 noon is 2026-06-19 22:00 UTC. That instant proves both sides:
+    the org-local lower bound includes it even though it precedes UTC midnight on June 20, and the
+    date-only upper bound includes the whole selected local day rather than only its midnight.
+    """
+    calendar_tz = "Pacific/Kiritimati"
+    org_id = await s5.default_org_id()
+    sm = get_sessionmaker()
+    async with sm() as session:
+        tz_before = (
+            await session.execute(
+                select(WorkingCalendar.timezone).where(
+                    WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one()
+
+    try:
+        async with sm() as session:
+            await session.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+                .values(timezone=calendar_tz)
+            )
+            await session.commit()
+
+        await s5.grant_lifecycle(subj.a)
+        await s5.grant_lifecycle(subj.b)
+        await _grant(subj.a, ("report.read",))
+        await s5.set_approver_release(org_id, True)
+        ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+
+        effective = await s5.drive_to_effective(
+            app_client,
+            ha,
+            hb,
+            hb,
+            await s5.type_id("SOP"),
+            b"org-local-effective-filter-boundary",
+        )
+        document_id = effective["id"]
+        version_id = effective["current_effective_version_id"]
+        owner_id = effective["owner_user_id"]
+        identifier = effective["identifier"]
+        assert version_id is not None
+
+        local_noon_as_utc = datetime.datetime(2026, 6, 19, 22, tzinfo=datetime.UTC)
+        async with sm() as session:
+            await session.execute(
+                text("UPDATE document_version SET effective_from = :v WHERE id = :id"),
+                {"v": local_noon_as_utc, "id": uuid.UUID(version_id)},
+            )
+            await session.commit()
+
+        query = (
+            f"filter[owner_user_id][eq]={owner_id}"
+            "&filter[effective_from][gte]=2026-06-20"
+            "&filter[effective_from][lte]=2026-06-20"
+        )
+        library = await app_client.get(f"/api/v1/documents?limit=100&{query}", headers=ha)
+        assert library.status_code == 200, library.text
+        library_rows = library.json()["data"]
+        assert document_id in {row["id"] for row in library_rows}
+
+        register = await app_client.get(f"{_ROUTE}?{query}", headers=ha)
+        assert register.status_code == 200, register.text
+        register_row = next(
+            row for row in register.json()["rows"] if row["identifier"] == identifier
+        )
+        assert register_row["effective_from"].startswith("2026-06-20T12:00:00")
+        assert register_row["effective_from"].endswith("+14:00")
+
+        # Simulate the race called out in review: request auth pinned UTC, while the report's
+        # REPEATABLE READ snapshot resolves Pacific/Kiritimati. Deferred raw bounds must use the
+        # snapshot timezone so filtering agrees with the row's rendered calendar date.
+        import zoneinfo
+
+        from easysynq_api.services.common.org_clock import using_org_tz
+        from easysynq_api.services.reports.document_control import (
+            compute_document_control_register,
+        )
+        from easysynq_api.services.vault.document_filters import DeferredEffectiveFromFilter
+
+        async with sm() as session:
+            caller = await _ensure_user(session, subj.a)
+        with using_org_tz(zoneinfo.ZoneInfo("UTC")):
+            snapshot_result = await compute_document_control_register(
+                user_id=caller.id,
+                org_id=org_id,
+                source_ip=None,
+                filters=[
+                    DeferredEffectiveFromFilter(op="gte", value="2026-06-20"),
+                    DeferredEffectiveFromFilter(op="lte", value="2026-06-20"),
+                ],
+            )
+        snapshot_row = next(row for row in snapshot_result.rows if row["identifier"] == identifier)
+        assert snapshot_row["effective_from"].startswith("2026-06-20T12:00:00")
+        assert str(snapshot_result.org_tz) == calendar_tz
+    finally:
+        async with sm() as session:
+            await session.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+                .values(timezone=tz_before)
+            )
+            await session.commit()
+
+
 async def _grant_read_folder(subject: str, folder_path: str) -> None:
     """Grant document.read at FOLDER scope only (test_documents_list.py's ``_grant_read_folder``
     precedent) — a SUBSET grant, so the register's per-row filter drops an out-of-folder doc."""

@@ -42,6 +42,7 @@ from ..authz import gather_grants
 from ..authz.resource import resource_from_doc
 from ..common.org_clock import resolve_org_tz
 from ..vault import repository as vault_repo
+from ..vault.document_filters import DeferredEffectiveFromFilter
 from ..vault.review import review_state
 
 _REPORT_NAME = "Controlled Document Register"
@@ -271,7 +272,7 @@ async def compute_document_control_register(
     user_id: uuid.UUID,
     org_id: uuid.UUID,
     source_ip: str | None,
-    filters: list[ColumnElement[bool]],
+    filters: list[ColumnElement[bool] | DeferredEffectiveFromFilter],
 ) -> RegisterResult:
     """The permission-filtered master list. Scans ALL org DOCUMENT rows matching ``filters`` (no
     cap — the register is complete), row-filters by ``document.read`` (the ``list_documents`` loop),
@@ -310,6 +311,16 @@ async def compute_document_control_register(
         org = await session.get(Organization, org_id)
         org_short_code = org.short_code if org else str(org_id)
 
+        # Resolve the canonical timezone from this snapshot before materializing raw date-only
+        # bounds. The request context was pinned before this transaction opened and can be stale if
+        # an administrator changed the working-calendar/org timezone in that window. Keeping the
+        # conversion here makes selection, rendered row dates, and provenance share one snapshot.
+        org_tz = await resolve_org_tz(session, org_id)
+        resolved_filters = [
+            item.materialize(org_tz) if isinstance(item, DeferredEffectiveFromFilter) else item
+            for item in filters
+        ]
+
         docs = (
             (
                 await session.execute(
@@ -317,7 +328,7 @@ async def compute_document_control_register(
                     .where(
                         DocumentedInformation.org_id == org_id,
                         DocumentedInformation.kind == DocumentKind.DOCUMENT,
-                        *filters,
+                        *resolved_filters,
                     )
                     # deterministic candidate order; the final rows re-sort by identifier in the
                     # hash.
@@ -540,13 +551,6 @@ async def compute_document_control_register(
         # org-tz midnight after ``snapshot_at`` was captured, review_state could be computed
         # against a different day than the one the provenance ``as_of``/content hash attest to.
         #
-        # FIX 4 (#335, P2): resolve the canonical org tz from INSIDE this snapshot session, not the
-        # request-context ``current_org_tz()`` (pinned by get_current_user BEFORE this REPEATABLE
-        # READ txn opened). If an admin changed the org/working-calendar tz in that window the
-        # pinned value is stale versus the config this snapshot holds; ``resolve_org_tz`` reads it
-        # consistently here. Returned in RegisterResult so the route formats generated_at/as_of in
-        # the SAME tz.
-        org_tz = await resolve_org_tz(session, org_id)
         today = snapshot_at.astimezone(org_tz).date()
         rows: list[dict[str, Any]] = []
         for d in visible:

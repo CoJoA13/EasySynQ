@@ -972,15 +972,26 @@ paths:
         - name: "filter[effective_from][gte]"
           in: query
           required: false
-          schema: { type: string, format: date-time }
+          schema:
+            oneOf:
+              - { type: string, format: date }
+              - { type: string, format: date-time }
           description: >-
-            Documents whose CURRENT effective version's effective_from is ≥ this ISO timestamp
-            (the library "Effective date" facet). Docs with no effective version are excluded.
+            Documents whose CURRENT effective version's effective_from is ≥ this bound (the library
+            "Effective date" facet). A bare ISO date is midnight in the canonical organization
+            timezone; an ISO date-time is an explicit instant. Docs with no effective version are
+            excluded.
         - name: "filter[effective_from][lte]"
           in: query
           required: false
-          schema: { type: string, format: date-time }
-          description: As effective_from][gte] but an upper bound (≤).
+          schema:
+            oneOf:
+              - { type: string, format: date }
+              - { type: string, format: date-time }
+          description: >-
+            Documents whose CURRENT effective version's effective_from is ≤ this bound. A bare ISO
+            date includes through the end of that day in the canonical organization timezone; an
+            ISO date-time is an explicit instant. Docs with no effective version are excluded.
         - name: "filter[has_effective_version][eq]"
           in: query
           required: false
@@ -3912,15 +3923,25 @@ paths:
         - name: "filter[effective_from][gte]"
           in: query
           required: false
-          schema: { type: string, format: date-time }
+          schema:
+            oneOf:
+              - { type: string, format: date }
+              - { type: string, format: date-time }
           description: >-
-            Documents whose CURRENT effective version's effective_from is ≥ this ISO timestamp.
-            Docs with no effective version are excluded.
+            Documents whose CURRENT effective version's effective_from is ≥ this bound. A bare ISO
+            date is midnight in the canonical organization timezone; an ISO date-time is an
+            explicit instant. Docs with no effective version are excluded.
         - name: "filter[effective_from][lte]"
           in: query
           required: false
-          schema: { type: string, format: date-time }
-          description: As effective_from][gte] but an upper bound (≤).
+          schema:
+            oneOf:
+              - { type: string, format: date }
+              - { type: string, format: date-time }
+          description: >-
+            Documents whose CURRENT effective version's effective_from is ≤ this bound. A bare ISO
+            date includes through the end of that day in the canonical organization timezone; an
+            ISO date-time is an explicit instant. Docs with no effective version are excluded.
         - name: "filter[has_effective_version][eq]"
           in: query
           required: false

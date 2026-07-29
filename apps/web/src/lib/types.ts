@@ -136,7 +136,7 @@ export interface DocumentFilters {
   document_type?: string; // a document_type_id
   owner_user_id?: string;
   clause?: string; // a clause number, e.g. "8.4"
-  effective_from_gte?: string; // ISO timestamp (the relative date bucket's lower bound)
+  effective_from_gte?: string; // Organization-calendar date for the relative bucket's lower bound
   // S-report-doc-control fix wave: the register's process facet — docs linked to this process
   // (filter[process_id][eq]). Omitted by default; only the register sets it today.
   process_id?: string;

@@ -18,9 +18,11 @@ from easysynq_api.api.documents import (
     _ilike_escape,
     _parse_document_filters,
     _parse_filter_bool,
+    parse_document_filters_for_snapshot_with_applied,
     parse_document_filters_with_applied,
 )
 from easysynq_api.problems import ProblemException
+from easysynq_api.services.vault.document_filters import DeferredEffectiveFromFilter
 
 
 def _fake_request(*pairs: tuple[str, str]) -> SimpleNamespace:
@@ -122,6 +124,24 @@ def test_parse_document_filters_preserves_repeated_clause_membership_values() ->
     assert len(conditions) == 2
     assert all(isinstance(condition, ColumnElement) for condition in conditions)
     assert applied == {"filter[clause_refs][has]": ["8.4", "7.5.3"]}
+
+
+def test_report_parser_defers_raw_effective_bounds_for_snapshot_materialization() -> None:
+    conditions, applied = parse_document_filters_for_snapshot_with_applied(
+        _fake_request(
+            ("filter[effective_from][gte]", "2026-06-20"),
+            ("filter[effective_from][lte]", "2026-06-20"),
+        )
+    )
+
+    assert conditions == [
+        DeferredEffectiveFromFilter(op="gte", value="2026-06-20"),
+        DeferredEffectiveFromFilter(op="lte", value="2026-06-20"),
+    ]
+    assert applied == {
+        "filter[effective_from][gte]": ["2026-06-20"],
+        "filter[effective_from][lte]": ["2026-06-20"],
+    }
 
 
 # --- _ilike_escape: the s-dcr-target-typeahead free-text `q` wildcard guard --------------------

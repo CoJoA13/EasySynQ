@@ -1,4 +1,5 @@
 import type { DocumentCurrentState, DocumentFilters } from "../../lib/types";
+import { formatDateInTimeZone } from "../../lib/time";
 
 // The library's raw URL facet state (one short key per facet). `eff` is a relative-date BUCKET key
 // (not an ISO timestamp) — it is translated to effective_from_gte at query time so the value stays
@@ -50,20 +51,35 @@ export function parseUrlFilters(p: URLSearchParams): UrlFilters {
   return out;
 }
 
-function bucketToGte(bucket: string | undefined): string | undefined {
-  const b = EFFECTIVE_BUCKETS.find((x) => x.value === bucket);
-  if (!b) return undefined;
-  // YYYY-MM-DD only — stable within the day, so the query key (and cache) don't churn each render.
-  return new Date(Date.now() - b.days * 86_400_000).toISOString().slice(0, 10);
+function subtractCalendarDays(isoDate: string, days: number): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  if (year === undefined || month === undefined || day === undefined) return isoDate;
+  const cursor = new Date(Date.UTC(year, month - 1, day));
+  cursor.setUTCDate(cursor.getUTCDate() - days);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${cursor.getUTCFullYear()}-${pad(cursor.getUTCMonth() + 1)}-${pad(cursor.getUTCDate())}`;
 }
 
-export function toDocumentFilters(uf: UrlFilters): DocumentFilters {
+function bucketToGte(
+  bucket: string | undefined,
+  orgTimezone: string | null | undefined,
+): string | undefined {
+  const b = EFFECTIVE_BUCKETS.find((x) => x.value === bucket);
+  if (!b || !orgTimezone) return undefined;
+  // Start from TODAY'S calendar date in the organization timezone, then subtract calendar days.
+  // Subtracting milliseconds before slicing a UTC ISO string shifts the facet by a day whenever
+  // the organization and UTC are on different dates (and also models DST days as always 24h).
+  const today = formatDateInTimeZone(new Date(Date.now()).toISOString(), orgTimezone);
+  return subtractCalendarDays(today, b.days);
+}
+
+export function toDocumentFilters(uf: UrlFilters, orgTimezone?: string | null): DocumentFilters {
   const f: DocumentFilters = {};
   if (uf.state) f.current_state = uf.state as DocumentCurrentState;
   if (uf.type) f.document_type = uf.type;
   if (uf.owner) f.owner_user_id = uf.owner;
   if (uf.clause) f.clause = uf.clause;
-  const gte = bucketToGte(uf.eff);
+  const gte = bucketToGte(uf.eff, orgTimezone);
   if (gte) f.effective_from_gte = gte;
   // The `process` facet is register-only (S-report-doc-control fix wave R3-1) — the Library's
   // FILTER_KEYS/FacetBar/hasFilters/clearFilters don't know about it, so mapping it here would
