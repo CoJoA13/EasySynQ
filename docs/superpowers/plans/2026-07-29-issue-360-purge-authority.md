@@ -66,4 +66,6 @@ object or invoke governance bypass, while preserving ordinary and R27 crash reco
 - [x] Full API unit suite and relevant integration file/shard-safe order.
 - [x] Contract lint (unchanged contract proof) and `git diff --check`.
 - [x] Adversarial branch-diff review; fold verified findings.
-- [ ] Commit, push, open a ready PR that closes Issue #360, and monitor all CI checks.
+- [x] Commit, push, and open ready PR [#411](https://github.com/CoJoA13/EasySynQ/pull/411)
+      closing Issue #360.
+- [ ] Monitor all PR checks through completion.

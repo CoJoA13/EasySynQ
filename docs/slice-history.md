@@ -168,7 +168,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #360 — bind pending-purge recovery to lawful disposition authority (API + migration + integration + docs; migration `0081` [new head]; NO new permission key [catalog 102]; closes [#360](https://github.com/CoJoA13/EasySynQ/issues/360); PR pending)
+### Issue #360 — bind pending-purge recovery to lawful disposition authority (API + migration + integration + docs; migration `0081` [new head]; NO new permission key [catalog 102]; closes [#360](https://github.com/CoJoA13/EasySynQ/issues/360); PR [#411](https://github.com/CoJoA13/EasySynQ/pull/411))
 
 **The durable marker is no longer authority.** Every new `pending_blob_purge` row identifies the
 exact disposed Record and immutable DESTROY `disposition_event`; R27 work also identifies its
