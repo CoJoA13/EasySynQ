@@ -765,6 +765,9 @@ UJ-7: an on-demand, scope-limited, **immutable, self-verifying** bundle of recor
 > **Issue #363 / R58 worker contract:** the task payload remains `pack_id` only. After locking the
 > pack, the worker loads `build_requested_by` / `build_source_ip`, rejects a missing or non-active
 > initiator, and evaluates current grants/time with only that accepted request IP replayed.
+> The IP is stored as lossless Text because the existing `ip_allow` predicate compares exact
+> strings; `inet` canonicalization could change an accepted IPv6 representation. Authorization
+> audit writes use an independent session on the task-local engine, never the process-global pool.
 > Evidence classification, sealed-Record capture, and pack lifecycle attribution use this
 > initiator—not `created_by`. Immediately before FINDING/CAPA dossier serialization it repeats the
 > same audited subject-read graph used by create/generate; a denial fails the build before dossier

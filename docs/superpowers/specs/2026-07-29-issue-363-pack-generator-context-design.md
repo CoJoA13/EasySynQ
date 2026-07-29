@@ -28,7 +28,7 @@ starts a new attempt, then seal the new attempt using the stale message identity
 Migration `0083` adds two nullable attempt-context fields to `evidence_pack`:
 
 - `build_requested_by`, a RESTRICT FK to `app_user`; and
-- `build_source_ip`, a PostgreSQL `inet` value.
+- `build_source_ip`, a PostgreSQL `text` value that preserves the accepted request representation.
 
 `generate_pack` writes both fields in the same transaction that changes the pack to `BUILDING`.
 The task continues to carry only `pack_id`. After taking the organization pack-build lock and the
@@ -48,7 +48,10 @@ falls back to a different user.
 
 ## 3. Source-IP policy
 
-The generate request's `request.client.host` is snapshotted into `build_source_ip`. At worker time:
+The generate request's `request.client.host` is snapshotted losslessly into `build_source_ip`. Text
+is intentional: the existing PDP compares `ip_allow` values as exact strings, while PostgreSQL
+`inet` would canonicalize an expanded IPv6 spelling after the request-time decision and could make
+the worker deny that same accepted context. At worker time:
 
 - grants, explicit DENYs, account status, and `valid_from` / `valid_until` are evaluated fresh;
 - the authorization clock is the worker's current time; and
@@ -80,7 +83,9 @@ generate, and build:
 - an origin Finding requires `finding.read`.
 
 The request paths continue through `enforce`. The worker path uses the same PEP evaluation and
-authorization-audit sink with an explicit `RequestContext(now, source_ip, actor_user_id)`.
+authorization-audit sink with an explicit `RequestContext(now, source_ip, actor_user_id)`. Because
+each Celery invocation creates a task-local engine for its fresh `asyncio.run()` loop, that sink's
+independent short transaction is bound to the same task-local sessionmaker and disposed with it.
 
 Immediately before `build_dossier`, the worker evaluates every subject check for the persisted
 initiating generator. Any denial:

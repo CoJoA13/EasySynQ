@@ -266,9 +266,7 @@ async def build(
     if generator is None or generator.status is not UserStatus.ACTIVE:
         await _fail(session, pack_id, "initiating generator account is missing or inactive")
         return
-    # psycopg loads PostgreSQL INET as an ipaddress object; the PDP's canonical RequestContext
-    # compares textual addresses to the string values in ``scope.predicates.ip_allow``.
-    source_ip = str(pack.build_source_ip) if pack.build_source_ip is not None else None
+    source_ip = pack.build_source_ip
 
     try:
         scope_ids = _scope_ids(pack)

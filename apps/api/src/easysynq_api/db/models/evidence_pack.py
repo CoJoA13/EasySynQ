@@ -21,12 +21,11 @@ cover); the ZIP file digest is ``zip_blob_sha256``.
 from __future__ import annotations
 
 import datetime
-import ipaddress
 import uuid
 from typing import Any
 
 from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Text, func, text
-from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base
@@ -98,9 +97,10 @@ class EvidencePack(Base):
         ),
         nullable=True,
     )
-    build_source_ip: Mapped[ipaddress.IPv4Address | ipaddress.IPv6Address | None] = mapped_column(
-        INET, nullable=True
-    )
+    # Text is deliberate: the PDP's existing ``ip_allow`` policy is exact-string matching, so the
+    # accepted request representation must survive the async handoff losslessly (PostgreSQL INET
+    # canonicalizes equivalent IPv6 spellings and could turn an accepted request into a denial).
+    build_source_ip: Mapped[str | None] = mapped_column(Text, nullable=True)
     item_count: Mapped[int] = mapped_column(
         Integer, server_default=text("0"), default=0, nullable=False
     )

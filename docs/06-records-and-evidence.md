@@ -470,8 +470,11 @@ sequenceDiagram
 > uses that initiating generator—not the DRAFT's `created_by`—for current-grant R28 evidence
 > classification, the sealed Record's `captured_by`, and worker success/failure attribution.
 > Preview classification uses the live create-request IP, while seal classification replays only
-> the accepted generate-request IP so existing exact-match `ip_allow` grants survive the async
-> boundary; current time, account status, grants, validity windows, and DENYs are never snapshotted.
+> the accepted generate-request IP, stored as lossless Text, so existing exact-match `ip_allow`
+> grants—including equivalent IPv6 spellings—survive the async boundary; current time, account
+> status, grants, validity windows, and DENYs are never snapshotted. The worker's independent
+> authorization-audit transaction uses the same task-local engine as the build and is disposed
+> before that `asyncio.run()` loop closes.
 > Immediately before a FINDING/CAPA dossier is serialized, the worker repeats the same audited
 > subject-read graph used at create/generate (`finding.read`, source `audit.read`, and applicable
 > linked/origin `capa.read`/`finding.read`). A denial fails the attempt before dossier bytes exist.

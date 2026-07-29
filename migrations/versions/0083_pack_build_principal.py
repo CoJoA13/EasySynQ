@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects.postgresql import INET, UUID
+from sqlalchemy.dialects.postgresql import UUID
 
 revision: str = "0083_pack_build_principal"
 down_revision: str | None = "0082_pack_legal_erasure"
@@ -27,7 +27,9 @@ def upgrade() -> None:
     )
     op.add_column(
         "evidence_pack",
-        sa.Column("build_source_ip", INET(), nullable=True),
+        # Lossless text is required because the existing PDP compares ip_allow values exactly;
+        # PostgreSQL INET canonicalizes equivalent IPv6 spellings after request-time acceptance.
+        sa.Column("build_source_ip", sa.Text(), nullable=True),
     )
     # Existing non-DRAFT rows already crossed the old generate/build boundary, whose only
     # available principal was created_by. Preserve that behavior after an in-place upgrade;

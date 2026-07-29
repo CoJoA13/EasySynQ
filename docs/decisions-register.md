@@ -1651,14 +1651,18 @@ therefore cannot inject an older caller into a later retry.
 
 The worker evaluates current account state, grants, explicit DENYs, validity windows, and current
 time. Only the initiating request's source IP is replayed so the asynchronous continuation
-preserves the existing exact-match `ip_allow` semantics. Preview classification uses the live
-create-request IP; seal-time R28 classification uses the persisted generate-request IP. A missing
-or non-active initiating user fails closed, with no fallback to `created_by`.
+preserves the existing exact-match `ip_allow` semantics. `build_source_ip` is lossless Text—not
+`inet`—because database canonicalization of an equivalent IPv6 spelling after request acceptance
+would change that exact-string decision. Preview classification uses the live create-request IP;
+seal-time R28 classification uses the persisted generate-request IP. A missing or non-active
+initiating user fails closed, with no fallback to `created_by`.
 
 FINDING/CAPA dossier authorization is one shared check graph across create, generate, and build:
 `finding.read`, source `audit.read`, linked/origin counterpart reads, and process-scoped
 `capa.read` as applicable. The worker repeats those audited PEP decisions immediately before
-dossier serialization. Any denial moves the attempt to `FAILED` before dossier bytes are built.
+dossier serialization. Its independent authorization-audit transaction uses the task-local engine,
+which is disposed with that Celery invocation's `asyncio.run()` loop. Any denial moves the attempt
+to `FAILED` before dossier bytes are built.
 Record classification, the sealed pack Record's `captured_by`, `PACK_GENERATED`, and worker-emitted
 `PACK_BUILD_FAILED` all use the initiating generator. Reaper-emitted timeout failures remain system
 actions. No new endpoint, response field, status, or permission key is introduced.

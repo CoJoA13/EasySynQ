@@ -694,7 +694,19 @@ def test_populated_historical_transitions_and_head_repairs(
                             "AND column_name = 'build_source_ip'"
                         )
                     ).scalar_one()
-                    == "inet"
+                    == "text"
+                )
+                expanded_ipv6 = "0:0:0:0:0:0:0:1"
+                connection.execute(
+                    sa.text("UPDATE evidence_pack SET build_source_ip = :source_ip WHERE id = :id"),
+                    {"source_ip": expanded_ipv6, "id": failed_pack_id},
+                )
+                assert (
+                    connection.execute(
+                        sa.text("SELECT build_source_ip FROM evidence_pack WHERE id = :id"),
+                        {"id": failed_pack_id},
+                    ).scalar_one()
+                    == expanded_ipv6
                 )
                 assert (
                     connection.execute(

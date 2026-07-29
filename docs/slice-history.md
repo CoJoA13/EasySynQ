@@ -181,19 +181,21 @@ fails closed with no creator fallback.
 
 **Authorization and attribution agree at the async boundary.** Preview R28 classification uses the
 live create-request IP; seal-time classification uses current grants/time for the initiating
-generator and replays only the accepted generate-request IP for existing exact `ip_allow`
-predicates. One subject-check resolver drives create, generate, and the worker. Immediately before
-FINDING/CAPA dossier serialization the worker re-evaluates `finding.read`, source `audit.read`, and
-the applicable linked/origin CAPA/Finding reads through the audited PEP; denial fails the attempt
-before dossier bytes exist. Candidate classification, the sealed pack Record's `captured_by`,
-`PACK_GENERATED`, and worker-emitted `PACK_BUILD_FAILED` all use the same initiator; reaper timeout
-failures remain system actions.
+generator and replays only the accepted generate-request IP, stored losslessly as Text, for existing
+exact `ip_allow` predicates. One subject-check resolver drives create, generate, and the worker.
+Immediately before FINDING/CAPA dossier serialization the worker re-evaluates `finding.read`, source
+`audit.read`, and the applicable linked/origin CAPA/Finding reads through the audited PEP; its
+independent audit session uses the task-local engine, and denial fails the attempt before dossier
+bytes exist. Candidate classification, the sealed pack Record's `captured_by`, `PACK_GENERATED`, and
+worker-emitted `PACK_BUILD_FAILED` all use the same initiator; reaper timeout failures remain system
+actions.
 
 **Regression proof.** Docker-backed coverage distinguishes creator from generator, revokes a
 subject read after generate but before the worker, carries an IP-restricted read through the
 request/worker handoff, pins task arguments to `pack_id` only, and verifies sealed Record plus audit
-attribution. Populated migration coverage proves non-DRAFT backfill, DRAFT preservation, named FK /
-`inet` shape, downgrade/re-upgrade, and clean metadata.
+attribution. The IP proof uses an expanded IPv6 representation to distinguish lossless replay from
+`inet` canonicalization. Populated migration coverage proves non-DRAFT backfill, DRAFT preservation,
+named FK / Text shape, downgrade/re-upgrade, and clean metadata.
 
 ### Issue #361 — physically erase sealed Evidence Pack derivatives under R27 (API + migration + integration + docs; migration `0082` [new head]; NO new permission key [catalog 102]; closes [#361](https://github.com/CoJoA13/EasySynQ/issues/361); PR [#413](https://github.com/CoJoA13/EasySynQ/pull/413))
 

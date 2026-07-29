@@ -23,7 +23,6 @@ import dataclasses
 import datetime
 import hashlib
 import hmac
-import ipaddress
 import uuid
 from typing import Any, Literal
 
@@ -567,7 +566,10 @@ async def generate_pack(
     pack.status = PackStatus.BUILDING
     pack.build_started_at = _now()
     pack.build_requested_by = caller.id
-    pack.build_source_ip = ipaddress.ip_address(request.client.host) if request.client else None
+    # Preserve the exact representation that the request-time PDP accepted. Its ``ip_allow``
+    # semantics are exact-string matching, so canonicalizing an IPv6 address here would change the
+    # decision when the worker replays this context.
+    pack.build_source_ip = request.client.host if request.client else None
     pack.error = None
     await session.commit()
     await session.refresh(pack)

@@ -22,6 +22,8 @@ import logging
 import uuid
 from typing import Protocol
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models.audit_event import AuditEvent
@@ -90,11 +92,21 @@ class DbAuthzAuditSink:
     """Production sink (S6) — persists denies (and, if configured, allows) to ``audit_event`` in
     their own short transaction, off the request's primary session."""
 
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
+    ) -> None:
+        # Request paths share the process-global application engine. Workers that create one engine
+        # per asyncio.run() inject that task-local factory so the sink cannot retain a pooled
+        # connection bound to a closed event loop between Celery invocations.
+        self._session_factory = session_factory
+
     async def record(self, event: AuthzAuditEvent) -> None:
         if event.decision != "deny" and not get_settings().audit_persist_allows:
             logger.debug("authz.allow %s", event.permission_key)
             return
-        async with get_sessionmaker()() as session:
+        session_factory = self._session_factory or get_sessionmaker()
+        async with session_factory() as session:
             session.add(to_audit_event(event))
             await session.commit()
 

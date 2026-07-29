@@ -924,11 +924,17 @@ async def test_ip_allow_context_survives_generate_to_worker(
 ) -> None:
     """Issue #363 R58: the accepted generate request IP is replayed only as worker authz context.
 
-    All subject/evidence read grants are restricted to the ASGI client's ``127.0.0.1``. Preview,
-    generate, worker subject re-check, and seal-time R28 classification must agree and include the
-    linked evidence. Mutation-verify: the old preview/build classifiers use ``source_ip=None`` and
-    exclude the evidence; a naive worker subject check with no IP would fail the build.
+    All subject/evidence read grants are restricted to the ASGI client's expanded IPv6 spelling.
+    Preview, generate, worker subject re-check, and seal-time R28 classification must agree and
+    include the linked evidence. Mutation-verify: the old preview/build classifiers use
+    ``source_ip=None`` and exclude the evidence; PostgreSQL INET canonicalizes the accepted spelling
+    to ``::1``, so a worker replay against the exact-string grant fails.
     """
+    expanded_ipv6 = "0:0:0:0:0:0:0:1"
+    transport = app_client._transport
+    assert isinstance(transport, httpx.ASGITransport)
+    original_client = transport.client
+    transport.client = (expanded_ipv6, original_client[1])
     subject = _subject("worker-ip")
     user_id = await _grant(
         subject, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS)
@@ -936,7 +942,7 @@ async def test_ip_allow_context_survives_generate_to_worker(
     await _set_permission_predicates(
         user_id,
         ("finding.read", "capa.read", "audit.read", "record.read"),
-        {"ip_allow": ["127.0.0.1"]},
+        {"ip_allow": [expanded_ipv6]},
     )
     headers = _auth(token_factory, subject)
     audit_id = await _new_audit(app_client, headers)
@@ -978,7 +984,7 @@ async def test_ip_allow_context_survives_generate_to_worker(
             started_pack = await s.get(EvidencePack, pack_uuid)
             assert started_pack is not None
             assert started_pack.build_requested_by == user_id
-            assert str(started_pack.build_source_ip) == "127.0.0.1"
+            assert started_pack.build_source_ip == expanded_ipv6
 
         async with get_sessionmaker()() as s:
             await build(s, pack_uuid)
@@ -996,6 +1002,7 @@ async def test_ip_allow_context_survives_generate_to_worker(
             ).scalar_one()
             assert item.inclusion_status.value == "INCLUDED"
     finally:
+        transport.client = original_client
         await _teardown([evidence_id], pack_uuid)
 
 
