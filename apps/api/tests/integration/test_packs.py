@@ -22,10 +22,12 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import delete, select
 
+from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models._clause_enums import PdcaPhase
-from easysynq_api.db.models._pack_enums import PackStatus
+from easysynq_api.db.models._pack_enums import PackInclusionStatus, PackStatus
 from easysynq_api.db.models._retention_enums import DispositionAction
-from easysynq_api.db.models.app_user import AppUser
+from easysynq_api.db.models.app_user import AppUser, UserStatus
+from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.disposition_event import DispositionEvent
@@ -125,6 +127,8 @@ async def _seal(pack_id: uuid.UUID) -> None:
         assert pack is not None
         pack.status = PackStatus.BUILDING
         pack.build_started_at = datetime.datetime.now(datetime.UTC)
+        pack.build_requested_by = pack.created_by
+        pack.build_source_ip = None
         await s.commit()
     async with get_sessionmaker()() as s:
         await build(s, pack_id)
@@ -311,6 +315,167 @@ async def test_pack_build_seal_r28_matrix_and_download(
         await _teardown(
             record_ids=record_ids, pack_id=pack_uuid, scope_id=scope_id, process_id=process_id
         )
+
+
+async def test_pack_build_uses_current_attempt_generator_not_creator(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #363: a retrying generator must not borrow the DRAFT creator's ``record.read``.
+
+    The creator previews one process-linked Record as INCLUDED. A different user who holds only
+    ``report.evidence_pack.generate`` starts the build. Seal-time R28 classification must therefore
+    exclude that Record, and the generated pack Record/audit event must attribute to the initiating
+    generator. Mutation-verify: the old worker reloads ``pack.created_by``, includes the Record, and
+    attributes the seal to the creator.
+    """
+    creator_subject = _subject("pack-creator")
+    creator_id = await _grant(creator_subject, _PACK_PERMS)
+    creator_headers = _auth(token_factory, creator_subject)
+    generator_subject = _subject("pack-generator")
+    generator_id = await _grant(generator_subject, ("report.evidence_pack.generate",))
+    generator_headers = _auth(token_factory, generator_subject)
+    process_id = await _make_process(creator_id, f"Proc-{uuid.uuid4().hex[:8]}")
+
+    record_id = (
+        await _capture(
+            app_client,
+            creator_headers,
+            record_type="EVIDENCE",
+            title="creator-visible evidence",
+        )
+    ).json()["id"]
+    pack_uuid: uuid.UUID | None = None
+    try:
+        await _link_process(app_client, creator_headers, record_id, process_id)
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=creator_headers,
+            json={
+                "title": "generator context",
+                "scope_kind": "PROCESS",
+                "process_ids": [str(process_id)],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pack_uuid = uuid.UUID(created.json()["id"])
+        preview = {
+            item["record_id"]: item["inclusion_status"]
+            for item in created.json()["items"]
+            if item["record_id"]
+        }
+        assert preview[record_id] == "INCLUDED"
+
+        from easysynq_api.tasks.packs import build_evidence_pack
+
+        enqueued: list[tuple[str, ...]] = []
+        monkeypatch.setattr(build_evidence_pack, "delay", lambda *args: enqueued.append(args))
+        started = await app_client.post(
+            f"/api/v1/evidence-packs/{pack_uuid}/generate", headers=generator_headers
+        )
+        assert started.status_code == 202, started.text
+        # The row, not mutable task arguments, owns the attempt identity.
+        assert enqueued == [(str(pack_uuid),)]
+
+        async with get_sessionmaker()() as s:
+            await build(s, pack_uuid)
+
+        async with get_sessionmaker()() as s:
+            pack = await s.get(EvidencePack, pack_uuid)
+            assert pack is not None and pack.status is PackStatus.SEALED
+            assert pack.build_requested_by == generator_id
+            item = (
+                await s.execute(
+                    select(PackItem).where(
+                        PackItem.pack_id == pack_uuid,
+                        PackItem.record_id == uuid.UUID(record_id),
+                    )
+                )
+            ).scalar_one()
+            assert item.inclusion_status is PackInclusionStatus.EXCLUDED_PERMISSION
+            assert pack.pack_record_id is not None
+            pack_record = await s.get(Record, pack.pack_record_id)
+            assert pack_record is not None and pack_record.captured_by == generator_id
+            generated = (
+                await s.execute(
+                    select(AuditEvent)
+                    .where(
+                        AuditEvent.object_id == pack_uuid,
+                        AuditEvent.event_type == EventType.PACK_GENERATED,
+                    )
+                    .order_by(AuditEvent.occurred_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+            assert generated.actor_id == generator_id
+    finally:
+        await _teardown(
+            record_ids=[record_id], pack_id=pack_uuid, scope_id=None, process_id=process_id
+        )
+
+
+async def test_pack_build_rejects_generator_locked_after_generate(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R58 evaluates current account state instead of continuing for a newly inactive initiator."""
+    subject = _subject("pack-locked-generator")
+    generator_id = await _grant(subject, _PACK_PERMS)
+    headers = _auth(token_factory, subject)
+    process_id = await _make_process(generator_id, f"Proc-{uuid.uuid4().hex[:8]}")
+    pack_uuid: uuid.UUID | None = None
+    try:
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=headers,
+            json={
+                "title": "inactive generator",
+                "scope_kind": "PROCESS",
+                "process_ids": [str(process_id)],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pack_uuid = uuid.UUID(created.json()["id"])
+
+        from easysynq_api.tasks.packs import build_evidence_pack
+
+        monkeypatch.setattr(build_evidence_pack, "delay", lambda *_args: None)
+        started = await app_client.post(
+            f"/api/v1/evidence-packs/{pack_uuid}/generate", headers=headers
+        )
+        assert started.status_code == 202, started.text
+
+        async with get_sessionmaker()() as s:
+            generator = await s.get(AppUser, generator_id)
+            assert generator is not None
+            generator.status = UserStatus.LOCKED
+            await s.commit()
+
+        async with get_sessionmaker()() as s:
+            await build(s, pack_uuid)
+
+        async with get_sessionmaker()() as s:
+            pack = await s.get(EvidencePack, pack_uuid)
+            assert pack is not None
+            assert pack.status is PackStatus.FAILED
+            assert pack.pack_record_id is None
+            assert pack.error is not None and "inactive" in pack.error
+            failed = (
+                await s.execute(
+                    select(AuditEvent)
+                    .where(
+                        AuditEvent.object_id == pack_uuid,
+                        AuditEvent.event_type == EventType.PACK_BUILD_FAILED,
+                    )
+                    .order_by(AuditEvent.occurred_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+            assert failed.actor_id == generator_id
+    finally:
+        await _teardown(record_ids=[], pack_id=pack_uuid, scope_id=None, process_id=process_id)
 
 
 async def test_process_pack_includes_source_less_correction(

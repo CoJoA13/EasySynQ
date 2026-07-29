@@ -2,14 +2,15 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0082` (next `0083`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0083` (next `0084`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
 > (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
 > cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
 > `0075` the audit `scope_ref` index; M5 added `0076`'s import-owner snapshot; M7 added `0077`'s
 > sealed-pack retention policy and `0078`'s record content-hash version; M9 added `0079`'s
 > operational-install coherence repair; M10 added `0080`'s dead-field removal and query-path
 > indexes; Issue #360 added `0081`'s pending-purge authority binding; Issue #361 added `0082`'s
-> Evidence Pack legal-erasure status and source-event lineage.)
+> Evidence Pack legal-erasure status and source-event lineage; Issue #363 added `0083`'s
+> Evidence Pack build-attempt principal and source-IP context.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -168,6 +169,31 @@
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
+
+### Issue #363 — carry the initiating generator through Evidence Pack workers (API + migration + integration + docs; migration `0083` [new head]; R58; NO new permission key [catalog 102]; closes [#363](https://github.com/CoJoA13/EasySynQ/issues/363))
+
+**The current build attempt now owns its authority.** The generate transaction writes
+`build_requested_by` plus the accepted request's `build_source_ip` on the locked pack row with
+`status=BUILDING`; the Celery message stays `pack_id`-only. A redelivery or delayed message thus
+uses the row's current attempt instead of injecting stale task identity. Historical non-DRAFT rows
+backfill to their only available principal (`created_by`), while a new missing/non-active principal
+fails closed with no creator fallback.
+
+**Authorization and attribution agree at the async boundary.** Preview R28 classification uses the
+live create-request IP; seal-time classification uses current grants/time for the initiating
+generator and replays only the accepted generate-request IP for existing exact `ip_allow`
+predicates. One subject-check resolver drives create, generate, and the worker. Immediately before
+FINDING/CAPA dossier serialization the worker re-evaluates `finding.read`, source `audit.read`, and
+the applicable linked/origin CAPA/Finding reads through the audited PEP; denial fails the attempt
+before dossier bytes exist. Candidate classification, the sealed pack Record's `captured_by`,
+`PACK_GENERATED`, and worker-emitted `PACK_BUILD_FAILED` all use the same initiator; reaper timeout
+failures remain system actions.
+
+**Regression proof.** Docker-backed coverage distinguishes creator from generator, revokes a
+subject read after generate but before the worker, carries an IP-restricted read through the
+request/worker handoff, pins task arguments to `pack_id` only, and verifies sealed Record plus audit
+attribution. Populated migration coverage proves non-DRAFT backfill, DRAFT preservation, named FK /
+`inet` shape, downgrade/re-upgrade, and clean metadata.
 
 ### Issue #361 — physically erase sealed Evidence Pack derivatives under R27 (API + migration + integration + docs; migration `0082` [new head]; NO new permission key [catalog 102]; closes [#361](https://github.com/CoJoA13/EasySynQ/issues/361); PR [#413](https://github.com/CoJoA13/EasySynQ/pull/413))
 

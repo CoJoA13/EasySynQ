@@ -31,6 +31,7 @@ _M9_REVISION = "0079_migration_orm_coherence"
 _M10_REVISION = "0080_schema_index_design"
 _PURGE_AUTHORITY_REVISION = "0081_pending_purge_authority"
 _PACK_ERASURE_REVISION = "0082_pack_legal_erasure"
+_PACK_PRINCIPAL_REVISION = "0083_pack_build_principal"
 _CANONICAL_CHECK = "ck_process_edge_no_self_loop"
 _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
 _RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
@@ -452,6 +453,8 @@ def test_populated_historical_transitions_and_head_repairs(
             pack_record_id = uuid.uuid4()
             source_event_id = uuid.uuid4()
             invalidated_pack_id = uuid.uuid4()
+            draft_pack_id = uuid.uuid4()
+            failed_pack_id = uuid.uuid4()
             with engine.begin() as connection:
                 requester_id = connection.execute(
                     sa.text(
@@ -553,6 +556,24 @@ def test_populated_historical_transitions_and_head_repairs(
                         "event": source_event_id,
                     },
                 )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO evidence_pack "
+                        "(id, org_id, framework_id, title, scope_kind, scope_selector, status, "
+                        "created_by) "
+                        "VALUES (:draft_id, :org, :framework, 'M363 draft pack', 'PROCESS', "
+                        "CAST('{\"process_ids\": []}' AS jsonb), 'DRAFT', :user), "
+                        "(:failed_id, :org, :framework, 'M363 failed pack', 'PROCESS', "
+                        "CAST('{\"process_ids\": []}' AS jsonb), 'FAILED', :user)"
+                    ),
+                    {
+                        "draft_id": draft_pack_id,
+                        "failed_id": failed_pack_id,
+                        "org": org_id,
+                        "framework": framework_id,
+                        "user": user_id,
+                    },
+                )
 
             derived_event_id = uuid.uuid4()
             derived_purge_id = uuid.uuid4()
@@ -647,6 +668,63 @@ def test_populated_historical_transitions_and_head_repairs(
                     {"id": invalidated_pack_id},
                 ).one()
                 assert reupgraded == ("SEALED", None, None)
+                # 0083 backfills already-started/terminal attempts with their only historical
+                # principal, but leaves never-generated drafts empty. Future attempts overwrite
+                # this compatibility value with the actual generate caller.
+                principals = {
+                    row.id: row.build_requested_by
+                    for row in connection.execute(
+                        sa.text(
+                            "SELECT id, build_requested_by FROM evidence_pack "
+                            "WHERE id IN (:draft_id, :failed_id)"
+                        ),
+                        {"draft_id": draft_pack_id, "failed_id": failed_pack_id},
+                    )
+                }
+                assert principals == {
+                    draft_pack_id: None,
+                    failed_pack_id: user_id,
+                }
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT udt_name FROM information_schema.columns "
+                            "WHERE table_schema = current_schema() "
+                            "AND table_name = 'evidence_pack' "
+                            "AND column_name = 'build_source_ip'"
+                        )
+                    ).scalar_one()
+                    == "inet"
+                )
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT count(*) FROM pg_constraint "
+                            "WHERE conrelid = 'evidence_pack'::regclass "
+                            "AND conname = "
+                            "'fk_evidence_pack_build_requested_by_app_user'"
+                        )
+                    ).scalar_one()
+                    == 1
+                )
+
+            # The new attempt context is intentionally ephemeral migration state: downgrade drops
+            # both columns cleanly, and re-upgrade deterministically reconstructs historical
+            # non-DRAFT principals without inventing source IPs.
+            command.downgrade(config, _PACK_ERASURE_REVISION)
+            with engine.connect() as connection:
+                assert _column_nullable(connection, "evidence_pack", "build_requested_by") is None
+                assert _column_nullable(connection, "evidence_pack", "build_source_ip") is None
+            command.upgrade(config, _PACK_PRINCIPAL_REVISION)
+            with engine.connect() as connection:
+                rebuilt = connection.execute(
+                    sa.text(
+                        "SELECT build_requested_by, build_source_ip "
+                        "FROM evidence_pack WHERE id = :id"
+                    ),
+                    {"id": failed_pack_id},
+                ).one()
+                assert rebuilt == (user_id, None)
 
             # The downgrade restores a nullable compatibility column and removes only M10's
             # indexes; a clean re-upgrade remains safe with the live version row in place.

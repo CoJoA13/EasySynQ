@@ -21,11 +21,12 @@ cover); the ZIP file digest is ``zip_blob_sha256``.
 from __future__ import annotations
 
 import datetime
+import ipaddress
 import uuid
 from typing import Any
 
 from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Text, func, text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base
@@ -83,6 +84,22 @@ class EvidencePack(Base):
     # Set when the build is enqueued (status→BUILDING); the reaper's staleness basis.
     build_started_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # Issue #363: the current/latest BUILDING attempt executes on behalf of this user and the
+    # accepted generate request's source IP. The row is authoritative across acks-late redelivery
+    # and retry; Celery carries only pack_id, so an old delayed message cannot inject stale
+    # identity.
+    build_requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "app_user.id",
+            ondelete="RESTRICT",
+            name="fk_evidence_pack_build_requested_by_app_user",
+        ),
+        nullable=True,
+    )
+    build_source_ip: Mapped[ipaddress.IPv4Address | ipaddress.IPv6Address | None] = mapped_column(
+        INET, nullable=True
     )
     item_count: Mapped[int] = mapped_column(
         Integer, server_default=text("0"), default=0, nullable=False

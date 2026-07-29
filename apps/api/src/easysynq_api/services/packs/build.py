@@ -5,6 +5,9 @@ and idempotent**:
 
 * Loads the pack ``FOR UPDATE`` and no-ops if it is not BUILDING or already has a ``pack_record_id``
   (``task_acks_late=True`` re-delivery safety — a retry never double-registers the EVIDENCE record).
+* Loads the initiating generator + source IP from that locked row (the task carries only
+  ``pack_id``), evaluates current grants under that context, and rechecks FINDING/CAPA subject reads
+  immediately before dossier serialization.
 * **Re-resolves + re-classifies** at build time and atomically replaces the preview ``pack_item``
   rows, so the seal is over one coherent set (the TOCTOU fix — never trust stale preview rows).
 * Assembles the pack contents (records' evidence originals + their pinned governing versions +
@@ -42,6 +45,7 @@ from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.document_version import DocumentVersion
 from ...db.models.evidence_pack import EvidencePack
 from ...domain.packs.content_hash import pack_content_hash
+from ..authz import AuthzAuditSink, get_authz_audit_sink
 from ..records import capture_record
 from ..records import repository as records_repo
 from ..vault import storage
@@ -222,19 +226,28 @@ async def _fail(session: AsyncSession, pack_id: uuid.UUID, reason: str) -> None:
         return
     pack.status = PackStatus.FAILED
     pack.error = reason[:1000]
-    generator = await session.get(AppUser, pack.created_by)
+    generator = (
+        await session.get(AppUser, pack.build_requested_by)
+        if pack.build_requested_by is not None
+        else None
+    )
     if generator is not None:
         service.emit_pack_event(
             session, generator, EventType.PACK_BUILD_FAILED, pack.id, after={"error": pack.error}
         )
-    else:  # pragma: no cover - the generator FK is RESTRICT
+    else:  # legacy/corrupt row or a generator removed outside the FK-protected application path
         service.emit_pack_event_system(
             session, pack.org_id, EventType.PACK_BUILD_FAILED, pack.id, after={"error": pack.error}
         )
     await session.commit()
 
 
-async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
+async def build(
+    session: AsyncSession,
+    pack_id: uuid.UUID,
+    *,
+    authz_sink: AuthzAuditSink | None = None,
+) -> None:
     """Assemble + seal a pack. Single transaction; idempotent on retry; fail-closed."""
     org_id = await repo.get_pack_org_id(session, pack_id)
     if org_id is None:
@@ -246,10 +259,16 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
     if pack is None or pack.status is not PackStatus.BUILDING or pack.pack_record_id is not None:
         return  # nothing to do (already sealed, not building, or a redundant re-delivery)
 
-    generator = await session.get(AppUser, pack.created_by)
-    if generator is None or generator.status is UserStatus.DISABLED:
-        await _fail(session, pack_id, "generator account is gone or disabled")
+    if pack.build_requested_by is None:
+        await _fail(session, pack_id, "initiating generator is missing")
         return
+    generator = await session.get(AppUser, pack.build_requested_by)
+    if generator is None or generator.status is not UserStatus.ACTIVE:
+        await _fail(session, pack_id, "initiating generator account is missing or inactive")
+        return
+    # psycopg loads PostgreSQL INET as an ipaddress object; the PDP's canonical RequestContext
+    # compares textual addresses to the string values in ``scope.predicates.ip_allow``.
+    source_ip = str(pack.build_source_ip) if pack.build_source_ip is not None else None
 
     try:
         scope_ids = _scope_ids(pack)
@@ -261,7 +280,12 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
             period_start=pack.period_start,
             period_end=pack.period_end,
         )
-        classified = await service.classify_candidates(session, generator, candidates)
+        classified = await service.classify_candidates(
+            session,
+            generator,
+            candidates,
+            source_ip=source_ip,
+        )
 
         # Gather files for INCLUDED records; a build-time byte absence downgrades to absence.
         files: list[tuple[str, bytes]] = []
@@ -316,6 +340,20 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
             # would only withhold the sealed pack afterwards — this stops the born-dead copy).
             if await repo.pack_subjects_destroyed(session, pack):
                 await _fail(session, pack_id, "a finding/CAPA subject was destroyed before sealing")
+                return
+            if not await service.authorize_pack_subjects_for_build(
+                session,
+                authz_sink or get_authz_audit_sink(),
+                generator,
+                pack.scope_kind.value,
+                scope_ids,
+                source_ip=source_ip,
+            ):
+                await _fail(
+                    session,
+                    pack_id,
+                    "subject read authorization denied for initiating generator",
+                )
                 return
             dossier = await build_dossier(
                 session,
