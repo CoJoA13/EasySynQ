@@ -62,9 +62,10 @@ export function ReportsRegisterPage() {
 
   // #334: keep one unfiltered register query as the stable facet universe. It is already
   // permission-filtered by report.read + document.read, so deriving choices from it cannot disclose
-  // anything beyond the table. A second observer with the same {} query key is deduplicated by
-  // React Query when no filters are active; with filters, this baseline remains cached and stable.
+  // anything beyond the table. Cached data may be stale on mount, so URL membership checks wait for
+  // this observer to complete a fresh request before they trust the baseline.
   const facetQuery = useDocumentControlRegister();
+  const facetBaselineReady = facetQuery.isSuccess && facetQuery.isFetchedAfterMount;
   const facetSource = useMemo(
     () => (facetQuery.data ? deriveRegisterFacetSource(facetQuery.data) : null),
     [facetQuery.data],
@@ -90,16 +91,23 @@ export function ReportsRegisterPage() {
   const effectiveFilterReady = !uf.eff || Boolean(me?.org_timezone);
   const filters = toDocumentFilters(uf, me?.org_timezone);
   // The shared Library mapper knows clause but not the register-only process facet. Both report
-  // facets are applied only after the unfiltered, caller-visible baseline proves the URL value is
-  // representable. This generalizes the old process-only guard to clause and makes neither catalog
-  // endpoint authoritative for filter applicability.
-  if (uf.clause && !clauseValueSet.has(uf.clause)) delete filters.clause;
-  if (uf.process && processValueSet.has(uf.process)) filters.process_id = uf.process;
+  // facets are applied only after a freshly fetched, caller-visible baseline proves the URL value
+  // is representable. This generalizes the old process-only guard to clause and makes neither
+  // catalog endpoint authoritative for filter applicability.
+  if (uf.clause && (!facetBaselineReady || !clauseValueSet.has(uf.clause))) {
+    delete filters.clause;
+  }
+  if (uf.process && facetBaselineReady && processValueSet.has(uf.process)) {
+    filters.process_id = uf.process;
+  }
 
-  // Remove stale/bookmarked values once the permission-filtered universe is known. They were never
-  // sent to the API (the guards above), and replacing the URL prevents an invisible ghost filter.
-  const invalidClause = Boolean(facetSource && uf.clause && !clauseValueSet.has(uf.clause));
-  const invalidProcess = Boolean(facetSource && uf.process && !processValueSet.has(uf.process));
+  // Remove stale/bookmarked values only after this mount has fetched the permission-filtered
+  // universe. They were never sent to the API (the guards above), and replacing the URL prevents an
+  // invisible ghost filter without deleting a newly valid value from an older cached snapshot.
+  const invalidClause = Boolean(facetBaselineReady && uf.clause && !clauseValueSet.has(uf.clause));
+  const invalidProcess = Boolean(
+    facetBaselineReady && uf.process && !processValueSet.has(uf.process),
+  );
   useEffect(() => {
     if (!invalidClause && !invalidProcess) return;
     setParams(
@@ -112,19 +120,27 @@ export function ReportsRegisterPage() {
     );
   }, [invalidClause, invalidProcess, setParams]);
 
-  const registerQuery = useDocumentControlRegister(
-    filters,
-    facetSource !== null && effectiveFilterReady,
-  );
-  const data = registerQuery.data;
-  const forbidden = facetQuery.forbidden || registerQuery.forbidden;
-  const isError = facetQuery.isError || registerQuery.isError || (Boolean(uf.eff) && meError);
+  const hasReportFacetUrl = Boolean(uf.clause || uf.process);
+  const reportFacetValidationPending = hasReportFacetUrl && !facetBaselineReady;
+  const hasEffectiveFilters = Object.keys(filters).length > 0;
+  // An independent filter (state/type/owner/effective date) can run alongside the baseline. A
+  // Process/Clause deep link still waits for fresh membership validation. With no effective
+  // filters, the baseline is also the displayed report; keeping the second observer disabled avoids
+  // a staleTime:0 refetch of the same {} key after the first request completes.
+  const useFilteredQuery = hasEffectiveFilters || reportFacetValidationPending;
+  const registerQueryEnabled =
+    useFilteredQuery && effectiveFilterReady && (!hasReportFacetUrl || facetBaselineReady);
+  const registerQuery = useDocumentControlRegister(filters, registerQueryEnabled);
+  const reportQuery = useFilteredQuery ? registerQuery : facetQuery;
+  const data = reportQuery.data;
+  const facetQueryBlocksReport = reportFacetValidationPending;
+  const forbidden = reportQuery.forbidden || (facetQueryBlocksReport && facetQuery.forbidden);
+  const isError =
+    reportQuery.isError ||
+    (facetQueryBlocksReport && facetQuery.isError) ||
+    (Boolean(uf.eff) && meError);
   const isLoading =
-    !isError &&
-    (facetQuery.isLoading ||
-      facetSource === null ||
-      registerQuery.isLoading ||
-      !effectiveFilterReady);
+    !isError && (!effectiveFilterReady || reportQuery.isLoading || reportFacetValidationPending);
   const { q, setQ, query } = useDebouncedSearch();
   const { sort, dir, toggleSort } = useTableSort<SortKey>({
     keys: SORT_KEYS,
@@ -175,14 +191,14 @@ export function ReportsRegisterPage() {
           <ErrorState
             title="Couldn't load the register"
             onRetry={() => {
-              void refetchMe();
+              if (meError) void refetchMe();
               if (facetQuery.isError) void facetQuery.refetch();
-              else void registerQuery.refetch();
+              if (registerQueryEnabled && registerQuery.isError) void registerQuery.refetch();
             }}
           />
         ) : (
           <>
-            <AsOf at={registerQuery.dataUpdatedAt} />
+            <AsOf at={reportQuery.dataUpdatedAt} />
             <ProvenanceBanner provenance={data.provenance} />
             <Group align="flex-end" gap="sm" wrap="wrap">
               <FacetBar

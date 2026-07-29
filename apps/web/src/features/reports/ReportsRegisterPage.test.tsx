@@ -1,4 +1,5 @@
 import { screen, waitFor } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
@@ -125,6 +126,93 @@ describe("ReportsRegisterPage", () => {
     );
     renderWithProviders(<ReportsRegisterPage />);
     expect(await screen.findByText(/Couldn't load the register/)).toBeInTheDocument();
+  });
+
+  it("reuses the baseline response when no filters are active", async () => {
+    let requests = 0;
+    server.use(
+      http.get("/api/v1/reports/document-control", () => {
+        requests += 1;
+        return HttpResponse.json(REG);
+      }),
+    );
+    renderWithProviders(<ReportsRegisterPage />);
+    expect(await screen.findByText("SOP-QA-001")).toBeInTheDocument();
+
+    // Let the success render and its effects settle. Enabling a second staleTime:0 observer after
+    // the baseline completes would have reached the handler again by now.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(requests).toBe(1);
+  });
+
+  it("runs an independent filtered request concurrently and keeps it usable if the baseline fails", async () => {
+    let releaseBaseline: () => void = () => undefined;
+    const baselineGate = new Promise<void>((resolve) => {
+      releaseBaseline = resolve;
+    });
+    let baselineStarted = false;
+    let baselineFinished = false;
+    let filteredRequests = 0;
+    server.use(
+      http.get("/api/v1/reports/document-control", async ({ request }) => {
+        const query = new URL(request.url).searchParams;
+        if (query.get("filter[current_state][eq]") === "Effective") {
+          filteredRequests += 1;
+          return HttpResponse.json(REG);
+        }
+        baselineStarted = true;
+        await baselineGate;
+        baselineFinished = true;
+        return HttpResponse.json({ title: "baseline failed" }, { status: 500 });
+      }),
+    );
+
+    renderWithProviders(<ReportsRegisterPage />, { route: "/?state=Effective" });
+    try {
+      await waitFor(() => expect(baselineStarted).toBe(true));
+      expect(await screen.findByText("SOP-QA-001")).toBeInTheDocument();
+      expect(filteredRequests).toBe(1);
+    } finally {
+      releaseBaseline();
+    }
+
+    await waitFor(() => expect(baselineFinished).toBe(true));
+    expect(screen.getByText("SOP-QA-001")).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't load the register/)).not.toBeInTheDocument();
+  });
+
+  it("retries failed baseline and filtered requests together", async () => {
+    const user = userEvent.setup();
+    let baselineRequests = 0;
+    let filteredRequests = 0;
+    server.use(
+      http.get("/api/v1/reports/document-control", ({ request }) => {
+        const filtered =
+          new URL(request.url).searchParams.get("filter[current_state][eq]") === "Effective";
+        if (filtered) {
+          filteredRequests += 1;
+          return filteredRequests === 1
+            ? HttpResponse.json({ title: "filtered failed" }, { status: 500 })
+            : HttpResponse.json(REG);
+        }
+        baselineRequests += 1;
+        return baselineRequests === 1
+          ? HttpResponse.json({ title: "baseline failed" }, { status: 500 })
+          : HttpResponse.json(REG);
+      }),
+    );
+
+    renderWithProviders(<ReportsRegisterPage />, { route: "/?state=Effective" });
+    expect(await screen.findByText(/Couldn't load the register/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(baselineRequests).toBe(1);
+      expect(filteredRequests).toBe(1);
+    });
+
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("SOP-QA-001")).toBeInTheDocument();
+    expect(baselineRequests).toBe(2);
+    expect(filteredRequests).toBe(2);
   });
 
   it("debounced search filters rows by identifier / title / type", async () => {
@@ -308,6 +396,70 @@ describe("ReportsRegisterPage", () => {
         "filter%5Bprocess_id%5D%5Beq%5D=pr000001-0001-0001-0001-000000000001",
       ),
     );
+  });
+
+  it("waits for a fresh baseline before validating cached Process and Clause membership", async () => {
+    const staleReg: DocumentControlRegister = {
+      ...REG,
+      rows: REG.rows.map((row) => ({ ...row, clause_refs: [], process_links: [] })),
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(["document-control-register", {}], staleReg);
+
+    let releaseBaseline: () => void = () => undefined;
+    const baselineGate = new Promise<void>((resolve) => {
+      releaseBaseline = resolve;
+    });
+    let baselineStarted = false;
+    const filteredUrls: string[] = [];
+    server.use(
+      http.get("/api/v1/reports/document-control", async ({ request }) => {
+        const query = new URL(request.url).searchParams;
+        if (query.has("filter[process_id][eq]") || query.has("filter[clause_refs][has]")) {
+          filteredUrls.push(request.url);
+          return HttpResponse.json(REG);
+        }
+        baselineStarted = true;
+        await baselineGate;
+        return HttpResponse.json(REG);
+      }),
+    );
+
+    renderWithProviders(
+      <>
+        <ReportsRegisterPage />
+        <QueryProbe />
+      </>,
+      {
+        route: "/?process=pr000001-0001-0001-0001-000000000001&clause=7.5.3",
+        queryClient,
+      },
+    );
+    try {
+      await waitFor(() => expect(baselineStarted).toBe(true));
+      // Give the cached-data render its effects a turn: neither bookmark may be removed or sent
+      // until the fresh response supersedes this older snapshot.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(screen.getByLabelText("Current query")).toHaveTextContent(
+        "process=pr000001-0001-0001-0001-000000000001",
+      );
+      expect(screen.getByLabelText("Current query")).toHaveTextContent("clause=7.5.3");
+      expect(filteredUrls).toHaveLength(0);
+    } finally {
+      releaseBaseline();
+    }
+
+    await waitFor(() => expect(filteredUrls).toHaveLength(1));
+    expect(filteredUrls[0]).toContain(
+      "filter%5Bprocess_id%5D%5Beq%5D=pr000001-0001-0001-0001-000000000001",
+    );
+    expect(filteredUrls[0]).toContain("filter%5Bclause_refs%5D%5Bhas%5D=7.5.3");
+    expect(screen.getByLabelText("Current query")).toHaveTextContent(
+      "process=pr000001-0001-0001-0001-000000000001",
+    );
+    expect(screen.getByLabelText("Current query")).toHaveTextContent("clause=7.5.3");
   });
 
   // The former process-only URL guard is deliberately generalized to clause: 8.4 exists in the
