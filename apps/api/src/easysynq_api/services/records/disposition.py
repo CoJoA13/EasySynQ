@@ -239,6 +239,7 @@ async def _mark_record_evidence_for_purge(
         blob = blobs[sha]
         await repo.lock_blob_for_update(session, sha)
         if await repo.blob_needed_by_other_live_record(session, sha, record.id):
+            await repo.detach_record_evidence_blob(session, record.id, sha)
             continue  # another live Record, document version, rendition, or pack owns the bytes
         purge_id = await repo.insert_pending_purge(
             session,

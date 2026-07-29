@@ -130,10 +130,10 @@ async def test_pack_artifact_liveness_preserves_an_unaffected_live_owner(
 ) -> None:
     """Issue #361: clearing an affected pack pointer is not authority to erase another live owner.
 
-    This contrives a byte-identical structured rendition pointer to the pack portfolio, then proves
-    the shared last-owner query keeps the Blob while that Record is live and releases it only after
-    the independent pointer is cleared. Without the structured-owner leg, the first assertion after
-    clearing the pack pointer flips false and the cascade can delete still-owned bytes.
+    This contrives byte-identical structured-rendition ownership for both artifact families. A
+    shared ZIP stays alive but loses the disposed pack Record's route attachment; a shared portfolio
+    remains needed until the independent pointer is cleared. Removing either the targeted detach or
+    the structured-owner liveness leg makes this test fail.
     """
     subject = _subject("pack-r27-live-owner")
     user_id = await _grant(subject, _PACK_PERMS)
@@ -157,9 +157,36 @@ async def test_pack_artifact_liveness_preserves_an_unaffected_live_owner(
         async with get_sessionmaker()() as s:
             pack = await s.get(EvidencePack, pack_uuid)
             live_record = await s.get(Record, uuid.UUID(shared_record_id))
-            assert pack is not None and pack.portfolio_blob_sha256 is not None
+            assert pack is not None and pack.pack_record_id is not None
+            assert pack.zip_blob_sha256 is not None and pack.portfolio_blob_sha256 is not None
             assert live_record is not None
+            pack_record = await s.get(Record, pack.pack_record_id)
+            assert pack_record is not None
+            zip_sha = pack.zip_blob_sha256
             portfolio_sha = pack.portfolio_blob_sha256
+
+            # A lawful independent owner keeps shared ZIP bytes alive, but the disposed pack
+            # Record must still lose its own attachment or the generic Record route can mint a new
+            # URL to bytes retained for that other owner.
+            live_record.structured_pdf_blob_sha256 = zip_sha
+            event = disposition._write_tombstone(
+                s,
+                pack_record,
+                action=DispositionAction.DESTROY,
+                policy_id=pack_record.retention_policy_id,
+                approved_by=None,
+            )
+            assert (
+                await disposition._mark_record_evidence_for_purge(
+                    s,
+                    pack_record,
+                    disposition_event=event,
+                )
+                == []
+            )
+            assert await records_repo.get_evidence_blob(s, pack_record.id, zip_sha) is None
+            assert await s.get(Blob, zip_sha) is not None
+            assert live_record.structured_pdf_blob_sha256 == zip_sha
 
             # Remove the pack's ownership exactly as invalidation does, but leave an unrelated
             # active Record pointing at the same physical content.

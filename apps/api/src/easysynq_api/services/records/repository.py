@@ -501,19 +501,33 @@ async def delete_blob_and_links(session: AsyncSession, blob_sha256: str) -> None
     ``evidence_blob`` row referencing it, so the invariant **a ``blob`` row exists iff its object
     exists** holds — no backup/restore (or any 'copy every blob' sweep) ever hits a destroyed
     object (doc 06 §5.3 "removes the blob"; the ``disposition_event`` tombstone + the record
-    ``content_hash`` preserve what existed). Only called when no live record needs the bytes."""
+    ``content_hash`` preserve what existed). Only called when no live domain owner needs the
+    bytes."""
     await session.execute(delete(EvidenceBlob).where(EvidenceBlob.blob_sha256 == blob_sha256))
     await session.execute(delete(Blob).where(Blob.sha256 == blob_sha256))
+
+
+async def detach_record_evidence_blob(
+    session: AsyncSession, record_id: uuid.UUID, blob_sha256: str
+) -> None:
+    """Remove one disposed Record's reachability while another live owner retains the Blob."""
+    await session.execute(
+        delete(EvidenceBlob).where(
+            EvidenceBlob.record_id == record_id,
+            EvidenceBlob.blob_sha256 == blob_sha256,
+        )
+    )
 
 
 async def blob_needed_by_other_live_record(
     session: AsyncSession, blob_sha256: str, exclude_record_id: uuid.UUID
 ) -> bool:
     """``True`` if destroying this blob's bytes would orphan a still-live reference — so a DESTROY
-    purges the bytes only when this is ``False`` (the disposed record keeps its ``evidence_blob``
-    tombstone row regardless; the bytes simply 404 once gone).
+    purges the bytes only when this is ``False``. The caller still detaches the disposed Record's
+    own ``evidence_blob`` row when this is ``True`` so its generic download route cannot reach bytes
+    retained for an unrelated lawful owner.
 
-    Two legs:
+    Four live-owner legs:
     1. Some OTHER non-``DISPOSED`` record still attaches this blob (records may share a
        records-bucket WORM blob — the S-rec-1 dedup).
     2. A ``document_version`` references this sha as ``source_blob_sha256`` /
@@ -522,7 +536,9 @@ async def blob_needed_by_other_live_record(
        UNREACHABLE for new check-ins, but this leg stops a record disposition from physically
        destroying bytes a controlled document still needs — the D2 data-loss AND the
        ``delete_blob_and_links`` RESTRICT-FK IntegrityError that would otherwise crash-loop the
-       retention sweep."""
+       retention sweep.
+    3. Another live Record points at the sha as its structured PDF rendition.
+    4. A non-invalidated Evidence Pack still points at the sha as its ZIP or portfolio."""
     record_leg = await session.scalar(
         select(func.count())
         .select_from(EvidenceBlob)
