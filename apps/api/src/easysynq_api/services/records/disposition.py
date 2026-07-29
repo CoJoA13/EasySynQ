@@ -91,8 +91,28 @@ class _PurgeSpec:
     bypass: bool
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _PendingPurgeSnapshot:
+    """Commit-stable fields copied before the reaper commits any marker in a claimed batch."""
+
+    purge_id: uuid.UUID
+    org_id: uuid.UUID
+    sha256: str
+    bucket: str
+    object_key: str
+    requested_bypass: bool
+    record_id: uuid.UUID | None
+    disposition_event_id: uuid.UUID | None
+    worm_destroy_request_id: uuid.UUID | None
+    authority_bound: bool
+
+
 async def _mark_record_evidence_for_purge(
-    session: AsyncSession, record: Record, *, bypass: bool
+    session: AsyncSession,
+    record: Record,
+    *,
+    disposition_event: DispositionEvent,
+    worm_destroy_request: WormDestroyRequest | None = None,
 ) -> list[_PurgeSpec]:
     """The DB phase of a DESTROY erasure (NO S3 call, NO commit). For each evidence blob this record
     is the LAST live referencer of, drop the ``blob`` row + ``evidence_blob`` links and record a
@@ -105,8 +125,45 @@ async def _mark_record_evidence_for_purge(
     liveness re-check, so two concurrent shared-blob dispositions serialise and the last referencer
     purges, instead of both observing the peer live and orphaning the bytes.
 
+    Every marker is bound to the explicit immutable DESTROY event and, for an R27 legal-order
+    destruction, its executed two-person request. This routine derives bypass from that authority;
+    callers cannot set the marker boolean independently.
+
     Also handles the structured-PDF rendition (S-rec-3) — a per-record non-evidence blob reachable
     only via ``record.structured_pdf_blob_sha256`` (no liveness guard; non-WORM, no bypass)."""
+    if (
+        disposition_event.record_id != record.id
+        or disposition_event.org_id != record.org_id
+        or disposition_event.action is not DispositionAction.DESTROY
+        or not disposition_event.tombstone
+    ):
+        raise ValueError("purge marker authority must be this Record's DESTROY event")
+    if disposition_event.is_worm_destroy:
+        if (
+            worm_destroy_request is None
+            or worm_destroy_request.id is None
+            or worm_destroy_request.record_id != record.id
+            or worm_destroy_request.org_id != record.org_id
+            or worm_destroy_request.executed_at is None
+            or worm_destroy_request.cancelled_at is not None
+            or worm_destroy_request.approved_by is None
+            or worm_destroy_request.requested_by == worm_destroy_request.approved_by
+            or disposition_event.policy_id is not None
+            or disposition_event.requested_by != worm_destroy_request.requested_by
+            or disposition_event.approved_by != worm_destroy_request.approved_by
+            or disposition_event.legal_basis != worm_destroy_request.legal_basis
+        ):
+            raise ValueError("R27 purge marker authority requires its executed two-person request")
+    elif (
+        worm_destroy_request is not None
+        or disposition_event.policy_id != record.retention_policy_id
+        or disposition_event.requested_by is not None
+        or disposition_event.legal_basis is not None
+    ):
+        raise ValueError("ordinary purge marker authority requires this Record's retention policy")
+
+    bypass = disposition_event.is_worm_destroy
+    request_id = worm_destroy_request.id if worm_destroy_request is not None else None
     specs: list[_PurgeSpec] = []
     blobs = {b.sha256: b for _eb, b in await repo.list_evidence_blobs(session, record.id)}
     for sha in sorted(blobs):  # consistent lock order across concurrent dispositions
@@ -121,6 +178,9 @@ async def _mark_record_evidence_for_purge(
             bucket=blob.bucket,
             object_key=blob.object_key,
             bypass_governance=bypass,
+            record_id=record.id,
+            disposition_event_id=disposition_event.id,
+            worm_destroy_request_id=request_id,
         )
         await repo.delete_blob_and_links(session, sha)
         specs.append(_PurgeSpec(purge_id, sha, blob.bucket, blob.object_key, bypass))
@@ -135,6 +195,9 @@ async def _mark_record_evidence_for_purge(
             bucket=bucket,
             object_key=rendition_sha,
             bypass_governance=False,
+            record_id=record.id,
+            disposition_event_id=disposition_event.id,
+            worm_destroy_request_id=request_id,
         )
         await repo.delete_blob_and_links(session, rendition_sha)
         record.structured_pdf_blob_sha256 = None
@@ -157,14 +220,14 @@ async def _purge_marked(
     raises a cross-loop ``RuntimeError`` (not a ``SQLAlchemyError``, so it would escape the deferral
     below). Either failure just leaves the marker for ``reap_pending_blob_purges`` to finish (the
     record stays disposed either way). Skips the purge (and drops the marker) only if a ``blob`` row
-    now OWNS this exact object again (same sha + bucket + object_key) — a re-capture into the SAME
-    location re-owns the bytes, so a stale marker must not erase them; a matching sha in a DIFFERENT
-    bucket is a physically distinct object and does NOT cancel the purge (``blob_owns_object``)."""
+    now OWNS this exact physical object again (same bucket + object_key) — a re-capture into the
+    SAME location re-owns the bytes, so a stale marker must not erase them; a matching SHA in a
+    DIFFERENT bucket is a physically distinct object and does not cancel the purge."""
     for spec in specs:
         try:
             async with sessionmaker() as s:
-                if not await repo.blob_owns_object(
-                    s, sha256=spec.sha256, bucket=spec.bucket, object_key=spec.object_key
+                if not await repo.object_is_owned(
+                    s, bucket=spec.bucket, object_key=spec.object_key
                 ):
                     try:
                         await storage.purge_object(
@@ -199,7 +262,7 @@ def _write_tombstone(
     requested_by: uuid.UUID | None = None,
     is_worm_destroy: bool = False,
     legal_basis: str | None = None,
-) -> None:
+) -> DispositionEvent:
     """Flip the record to DISPOSED + append the immutable ``disposition_event`` tombstone.
 
     On a DESTROY — the schedule-driven ``DispositionAction.DESTROY`` sweep/human path AND the R27
@@ -215,19 +278,20 @@ def _write_tombstone(
     record.disposition_state = RecordDispositionState.DISPOSED
     if action is DispositionAction.DESTROY:
         record.form_field_values = None
-    session.add(
-        DispositionEvent(
-            org_id=record.org_id,
-            record_id=record.id,
-            action=action,
-            tombstone=True,
-            policy_id=policy_id,
-            approved_by=approved_by,
-            requested_by=requested_by,
-            is_worm_destroy=is_worm_destroy,
-            legal_basis=legal_basis,
-        )
+    event = DispositionEvent(
+        id=uuid.uuid4(),
+        org_id=record.org_id,
+        record_id=record.id,
+        action=action,
+        tombstone=True,
+        policy_id=policy_id,
+        approved_by=approved_by,
+        requested_by=requested_by,
+        is_worm_destroy=is_worm_destroy,
+        legal_basis=legal_basis,
     )
+    session.add(event)
+    return event
 
 
 # --- PATCH /disposition (advance the state machine) --------------------------------------
@@ -333,9 +397,16 @@ async def _dispose_now(
     specs: list[_PurgeSpec] = []
     if action is DispositionAction.DESTROY:
         await _guard_or_refuse_destroy(session, actor, record, bypass=False)
-        specs = await _mark_record_evidence_for_purge(session, record, bypass=False)
 
-    _write_tombstone(session, record, action=action, policy_id=policy.id, approved_by=actor.id)
+    event = _write_tombstone(
+        session, record, action=action, policy_id=policy.id, approved_by=actor.id
+    )
+    if action is DispositionAction.DESTROY:
+        specs = await _mark_record_evidence_for_purge(
+            session,
+            record,
+            disposition_event=event,
+        )
     emit_record_event(
         session,
         actor,
@@ -526,13 +597,9 @@ async def approve_worm_destroy(
     # Pre-purge guard: only COMPLIANCE mode is refused (bypass overrides an unexpired lock + hold).
     await _guard_or_refuse_destroy(session, actor, record, bypass=True)
 
-    # MARK the evidence for purge (blob-row deletes + markers); the physical S3 purge is the
-    # post-commit ``_purge_marked`` step below (reaper-backstopped).
-    specs = await _mark_record_evidence_for_purge(session, record, bypass=True)
-
     req.approved_by = actor.id
     req.executed_at = _now()
-    _write_tombstone(
+    event = _write_tombstone(
         session,
         record,
         action=DispositionAction.DESTROY,
@@ -541,6 +608,14 @@ async def approve_worm_destroy(
         requested_by=req.requested_by,
         is_worm_destroy=True,
         legal_basis=req.legal_basis,
+    )
+    # MARK the evidence only after the explicit immutable event and executed request exist in this
+    # transaction. All three commit atomically; a rollback leaves neither marker nor authority.
+    specs = await _mark_record_evidence_for_purge(
+        session,
+        record,
+        disposition_event=event,
+        worm_destroy_request=req,
     )
     emit_record_event(
         session,
@@ -687,8 +762,13 @@ async def _auto_dispose(
         retain_until = await _max_worm_retain_until(session, record.id)
         if retain_until is not None and retain_until > now:
             return None  # WORM lock not yet expired — no bypass in the sweep; wait
-        specs = await _mark_record_evidence_for_purge(session, record, bypass=False)
-    _write_tombstone(session, record, action=action, policy_id=policy.id, approved_by=None)
+    event = _write_tombstone(session, record, action=action, policy_id=policy.id, approved_by=None)
+    if action is DispositionAction.DESTROY:
+        specs = await _mark_record_evidence_for_purge(
+            session,
+            record,
+            disposition_event=event,
+        )
     emit_record_event_system(
         session,
         record.org_id,
@@ -708,6 +788,80 @@ async def _auto_dispose(
 # --- the pending-purge reaper (Batch 5 crash-recovery) -----------------------------------
 
 
+async def _authorized_reaper_bypass(
+    session: AsyncSession, marker: _PendingPurgeSnapshot
+) -> bool | None:
+    """Derive a marker's bypass decision from durable disposition authority.
+
+    ``None`` means the bound authority is invalid and the marker must be refused without touching
+    S3. Legacy rows predate the authority columns and are intentionally recoverable only through
+    the ordinary non-bypass delete path.
+    """
+    settings = get_settings()
+    if marker.bucket not in {
+        settings.s3_bucket_records,
+        settings.s3_bucket_renditions,
+    }:
+        return None
+    if not marker.authority_bound:
+        return False
+    if marker.record_id is None or marker.disposition_event_id is None:
+        return None
+
+    authority = await repo.get_pending_purge_authority(
+        session,
+        record_id=marker.record_id,
+        disposition_event_id=marker.disposition_event_id,
+        worm_destroy_request_id=marker.worm_destroy_request_id,
+    )
+    if authority is None:
+        return None
+    record, event, request = authority
+
+    if (
+        record.org_id != marker.org_id
+        or record.disposition_state is not RecordDispositionState.DISPOSED
+        or event.org_id != marker.org_id
+        or event.record_id != record.id
+        or event.action is not DispositionAction.DESTROY
+        or not event.tombstone
+    ):
+        return None
+
+    if marker.worm_destroy_request_id is None:
+        if (
+            marker.requested_bypass
+            or event.is_worm_destroy
+            or event.policy_id is None
+            or event.policy_id != record.retention_policy_id
+            or event.requested_by is not None
+            or event.legal_basis is not None
+        ):
+            return None
+        return False
+
+    if (
+        request is None
+        or not event.is_worm_destroy
+        or event.policy_id is not None
+        or event.requested_by is None
+        or event.approved_by is None
+        or event.requested_by == event.approved_by
+        or request.id != marker.worm_destroy_request_id
+        or request.org_id != marker.org_id
+        or request.record_id != record.id
+        or request.executed_at is None
+        or request.cancelled_at is not None
+        or request.approved_by is None
+        or request.requested_by == request.approved_by
+        or event.requested_by != request.requested_by
+        or event.approved_by != request.approved_by
+        or event.legal_basis != request.legal_basis
+    ):
+        return None
+    return marker.requested_bypass
+
+
 async def reap_pending_blob_purges(session: AsyncSession) -> dict[str, int]:
     """Crash-recovery for the post-commit purge. A ``pending_blob_purge`` marker survives only when
     the immediate ``_purge_marked`` didn't finish (a crash or storage outage between the disposition
@@ -715,37 +869,89 @@ async def reap_pending_blob_purges(session: AsyncSession) -> dict[str, int]:
     drop the marker, committing per marker so a mid-run crash re-does at most one. Fields are
     snapshotted per batch so a per-marker commit can't expire an ORM row we read. LOOPS in
     ``exclude_ids`` batches so a persistent-failure cohort in the oldest rows can't starve newer
-    purgeable markers within a run. SKIPs the purge (and drops the marker) when a ``blob`` row now
-    OWNS this exact object again (same sha + bucket + object_key) — a re-capture of the same content
-    into the SAME location re-owns the bytes; a matching sha in a different bucket is a distinct
-    object and does NOT cancel the purge. Returns ``{reaped}``."""
+    purgeable markers within a run. SKIPS the purge (and drops the marker) when a ``blob`` row now
+    owns the exact physical location (bucket + object_key), independently of the untrusted marker
+    SHA. Bound markers are purged only after their Record/event/request authority validates; legacy
+    markers are forced to non-bypass. Returns processed ``reaped`` and authority ``refused`` counts.
+    """
     reaped = 0
+    refused = 0
     handled: set[uuid.UUID] = set()
     while True:
         markers = await repo.list_pending_purges(session, exclude_ids=handled)
         if not markers:
             break
-        todo = [(m.id, m.sha256, m.bucket, m.object_key, m.bypass_governance) for m in markers]
-        handled.update(
-            purge_id for purge_id, *_ in todo
-        )  # skip this cohort on the next batch fetch
-        for purge_id, sha256, bucket, object_key, bypass in todo:
-            if await repo.blob_owns_object(
-                session, sha256=sha256, bucket=bucket, object_key=object_key
+        todo = [
+            _PendingPurgeSnapshot(
+                purge_id=m.id,
+                org_id=m.org_id,
+                sha256=m.sha256,
+                bucket=m.bucket,
+                object_key=m.object_key,
+                requested_bypass=m.bypass_governance,
+                record_id=m.record_id,
+                disposition_event_id=m.disposition_event_id,
+                worm_destroy_request_id=m.worm_destroy_request_id,
+                authority_bound=m.authority_bound,
+            )
+            for m in markers
+        ]
+        handled.update(marker.purge_id for marker in todo)
+        for marker in todo:
+            if await repo.object_is_owned(
+                session,
+                bucket=marker.bucket,
+                object_key=marker.object_key,
             ):
-                await repo.delete_pending_purge(session, purge_id)
+                await repo.delete_pending_purge(session, marker.purge_id)
                 await session.commit()
                 reaped += 1
                 continue
+
+            bypass = await _authorized_reaper_bypass(session, marker)
+            if bypass is None:
+                logger.warning(
+                    "records.reap_purge.authority_refused",
+                    extra={
+                        "extra_fields": {
+                            "purge_id": str(marker.purge_id),
+                            "record_id": str(marker.record_id) if marker.record_id else None,
+                            "disposition_event_id": (
+                                str(marker.disposition_event_id)
+                                if marker.disposition_event_id
+                                else None
+                            ),
+                        }
+                    },
+                )
+                await repo.delete_pending_purge(session, marker.purge_id)
+                await session.commit()
+                reaped += 1
+                refused += 1
+                continue
+            if not marker.authority_bound and marker.requested_bypass:
+                logger.warning(
+                    "records.reap_purge.legacy_bypass_downgraded",
+                    extra={"extra_fields": {"purge_id": str(marker.purge_id)}},
+                )
             try:
-                await storage.purge_object(object_key, bucket=bucket, bypass_governance=bypass)
+                await storage.purge_object(
+                    marker.object_key,
+                    bucket=marker.bucket,
+                    bypass_governance=bypass,
+                )
             except (ClientError, BotoCoreError):
                 logger.warning(
                     "records.reap_purge.failed",
-                    extra={"extra_fields": {"sha256": sha256, "bucket": bucket}},
+                    extra={
+                        "extra_fields": {
+                            "sha256": marker.sha256,
+                            "bucket": marker.bucket,
+                        }
+                    },
                 )
                 continue  # leave the marker; retried on the NEXT run (skipped this run via handled)
-            await repo.delete_pending_purge(session, purge_id)
+            await repo.delete_pending_purge(session, marker.purge_id)
             await session.commit()
             reaped += 1
-    return {"reaped": reaped}
+    return {"reaped": reaped, "refused": refused}

@@ -562,45 +562,82 @@ async def insert_pending_purge(
     bucket: str,
     object_key: str,
     bypass_governance: bool,
+    record_id: uuid.UUID,
+    disposition_event_id: uuid.UUID,
+    worm_destroy_request_id: uuid.UUID | None,
 ) -> uuid.UUID:
-    """Record a to-be-purged marker — the reaper-recoverable follow-up committed alongside the
-    blob-row delete, so a crash between that commit and the physical S3 purge never loses the bytes.
-    Returns the marker id so the immediate post-commit purge can delete exactly this row."""
+    """Record an authority-bound to-be-purged marker.
+
+    The marker is committed alongside the immutable DESTROY event and blob-row delete, so a crash
+    between that commit and the physical S3 purge never loses the erasure work. Its Record/event
+    references (plus the executed R27 request when present) let the reaper derive authority instead
+    of trusting marker-controlled fields. Returns the id used by the immediate post-commit purge.
+    """
     marker = PendingBlobPurge(
         org_id=org_id,
         sha256=sha256,
         bucket=bucket,
         object_key=object_key,
         bypass_governance=bypass_governance,
+        record_id=record_id,
+        disposition_event_id=disposition_event_id,
+        worm_destroy_request_id=worm_destroy_request_id,
     )
     session.add(marker)
     await session.flush()
     return marker.id
 
 
-async def blob_owns_object(
-    session: AsyncSession, *, sha256: str, bucket: str, object_key: str
-) -> bool:
-    """True if a live ``blob`` row now owns THIS EXACT object — same sha AND bucket AND object_key.
+async def object_is_owned(session: AsyncSession, *, bucket: str, object_key: str) -> bool:
+    """True if a live ``blob`` row owns this exact physical object location.
+
     The purge path checks this before erasing a marker's bytes: a re-capture of the same content
     after the marker was written re-creates the ``blob`` row over the still-present (not-yet-purged)
     object, so the bytes are live again and the stale marker must be dropped, not replayed.
 
-    ⚠ Matching the sha ALONE is wrong: ``blob.sha256`` is a GLOBAL content-addressed PK, so the
-    identical bytes can be re-owned by a blob row in a DIFFERENT bucket — e.g. a document check-in
-    lands the sha in the ``documents`` bucket while a records-evidence marker still targets the
-    ``records`` bucket (both objects physically distinct). A sha-only match would then cancel the
-    marker WITHOUT erasing the orphaned records object, leaking a disposed record's evidence. Keying
-    on (sha, bucket, object_key) cancels only when the marker's OWN object was re-created."""
+    The marker's SHA is deliberately not part of this decision: it is untrusted diagnostic
+    provenance, and a forged false SHA must not hide a live owner at the named location. Conversely,
+    matching content in another bucket is a physically distinct object and does not cancel this
+    purge. Keying on ``(bucket, object_key)`` protects exactly the object the worker would erase.
+    """
     return (
         await session.scalar(
             select(Blob.sha256).where(
-                Blob.sha256 == sha256,
                 Blob.bucket == bucket,
                 Blob.object_key == object_key,
             )
         )
     ) is not None
+
+
+async def get_pending_purge_authority(
+    session: AsyncSession,
+    *,
+    record_id: uuid.UUID,
+    disposition_event_id: uuid.UUID,
+    worm_destroy_request_id: uuid.UUID | None,
+) -> tuple[Record, DispositionEvent, WormDestroyRequest | None] | None:
+    """Load the rows a bound marker claims authorize it.
+
+    Relationships are intentionally not filtered here: the service validates every org/Record/
+    actor/legal-basis edge and must be able to distinguish a mismatched-but-existing row from a
+    legitimate tuple. The outer request join yields ``None`` for an ordinary policy disposition.
+    """
+    row = (
+        await session.execute(
+            select(Record, DispositionEvent, WormDestroyRequest)
+            .select_from(Record)
+            .join(DispositionEvent, DispositionEvent.id == disposition_event_id)
+            .outerjoin(
+                WormDestroyRequest,
+                WormDestroyRequest.id == worm_destroy_request_id,
+            )
+            .where(Record.id == record_id)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    return row[0], row[1], row[2]
 
 
 async def list_pending_purges(
