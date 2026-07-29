@@ -170,7 +170,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #363 — carry the initiating generator through Evidence Pack workers (API + migration + integration + docs; migration `0083` [new head]; R58; NO new permission key [catalog 102]; closes [#363](https://github.com/CoJoA13/EasySynQ/issues/363))
+### Issue #363 — carry the initiating generator through Evidence Pack workers (API + migration + integration + docs; migration `0083` [new head]; R58; NO new permission key [catalog 102]; closes [#363](https://github.com/CoJoA13/EasySynQ/issues/363); PR [#414](https://github.com/CoJoA13/EasySynQ/pull/414))
 
 **The current build attempt now owns its authority.** The generate transaction writes
 `build_requested_by` plus the accepted request's `build_source_ip` on the locked pack row with

@@ -68,6 +68,6 @@ The owner approved this plan before production implementation.
 - [x] Redocly contract lint and response-contract checks are not applicable: no OpenAPI contract
       changed.
 - [x] `git diff --check` and adversarial branch-diff review.
-- [ ] Commit intentionally, push, and open a ready (not draft) PR closing Issue #363.
+- [x] Commit intentionally, push, and open ready PR #414 closing Issue #363.
 - [ ] Respond to and resolve addressed review threads.
 - [ ] Monitor all PR checks and a fresh Codex review through completion; do not merge.
