@@ -10,6 +10,7 @@ a content-tier ``permission.grant`` holder cannot grant a system-domain permissi
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime
 import uuid
 from collections.abc import Awaitable, Callable
@@ -82,24 +83,53 @@ async def evaluate(
     *,
     sig_hook: bool = False,
 ) -> Decision:
-    """Resolve grants, run the PDP, and emit the audit hook (allow AND deny)."""
-    grants = await gather_grants(session, user.id, user.org_id, permission_key)
-    sod: list[Any] = []
-    allow_approver_release = False
-    if permission_key in _SOD_KEYS:
-        sod = await gather_sod_constraints(session, user.org_id)
-        if permission_key == "document.release":
-            allow_approver_release = await get_allow_approver_release(session, user.org_id)
+    """Build request context, run the PDP, and emit the audit hook (allow AND deny)."""
     ctx = RequestContext(
         now=_now(),
         source_ip=request.client.host if request.client else None,
         actor_user_id=str(user.id),
-        allow_approver_release=allow_approver_release,
     )
-    decision = authorize(grants, permission_key, resource, ctx, sig_hook=sig_hook, sod=sod)
+    return await evaluate_with_context(
+        session,
+        sink,
+        user,
+        permission_key,
+        resource,
+        ctx,
+        sig_hook=sig_hook,
+    )
+
+
+async def evaluate_with_context(
+    session: AsyncSession,
+    sink: AuthzAuditSink,
+    user: AppUser,
+    permission_key: str,
+    resource: ResourceContext,
+    context: RequestContext,
+    *,
+    sig_hook: bool = False,
+) -> Decision:
+    """Resolve grants and audit a PDP decision for an explicit trusted context.
+
+    Request routes use :func:`evaluate`; asynchronous workers use this seam when they execute on
+    behalf of a persisted initiating request and therefore have no FastAPI ``Request`` object.
+    Grants, SoD configuration, and the decision clock remain current; only context attributes
+    explicitly supplied by the transaction owner (for example a snapshotted source IP) are replayed.
+    """
+    grants = await gather_grants(session, user.id, user.org_id, permission_key)
+    sod: list[Any] = []
+    if permission_key in _SOD_KEYS:
+        sod = await gather_sod_constraints(session, user.org_id)
+        if permission_key == "document.release":
+            context = dataclasses.replace(
+                context,
+                allow_approver_release=await get_allow_approver_release(session, user.org_id),
+            )
+    decision = authorize(grants, permission_key, resource, context, sig_hook=sig_hook, sod=sod)
     await sink.record(
         AuthzAuditEvent(
-            occurred_at=ctx.now,
+            occurred_at=context.now,
             actor_id=str(user.id),
             org_id=str(user.org_id),
             permission_key=permission_key,

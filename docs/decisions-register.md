@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R57) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R58) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R57
+## Part 3 — Resolutions R1–R58
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1636,6 +1636,43 @@ keys for metadata access.
 **Back-propagation:** 07 §3.1, 13 §2/§6.1, 15 §8.5/§8.14/§8.15, OpenAPI.
 
 Bumps the resolutions range **R1–R56 → R1–R57**.
+
+---
+
+### R58 — Evidence Pack asynchronous build principal and request context (issue #363) — 2026-07-29
+
+An Evidence Pack build executes on behalf of the user who initiated the **current build attempt**,
+not the user who originally created its DRAFT header. `evidence_pack.created_by` retains the
+header-creator meaning. `evidence_pack.build_requested_by` and `build_source_ip` snapshot the
+current attempt's user and accepted generate request IP in the same transaction as
+`status → BUILDING`. The Celery task carries only `pack_id`; after acquiring the build and row
+locks, the worker reads the authoritative attempt context from the row. A delayed delivery
+therefore cannot inject an older caller into a later retry.
+
+The worker evaluates current account state, grants, explicit DENYs, validity windows, and current
+time. Only the initiating request's source IP is replayed so the asynchronous continuation
+preserves the existing exact-match `ip_allow` semantics. `build_source_ip` is lossless Text—not
+`inet`—because database canonicalization of an equivalent IPv6 spelling after request acceptance
+would change that exact-string decision. Preview classification uses the live create-request IP;
+seal-time R28 classification uses the persisted generate-request IP. A missing or non-active
+initiating user fails closed, with no fallback to `created_by`.
+
+FINDING/CAPA dossier authorization is one shared check graph across create, generate, and build:
+`finding.read`, source `audit.read`, linked/origin counterpart reads, and process-scoped
+`capa.read` as applicable. The worker repeats those audited PEP decisions immediately before
+dossier serialization. Its independent authorization-audit transaction uses the task-local engine,
+which is disposed with that Celery invocation's `asyncio.run()` loop. Any denial moves the attempt
+to `FAILED` before dossier bytes are built.
+Record classification, the sealed pack Record's `captured_by`, `PACK_GENERATED`, and worker-emitted
+`PACK_BUILD_FAILED` all use the initiating generator. Reaper-emitted timeout failures remain system
+actions. No new endpoint, response field, status, or permission key is introduced.
+
+Migration `0083` adds the nullable attempt fields, a named RESTRICT user FK, and compatibility
+backfill of historical non-DRAFT rows to `created_by`.
+
+**Back-propagation:** 06 §7, 14 §5.7, 15 §8.15a, engineering patterns, remediation tracker.
+
+Bumps the resolutions range **R1–R57 → R1–R58**.
 
 ---
 

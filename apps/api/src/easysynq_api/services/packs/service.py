@@ -43,7 +43,7 @@ from ...db.models.record import Record
 from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...logging import request_id_var
 from ...problems import ProblemException
-from ..authz import AuthzAuditSink, enforce, gather_grants
+from ..authz import AuthzAuditSink, enforce, evaluate_with_context, gather_grants
 from ..records import repository as records_repo
 from ..reports.checklist import compute_checklist
 from ..vault import repository as vault_repo
@@ -153,13 +153,19 @@ async def classify_candidates(
     session: AsyncSession,
     generator: AppUser,
     candidates: list[tuple[Record, DocumentedInformation]],
+    *,
+    source_ip: str | None = None,
 ) -> list[ClassifiedRecord]:
     """Run each candidate through the generator's deny-by-default ``record.read`` (the
     search/records row-filter), then the genuine-absence (destroy-tombstone) check. The
     ``ResourceContext`` carries the record's process_ids + framework so a genuinely PROCESS-scoped
     grant is honored (not a blanket EXCLUDED_PERMISSION)."""
     grants = await gather_grants(session, generator.id, generator.org_id, "record.read")
-    ctx = RequestContext(now=_now())
+    ctx = RequestContext(
+        now=_now(),
+        source_ip=source_ip,
+        actor_user_id=str(generator.id),
+    )
     out: list[ClassifiedRecord] = []
     for record, base in candidates:
         # The ONE source of truth (S-records-R): the same effective binding the records read gate
@@ -289,6 +295,64 @@ async def _validate_scope(
     return ids
 
 
+async def _pack_subject_read_checks(
+    session: AsyncSession,
+    scope_kind: str,
+    scope_ids: list[uuid.UUID],
+) -> list[tuple[str, ResourceContext]]:
+    """Resolve the exact read checks required by a FINDING/CAPA dossier.
+
+    Both the request PEP and the asynchronous worker consume this graph so create/generate and
+    seal-time authorization cannot drift apart.
+    """
+    checks: list[tuple[str, ResourceContext]] = []
+    if scope_kind == "FINDING":
+        # finding.read is SYSTEM-enforced (GET /findings/{id}) → one check gates every subject.
+        if scope_ids:
+            checks.append(("finding.read", ResourceContext.system()))
+        for fid in scope_ids:
+            finding = await repo.get_finding(session, fid)
+            if finding is None:  # pragma: no cover - already 404'd by _validate_scope
+                continue
+            # The finding dossier embeds its SOURCE AUDIT's id + identifier; GET /audits/{id} gates
+            # that behind audit.read (SYSTEM), so bundling the finding also requires reading its
+            # source audit — else a finding.read-only holder harvests the audit identifier.
+            checks.append(("audit.read", ResourceContext.system()))
+            if finding.auto_capa_id is None:
+                continue
+            capa = await repo.get_capa(session, finding.auto_capa_id)
+            if capa is None:  # pragma: no cover - the bidirectional link is created in one txn
+                continue
+            resource = (
+                ResourceContext(process_ids=frozenset({str(capa.process_id)}))
+                if capa.process_id is not None
+                else ResourceContext.system()
+            )
+            # The finding dossier embeds the linked auto-CAPA's identifier + close_state
+            # (dossier._finding_subject) — data GET /findings/{id} does NOT expose — so this finding
+            # also requires reading its paired CAPA (the symmetric partner of the CAPA pack's
+            # origin-finding gate); else a finding.read-only holder harvests the CAPA data.
+            checks.append(("capa.read", resource))
+    elif scope_kind == "CAPA":
+        for cid in scope_ids:
+            capa = await repo.get_capa(session, cid)
+            if capa is None:  # pragma: no cover - _validate_scope already 404'd a missing subject
+                continue
+            resource = (
+                ResourceContext(process_ids=frozenset({str(capa.process_id)}))
+                if capa.process_id is not None
+                else ResourceContext.system()
+            )
+            checks.append(("capa.read", resource))
+            if capa.origin_finding_id is not None:
+                # The CAPA dossier embeds the origin finding's type/severity/summary/identifier
+                # (dossier._capa_subject) — content GET /capas/{id} does NOT expose — so bundling
+                # this CAPA also requires reading that finding (finding.read is SYSTEM-enforced,
+                # GET /findings/{id}); else a capa.read-only holder harvests the finding data.
+                checks.append(("finding.read", ResourceContext.system()))
+    return checks
+
+
 async def _authorize_pack_subjects(
     session: AsyncSession,
     authz_sink: AuthzAuditSink,
@@ -299,9 +363,8 @@ async def _authorize_pack_subjects(
 ) -> None:
     """Refuse (403) creating a FINDING/CAPA pack over a subject the caller cannot READ at its own
     scope. The build serializes the finding/CAPA SUBJECT dossier (its narrative + the CAPA stage
-    trail + e-signatures) — that IS the deliverable — but the build is worker-async with no request
-    caller, so the read gate lives HERE, at create. ``classify_candidates`` R28-filters the evidence
-    CANDIDATES, but the subject is excluded from that set, so without this gate a holder of
+    trail + e-signatures) — that IS the deliverable. ``classify_candidates`` R28-filters the
+    evidence CANDIDATES, but the subject is excluded from that set, so without this gate a holder of
     ``report.evidence_pack.generate`` (independent of finding/capa read) could bundle a finding/CAPA
     they cannot read. Mirrors each subject's own single-read surface (no new authority):
     ``finding.read`` at SYSTEM (GET /findings/{id}), ``capa.read`` at the CAPA's PROCESS scope
@@ -317,57 +380,39 @@ async def _authorize_pack_subjects(
     Routed through the ``enforce`` PEP (not a bare ``authorize``) so the subject-read decision —
     ALLOW **and** DENY — lands in the ``AuthzAuditSink`` durable authz trail (the PEP's audit
     invariant; a denied attempt must not be invisible), and the request source IP is threaded so an
-    ``ip_allow`` read grant evaluates exactly as the subject's own GET does."""
-    if scope_kind == "FINDING":
-        # finding.read is SYSTEM-enforced (GET /findings/{id}) → one check gates every subject.
-        if scope_ids:
-            await enforce(
-                session, authz_sink, request, caller, "finding.read", ResourceContext.system()
-            )
-        for fid in scope_ids:
-            finding = await repo.get_finding(session, fid)
-            if finding is None:  # pragma: no cover - already 404'd by _validate_scope
-                continue
-            # The finding dossier embeds its SOURCE AUDIT's id + identifier; GET /audits/{id} gates
-            # that behind audit.read (SYSTEM), so bundling the finding also requires reading its
-            # source audit — else a finding.read-only holder harvests the audit identifier.
-            await enforce(
-                session, authz_sink, request, caller, "audit.read", ResourceContext.system()
-            )
-            if finding.auto_capa_id is None:
-                continue
-            capa = await repo.get_capa(session, finding.auto_capa_id)
-            if capa is None:  # pragma: no cover - the bidirectional link is created in one txn
-                continue
-            resource = (
-                ResourceContext(process_ids=frozenset({str(capa.process_id)}))
-                if capa.process_id is not None
-                else ResourceContext.system()
-            )
-            # The finding dossier embeds the linked auto-CAPA's identifier + close_state
-            # (dossier._finding_subject) — data GET /findings/{id} does NOT expose — so this finding
-            # also requires reading its paired CAPA (the symmetric partner of the CAPA pack's
-            # origin-finding gate); else a finding.read-only holder harvests the CAPA data.
-            await enforce(session, authz_sink, request, caller, "capa.read", resource)
-    elif scope_kind == "CAPA":
-        for cid in scope_ids:
-            capa = await repo.get_capa(session, cid)
-            if capa is None:  # pragma: no cover - _validate_scope already 404'd a missing subject
-                continue
-            resource = (
-                ResourceContext(process_ids=frozenset({str(capa.process_id)}))
-                if capa.process_id is not None
-                else ResourceContext.system()
-            )
-            await enforce(session, authz_sink, request, caller, "capa.read", resource)
-            if capa.origin_finding_id is not None:
-                # The CAPA dossier embeds the origin finding's type/severity/summary/identifier
-                # (dossier._capa_subject) — content GET /capas/{id} does NOT expose — so bundling
-                # this CAPA also requires reading that finding (finding.read is SYSTEM-enforced,
-                # GET /findings/{id}); else a capa.read-only holder harvests the finding data.
-                await enforce(
-                    session, authz_sink, request, caller, "finding.read", ResourceContext.system()
-                )
+    ``ip_allow`` read grant evaluates exactly as the subject's own GET does. The worker repeats the
+    same resolved check graph immediately before dossier serialization using current grants."""
+    for permission_key, resource in await _pack_subject_read_checks(session, scope_kind, scope_ids):
+        await enforce(session, authz_sink, request, caller, permission_key, resource)
+
+
+async def authorize_pack_subjects_for_build(
+    session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    caller: AppUser,
+    scope_kind: str,
+    scope_ids: list[uuid.UUID],
+    *,
+    source_ip: str | None,
+) -> bool:
+    """Re-authorize dossier reads using current grants and persisted request context."""
+    context = RequestContext(
+        now=_now(),
+        source_ip=source_ip,
+        actor_user_id=str(caller.id),
+    )
+    for permission_key, resource in await _pack_subject_read_checks(session, scope_kind, scope_ids):
+        decision = await evaluate_with_context(
+            session,
+            authz_sink,
+            caller,
+            permission_key,
+            resource,
+            context,
+        )
+        if not decision.allow:
+            return False
+    return True
 
 
 def _build_items(
@@ -441,8 +486,8 @@ async def create_pack_with_preview(
     if framework is None:
         raise ProblemException(status=422, code="validation_error", title="No framework configured")
     scope_ids = await _validate_scope(session, caller.org_id, kind.value, scope_selector)
-    # R28: a FINDING/CAPA pack must not bundle a subject the caller cannot read (the subject dossier
-    # is built worker-side with no caller, so the read gate lives here at create).
+    # R28: a FINDING/CAPA pack must not bundle a subject the caller cannot read. The worker repeats
+    # this same graph at seal time using the persisted initiating principal/context.
     await _authorize_pack_subjects(session, authz_sink, request, caller, kind.value, scope_ids)
 
     pack = EvidencePack(
@@ -467,7 +512,12 @@ async def create_pack_with_preview(
         period_start=period_start,
         period_end=period_end,
     )
-    classified = await classify_candidates(session, caller, candidates)
+    classified = await classify_candidates(
+        session,
+        caller,
+        candidates,
+        source_ip=request.client.host if request.client else None,
+    )
     items, included = _build_items(caller.org_id, pack.id, classified)
     session.add_all(items)
     pack.exclusion_summary = exclusion_summary(classified)
@@ -504,9 +554,9 @@ async def generate_pack(
     if pack.status is PackStatus.BUILDING:
         raise ProblemException(status=409, code="conflict", title="Pack build already in progress")
     # Re-authorize the FINDING/CAPA subject at generate (request-aware): the create-time gate is
-    # stale if the generator's finding.read/capa.read was revoked before this seal — including a
-    # retry from FAILED long after create. Mirrors the evidence's seal-time re-check; closes the
-    # create→seal read-authz TOCTOU (the worker build itself has no caller to re-check).
+    # stale if the generator's finding.read/capa.read was revoked before this attempt — including a
+    # retry from FAILED long after create. The worker repeats this graph immediately before dossier
+    # serialization, closing the generate-commit→seal window with current grants.
     scope_ids = await _validate_scope(
         session, pack.org_id, pack.scope_kind.value, pack.scope_selector
     )
@@ -515,6 +565,11 @@ async def generate_pack(
     )
     pack.status = PackStatus.BUILDING
     pack.build_started_at = _now()
+    pack.build_requested_by = caller.id
+    # Preserve the exact representation that the request-time PDP accepted. Its ``ip_allow``
+    # semantics are exact-string matching, so canonicalizing an IPv6 address here would change the
+    # decision when the worker replays this context.
+    pack.build_source_ip = request.client.host if request.client else None
     pack.error = None
     await session.commit()
     await session.refresh(pack)

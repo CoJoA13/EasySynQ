@@ -15,6 +15,7 @@ capa_stage and capa_stage→capa is RESTRICT; those rows stay, harmless under pe
 
 from __future__ import annotations
 
+import datetime
 import io
 import json
 import uuid
@@ -26,9 +27,12 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import delete, select
 
+from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models._pack_enums import PackStatus
 from easysynq_api.db.models._record_enums import RecordDispositionState
 from easysynq_api.db.models._retention_enums import DispositionAction
+from easysynq_api.db.models.audit_event import AuditEvent
+from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.evidence_blob import EvidenceBlob
@@ -37,10 +41,13 @@ from easysynq_api.db.models.evidence_pack import EvidencePack
 from easysynq_api.db.models.pack_item import PackItem
 from easysynq_api.db.models.pack_share_link import PackShareLink
 from easysynq_api.db.models.pending_blob_purge import PendingBlobPurge
+from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.record import Record
+from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.models.worm_destroy_request import WormDestroyRequest
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.services.packs import build_and_cache_portfolio
+from easysynq_api.domain.authz.types import Effect
+from easysynq_api.services.packs import build, build_and_cache_portfolio
 from easysynq_api.services.packs import repository as packs_repo
 from easysynq_api.services.records import disposition
 from easysynq_api.services.vault import storage
@@ -79,6 +86,63 @@ async def _link(client: AsyncClient, h: dict[str, str], rid: str, ttype: str, ti
         json={"target_type": ttype, "target_id": tid},
     )
     assert r.status_code == 201, r.text
+
+
+async def _set_permission_predicates(
+    user_id: uuid.UUID, permission_keys: tuple[str, ...], predicates: dict[str, object]
+) -> None:
+    """Set predicates on this test user's direct-ALLOW scopes for the selected permission keys."""
+    async with get_sessionmaker()() as s:
+        scopes = (
+            (
+                await s.execute(
+                    select(Scope)
+                    .join(PermissionOverride, PermissionOverride.scope_id == Scope.id)
+                    .join(Permission, Permission.id == PermissionOverride.permission_id)
+                    .where(
+                        PermissionOverride.user_id == user_id,
+                        Permission.key.in_(permission_keys),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(scopes) == len(permission_keys)
+        for scope in scopes:
+            scope.predicates = predicates
+        await s.commit()
+
+
+async def _change_direct_permission(user_id: uuid.UUID, permission_key: str, mode: str) -> None:
+    """Revoke, expire, or DENY this fresh test user's direct grant for one key."""
+    async with get_sessionmaker()() as s:
+        overrides = (
+            (
+                await s.execute(
+                    select(PermissionOverride)
+                    .join(Permission, Permission.id == PermissionOverride.permission_id)
+                    .where(
+                        PermissionOverride.user_id == user_id,
+                        Permission.key == permission_key,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(overrides) == 1
+        override = overrides[0]
+        if mode == "revoked":
+            await s.delete(override)
+        elif mode == "expired":
+            override.valid_until = datetime.datetime.now(datetime.UTC) - datetime.timedelta(
+                seconds=1
+            )
+        else:
+            assert mode == "denied"
+            override.effect = Effect.DENY
+        await s.commit()
 
 
 async def _download_zip(client: AsyncClient, h: dict[str, str], pack_id: uuid.UUID) -> bytes:
@@ -720,9 +784,9 @@ async def test_generate_pack_rechecks_subject_read(
 ) -> None:
     """Batch 6 (finding-2 hardening, IijIP): the FINDING/CAPA subject read is re-authorized at
     GENERATE (request-aware), not just at create — so a generator who cannot read the subject can't
-    seal the pack (a revoked grant, or a different generator, between create and seal). The worker
-    build has no caller, so the last request-time gate is generate. Mutation-verify: without the
-    generate re-check the seal is enqueued (202)."""
+    enqueue the pack (a revoked grant, or a different generator, between create and generate).
+    The worker independently repeats the check immediately before dossier serialization.
+    Mutation-verify: without the generate re-check the seal is enqueued (202)."""
     owner = _subject("regen-owner")
     await _grant(owner, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS))
     ho = _auth(token_factory, owner)
@@ -757,6 +821,189 @@ async def test_generate_pack_rechecks_subject_read(
         # generate-time wiring reaching it is proven by the 403 above.
     finally:
         await _teardown([], pack_uuid)
+
+
+@pytest.mark.parametrize("loss_mode", ("revoked", "expired", "denied"))
+async def test_worker_rechecks_subject_after_generate_before_dossier(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    loss_mode: str,
+) -> None:
+    """Issue #363: remove subject authority after generate but before worker dossier build.
+
+    Revocation, expiry under the worker's current clock, and a newly explicit DENY must each be
+    observed immediately before ``build_dossier`` and fail without sealing. Mutation-verify: the
+    old worker performs no subject authorization and seals the Finding narrative.
+    """
+    subject = _subject(f"worker-{loss_mode}")
+    user_id = await _grant(
+        subject, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS)
+    )
+    headers = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, headers)
+    await _walk(app_client, headers, audit_id, "plan", "conduct")
+    finding_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=headers,
+            json={"finding_type": "NC", "severity": "Major", "clause_ref": "8.4"},
+        )
+    ).json()["id"]
+    pack_uuid: uuid.UUID | None = None
+    try:
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=headers,
+            json={
+                "title": f"worker {loss_mode}",
+                "scope_kind": "FINDING",
+                "finding_ids": [finding_id],
+            },
+        )
+        assert created.status_code == 201, created.text
+        pack_uuid = uuid.UUID(created.json()["id"])
+
+        from easysynq_api.tasks.packs import build_evidence_pack
+
+        monkeypatch.setattr(build_evidence_pack, "delay", lambda *_args: None)
+        started = await app_client.post(
+            f"/api/v1/evidence-packs/{pack_uuid}/generate", headers=headers
+        )
+        assert started.status_code == 202, started.text
+        await _change_direct_permission(user_id, "finding.read", loss_mode)
+
+        async with get_sessionmaker()() as s:
+            await build(s, pack_uuid)
+
+        async with get_sessionmaker()() as s:
+            pack = await s.get(EvidencePack, pack_uuid)
+            assert pack is not None
+            assert pack.status is PackStatus.FAILED
+            assert pack.pack_record_id is None
+            assert pack.zip_blob_sha256 is None
+            assert pack.error is not None and "subject read authorization" in pack.error
+            failed = (
+                await s.execute(
+                    select(AuditEvent)
+                    .where(
+                        AuditEvent.object_id == pack_uuid,
+                        AuditEvent.event_type == EventType.PACK_BUILD_FAILED,
+                    )
+                    .order_by(AuditEvent.occurred_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+            assert failed.actor_id == user_id
+            denied_events = (
+                (
+                    await s.execute(
+                        select(AuditEvent).where(
+                            AuditEvent.actor_id == user_id,
+                            AuditEvent.event_type == EventType.ACCESS_DENIED,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert any(
+                event.after is not None
+                and event.after.get("permission_key") == "finding.read"
+                and event.after.get("decision") == "deny"
+                for event in denied_events
+            )
+    finally:
+        await _teardown([], pack_uuid)
+
+
+async def test_ip_allow_context_survives_generate_to_worker(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #363 R58: the accepted generate request IP is replayed only as worker authz context.
+
+    All subject/evidence read grants are restricted to the ASGI client's expanded IPv6 spelling.
+    Preview, generate, worker subject re-check, and seal-time R28 classification must agree and
+    include the linked evidence. Mutation-verify: the old preview/build classifiers use
+    ``source_ip=None`` and exclude the evidence; PostgreSQL INET canonicalizes the accepted spelling
+    to ``::1``, so a worker replay against the exact-string grant fails.
+    """
+    expanded_ipv6 = "0:0:0:0:0:0:0:1"
+    transport = app_client._transport
+    assert isinstance(transport, httpx.ASGITransport)
+    original_client = transport.client
+    transport.client = (expanded_ipv6, original_client[1])
+    subject = _subject("worker-ip")
+    user_id = await _grant(
+        subject, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS)
+    )
+    await _set_permission_predicates(
+        user_id,
+        ("finding.read", "capa.read", "audit.read", "record.read"),
+        {"ip_allow": [expanded_ipv6]},
+    )
+    headers = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, headers)
+    await _walk(app_client, headers, audit_id, "plan", "conduct")
+    finding_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=headers,
+            json={"finding_type": "NC", "severity": "Major", "clause_ref": "8.4"},
+        )
+    ).json()["id"]
+    evidence_id = await _evidence_record(app_client, headers, "IP-bound evidence")
+    await _link(app_client, headers, evidence_id, "finding", finding_id)
+
+    pack_uuid: uuid.UUID | None = None
+    try:
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=headers,
+            json={"title": "IP context", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+        )
+        assert created.status_code == 201, created.text
+        pack_uuid = uuid.UUID(created.json()["id"])
+        statuses = {
+            item["record_id"]: item["inclusion_status"]
+            for item in created.json()["items"]
+            if item["record_id"]
+        }
+        assert statuses[evidence_id] == "INCLUDED"
+
+        from easysynq_api.tasks.packs import build_evidence_pack
+
+        monkeypatch.setattr(build_evidence_pack, "delay", lambda *_args: None)
+        started = await app_client.post(
+            f"/api/v1/evidence-packs/{pack_uuid}/generate", headers=headers
+        )
+        assert started.status_code == 202, started.text
+        async with get_sessionmaker()() as s:
+            started_pack = await s.get(EvidencePack, pack_uuid)
+            assert started_pack is not None
+            assert started_pack.build_requested_by == user_id
+            assert started_pack.build_source_ip == expanded_ipv6
+
+        async with get_sessionmaker()() as s:
+            await build(s, pack_uuid)
+
+        async with get_sessionmaker()() as s:
+            sealed = await s.get(EvidencePack, pack_uuid)
+            assert sealed is not None and sealed.status is PackStatus.SEALED
+            item = (
+                await s.execute(
+                    select(PackItem).where(
+                        PackItem.pack_id == pack_uuid,
+                        PackItem.record_id == uuid.UUID(evidence_id),
+                    )
+                )
+            ).scalar_one()
+            assert item.inclusion_status.value == "INCLUDED"
+    finally:
+        transport.client = original_client
+        await _teardown([evidence_id], pack_uuid)
 
 
 async def test_capa_scope_pack_proves_closed_effectively(

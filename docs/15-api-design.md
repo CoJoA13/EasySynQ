@@ -749,10 +749,10 @@ UJ-7: an on-demand, scope-limited, **immutable, self-verifying** bundle of recor
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
-| POST | `/evidence-packs` | `report.evidence_pack.generate` | Create (DRAFT) + synchronous preview: `{ title, scope_kind:CLAUSE\|PROCESS, clause_ids\|process_ids, period_start?, period_end? }`. Resolves candidates (CLAUSE/PROCESS UNION of `evidence_for_link` + clause-mapped/process-linked source docs) and **R28-classifies** each `INCLUDED`/`EXCLUDED_PERMISSION`/`EXCLUDED_ABSENCE` (nothing silently dropped) + the gap report. `422` on bad scope / unknown clause-process / bad period. |
+| POST | `/evidence-packs` | `report.evidence_pack.generate` | Create (DRAFT) + synchronous preview: `{ title, scope_kind:CLAUSE\|PROCESS\|FINDING\|CAPA, clause_ids\|process_ids\|finding_ids\|capa_ids, period_start?, period_end? }`. Resolves the scope's evidence candidates and **R28-classifies** each `INCLUDED`/`EXCLUDED_PERMISSION`/`EXCLUDED_ABSENCE` under the caller's live request context (nothing silently dropped) + the applicable gap report. FINDING/CAPA also enforce the dossier subject read graph. `422` on bad/unknown scope or bad period. |
 | GET | `/evidence-packs` | `report.evidence_pack.generate` | List the org's packs (newest first). |
 | GET | `/evidence-packs/{id}` | `report.evidence_pack.generate` | Header + membership + gap/exclusion summaries + **`status`** (DRAFT→BUILDING→SEALED\|FAILED, or SEALED→terminal `UNAVAILABLE` under R27). An unavailable tombstone exposes `invalidated_at` + `invalidated_by_disposition_event_id`, retains membership/seal history, and has null artifact pointers. |
-| POST | `/evidence-packs/{id}/generate` | `report.evidence_pack.generate` | Enqueue the immutable build/seal (DRAFT/FAILED→BUILDING) → `202`. `409` if already SEALED/UNAVAILABLE or building. |
+| POST | `/evidence-packs/{id}/generate` | `report.evidence_pack.generate` | Re-authorize any FINDING/CAPA dossier subjects, atomically persist the current attempt's generator + accepted source IP with DRAFT/FAILED→BUILDING, and enqueue the immutable build/seal → `202`. `409` if already SEALED/UNAVAILABLE or building. |
 | GET | `/evidence-packs/{id}/download` | `report.export` | Presigned GET to the sealed pack ZIP. `409` until SEALED and after terminal `UNAVAILABLE`. |
 | POST | `/evidence-packs/{id}/share` | `report.evidence_pack.generate` | **(S-pack-2)** Mint a time-boxed Ed25519 share link for a SEALED pack: `{ ttl_days?\|expires_at?, recipient? }`. Returns the raw token + `share_url` **once** (only its digest is stored). `409` if not SEALED, including `UNAVAILABLE`; `503` if the signing key isn't provisioned. |
 | GET | `/evidence-packs/{id}/share-links` | `report.evidence_pack.generate` | **(S-pack-2)** List a pack's share links (management view, digest prefix only — never the raw token). |
@@ -761,6 +761,17 @@ UJ-7: an on-demand, scope-limited, **immutable, self-verifying** bundle of recor
 | GET | `/evidence-packs/shared/download?t=<token>&format=zip\|pdf` | *public (no auth)* | **(S-pack-2)** Stream the pack to the guest (ZIP canonical, or the live-stamped PDF portfolio). Re-checks the **revocable** DB row each request (revoke is immediate), audits `PACK_DOWNLOADED`, streams through the API (no presigned URL outlives a revoke). `403` if invalid/expired/revoked; `409` if the PDF portfolio is unavailable. |
 
 > **No new permission key** — `report.evidence_pack.generate` + `report.export` already exist in the closed `07 §3.8` catalog (held by QMS Owner); packs ride a **SYSTEM override** until the role UI (the `record.*` precedent). Pack lifecycle audits as `PACK_GENERATED`/`PACK_BUILD_FAILED` (object_type `evidence_pack`).
+>
+> **Issue #363 / R58 worker contract:** the task payload remains `pack_id` only. After locking the
+> pack, the worker loads `build_requested_by` / `build_source_ip`, rejects a missing or non-active
+> initiator, and evaluates current grants/time with only that accepted request IP replayed.
+> The IP is stored as lossless Text because the existing `ip_allow` predicate compares exact
+> strings; `inet` canonicalization could change an accepted IPv6 representation. Authorization
+> audit writes use an independent session on the task-local engine, never the process-global pool.
+> Evidence classification, sealed-Record capture, and pack lifecycle attribution use this
+> initiator—not `created_by`. Immediately before FINDING/CAPA dossier serialization it repeats the
+> same audited subject-read graph used by create/generate; a denial fails the build before dossier
+> bytes exist. These attempt fields are internal and add no API response field.
 >
 > **Issue #361 / R27:** Approving a two-person legal-order destroy invalidates every sealed pack
 > whose included evidence or dossier copied that Record. The same transaction revokes all live

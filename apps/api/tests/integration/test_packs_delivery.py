@@ -58,6 +58,8 @@ async def _seal_with_portfolio(pack_id: uuid.UUID) -> None:
         assert pack is not None
         pack.status = PackStatus.BUILDING
         pack.build_started_at = datetime.datetime.now(datetime.UTC)
+        pack.build_requested_by = pack.created_by
+        pack.build_source_ip = None
         await s.commit()
     async with get_sessionmaker()() as s:
         await build(s, pack_id)
@@ -991,6 +993,8 @@ async def test_pack_build_and_r27_destroy_serialize_without_a_last_copy(
             assert pack is not None
             pack.status = PackStatus.BUILDING
             pack.build_started_at = datetime.datetime.now(datetime.UTC)
+            pack.build_requested_by = pack.created_by
+            pack.build_source_ip = None
             await s.commit()
 
         request_id = (
