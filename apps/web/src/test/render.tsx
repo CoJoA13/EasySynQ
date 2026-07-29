@@ -16,14 +16,21 @@ export const TEST_AUTH: AuthState = {
 
 export function renderWithProviders(
   ui: ReactElement,
-  opts: { route?: string; auth?: AuthState } & Omit<RenderOptions, "wrapper"> = {},
+  opts: { route?: string; auth?: AuthState; queryClient?: QueryClient } & Omit<
+    RenderOptions,
+    "wrapper"
+  > = {},
 ) {
-  const { route = "/", auth = TEST_AUTH, ...rest } = opts;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const {
+    route = "/",
+    auth = TEST_AUTH,
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+    ...rest
+  } = opts;
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <MantineProvider theme={theme}>
-        <QueryClientProvider client={client}>
+        <QueryClientProvider client={queryClient}>
           <AuthContext.Provider value={auth}>
             <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
           </AuthContext.Provider>

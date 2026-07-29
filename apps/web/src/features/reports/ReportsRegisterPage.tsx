@@ -1,12 +1,12 @@
 import { Badge, Button, Card, Container, Group, Stack, Table, Text, Title } from "@mantine/core";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useDocumentControlRegister } from "./useDocumentControlRegister";
 import { useMe } from "../../app/shell/useMe";
 import { ClauseBadge } from "../../lib/ClauseBadge";
 import type { RegisterProvenance, RegisterRow } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
-import { ErrorState, LoadingState, NoAccessState, EmptyState } from "../../lib/states";
+import { EmptyState, ErrorState, InlineState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
 import { StateBadge } from "../document/StateBadge";
@@ -15,6 +15,7 @@ import { FacetBar } from "../library/FacetBar";
 import { parseUrlFilters, toDocumentFilters, type UrlFilters } from "../library/filters";
 import { useProcesses } from "../objectives/hooks";
 import { ProcessSelect } from "./ProcessSelect";
+import { buildProcessFacetOptions, deriveRegisterFacetSource } from "./reportFacets";
 
 const SORT_KEYS = ["identifier", "title", "type", "state", "review"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
@@ -56,37 +57,91 @@ function truncateSha(sha: string): string {
 export function ReportsRegisterPage() {
   const [params, setParams] = useSearchParams();
   const uf = parseUrlFilters(params);
-  // Resolved BEFORE `filters` is built (FIX 3) — the process facet's own applicability gate below
-  // needs to know whether the facet is representable at all.
   const { data: processes } = useProcesses();
   const { data: me, isError: meError, refetch: refetchMe } = useMe();
-  const processMap = new Map((processes ?? []).map((p) => [p.id, p.name]));
+
+  // #334: keep one unfiltered register query as the stable facet universe. It is already
+  // permission-filtered by report.read + document.read, so deriving choices from it cannot disclose
+  // anything beyond the table. Cached data may be stale on mount, so URL membership checks wait for
+  // this observer to complete a fresh request before they trust the baseline.
+  const facetQuery = useDocumentControlRegister();
+  const facetBaselineReady = facetQuery.isSuccess && facetQuery.isFetchedAfterMount;
+  const facetSource = useMemo(
+    () => (facetQuery.data ? deriveRegisterFacetSource(facetQuery.data) : null),
+    [facetQuery.data],
+  );
+  const clauseValues = facetSource?.clauseValues ?? [];
+  const processOptions = useMemo(
+    () => (facetSource ? buildProcessFacetOptions(facetSource, processes ?? []) : []),
+    [facetSource, processes],
+  );
+  const clauseValueSet = useMemo(() => new Set(clauseValues), [clauseValues]);
+  const processValueSet = useMemo(
+    () => new Set(processOptions.map((option) => option.value)),
+    [processOptions],
+  );
+  const processMap = useMemo(
+    () => new Map(processOptions.map((option) => [option.value, option.label])),
+    [processOptions],
+  );
+
   // A fresh object each render is fine — React Query hashes queryKey BY VALUE (a stable JSON
   // serialization), not by reference, so this still refetches on a real facet change and NOT on
   // every unrelated re-render.
   const effectiveFilterReady = !uf.eff || Boolean(me?.org_timezone);
   const filters = toDocumentFilters(uf, me?.org_timezone);
-  // The register-only process facet (R3-1): the shared `toDocumentFilters` no longer maps it (the
-  // Library doesn't know about `process`), so the register maps it itself — it owns the
-  // ProcessSelect + this file's FILTER_KEYS/hasFilters/clearFilters bookkeeping for it.
-  //
-  // FIX 3 (Codex round 5, P2): only apply a `?process=` URL value when the facet is REPRESENTABLE
-  // (useProcesses() returned options) — the round-4 fix hides the ProcessSelect control when
-  // options are unavailable, but a stale/bookmarked `?process=<id>` would otherwise still silently
-  // narrow the register with no visible control to see or clear it. When options are unavailable
-  // the value is simply not applied (still removable via "Clear all", which stays in FILTER_KEYS).
-  if (uf.process && (processes?.length ?? 0) > 0) filters.process_id = uf.process;
+  // The shared Library mapper knows clause but not the register-only process facet. Both report
+  // facets are applied only after a freshly fetched, caller-visible baseline proves the URL value
+  // is representable. This generalizes the old process-only guard to clause and makes neither
+  // catalog endpoint authoritative for filter applicability.
+  if (uf.clause && (!facetBaselineReady || !clauseValueSet.has(uf.clause))) {
+    delete filters.clause;
+  }
+  if (uf.process && facetBaselineReady && processValueSet.has(uf.process)) {
+    filters.process_id = uf.process;
+  }
 
-  const {
-    data,
-    isLoading: registerLoading,
-    isError: registerError,
-    forbidden,
-    dataUpdatedAt,
-    refetch,
-  } = useDocumentControlRegister(filters, effectiveFilterReady);
-  const isLoading = registerLoading || (!effectiveFilterReady && !meError);
-  const isError = registerError || (Boolean(uf.eff) && meError);
+  // Remove stale/bookmarked values only after this mount has fetched the permission-filtered
+  // universe. They were never sent to the API (the guards above), and replacing the URL prevents an
+  // invisible ghost filter without deleting a newly valid value from an older cached snapshot.
+  const invalidClause = Boolean(facetBaselineReady && uf.clause && !clauseValueSet.has(uf.clause));
+  const invalidProcess = Boolean(
+    facetBaselineReady && uf.process && !processValueSet.has(uf.process),
+  );
+  useEffect(() => {
+    if (!invalidClause && !invalidProcess) return;
+    setParams(
+      (current) => {
+        if (invalidClause) current.delete("clause");
+        if (invalidProcess) current.delete("process");
+        return current;
+      },
+      { replace: true },
+    );
+  }, [invalidClause, invalidProcess, setParams]);
+
+  const hasReportFacetUrl = Boolean(uf.clause || uf.process);
+  const reportFacetValidationPending = hasReportFacetUrl && !facetBaselineReady;
+  const hasEffectiveFilters = Object.keys(filters).length > 0;
+  // An independent filter (state/type/owner/effective date) can run alongside the baseline. A
+  // Process/Clause deep link still waits for fresh membership validation. With no effective
+  // filters, the baseline is also the displayed report; keeping the second observer disabled avoids
+  // a staleTime:0 refetch of the same {} key after the first request completes.
+  const useFilteredQuery = hasEffectiveFilters || reportFacetValidationPending;
+  const registerQueryEnabled =
+    useFilteredQuery && effectiveFilterReady && (!hasReportFacetUrl || facetBaselineReady);
+  const registerQuery = useDocumentControlRegister(filters, registerQueryEnabled);
+  const reportQuery = useFilteredQuery ? registerQuery : facetQuery;
+  const data = reportQuery.data;
+  const facetQueryBlocksReport = reportFacetValidationPending;
+  const facetOptionsError = facetQuery.isError && useFilteredQuery && !facetQueryBlocksReport;
+  const forbidden = reportQuery.forbidden || (facetQueryBlocksReport && facetQuery.forbidden);
+  const isError =
+    reportQuery.isError ||
+    (facetQueryBlocksReport && facetQuery.isError) ||
+    (Boolean(uf.eff) && meError);
+  const isLoading =
+    !isError && (!effectiveFilterReady || reportQuery.isLoading || reportFacetValidationPending);
   const { q, setQ, query } = useDebouncedSearch();
   const { sort, dir, toggleSort } = useTableSort<SortKey>({
     keys: SORT_KEYS,
@@ -137,19 +192,30 @@ export function ReportsRegisterPage() {
           <ErrorState
             title="Couldn't load the register"
             onRetry={() => {
-              void refetchMe();
-              void refetch();
+              if (meError) void refetchMe();
+              if (facetQuery.isError) void facetQuery.refetch();
+              if (registerQueryEnabled && registerQuery.isError) void registerQuery.refetch();
             }}
           />
         ) : (
           <>
-            <AsOf at={dataUpdatedAt} />
+            <AsOf at={reportQuery.dataUpdatedAt} />
             <ProvenanceBanner provenance={data.provenance} />
+            {facetOptionsError && (
+              <InlineState kind="error" onRetry={() => void facetQuery.refetch()}>
+                Couldn't load Process and Clause filter options.
+              </InlineState>
+            )}
             <Group align="flex-end" gap="sm" wrap="wrap">
-              <FacetBar value={uf} onChange={patchFilters} onClear={clearFilters} />
-              {(processes?.length ?? 0) > 0 && (
+              <FacetBar
+                value={uf}
+                onChange={patchFilters}
+                onClear={clearFilters}
+                clauseValues={clauseValues}
+              />
+              {processOptions.length > 0 && (
                 <ProcessSelect
-                  processes={processes ?? []}
+                  options={processOptions}
                   value={uf.process}
                   onChange={(v) => patchFilters({ process: v })}
                 />

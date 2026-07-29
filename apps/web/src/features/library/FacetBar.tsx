@@ -13,10 +13,14 @@ export function FacetBar({
   value,
   onChange,
   onClear,
+  clauseValues,
 }: {
   value: UrlFilters;
   onChange: (patch: Partial<UrlFilters>) => void;
   onClear: () => void;
+  // When supplied by the register, this list is the permission-filtered facet universe. The
+  // optional clause catalog may enrich labels, but it cannot add choices the report did not expose.
+  clauseValues?: readonly string[];
 }) {
   const { data: types } = useDocumentTypes();
   const { data: directory } = useUserDirectory();
@@ -24,10 +28,13 @@ export function FacetBar({
 
   const typeData = (types ?? []).map((t) => ({ value: t.id, label: t.name }));
   const ownerData = (directory ?? []).map((u) => ({ value: u.id, label: u.display_name ?? u.id }));
-  const clauseData = (clauses ?? []).map((c) => ({
-    value: c.number,
-    label: `${c.number} ${c.title}`,
-  }));
+  const clauseLabels = new Map((clauses ?? []).map((c) => [c.number, `${c.number} ${c.title}`]));
+  const clauseData = (clauseValues ?? (clauses ?? []).map((clause) => clause.number)).map(
+    (value) => ({
+      value,
+      label: clauseLabels.get(value) ?? value,
+    }),
+  );
   const stateData = STATES.map((s) => ({ value: s, label: documentStateLabel(s) }));
   const effData = EFFECTIVE_BUCKETS.map((b) => ({ value: b.value, label: b.label }));
 
@@ -76,17 +83,19 @@ export function FacetBar({
           size="sm"
           w={180}
         />
-        <Select
-          label="Clause"
-          placeholder="All"
-          data={clauseData}
-          value={value.clause ?? null}
-          onChange={(v) => onChange({ clause: v ?? undefined })}
-          clearable
-          searchable
-          size="sm"
-          w={210}
-        />
+        {(clauseValues === undefined || clauseData.length > 0) && (
+          <Select
+            label="Clause"
+            placeholder="All"
+            data={clauseData}
+            value={value.clause ?? null}
+            onChange={(v) => onChange({ clause: v ?? undefined })}
+            clearable
+            searchable
+            size="sm"
+            w={210}
+          />
+        )}
         <Select
           label="Effective date"
           placeholder="Any time"
