@@ -423,7 +423,20 @@ event. The marker's `bypass_governance` boolean is never authority by itself. Or
 policy-backed disposition may replay only without bypass. Pre-0081 markers are deliberately
 unbound legacy work and are therefore forced through non-bypass recovery.
 
-**Back-propagation:** 06, 12, 14.
+**Derivative-copy addendum (Issue #361, 2026-07-29):** The executed two-person R27 order also
+authorizes erasure of every sealed Evidence Pack copy whose included evidence or synthesized
+dossier embeds the source Record. In the source disposition transaction, each affected pack
+becomes terminal `UNAVAILABLE`, every live share is revoked, both ZIP/portfolio pointers are
+cleared, and the registered pack Record receives an immutable one-hop derivative tombstone linked
+to the source event. Authority-bound purge markers remove the physical artifacts after commit and
+retain the original request, actors, organization, and legal basis for reaper validation. Pack
+build stages and R27 approval serialize through an organization-scoped shared/exclusive
+transaction advisory lock, so no new last copy can cross the legal order. This extension is
+**R27-only**: an ordinary policy DESTROY neither overrides the pack's independent permanent
+retention nor revokes its shares; the existing serve-time destroyed-dependency guard continues to
+withhold such a retained snapshot.
+
+**Back-propagation:** 06, 12, 14, 15.
 
 ---
 

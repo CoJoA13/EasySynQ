@@ -145,6 +145,10 @@ async def _teardown(
                 recs.append(pack.pack_record_id)
             await s.execute(delete(PackItem).where(PackItem.pack_id == pack_id))
             await s.execute(delete(EvidencePack).where(EvidencePack.id == pack_id))
+            # Issue #361 adds evidence_pack -> source disposition_event. Commit the pack deletion
+            # before the owner connection removes append-only events, or the still-visible FK in
+            # this transaction correctly blocks teardown.
+            await s.commit()
         if recs:
             await s.execute(delete(EvidenceForLink).where(EvidenceForLink.record_id.in_(recs)))
             # disposition_event is append-only for the app role (0072) → delete it as the OWNER.

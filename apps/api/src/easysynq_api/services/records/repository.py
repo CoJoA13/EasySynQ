@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._evidence_enums import EvidenceForTargetType
+from ...db.models._pack_enums import PackStatus
 from ...db.models._record_enums import RecordDispositionState
 from ...db.models._retention_enums import DispositionAction, RetentionBasis
 from ...db.models.blob import Blob
@@ -26,6 +27,7 @@ from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
+from ...db.models.evidence_pack import EvidencePack
 from ...db.models.pending_blob_purge import PendingBlobPurge
 from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
@@ -543,7 +545,86 @@ async def blob_needed_by_other_live_record(
             )
         )
     )
-    return bool(version_leg)
+    if version_leg:
+        return True
+    structured_leg = await session.scalar(
+        select(func.count())
+        .select_from(Record)
+        .where(
+            Record.id != exclude_record_id,
+            Record.structured_pdf_blob_sha256 == blob_sha256,
+            Record.disposition_state != RecordDispositionState.DISPOSED,
+        )
+    )
+    if structured_leg:
+        return True
+    pack_leg = await session.scalar(
+        select(func.count())
+        .select_from(EvidencePack)
+        .where(
+            EvidencePack.status != PackStatus.UNAVAILABLE,
+            or_(
+                EvidencePack.zip_blob_sha256 == blob_sha256,
+                EvidencePack.portfolio_blob_sha256 == blob_sha256,
+            ),
+        )
+    )
+    return bool(pack_leg)
+
+
+async def blob_needed_by_any_live_owner(session: AsyncSession, blob_sha256: str) -> bool:
+    """Return whether any still-live domain pointer owns this content-addressed Blob.
+
+    Issue #361 uses this after clearing every affected pack pointer. Unlike the record-specific
+    helper above, a portfolio has no EvidenceBlob parent, so its last-owner decision must cover all
+    four pointer families explicitly: live Record evidence, controlled DocumentVersions, live
+    structured-record renditions, and non-invalidated Evidence Pack ZIP/portfolio pointers.
+    """
+    evidence_leg = await session.scalar(
+        select(func.count())
+        .select_from(EvidenceBlob)
+        .join(Record, EvidenceBlob.record_id == Record.id)
+        .where(
+            EvidenceBlob.blob_sha256 == blob_sha256,
+            Record.disposition_state != RecordDispositionState.DISPOSED,
+        )
+    )
+    if evidence_leg:
+        return True
+    version_leg = await session.scalar(
+        select(func.count())
+        .select_from(DocumentVersion)
+        .where(
+            or_(
+                DocumentVersion.source_blob_sha256 == blob_sha256,
+                DocumentVersion.rendition_blob_sha256 == blob_sha256,
+            )
+        )
+    )
+    if version_leg:
+        return True
+    structured_leg = await session.scalar(
+        select(func.count())
+        .select_from(Record)
+        .where(
+            Record.structured_pdf_blob_sha256 == blob_sha256,
+            Record.disposition_state != RecordDispositionState.DISPOSED,
+        )
+    )
+    if structured_leg:
+        return True
+    pack_leg = await session.scalar(
+        select(func.count())
+        .select_from(EvidencePack)
+        .where(
+            EvidencePack.status != PackStatus.UNAVAILABLE,
+            or_(
+                EvidencePack.zip_blob_sha256 == blob_sha256,
+                EvidencePack.portfolio_blob_sha256 == blob_sha256,
+            ),
+        )
+    )
+    return bool(pack_leg)
 
 
 async def lock_blob_for_update(session: AsyncSession, blob_sha256: str) -> None:

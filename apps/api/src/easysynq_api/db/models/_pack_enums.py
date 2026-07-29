@@ -13,7 +13,8 @@ model the pack header + membership:
   ``EvidenceForTargetType.FINDING``/``CAPA_STAGE`` targets were already live (S-aud-2/S-capa-3).
 * ``PackStatus`` — the build lifecycle: DRAFT (preview persisted) → BUILDING (generate enqueued) →
   SEALED (immutable hashed ZIP written + registered as an EVIDENCE Record) | FAILED (build error;
-  re-triggerable). SEALED is terminal.
+  re-triggerable). An R27 legal-order erasure advances a sealed pack to terminal UNAVAILABLE after
+  its derived ZIP/portfolio copies have been detached and marked for physical purge.
 * ``PackItemType`` — a membership row is either a RECORD or one of its PINNED governing
   DOCUMENT_VERSIONs (``record.source_version_id``, the edition in force at capture — doc 06 §7.3).
 * ``PackInclusionStatus`` — the R28 honesty classification: INCLUDED, or excluded with the reason
@@ -43,6 +44,7 @@ class PackStatus(enum.Enum):
     BUILDING = "BUILDING"
     SEALED = "SEALED"
     FAILED = "FAILED"
+    UNAVAILABLE = "UNAVAILABLE"
 
 
 class PackItemType(enum.Enum):

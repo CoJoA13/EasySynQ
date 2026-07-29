@@ -60,6 +60,18 @@ class DispositionEvent(Base):
         Boolean, server_default=text("false"), default=False, nullable=False
     )
     legal_basis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Issue #361: a pack-record tombstone authorized by an R27 destruction of copied source
+    # evidence points at that source event. No second mutable worm_destroy_request is fabricated;
+    # the immutable one-hop lineage carries the original two-person authority.
+    derived_from_disposition_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "disposition_event.id",
+            ondelete="RESTRICT",
+            name="fk_disposition_event_derived_from_event",
+        ),
+        nullable=True,
+    )
     executed_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

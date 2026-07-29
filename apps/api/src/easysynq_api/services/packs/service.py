@@ -488,13 +488,19 @@ async def generate_pack(
     pack_id: uuid.UUID,
 ) -> EvidencePack:
     """Flip a DRAFT/FAILED pack → BUILDING and enqueue the worker build (after commit). Idempotent
-    re-trigger from FAILED; a SEALED pack is terminal (409); a BUILDING pack is already in flight
+    re-trigger from FAILED; SEALED/UNAVAILABLE are terminal (409); BUILDING is already in flight
     (409) — the reaper recovers a stalled build."""
     pack = await repo.get_pack(session, pack_id, for_update=True)
     if pack is None or pack.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Evidence pack not found")
     if pack.status is PackStatus.SEALED:
         raise ProblemException(status=409, code="conflict", title="Pack is already sealed")
+    if pack.status is PackStatus.UNAVAILABLE:
+        raise ProblemException(
+            status=409,
+            code="pack_unavailable",
+            title="Pack was invalidated by legal erasure",
+        )
     if pack.status is PackStatus.BUILDING:
         raise ProblemException(status=409, code="conflict", title="Pack build already in progress")
     # Re-authorize the FINDING/CAPA subject at generate (request-aware): the create-time gate is
@@ -607,7 +613,9 @@ async def create_share_link(
     Returns ``(link, raw_token)`` — the raw token is shown to the caller **once** (only its digest
     is stored). 404 if the pack is missing/another org; 409 if not SEALED; 503 if the signing key is
     not provisioned (a share link must be verifiable). Audits PACK_SHARED."""
-    pack = await repo.get_pack(session, pack_id)
+    # Serialize minting against R27 invalidation. If mint wins, invalidation sees and revokes the
+    # row; if invalidation wins, this locking read refreshes the terminal UNAVAILABLE status.
+    pack = await repo.get_pack(session, pack_id, for_update=True)
     if pack is None or pack.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Evidence pack not found")
     if pack.status is not PackStatus.SEALED:
@@ -735,9 +743,9 @@ async def resolve_share_token(
     if await repo.pack_has_destroyed_member(session, pack):
         # Fail-closed AFTER the seal: a record INCLUDED in this pack (or its FINDING/CAPA subject)
         # was physically destroyed (DESTROY / R27 WORM-destroy), so the cached ZIP / portfolio must
-        # not keep serving erased evidence / dossier narrative via this public link. Physically
-        # purging the derived artifacts on disposition is a heavier R27 policy decision tracked as a
-        # fast-follow — this closes the reachability now.
+        # not keep serving erased evidence / dossier narrative via this public link. R27 now also
+        # invalidates and purges the derivative artifacts; this guard remains necessary for
+        # ordinary retention-driven DESTROY, which has no authority over the pack's own policy.
         return ShareResolution("UNAVAILABLE", link=link)
     return ShareResolution("OK", link=link, pack=pack)
 

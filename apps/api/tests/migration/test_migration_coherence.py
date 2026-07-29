@@ -30,6 +30,7 @@ _API_ROOT = Path(__file__).resolve().parents[2]
 _M9_REVISION = "0079_migration_orm_coherence"
 _M10_REVISION = "0080_schema_index_design"
 _PURGE_AUTHORITY_REVISION = "0081_pending_purge_authority"
+_PACK_ERASURE_REVISION = "0082_pack_legal_erasure"
 _CANONICAL_CHECK = "ck_process_edge_no_self_loop"
 _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
 _RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
@@ -442,6 +443,135 @@ def test_populated_historical_transitions_and_head_repairs(
                     {"id": legacy_purge_id},
                 ).one()
                 assert legacy == (False, None, None, None, True)
+
+            # 0082: a legally erased pack must survive downgrade as an undeliverable FAILED
+            # tombstone. Drop the invalidation CHECK before rewriting the status; erased bytes
+            # cannot be restored. The CHECK must also reject half-populated provenance.
+            command.upgrade(config, _PACK_ERASURE_REVISION)
+            pack_record_id = uuid.uuid4()
+            source_event_id = uuid.uuid4()
+            invalidated_pack_id = uuid.uuid4()
+            with engine.begin() as connection:
+                requester_id = connection.execute(
+                    sa.text(
+                        "INSERT INTO app_user (org_id, keycloak_subject, display_name) "
+                        "VALUES (:org, 'm361-requester', 'M361 Requester') RETURNING id"
+                    ),
+                    {"org": org_id},
+                ).scalar_one()
+                retention_policy_id = connection.execute(
+                    sa.text(
+                        "SELECT id FROM retention_policy WHERE org_id = :org ORDER BY created_at "
+                        "LIMIT 1"
+                    ),
+                    {"org": org_id},
+                ).scalar_one()
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO documented_information "
+                        "(id, org_id, framework_id, kind, identifier, title, owner_user_id, "
+                        "current_state, is_singleton, classification, acknowledgement_required, "
+                        "created_by) "
+                        "VALUES (:id, :org, :framework, 'RECORD', 'M361-PACK-RECORD', "
+                        "'M361 invalidated pack record', :user, 'Draft', false, 'Internal', "
+                        "false, :user)"
+                    ),
+                    {
+                        "id": pack_record_id,
+                        "org": org_id,
+                        "framework": framework_id,
+                        "user": user_id,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO record "
+                        "(id, org_id, record_type, captured_by, content_hash_version, "
+                        "retention_policy_id, disposition_state, legal_hold) "
+                        "VALUES (:id, :org, 'EVIDENCE', :user, 2, :policy, 'DISPOSED', false)"
+                    ),
+                    {
+                        "id": pack_record_id,
+                        "org": org_id,
+                        "user": user_id,
+                        "policy": retention_policy_id,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO disposition_event "
+                        "(id, org_id, record_id, action, tombstone, approved_by, requested_by, "
+                        "is_worm_destroy, legal_basis) "
+                        "VALUES (:id, :org, :record, 'DESTROY', true, :approver, :requester, "
+                        "true, 'M361 migration proof')"
+                    ),
+                    {
+                        "id": source_event_id,
+                        "org": org_id,
+                        "record": pack_record_id,
+                        "approver": user_id,
+                        "requester": requester_id,
+                    },
+                )
+
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO evidence_pack "
+                            "(id, org_id, framework_id, title, scope_kind, scope_selector, "
+                            "status, created_by, invalidated_at) "
+                            "VALUES (:id, :org, :framework, 'M361 partial provenance', 'PROCESS', "
+                            "CAST('{\"process_ids\": []}' AS jsonb), 'SEALED', :user, now())"
+                        ),
+                        {
+                            "id": uuid.uuid4(),
+                            "org": org_id,
+                            "framework": framework_id,
+                            "user": user_id,
+                        },
+                    )
+
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO evidence_pack "
+                        "(id, org_id, framework_id, title, scope_kind, scope_selector, status, "
+                        "pack_record_id, created_by, invalidated_at, "
+                        "invalidated_by_disposition_event_id) "
+                        "VALUES (:id, :org, :framework, 'M361 invalidated pack', 'PROCESS', "
+                        "CAST('{\"process_ids\": []}' AS jsonb), 'UNAVAILABLE', :record, :user, "
+                        "now(), :event)"
+                    ),
+                    {
+                        "id": invalidated_pack_id,
+                        "org": org_id,
+                        "framework": framework_id,
+                        "record": pack_record_id,
+                        "user": user_id,
+                        "event": source_event_id,
+                    },
+                )
+
+            command.downgrade(config, _PURGE_AUTHORITY_REVISION)
+            with engine.connect() as connection:
+                downgraded = connection.execute(
+                    sa.text("SELECT status::text, error FROM evidence_pack WHERE id = :id"),
+                    {"id": invalidated_pack_id},
+                ).one()
+                assert downgraded[0] == "FAILED"
+                assert "legal erasure" in downgraded[1]
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                reupgraded = connection.execute(
+                    sa.text(
+                        "SELECT status::text, invalidated_at, "
+                        "invalidated_by_disposition_event_id "
+                        "FROM evidence_pack WHERE id = :id"
+                    ),
+                    {"id": invalidated_pack_id},
+                ).one()
+                assert reupgraded == ("FAILED", None, None)
 
             # The downgrade restores a nullable compatibility column and removes only M10's
             # indexes; a clean re-upgrade remains safe with the live version row in place.

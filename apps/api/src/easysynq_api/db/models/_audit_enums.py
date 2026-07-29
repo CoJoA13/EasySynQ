@@ -216,6 +216,9 @@ class EventType(enum.Enum):
     PACK_SHARED = "PACK_SHARED"
     PACK_DOWNLOADED = "PACK_DOWNLOADED"
     PACK_SHARE_REVOKED = "PACK_SHARE_REVOKED"
+    # Issue #361: an R27 legal-order erasure invalidated the sealed header and detached every
+    # derived ZIP/portfolio copy. The source disposition event/request ids live in ``after``.
+    PACK_INVALIDATED = "PACK_INVALIDATED"
     # Mode-B structured forms (S-rec-3, doc 06 §4.2). FORM_SCHEMA_SET trails an author setting a
     # form template's working ``field_schema`` (object_type ``document`` — a form template IS a
     # controlled document; the schema is frozen into the version's metadata_snapshot at check-in).

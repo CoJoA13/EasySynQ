@@ -95,6 +95,12 @@ def _pack(pack: EvidencePack) -> dict[str, Any]:
         "error": pack.error,
         "created_at": pack.created_at.isoformat() if pack.created_at else None,
         "generated_at": pack.generated_at.isoformat() if pack.generated_at else None,
+        "invalidated_at": pack.invalidated_at.isoformat() if pack.invalidated_at else None,
+        "invalidated_by_disposition_event_id": (
+            str(pack.invalidated_by_disposition_event_id)
+            if pack.invalidated_by_disposition_event_id
+            else None
+        ),
     }
 
 
@@ -204,8 +210,9 @@ async def generate_pack_endpoint(
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Enqueue the immutable build/seal (DRAFT/FAILED → BUILDING). Poll ``GET /evidence-packs/{id}``
-    for SEALED. 409 if already sealed or a build is in progress; 403 if the generator can no longer
-    read a FINDING/CAPA subject (re-checked here so a revoked grant can't seal it)."""
+    for SEALED. 409 if already sealed, terminally unavailable, or a build is in progress; 403 if
+    the generator can no longer read a FINDING/CAPA subject (re-checked here so a revoked grant
+    can't seal it)."""
     pack = await generate_pack(session, authz_sink, request, caller, pack_id)
     return _pack(pack)
 
@@ -216,7 +223,7 @@ async def download_pack_endpoint(
     caller: AppUser = Depends(_export),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Presign the sealed pack ZIP (gate ``report.export``). 409 until the pack is SEALED."""
+    """Presign the sealed pack ZIP (gate ``report.export``). 409 unless the pack is SEALED."""
     pack = await _load(session, caller, pack_id)
     if pack.status is not PackStatus.SEALED or pack.zip_blob_sha256 is None:
         raise ProblemException(

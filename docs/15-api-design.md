@@ -751,16 +751,25 @@ UJ-7: an on-demand, scope-limited, **immutable, self-verifying** bundle of recor
 |---|---|---|---|
 | POST | `/evidence-packs` | `report.evidence_pack.generate` | Create (DRAFT) + synchronous preview: `{ title, scope_kind:CLAUSE\|PROCESS, clause_ids\|process_ids, period_start?, period_end? }`. Resolves candidates (CLAUSE/PROCESS UNION of `evidence_for_link` + clause-mapped/process-linked source docs) and **R28-classifies** each `INCLUDED`/`EXCLUDED_PERMISSION`/`EXCLUDED_ABSENCE` (nothing silently dropped) + the gap report. `422` on bad scope / unknown clause-process / bad period. |
 | GET | `/evidence-packs` | `report.evidence_pack.generate` | List the org's packs (newest first). |
-| GET | `/evidence-packs/{id}` | `report.evidence_pack.generate` | Header + membership + gap/exclusion summaries + **`status`** (DRAFT→BUILDING→SEALED\|FAILED — the build poll). Seal-time classification once SEALED. |
-| POST | `/evidence-packs/{id}/generate` | `report.evidence_pack.generate` | Enqueue the immutable build/seal (DRAFT/FAILED→BUILDING) → `202`. `409` if already SEALED or building. |
-| GET | `/evidence-packs/{id}/download` | `report.export` | Presigned GET to the sealed pack ZIP. `409` until SEALED. |
-| POST | `/evidence-packs/{id}/share` | `report.evidence_pack.generate` | **(S-pack-2)** Mint a time-boxed Ed25519 share link for a SEALED pack: `{ ttl_days?\|expires_at?, recipient? }`. Returns the raw token + `share_url` **once** (only its digest is stored). `409` if not SEALED; `503` if the signing key isn't provisioned. |
+| GET | `/evidence-packs/{id}` | `report.evidence_pack.generate` | Header + membership + gap/exclusion summaries + **`status`** (DRAFT→BUILDING→SEALED\|FAILED, or SEALED→terminal `UNAVAILABLE` under R27). An unavailable tombstone exposes `invalidated_at` + `invalidated_by_disposition_event_id`, retains membership/seal history, and has null artifact pointers. |
+| POST | `/evidence-packs/{id}/generate` | `report.evidence_pack.generate` | Enqueue the immutable build/seal (DRAFT/FAILED→BUILDING) → `202`. `409` if already SEALED/UNAVAILABLE or building. |
+| GET | `/evidence-packs/{id}/download` | `report.export` | Presigned GET to the sealed pack ZIP. `409` until SEALED and after terminal `UNAVAILABLE`. |
+| POST | `/evidence-packs/{id}/share` | `report.evidence_pack.generate` | **(S-pack-2)** Mint a time-boxed Ed25519 share link for a SEALED pack: `{ ttl_days?\|expires_at?, recipient? }`. Returns the raw token + `share_url` **once** (only its digest is stored). `409` if not SEALED, including `UNAVAILABLE`; `503` if the signing key isn't provisioned. |
 | GET | `/evidence-packs/{id}/share-links` | `report.evidence_pack.generate` | **(S-pack-2)** List a pack's share links (management view, digest prefix only — never the raw token). |
 | POST | `/evidence-packs/{id}/share-links/{link_id}/revoke` | `report.evidence_pack.generate` | **(S-pack-2)** Revoke a link (immediate — re-checked on every public access): `{ reason? }`. `409` if already revoked. |
 | GET | `/evidence-packs/shared?t=<token>` | *public (no auth)* | **(S-pack-2)** The guest HTML landing — verify the token + show the pack summary (incl. the R28 gap/exclusion surface) + download links, or an honest expired/revoked/invalid message. Latch-exempt; `Referrer-Policy: no-referrer`. |
 | GET | `/evidence-packs/shared/download?t=<token>&format=zip\|pdf` | *public (no auth)* | **(S-pack-2)** Stream the pack to the guest (ZIP canonical, or the live-stamped PDF portfolio). Re-checks the **revocable** DB row each request (revoke is immediate), audits `PACK_DOWNLOADED`, streams through the API (no presigned URL outlives a revoke). `403` if invalid/expired/revoked; `409` if the PDF portfolio is unavailable. |
 
 > **No new permission key** — `report.evidence_pack.generate` + `report.export` already exist in the closed `07 §3.8` catalog (held by QMS Owner); packs ride a **SYSTEM override** until the role UI (the `record.*` precedent). Pack lifecycle audits as `PACK_GENERATED`/`PACK_BUILD_FAILED` (object_type `evidence_pack`).
+>
+> **Issue #361 / R27:** Approving a two-person legal-order destroy invalidates every sealed pack
+> whose included evidence or dossier copied that Record. The same transaction revokes all live
+> share rows, clears ZIP/portfolio pointers, disposes the pack Record with one-hop source-event
+> lineage, and emits `PACK_INVALIDATED`; post-commit/reaper work erases the bytes. Public share
+> routes then return `403`, dedicated download/share/generate refuse the terminal state, the generic
+> pack-record evidence route loses its attachment, and previously issued object-store URLs fail
+> once the object is removed. Ordinary retention DESTROY preserves the independent pack and relies
+> on the existing conservative destroyed-dependency serve guard.
 
 ### 8.16 Retention (`/retention-policies`)
 

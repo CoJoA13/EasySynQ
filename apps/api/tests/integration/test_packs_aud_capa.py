@@ -27,6 +27,7 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select
 
 from easysynq_api.db.models._pack_enums import PackStatus
+from easysynq_api.db.models._record_enums import RecordDispositionState
 from easysynq_api.db.models._retention_enums import DispositionAction
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.documented_information import DocumentedInformation
@@ -35,11 +36,14 @@ from easysynq_api.db.models.evidence_for_link import EvidenceForLink
 from easysynq_api.db.models.evidence_pack import EvidencePack
 from easysynq_api.db.models.pack_item import PackItem
 from easysynq_api.db.models.pack_share_link import PackShareLink
+from easysynq_api.db.models.pending_blob_purge import PendingBlobPurge
 from easysynq_api.db.models.record import Record
+from easysynq_api.db.models.worm_destroy_request import WormDestroyRequest
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.packs import build_and_cache_portfolio
 from easysynq_api.services.packs import repository as packs_repo
 from easysynq_api.services.records import disposition
+from easysynq_api.services.vault import storage
 
 from ._owner_db import owner_delete_disposition_events
 from .test_audits import _new_audit, _walk
@@ -127,9 +131,19 @@ async def test_finding_scope_pack_bundles_dossier(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
     subject = _subject("fpack")
-    keys = (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS)
+    keys = (
+        *_AUDIT_KEYS,
+        "finding.create",
+        "finding.read",
+        "capa.read",
+        *_PACK_KEYS,
+        "record.dispose",
+    )
     await _grant(subject, keys)
     h = _auth(token_factory, subject)
+    approver_subject = _subject("fpack-r27-approver")
+    await _grant(approver_subject, ("record.read", "record.dispose"))
+    approver_headers = _auth(token_factory, approver_subject)
 
     audit_id = await _new_audit(app_client, h)
     await _walk(app_client, h, audit_id, "plan", "conduct")
@@ -146,6 +160,7 @@ async def test_finding_scope_pack_bundles_dossier(
     await _link(app_client, h, ev_id, "finding", finding_id)
 
     pack_uuid: uuid.UUID | None = None
+    pack_record_id: uuid.UUID | None = None
     try:
         created = await app_client.post(
             "/api/v1/evidence-packs",
@@ -195,8 +210,73 @@ async def test_finding_scope_pack_bundles_dossier(
             # keycloak_subject field (the structural project_user boundary).
             blob = zf.read(dossier_names[0]).decode()
             assert '"email"' not in blob and '"keycloak_subject"' not in blob
+
+        # Issue #361 dossier-only dependency: the finding subject is not a pack_item, but its
+        # narrative is sealed into the ZIP. A real two-person R27 order on that subject must
+        # therefore invalidate the pack and physically erase its registered ZIP copy.
+        async with get_sessionmaker()() as s:
+            sealed_pack = await s.get(EvidencePack, pack_uuid)
+            assert sealed_pack is not None
+            assert sealed_pack.pack_record_id is not None
+            assert sealed_pack.zip_blob_sha256 is not None
+            pack_record_id = sealed_pack.pack_record_id
+            zip_sha = sealed_pack.zip_blob_sha256
+            zip_blob = await s.get(Blob, zip_sha)
+            assert zip_blob is not None
+            zip_location = (zip_blob.bucket, zip_blob.object_key)
+
+        requested = await app_client.post(
+            f"/api/v1/records/{finding_id}/worm-destroy-requests",
+            headers=h,
+            json={"legal_basis": "court order PACK-361-DOSSIER"},
+        )
+        assert requested.status_code == 201, requested.text
+        approved = await app_client.post(
+            f"/api/v1/records/{finding_id}/worm-destroy-requests/{requested.json()['id']}/approve",
+            headers=approver_headers,
+            json={},
+        )
+        assert approved.status_code == 200, approved.text
+
+        async with get_sessionmaker()() as s:
+            invalidated = await s.get(EvidencePack, pack_uuid)
+            pack_record = await s.get(Record, pack_record_id)
+            assert invalidated is not None and invalidated.status is PackStatus.UNAVAILABLE
+            assert pack_record is not None
+            assert pack_record.disposition_state is RecordDispositionState.DISPOSED
+            assert await s.get(Blob, zip_sha) is None
+        assert not (await storage.head(zip_location[1], bucket=zip_location[0])).exists
     finally:
-        await _teardown([ev_id], pack_uuid)
+        # The invalidated header points at the source event, and the derived event points back to
+        # it. Remove the header first, then delete both append-only events as the owner role.
+        async with get_sessionmaker()() as s:
+            if pack_uuid is not None:
+                pack = await s.get(EvidencePack, pack_uuid)
+                if pack_record_id is None and pack is not None:
+                    pack_record_id = pack.pack_record_id
+                cleanup_ids = [uuid.UUID(finding_id)]
+                if pack_record_id is not None:
+                    cleanup_ids.append(pack_record_id)
+                await s.execute(
+                    delete(PendingBlobPurge).where(PendingBlobPurge.record_id.in_(cleanup_ids))
+                )
+                await s.execute(
+                    delete(WormDestroyRequest).where(
+                        WormDestroyRequest.record_id == uuid.UUID(finding_id)
+                    )
+                )
+                await s.execute(delete(PackShareLink).where(PackShareLink.pack_id == pack_uuid))
+                await s.execute(delete(PackItem).where(PackItem.pack_id == pack_uuid))
+                await s.execute(delete(EvidencePack).where(EvidencePack.id == pack_uuid))
+                await s.commit()
+        tombstoned = [uuid.UUID(finding_id)]
+        if pack_record_id is not None:
+            tombstoned.append(pack_record_id)
+        await owner_delete_disposition_events(tombstoned)
+        cleanup_records = [ev_id]
+        if pack_record_id is not None:
+            cleanup_records.append(str(pack_record_id))
+        await _teardown(cleanup_records, None)
 
 
 async def test_sealed_finding_pack_refuses_serving_after_subject_destroyed(

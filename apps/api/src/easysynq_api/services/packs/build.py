@@ -48,6 +48,7 @@ from ..vault import storage
 from . import repository as repo
 from . import service
 from .dossier import DossierBuild, build_dossier
+from .locks import lock_pack_build_shared
 
 
 def _scope_ids(pack: EvidencePack) -> list[uuid.UUID]:
@@ -235,6 +236,12 @@ async def _fail(session: AsyncSession, pack_id: uuid.UUID, reason: str) -> None:
 
 async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
     """Assemble + seal a pack. Single transaction; idempotent on retry; fail-closed."""
+    org_id = await repo.get_pack_org_id(session, pack_id)
+    if org_id is None:
+        return
+    # Lock order is shared org-artifact lock -> pack row. R27 takes the exclusive side before its
+    # request/source-record locks, so a completed legal erasure can never race a last derived copy.
+    await lock_pack_build_shared(session, org_id)
     pack = await repo.get_pack(session, pack_id, for_update=True)
     if pack is None or pack.status is not PackStatus.BUILDING or pack.pack_record_id is not None:
         return  # nothing to do (already sealed, not building, or a redundant re-delivery)

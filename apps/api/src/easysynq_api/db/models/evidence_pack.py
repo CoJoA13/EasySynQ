@@ -24,7 +24,7 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Text, func, text
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,7 +34,26 @@ from ._pack_enums import PackScopeKind, PackStatus, pack_scope_kind_enum, pack_s
 
 class EvidencePack(Base):
     __tablename__ = "evidence_pack"
-    __table_args__ = (Index("ix_evidence_pack_org_id_status", "org_id", "status"),)
+    __table_args__ = (
+        CheckConstraint(
+            """
+            (
+                status::text = 'UNAVAILABLE'
+                AND invalidated_at IS NOT NULL
+                AND invalidated_by_disposition_event_id IS NOT NULL
+                AND zip_blob_sha256 IS NULL
+                AND portfolio_blob_sha256 IS NULL
+            )
+            OR (
+                status::text <> 'UNAVAILABLE'
+                AND invalidated_at IS NULL
+                AND invalidated_by_disposition_event_id IS NULL
+            )
+            """,
+            name="invalidation_shape",
+        ),
+        Index("ix_evidence_pack_org_id_status", "org_id", "status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
@@ -85,4 +104,19 @@ class EvidencePack(Base):
     )
     generated_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # Issue #361: an R27 legal-order destruction of any copied dependency makes the sealed bundle
+    # terminally unavailable. The header/audit seal remains as a tombstone while both artifact
+    # pointers are cleared and their bytes are purged after commit.
+    invalidated_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    invalidated_by_disposition_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "disposition_event.id",
+            ondelete="RESTRICT",
+            name="fk_evidence_pack_invalidation_event",
+        ),
+        nullable=True,
     )
