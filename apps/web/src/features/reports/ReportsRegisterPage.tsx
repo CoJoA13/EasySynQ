@@ -6,7 +6,7 @@ import { useMe } from "../../app/shell/useMe";
 import { ClauseBadge } from "../../lib/ClauseBadge";
 import type { RegisterProvenance, RegisterRow } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
-import { ErrorState, LoadingState, NoAccessState, EmptyState } from "../../lib/states";
+import { EmptyState, ErrorState, InlineState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
 import { StateBadge } from "../document/StateBadge";
@@ -134,6 +134,7 @@ export function ReportsRegisterPage() {
   const reportQuery = useFilteredQuery ? registerQuery : facetQuery;
   const data = reportQuery.data;
   const facetQueryBlocksReport = reportFacetValidationPending;
+  const facetOptionsError = facetQuery.isError && useFilteredQuery && !facetQueryBlocksReport;
   const forbidden = reportQuery.forbidden || (facetQueryBlocksReport && facetQuery.forbidden);
   const isError =
     reportQuery.isError ||
@@ -200,6 +201,11 @@ export function ReportsRegisterPage() {
           <>
             <AsOf at={reportQuery.dataUpdatedAt} />
             <ProvenanceBanner provenance={data.provenance} />
+            {facetOptionsError && (
+              <InlineState kind="error" onRetry={() => void facetQuery.refetch()}>
+                Couldn't load Process and Clause filter options.
+              </InlineState>
+            )}
             <Group align="flex-end" gap="sm" wrap="wrap">
               <FacetBar
                 value={uf}

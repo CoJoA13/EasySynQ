@@ -603,14 +603,14 @@ def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
             )
             .exists()
         )
-    if field == "process_id":  # filter[process_id][eq]=<uuid> — docs linked to this process
+    if field == "process_id":  # filter[process_id][eq]=<uuid> — docs scoped to this process
         try:
             process_id = uuid.UUID(value)
         except ValueError as exc:
             raise ProblemException(
                 status=422, code="validation_error", title="Invalid process_id filter value"
             ) from exc
-        return (
+        process_link = (
             select(1)
             .select_from(ProcessLink)
             .where(
@@ -619,6 +619,20 @@ def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
             )
             .exists()
         )
+        # Quality Objectives bind their process on the shared-PK satellite row rather than through
+        # ProcessLink. ``vault_repo.process_ids_for_docs`` unions this same binding into the
+        # register's ``process_links`` projection, so the filter must match it too: every advertised
+        # facet value has to retain the objective row that supplied it.
+        objective_process = (
+            select(1)
+            .select_from(QualityObjective)
+            .where(
+                QualityObjective.id == DocumentedInformation.id,
+                QualityObjective.process_id == process_id,
+            )
+            .exists()
+        )
+        return or_(process_link, objective_process)
     if field == "current_state":
         try:
             return DocumentedInformation.current_state == DocumentCurrentState(value)

@@ -168,7 +168,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #334 — source delegated register facets from caller-visible report data (web + docs; NO API/contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#334](https://github.com/CoJoA13/EasySynQ/issues/334); PR [#410](https://github.com/CoJoA13/EasySynQ/pull/410))
+### Issue #334 — source delegated register facets from caller-visible report data (web + API + docs; NO OpenAPI contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#334](https://github.com/CoJoA13/EasySynQ/issues/334); PR [#410](https://github.com/CoJoA13/EasySynQ/pull/410))
 
 **Permission-safe facet sourcing.** The Controlled Document Register now derives its Process and
 Clause choice universes from the distinct `process_links` and `clause_refs` in one unfiltered
@@ -188,6 +188,16 @@ proves it representable. Stale/bookmarked values outside that boundary are never
 API and are removed from the URL. Tests prove both positive facets under denied catalogs, natural
 deduplication/sorting, option membership from visible rows only, interactive and bookmarked filter
 wiring, and the negative stale-value guards for both facets.
+
+**Query and satellite alignment.** The unfiltered facet baseline is reused as the displayed report
+when no filters are active; independent filters start concurrently, while Process/Clause deep links
+wait only for a fresh post-mount membership snapshot. A successful filtered report remains visible
+when that optional baseline fails and exposes an inline retry that restores the missing facet
+controls; one retry also refreshes both queries when both fail. The server Process predicate now
+matches the same union projected into `process_links`: ordinary `ProcessLink` rows plus
+`QualityObjective.process_id`. Selecting a Process facet can therefore no longer remove the
+Quality Objective that advertised it. Regression coverage includes the partial-failure/retry paths
+and a real-Postgres objective-satellite filter proof.
 
 ### Issue #332 — interpret date-only effective bounds in the organization timezone (API + web + OpenAPI + integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#332](https://github.com/CoJoA13/EasySynQ/issues/332); PR [#409](https://github.com/CoJoA13/EasySynQ/pull/409))
 

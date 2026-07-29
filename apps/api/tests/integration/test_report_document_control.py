@@ -848,6 +848,45 @@ async def test_process_id_filter_narrows_register_to_linked_documents(
     assert doc_out["identifier"] not in ids
 
 
+async def test_process_id_filter_includes_objective_satellite_binding(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A Quality Objective stores its process on ``quality_objective.process_id``, not a
+    ``ProcessLink``. The register projects that satellite binding in ``process_links``, so choosing
+    the advertised Process facet must retain the objective that supplied the option."""
+    await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, ("objective.manage", "objective.read", "report.read"))
+    ha = _auth(token_factory, subj.a)
+
+    process_id = await _create_process(subj.a, await s5.default_org_id())
+    created = await app_client.post(
+        "/api/v1/objectives",
+        headers=ha,
+        json={
+            "title": f"Satellite process objective {uuid.uuid4().hex[:8]}",
+            "target_value": "98",
+            "unit": "%",
+            "direction": "HIGHER_IS_BETTER",
+            "due_date": "2026-12-31",
+            "baseline_value": "90",
+            "at_risk_threshold": "95",
+            "process_id": process_id,
+        },
+    )
+    assert created.status_code == 201, created.text
+    objective = created.json()
+
+    unrelated = await _create(app_client, ha, await s5.type_id("SOP"))
+    resp = await app_client.get(f"{_ROUTE}?filter[process_id][eq]={process_id}", headers=ha)
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["rows"]
+    identifiers = {row["identifier"] for row in rows}
+    assert objective["identifier"] in identifiers
+    assert unrelated["identifier"] not in identifiers
+    objective_row = next(row for row in rows if row["identifier"] == objective["identifier"])
+    assert process_id in objective_row["process_links"]
+
+
 async def test_process_id_filter_rejects_a_non_uuid_value() -> None:
     """A malformed ``filter[process_id][eq]`` value is a 422, mirroring the other UUID-valued
     filters (document_type/owner_user_id) — exercised directly on the pure builder, no HTTP

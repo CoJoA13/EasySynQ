@@ -145,13 +145,15 @@ describe("ReportsRegisterPage", () => {
     expect(requests).toBe(1);
   });
 
-  it("runs an independent filtered request concurrently and keeps it usable if the baseline fails", async () => {
+  it("keeps an independent filtered report usable and retries its failed facet baseline", async () => {
+    const user = userEvent.setup();
     let releaseBaseline: () => void = () => undefined;
     const baselineGate = new Promise<void>((resolve) => {
       releaseBaseline = resolve;
     });
     let baselineStarted = false;
     let baselineFinished = false;
+    let baselineRequests = 0;
     let filteredRequests = 0;
     server.use(
       http.get("/api/v1/reports/document-control", async ({ request }) => {
@@ -160,6 +162,8 @@ describe("ReportsRegisterPage", () => {
           filteredRequests += 1;
           return HttpResponse.json(REG);
         }
+        baselineRequests += 1;
+        if (baselineRequests > 1) return HttpResponse.json(REG);
         baselineStarted = true;
         await baselineGate;
         baselineFinished = true;
@@ -179,6 +183,17 @@ describe("ReportsRegisterPage", () => {
     await waitFor(() => expect(baselineFinished).toBe(true));
     expect(screen.getByText("SOP-QA-001")).toBeInTheDocument();
     expect(screen.queryByText(/Couldn't load the register/)).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("Couldn't load Process and Clause filter options."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(baselineRequests).toBe(2));
+    expect(
+      screen.queryByText("Couldn't load Process and Clause filter options."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Process" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Clause" })).toBeInTheDocument();
   });
 
   it("retries failed baseline and filtered requests together", async () => {

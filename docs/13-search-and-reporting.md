@@ -429,6 +429,11 @@ permissions. Those catalogs may enrich a visible choice's label, but they never 
 whether a URL filter is applicable. A bookmarked Process/Clause value absent from the caller-visible
 baseline is removed and is never sent as a hidden report filter.
 
+The Process filter uses the same process-scope definition as the rows it advertises:
+`ProcessLink.process_id` plus the shared-PK `QualityObjective.process_id` satellite binding. A
+Quality Objective therefore remains in the filtered register when its own `process_links` projection
+supplied the selected facet value.
+
 | Column | Source |
 |---|---|
 | Document identifier (doc code) | `identifier` |
