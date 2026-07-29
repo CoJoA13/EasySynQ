@@ -2,13 +2,13 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0080` (next `0081`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0081` (next `0082`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
 > (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
 > cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
 > `0075` the audit `scope_ref` index; M5 added `0076`'s import-owner snapshot; M7 added `0077`'s
 > sealed-pack retention policy and `0078`'s record content-hash version; M9 added `0079`'s
 > operational-install coherence repair; M10 added `0080`'s dead-field removal and query-path
-> indexes.)
+> indexes; Issue #360 added `0081`'s pending-purge authority binding.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -167,6 +167,28 @@
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
+
+### Issue #360 — bind pending-purge recovery to lawful disposition authority (API + migration + integration + docs; migration `0081` [new head]; NO new permission key [catalog 102]; closes [#360](https://github.com/CoJoA13/EasySynQ/issues/360); PR pending)
+
+**The durable marker is no longer authority.** Every new `pending_blob_purge` row identifies the
+exact disposed Record and immutable DESTROY `disposition_event`; R27 work also identifies its
+executed, non-cancelled `worm_destroy_request`. The reaper validates organization/Record/action,
+policy-backed ordinary disposition, or the R27 request's matching two distinct actors and legal
+basis before it touches storage. Only the latter can replay `BypassGovernanceRetention`.
+
+**False-SHA, bucket, and upgrade safety.** Live ownership is checked by the physical
+`(bucket, object_key)` rather than the marker's diagnostic SHA, so a forged SHA cannot hide a live
+object. The reaper accepts only the configured records/renditions buckets, preventing a valid event
+from becoming a delete oracle for unrelated S3 namespaces. Migration `0081` marks existing rows as
+unbound legacy work and forces them through non-bypass recovery. New rows server-default to
+authority-bound, with a CHECK requiring their references. Column-scoped app role grants prevent
+selecting legacy mode or mutating target/authority fields while retaining the minimal `UPDATE(id)`
+needed for `FOR UPDATE SKIP LOCKED`.
+
+**Regression proof.** Docker-backed tests cover genuine ordinary and two-person R27 crash
+recovery, wrong-SHA live-object cancellation, mismatched-authority/wrong-bucket refusal with zero
+S3 calls, legacy bypass downgrade, immediate-purge/re-capture/cross-bucket behavior, and PostgreSQL
+denial of forged/mutated markers while the reaper's row-lock claim still succeeds.
 
 ### Issue #334 — source delegated register facets from caller-visible report data (web + API + docs; NO OpenAPI contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#334](https://github.com/CoJoA13/EasySynQ/issues/334); PR [#410](https://github.com/CoJoA13/EasySynQ/pull/410))
 

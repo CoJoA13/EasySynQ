@@ -29,6 +29,7 @@ from easysynq_api.services.backup.dsn import conn_kwargs
 _API_ROOT = Path(__file__).resolve().parents[2]
 _M9_REVISION = "0079_migration_orm_coherence"
 _M10_REVISION = "0080_schema_index_design"
+_PURGE_AUTHORITY_REVISION = "0081_pending_purge_authority"
 _CANONICAL_CHECK = "ck_process_edge_no_self_loop"
 _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
 _RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
@@ -412,6 +413,36 @@ def test_populated_historical_transitions_and_head_repairs(
                     == 1
                 )
 
+            # 0081: pre-existing purge work cannot be reconstructed after its evidence links were
+            # deleted. Preserve it as explicitly unbound legacy work; never promote its old bypass
+            # bit into authority.
+            legacy_purge_id = uuid.uuid4()
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO pending_blob_purge "
+                        "(id, org_id, sha256, bucket, object_key, bypass_governance) "
+                        "VALUES (:id, :org, :sha256, 'records', :object_key, true)"
+                    ),
+                    {
+                        "id": legacy_purge_id,
+                        "org": org_id,
+                        "sha256": "legacy-" + uuid.uuid4().hex,
+                        "object_key": uuid.uuid4().hex,
+                    },
+                )
+            command.upgrade(config, _PURGE_AUTHORITY_REVISION)
+            with engine.connect() as connection:
+                legacy = connection.execute(
+                    sa.text(
+                        "SELECT authority_bound, record_id, disposition_event_id, "
+                        "worm_destroy_request_id, bypass_governance "
+                        "FROM pending_blob_purge WHERE id = :id"
+                    ),
+                    {"id": legacy_purge_id},
+                ).one()
+                assert legacy == (False, None, None, None, True)
+
             # The downgrade restores a nullable compatibility column and removes only M10's
             # indexes; a clean re-upgrade remains safe with the live version row in place.
             command.downgrade(config, _M9_REVISION)
@@ -426,6 +457,13 @@ def test_populated_historical_transitions_and_head_repairs(
                 assert _column_nullable(connection, "document_version", "change_summary") is None
                 assert _RECORD_SOURCE_DOCUMENT_INDEX in _table_indexes(connection, "record")
                 assert _ROLE_ASSIGNMENT_USER_INDEX in _table_indexes(connection, "role_assignment")
+                assert (
+                    connection.execute(
+                        sa.text("SELECT authority_bound FROM pending_blob_purge WHERE id = :id"),
+                        {"id": legacy_purge_id},
+                    ).scalar_one()
+                    is False
+                )
 
             # The repair downgrade is intentionally non-destructive; re-upgrade is idempotent.
             command.downgrade(config, "0078_record_content_hash_version")

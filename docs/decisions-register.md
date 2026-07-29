@@ -415,7 +415,15 @@ Doc 10 short form (Raised / Triage / Accepted) **maps onto these**.
 
 **Decision:** Document the legal posture: records whose **CONTENT is PII** and whose **retention exceeds employment** **remain under object-lock**; provide a **tightly-controlled, dual-control, fully-audited destroy-under-legal-order escape hatch** for WORM blobs (mis-imports, erasure orders).
 
-**Back-propagation:** 06, 12.
+**Authority-bound reaper addendum (Issue #360, 2026-07-29):** Crash recovery may replay a
+governance-bypass erase only when its durable `pending_blob_purge` marker points to the exact
+`DISPOSED` Record, immutable `disposition_event`, and executed, non-cancelled
+`worm_destroy_request`, and the request's two distinct actors and legal basis match the immutable
+event. The marker's `bypass_governance` boolean is never authority by itself. Ordinary
+policy-backed disposition may replay only without bypass. Pre-0081 markers are deliberately
+unbound legacy work and are therefore forced through non-bypass recovery.
+
+**Back-propagation:** 06, 12, 14.
 
 ---
 
