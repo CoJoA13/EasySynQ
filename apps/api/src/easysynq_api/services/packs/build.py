@@ -48,6 +48,7 @@ from ..vault import storage
 from . import repository as repo
 from . import service
 from .dossier import DossierBuild, build_dossier
+from .locks import lock_pack_build_shared
 
 
 def _scope_ids(pack: EvidencePack) -> list[uuid.UUID]:
@@ -235,6 +236,12 @@ async def _fail(session: AsyncSession, pack_id: uuid.UUID, reason: str) -> None:
 
 async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
     """Assemble + seal a pack. Single transaction; idempotent on retry; fail-closed."""
+    org_id = await repo.get_pack_org_id(session, pack_id)
+    if org_id is None:
+        return
+    # Lock order is shared org-artifact lock -> pack row. R27 takes the exclusive side before its
+    # request/source-record locks, so a completed legal erasure can never race a last derived copy.
+    await lock_pack_build_shared(session, org_id)
     pack = await repo.get_pack(session, pack_id, for_update=True)
     if pack is None or pack.status is not PackStatus.BUILDING or pack.pack_record_id is not None:
         return  # nothing to do (already sealed, not building, or a redundant re-delivery)
@@ -383,6 +390,13 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
         pack.content_hash = content_hash
         pack.zip_blob_sha256 = zip_sha
         pack.pack_record_id = record.id
+        # Persist the exact shared-PK Records whose fields/references were serialized into the
+        # dossier. Runtime R27 discovery must never consult a correction pointer created after this
+        # immutable snapshot. CLAUSE/PROCESS packs deliberately persist [] rather than NULL so NULL
+        # remains the unambiguous legacy-pre-0082 fallback signal.
+        pack.embedded_record_ids_at_seal = sorted(
+            str(record_id) for record_id in (dossier.dependency_record_ids if dossier else ())
+        )
         pack.generated_at = generated_at
         pack.item_count = included_count
         pack.exclusion_summary = excl
@@ -399,6 +413,7 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
                 "content_hash": content_hash,
                 "zip_blob_sha256": zip_sha,
                 "pack_record_id": str(record.id),
+                "embedded_record_dependency_count": len(pack.embedded_record_ids_at_seal),
                 "item_count": included_count,
                 "included_records": len(included),
                 "excluded_permission": excl["permission_count"],

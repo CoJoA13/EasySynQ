@@ -16,8 +16,10 @@ from collections.abc import Iterable
 from sqlalchemy import and_, asc, delete, desc, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from ...db.models._evidence_enums import EvidenceForTargetType
+from ...db.models._pack_enums import PackStatus
 from ...db.models._record_enums import RecordDispositionState
 from ...db.models._retention_enums import DispositionAction, RetentionBasis
 from ...db.models.blob import Blob
@@ -26,6 +28,7 @@ from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
+from ...db.models.evidence_pack import EvidencePack
 from ...db.models.pending_blob_purge import PendingBlobPurge
 from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
@@ -499,28 +502,64 @@ async def delete_blob_and_links(session: AsyncSession, blob_sha256: str) -> None
     ``evidence_blob`` row referencing it, so the invariant **a ``blob`` row exists iff its object
     exists** holds — no backup/restore (or any 'copy every blob' sweep) ever hits a destroyed
     object (doc 06 §5.3 "removes the blob"; the ``disposition_event`` tombstone + the record
-    ``content_hash`` preserve what existed). Only called when no live record needs the bytes."""
+    ``content_hash`` preserve what existed). Only called when no live domain owner needs the
+    bytes."""
     await session.execute(delete(EvidenceBlob).where(EvidenceBlob.blob_sha256 == blob_sha256))
     await session.execute(delete(Blob).where(Blob.sha256 == blob_sha256))
+
+
+async def detach_record_evidence_blob(
+    session: AsyncSession, record_id: uuid.UUID, blob_sha256: str
+) -> None:
+    """Remove one disposed Record's reachability while another live owner retains the Blob."""
+    await session.execute(
+        delete(EvidenceBlob).where(
+            EvidenceBlob.record_id == record_id,
+            EvidenceBlob.blob_sha256 == blob_sha256,
+        )
+    )
+
+
+def _record_content_is_preserved() -> ColumnElement[bool]:
+    """Match Records whose bytes remain lawful owners of a Blob.
+
+    ``DISPOSED`` alone is not an erasure signal: ``ARCHIVE_COLD`` and ``TRANSFER`` deliberately
+    preserve content. Only an immutable destructive disposition event removes Record ownership.
+    """
+    return ~(
+        select(DispositionEvent.id)
+        .where(
+            DispositionEvent.record_id == Record.id,
+            or_(
+                DispositionEvent.is_worm_destroy.is_(True),
+                DispositionEvent.action == DispositionAction.DESTROY,
+            ),
+        )
+        .exists()
+    )
 
 
 async def blob_needed_by_other_live_record(
     session: AsyncSession, blob_sha256: str, exclude_record_id: uuid.UUID
 ) -> bool:
     """``True`` if destroying this blob's bytes would orphan a still-live reference — so a DESTROY
-    purges the bytes only when this is ``False`` (the disposed record keeps its ``evidence_blob``
-    tombstone row regardless; the bytes simply 404 once gone).
+    purges the bytes only when this is ``False``. The caller still detaches the disposed Record's
+    own ``evidence_blob`` row when this is ``True`` so its generic download route cannot reach bytes
+    retained for an unrelated lawful owner.
 
-    Two legs:
-    1. Some OTHER non-``DISPOSED`` record still attaches this blob (records may share a
-       records-bucket WORM blob — the S-rec-1 dedup).
+    Four live-owner legs:
+    1. Some OTHER record whose content was not destructively disposed still attaches this blob
+       (records may share a records-bucket WORM blob — the S-rec-1 dedup). A Record disposed through
+       ``ARCHIVE_COLD`` or ``TRANSFER`` remains an owner because those actions preserve its bytes.
     2. A ``document_version`` references this sha as ``source_blob_sha256`` /
        ``rendition_blob_sha256`` (both RESTRICT FKs onto ``blob.sha256``). CR-1 defense-in-depth:
        the check-in guard (``_assert_documents_worm_blob``) makes this cross-kind sharing
        UNREACHABLE for new check-ins, but this leg stops a record disposition from physically
        destroying bytes a controlled document still needs — the D2 data-loss AND the
        ``delete_blob_and_links`` RESTRICT-FK IntegrityError that would otherwise crash-loop the
-       retention sweep."""
+       retention sweep.
+    3. Another live Record points at the sha as its structured PDF rendition.
+    4. A non-invalidated Evidence Pack still points at the sha as its ZIP or portfolio."""
     record_leg = await session.scalar(
         select(func.count())
         .select_from(EvidenceBlob)
@@ -528,7 +567,7 @@ async def blob_needed_by_other_live_record(
         .where(
             EvidenceBlob.blob_sha256 == blob_sha256,
             EvidenceBlob.record_id != exclude_record_id,
-            Record.disposition_state != RecordDispositionState.DISPOSED,
+            _record_content_is_preserved(),
         )
     )
     if record_leg:
@@ -543,7 +582,88 @@ async def blob_needed_by_other_live_record(
             )
         )
     )
-    return bool(version_leg)
+    if version_leg:
+        return True
+    structured_leg = await session.scalar(
+        select(func.count())
+        .select_from(Record)
+        .where(
+            Record.id != exclude_record_id,
+            Record.structured_pdf_blob_sha256 == blob_sha256,
+            _record_content_is_preserved(),
+        )
+    )
+    if structured_leg:
+        return True
+    pack_leg = await session.scalar(
+        select(func.count())
+        .select_from(EvidencePack)
+        .where(
+            EvidencePack.status != PackStatus.UNAVAILABLE,
+            or_(
+                EvidencePack.zip_blob_sha256 == blob_sha256,
+                EvidencePack.portfolio_blob_sha256 == blob_sha256,
+            ),
+        )
+    )
+    return bool(pack_leg)
+
+
+async def blob_needed_by_any_live_owner(session: AsyncSession, blob_sha256: str) -> bool:
+    """Return whether any still-live domain pointer owns this content-addressed Blob.
+
+    Issue #361 uses this after clearing every affected pack pointer. Unlike the record-specific
+    helper above, a portfolio has no EvidenceBlob parent, so its last-owner decision must cover all
+    four pointer families explicitly: preserved Record evidence, controlled DocumentVersions,
+    preserved structured-record renditions, and non-invalidated Evidence Pack ZIP/portfolio
+    pointers. ``ARCHIVE_COLD``/``TRANSFER`` Records remain preserved owners despite their terminal
+    ``DISPOSED`` state; only a destructive disposition event removes ownership.
+    """
+    evidence_leg = await session.scalar(
+        select(func.count())
+        .select_from(EvidenceBlob)
+        .join(Record, EvidenceBlob.record_id == Record.id)
+        .where(
+            EvidenceBlob.blob_sha256 == blob_sha256,
+            _record_content_is_preserved(),
+        )
+    )
+    if evidence_leg:
+        return True
+    version_leg = await session.scalar(
+        select(func.count())
+        .select_from(DocumentVersion)
+        .where(
+            or_(
+                DocumentVersion.source_blob_sha256 == blob_sha256,
+                DocumentVersion.rendition_blob_sha256 == blob_sha256,
+            )
+        )
+    )
+    if version_leg:
+        return True
+    structured_leg = await session.scalar(
+        select(func.count())
+        .select_from(Record)
+        .where(
+            Record.structured_pdf_blob_sha256 == blob_sha256,
+            _record_content_is_preserved(),
+        )
+    )
+    if structured_leg:
+        return True
+    pack_leg = await session.scalar(
+        select(func.count())
+        .select_from(EvidencePack)
+        .where(
+            EvidencePack.status != PackStatus.UNAVAILABLE,
+            or_(
+                EvidencePack.zip_blob_sha256 == blob_sha256,
+                EvidencePack.portfolio_blob_sha256 == blob_sha256,
+            ),
+        )
+    )
+    return bool(pack_leg)
 
 
 async def lock_blob_for_update(session: AsyncSession, blob_sha256: str) -> None:

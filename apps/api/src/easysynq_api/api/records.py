@@ -170,6 +170,11 @@ def _disposition_event(event: DispositionEvent) -> dict[str, Any]:
         "requested_by": str(event.requested_by) if event.requested_by else None,
         "is_worm_destroy": event.is_worm_destroy,
         "legal_basis": event.legal_basis,
+        "derived_from_disposition_event_id": (
+            str(event.derived_from_disposition_event_id)
+            if event.derived_from_disposition_event_id
+            else None
+        ),
         "executed_at": event.executed_at.isoformat() if event.executed_at else None,
     }
 

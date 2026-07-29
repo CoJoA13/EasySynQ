@@ -16,7 +16,7 @@ from sqlalchemy import Date, asc, cast, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._evidence_enums import EvidenceForTargetType
-from ...db.models._pack_enums import PackInclusionStatus, PackItemType, PackScopeKind
+from ...db.models._pack_enums import PackInclusionStatus, PackItemType, PackScopeKind, PackStatus
 from ...db.models._retention_enums import DispositionAction
 from ...db.models._signature_enums import SignedObjectType
 from ...db.models.app_user import AppUser
@@ -45,10 +45,21 @@ async def get_pack(
     if for_update:
         return (
             await session.execute(
-                select(EvidencePack).where(EvidencePack.id == pack_id).with_for_update()
+                select(EvidencePack)
+                .where(EvidencePack.id == pack_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
     return await session.get(EvidencePack, pack_id)
+
+
+async def get_pack_org_id(session: AsyncSession, pack_id: uuid.UUID) -> uuid.UUID | None:
+    """Read only the tenancy key needed before taking the pack-artifact advisory lock."""
+    org_id: uuid.UUID | None = await session.scalar(
+        select(EvidencePack.org_id).where(EvidencePack.id == pack_id)
+    )
+    return org_id
 
 
 async def list_packs(session: AsyncSession, org_id: uuid.UUID, *, limit: int) -> list[EvidencePack]:
@@ -373,19 +384,58 @@ async def _finding_audit_ids(
     return [r for r in rows.all() if r is not None]
 
 
+async def _finding_correction_ids(
+    session: AsyncSession,
+    finding_ids: list[uuid.UUID],
+    *,
+    as_of: datetime.datetime | None,
+) -> list[uuid.UUID]:
+    """Correction predecessor/successor identifiers embedded by ``dossier._finding_subject``.
+
+    New seals persist their exact dossier dependency set and do not call this compatibility path.
+    For a legacy sealed pack, bound mutable successor pointers by ``generated_at``: a correction
+    captured after the seal could not have appeared in the frozen dossier and must not retroactively
+    become its dependency. During a build ``as_of`` is None and current relations are intentional.
+    """
+    if not finding_ids:
+        return []
+    rows = (
+        await session.execute(
+            select(Record.correction_of, Record.superseded_by_correction).where(
+                Record.id.in_(finding_ids)
+            )
+        )
+    ).all()
+    ids: list[uuid.UUID] = []
+    for predecessor, successor in rows:
+        if predecessor is not None:
+            ids.append(predecessor)
+        if successor is not None:
+            ids.append(successor)
+    if not ids or as_of is None:
+        return ids
+    sealed_ids = await session.scalars(
+        select(Record.id).where(
+            Record.id.in_(ids),
+            Record.captured_at <= as_of,
+        )
+    )
+    return list(sealed_ids.all())
+
+
 async def _pack_embedded_record_ids(session: AsyncSession, pack: EvidencePack) -> list[uuid.UUID]:
     """Every record whose metadata/narrative is baked into the sealed pack but is NOT an INCLUDED
     ``pack_item`` member — so a DESTROY tombstone on any must also fail-close the serve gate:
 
     * the FINDING/CAPA scope **subjects** (dossier subjects; shared-PK records),
     * a CAPA subject's **origin finding** / a FINDING subject's **linked auto-CAPA** + **source
-      audit** — the cross-references each dossier embeds (all shared-PK records), and
+      audit** — the cross-references each dossier embeds (all shared-PK records),
+    * a FINDING subject's correction predecessor/successor identifiers, and
     * the pack's own registered EVIDENCE **record** (``pack_record_id`` — the sealed ZIP-as-record;
-      an R27 destroy of it purges the ZIP blob but leaves the portfolio serving).
+      an ordinary policy tombstone is serve-gated, while R27 invalidates the whole pack).
 
     The CAPA-stage / finding evidence records ARE INCLUDED ``pack_item`` members (the member join
-    covers them). A finding/CAPA correction-chain identifier is also dossier-embedded but a rarer
-    lineage; the uniform closer for that deep graph is the #361 physical purge."""
+    covers them)."""
     subject_ids = _pack_subject_record_ids(pack)
     ids: list[uuid.UUID] = list(subject_ids)
     if subject_ids:
@@ -394,9 +444,31 @@ async def _pack_embedded_record_ids(session: AsyncSession, pack: EvidencePack) -
         elif pack.scope_kind is PackScopeKind.FINDING:
             ids.extend(await _finding_linked_capa_ids(session, subject_ids))
             ids.extend(await _finding_audit_ids(session, subject_ids))
+            ids.extend(
+                await _finding_correction_ids(
+                    session,
+                    subject_ids,
+                    as_of=pack.generated_at,
+                )
+            )
     if pack.pack_record_id is not None:
         ids.append(pack.pack_record_id)
     return ids
+
+
+def _sealed_embedded_record_ids(pack: EvidencePack) -> set[uuid.UUID] | None:
+    """Parse the exact dossier dependency snapshot, or return None for a legacy seal."""
+    raw = pack.embedded_record_ids_at_seal
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise RuntimeError("Evidence Pack embedded dependency snapshot is not a JSON array")
+    try:
+        return {uuid.UUID(str(value)) for value in raw}
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Evidence Pack embedded dependency snapshot contains an invalid UUID"
+        ) from exc
 
 
 async def _count_destroy_tombstones(session: AsyncSession, record_ids: list[uuid.UUID]) -> int:
@@ -425,31 +497,125 @@ async def pack_has_destroyed_member(session: AsyncSession, pack: EvidencePack) -
 
     * INCLUDED ``pack_item`` RECORD members — the evidence bytes in the ZIP / portfolio, and
     * every dossier-embedded / derived record (``_pack_embedded_record_ids``): the FINDING/CAPA
-      subjects, their embedded origin-finding / linked-CAPA cross-reference, and the pack's own
-      registered EVIDENCE record — none of which are ``pack_item`` rows.
+      subjects, their embedded origin-finding / linked-CAPA/source-audit/correction references, and
+      the pack's own registered EVIDENCE record — none of which are ``pack_item`` rows.
 
     Serve paths use this to fail-closed AFTER the seal — a record destroyed post-seal must not stay
     reachable via the pack's cached ZIP / portfolio (their bytes/narrative are baked into the sealed
     artifacts, so delivery is gated here). Records destroyed BEFORE the seal are already
     EXCLUDED_ABSENCE / refused at build time, so only INCLUDED members + the embedded set matter."""
-    member_count = await session.scalar(
-        select(func.count())
-        .select_from(PackItem)
-        .join(DispositionEvent, DispositionEvent.record_id == PackItem.record_id)
-        .where(
-            PackItem.pack_id == pack.id,
-            PackItem.item_type == PackItemType.RECORD,
-            PackItem.inclusion_status == PackInclusionStatus.INCLUDED,
-            or_(
-                DispositionEvent.is_worm_destroy.is_(True),
-                DispositionEvent.action == DispositionAction.DESTROY,
-            ),
+    return (
+        await _count_destroy_tombstones(
+            session, list(await pack_dependency_record_ids(session, pack))
         )
+        > 0
     )
-    if member_count:
-        return True
-    embedded_ids = await _pack_embedded_record_ids(session, pack)
-    return await _count_destroy_tombstones(session, embedded_ids) > 0
+
+
+async def pack_dependency_record_ids(session: AsyncSession, pack: EvidencePack) -> set[uuid.UUID]:
+    """Every Record whose bytes or metadata were copied into a sealed pack.
+
+    This is the single dependency resolver used by both the serve-time fail-closed guard and the
+    R27 invalidation cascade: INCLUDED members plus dossier subjects/cross-references/correction
+    identifiers and the registered pack Record itself. New seals read the exact dossier dependency
+    snapshot persisted by the builder. Legacy seals fall back to relational discovery, with
+    correction targets bounded by the seal's ``generated_at`` timestamp.
+    """
+    member_ids = (
+        await session.scalars(
+            select(PackItem.record_id).where(
+                PackItem.pack_id == pack.id,
+                PackItem.item_type == PackItemType.RECORD,
+                PackItem.inclusion_status == PackInclusionStatus.INCLUDED,
+                PackItem.record_id.is_not(None),
+            )
+        )
+    ).all()
+    dependencies = {rid for rid in member_ids if rid is not None}
+    embedded = _sealed_embedded_record_ids(pack)
+    if embedded is None:
+        dependencies.update(await _pack_embedded_record_ids(session, pack))
+    else:
+        dependencies.update(embedded)
+        if pack.pack_record_id is not None:
+            dependencies.add(pack.pack_record_id)
+    return dependencies
+
+
+def _pack_invalidation_closure(
+    packs: list[EvidencePack],
+    dependencies_by_pack: dict[uuid.UUID, set[uuid.UUID]],
+    source_record_id: uuid.UUID,
+) -> set[uuid.UUID]:
+    """Close R27 invalidation over nested pack Records and byte-identical artifacts.
+
+    A registered pack Record is ordinary EVIDENCE and can therefore be copied into a later pack.
+    Selecting a pack makes that registered Record another affected source; selecting an artifact
+    alias does the same. Iterate both edges to a fixed point so no outer pack retains bytes copied
+    from a newly invalidated inner pack.
+    """
+    selected: set[uuid.UUID] = set()
+    affected_record_ids = {source_record_id}
+    artifact_shas: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for pack in packs:
+            if pack.id in selected:
+                continue
+            depends_on_affected_record = bool(dependencies_by_pack[pack.id] & affected_record_ids)
+            aliases_affected_artifact = any(
+                sha is not None and sha in artifact_shas
+                for sha in (pack.zip_blob_sha256, pack.portfolio_blob_sha256)
+            )
+            if not depends_on_affected_record and not aliases_affected_artifact:
+                continue
+            selected.add(pack.id)
+            if pack.pack_record_id is not None:
+                affected_record_ids.add(pack.pack_record_id)
+            artifact_shas.update(
+                sha for sha in (pack.zip_blob_sha256, pack.portfolio_blob_sha256) if sha is not None
+            )
+            changed = True
+    return selected
+
+
+async def affected_sealed_packs_for_r27(
+    session: AsyncSession, org_id: uuid.UUID, source_record_id: uuid.UUID
+) -> list[EvidencePack]:
+    """Resolve and row-lock every SEALED pack copied from the R27 source.
+
+    The caller already holds the organization-exclusive pack-artifact advisory lock. We take pack
+    rows in UUID order, then resolve dependencies from the freshly locked state and close over
+    nested registered pack Records plus exact artifact aliases. Locking all SEALED headers in the
+    organization is deliberate: it makes the re-check and closure one stable snapshot, and R27 is
+    a rare governance operation.
+    """
+    packs = list(
+        (
+            await session.execute(
+                select(EvidencePack)
+                .where(
+                    EvidencePack.org_id == org_id,
+                    EvidencePack.status == PackStatus.SEALED,
+                )
+                .order_by(asc(EvidencePack.id))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    dependencies_by_pack = {
+        pack.id: await pack_dependency_record_ids(session, pack) for pack in packs
+    }
+    affected_ids = _pack_invalidation_closure(
+        packs,
+        dependencies_by_pack,
+        source_record_id,
+    )
+    return [pack for pack in packs if pack.id in affected_ids]
 
 
 async def pack_subjects_destroyed(session: AsyncSession, pack: EvidencePack) -> bool:

@@ -40,6 +40,15 @@ class DossierBuild:
     file_manifest: list[dict[str, Any]]  # [{path, sha256}] — for manifest["dossier"]["files"]
     subjects: list[dict[str, Any]]  # manifest subject index, including each hash + its version
     digest: str  # the dossier seal (folds into the v2 pack_content_hash)
+    # Exact shared-PK Records whose fields/references were serialized into these dossier bytes.
+    # Persisted on the pack at seal so later mutable correction pointers cannot rewrite history.
+    dependency_record_ids: frozenset[uuid.UUID]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _SubjectBuild:
+    payload: dict[str, Any]
+    dependency_record_ids: frozenset[uuid.UUID]
 
 
 def _user_ref(user: AppUser | None) -> pure.UserRef | None:
@@ -72,14 +81,16 @@ async def _finding_subject(
     record: Record,
     base: DocumentedInformation,
     included: frozenset[uuid.UUID],
-) -> dict[str, Any]:
+) -> _SubjectBuild:
     finding = await repo.get_finding(session, finding_id)
     if finding is None:  # pragma: no cover - validated at scope time (shared-PK subtype exists)
         raise RuntimeError(f"finding {finding_id} missing for dossier")
+    dependency_record_ids = {record.id}
     audit_ref: dict[str, Any] | None = None
     audit = await repo.get_audit(session, finding.audit_id)
     if audit is not None:
         audit_ref = {"id": str(audit.id), "identifier": await _identifier(session, audit.id)}
+        dependency_record_ids.add(audit.id)
     linked_capa: dict[str, Any] | None = None
     if finding.auto_capa_id is not None:
         capa = await repo.get_capa(session, finding.auto_capa_id)
@@ -89,6 +100,13 @@ async def _finding_subject(
                 "identifier": await _identifier(session, capa.id),
                 "close_state": capa.close_state.value,
             }
+            dependency_record_ids.add(capa.id)
+    correction_of = await _identifier(session, record.correction_of)
+    if record.correction_of is not None and correction_of is not None:
+        dependency_record_ids.add(record.correction_of)
+    superseded_by_correction = await _identifier(session, record.superseded_by_correction)
+    if record.superseded_by_correction is not None and superseded_by_correction is not None:
+        dependency_record_ids.add(record.superseded_by_correction)
     ev = _filter_included(
         (
             await repo.evidence_records_for_targets(
@@ -98,23 +116,26 @@ async def _finding_subject(
         included,
     )
     captured_by = await session.get(AppUser, record.captured_by)
-    return pure.serialize_finding_dossier(
-        finding_id=str(finding.id),
-        identifier=base.identifier,
-        summary=base.title,
-        finding_type=finding.finding_type.value,
-        severity=finding.severity.value if finding.severity is not None else None,
-        clause_ref=finding.clause_ref,
-        process_ref=finding.process_ref,
-        captured_at=record.captured_at.isoformat() if record.captured_at else None,
-        captured_by=_user_ref(captured_by),
-        content_hash=record.content_hash,
-        content_hash_version=record.content_hash_version,
-        audit=audit_ref,
-        correction_of=await _identifier(session, record.correction_of),
-        superseded_by_correction=await _identifier(session, record.superseded_by_correction),
-        linked_capa=linked_capa,
-        evidence_records=ev,
+    return _SubjectBuild(
+        payload=pure.serialize_finding_dossier(
+            finding_id=str(finding.id),
+            identifier=base.identifier,
+            summary=base.title,
+            finding_type=finding.finding_type.value,
+            severity=finding.severity.value if finding.severity is not None else None,
+            clause_ref=finding.clause_ref,
+            process_ref=finding.process_ref,
+            captured_at=record.captured_at.isoformat() if record.captured_at else None,
+            captured_by=_user_ref(captured_by),
+            content_hash=record.content_hash,
+            content_hash_version=record.content_hash_version,
+            audit=audit_ref,
+            correction_of=correction_of,
+            superseded_by_correction=superseded_by_correction,
+            linked_capa=linked_capa,
+            evidence_records=ev,
+        ),
+        dependency_record_ids=frozenset(dependency_record_ids),
     )
 
 
@@ -125,10 +146,11 @@ async def _capa_subject(
     record: Record,
     base: DocumentedInformation,
     included: frozenset[uuid.UUID],
-) -> dict[str, Any]:
+) -> _SubjectBuild:
     capa = await repo.get_capa(session, capa_id)
     if capa is None:  # pragma: no cover - validated at scope time (shared-PK subtype exists)
         raise RuntimeError(f"capa {capa_id} missing for dossier")
+    dependency_record_ids = {record.id}
     origin_finding: dict[str, Any] | None = None
     if capa.origin_finding_id is not None:
         finding = await repo.get_finding(session, capa.origin_finding_id)
@@ -141,6 +163,7 @@ async def _capa_subject(
                 "severity": finding.severity.value if finding.severity is not None else None,
                 "summary": fbase.title if fbase is not None else None,
             }
+            dependency_record_ids.add(finding.id)
 
     stages = await repo.list_capa_stages(session, capa_id)
     stage_ids = [s.id for s in stages]
@@ -181,21 +204,24 @@ async def _capa_subject(
             )
         )
 
-    return pure.serialize_capa_dossier(
-        capa_id=str(capa.id),
-        identifier=base.identifier,
-        title=base.title,
-        source=capa.source.value,
-        severity=capa.severity.value,
-        close_state=capa.close_state.value,
-        cycle_marker=capa.cycle_marker,
-        process_id=str(capa.process_id) if capa.process_id else None,
-        captured_at=record.captured_at.isoformat() if record.captured_at else None,
-        captured_by=_user_ref(users.get(record.captured_by)),
-        content_hash=record.content_hash,
-        content_hash_version=record.content_hash_version,
-        origin_finding=origin_finding,
-        stages=stage_dicts,
+    return _SubjectBuild(
+        payload=pure.serialize_capa_dossier(
+            capa_id=str(capa.id),
+            identifier=base.identifier,
+            title=base.title,
+            source=capa.source.value,
+            severity=capa.severity.value,
+            close_state=capa.close_state.value,
+            cycle_marker=capa.cycle_marker,
+            process_id=str(capa.process_id) if capa.process_id else None,
+            captured_at=record.captured_at.isoformat() if record.captured_at else None,
+            captured_by=_user_ref(users.get(record.captured_by)),
+            content_hash=record.content_hash,
+            content_hash_version=record.content_hash_version,
+            origin_finding=origin_finding,
+            stages=stage_dicts,
+        ),
+        dependency_record_ids=frozenset(dependency_record_ids),
     )
 
 
@@ -220,6 +246,7 @@ async def build_dossier(
     files: list[tuple[str, bytes]] = []
     file_manifest: list[dict[str, Any]] = []
     subjects: list[dict[str, Any]] = []
+    dependency_record_ids: set[uuid.UUID] = set()
     # Iterate scope_ids (a stable, caller-defined order) so the build is deterministic.
     for sid in scope_ids:
         pair = subjects_with_base.get(sid)
@@ -227,11 +254,14 @@ async def build_dossier(
             continue
         record, base = pair
         if kind == "finding":
-            obj = await _finding_subject(session, org_id, sid, record, base, included_record_ids)
+            subject = await _finding_subject(
+                session, org_id, sid, record, base, included_record_ids
+            )
         else:
-            obj = await _capa_subject(session, org_id, sid, record, base, included_record_ids)
+            subject = await _capa_subject(session, org_id, sid, record, base, included_record_ids)
+        dependency_record_ids.update(subject.dependency_record_ids)
         path = pure.dossier_filename(kind, base.identifier, str(sid))
-        data = pure.canonical_dossier_bytes(obj)
+        data = pure.canonical_dossier_bytes(subject.payload)
         sha = hashlib.sha256(data).hexdigest()
         files.append((path, data))
         file_manifest.append({"path": path, "sha256": sha})
@@ -247,4 +277,10 @@ async def build_dossier(
         )
 
     digest = pure.dossier_digest([fm["sha256"] for fm in file_manifest])
-    return DossierBuild(files=files, file_manifest=file_manifest, subjects=subjects, digest=digest)
+    return DossierBuild(
+        files=files,
+        file_manifest=file_manifest,
+        subjects=subjects,
+        digest=digest,
+        dependency_record_ids=frozenset(dependency_record_ids),
+    )

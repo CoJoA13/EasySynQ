@@ -33,15 +33,20 @@ import logging
 import uuid
 
 from botocore.exceptions import BotoCoreError, ClientError
+from sqlalchemy import asc, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...config import get_settings
 from ...db.models._audit_enums import EventType
+from ...db.models._pack_enums import PackStatus
 from ...db.models._record_enums import RecordDispositionState
 from ...db.models._retention_enums import DispositionAction
 from ...db.models.app_user import AppUser
+from ...db.models.blob import Blob
 from ...db.models.disposition_event import DispositionEvent
+from ...db.models.evidence_pack import EvidencePack
+from ...db.models.pack_share_link import PackShareLink
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.worm_destroy_request import WormDestroyRequest
@@ -107,12 +112,75 @@ class _PendingPurgeSnapshot:
     authority_bound: bool
 
 
+def _r27_authority_matches(
+    record: Record,
+    event: DispositionEvent,
+    request: WormDestroyRequest,
+    *,
+    source_event: DispositionEvent | None,
+) -> bool:
+    """Validate root or one-hop-derived R27 authority for a target Record.
+
+    A root event is authorized by a request for that same Record. A derivative pack-copy event is
+    authorized by the root event/request for the copied source Record, and must copy the exact
+    organization, actors, and legal basis. Deeper chains are refused.
+    """
+    if (
+        event.org_id != record.org_id
+        or event.record_id != record.id
+        or event.action is not DispositionAction.DESTROY
+        or not event.tombstone
+        or not event.is_worm_destroy
+        or event.policy_id is not None
+        or event.requested_by is None
+        or event.approved_by is None
+        or event.requested_by == event.approved_by
+        or request.executed_at is None
+        or request.cancelled_at is not None
+        or request.approved_by is None
+        or request.requested_by == request.approved_by
+    ):
+        return False
+
+    if event.derived_from_disposition_event_id is None:
+        if source_event is not None:
+            return False
+        root = event
+    else:
+        if (
+            source_event is None
+            or event.derived_from_disposition_event_id != source_event.id
+            or source_event.derived_from_disposition_event_id is not None
+            or source_event.org_id != record.org_id
+            or not source_event.is_worm_destroy
+            or source_event.action is not DispositionAction.DESTROY
+            or not source_event.tombstone
+            or source_event.policy_id is not None
+            or event.requested_by != source_event.requested_by
+            or event.approved_by != source_event.approved_by
+            or event.legal_basis != source_event.legal_basis
+        ):
+            return False
+        root = source_event
+
+    return bool(
+        request.id is not None
+        and request.org_id == record.org_id
+        and request.record_id == root.record_id
+        and root.org_id == request.org_id
+        and root.requested_by == request.requested_by
+        and root.approved_by == request.approved_by
+        and root.legal_basis == request.legal_basis
+    )
+
+
 async def _mark_record_evidence_for_purge(
     session: AsyncSession,
     record: Record,
     *,
     disposition_event: DispositionEvent,
     worm_destroy_request: WormDestroyRequest | None = None,
+    source_disposition_event: DispositionEvent | None = None,
 ) -> list[_PurgeSpec]:
     """The DB phase of a DESTROY erasure (NO S3 call, NO commit). For each evidence blob this record
     is the LAST live referencer of, drop the ``blob`` row + ``evidence_blob`` links and record a
@@ -129,8 +197,9 @@ async def _mark_record_evidence_for_purge(
     destruction, its executed two-person request. This routine derives bypass from that authority;
     callers cannot set the marker boolean independently.
 
-    Also handles the structured-PDF rendition (S-rec-3) — a per-record non-evidence blob reachable
-    only via ``record.structured_pdf_blob_sha256`` (no liveness guard; non-WORM, no bypass)."""
+    Also handles the structured-PDF rendition (S-rec-3). Its pointer is cleared first, then the
+    same cross-domain last-owner check protects any unrelated live Record, document version, or
+    available pack that lawfully owns identical content."""
     if (
         disposition_event.record_id != record.id
         or disposition_event.org_id != record.org_id
@@ -142,20 +211,20 @@ async def _mark_record_evidence_for_purge(
         if (
             worm_destroy_request is None
             or worm_destroy_request.id is None
-            or worm_destroy_request.record_id != record.id
-            or worm_destroy_request.org_id != record.org_id
-            or worm_destroy_request.executed_at is None
-            or worm_destroy_request.cancelled_at is not None
-            or worm_destroy_request.approved_by is None
-            or worm_destroy_request.requested_by == worm_destroy_request.approved_by
-            or disposition_event.policy_id is not None
-            or disposition_event.requested_by != worm_destroy_request.requested_by
-            or disposition_event.approved_by != worm_destroy_request.approved_by
-            or disposition_event.legal_basis != worm_destroy_request.legal_basis
+            or not _r27_authority_matches(
+                record,
+                disposition_event,
+                worm_destroy_request,
+                source_event=source_disposition_event,
+            )
         ):
-            raise ValueError("R27 purge marker authority requires its executed two-person request")
+            raise ValueError(
+                "R27 purge marker authority requires root or one-hop-derived two-person lineage"
+            )
     elif (
         worm_destroy_request is not None
+        or source_disposition_event is not None
+        or disposition_event.derived_from_disposition_event_id is not None
         or disposition_event.policy_id != record.retention_policy_id
         or disposition_event.requested_by is not None
         or disposition_event.legal_basis is not None
@@ -166,11 +235,20 @@ async def _mark_record_evidence_for_purge(
     request_id = worm_destroy_request.id if worm_destroy_request is not None else None
     specs: list[_PurgeSpec] = []
     blobs = {b.sha256: b for _eb, b in await repo.list_evidence_blobs(session, record.id)}
+    rendition_sha = record.structured_pdf_blob_sha256
+    # Evidence and structured-rendition rows share one Blob lock namespace. Acquire the complete
+    # Record set in global SHA order before any liveness decision so an evidence SHA cannot be
+    # followed by a lexically-earlier rendition SHA in a concurrent destroy transaction.
+    record_blob_shas = set(blobs)
+    if rendition_sha is not None:
+        record_blob_shas.add(rendition_sha)
+    for sha in sorted(record_blob_shas):
+        await repo.lock_blob_for_update(session, sha)
     for sha in sorted(blobs):  # consistent lock order across concurrent dispositions
         blob = blobs[sha]
-        await repo.lock_blob_for_update(session, sha)
         if await repo.blob_needed_by_other_live_record(session, sha, record.id):
-            continue  # another live record (or a document_version) still needs the bytes
+            await repo.detach_record_evidence_blob(session, record.id, sha)
+            continue  # another live Record, document version, rendition, or pack owns the bytes
         purge_id = await repo.insert_pending_purge(
             session,
             org_id=record.org_id,
@@ -184,24 +262,43 @@ async def _mark_record_evidence_for_purge(
         )
         await repo.delete_blob_and_links(session, sha)
         specs.append(_PurgeSpec(purge_id, sha, blob.bucket, blob.object_key, bypass))
-    rendition_sha = record.structured_pdf_blob_sha256
     if rendition_sha is not None:
-        bucket = get_settings().s3_bucket_renditions
-        await repo.lock_blob_for_update(session, rendition_sha)
+        record.structured_pdf_blob_sha256 = None
+        await session.flush()
+        rendition_blob = (
+            await session.execute(
+                select(Blob)
+                .where(Blob.sha256 == rendition_sha)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if rendition_blob is None or await repo.blob_needed_by_any_live_owner(
+            session, rendition_sha
+        ):
+            return specs
+        rendition_bypass = bool(bypass and rendition_blob.worm_locked)
         purge_id = await repo.insert_pending_purge(
             session,
             org_id=record.org_id,
             sha256=rendition_sha,
-            bucket=bucket,
-            object_key=rendition_sha,
-            bypass_governance=False,
+            bucket=rendition_blob.bucket,
+            object_key=rendition_blob.object_key,
+            bypass_governance=rendition_bypass,
             record_id=record.id,
             disposition_event_id=disposition_event.id,
             worm_destroy_request_id=request_id,
         )
         await repo.delete_blob_and_links(session, rendition_sha)
-        record.structured_pdf_blob_sha256 = None
-        specs.append(_PurgeSpec(purge_id, rendition_sha, bucket, rendition_sha, False))
+        specs.append(
+            _PurgeSpec(
+                purge_id,
+                rendition_sha,
+                rendition_blob.bucket,
+                rendition_blob.object_key,
+                rendition_bypass,
+            )
+        )
     return specs
 
 
@@ -272,6 +369,7 @@ def _write_tombstone(
     requested_by: uuid.UUID | None = None,
     is_worm_destroy: bool = False,
     legal_basis: str | None = None,
+    derived_from_disposition_event_id: uuid.UUID | None = None,
 ) -> DispositionEvent:
     """Flip the record to DISPOSED + append the immutable ``disposition_event`` tombstone.
 
@@ -299,6 +397,7 @@ def _write_tombstone(
         requested_by=requested_by,
         is_worm_destroy=is_worm_destroy,
         legal_basis=legal_basis,
+        derived_from_disposition_event_id=derived_from_disposition_event_id,
     )
     session.add(event)
     return event
@@ -578,6 +677,282 @@ async def request_worm_destroy(
     return req
 
 
+_PACK_ERASURE_REASON = "R27 legal erasure invalidated the Evidence Pack"
+
+
+async def _lock_pack_records(
+    session: AsyncSession, packs: list[EvidencePack]
+) -> dict[uuid.UUID, Record]:
+    record_ids = sorted(
+        {pack.pack_record_id for pack in packs if pack.pack_record_id is not None},
+        key=str,
+    )
+    if len(record_ids) != len({pack.pack_record_id for pack in packs}):
+        raise RuntimeError("SEALED Evidence Pack is missing its registered Record")
+    records = list(
+        (
+            await session.execute(
+                select(Record)
+                .where(Record.id.in_(record_ids))
+                .order_by(asc(Record.id))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_id = {record.id: record for record in records}
+    if set(by_id) != set(record_ids):
+        raise RuntimeError("SEALED Evidence Pack registered Record is missing")
+    return by_id
+
+
+async def _lock_r27_blob_rows(
+    session: AsyncSession,
+    records: list[Record],
+    artifact_shas: set[str],
+) -> None:
+    """Acquire every source/derivative Blob row in one transaction-global SHA order.
+
+    R27 can dispose several registered pack Records and detached portfolios at once. Per-record
+    ordering is insufficient because UUID-ordered Records can expose their SHA sets in opposite
+    order to another destroy transaction. The caller has already stabilized pack membership under
+    the organization-exclusive artifact lock; Record evidence is immutable after capture.
+    """
+    shas = set(artifact_shas)
+    for record in records:
+        shas.update(
+            blob.sha256 for _link, blob in await repo.list_evidence_blobs(session, record.id)
+        )
+        if record.structured_pdf_blob_sha256 is not None:
+            shas.add(record.structured_pdf_blob_sha256)
+    for sha in sorted(shas):
+        await repo.lock_blob_for_update(session, sha)
+
+
+async def _mark_detached_pack_artifacts(
+    session: AsyncSession,
+    artifacts: dict[str, tuple[Record, DispositionEvent, bool]],
+    *,
+    request: WormDestroyRequest,
+    source_event: DispositionEvent,
+) -> list[_PurgeSpec]:
+    """Mark detached ZIP/portfolio pointers not already reached through pack Record evidence.
+
+    The normal pack-Record purge handles canonical ZIPs. This second pass is the corruption-safe
+    closer and the portfolio path: after every affected pointer has been cleared, it removes a Blob
+    only when no live Record, DocumentVersion, structured rendition, or available pack still owns
+    it. ``wants_bypass`` is true for ZIP identities; actual non-WORM objects never request bypass.
+    """
+    specs: list[_PurgeSpec] = []
+    await session.flush()
+    for sha in sorted(artifacts):
+        record, event, wants_bypass = artifacts[sha]
+        lineage_source = source_event if event.id != source_event.id else None
+        if not _r27_authority_matches(
+            record,
+            event,
+            request,
+            source_event=lineage_source,
+        ):
+            raise ValueError("detached pack artifact has invalid R27 lineage")
+        await repo.lock_blob_for_update(session, sha)
+        blob = (
+            await session.execute(
+                select(Blob)
+                .where(Blob.sha256 == sha)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if blob is None or await repo.blob_needed_by_any_live_owner(session, sha):
+            continue
+        bypass = bool(wants_bypass and blob.worm_locked)
+        purge_id = await repo.insert_pending_purge(
+            session,
+            org_id=record.org_id,
+            sha256=sha,
+            bucket=blob.bucket,
+            object_key=blob.object_key,
+            bypass_governance=bypass,
+            record_id=record.id,
+            disposition_event_id=event.id,
+            worm_destroy_request_id=request.id,
+        )
+        await repo.delete_blob_and_links(session, sha)
+        specs.append(_PurgeSpec(purge_id, sha, blob.bucket, blob.object_key, bypass))
+    return specs
+
+
+async def _invalidate_sealed_packs_for_r27(
+    session: AsyncSession,
+    actor: AppUser,
+    source_record: Record,
+    source_event: DispositionEvent,
+    request: WormDestroyRequest,
+) -> list[_PurgeSpec]:
+    """Mark the source and invalidate every sealed derivative copy in one R27 transaction.
+
+    The caller holds the organization-exclusive pack-artifact lock. Pack headers, links, derived
+    pack-Record tombstones, source/derivative Blob deletes, and authority-bound markers are
+    therefore one atomic DB state transition. Every involved Blob row is acquired in global SHA
+    order before any per-Record processing. Physical S3 removal remains the shared post-commit
+    phase.
+    """
+    # Lazy imports avoid the records.__init__ -> disposition -> packs.__init__ -> build -> records
+    # cycle. At use time the records package (including capture_record) is fully initialized.
+    from ..packs import repository as packs_repo
+    from ..packs import service as packs_service
+
+    if not _r27_authority_matches(source_record, source_event, request, source_event=None):
+        raise ValueError("source R27 event/request lineage is invalid")
+
+    packs = await packs_repo.affected_sealed_packs_for_r27(
+        session, source_record.org_id, source_record.id
+    )
+
+    now = _now()
+    pack_records = await _lock_pack_records(session, packs)
+    events_by_record: dict[uuid.UUID, DispositionEvent] = {}
+    for record_id in sorted(pack_records, key=str):
+        record = pack_records[record_id]
+        if record.id == source_record.id:
+            events_by_record[record.id] = source_event
+            continue
+        events_by_record[record.id] = _write_tombstone(
+            session,
+            record,
+            action=DispositionAction.DESTROY,
+            policy_id=None,
+            approved_by=source_event.approved_by,
+            requested_by=source_event.requested_by,
+            is_worm_destroy=True,
+            legal_basis=source_event.legal_basis,
+            derived_from_disposition_event_id=source_event.id,
+        )
+
+    artifacts: dict[str, tuple[Record, DispositionEvent, bool]] = {}
+    for pack in packs:
+        if pack.pack_record_id is None:  # _lock_pack_records fails first; type narrowing.
+            raise RuntimeError("SEALED Evidence Pack is missing its registered Record")
+        record = pack_records[pack.pack_record_id]
+        event = events_by_record[record.id]
+        old_zip = pack.zip_blob_sha256
+        old_portfolio = pack.portfolio_blob_sha256
+        pack.status = PackStatus.UNAVAILABLE
+        pack.invalidated_at = now
+        pack.invalidated_by_disposition_event_id = source_event.id
+        pack.zip_blob_sha256 = None
+        pack.portfolio_blob_sha256 = None
+
+        if old_zip is not None:
+            prior = artifacts.get(old_zip)
+            artifacts[old_zip] = (
+                prior[0] if prior else record,
+                prior[1] if prior else event,
+                True,
+            )
+        if old_portfolio is not None:
+            prior = artifacts.get(old_portfolio)
+            artifacts[old_portfolio] = (
+                prior[0] if prior else record,
+                prior[1] if prior else event,
+                prior[2] if prior else False,
+            )
+
+        packs_service.emit_pack_event(
+            session,
+            actor,
+            EventType.PACK_INVALIDATED,
+            pack.id,
+            before={
+                "status": PackStatus.SEALED.value,
+                "zip_blob_sha256": old_zip,
+                "portfolio_blob_sha256": old_portfolio,
+            },
+            after={
+                "status": PackStatus.UNAVAILABLE.value,
+                "source_record_id": str(source_record.id),
+                "source_disposition_event_id": str(source_event.id),
+                "worm_destroy_request_id": str(request.id),
+                "pack_record_id": str(record.id),
+                "pack_record_disposition_event_id": str(event.id),
+                "zip_blob_sha256": None,
+                "portfolio_blob_sha256": None,
+            },
+        )
+
+    pack_ids = [pack.id for pack in packs]
+    links = list(
+        (
+            await session.execute(
+                select(PackShareLink)
+                .where(
+                    PackShareLink.pack_id.in_(pack_ids),
+                    PackShareLink.revoked_at.is_(None),
+                )
+                .order_by(asc(PackShareLink.id))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for link in links:
+        link.revoked_at = now
+        link.revoked_by = actor.id
+        link.revoke_reason = _PACK_ERASURE_REASON
+        packs_service.emit_pack_event(
+            session,
+            actor,
+            EventType.PACK_SHARE_REVOKED,
+            link.pack_id,
+            after={
+                "share_link_id": str(link.id),
+                "reason": _PACK_ERASURE_REASON,
+                "source_disposition_event_id": str(source_event.id),
+            },
+        )
+
+    records_by_id = {source_record.id: source_record, **pack_records}
+    await _lock_r27_blob_rows(
+        session,
+        list(records_by_id.values()),
+        set(artifacts),
+    )
+
+    specs = await _mark_record_evidence_for_purge(
+        session,
+        source_record,
+        disposition_event=source_event,
+        worm_destroy_request=request,
+    )
+    for record_id in sorted(events_by_record, key=str):
+        if record_id == source_record.id:
+            # The source Record was marked immediately above with its root event.
+            continue
+        specs.extend(
+            await _mark_record_evidence_for_purge(
+                session,
+                pack_records[record_id],
+                disposition_event=events_by_record[record_id],
+                worm_destroy_request=request,
+                source_disposition_event=source_event,
+            )
+        )
+    specs.extend(
+        await _mark_detached_pack_artifacts(
+            session,
+            artifacts,
+            request=request,
+            source_event=source_event,
+        )
+    )
+    return specs
+
+
 async def approve_worm_destroy(
     session: AsyncSession,
     actor: AppUser,
@@ -587,7 +962,14 @@ async def approve_worm_destroy(
     reason: str | None = None,
 ) -> Record:
     """Second control: a *distinct* actor approves → governance-bypass purge (fail-closed) →
-    DISPOSED tombstone (``is_worm_destroy=true``, both actors) → ``RECORD_WORM_DESTROYED``."""
+    DISPOSED tombstone (``is_worm_destroy=true``, both actors) → invalidate every sealed pack copy
+    in the same DB transaction → ``RECORD_WORM_DESTROYED``."""
+    # Lazy for the same package-cycle reason documented in _invalidate_sealed_packs_for_r27.
+    from ..packs.locks import lock_pack_erasure_exclusive
+
+    # Fixed lock order: exclusive org-artifact lock before request/source Record and pack rows.
+    # Stage 1/2 take the shared side before their pack row, closing the last-copy race.
+    await lock_pack_erasure_exclusive(session, actor.org_id)
     req = await repo.get_worm_destroy_request(session, req_id, for_update=True)
     if req is None or req.record_id != record_id or req.org_id != actor.org_id:
         raise ProblemException(status=404, code="not_found", title="Destroy request not found")
@@ -619,14 +1001,10 @@ async def approve_worm_destroy(
         is_worm_destroy=True,
         legal_basis=req.legal_basis,
     )
-    # MARK the evidence only after the explicit immutable event and executed request exist in this
-    # transaction. All three commit atomically; a rollback leaves neither marker nor authority.
-    specs = await _mark_record_evidence_for_purge(
-        session,
-        record,
-        disposition_event=event,
-        worm_destroy_request=req,
-    )
+    # Resolve every derivative before deleting any source Blob row, then acquire the source +
+    # cascade Blob lock set globally by SHA. The request, event, pack invalidations, and purge
+    # markers commit atomically; a rollback leaves neither erasure state nor authority.
+    specs = await _invalidate_sealed_packs_for_r27(session, actor, record, event, req)
     emit_record_event(
         session,
         actor,
@@ -842,6 +1220,7 @@ async def _authorized_reaper_bypass(
         if (
             marker.requested_bypass
             or event.is_worm_destroy
+            or event.derived_from_disposition_event_id is not None
             or event.policy_id is None
             or event.policy_id != record.retention_policy_id
             or event.requested_by is not None
@@ -850,25 +1229,33 @@ async def _authorized_reaper_bypass(
             return None
         return False
 
-    if (
-        request is None
-        or not event.is_worm_destroy
-        or event.policy_id is not None
-        or event.requested_by is None
-        or event.approved_by is None
-        or event.requested_by == event.approved_by
-        or request.id != marker.worm_destroy_request_id
-        or request.org_id != marker.org_id
-        or request.record_id != record.id
-        or request.executed_at is None
-        or request.cancelled_at is not None
-        or request.approved_by is None
-        or request.requested_by == request.approved_by
-        or event.requested_by != request.requested_by
-        or event.approved_by != request.approved_by
-        or event.legal_basis != request.legal_basis
+    if request is None or request.id != marker.worm_destroy_request_id:
+        return None
+    source_event = (
+        await session.get(DispositionEvent, event.derived_from_disposition_event_id)
+        if event.derived_from_disposition_event_id is not None
+        else None
+    )
+    if not _r27_authority_matches(
+        record,
+        event,
+        request,
+        source_event=source_event,
     ):
         return None
+    if source_event is not None:
+        invalidated_pack_id = await session.scalar(
+            select(EvidencePack.id)
+            .where(
+                EvidencePack.org_id == record.org_id,
+                EvidencePack.pack_record_id == record.id,
+                EvidencePack.status == PackStatus.UNAVAILABLE,
+                EvidencePack.invalidated_by_disposition_event_id == source_event.id,
+            )
+            .limit(1)
+        )
+        if invalidated_pack_id is None:
+            return None
     return marker.requested_bypass
 
 

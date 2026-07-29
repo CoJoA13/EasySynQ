@@ -3522,8 +3522,9 @@ paths:
       operationId: getEvidencePack
       summary: The pack header + membership + status (the build poll endpoint). Needs report.evidence_pack.generate.
       description: >-
-        status is DRAFT → BUILDING → SEALED | FAILED. Membership/summaries reflect the seal-time
-        classification once SEALED (the preview is advisory).
+        status is DRAFT → BUILDING → SEALED | FAILED. An R27 legal-order destruction of copied
+        evidence advances a SEALED pack to terminal UNAVAILABLE after its artifacts are detached
+        for physical purge. Membership/summaries remain as the audit tombstone.
       responses:
         "200":
           description: The pack header, membership, and gap/exclusion summaries.
@@ -3552,7 +3553,7 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
-          description: The pack is already SEALED (terminal) or a build is already in progress.
+          description: The pack is already SEALED/UNAVAILABLE (terminal) or a build is already in progress.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -3573,7 +3574,7 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
-          description: The pack is not SEALED yet (detail carries the current status).
+          description: The pack is not downloadable (detail carries the current status, including UNAVAILABLE).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -9907,6 +9908,10 @@ components:
           description: The R27 first authorizer (the destroy requester); null otherwise.
         is_worm_destroy: { type: boolean, description: true for the R27 dual-control pre-expiry destroy. }
         legal_basis: { type: [string, "null"] }
+        derived_from_disposition_event_id:
+          type: [string, "null"]
+          format: uuid
+          description: The source R27 event when this tombstone erases a derivative pack Record.
         executed_at: { type: [string, "null"], format: date-time }
 
     WormDestroyRequest:
@@ -10299,7 +10304,10 @@ components:
         scope_selector: { type: object, additionalProperties: true }
         period_start: { type: [string, "null"], format: date }
         period_end: { type: [string, "null"], format: date }
-        status: { type: string, enum: [DRAFT, BUILDING, SEALED, FAILED], description: The build poll state. }
+        status:
+          type: string
+          enum: [DRAFT, BUILDING, SEALED, FAILED, UNAVAILABLE]
+          description: The build poll state; UNAVAILABLE is terminal after R27 derivative erasure.
         item_count: { type: integer, description: Included records + their distinct pinned versions. }
         gap_summary:
           type: [object, "null"]
@@ -10315,6 +10323,14 @@ components:
         error: { type: [string, "null"] }
         created_at: { type: [string, "null"], format: date-time }
         generated_at: { type: [string, "null"], format: date-time }
+        invalidated_at:
+          type: [string, "null"]
+          format: date-time
+          description: Set when R27 legal erasure made the sealed pack unavailable.
+        invalidated_by_disposition_event_id:
+          type: [string, "null"]
+          format: uuid
+          description: The source R27 disposition event that invalidated this pack.
 
     EvidencePackDetail:
       allOf:

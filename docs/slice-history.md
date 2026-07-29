@@ -2,13 +2,14 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0081` (next `0082`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0082` (next `0083`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
 > (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
 > cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
 > `0075` the audit `scope_ref` index; M5 added `0076`'s import-owner snapshot; M7 added `0077`'s
 > sealed-pack retention policy and `0078`'s record content-hash version; M9 added `0079`'s
 > operational-install coherence repair; M10 added `0080`'s dead-field removal and query-path
-> indexes; Issue #360 added `0081`'s pending-purge authority binding.)
+> indexes; Issue #360 added `0081`'s pending-purge authority binding; Issue #361 added `0082`'s
+> Evidence Pack legal-erasure status and source-event lineage.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -167,6 +168,46 @@
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
+
+### Issue #361 — physically erase sealed Evidence Pack derivatives under R27 (API + migration + integration + docs; migration `0082` [new head]; NO new permission key [catalog 102]; closes [#361](https://github.com/CoJoA13/EasySynQ/issues/361); PR [#413](https://github.com/CoJoA13/EasySynQ/pull/413))
+
+**The legal order now reaches every retained copy.** An executed two-person R27 destroy resolves
+every sealed pack whose INCLUDED evidence or synthesized Finding/CAPA dossier embeds the source
+Record, then closes to a fixed point over each selected pack's registered EVIDENCE Record and exact
+artifact aliases. A later pack that copied an earlier pack therefore becomes unavailable in the
+same transaction. Each header moves from `SEALED` to terminal `UNAVAILABLE`, records the source
+disposition event and invalidation time, clears ZIP/portfolio pointers, revokes every live share
+with a reason/audit event, and disposes the registered pack Record through exactly one immutable
+event hop. Ordinary
+retention-driven DESTROY remains deliberately narrower: it preserves the pack's independent
+permanent retention and relies on the conservative destroyed-dependency serve guard.
+
+**Purge, recovery, and last-copy races stay fail-safe.** The canonical WORM ZIP flows through the
+existing Record evidence marker path; the non-WORM portfolio uses the same content-addressed
+last-live-owner decision over Record evidence, controlled DocumentVersions, structured renditions,
+and non-unavailable pack pointers. Archived/transferred Records remain owners until a destructive
+event exists. Finding/CAPA builds persist the exact dossier-only dependency ids at seal, so a
+correction created later cannot retroactively invalidate an older bundle. The source plus all
+derivative Blob rows are acquired in one global SHA order. Both artifacts are removed only after
+the database tombstone commits, with Issue-359 physical-object locking and Issue-360
+authority-bound reaper recovery unchanged. A derived marker is accepted only when its target is the
+disposed registered Record of an `UNAVAILABLE` pack invalidated by that exact lawful source event.
+Migration downgrade refuses while derived markers still need that lineage or immutable
+`PACK_INVALIDATED` rows exist; the history-free compatibility mapping uses terminal `SEALED`, not
+retryable `FAILED`.
+Pack Stage 1/2 take an
+organization-scoped shared transaction advisory lock before the pack row; R27 takes the exclusive
+side before its request/source Record and affected pack rows. Build-first therefore seals then gets
+invalidated; erase-first makes the worker observe the tombstone—never a surviving post-order copy.
+
+**Regression proof.** Docker-backed tests exercise the full two-person member flow with ZIP,
+portfolio, share revocation, dedicated/public/generic routes, and already-issued object-store URLs;
+storage failure followed by derived-marker reaping; a direct pack-Record order; a real
+dossier-only Finding subject; shared live-owner liveness; and a deterministic build-vs-R27 race.
+Unit/migration proofs cover enum/constraint/FK parity, one-hop authority rejection, transitive
+artifact aliases, transaction-global SHA lock order, archived-owner liveness, seal-time correction
+snapshotting, a populated `UNAVAILABLE → FAILED → head` downgrade, and rejection of half-populated
+invalidation provenance.
 
 ### Issue #359 — serialize record capture with pending physical purge (API + integration + docs; NO migration [head stays `0081`]; NO new permission key [catalog 102]; closes [#359](https://github.com/CoJoA13/EasySynQ/issues/359); PR [#412](https://github.com/CoJoA13/EasySynQ/pull/412))
 

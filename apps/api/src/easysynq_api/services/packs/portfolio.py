@@ -49,6 +49,7 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_pack import EvidencePack
 from ..vault import storage, watermark
 from . import repository as repo
+from .locks import lock_pack_build_shared
 
 logger = logging.getLogger("easysynq.packs")
 
@@ -274,6 +275,13 @@ async def assemble(session: AsyncSession, pack: EvidencePack) -> bytes:
 async def build_and_cache_portfolio(session: AsyncSession, pack_id: uuid.UUID) -> None:
     """Build Stage 2: assemble the PDF portfolio + cache it (idempotent, best-effort). Runs once the
     seal commits — never blocks/fails the canonical pack. Skips if not SEALED or already cached."""
+    org_id = await repo.get_pack_org_id(session, pack_id)
+    if org_id is None:
+        await session.rollback()
+        return
+    # Match Stage 1: shared org-artifact lock before the pack row. An R27 transaction either sees
+    # this committed portfolio and purges it, or wins first and makes this stage no-op.
+    await lock_pack_build_shared(session, org_id)
     pack = await repo.get_pack(session, pack_id, for_update=True)
     if (
         pack is None
