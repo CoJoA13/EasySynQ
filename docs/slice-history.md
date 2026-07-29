@@ -168,7 +168,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #359 — serialize record capture with pending physical purge (API + integration + docs; NO migration [head stays `0081`]; NO new permission key [catalog 102]; closes [#359](https://github.com/CoJoA13/EasySynQ/issues/359))
+### Issue #359 — serialize record capture with pending physical purge (API + integration + docs; NO migration [head stays `0081`]; NO new permission key [catalog 102]; closes [#359](https://github.com/CoJoA13/EasySynQ/issues/359); PR [#412](https://github.com/CoJoA13/EasySynQ/pull/412))
 
 **The check-to-delete race is closed at the physical object boundary.** Record capture, immediate
 post-commit purge, and hourly reaper recovery now share a blocking PostgreSQL transaction advisory

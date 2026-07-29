@@ -56,5 +56,5 @@ so a stale marker can never erase newly captured evidence.
 - [x] Ruff lint/format and mypy.
 - [x] Full API unit suite and `git diff --check`.
 - [x] Adversarial branch-diff review; fold verified findings.
-- [ ] Commit, push, and open a ready PR closing Issue #359.
+- [x] Commit, push, and open ready PR #412 closing Issue #359.
 - [ ] Monitor all PR checks and review threads through completion.
