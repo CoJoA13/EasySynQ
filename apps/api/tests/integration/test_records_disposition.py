@@ -40,6 +40,7 @@ from easysynq_api.db.models.system_config import SystemConfig
 from easysynq_api.db.models.worm_destroy_request import WormDestroyRequest
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.records import disposition, sweep_due_records
+from easysynq_api.services.records import service as records_service
 from easysynq_api.services.vault import storage
 
 from ._owner_db import owner_delete_disposition_events
@@ -1353,6 +1354,83 @@ async def test_reaper_completes_stranded_purge(
         await _cleanup(pol)
 
 
+async def test_reaper_reclaims_every_marker_after_per_marker_commit(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each later batch snapshot regains its row lock before the physical-object lock.
+
+    ``list_pending_purges`` initially claims both rows, but committing the first purge releases the
+    second claim. Mutation distinction: without the per-snapshot reclaim, neither marker is
+    recorded here and the second one can reintroduce the immediate-purge/reaper lock inversion.
+    """
+    subject = _subject("reaper-reclaims")
+    user_id = await _grant(subject, _DISPOSITION_PERMS)
+    approver_id = await _grant(_subject("reaper-reclaims-approver"), _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, subject)
+    pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
+    try:
+        shas = [
+            await _upload_evidence(
+                app_client,
+                h,
+                f"reaper-reclaims-{index}-{uuid.uuid4().hex}".encode(),
+            )
+            for index in range(2)
+        ]
+        rid = (
+            await _capture(
+                app_client,
+                h,
+                record_type="CALIBRATION",
+                title="reaper reclaims",
+                retention_policy_id=str(pol),
+                evidence=[{"sha256": sha, "content_type": "application/pdf"} for sha in shas],
+            )
+        ).json()["id"]
+        async with get_sessionmaker()() as s:
+            record = await s.get(Record, uuid.UUID(rid))
+            assert record is not None
+            specs = await _mark_r27_for_crash(
+                s,
+                record,
+                requested_by=user_id,
+                approved_by=approver_id,
+            )
+            await s.commit()
+        assert len(specs) == 2
+
+        real_claim = disposition.repo.lock_pending_purge_for_update
+        claims: list[tuple[uuid.UUID, int]] = []
+
+        async def _record_claim(session: AsyncSession, purge_id: uuid.UUID) -> bool:
+            claimed = await real_claim(session, purge_id)
+            if claimed:
+                txid = int(await session.scalar(text("SELECT txid_current()")) or 0)
+                claims.append((purge_id, txid))
+            return claimed
+
+        monkeypatch.setattr(
+            disposition.repo,
+            "lock_pending_purge_for_update",
+            _record_claim,
+        )
+        async with get_sessionmaker()() as s:
+            summary = await disposition.reap_pending_blob_purges(s)
+
+        claimed_tx_by_id = dict(claims)
+        target_ids = {spec.purge_id for spec in specs}
+        assert target_ids <= claimed_tx_by_id.keys()
+        assert len({claimed_tx_by_id[purge_id] for purge_id in target_ids}) == 2
+        assert summary["reaped"] >= 2
+        for sha in shas:
+            assert not (await storage.head(sha, bucket=storage._records_bucket())).exists
+    finally:
+        await _cleanup(pol)
+
+
 async def test_reaper_completes_ordinary_policy_purge_without_bypass(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
@@ -1470,6 +1548,245 @@ async def test_recapture_before_purge_cancels_stale_marker(
             )
             assert pending == 0  # the stale marker was dropped, not replayed
     finally:
+        await _cleanup(pol)
+
+
+@pytest.mark.parametrize("purge_mode", ["immediate", "reaper"])
+async def test_recapture_serializes_with_check_then_purge_window(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    purge_mode: str,
+) -> None:
+    """Issue #359: capture and both physical-purge paths share one transaction advisory lock.
+
+    The purge is paused after its no-owner check, at the S3 boundary. A byte-identical capture in a
+    second DB session must then be visibly waiting on an advisory lock. Once purge commits, capture
+    promotes the staged bytes and establishes the new owner, so the new record can never retain a
+    live blob row over bytes the stale marker erased.
+
+    Mutation distinction: without either side of the shared lock, capture completes inside the
+    paused check→purge window; the resumed purge deletes the newly promoted object and this test
+    fails both the PostgreSQL-wait and final-byte assertions.
+    """
+    subject = _subject(f"purge-lock-{purge_mode}")
+    user_id = await _grant(subject, _DISPOSITION_PERMS)
+    approver_id = await _grant(_subject(f"purge-lock-approver-{purge_mode}"), _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, subject)
+    pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
+    purge_entered = asyncio.Event()
+    release_purge = asyncio.Event()
+    real_purge = storage.purge_object
+    purge_task: asyncio.Task[object] | None = None
+    try:
+        content = f"purge-lock-{purge_mode}-{uuid.uuid4().hex}".encode()
+        sha = await _upload_evidence(app_client, h, content)
+        original_id = (
+            await _capture(
+                app_client,
+                h,
+                record_type="CALIBRATION",
+                title=f"original-{purge_mode}",
+                retention_policy_id=str(pol),
+                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+            )
+        ).json()["id"]
+        async with get_sessionmaker()() as s:
+            original = await s.get(Record, uuid.UUID(original_id))
+            assert original is not None
+            specs = await _mark_r27_for_crash(
+                s,
+                original,
+                requested_by=user_id,
+                approved_by=approver_id,
+            )
+            await s.commit()
+
+        # The recapture has fresh staging bytes, while the stranded records object still has no
+        # live Blob owner.
+        assert await _upload_evidence(app_client, h, content) == sha
+        async with get_sessionmaker()() as s:
+            assert await s.get(Blob, sha) is None
+
+        async def _pause_target_purge(
+            object_key: str, *, bucket: str, bypass_governance: bool = False
+        ) -> int:
+            if object_key == sha and bucket == storage._records_bucket():
+                purge_entered.set()
+                await release_purge.wait()
+            return await real_purge(
+                object_key,
+                bucket=bucket,
+                bypass_governance=bypass_governance,
+            )
+
+        monkeypatch.setattr(storage, "purge_object", _pause_target_purge)
+
+        async def _run_purge() -> object:
+            if purge_mode == "immediate":
+                return await disposition._purge_marked(specs, sessionmaker=get_sessionmaker())
+            async with get_sessionmaker()() as reaper_session:
+                return await disposition.reap_pending_blob_purges(reaper_session)
+
+        purge_task = asyncio.create_task(_run_purge())
+        await asyncio.wait_for(purge_entered.wait(), timeout=10)
+
+        async with get_sessionmaker()() as capture_session:
+            actor = await capture_session.get(AppUser, user_id)
+            assert actor is not None
+            capture_pid = int(await capture_session.scalar(select(func.pg_backend_pid())) or 0)
+            assert capture_pid > 0
+            capture_task = asyncio.create_task(
+                records_service.capture_record(
+                    capture_session,
+                    actor,
+                    record_type="CALIBRATION",
+                    title=f"recaptured-{purge_mode}",
+                    retention_policy_id=pol,
+                    evidence=[(sha, "application/pdf")],
+                )
+            )
+
+            async def _capture_is_waiting_on_advisory_lock() -> bool:
+                deadline = asyncio.get_running_loop().time() + 10
+                async with get_sessionmaker()() as observer:
+                    while asyncio.get_running_loop().time() < deadline:
+                        waiting = bool(
+                            await observer.scalar(
+                                text(
+                                    """
+                                    SELECT EXISTS (
+                                        SELECT 1
+                                        FROM pg_locks
+                                        WHERE locktype = 'advisory'
+                                          AND pid = :pid
+                                          AND NOT granted
+                                    )
+                                    """
+                                ),
+                                {"pid": capture_pid},
+                            )
+                        )
+                        if waiting:
+                            return True
+                        if capture_task.done():
+                            return False
+                        await asyncio.sleep(0.01)
+                return False
+
+            try:
+                capture_waited = await _capture_is_waiting_on_advisory_lock()
+            finally:
+                release_purge.set()
+            _purge_result, recaptured = await asyncio.gather(purge_task, capture_task)
+            recaptured_id = recaptured.id
+
+        assert capture_waited
+        assert (await storage.head(sha, bucket=storage._records_bucket())).exists
+        async with get_sessionmaker()() as s:
+            blob = await s.get(Blob, sha)
+            assert blob is not None
+            link = await s.scalar(
+                select(EvidenceBlob).where(
+                    EvidenceBlob.record_id == recaptured_id,
+                    EvidenceBlob.blob_sha256 == sha,
+                )
+            )
+            assert link is not None
+            pending = await s.scalar(
+                select(func.count())
+                .select_from(PendingBlobPurge)
+                .where(PendingBlobPurge.sha256 == sha)
+            )
+            assert pending == 0
+    finally:
+        release_purge.set()
+        if purge_task is not None and not purge_task.done():
+            await asyncio.gather(purge_task, return_exceptions=True)
+        await _cleanup(pol)
+
+
+async def test_immediate_purge_claims_marker_before_physical_lock(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An overlapping reaper skips a marker held by immediate purge instead of deadlocking.
+
+    Mutation distinction: without the immediate path's marker-row claim, the reaper claims that
+    row and waits on the physical-object advisory lock while immediate purge later waits on the
+    reaper's row lock. Here the reaper must finish while immediate purge is still paused.
+    """
+    subject = _subject("purge-lock-order")
+    user_id = await _grant(subject, _DISPOSITION_PERMS)
+    approver_id = await _grant(_subject("purge-lock-order-approver"), _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, subject)
+    pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
+    purge_entered = asyncio.Event()
+    release_purge = asyncio.Event()
+    real_purge = storage.purge_object
+    immediate_task: asyncio.Task[None] | None = None
+    try:
+        content = f"purge-lock-order-{uuid.uuid4().hex}".encode()
+        sha = await _upload_evidence(app_client, h, content)
+        original_id = (
+            await _capture(
+                app_client,
+                h,
+                record_type="CALIBRATION",
+                title="purge-lock-order",
+                retention_policy_id=str(pol),
+                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+            )
+        ).json()["id"]
+        async with get_sessionmaker()() as s:
+            original = await s.get(Record, uuid.UUID(original_id))
+            assert original is not None
+            specs = await _mark_r27_for_crash(
+                s,
+                original,
+                requested_by=user_id,
+                approved_by=approver_id,
+            )
+            await s.commit()
+
+        async def _pause_target_purge(
+            object_key: str, *, bucket: str, bypass_governance: bool = False
+        ) -> int:
+            if object_key == sha and bucket == storage._records_bucket():
+                purge_entered.set()
+                await release_purge.wait()
+            return await real_purge(
+                object_key,
+                bucket=bucket,
+                bypass_governance=bypass_governance,
+            )
+
+        monkeypatch.setattr(storage, "purge_object", _pause_target_purge)
+        immediate_task = asyncio.create_task(
+            disposition._purge_marked(specs, sessionmaker=get_sessionmaker())
+        )
+        await asyncio.wait_for(purge_entered.wait(), timeout=10)
+
+        async with get_sessionmaker()() as reaper_session:
+            await asyncio.wait_for(
+                disposition.reap_pending_blob_purges(reaper_session),
+                timeout=10,
+            )
+        async with get_sessionmaker()() as s:
+            assert await s.get(PendingBlobPurge, specs[0].purge_id) is not None
+
+        release_purge.set()
+        await immediate_task
+        assert not (await storage.head(sha, bucket=storage._records_bucket())).exists
+        async with get_sessionmaker()() as s:
+            assert await s.get(PendingBlobPurge, specs[0].purge_id) is None
+    finally:
+        release_purge.set()
+        if immediate_task is not None and not immediate_task.done():
+            await asyncio.gather(immediate_task, return_exceptions=True)
         await _cleanup(pol)
 
 

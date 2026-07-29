@@ -226,6 +226,16 @@ async def _purge_marked(
     for spec in specs:
         try:
             async with sessionmaker() as s:
+                # Match the reaper's marker-row → physical-object lock order. If the reaper
+                # already completed this marker, there is no stale work left to replay.
+                if not await repo.lock_pending_purge_for_update(s, spec.purge_id):
+                    await s.rollback()
+                    continue
+                await repo.lock_physical_object(
+                    s,
+                    bucket=spec.bucket,
+                    object_key=spec.object_key,
+                )
                 if not await repo.object_is_owned(
                     s, bucket=spec.bucket, object_key=spec.object_key
                 ):
@@ -898,6 +908,17 @@ async def reap_pending_blob_purges(session: AsyncSession) -> dict[str, int]:
         ]
         handled.update(marker.purge_id for marker in todo)
         for marker in todo:
+            # A prior per-marker commit/rollback released every row claim from the original batch.
+            # Reclaim this snapshot before the object lock so immediate purge and every reaper
+            # iteration preserve the same marker-row → physical-object order.
+            if not await repo.lock_pending_purge_for_update(session, marker.purge_id):
+                await session.rollback()
+                continue
+            await repo.lock_physical_object(
+                session,
+                bucket=marker.bucket,
+                object_key=marker.object_key,
+            )
             if await repo.object_is_owned(
                 session,
                 bucket=marker.bucket,
@@ -950,6 +971,9 @@ async def reap_pending_blob_purges(session: AsyncSession) -> dict[str, int]:
                         }
                     },
                 )
+                # Release this marker's row claim and physical-object transaction lock before
+                # moving on; ``handled`` keeps it deferred until the next reaper run.
+                await session.rollback()
                 continue  # leave the marker; retried on the NEXT run (skipped this run via handled)
             await repo.delete_pending_purge(session, marker.purge_id)
             await session.commit()
