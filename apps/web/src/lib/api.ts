@@ -64,7 +64,7 @@ export const apiGet = <T>(path: string, token: string | null = null): Promise<T>
   request<T>("GET", path, token);
 
 // Authed BINARY fetch (S-web-4b): the visual-diff page PNG streams image/png through the
-// authenticated API (gate document.read_draft, NOT a presigned URL), so a bare <img src> can't
+// authenticated API (R59 state-aware version gates, NOT a presigned URL), so a bare <img src> can't
 // carry the bearer. Fetch the bytes with the token → Blob (the caller URL.createObjectURLs it,
 // and MUST URL.revokeObjectURL on cleanup). Surfaces the RFC 9457 problem code like request<T>:
 // 403 → quiet, 404 → "no image for this page/layer", 422 → bad layer.

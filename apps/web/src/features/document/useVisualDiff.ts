@@ -14,10 +14,10 @@ import type { VisualDiffStatus } from "../../lib/types";
 // as "fresh" (default staleTime:0) and SKIPS the enable-triggered initial GET — the viewer then
 // hangs on "Rendering…" with zero GET traffic (the first-mount stall). Letting the poll fetch off an
 // empty cache avoids that race. refetchInterval then sustains the poll while Pending and halts at
-// any terminal status (Ready/Failed/Unavailable) — the SetupWizard refetchInterval precedent. Gated
-// document.read_draft server-side: a 403 surfaces as an ApiError, which the viewer renders quietly
-// (DP-6). `enabled` lets the caller withhold the request until the visual mode is actually active (a
-// Text-mode view never triggers a render).
+// any terminal status (Ready/Failed/Unavailable) — the SetupWizard refetchInterval precedent. R59
+// requires document.read plus both immutable versions' state-selected keys; a 403 surfaces as an
+// ApiError, which the viewer renders quietly (DP-6). `enabled` lets the caller withhold the request
+// until the visual mode is actually active (a Text-mode view never triggers a render).
 //
 // PAIR-SCOPED enable gate (Codex P2 — 404-before-request): `request.isSuccess` is the SINGLE
 // mutation's state, NOT pair-scoped. When this hook stays mounted and the pair CHANGES after a prior

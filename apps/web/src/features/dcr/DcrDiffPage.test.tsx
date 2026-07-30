@@ -104,7 +104,7 @@ it("shows a calm 'no visual diff' note before a REVISE is implemented (no result
   );
 });
 
-it("calm-degrades to a no-access note when the viewer lacks document.read_draft on the target", async () => {
+it("calm-degrades to a no-access note when version authorization denies the viewer", async () => {
   serveDcr(reviseImplemented);
   server.use(
     http.get("/api/v1/documents/:id/versions", () =>

@@ -71,7 +71,8 @@ export interface DirectoryUser {
   display_name: string | null;
 }
 
-// S-web-2: GET /documents/{id}/versions (the History timeline; gated document.read_draft).
+// S-web-2/R59: GET /documents/{id}/versions — document.read plus an authorized, state-filtered
+// History timeline.
 export interface DocumentVersion {
   id: string;
   document_id: string;
@@ -236,7 +237,8 @@ export interface DocumentDownload {
   rendition: "controlled_copy" | "source";
 }
 
-// GET /documents/{id}/versions/{vid}/diff?from={vid2} — doc 05 §8 (gate document.read_draft).
+// GET /documents/{id}/versions/{vid}/diff?from={vid2} — doc 05 §8 / R59 (document.read plus both
+// immutable versions' state-selected keys).
 // One version's signature event (PII-projected — signer_user_id only).
 export interface DiffSignature {
   meaning: "approval" | "release" | "obsolete";
@@ -289,8 +291,9 @@ export interface VersionDiff {
 }
 
 // ---- S-web-4b (the worker-async visual page-image diff) ---------------------------------
-// POST/GET /documents/{id}/versions/{vid}/visual-diff?from={vid2} → VisualDiffStatus (gate
-// document.read_draft). The page PNGs stream from …/visual-diff/page/{n}?layer=from|to|diff.
+// POST/GET /documents/{id}/versions/{vid}/visual-diff?from={vid2} → VisualDiffStatus (R59:
+// document.read plus both immutable versions' state-selected keys). The page PNGs stream from
+// …/visual-diff/page/{n}?layer=from|to|diff.
 export type VisualDiffLayer = "from" | "to" | "diff";
 
 // One page of the diff. `page` is a 0-BASED index (label it 1-based in the UI). `changed` drives

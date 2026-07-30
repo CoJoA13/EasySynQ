@@ -40,7 +40,7 @@ test("useVersionDiff is disabled when the pair is incomplete or identical", () =
   expect(same.current.fetchStatus).toBe("idle");
 });
 
-test("useVersionDiff surfaces a 403 as an ApiError (document.read_draft)", async () => {
+test("useVersionDiff surfaces a state-aware authorization 403 as an ApiError", async () => {
   server.use(
     http.get("/api/v1/documents/:id/versions/:vid/diff", () =>
       HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),

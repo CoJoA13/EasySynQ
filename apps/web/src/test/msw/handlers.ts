@@ -182,8 +182,9 @@ export const versionFixture = [
   },
 ];
 
-// S-web-4: the default per-document capabilities (detail-only). All-false except read_draft → the
-// page renders READ-ONLY (no author actions) but can load history/diff. Author tests override this.
+// S-web-4: the default per-document capabilities (detail-only). All-false except read_draft keeps
+// the legacy Draft/Approved affordance true while the page remains read-only; version API fixtures
+// are mocked independently. Author tests override this.
 export const detailCapabilities = {
   checkout: false,
   edit: false,

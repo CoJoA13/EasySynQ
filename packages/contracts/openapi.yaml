@@ -1820,7 +1820,10 @@ paths:
     get:
       tags: [documents]
       operationId: listVersions
-      summary: A document's versions, newest first. Needs document.read_draft.
+      summary: >-
+        A document's authorized version subset, newest first. Requires document.read; Effective
+        rows add no key, Draft/InReview/Approved add document.read_draft, and Superseded/Obsolete
+        add document.read_obsolete. Rows missing their additional key are filtered.
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -1836,7 +1839,10 @@ paths:
     get:
       tags: [documents]
       operationId: getVersion
-      summary: A single immutable version. Needs document.read_draft.
+      summary: >-
+        A single immutable version. Requires document.read; Effective adds no key,
+        Draft/InReview/Approved add document.read_draft, and Superseded/Obsolete add
+        document.read_obsolete.
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1856,8 +1862,10 @@ paths:
       summary: >-
         The doc 05 §8 redline of `from` → `version_id` (two versions of THIS document): metadata diff
         (frozen snapshots) + text redline (on-demand Tika extraction + line-LCS; degrades to
-        `unavailable` if text can't be extracted) + both provenance headers. Read-only. Needs
-        document.read_draft (the diff exposes non-released version content). Visual page-image diff is S-dcr-3b.
+        `unavailable` if text can't be extracted) + both provenance headers. Read-only. Requires
+        document.read plus both immutable sides' state-selected keys: Effective adds none,
+        Draft/InReview/Approved add document.read_draft, and Superseded/Obsolete add
+        document.read_obsolete. Visual page-image diff is S-dcr-3b.
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1882,7 +1890,9 @@ paths:
       summary: >-
         Request the doc 05 §8.1 visual page-image diff of `from` → `version_id` (worker-async — the API
         can't render). Idempotent (UPSERTs the cached row + enqueues the worker when not terminal). 202
-        Pending / 200 once Ready (then poll GET). Needs document.read_draft.
+        Pending / 200 once Ready (then poll GET). Requires document.read plus both immutable sides'
+        state-selected keys: Effective adds none, Draft/InReview/Approved add document.read_draft,
+        and Superseded/Obsolete add document.read_obsolete.
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1905,7 +1915,9 @@ paths:
       operationId: getVisualDiff
       summary: >-
         Poll the cached visual-diff result (no side effect). 404 if not yet requested (POST first), 202
-        while Pending, 200 once terminal. Needs document.read_draft.
+        while Pending, 200 once terminal. Requires document.read plus both immutable sides'
+        state-selected keys: Effective adds none, Draft/InReview/Approved add document.read_draft,
+        and Superseded/Obsolete add document.read_obsolete.
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1930,7 +1942,9 @@ paths:
       operationId: getVisualDiffPage
       summary: >-
         Stream one page's rendered PNG (`layer` = from | to | diff). 404 unless the visual diff is Ready
-        and the page/layer exists. Needs document.read_draft.
+        and the page/layer exists. Requires document.read plus both immutable sides' state-selected
+        keys: Effective adds none, Draft/InReview/Approved add document.read_draft, and
+        Superseded/Obsolete add document.read_obsolete.
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1954,7 +1968,10 @@ paths:
     get:
       tags: [documents]
       operationId: downloadVersion
-      summary: A presigned GET URL for a version's bytes (never proxied). Needs document.read_draft.
+      summary: >-
+        A presigned GET URL for a version's bytes (never proxied). Requires document.read;
+        Effective adds no key, Draft/InReview/Approved add document.read_draft, and
+        Superseded/Obsolete add document.read_obsolete.
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -7229,7 +7246,13 @@ components:
         submit: { type: boolean }
         release: { type: boolean }
         obsolete: { type: boolean }
-        read_draft: { type: boolean, description: history / diff / working-copy download (document.read_draft). }
+        read_draft:
+          type: boolean
+          description: >-
+            Whether document.read_draft admits at least one immutable Draft, InReview, or Approved
+            state for this document under the current request context. Evaluated against candidate
+            version states, never the mutable Document headline; row existence is reported by the
+            version collection.
 
     PageMeta:
       type: object

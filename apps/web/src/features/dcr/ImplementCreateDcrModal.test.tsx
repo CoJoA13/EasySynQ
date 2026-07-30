@@ -181,9 +181,8 @@ it("renders every server-returned candidate with NO client filtering", async () 
   expect(screen.getByText("SOP-OLD-002 — Previously filtered")).toBeInTheDocument();
 });
 
-it("surfaces a calm error when the version fetch is forbidden (releaser lacks draft access)", async () => {
-  // Codex P2: a release-capable user without document.read_draft 403s on the version fetch; surface it
-  // instead of leaving a silently-disabled button.
+it("surfaces a calm error when base version-list access is forbidden", async () => {
+  // A request-level failure remains distinct from R59's authorized-subset filtering.
   server.use(
     http.get("/api/v1/documents", () => HttpResponse.json(docsPage)),
     http.get(`/api/v1/documents/${DOC_ID}/versions`, () => new HttpResponse(null, { status: 403 })),
@@ -191,6 +190,6 @@ it("surfaces a calm error when the version fetch is forbidden (releaser lacks dr
   renderWithProviders(<ImplementCreateDcrModal dcrId={DCR_ID} onClose={() => {}} />);
   await userEvent.click(await screen.findByLabelText(/New document/));
   await userEvent.click(await screen.findByText("SOP-NEW-001 — New procedure"));
-  expect(await screen.findByText(/needs draft-read access/)).toBeInTheDocument();
+  expect(await screen.findByText(/needs document access/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Implement" })).toBeDisabled();
 });

@@ -13,7 +13,7 @@ test("HistoryTab renders the version timeline (newest first)", async () => {
   expect(screen.getByText("Rev A")).toBeInTheDocument();
 });
 
-test("HistoryTab shows quiet no-access on a 403 (document.read_draft, DP-6)", async () => {
+test("HistoryTab shows quiet no-access on a base document.read 403 (DP-6)", async () => {
   server.use(
     http.get("/api/v1/documents/:id/versions", () =>
       HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),

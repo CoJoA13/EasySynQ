@@ -58,6 +58,11 @@ from ..services.ack.sink import get_ack_enqueue_sink
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.authz.resource import build_document_resource_context, resource_from_doc
+from ..services.authz.version_history import (
+    can_read_any_version_state,
+    enforce_version_reads,
+    filter_readable_versions,
+)
 from ..services.common.org_clock import current_org_tz
 from ..services.dcr import build_where_used
 from ..services.diff import build_version_diff, get_or_create_visual_diff, get_visual_diff
@@ -401,20 +406,36 @@ _CAPABILITY_KEYS: dict[str, str] = {
     "edit": "document.edit",  # check-in + start-revision
     "manage_metadata": "document.manage_metadata",  # clause mapping
     "submit": "document.submit",
-    "read_draft": "document.read_draft",  # history / diff / working-copy download
 }
 
 
 async def _document_capabilities(
-    session: AsyncSession, caller: AppUser, doc: DocumentedInformation
+    session: AsyncSession,
+    request: Request,
+    caller: AppUser,
+    doc: DocumentedInformation,
 ) -> dict[str, bool]:
     base = await _document_scope_by_id(session, doc.id)
     now = datetime.datetime.now(datetime.UTC)
-    ctx = RequestContext(now=now, actor_user_id=str(caller.id))
+    ctx = RequestContext(
+        now=now,
+        source_ip=request.client.host if request.client else None,
+        actor_user_id=str(caller.id),
+    )
     caps: dict[str, bool] = {}
     for short_key, perm_key in _CAPABILITY_KEYS.items():
         grants = await gather_grants(session, caller.id, caller.org_id, perm_key)
         caps[short_key] = authorize(grants, perm_key, base, ctx).allow
+    # R59: unlike authoring actions, this capability ranges over immutable version states. Probe
+    # Draft/InReview/Approved contexts so a lifecycle predicate never evaluates against the mutable
+    # Document headline (for example UnderRevision), while keeping this an authz-only affordance.
+    caps["read_draft"] = await can_read_any_version_state(
+        session,
+        request,
+        caller,
+        base,
+        "document.read_draft",
+    )
     # obsolete: a sig-hook action (no SoD overlay). The §7.3 coverage gate is a separate runtime
     # check, not authz — the capability just says "you hold document.obsolete on this doc".
     obs_grants = await gather_grants(session, caller.id, caller.org_id, "document.obsolete")
@@ -485,7 +506,6 @@ async def _load_document(
 # detail GET). Specialized draft/obsolete keys protect version content; they do not substitute for
 # this dependency. The resolver still carries lifecycle_state so predicates/DENYs narrow normally.
 _read = require("document.read", async_scope_resolver=_document_scope)
-_read_draft = require("document.read_draft", async_scope_resolver=_document_scope)
 _checkout = require("document.checkout", async_scope_resolver=_document_scope)
 _edit = require("document.edit", async_scope_resolver=_document_scope)
 _manage_metadata = require("document.manage_metadata", async_scope_resolver=_document_scope)
@@ -921,13 +941,14 @@ async def create_document_endpoint(
 @router.get("/documents/{document_id}")
 async def get_document_endpoint(
     document_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
     rows = await vault_repo.list_clause_mappings(session, doc.id)
     eff = await _effective_from_map(session, [doc])
-    caps = await _document_capabilities(session, caller, doc)
+    caps = await _document_capabilities(session, request, caller, doc)
     return _document(
         doc,
         clause_refs=[c.number for _, c in rows],
@@ -2000,7 +2021,8 @@ async def print_document_endpoint(
 @router.get("/documents/{document_id}/versions")
 async def list_versions_endpoint(
     document_id: uuid.UUID,
-    caller: AppUser = Depends(_read_draft),
+    request: Request,
+    caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
     await _load_document(session, caller, document_id)
@@ -2015,7 +2037,9 @@ async def list_versions_endpoint(
         .scalars()
         .all()
     )
-    return [_version(v) for v in rows]
+    resource = await _document_scope_by_id(session, document_id)
+    visible = await filter_readable_versions(session, request, caller, resource, rows)
+    return [_version(v) for v in visible]
 
 
 async def _load_version(
@@ -2027,34 +2051,61 @@ async def _load_version(
     return version
 
 
+async def _load_authorized_versions(
+    session: AsyncSession,
+    sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    document_id: uuid.UUID,
+    version_ids: tuple[uuid.UUID, ...],
+) -> tuple[DocumentedInformation, list[DocumentVersion]]:
+    """Load one Document's requested versions and enforce the shared state-aware read policy."""
+    document = await _load_document(session, caller, document_id)
+    versions = [await _load_version(session, document_id, version_id) for version_id in version_ids]
+    resource = await _document_scope_by_id(session, document_id)
+    await enforce_version_reads(session, sink, request, caller, resource, versions)
+    return document, versions
+
+
 @router.get("/documents/{document_id}/versions/{version_id}")
 async def get_version_endpoint(
     document_id: uuid.UUID,
     version_id: uuid.UUID,
-    caller: AppUser = Depends(_read_draft),
+    request: Request,
+    caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
-    await _load_document(session, caller, document_id)
-    return _version(await _load_version(session, document_id, version_id))
+    _document, versions = await _load_authorized_versions(
+        session, authz_sink, request, caller, document_id, (version_id,)
+    )
+    return _version(versions[0])
 
 
 @router.get("/documents/{document_id}/versions/{version_id}/diff")
 async def diff_versions_endpoint(
     document_id: uuid.UUID,
     version_id: uuid.UUID,
+    request: Request,
     from_version_id: uuid.UUID = Query(alias="from"),
-    caller: AppUser = Depends(_read_draft),
+    caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """The doc 05 §8 redline of ``from`` → ``version_id`` (both versions of THIS document): the
     metadata diff (frozen snapshots) + the text redline (on-demand Tika extraction + line-LCS;
     degrades to ``unavailable`` if text can't be extracted) + both provenance headers. Read-only.
-    Gated on ``document.read_draft`` (the diff exposes non-released version content, like the other
-    version-read endpoints — `document.read` alone must NOT leak Draft text). The visual page-image
-    diff is S-dcr-3b."""
-    await _load_document(session, caller, document_id)
-    to_version = await _load_version(session, document_id, version_id)
-    from_version = await _load_version(session, document_id, from_version_id)
+    Requires ``document.read`` plus every specialized key selected by the two immutable version
+    states. The visual page-image diff is S-dcr-3b."""
+    _document, versions = await _load_authorized_versions(
+        session,
+        authz_sink,
+        request,
+        caller,
+        document_id,
+        (version_id, from_version_id),
+    )
+    to_version, from_version = versions
     return await build_version_diff(session, from_version, to_version)
 
 
@@ -2077,17 +2128,25 @@ async def request_visual_diff_endpoint(
     document_id: uuid.UUID,
     version_id: uuid.UUID,
     response: Response,
+    request: Request,
     from_version_id: uuid.UUID = Query(alias="from"),
-    caller: AppUser = Depends(_read_draft),
+    caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Request the doc 05 §8.1 visual page-image diff of ``from`` → ``version_id`` (worker-async,
     since the API can't render). Idempotent — UPSERTs the cached ``visual_diff`` row + enqueues the
-    worker task when not already terminal. 202 while Pending, 200 once Ready (poll GET). Needs
-    ``document.read_draft``."""
-    doc = await _load_document(session, caller, document_id)
-    to_version = await _load_version(session, document_id, version_id)
-    from_version = await _load_version(session, document_id, from_version_id)
+    worker task when not already terminal. 202 while Pending, 200 once Ready (poll GET). Requires
+    ``document.read`` plus every specialized key selected by the two version states."""
+    doc, versions = await _load_authorized_versions(
+        session,
+        authz_sink,
+        request,
+        caller,
+        document_id,
+        (version_id, from_version_id),
+    )
+    to_version, from_version = versions
     vd, should_enqueue = await get_or_create_visual_diff(
         session,
         org_id=caller.org_id,
@@ -2107,15 +2166,23 @@ async def get_visual_diff_endpoint(
     document_id: uuid.UUID,
     version_id: uuid.UUID,
     response: Response,
+    request: Request,
     from_version_id: uuid.UUID = Query(alias="from"),
-    caller: AppUser = Depends(_read_draft),
+    caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Poll the cached visual-diff result (no side effect). 404 if not yet requested (POST first);
-    202 while Pending; 200 once terminal. Needs ``document.read_draft``."""
-    await _load_document(session, caller, document_id)
-    to_version = await _load_version(session, document_id, version_id)
-    from_version = await _load_version(session, document_id, from_version_id)
+    202 while Pending; 200 once terminal. Uses the shared two-version read policy."""
+    _document, versions = await _load_authorized_versions(
+        session,
+        authz_sink,
+        request,
+        caller,
+        document_id,
+        (version_id, from_version_id),
+    )
+    to_version, from_version = versions
     vd = await get_visual_diff(session, from_version.id, to_version.id)
     if vd is None or vd.org_id != caller.org_id:
         raise ProblemException(
@@ -2131,20 +2198,28 @@ async def get_visual_diff_page_endpoint(
     document_id: uuid.UUID,
     version_id: uuid.UUID,
     page: int,
+    request: Request,
     from_version_id: uuid.UUID = Query(alias="from"),
     layer: str = Query(default="diff"),
-    caller: AppUser = Depends(_read_draft),
+    caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> Response:
     """Stream one page's rendered PNG (``layer`` = from | to | diff). 404 unless the visual diff is
-    Ready and the page/layer exists. Needs ``document.read_draft``."""
+    Ready and the page/layer exists. Uses the shared two-version read policy."""
+    _document, versions = await _load_authorized_versions(
+        session,
+        authz_sink,
+        request,
+        caller,
+        document_id,
+        (version_id, from_version_id),
+    )
+    to_version, from_version = versions
     if layer not in ("from", "to", "diff"):
         raise ProblemException(
             status=422, code="validation_error", title="layer must be from|to|diff"
         )
-    await _load_document(session, caller, document_id)
-    to_version = await _load_version(session, document_id, version_id)
-    from_version = await _load_version(session, document_id, from_version_id)
     vd = await get_visual_diff(session, from_version.id, to_version.id)
     if (
         vd is None
@@ -2169,11 +2244,15 @@ async def get_visual_diff_page_endpoint(
 async def download_version_endpoint(
     document_id: uuid.UUID,
     version_id: uuid.UUID,
-    caller: AppUser = Depends(_read_draft),
+    request: Request,
+    caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
-    await _load_document(session, caller, document_id)
-    version = await _load_version(session, document_id, version_id)
+    _document, versions = await _load_authorized_versions(
+        session, authz_sink, request, caller, document_id, (version_id,)
+    )
+    version = versions[0]
     blob = await vault_repo.get_blob(session, version.source_blob_sha256)
     if blob is None:
         raise ProblemException(status=404, code="not_found", title="Blob not found")

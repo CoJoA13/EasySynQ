@@ -40,7 +40,13 @@ async def test_generic_byte_path_rejected_on_objective(
     await _grant(subject, _OBJ_KEYS)
     await _grant(
         subject,
-        ("document.checkout", "document.edit", "document.submit", "document.read_draft"),
+        (
+            "document.checkout",
+            "document.edit",
+            "document.submit",
+            "document.read",
+            "document.read_draft",
+        ),
     )
     oid = await _create_objective(app_client, h, "Byte-guard objective")
 

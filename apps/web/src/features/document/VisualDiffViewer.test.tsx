@@ -171,7 +171,7 @@ test("VisualDiffViewer (Unavailable) offers the source-download fallback, not an
   await waitFor(() => expect(openSpy).toHaveBeenCalled());
 });
 
-test("VisualDiffViewer shows quiet no-access on a 403 (document.read_draft)", async () => {
+test("VisualDiffViewer shows quiet no-access on a state-aware authorization 403", async () => {
   server.use(
     http.post(VD, () =>
       HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),

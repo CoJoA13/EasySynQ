@@ -3,9 +3,9 @@ import { useApi } from "../../lib/api";
 import type { VersionDiff } from "../../lib/types";
 
 // S-web-4: the doc 05 §8 redline of `fromVid` → `toVid` (two versions of the same document) —
-// metadata diff + the inline text redline. Gated document.read_draft server-side: a reader without
-// it gets a 403 (ApiError), which the viewer renders as quiet "no access" (DP-6). Enabled only when
-// a distinct version pair is selected (the page's `?from=&to=` URL state).
+// metadata diff + the inline text redline. R59 requires document.read plus both immutable versions'
+// state-selected keys; a denial is a 403 ApiError that the viewer renders as quiet "no access"
+// (DP-6). Enabled only when a distinct pair is selected (the page's `?from=&to=` URL state).
 export function useVersionDiff(
   documentId: string | null,
   toVid: string | null,

@@ -71,9 +71,9 @@ function usePageImage(
 // S-web-4b (doc 11 §4.7 visual mode): the worker-async page-image diff for two immutable versions.
 // A single image pane + a Before/After/Diff layer toggle (default Diff = the server-composed overlay),
 // a changed-page rail (the §4.7 minimap AND the §6.2 screen-reader change index, marked non-color),
-// and n/p next/previous-changed-page nav. Read-only, gated document.read_draft (403 → quiet, DP-6).
-// The async render reads as a phased long-op (§4.9), never a frozen UI; Failed → Retry, Unavailable →
-// a calm source-download fallback.
+// and n/p next/previous-changed-page nav. Read-only; R59 authorizes both immutable sides by state
+// (403 → quiet, DP-6). The async render reads as a phased long-op (§4.9), never a frozen UI;
+// Failed → Retry, Unavailable → a calm source-download fallback.
 export function VisualDiffViewer({
   documentId,
   fromVid,
