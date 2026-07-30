@@ -797,14 +797,14 @@ async def list_documents(
         .all()
     )
     type_ids = {d.document_type_id for d in docs if d.document_type_id}
-    levels: dict[uuid.UUID, str] = {}
+    document_types: dict[uuid.UUID, DocumentType] = {}
     if type_ids:
         for dt in (
             (await session.execute(select(DocumentType).where(DocumentType.id.in_(type_ids))))
             .scalars()
             .all()
         ):
-            levels[dt.id] = dt.document_level.value
+            document_types[dt.id] = dt
     # S-owner-assignment-1: batch-load each candidate doc's process links ONCE (one grouped query
     # over the bounded scan window — no N+1) so the per-row read-filter can match a PROCESS-scoped
     # document.read grant (the list-side half of the _document_scope process_ids migration). A doc
@@ -820,7 +820,7 @@ async def list_documents(
         # lifecycle-predicated read narrows here, consistent with the detail gate + the register).
         resource = resource_from_doc(
             d,
-            document_level=levels.get(d.document_type_id) if d.document_type_id else None,
+            document_type=(document_types.get(d.document_type_id) if d.document_type_id else None),
             process_ids=process_ids_by_doc.get(d.id, frozenset()),
         )
         if authorize(grants, "document.read", resource, ctx).allow:
@@ -882,6 +882,7 @@ async def create_document_endpoint(
     resource = ResourceContext(
         folder_path=body.folder_path,
         document_level=level,
+        concrete_type=dt.code if dt is not None else None,
         kind=DocumentKind.DOCUMENT.value,
         process_ids=frozenset(str(p) for p in declared),
         framework_id=framework_id,
@@ -913,6 +914,7 @@ async def create_document_endpoint(
         link_scope = ResourceContext(
             folder_path=body.folder_path,
             document_level=level,
+            concrete_type=dt.code if dt is not None else None,
             kind=DocumentKind.DOCUMENT.value,
             process_ids=frozenset({str(process.id)}),
             # The new doc is always created Draft — mirror the standalone _enforce_target_process

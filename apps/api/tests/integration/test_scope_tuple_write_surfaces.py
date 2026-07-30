@@ -132,6 +132,33 @@ async def test_document_create_doc_class_kind_deny_wins(
     assert r.status_code == 403, r.text
 
 
+async def test_document_create_doc_class_concrete_type_deny_wins(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A concrete-type DOC_CLASS DENY matches the exact catalog code at the pre-create gate.
+
+    Before #345 the scope carried the document level but left ``concrete_type=None``, so the DENY
+    was dropped and the broad SYSTEM ALLOW created the SOP.
+    """
+    subject = _subject("doc-type-deny")
+    await _grant(subject, ("document.create",))
+    h = _auth(token_factory, subject)
+    type_id = await s5.type_id("SOP")
+    await _add_override(
+        subject,
+        "document.create",
+        Effect.DENY,
+        ScopeLevel.DOC_CLASS,
+        selector={"document_level": "L2_PROCEDURE", "concrete_type": "SOP"},
+    )
+    r = await app_client.post(
+        "/api/v1/documents",
+        headers=h,
+        json={"title": "concrete-type-deny", "document_type_id": type_id, "area_code": "PUR"},
+    )
+    assert r.status_code == 403, r.text
+
+
 async def test_document_create_lifecycle_deny_wins(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

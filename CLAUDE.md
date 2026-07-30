@@ -1,7 +1,7 @@
 # EasySynQ — Project Context
 
 > Orientation for a new session. The **authoritative** detail lives in `docs/` — start with
-> `docs/00-overview.md` (front door) and `docs/decisions-register.md` (binding decisions, R1–R59).
+> `docs/00-overview.md` (front door) and `docs/decisions-register.md` (binding decisions, R1–R60).
 > The recurring-patterns catalog + the machine playbook live in `.claude/rules/`; the slice changelog
 > + operator/dev reference live in `docs/` (all linked under Deep Dive — read on demand). Keep this
 > file lean; new lessons go to **Recent learnings** (below) or `engineering-patterns`, not inline.
@@ -63,7 +63,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 
 ## Deep Dive — read on demand
 
-- **`docs/decisions-register.md`** — AUTHORITATIVE (R1–R59); supersedes conflicting section text. Read before any design call.
+- **`docs/decisions-register.md`** — AUTHORITATIVE (R1–R60); supersedes conflicting section text. Read before any design call.
 - **`docs/14-data-model.md`** (ERD) — schema source of truth; read before a migration/ORM change.
 - **`docs/15-api-design.md`** — endpoints + gates; read before adding/changing an endpoint (update `openapi.yaml` in-PR).
 - **`docs/07-authorization-model.md`** — permission catalog, RBAC+ABAC scoping, deny-wins; read before authz work.
@@ -102,6 +102,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 
 ## Recent learnings  <!-- ONE line per entry; cap ~8, newest first. Full per-slice narrative → docs/slice-history.md; recurring traps → .claude/rules/engineering-patterns.md. -->
 
+- 2026-07-29 — **Issue #345 = the dormant DOC_CLASS `concrete_type` selector is now sourced canonically from exact, case-sensitive `DocumentType.code` (R60; API + OpenAPI/docs + tests; NO migration [head 0083]; NO new key [catalog 102]):** `resource_from_doc` receives the resolved catalog row and derives level + code together; batched Library/register callers retain the row, search/suggest project `dt.code`, and pre-create scopes use the validated row. A matching concrete-type DENY can no longer be silently dropped; mutation proof blanks only the field and flips DENY→ALLOW. (Closes #345; PR #416.)
 - 2026-07-29 — **Issue #363 = an async Evidence Pack build is authorized and attributed as the current attempt generator, never the DRAFT creator (R58; API + migration `0083` + integration + docs; NO new permission key [catalog 102]):** `generate` persists caller + accepted source IP atomically with `BUILDING`, Celery carries only `pack_id`, and the locked-row worker evaluates current grants/time with only that IP replayed for `ip_allow`; it rechecks the shared FINDING/CAPA subject-read graph immediately before dossier serialization and uses the initiator for R28 classification, sealed-Record capture, and worker success/failure events. A missing or non-active initiator fails closed. Populated migration coverage proves non-DRAFT compatibility backfill and downgrade/re-upgrade. (Closes #363; PR #414.)
 - 2026-07-29 — **Issue #361 = R27 legal erasure now follows every sealed Evidence Pack derivative (API + OpenAPI + migration `0082` + integration + docs; NO new permission key [catalog 102]):** affected member/dossier/pack-record dependencies and exact artifact aliases move to terminal `UNAVAILABLE`, revoke shares, clear ZIP/portfolio pointers, dispose the pack Record through one source-event hop, and use the existing authority-bound purge/reaper path; an org-scoped shared(build)/exclusive(R27) transaction advisory lock closes the last-copy race while ordinary retention remains unchanged. A populated downgrade proved the invalidation CHECK must be dropped before `UNAVAILABLE→FAILED`; empty migration round-trips cannot catch that ordering defect. (Closes #361; PR #413.)
 - 2026-07-27 — **Minor Batch M1 = harden four authentication/public-diagnostic boundaries and turn the 104 MINORs into an exact implementation queue (API + OpenAPI + docs; NO migration [head 0075]; NO new key [catalog 102]):** `GET /setup` now needs existing SYSTEM `config.read` while public state/bootstrap keep first-run viable; concurrent first-login JIT inserts converge through PostgreSQL `ON CONFLICT`; JWKS keys rotate under a bounded TTL with single-flight/cooldown and sanitized 503 failures (an unknown-kid outage cannot poison an unexpired known key); and `/readyz` strips raw dependency diagnostics while internal upgrade checks retain them. The new tracker maps all 104 source locations exactly once: 1 preclosed, 4 in M1, 99 queued for revalidation. (API unit 1161→1168; setup integration 24 + auth/JIT selection 5; PR #381.)
@@ -148,7 +149,10 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 > `26360bb`; and **#335 → S-register-hardening** closed the Controlled Document Register's `report.read`
 > scope/provenance/tz edges (a new `provenance.excluded_processes` + its web banner line, context-only surface
 > admission consolidated in `report_read_resource_satisfiable`, an org-scoped process-name lookup, in-snapshot
-> `resolve_org_tz`) — PR #347 squash `d3fbb01`. Both BE(+web), no migration, no new key.
+> `resolve_org_tz`) — PR #347 squash `d3fbb01`; and **#345 → R60** now resolves the dormant
+> DOC_CLASS `concrete_type` from exact `DocumentType.code` across canonical, batched, projected,
+> and pre-create document gates. These authorization hardenings require no new permission key;
+> #333/#335/#345 require no migration.
 > **Migration head `0083`** (next `0084`) — the 2026-07-22 remediation batches moved it past `0070`
 > (`0071` audit-chain cursor · `0072` disposition append-only · `0073` pending-blob-purge · `0074`
 > operator alarms · `0075` audit `scope_ref` index · `0076` import-owner snapshot · `0077` sealed-pack

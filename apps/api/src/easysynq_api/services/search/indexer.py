@@ -45,6 +45,7 @@ _SEARCH_SQL = sa.text(
            documented_information.folder_path AS folder_path,
            documented_information.document_type_id AS document_type_id,
            dt.document_level AS document_level,
+           dt.code AS concrete_type,
            ts_rank(
                setweight(to_tsvector('english', coalesce(identifier, '')), 'A')
                || setweight(to_tsvector('english', coalesce(title, '')), 'B')
@@ -71,7 +72,8 @@ _SEARCH_SQL = sa.text(
 # Type-ahead suggest = a simple case-insensitive prefix over identifier/title (doc 13 §2.1). FTS
 # prefix (``to_tsquery(... :*)``) is a v1 refinement — ILIKE is robust and has no tsquery-syntax
 # pitfalls on partial input. ``:prefix`` is bound (injection-safe). Carries the same
-# folder_path/document_level as a SearchHit so the api's document.read post-filter is identical.
+# folder_path/document-level/type as a SearchHit so the api's document.read post-filter is
+# identical.
 _SUGGEST_SQL = sa.text(
     """
     SELECT documented_information.id AS id,
@@ -79,7 +81,8 @@ _SUGGEST_SQL = sa.text(
            identifier AS identifier,
            title AS title,
            documented_information.folder_path AS folder_path,
-           dt.document_level AS document_level
+           dt.document_level AS document_level,
+           dt.code AS concrete_type
     FROM documented_information
     LEFT JOIN document_type dt ON dt.id = documented_information.document_type_id
     WHERE documented_information.org_id = :org_id
@@ -94,9 +97,8 @@ _SUGGEST_SQL = sa.text(
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class SearchHit:
-    """One candidate document hit. ``folder_path``/``document_level`` carry the ABAC inputs the api
-    needs to re-check ``document.read`` without an extra round-trip (an OpenSearch impl would
-    denormalize the same fields)."""
+    """One candidate document hit carrying the ABAC inputs needed to re-check ``document.read``
+    without an extra round-trip (an OpenSearch implementation must denormalize the same fields)."""
 
     doc_id: uuid.UUID
     framework_id: str
@@ -105,6 +107,7 @@ class SearchHit:
     current_state: str
     folder_path: str | None
     document_level: str | None
+    concrete_type: str | None
     rank: float
     snippet: str
 
@@ -117,6 +120,7 @@ class Suggestion:
     title: str
     folder_path: str | None
     document_level: str | None
+    concrete_type: str | None
 
 
 class Indexer(Protocol):
@@ -152,6 +156,7 @@ class PostgresFtsIndexer:
                 current_state=r["current_state"],
                 folder_path=r["folder_path"],
                 document_level=r["document_level"],
+                concrete_type=r["concrete_type"],
                 rank=float(r["rank"]),
                 snippet=r["snippet"],
             )
@@ -179,6 +184,7 @@ class PostgresFtsIndexer:
                 title=r["title"],
                 folder_path=r["folder_path"],
                 document_level=r["document_level"],
+                concrete_type=r["concrete_type"],
             )
             for r in rows
         ]

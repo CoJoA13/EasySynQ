@@ -339,10 +339,10 @@ async def compute_document_control_register(
             .all()
         )
 
-        # document_level per doc-type (needed for the document.read ResourceContext) — the
-        # list_documents ``levels`` map.
+        # Resolved catalog rows per doc-type (needed for both DOC_CLASS attributes in the
+        # document.read ResourceContext) — the list_documents ``document_types`` map.
         type_ids = {d.document_type_id for d in docs if d.document_type_id}
-        type_level: dict[uuid.UUID, str] = {}
+        document_types: dict[uuid.UUID, DocumentType] = {}
         type_name: dict[uuid.UUID, str] = {}
         if type_ids:
             for dt in (
@@ -350,7 +350,7 @@ async def compute_document_control_register(
                 .scalars()
                 .all()
             ):
-                type_level[dt.id] = dt.document_level.value
+                document_types[dt.id] = dt
                 type_name[dt.id] = dt.name
 
         process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [d.id for d in docs])
@@ -428,7 +428,9 @@ async def compute_document_control_register(
             # selectors it populates (adds kind; framework_id/lifecycle were already inline).
             resource = resource_from_doc(
                 d,
-                document_level=type_level.get(d.document_type_id) if d.document_type_id else None,
+                document_type=(
+                    document_types.get(d.document_type_id) if d.document_type_id else None
+                ),
                 process_ids=process_ids_by_doc.get(d.id, frozenset()),
             )
             if (

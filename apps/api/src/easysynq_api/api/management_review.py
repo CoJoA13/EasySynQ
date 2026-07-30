@@ -239,15 +239,16 @@ def _approval_instance(i: WorkflowInstance, tasks: list[Task]) -> dict[str, Any]
 async def _release_scope(session: AsyncSession, doc: DocumentedInformation) -> ResourceContext:
     """Release scope = the MR's document scope + the SoD-2 inputs for the version the cutover will
     promote. Copied from api/objectives.py:317-334 (_objective_release_scope)."""
-    level: str | None = None
+    document_type: DocumentType | None = None
     if doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
+        document_type = await session.get(DocumentType, doc.document_type_id)
     # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK/kind-
     # scoped release DENY isn't dropped), INCLUDING process_ids so a PROCESS-scoped DENY on a
     # linked process participates too (#346 review), then fold SoD inputs.
     base = resource_from_doc(
-        doc, document_level=level, process_ids=await vault_repo.process_ids_for_doc(session, doc.id)
+        doc,
+        document_type=document_type,
+        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
     return await enrich_release_sod_scope(session, base, doc.id, None)
 

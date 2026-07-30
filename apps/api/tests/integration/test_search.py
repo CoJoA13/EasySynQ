@@ -52,11 +52,17 @@ async def _create_titled(client: AsyncClient, h: dict[str, str], type_id: str, t
 
 
 async def _effective_titled(
-    app_client: AsyncClient, ha: dict[str, str], hb: dict[str, str], title: str
+    app_client: AsyncClient,
+    ha: dict[str, str],
+    hb: dict[str, str],
+    title: str,
+    *,
+    document_type_id: str | None = None,
 ) -> dict:
     """Drive a doc to Effective (author=a, approver+releaser=b), then retitle it (the title lives on
     documented_information, so search picks up the new value via the live FTS expression)."""
-    eff = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"search")
+    type_id = document_type_id or await s5.type_id("SOP")
+    eff = await s5.drive_to_effective(app_client, ha, hb, hb, type_id, b"search")
     r = await app_client.patch(f"/api/v1/documents/{eff['id']}", headers=ha, json={"title": title})
     assert r.status_code == 200, r.text
     return r.json()
@@ -209,3 +215,72 @@ async def test_framework_scoped_document_read_deny_hides_search_hit(
     # The same completion applies on the suggest path (prefix over identifier/title).
     sg = (await app_client.get("/api/v1/search/suggest?q=FwDeny", headers=hc)).json()
     assert doc["id"] not in {s["id"] for s in sg["suggestions"]}
+
+
+async def test_concrete_type_deny_is_consistent_across_document_read_surfaces(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """R60/#345: exact type-code DENY hides OBJ while another L1 type remains readable.
+
+    The equal document level proves the distinction comes from ``concrete_type`` on the canonical
+    detail/list builder and both search candidate projections, not from the mandatory level match.
+    """
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    token = uuid.uuid4().hex[:10]
+    objective_type_id = await s5.type_id("OBJ")
+    review_type_id = await s5.type_id("MR")
+    title_prefix = f"TypeGate {token}"
+    objective = await _effective_titled(
+        app_client,
+        ha,
+        hb,
+        f"{title_prefix} objective",
+        document_type_id=objective_type_id,
+    )
+    alternate = await _effective_titled(
+        app_client,
+        ha,
+        hb,
+        f"{title_prefix} review",
+        document_type_id=review_type_id,
+    )
+
+    denier = f"kc-typedeny-{uuid.uuid4().hex[:8]}"
+    await _add_override(denier, "document.read", Effect.ALLOW, ScopeLevel.SYSTEM)
+    await _add_override(
+        denier,
+        "document.read",
+        Effect.DENY,
+        ScopeLevel.DOC_CLASS,
+        selector={"document_level": "L1_POLICY", "concrete_type": "OBJ"},
+    )
+    hc = _auth(token_factory, denier)
+
+    denied = await app_client.get(f"/api/v1/documents/{objective['id']}", headers=hc)
+    assert denied.status_code == 403, denied.text
+    allowed = await app_client.get(f"/api/v1/documents/{alternate['id']}", headers=hc)
+    assert allowed.status_code == 200, allowed.text
+
+    listed = await app_client.get("/api/v1/documents", headers=hc)
+    assert listed.status_code == 200, listed.text
+    listed_ids = {row["id"] for row in listed.json()["data"]}
+    assert objective["id"] not in listed_ids
+    assert alternate["id"] in listed_ids
+
+    searched = await app_client.get(f"/api/v1/search?q={token}", headers=hc)
+    assert searched.status_code == 200, searched.text
+    search_ids = {hit["id"] for hit in searched.json()["results"]}
+    assert objective["id"] not in search_ids
+    assert alternate["id"] in search_ids
+    assert searched.json()["hidden_by_scope"] >= 1
+
+    suggested = await app_client.get(
+        "/api/v1/search/suggest", headers=hc, params={"q": title_prefix}
+    )
+    assert suggested.status_code == 200, suggested.text
+    suggestion_ids = {item["id"] for item in suggested.json()["suggestions"]}
+    assert objective["id"] not in suggestion_ids
+    assert alternate["id"] in suggestion_ids

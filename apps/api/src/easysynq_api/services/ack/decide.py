@@ -158,10 +158,9 @@ async def decide_doc_ack(
     # _commit=False trick as the 409 ladder); the deny is still audited (the authz sink commits
     # in its OWN session). The key's first consumer: document.acknowledge at the document's
     # scope — membership failures 404-collapsed above; a key failure is a calm 403 (doc 10 §8.3).
-    level: str | None = None
+    document_type: DocumentType | None = None
     if doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
+        document_type = await session.get(DocumentType, doc.document_type_id)
     # R28: the FULL context — the seeded Employee grant is PROCESS-scoped; without process_ids
     # the PDP can never match it (Codex P1).
     # #333/M2: full scope tuple via the shared helper (adds framework_id + kind so a
@@ -171,7 +170,7 @@ async def decide_doc_ack(
     # PROCESS DENY from the fresh-decision gate.
     resource = resource_from_doc(
         doc,
-        document_level=level,
+        document_type=document_type,
         process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
     await enforce(session, authz_sink, request, actor, "document.acknowledge", resource)

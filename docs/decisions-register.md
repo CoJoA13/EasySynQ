@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R59) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R60) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R59
+## Part 3 — Resolutions R1–R60
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1717,6 +1717,39 @@ frontend behavior branch is introduced.
 implementation comments.
 
 Bumps the resolutions range **R1–R58 → R1–R59**.
+
+---
+
+### R60 — DOC_CLASS `concrete_type` is the exact Document Type catalog code (issue #345) — 2026-07-29
+
+For every `ResourceContext` whose `kind=DOCUMENT`, the DOC_CLASS `concrete_type` is the exact,
+case-sensitive `document_type.code` resolved through
+`documented_information.document_type_id` — for example `POL`, `SOP`, `WI`, `FRM`, `OBJ`, `MR`,
+`RSK`, `CTX`, or `IPR`. The display `document_type.name` is presentation text and MUST NOT be used
+as an authorization identifier. No separate `documented_information.concrete_type` column or
+satellite-derived taxonomy is introduced.
+
+The canonical document-scope helper receives the resolved `DocumentType` catalog row and derives
+both `document_level` and `concrete_type` from it. Callers MUST NOT supply those two DOC_CLASS
+attributes independently. Row-backed document gates, batched Library/register filters, workflow
+and lifecycle decisions, acknowledgement/DCR scopes, and version-resource projections all inherit
+that completed canonical context. Search and suggestion candidates project both catalog values,
+and the pre-create Document scopes use the already-validated catalog row so authorization is
+identical immediately before and after persistence.
+
+DOC_CLASS matching remains conjunctive: `document_level` is required; optional `kind` and
+`concrete_type` selectors further narrow it. Existing grants without `concrete_type` are unchanged.
+A matching concrete-type DENY now participates on every Document gate and beats any broader ALLOW.
+A missing/unresolvable catalog row supplies neither DOC_CLASS value, so it cannot accidentally
+match a narrower grant.
+
+No migration, data backfill, permission key, role grant, endpoint, request field, response field,
+or frontend behavior change is introduced.
+
+**Back-propagation:** 07 §5.1, 14 §5.1, OpenAPI scope-selector prose, slice history, engineering
+patterns, and repository orientation.
+
+Bumps the resolutions range **R1–R59 → R1–R60**.
 
 ---
 
