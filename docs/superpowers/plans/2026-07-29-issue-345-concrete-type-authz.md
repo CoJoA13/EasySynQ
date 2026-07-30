@@ -58,7 +58,7 @@ mutation-backed verification before implementation.
 
 ## Task 6 — publication
 
-- [ ] Commit intentionally and push the issue branch.
-- [ ] Open a ready PR closing Issue #345.
+- [x] Commit intentionally and push the issue branch.
+- [x] Open a ready PR closing Issue #345.
 - [ ] Monitor all CI checks and fresh Codex review.
 - [ ] Respond to and resolve every addressed review thread; do not merge.

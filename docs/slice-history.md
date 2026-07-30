@@ -372,7 +372,7 @@ comparisons that need both sides' keys. R59, authorization/API docs, OpenAPI, en
 and SPA implementation comments now publish the same matrix. The remediation tracker contained no
 separate #406 entry; this slice-history residual was the handoff item and is now closed.
 
-### Issue #345 — define the DOC_CLASS `concrete_type` selector source (API + OpenAPI/docs + tests; NO migration [head stays `0083`]; NO new permission key [catalog 102]; closes [#345](https://github.com/CoJoA13/EasySynQ/issues/345))
+### Issue #345 — define the DOC_CLASS `concrete_type` selector source (API + OpenAPI/docs + tests; NO migration [head stays `0083`]; NO new permission key [catalog 102]; closes [#345](https://github.com/CoJoA13/EasySynQ/issues/345); PR [#416](https://github.com/CoJoA13/EasySynQ/pull/416))
 
 **Owner decision (R60).** A Document's exact, case-sensitive `document_type.code` is its
 `ResourceContext.concrete_type`; the display name is never an authorization identifier. The
