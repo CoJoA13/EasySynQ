@@ -10,7 +10,7 @@ EasySynQ runs your quality system on your own server, in the browser — and ans
 
 Most quality systems keep their master documents on a file share anyone can overwrite. The result is drift — stale PDFs on desktops, competing copies, and an audit-prep scramble every year.
 
-EasySynQ inverts that. A managed **controlled vault** (PostgreSQL + WORM object storage) owns the master copy of every controlled document and record. The on-disk filesystem is only a **read-only mirror**, regenerated from *Released* versions. Authority flows **vault → mirror, never the reverse** — so document drift stops being a discipline problem and becomes a solved engineering problem.
+EasySynQ inverts that. A managed **controlled vault** (PostgreSQL + WORM object storage) owns the master copy of every controlled document and record. The on-disk filesystem is only a **read-only mirror**, regenerated from *Effective* versions. Authority flows **vault → mirror, never the reverse** — so document drift stops being a discipline problem and becomes a solved engineering problem.
 
 The interface flows the way ISO 9001 itself flows — the clause spine, the process map, the PDCA cycle — so the system reads as the standard made operable, not a database with forms bolted on. The payoff is **audit readiness as the default state**: an external auditor can confirm any document's status — effective version, signatures, lineage — in seconds.
 
@@ -26,7 +26,7 @@ The interface flows the way ISO 9001 itself flows — the clause spine, the proc
 - Periodic-review scheduling and controlled obsolescence
 
 **Read-only mirror & controlled copies**
-- Filesystem mirror regenerated from Released versions only, mounted read-only — the disk can never become a competing truth
+- Filesystem mirror regenerated from Effective versions only, mounted read-only — the disk can never become a competing truth
 - Organized two ways at once: a **clause-aligned PLAN/DO/CHECK/ACT tree** and a **by-process index**
 - **Watermarked controlled-copy PDFs**, each carrying a QR **verify token**
 - Public `/verify` endpoint (CURRENT / SUPERSEDED / UNKNOWN) — confirm any printout at a glance
@@ -44,7 +44,7 @@ The interface flows the way ISO 9001 itself flows — the clause spine, the proc
 - **Compliance Checklist** scoring every mandatory clause COVERED / PARTIAL / GAP
 - **Quality Objectives** (lifecycle + KPI trend charts) and **Management Review** (inputs → outputs → filed minutes pack)
 - **Improvement Initiatives** (clause 10.3)
-- Permission-filtered full-text **search** (Postgres FTS behind an OpenSearch-ready seam)
+- Permission-filtered **document metadata search** (PostgreSQL FTS behind an OpenSearch-ready seam)
 
 **Workflows & notifications**
 - Approvals with enforced **separation of duties** (no self-approval, no self-release, auditor independence)
@@ -60,7 +60,8 @@ The interface flows the way ISO 9001 itself flows — the clause spine, the proc
 
 **Deployment & operations**
 - **Self-hosted** on a single Linux host via Docker Compose (S/M sizing profiles) — air-gap friendly, no phone-home
-- Guided **first-run setup** with blocking trust gates (bootstrap → WORM verify → backup/restore drill → auth → users & roles)
+- Guided **first-run setup** with blocking trust gates (activate → organization → WORM verify →
+  backup/restore drill → authentication → finalize); users and roles continue in Administration
 - Encrypted backups (AES-256-GCM), **WORM-aware restore-to-verified-target**, health-gated upgrades
 - **Ingestion engine** to import an existing QMS file tree (scan → classify → dedup → review → commit)
 - Optional **1-click Hyper-V appliance** (VHDX + seed ISO + installer)
@@ -87,11 +88,32 @@ React + TypeScript + Mantine + Tailwind (SPA) · FastAPI / Python 3.12 · Postgr
 Requires Docker Compose v2, [uv](https://docs.astral.sh/uv/), Node 22, and [just](https://github.com/casey/just).
 
 ```bash
-just setup      # install deps, pre-commit hooks, generate the API contract
-just up s       # bring up the stack (S profile)
+cp .env.example .env
+chmod 600 .env
 ```
 
-Then open **http://localhost** and sign in with the dev account `demo` / `Demo-Password-1`. `/healthz` and `/readyz` report stack health behind Caddy.
+For the local developer stack, set these values in `.env` before starting:
+
+```dotenv
+OIDC_ISSUER=http://localhost/realms/easysynq
+OIDC_JWKS_URL=http://keycloak:8080/realms/easysynq/protocol/openid-connect/certs
+OIDC_DISCOVERY_URL=http://keycloak:8080/realms/easysynq/.well-known/openid-configuration
+```
+
+Then run:
+
+```bash
+just setup      # install deps, pre-commit hooks, generate the API contract
+just up s       # bring up the stack (S profile)
+just demo-user  # create the local demo login
+./scripts/easysynq setup mint-bootstrap
+```
+
+Then open **http://localhost/setup**, sign in with the dev account `demo` /
+`Demo-Password-1`, paste the one-time secret, and complete the six setup screens. After finalization,
+normal navigation is available at **http://localhost**. `/healthz` and `/readyz` report stack health
+behind Caddy. See the [fresh Linux developer setup](docs/runbooks/fresh-linux-setup.md) for the
+complete environment and platform notes.
 
 ## Repository layout
 
@@ -108,13 +130,27 @@ docs/                 the full specification + operator runbooks
 
 ## Project status
 
-The **MVP is complete** — 11 vertical slices, each shipped to protected `main` behind green CI — and the **ISO 9001:2015 ★ spine and the React web UI are feature-complete**. Records & evidence, ingestion, audits/findings/CAPA, change requests, acknowledgements, quality objectives, management review, improvement initiatives, and the full notification family are all done end-to-end.
+The original **MVP foundation (S0–S11)** and the subsequent ISO 9001 workflow families are delivered on
+protected `main`. The React application has routed working surfaces for document control, tasks,
+notifications, search, compliance, reporting, CAPA/complaints/NCRs, audits, ingestion, drift,
+objectives, management review, DCRs, improvement, risks, context, and interested parties.
+
+Records, retention/disposition, and Evidence Packs are implemented as API/worker capabilities and
+feed routed workflows such as CAPA evidence linking, but they do **not** yet have dedicated browser
+management screens. “Shipped” in the slice history therefore does not always mean “available as a
+standalone page in the SPA.”
 
 For the per-slice history and the deliberate v1 / v1.x deferrals, see [`CLAUDE.md`](CLAUDE.md) and [`docs/slice-history.md`](docs/slice-history.md).
 
 ## Documentation
 
-The full specification lives in [`docs/`](docs/) — start at [`docs/00-overview.md`](docs/00-overview.md), the front door. [`docs/decisions-register.md`](docs/decisions-register.md) is the authoritative source of truth, [`PRODUCT.md`](PRODUCT.md) captures the product vision and design principles, and operator runbooks are in [`docs/runbooks/`](docs/runbooks/).
+Start with the task-oriented manuals:
+
+- [Installation Guide](docs/manuals/installation-guide.md)
+- [User Manual](docs/manuals/user-manual.md)
+- [Administrator & IT Manual](docs/manuals/administrator-it-manual.md)
+
+The full specification lives in [`docs/`](docs/) — [`docs/00-overview.md`](docs/00-overview.md) is its front door and [`docs/decisions-register.md`](docs/decisions-register.md) is the authoritative design source. [`PRODUCT.md`](PRODUCT.md) captures the product vision and design principles, while hands-on operator procedures live in [`docs/runbooks/`](docs/runbooks/).
 
 ---
 

@@ -28,7 +28,8 @@ export function SearchResultsPage() {
       ) : (
         <Stack gap="xs">
           <Text c="dimmed" size="sm">
-            Searches title, identifier &amp; clause refs — Effective documents only.
+            Searches identifier, title, legacy identifier &amp; area code — Effective documents
+            only. Clause references are displayed but are not search terms.
           </Text>
           {data.results.length === 0 ? (
             <Text>No matching documents.</Text>

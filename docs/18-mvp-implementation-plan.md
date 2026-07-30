@@ -1,5 +1,10 @@
 # EasySynQ — MVP Implementation Plan (for approval)
 
+> **Historical build-plan note.** This file records the MVP slice plan and its completion evidence;
+> migration heads, route inventory, and deferred labels inside the snapshot are not current
+> operations guidance. Use `CLAUDE.md` and `slice-history.md` for shipped history, and the
+> [manuals](manuals/00-index.md) plus [runbooks](runbooks/00-index.md) for current procedures.
+
 > **Status: APPROVED (2026-05-31) and SHIPPED — MVP COMPLETE.** All 11 ordered slices **S0–S7 + S7b/c/d,
 > S8a–S8d, S9/S9b/S9c/S9d, S10, and S11 (the exit slice, PR #41) are shipped to `main`** (each via PR, all
 > CI green, validated on the real Docker stack), and the **OpenAPI contract
@@ -35,7 +40,7 @@
 > repo/monorepo layout + tooling, the Docker Compose dev stack, the Alembic schema derived from
 > `14-data-model.md`, the FastAPI/OpenAPI surface from `15-api-design.md`, the ordered vertical
 > slices, and a definition-of-done per slice. It stays strictly inside the four locked decisions
-> (D1–D4) and the **Decisions Register** (R1–R37 at MVP-authoring time; now R1–R46 — see
+> (D1–D4) and the **Decisions Register** (R1–R37 at MVP-authoring time; now R1–R60 — see
 > `decisions-register.md`), which supersedes any conflicting section text.
 >
 > **How it was produced.** A fan-out of deep readers over the MVP-critical sections (03/04/07/08/11/12,
@@ -268,7 +273,7 @@ Pydantic models and the TS client are generated from it; the running server is p
 ### 5.2 Cross-cutting mechanisms
 
 - **PEP/PDP.** A FastAPI dependency on every authenticated route declares `(required permission, scope-resolver)`; the **PDP is a pure function** implementing R3 verbatim: deny-by-default → gather grants in scope → **any DENY ⇒ DENY** → else any ALLOW ⇒ ALLOW → specificity breaks only ALLOW-vs-ALLOW ties → SoD against immutable history → sig-hook step-up gate. **Every allow *and* deny writes an `audit_event`.** Effective-permission cache in Redis keyed by `(user, permissions_epoch)`; any grant change bumps the epoch (revoke takes effect next request). List endpoints **filter, not 403**; sensitive types collapse permitted-but-absent vs forbidden to **404** (doc 15 §9.5).
-- **Supersession (`release`).** One **SERIALIZABLE** txn: prior Effective→`Superseded` (`effective_to=now`), this→`Effective` (`effective_from`), set `current_effective_version_id`, append audit RELEASED+SUPERSEDED, write `signature_event(meaning='release')`; the INV-1 index makes a second concurrent release fail → rollback/retry. Future-dated `effective_from` stays `Approved` until the Beat cutover sweep (lazy-read `effective_from <= now()` guard; R8 tz rule).
+- **Supersession (`release`).** One **SERIALIZABLE** txn: prior Effective→`Superseded` (`effective_to=now`), this→`Effective` (`effective_from`), set `current_effective_version_id`, append audit RELEASED+SUPERSEDED, write `signature_event(meaning='release')`; the INV-1 index makes a second concurrent release fail → rollback/retry. Future-dated `effective_from` stays `Approved` until the five-minute Beat cutover sweep or an explicit cutover trigger (R8 tz rule); reads do not perform a lazy cutover.
 - **Audit + signature emission.** A helper writes the `audit_event` in the **same txn** as the change; `signature_event` is written where the §8.16 matrix requires (approve/release/obsolete/review). Login/MFA/logout originate in Keycloak → ingested via the event-listener SPI (the same-txn rule doesn't apply to those).
 - **Conventions.** `Idempotency-Key` on mutating POSTs (Redis dedupe); `ETag`/`If-Match` optimistic lock (412); cursor pagination over UUID v7; **RFC 9457 problem+json** with canonical `code`s (`permission_denied`/`invalid_state_transition`/`conflict`/`lock_conflict`/`etag_mismatch`/`worm_required`/`two_tier_violation`/`validation_error`/`not_found`/`rate_limited`/`sod_violation`/`step_up_required`/`setup_incomplete`); **429 + Retry-After** Redis token bucket (per-user + per-IP) at app, coarse at Caddy.
 
@@ -346,7 +351,7 @@ S0 walking skeleton ─┬─ S1 AuthN ── S2 AuthZ[AC#3,4] ── S3 Vault �
 
 ## 9. Ops foundations (shipped in MVP)
 
-- **Backup/restore (R37).** `easysynq backup` = single timestamped, checksummed, optionally-encrypted archive (pg_dump + MinIO manifest with **blob-snapshot id per position** + Keycloak realm + encrypted config; brief consistency quiesce). `easysynq restore` is **WORM-aware**: restore blobs into a **fresh/cleared/versioned bucket** then cut MinIO over (never mutate the locked bucket); pair the PITR target with the **aligned** blob snapshot (not the latest mirror); **verify the audit checkpoint is not ahead** of a mid-chain target (else flag a tamper event requiring audited operator ack); re-verify the chain; trigger reindex + mirror-sync. **MVP = nightly pg_dump + WORM-aware cutover + alignment + checkpoint check**; continuous WAL/PITR is v1.x (§11 D-6). The tested-restore drill is the S8 G-C gate.
+- **Backup/restore (R37).** `easysynq backup` = single timestamped, checksummed, optionally-encrypted archive (pg_dump + MinIO manifest with **blob-snapshot id per position** + Keycloak realm + encrypted config; brief consistency quiesce). `easysynq restore` is **WORM-aware**: restore blobs into a **fresh/cleared/versioned bucket** then cut MinIO over (never mutate the locked bucket); pair the PITR target with the **aligned** blob snapshot (not the latest mirror); **verify the audit checkpoint is not ahead** of a mid-chain target (else flag a tamper event requiring audited operator ack); and re-verify the chain. After cutover, run `easysynq mirror rebuild`; rebuild any future derived search index if that extension is deployed. **MVP = nightly pg_dump + WORM-aware cutover + alignment + checkpoint check**; continuous WAL/PITR is v1.x (§11 D-6). The tested-restore drill is the S8 G-C gate.
 - **Audit chain-linker (R12)** — single-threaded under a PG advisory lock (or a dedicated Beat job), bounded written-but-not-yet-chained lag, alarmed above threshold; sets `prev_hash/row_hash/chained_at` once. **Off-host checkpoint sink (R13)** — three kinds (`worm_bucket`/`external_object_store`/`append_only_syslog`); credential held in **separate custody** from the app KEK/backup key (§11 D-8).
 - **Read-only mirror writer (R11)** — regenerate Effective-only on Release/Supersede/Obsolete (incremental) + nightly full reconcile; atomic swap; RO mount contract.
 - **Beat schedule** — effectivity-cutover sweep (~5 min), periodic-review-due sweep (daily, light in MVP), chain-linker cadence, nightly backup, monthly audit-partition roll, blob-integrity re-hash. `beat` is a **documented SPOF** with a fast-restart runbook (R14); availability target **99.0%/month** single-host (incl. Keycloak+Beat) — **not** 99.5% (HA path only).
@@ -374,7 +379,7 @@ S0 walking skeleton ─┬─ S1 AuthN ── S2 AuthZ[AC#3,4] ── S3 Vault �
 ## 11. Decisions for the owner (flagged; recommendation in **bold**)
 
 Most build choices are settled by the Register/docs and are baked into this plan. The following are the genuinely
-open ones; **none contradict D1–D4 or the Decisions Register** (R1–R37 at MVP-authoring time; now R1–R46 —
+open ones; **none contradict D1–D4 or the Decisions Register** (R1–R37 at MVP-authoring time; now R1–R60 —
 see `decisions-register.md`)**.** The first three are the strategic ones worth an explicit call.
 
 | # | Decision | Options | Recommendation |
@@ -399,7 +404,8 @@ see `decisions-register.md`)**.** The first three are the strategic ones worth a
 - [x] **D1** no outbound except customer-designated systems; no telemetry; admin-controlled backups (air-gap bundle ships).
 - [x] **D2** authority vault→mirror only; mirror RO; only Effective in mirror.
 - [x] **D3** `org_id` everywhere + `framework_id` where doc 14 specifies; all Part-11/multi-standard hooks present-but-unbuilt and **not removed**.
-- [x] **D4** full stack on Compose S+M; OpenAPI-first; deny-by-default; 12-factor; `beat` exactly 1.
+- [x] **D4** shipped S+M Compose overlays; PostgreSQL FTS in both, with OpenSearch reserved;
+  OpenAPI-first; deny-by-default; 12-factor; `beat` exactly 1.
 - [x] R3 deny-wins PDP pure + unit-tested · R12 decoupled chain-linker with bounded-lag alarm · R13 off-host sink configurable (+not-tamper-evident warning when absent) · **R37 WORM-aware restore proven (S11)**.
 - [x] NFR P95 budgets (server-side smoke, S11); migrations reversible + CI-gated; air-gapped bundle installs (digest-pin + release guard); security headers + TLS 1.2+ (Caddy default floor, `caddy validate`-confirmed); secrets rotatable. **WCAG 2.2 AA = deferred with the v1 web track** (the MVP ships the backend + the setup-wizard/admin web only; the full clause-aligned SPA + its axe/manual a11y pass is v1).
 - [x] `easysynq backup/restore/upgrade` proven; tested-restore drill passes (G-C); WORM-verify hard gate enforced (G-B); operator runbooks delivered (`docs/runbooks/`).

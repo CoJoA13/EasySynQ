@@ -20,7 +20,7 @@ mc retention set --default GOVERNANCE 30d myminio/records     # same default for
   warns; use GOVERNANCE unless a regulation mandates COMPLIANCE.
 
 ## Restore implication
-**Never restore into the locked `documents`/`records` buckets.** `easysynq restore` always targets the
+**Never restore into the locked `documents`/`records` buckets.** `./scripts/easysynq restore` always targets the
 plain non-WORM `restore-scratch` bucket (and the drill does too). Cutover lands the verified blobs into
 **fresh** object-lock-enabled buckets — see [backup-restore.md](backup-restore.md). The off-host
 audit-checkpoint anchor bucket (`audit-checkpoints`) is likewise object-lock-enabled, with **separate

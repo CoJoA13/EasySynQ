@@ -1,6 +1,13 @@
 # Search, Navigation & Reporting / Dashboards
 
-This section specifies how users **find** anything in the Controlled Vault and how they **see the state** of the QMS at a glance. It defines a unified full-text-plus-metadata search with faceted filtering, clause/process navigation, saved searches, and find-where-used (impact analysis); then it specifies the reporting and dashboard layer for QMS health — the Management-Review dashboard, the persona-targeted KPI dashboards, the canonical document-control reports (Controlled Document Register, Revision-History report, Distribution-and-Acknowledgement report), and auditor-grade PDF/Excel exports. Everything here is a **lens over the one QMS** (per the domain model's three-lenses rule): search and reports never duplicate truth, they query PostgreSQL (metadata, lifecycle, permissions, append-only audit) and OpenSearch (rebuildable index) and present results through the same artifact header and cross-lens switcher established in `02-iso-9001-domain-model.md` §5.4. All results are **permission-filtered server-side, deny-by-default** (architecture invariant #4), so a user — including a time-boxed external auditor (Olsen) — only ever sees, searches, or exports what their effective permissions grant.
+This section specifies how users **find** anything in the Controlled Vault and how they **see the state** of the QMS at a glance. It defines a unified full-text-plus-metadata search with faceted filtering, clause/process navigation, saved searches, and find-where-used (impact analysis); then it specifies the reporting and dashboard layer for QMS health — the Management-Review dashboard, the persona-targeted KPI dashboards, the canonical document-control reports (Controlled Document Register, Revision-History report, Distribution-and-Acknowledgement report), and auditor-grade PDF/Excel exports. Everything here is a **lens over the one QMS** (per the domain model's three-lenses rule): search and reports never duplicate truth. All results are **permission-filtered server-side, deny-by-default** (architecture invariant #4), so a user — including a time-boxed external auditor (Olsen) — only ever sees, searches, or exports what their effective permissions grant.
+
+> **Implementation status (audited 2026-07-30).** The shipped search is PostgreSQL FTS over
+> authorized Effective-document metadata (identifier, title, legacy identifier, and area code);
+> hits display clause references, while clause-number lookup uses the Library filter. The global
+> palette, results page, Compliance Checklist, and Controlled Document Register ship. Body/OCR
+> content search, OpenSearch, facets, saved searches, generic audit-log search, and the broader
+> dashboard/export catalog below remain target design.
 
 ---
 
@@ -34,7 +41,7 @@ This section specifies how users **find** anything in the Controlled Vault and h
 | **Report** | A parameterized, exportable, point-in-time rendering of a query, with a header block carrying generation metadata for audit defensibility. |
 | **Evidence Pack** | (Defined in vision doc.) A clause-mapped, scope-limited bundle assembled for an external audit; reporting/export here is the engine the pack assembly reuses. |
 
-### 1.3 Where search and reporting sit in the stack
+### 1.3 Target search/reporting stack
 
 ```mermaid
 flowchart LR
@@ -42,8 +49,8 @@ flowchart LR
       PG[("PostgreSQL 16\nmetadata, lifecycle,\npermissions, append-only audit")]
       OBJ[("MinIO\nimmutable blobs + PDF renditions")]
     end
-    subgraph Derived["Derived / rebuildable"]
-      IDX[("OpenSearch 2.x\nFTS + facets + highlight")]
+    subgraph Derived["Reserved derived extension"]
+      IDX[("OpenSearch 2.x target\nFTS + facets + highlight")]
     end
     Worker["Celery worker\nextract text -> index"] --> IDX
     OBJ --> Worker
@@ -52,16 +59,20 @@ flowchart LR
     API -->|exact metadata,\nlifecycle, audit, KPIs| PG
     API -->|presigned\nrendition fetch| OBJ
     SPA["React SPA\nsearch bar, facets,\ndashboards, report viewer"] -->|/api/search,\n/api/reports| API
-    IDX -. "down: degrade to" .-> PGFTS["Postgres FTS fallback"]
-    API -. "S profile / OS outage" .-> PGFTS
+    IDX -. "not deployed in shipped S/M" .-> PGFTS["Current PostgreSQL FTS"]
+    API --> PGFTS
     classDef sot fill:#efe,stroke:#7a7;
     class PG,OBJ sot;
 ```
 
-**Authority & degradation rules inherited from architecture:**
-- OpenSearch is **derived and always rebuildable** from PG+MinIO; it is never backup-critical and never authoritative for lifecycle/permission decisions.
-- **Search-down degradation:** the **S sizing profile runs Postgres-FTS-only (OpenSearch disabled) as a documented degraded mode** (reconciled per Decisions Register R34) — on the **S (tiny) profile** OpenSearch is off by default and **PostgreSQL FTS** (`tsvector`/`tsquery` + `pg_trgm`) serves search; on **M/L** profiles, if OpenSearch is unreachable, search **falls back to Postgres FTS** with a non-blocking banner ("Reduced search: relevance/highlighting limited"). Exact-match metadata search, navigation, dashboards, and reports keep working because they query PG directly.
-- **Reports and KPIs are computed from PostgreSQL only** (the authoritative store) — never from OpenSearch — so an audit-grade report is correct even if the index is stale or rebuilding. Search uses OpenSearch for relevance/highlight but **re-checks permissions in PG** at result-hydration time.
+**Authority and implementation rules inherited from architecture:**
+
+- PostgreSQL FTS is the current engine in both S and M; the UI does not present it as a degraded
+  fallback.
+- A future OpenSearch index remains derived/rebuildable from PG+MinIO and may never become
+  authoritative for lifecycle or permission decisions.
+- Reports and KPIs are computed from PostgreSQL, so audit-grade output does not depend on a derived
+  search index.
 
 ---
 
@@ -69,7 +80,12 @@ flowchart LR
 
 ### 2.1 The unified search model: one box, two planes
 
-> **Status (2026-06-09):** Shipped (S10 backend + S-web-6 UI) = the **metadata plane** (titles / identifiers / clause-refs, Effective docs) + the ⌘K palette + the ★ Compliance Checklist. **Deferred (v1.x):** the **content plane** (body-text / OCR FTS), OpenSearch faceting, saved searches, and the §3–§7 reports. The §2 narrative below describes the full design intent.
+> **Status (audited 2026-07-30):** Shipped (S10 backend + S-web-6 UI) = the
+> **Effective-document metadata plane** (identifier, title, legacy identifier, and area code), the
+> ⌘K palette, the ★ Compliance Checklist, and the Controlled Document Register. Clause references
+> are returned for display but are not query terms. **Deferred:** the **content plane** (body-text /
+> OCR FTS), OpenSearch faceting, saved searches, generic audit-log search, and the remaining
+> §3–§7 report catalog. The §2 narrative below describes the full target design.
 
 EasySynQ presents a **single global search bar** (always in the top app bar, primary keyboard shortcut `Cmd-K` / `Ctrl-K`, with `/` as a secondary focus shortcut) (reconciled per Decisions Register R23) that searches two planes simultaneously and merges them:
 
@@ -118,7 +134,7 @@ The facet rail (left side of the search results page) shows the **six canonical 
 | **Type** | `kind` + concrete type | Top split Documents / Records, then concrete types (Procedure, Work Instruction, Form/Template, Quality Objective, Audit, CAPA, Calibration, Training, KPI reading, …) | Two-level tree; Documents vs Records visually distinct (version-timeline glyph vs lock glyph) per domain model §4.3 |
 | **Clause** | `clause_map[]` (M:N) | Clause-catalog tree 4–10 → sub-clauses; counts roll **up** the tree; `★` marks mandatory items | Collapsible clause tree; selecting `8` selects all of 8.x |
 | **Process** | `process_links[]` (M:N) | Flat list of Process nodes (from Process Map); "(unlinked)" bucket surfaces governance gaps | Type-ahead for large maps |
-| **Status** | lifecycle `status` (Documents) / disposition (Records) | Draft, In Review, Approved, Released/Effective, Obsolete; Records: Active / Archived / Disposed | Chips; "Effective only" is the default. A future non-Effective metadata facet remains under `document.read` (R57), not a state-selected permission key. |
+| **Status** | lifecycle `status` (Documents) / disposition (Records) | Draft, In Review, Approved, Effective, Under Revision, Superseded, Obsolete; Records: Active / Archived / Disposed | Chips; "Effective only" is the default. A future non-Effective metadata facet remains under `document.read` (R57), not a state-selected permission key. |
 | **Owner** | `owner` / `org_role` | People + OrgRoles; "My items" quick toggle | Type-ahead; respects who the searcher may see |
 | **Date** | created / modified / **next-review-due** / effective-from / captured-at | Presets (last 7/30/90 d, this quarter, overdue) + custom range; the date *dimension* is itself selectable | Date-dimension dropdown + range picker |
 
@@ -449,7 +465,7 @@ supplied the selected facet value.
 | Approved-by / approved-on | approval record |
 | Retention of superseded | retention policy |
 
-Exports: **Excel** (filter/sort/pivot by auditors) and **PDF** (signed-look master list). This report directly serves "zero uncontrolled effective versions" (M-metrics): exactly one Released/Effective version per document is invariant, and the register makes any anomaly visible.
+Exports: **Excel** (filter/sort/pivot by auditors) and **PDF** (signed-look master list). This report directly serves "zero uncontrolled effective versions" (M-metrics): at most one Effective version per document is invariant, and the register makes any anomaly visible.
 
 ### 6.2 Revision-History report
 
@@ -534,9 +550,13 @@ The pack is **scope-limited** to exactly the audit's clauses/processes/date-rang
 
 ---
 
-## 8. Summary of decisions
+## 8. Target-design summary
 
-1. **One unified search** over content + metadata, OpenSearch-backed with a Postgres-FTS fallback/degradation path; the six canonical facets (type, clause, process, status, owner, date) plus reserved `requirement_source`/`framework_id`; every result permission-filtered server-side and re-validated against PG.
+1. **Target:** one unified search over content + metadata, OpenSearch-backed with a PostgreSQL-FTS
+   fallback/degradation path; the six canonical facets (type, clause, process, status, owner, date)
+   plus reserved `requirement_source`/`framework_id`; every result permission-filtered server-side
+   and re-validated against PostgreSQL. The shipped mode remains the narrower metadata search stated
+   in the implementation-status note above.
 2. **Search, navigation, saved searches, and clause/process pages are one machine** — all serialize to a single structured query object, making lenses, deep links, widgets, and reports interoperable without data duplication.
 3. **Find-where-used** is a first-class impact tool sourced from authoritative PG link tables; obsoleting an artifact runs a where-used safety check to prevent silent loss of `★` coverage.
 4. **Dashboards are live and persona-scoped**; the Management-Review dashboard is structured exactly to ISO 9001:2015 §9.3.2 inputs and produces a fileable §9.3 record.

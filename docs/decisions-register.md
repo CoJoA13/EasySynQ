@@ -1130,7 +1130,7 @@ Completed → Closed` (+ `Cancelled` from the pre-completion states only); the `
 freeze a free-text realized-benefit note into the sealed `stage_event.payload` (the lightweight 10.3
 continual-improvement evidence). **No signed gate, no effectiveness loop, no new `SignatureMeaning`**
 (R2 closed); the `stage_event.signed_event_id` Part-11 hook ships day-one but stays NULL/unsigned in
-v1.x (D3). An initiative is purely operational PostgreSQL state — never a Released version, never the
+v1.x (D3). An initiative is purely operational PostgreSQL state — never an Effective Document version, never the
 mirror, no blob / disposition / WORM-destroy path (D2).
 
 **Two additive (R38) CONTENT-domain permission keys**, seeded in migration `0052`:

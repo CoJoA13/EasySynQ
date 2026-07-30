@@ -32,7 +32,7 @@ docker compose -f infra/compose/compose.yml ps beat        # MUST be exactly ONE
 ```
 A growing **written-but-not-yet-chained** audit tail (chain-linker stalled) is itself alarmed; once
 Beat is back the linker catches up. To force a sweep immediately, the relevant CLIs are
-`easysynq mirror rebuild` (mirror) and `easysynq backup run` (backup); chain-linking resumes on the
+`./scripts/easysynq mirror rebuild` (mirror) and `./scripts/easysynq backup run` (backup); chain-linking resumes on the
 next Beat tick.
 
 ## Budget note

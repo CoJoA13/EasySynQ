@@ -2,13 +2,19 @@
 
 > This roadmap sequences the build into **MVP → v1 → v1.x → Future**. It states a crisp, defensible MVP, then layers value while never violating the four locked foundational decisions (overview §3). Every phase respects the rule that Part 11 e-signatures and multi-standard frameworks are *architected now, built later* — the reserved hooks (`signature_event`, `framework_id`, M:N `clause_map`, retention-policy-as-data) carry no cost today and prevent a rewrite tomorrow. Phasing is driven by **dependency order** (you cannot have approvals without a vault, nor evidence packs without records) and by **risk-burn-down** (prove the hardest, most foundational guarantees first).
 
+> **Implementation status (audited 2026-07-30).** The phase definitions below preserve historical
+> sequencing and acceptance intent; they are not installation instructions or a current route
+> inventory. For current procedures and browser coverage, use the [manuals](manuals/00-index.md).
+> Shipped S/M profiles use PostgreSQL FTS as the primary search implementation, `/setup` has six
+> screens, and no L/OpenSearch deployment artifact exists.
+
 ---
 
 ## 1. Phasing Principles
 
 | Principle | Consequence on sequencing |
 |---|---|
-| **Prove the foundation before the features** | The vault, immutable versions, the "exactly one Effective" invariant, and the audit trail are built and hardened in MVP — everything else depends on them. |
+| **Prove the foundation before the features** | The vault, immutable versions, the single-Effective invariant, and the audit trail are built and hardened in MVP — everything else depends on them. |
 | **Authority + recoverability before data** | First-run setup, the permission engine, and backup/restore must work before any real QMS content lands (doc 08 proves backup before import). |
 | **Ship a usable slice, not a horizontal layer** | MVP is an end-to-end thin path (set up → import/author → control → audit-log it), not "all of the backend, none of the UI." |
 | **Each phase leaves hooks, never debt** | Extensibility hooks are added in the phase where their host entity is built (e.g., `signature_event` ships in MVP empty-but-present), so Future phases are additive. |
@@ -35,7 +41,7 @@ flowchart LR
 
 | Phase | Theme | Outcome a customer can do | Primary docs realized |
 |---|---|---|---|
-| **MVP** | *Controlled document control that actually controls* | Install, configure, grant permissions, author or import documents, run the full Draft→Effective lifecycle with immutable versions and a single Effective copy, browse a read-only mirror, and see every action in an audit log. | 03, 04, 07 (core), 08, 12 (core), 02 (IA core) |
+| **MVP** | *Controlled document control that actually controls* | Install, configure, grant permissions, author or import documents, run the full Draft→Effective lifecycle with immutable versions and at most one Effective copy per document, browse a read-only mirror, and see every action in an audit log. | 03, 04, 07 (core), 08, 12 (core), 02 (IA core) |
 | **v1** | *A complete ISO 9001:2015 QMS* | Capture and retain evidence, run audits and CAPA, generate clause-mapped Evidence Packs, search across the QMS, receive workflow notifications, detect drift, and import an existing QMS at scale. | 05, 06, 09, 10, 13 + completion of 02, 11 |
 | **v1.x** | *Operate it confidently at scale* | Richer reporting/dashboards, bulk operations, delegation/SoD administration UX, full observability stack, additional UI locales, performance hardening to the L profile, and a **whole-vault portable export** for tenant migration/decommission (R33). | depth across 10, 11, 13; 03 (obs/scale); 06, 15 (export) |
 | **Future** | *Regulated & multi-standard, without a rewrite* | Turn on Part 11-grade e-signatures, add a second standard (e.g., ISO 13485) as a framework, get AI-assisted classification suggestions, and (optionally) run HA on Kubernetes. | the reserved hooks across 04/06/07/12/14 + new standards-pack section |
@@ -58,11 +64,11 @@ flowchart LR
 | **Self-hosted install** | Single-host Docker Compose (S + M profiles), `install.sh` wizard, pinned images, TLS via Caddy, `/healthz` + `/readyz`. Air-gapped bundle. | 03 §12 |
 | **First-run setup wizard** | Steps 0-10: bootstrap login → admin+MFA → org identity → framework seed (ISO 9001:2015 clause catalog) → identity (local + at least one of LDAP/OIDC) → storage+vault+WORM verify → **backup+tested restore** → SMTP (deferrable) → create Mara + seed roles → import/empty → finalize gate. **Configure the off-host / append-only audit-checkpoint anchor (R13)** as a soft gate (an `audit_checkpoint_sink`: WORM bucket, external object store, or append-only syslog), with a **clear UI warning if absent** — it is **MANDATORY for any install claiming tamper-evidence / Part-11 readiness**. | 08 |
 | **Controlled Vault** | PostgreSQL (metadata/lifecycle/audit) + MinIO (content-addressed, WORM blobs). Authority flows vault → mirror only. | 03 §5, 04 §2 |
-| **Document lifecycle** | The canonical **7-state machine** (engine/data-model tokens, verbatim) `Draft` → `InReview` → `Approved` → `Effective` → `UnderRevision` → `Superseded` → `Obsolete` (per decisions-register R1; the 5-state `Draft → In Review → Approved → Effective → Obsolete` form is only a simplified user-facing summary); **exactly one Effective** enforced by partial-unique index + serializable supersession. | 04 §3 |
+| **Document lifecycle** | The canonical **7-state machine** (engine/data-model tokens, verbatim) `Draft` → `InReview` → `Approved` → `Effective` → `UnderRevision` → `Superseded` → `Obsolete` (per decisions-register R1; the 5-state `Draft → In Review → Approved → Effective → Obsolete` form is only a simplified user-facing summary); **at most one Effective** enforced by partial-unique index + serializable supersession. | 04 §3 |
 | **Immutable versions + working draft** | Immutable version snapshots; single mutable working draft; check-out/check-in under Redis lock; **mandatory change reason**; content-addressed dedup. | 04 §5, 05 §2-4 |
 | **Approval = signature hook** | Recorded approval writes an append-only `signature_event` (single-factor today); SoD flag (author ≠ sole approver) for `iso_mandatory` docs. | 04 §4 |
 | **Document metadata + numbering** | Controlled metadata schema; configurable `{TYPE}-{AREA}-{SEQ}` numbering; revision label distinct from identifier. | 04 §6-7 |
-| **Read-only filesystem mirror** | Regenerated from Released versions only; atomic swap; read-only mount; nightly reconcile. | 04 §10 |
+| **Read-only filesystem mirror** | Regenerated from Effective versions only; atomic swap; read-only mount; nightly reconcile. | 04 §10 |
 | **Controlled-copy watermarking** | Server-side watermark + revision/effective-date header/footer on preview/print/export; controlled vs uncontrolled stamping. | 04 §11 |
 | **Authorization engine** | Hybrid RBAC + ABAC; permission catalog (documents + system); roles as bundles; scope tree (system/process/folder/document); per-user overrides; deny-wins; PDP/PEP, deny-by-default; seeded starter roles. | 07 |
 | **Authentication** | Keycloak: local accounts + (LDAP/AD **or** OIDC/SAML); MFA for admins. | 03 §8.3 |
@@ -72,7 +78,7 @@ flowchart LR
 
 ### 3.2 MVP scope (explicitly out — lands in v1)
 
-Records/evidence capture, retention/disposition, Evidence Packs, audits/findings/CAPA workflows, where-used/impact analysis, redline/diff, drift *detection* (mirror tamper scan, verify tokens, scheduled re-review), full-text/faceted **OpenSearch** (MVP uses Postgres-FTS fallback), the **ingestion engine at scale** (MVP supports manual create + small ad-hoc upload only), and the notification engine (MVP shows **My Tasks** in-app; email is best-effort).
+Records/evidence capture, retention/disposition, Evidence Packs, audits/findings/CAPA workflows, where-used/impact analysis, redline/diff, drift *detection* (mirror tamper scan, verify tokens, scheduled re-review), full-text/faceted **OpenSearch** (still future; MVP and current S/M use PostgreSQL FTS), the **ingestion engine at scale** (MVP supports manual create + small ad-hoc upload only), and the notification engine (MVP shows **My Tasks** in-app; email is best-effort).
 
 ### 3.3 MVP acceptance criteria (the proof points)
 
@@ -87,14 +93,16 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 
 ## 4. v1 — "A Complete ISO 9001:2015 QMS"
 
-> **🟢 SUBSTANTIALLY DELIVERED (as-built snapshot 2026-06-17; migration head `0054`).** The ISO 9001:2015 **★ spine is
-> feature-complete** — every ★ family has shipped end-to-end on `main`, and the **web-UI track is feature-complete for them**
-> (~1040 tests). Shipped families:
+> **🟢 SUBSTANTIALLY DELIVERED (historical as-built snapshot 2026-06-17; migration head `0054`).** The ISO 9001:2015
+> **★ backend/workflow spine was substantially delivered** on `main`, with broad routed SPA coverage (~1040 tests at
+> this snapshot). A shipped API/worker slice did not necessarily include a standalone browser page: Records/Retention
+> and Evidence Packs still have no dedicated SPA management route. Shipped families:
 >
 > - **Records & evidence** (capture/evidence-linking/correction, Mode-B structured-form capture) + **Retention & disposition**
 >   (policies-as-data, the R27 dual-control WORM-destroy hatch, `/retention-policies` CRUD + SoD-6) — S-rec-1..4.
 > - **Traceability chain + Evidence Packs (UJ-7)** — clause/process **and** Finding/CAPA scope, immutable/self-verifying,
->   time-boxed revocable external-auditor delivery — S-pack-1/2 + S-aud-capa-pack. *One-click evidence pack works end-to-end.*
+>   time-boxed revocable external-auditor delivery — S-pack-1/2 + S-aud-capa-pack. The API/worker flow works end-to-end;
+>   a dedicated browser management surface is not shipped.
 > - **Ingestion engine (UJ-2)** — scan/inventory → extract/classify → dedup/version-families/proposal → human-in-the-loop
 >   review → COMMIT, with `import_provenance` + `signature_event(meaning=import_baseline)` (R2) — S-ing-1..5 (+ the S-ing-4b
 >   review UI). OpenSearch stays **absent (R34)**: near-dup ships as in-process MinHash behind a reserved `DedupDetector` seam.
@@ -124,7 +132,8 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > `docs/superpowers/{specs,plans}/`. Deferred to **v1.x**: OpenSearch full-text + currency/overdue + audit-log search; the
 > notification *delivery/escalation/digest* tail; reporting depth; and the items named per family in slice-history.
 
-**Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
+**Target goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to
+end, and to face an external audit with a dedicated evidence-pack workflow.
 
 | Capability | What v1 adds | Doc | Depends on |
 |---|---|---|---|
@@ -138,10 +147,14 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 | ✅ **Distribution & acknowledgement** | Issue-on-release to dynamic distribution lists; version-pinned read-and-understood acknowledgements as immutable evidence; ack dashboard. **Shipped: S-ack-1 (backend — engine, coverage, R42/R43) + S-ack-2 (#114, the acknowledgement UI tail).** Deferred (v1.x): Remind + the §6.3 report. | 04 §8 | records, notifications |
 | 🟡 **Search & reporting** | OpenSearch full-text + faceted + metadata; clause/process/state filters; ★ mandatory-coverage **Compliance Checklist**; currency/overdue reports; audit-log search. **Partial: the Postgres-FTS search + the ★ Compliance Checklist shipped (S10 backend + S-web-6 UI); OpenSearch full-text, currency/overdue reports + audit-log search deferred (v1.x).** | 13 | OpenSearch, records |
 | 🟡 **Workflow & notifications** | Approval/review routing topologies (single/sequential/parallel-quorum/lightweight/policy-apex); CAPA/audit/retention/review/ack tasks; My Tasks; escalations; SMTP + in-app delivery + digests. **Partial: the declarative workflow engine (S-wf-engine) + the document/CAPA/DCR approval routes + the My-Tasks inbox (S-web-5) shipped; SMTP/escalation/digest delivery deferred (v1.x).** | 10 | authz routing, SMTP |
-| ✅ **Ingestion engine (UJ-2)** | Scan & preview existing QMS; proposed source→document mapping with process/clause hints; baseline version creation; legacy-identifier preservation; bulk record import (CSV sidecar); mirror generation. **Shipped (S-ing-1..5 + the S-ing-4b review UI — UJ-2 closed.) Import default (R10): current/latest version only as the controlled baseline, with older copies archived as provenance** (not approved revision history); **revision-chain reconstruction is opt-in per document-family with explicit confirmation**; the **Document-vs-Record (`kind`) classification is ALWAYS human-confirmed regardless of confidence**; the review UI scales to thousands of low-confidence items (bulk triage). | 09 | vault, records, setup import hand-off |
+| ✅ **Ingestion engine (UJ-2)** | Scan & preview existing QMS; proposed source→document mapping with process/clause hints; baseline version creation; legacy-identifier preservation; bulk record import (CSV sidecar); mirror generation. **Shipped (S-ing-1..5 + the S-ing-4b review UI — UJ-2 closed.) Import default (R10): current/latest version only as the controlled baseline, with older copies archived as provenance** (not approved revision history). The locked revision-chain opt-in is recorded but **not materialized**; current commit refuses an opted-in family with `422 revision_chain_reconstruction_unsupported`. The **Document-vs-Record (`kind`) classification is ALWAYS human-confirmed regardless of confidence**; the review UI scales to thousands of low-confidence items (bulk triage). | 09 | vault, records, setup import hand-off |
 | ✅ **PDCA dashboard (Home)** | The four-quadrant health wheel reading live signals from documents/records/audits/CAPA; process-scoped PDCA pages. **Shipped (S-home-1, #117): the PDCA Home health wheel reading the live document/record/audit/CAPA/ack/objective signals.** | 02 §5.3, 11 | all engines emitting health |
 
-**v1 exit = the seven user journeys (UJ-1…UJ-7) all work end-to-end**, and the success metrics (M1 audit-pack < 30 min, M2 zero uncontrolled effective, M3 < 5% overdue, M4 100% CAPA traceability, M7 100% audit-trail completeness) are demonstrably met on the M-profile reference deployment (~150 docs, ~50 users).
+**Target v1 exit:** the seven user journeys (UJ-1…UJ-7) work end-to-end through their intended user
+surfaces, and the success metrics (M1 audit-pack < 30 min, M2 zero uncontrolled effective, M3 < 5%
+overdue, M4 100% CAPA traceability, M7 100% audit-trail completeness) are demonstrated on the
+M-profile reference deployment (~150 docs, ~50 users). This target is not a current claim of a
+dedicated browser surface for every shipped API capability.
 
 ---
 
@@ -215,14 +228,14 @@ flowchart TD
 
 | # | Risk | Likelihood / impact | Mitigation |
 |---|---|---|---|
-| **R1** | **WORM/object-lock not available or misconfigured** on the customer's MinIO/S3, weakening the immutability guarantee. | Med / High | Setup wizard *verifies* WORM at Step 5 (`WORM_VERIFIED`) and blocks finalize if absent; documented MinIO object-lock prerequisites; integrity verify job alarms on tamper as a defense-in-depth backstop. |
+| **R1** | **WORM/object-lock not available or misconfigured** on the customer's MinIO/S3, weakening the immutability guarantee. | Med / High | The shipped Storage screen verifies WORM and blocks finalize if absent; documented MinIO object-lock prerequisites and integrity verification provide defense in depth. |
 | **R2** | **Office→PDF rendering fidelity / throughput** (LibreOffice/Gotenberg) is imperfect for complex documents, hurting preview/watermark/diff. | Med / Med | Source blob remains the editable master (rendition is derived, never authoritative); diff uses extracted text + visual page diff (stated limitation, N4); rendering is async with progress; renderer scales horizontally; bad render alarms, never blocks check-in. |
-| **R3** | **"Exactly one Effective" race** under concurrency or partial failure. | Low / High | DB partial-unique index + serializable supersession transaction + Redis check-out lock; lazy-read cutover guard so correctness is independent of Beat latency; concurrency test is an MVP acceptance gate. |
-| **R4** | **Messy / inconsistent existing QMS** makes import mapping unreliable (UJ-2). | High / Med | Import is preview-and-confirm with human review (Avery + Mara); legacy identifiers preserved; baseline versions clearly flagged `imported`; import can run post-finalize so it never blocks setup; gaps flagged on the Compliance Checklist. Per **R10**, the default ingests **current/latest only as the controlled baseline (older copies archived as provenance)** — avoiding manufactured false revision history; **revision-chain reconstruction is opt-in per family with explicit confirmation**, and the **`kind` (Document-vs-Record) classification is ALWAYS human-confirmed**, so unreliable auto-classification can never silently commit. |
+| **R3** | **Single-Effective race** under concurrency or partial failure. | Low / High | DB partial-unique index + serializable supersession transaction + Redis check-out lock; the five-minute Beat sweep and explicit cutover trigger process due releases, and operational monitoring must surface scheduler delay; concurrency testing is an MVP acceptance gate. |
+| **R4** | **Messy / inconsistent existing QMS** makes import mapping unreliable (UJ-2). | High / Med | Import is preview-and-confirm with human review (Avery + Mara); legacy identifiers are preserved; baseline versions are flagged `imported`; import can run post-finalize so it never blocks setup; gaps are surfaced on the Compliance Checklist. Per **R10**, the current path ingests **current/latest only as the controlled baseline (older copies archived as provenance)**, and commit refuses the unimplemented revision-chain opt-in rather than manufacturing history. The **`kind` (Document-vs-Record) classification is ALWAYS human-confirmed**, so unreliable auto-classification cannot silently commit. |
 | **R5** | **Drift detection produces false positives / noisy alarms** on the mirror (legitimate OS-level activity). | Med / Med | Mirror is auto-corrected from the vault (vault always wins) so a false positive is self-healing; alarms are quality/security signals, rate-limited and surfaced calmly; read-only mount reduces incidence at the source. |
-| **R6** | **Permission model complexity** (RBAC+ABAC+overrides+SoD+break-glass) confuses admins → over-grant or lockout. | Med / High | Seeded starter roles; the explainability tool ("why can/can't X?"); deny-wins with break-glass as the *only* audited deny override so there is never an unrecoverable deadlock; SoD secure defaults. |
+| **R6** | **Permission model complexity** (RBAC+ABAC+overrides+SoD+break-glass) confuses admins → over-grant or lockout. | Med / High | Seeded starter roles, deny-wins, secure SoD defaults, last-admin protection, and a documented host recovery path reduce lockout risk. The host path bypasses API audit and therefore requires an independent change/incident record. The “why can/can't” explorer remains a v1.x target. |
 | **R7** | **Backup/restore not actually exercised**, so recoverability is theoretical. | Med / High | Setup proves a **test restore before data lands**; documented restore drill in the runbook; only PG + MinIO are backup-critical (everything else rebuildable), shrinking the surface. |
-| **R8** | **Single-host availability** (one Linux host) is a SPOF for some customers. | Med / Med | Per **decisions-register R14**, the stated target is **99.0% per month for the single-host profile** — **including** the auth (**Keycloak**) and scheduler (**Beat**) dependencies, which are documented **single points of failure** with a **fast-restart runbook**. Graceful degradation (search→FTS fallback, renderer queue) and a documented vertical-scale path apply. **99.5%+ is achievable only via the documented HA/Kubernetes path** (Future HA/Helm option); do **not** claim 99.5% on a six-single-instance-stateful-service single host. |
+| **R8** | **Single-host availability** (one Linux host) is a SPOF for some customers. | Med / Med | Per **decisions-register R14**, the stated target is **99.0% per month for the single-host profile** — **including** the auth (**Keycloak**) and scheduler (**Beat**) dependencies, which are documented **single points of failure** with a **fast-restart runbook**. Current PostgreSQL search avoids an external search-service dependency; renderer work can queue, and a documented vertical-scale path applies. **99.5%+ is achievable only via the documented HA/Kubernetes path** (Future HA/Helm option); do **not** claim 99.5% on a single host. |
 | **R9** | **Scope creep toward non-goals** (in-app authoring, analytics, BPM, SaaS) erodes the calm-UX promise and timeline. | Med / Med | Non-goals are explicit (doc 01 §4) and re-asserted per phase; Future items are gated behind their reserved hooks; multi-org explicitly fenced as a separate product line, not a change to the self-hosted edition. |
 | **R10** | **Part 11 retrofit turns out to need schema changes** despite the hook. | Low / High | `signature_event` is append-only and present from MVP, empty for records; the documented Part 11 delta is *additive columns + policy flags only* (doc 04 §4.2, doc 12); validated by a design spike before committing the Future phase. |
 | **R11** | **Accessibility/i18n retrofitted late** becomes costly. | Med / Med | WCAG 2.2 AA + string externalization are MVP acceptance criteria (doc 03 §11); axe checks in CI + screen-reader passes per release; locales added on an already-externalized framework in v1.x. |
@@ -239,9 +252,9 @@ flowchart TD
 | **AS4** | v1 "approval" satisfies ISO 9001 recorded-authorization needs; cryptographic/Part 11 signatures are a future additive layer (doc 01 A4, D3). | Pull the Part 11 Future item forward; the hook already exists, so it is additive. |
 | **AS5** | One organization (single tenant) per install (doc 01 A5, D1). | Multi-org is a *separate product line* via the present `org_id` discriminator — never a change to the self-hosted edition. |
 | **AS6** | Modern desktop browsers; responsive but no native mobile (doc 01 A6, N10). | Responsive web only; native apps remain out of scope. |
-| **AS7** | Exactly one Released/Effective version per controlled document at any time; all prior effective versions retained as Superseded/Obsolete (doc 01 A7, doc 04 §3.4). | This is an enforced invariant, not a hope (DB constraint) — failure here is a bug, not an assumption change. |
+| **AS7** | At most one Effective version per controlled document at any time; an active released document has one, and all prior effective versions are retained as Superseded/Obsolete (doc 01 A7, doc 04 §3.4). | This is an enforced invariant, not a hope (DB constraint) — a second concurrent Effective version is a bug, not an assumption change. |
 | **AS8** | Customer-controlled MinIO/S3 supports object-lock/WORM and SSE (doc 03 §8.2, doc 06 R3). | R1 mitigations; without WORM, immutability falls back to application + audit enforcement with a flagged reduced guarantee. |
-| **AS9** | OpenSearch can be afforded on M/L profiles; tiny installs accept the Postgres-FTS fallback with reduced faceting (doc 03 §3, §7). | MVP already ships on FTS; OpenSearch is the v1 upgrade for richer search. |
+| **AS9** | Historical target assumption: OpenSearch could be afforded on a future larger profile. Current S/M installs use PostgreSQL FTS and no L profile ships (doc 03 §3, §7). | OpenSearch remains a future richer-search extension, not a current dependency or degradation path. |
 | **AS10** | The reference scale (≤250 users, ≤1M docs/versions, single host) covers the target market; HA is opt-in Future (doc 03 §7). | Future Helm/HA path exists; does not gate v1. |
 
 ---

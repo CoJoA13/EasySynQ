@@ -1,6 +1,13 @@
 # API Design
 
-This section specifies the **external HTTP API surface** of EasySynQ: the contract every client (the React SPA, future integrations, external-auditor tooling) speaks to the FastAPI tier. It is binding on `03-architecture-and-stack.md` (FastAPI + OpenAPI-first, Keycloak/OIDC + PKCE, JWT validated against JWKS, OpenSearch with Postgres-FTS fallback, MinIO presigned blob access, Celery async pipelines, deny-by-default server-side authz) and on `14-data-model.md` (the consolidated entity model, the immutability matrix, the hybrid RBAC+ABAC resolution order, append-only hash-chained audit, and the `dcr`/`workflow`/`task`/`signature_event`/`capa_stage`/`ncr`/`import_*` shapes). Where this section names an entity or permission key, it uses the **canonical, reconciled** name from `14-data-model.md` (which itself defers to `07` for the permission catalog).
+This section specifies the **external HTTP API surface** of EasySynQ: the contract every client (the React SPA, future integrations, external-auditor tooling) speaks to the FastAPI tier. It is binding on `03-architecture-and-stack.md` (FastAPI + OpenAPI-first, Keycloak/OIDC + PKCE, JWT validated against JWKS, PostgreSQL FTS behind an OpenSearch-ready seam, MinIO presigned blob access, Celery async pipelines, deny-by-default server-side authz) and on `14-data-model.md` (the consolidated entity model, the immutability matrix, the hybrid RBAC+ABAC resolution order, append-only hash-chained audit, and the `dcr`/`workflow`/`task`/`signature_event`/`capa_stage`/`ncr`/`import_*` shapes). Where this section names an entity or permission key, it uses the **canonical, reconciled** name from `14-data-model.md` (which itself defers to `07` for the permission catalog).
+
+> **Implementation status (audited 2026-07-30).** This is a design catalog, not a guarantee that
+> every listed endpoint is mounted. The generated and linted
+> `packages/contracts/dist/openapi.json`, current FastAPI routers, and route tests define the
+> shipped HTTP surface. PostgreSQL FTS is current in S/M; OpenSearch, saved search, generic
+> audit-log search/export, generic `/events` SSE, and admin webhook portions remain future. The
+> authenticated `/notifications/stream` SSE endpoint is shipped.
 
 > **How to read this.** §1 picks the transport style and justifies it. §2 fixes the global conventions (base URL, headers, IDs, envelopes). §3 gives pagination/filtering/sorting/shaping. §4 is the single error model. §5–§6 are authentication and server-side authorization enforcement. §7 is the resource map. §8 is the full endpoint catalog grouped by domain (one table per domain, with representative shapes and the state machines). §9 details the authz engine at request time. §10 is versioning. §11 is webhooks + real-time events. §12 summarizes cross-cutting conventions. §13 lists the deliberate forward-compatibility hooks.
 
@@ -12,7 +19,7 @@ This section specifies the **external HTTP API surface** of EasySynQ: the contra
 
 | Candidate | Verdict | Rationale |
 |---|---|---|
-| **REST + JSON, OpenAPI-first** | **Chosen** | Locked by `03 §2`/`§11`: FastAPI *is* OpenAPI-first — request/response Pydantic models generate the spec, the interactive docs, **and** the typed TanStack-Query client in one move (`03 §2` client data layer). REST fits a CRUD-and-lifecycle-heavy document-control domain; it is cacheable, proxy-friendly (Caddy), and **auditor-legible** — a `GET /documents/{id}/audit-events` is self-describing in a network log, which matters for a compliance tool a 3rd-party auditor may inspect. |
+| **REST + JSON, OpenAPI-first** | **Chosen** | Locked by `03 §2`/§11: the hand-authored contract is linted/bundled and generates Pydantic server models plus TypeScript schema types; the SPA uses those types with TanStack Query and a hand-written transport. REST fits a CRUD-and-lifecycle-heavy document-control domain; it is cacheable, proxy-friendly (Caddy), and **auditor-legible** — a `GET /documents/{id}/audit-events` is self-describing in a network log, which matters for a compliance tool a 3rd-party auditor may inspect. |
 | GraphQL | Rejected (v1) | Flexible read-shaping is attractive for dashboards, but it fights three of our hard requirements: (a) **per-field ABAC** scoping is awkward when one query spans many scopes; (b) one opaque `POST /graphql` obscures intent in the **append-only audit trail** (every mutation must write a typed `audit_event` with a clear `event_type`); (c) query-cost analysis + rate-limiting add operational burden on a single-host install. The few aggregation needs are met by purpose-built report endpoints (§8.14). |
 | gRPC / tRPC | Rejected | Browser-first SPA over Caddy; no cross-language/streaming-RPC need. tRPC couples client to server internals and bypasses the explicit, language-neutral, auditable OpenAPI contract we want for future external/auditor clients. |
 
@@ -245,14 +252,14 @@ Every authenticated route declares (a) the **required permission key(s)** (from 
 | Management Review | `/management-reviews` | `management_review`, `review_input`, `review_output` |
 | Improvement Initiatives | `/improvement-initiatives` | `improvement_initiative`, `improvement_initiative_stage_event` |
 | Audit Trail | `/audit-events`, `/{resource}/{id}/audit-events` | `audit_event`, `audit_checkpoint` |
-| Search | `/search` | OpenSearch (Postgres-FTS fallback) |
+| Search | `/search` | PostgreSQL FTS (`documented_information` metadata); OpenSearch is reserved |
 | Reports | `/reports/compliance-checklist`, `/reports/document-control` | computed aggregates (no dashboard route ships) |
 | Evidence Packs | `/evidence-packs` | `evidence_pack`, `pack_item`, `pack_share_link`, `record` (`record_type=EVIDENCE`) |
 | Retention | `/retention-policies`, `/records/{id}/disposition` | `retention_policy`, `disposition_event` |
 | Setup / Admin Config | `/setup/*`, `/admin/config`, `/admin/notifications/working-calendar` | `organization`, `system_config`, `storage_config`, `backup_policy`, `working_calendar` |
 | Backup setup / restore drill | `/setup/configure-backup`, `/setup/run-restore-test` | `backup_policy` (latest result; no run table) |
 | Import | `/admin/imports` | `import_run`, `import_file`, `import_classification`, `import_decision`, `import_commit_result` |
-| Webhooks / Events | `/admin/webhooks`, `/events` (SSE) | system |
+| Webhooks / Events (target, not mounted) | `/admin/webhooks`, `/events` (SSE) | system |
 
 ---
 
@@ -720,21 +727,22 @@ Read-only projection of `audit_event` (`14 §12`). The auditor's primary evidenc
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
-| GET | `/audit-events` | `audit.read` | Org-wide trail. Filter `actor_id`, `actor_type`, `event_type`, `object_type`, `object_id`, `occurred_at` range. Sort `occurred_at` (default desc). Served from OpenSearch mirror, PG-authoritative (`03 §10`). |
-| GET | `/audit-events/{id}` | `audit.read` | Single event incl. `before`/`after` diff, `reason`, `request_id`, `client_ip`, `auth_context`, `prev_hash`/`row_hash`. |
-| GET | `/audit-events/verify-chain?from=&to=` | `audit.read` | On-demand hash-chain verification against the signed `audit_checkpoint`s (tamper-evidence; the nightly Beat job does this continuously). |
-| GET | `/audit-events/export` | `audit.export` | Async export (CSV/JSON) → `202` + job link (§8.18 pattern) for external-auditor evidence packs. |
-| GET | `/{resource}/{id}/audit-events` | `audit.read` + read on resource | Per-resource trail (e.g. one document's full history). |
+| GET | `/audit-events` | `system.audit_log.read` | **Shipped.** PostgreSQL-backed org trail; filter `actor_id`, `event_type`, `object_type`, `object_id`, and time range, with bounded cursor pagination. |
+| GET | `/audit-events/{id}` | `system.audit_log.read` | **Shipped.** Single event including before/after, reason, request context, and chain fields. |
+| GET | `/audit-events/verify-chain?from=&to=` | `system.audit_log.read` | **Shipped.** On-demand PostgreSQL hash-chain verification against signed checkpoints. |
+| GET | `/documents/{id}/audit-events` | `system.audit_log.read` | **Shipped.** Per-document history within the caller's organization; this remains an audit-log surface rather than an ordinary document-read endpoint. |
+| GET | `/audit-events/export` | `system.audit_log.export` | **Deferred.** Present in the design/OpenAPI but not mounted by the current FastAPI router. |
 
 ### 8.14 Search (`/search`)
 
-OpenSearch on M/L profiles; **Postgres FTS fallback** on the S profile and on OpenSearch outage (`03 §7/§11`). The endpoint contract is engine-agnostic.
+PostgreSQL FTS is the shipped engine in S/M. OpenSearch is a reserved future implementation behind
+the engine-agnostic endpoint contract.
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
-| GET | `/search?q=...&types=document,record,ncr,capa,audit&facets=clause,process,pdca_phase` | per-type read | Unified faceted search. Results are **post-filtered by the caller's effective permissions** — never leak titles of out-of-scope items. Document metadata hits use `document.read` in every lifecycle state (R57); the shipped Effective-only candidate set is a query default, not a permission switch. Cursor-paginated; highlight snippets included. |
-| GET | `/search/suggest?q=...` | `document.read` | Low-latency type-ahead (identifiers, titles). |
-| GET / POST | `/saved-searches` | `search.read` / `search.save` | `saved_search` (live re-run, permission-filtered per viewer); subscriptions notify on count-crosses / new-item (`14 §11`). |
+| GET | `/search?q=...&limit=...` | `document.read` per hit | **Shipped.** Effective-document metadata search over identifier, title, legacy identifier, and area code. Results are post-filtered by effective permission; response includes `hidden_by_scope`. No type/facet/cursor parameters. |
+| GET | `/search/suggest?q=...&limit=...` | `document.read` per hit | **Shipped.** Low-latency identifier/title type-ahead, post-filtered by effective permission. |
+| GET / POST | `/saved-searches` | `search.read` / `search.save` | **Future design.** No saved-search route or permission keys ship. |
 
 ### 8.15 Reports (`/reports`) and deferred dashboards
 
@@ -809,10 +817,12 @@ FKs) → retirement is the soft `:archive` action.
 ### 8.17 Admin & Config (`/admin/*`)
 
 The ADMIN super-user sits **outside the QMS** (`03 §4`): first-run setup, users, roles,
-storage/backup, IdP federation, import. ADMIN holds **no QMS-content permission by default**
-(`14 §3`) and **every admin action is itself audited**. All `/admin/**` require
-`is_system_admin` **and** `acr=mfa`; while `system_config.setup_state ≠ OPERATIONAL` the QMS
-surface returns `403 setup_incomplete`.
+storage/backup, IdP federation, and import. ADMIN holds **no QMS-content permission by default**
+(`14 §3`). In the shipped API, mounted administration routes use their named SYSTEM-domain
+permissions (for example `config.update`, `user.manage`, or `import.execute`) rather than a blanket
+`/admin/**` role/MFA check. The setup latch still restricts the normal QMS surface until
+`system_config.setup_state = OPERATIONAL`; consult the OpenAPI contract for each route's exact
+current gate. Rows explicitly labeled Future below are not mounted.
 
 | Method | Path | Notes |
 |---|---|---|
@@ -824,12 +834,12 @@ surface returns `403 setup_incomplete`.
 | POST | `/setup/verify-storage` | Requires `storage.manage`; runs the G-B WORM probe and persists `storage_config.worm_verified_at`/`object_lock_mode`. Bucket/endpoint values remain deployment configuration. |
 | POST | `/setup/configure-auth` | Requires `config.update`; persists the selected auth method and successful non-bootstrap OIDC proof on `system_config`. Federation details remain in Keycloak/environment configuration. |
 | POST | `/setup/finalize` | Requires `config.update`; rechecks G-A…G-E and advances `system_config.setup_state` to `OPERATIONAL`. |
-| GET / PATCH | `/admin/config/workflow` | `workflow_definition`s (versioned); per-doc-type approval chains, MFA-on-approval toggle, SLAs. |
-| GET | `/admin/system/health` | Liveness/readiness of PG, MinIO, OpenSearch, Redis, Keycloak, renderer, queue depth (mirrors `/readyz`, `03 §10`). |
-| GET | `/admin/jobs/{id}` | Generic async-job status (the `202` follow-up): `{ id, kind, status:queued\|running\|succeeded\|failed, progress, result_url?, error? }`. |
+| GET / PATCH | `/admin/config/workflow` | **Future design.** Workflow definitions are seeded/versioned in storage, but this generic administration route is not mounted. |
+| GET | `/admin/system/health` | **Future design.** Use the shipped `/healthz`, `/readyz`, Compose state/logs, and domain-specific status surfaces. |
+| GET | `/admin/jobs/{id}` | **Future design.** No generic job router is mounted; use each asynchronous domain resource's status endpoint. |
 | GET | `/admin/drift/status` | **S-drift-3:** latest `drift_scan` per kind + D1 blob coverage + the D4 headline. Gated on the SYSTEM-domain `drift.read` (R41); pure read, no scan trigger. |
 | GET | `/admin/drift/superseded-copies` | **S-drift-3 (D4, R11):** outstanding EXPORTED/PRINTED copies of now-Superseded/Obsolete versions (`limit`/`offset`; totals over the full set). The only detection leg reaching copies outside the mirror; the public `/verify` token is the per-copy resolution. |
-| POST | `/admin/export` | **Whole-vault export stub** (`vault.export`): a portable, full-QMS export — documents + records + audit in open formats — for tenant migration/decommission, **distinct** from scoped Evidence Packs and from backups. Async: returns `202` + a job (poll `/admin/jobs/{id}`); the archive lands in MinIO and is returned via presigned URL. Declared for the v1.x roadmap (`16`) (reconciled per Decisions Register R33). |
+| POST | `/admin/export` | **Future design; not mounted.** A portable whole-vault export for migration/decommission remains distinct from scoped Evidence Packs and backups (R33). |
 
 ### 8.18 Backup setup and restore drill (`/setup/*`)
 
@@ -851,7 +861,7 @@ Point the install at an existing QMS and ingest into the controlled vault (locke
 | GET | `/admin/imports/{id}/files?scan_flags=&status=` | `import.review` | Paginated `import_file` items with `import_classification` (kind/type/clauses + confidence), dedup clusters, proposed identifier/IA path/owner, conflict flags. |
 | POST | `/admin/imports/{id}/files/{fileId}/decision` | `import.review` | `import_decision` (per-file **dimensional** decision): `{ action:"accept"\|"correct"\|"exclude"\|"defer", after?:{kind?,type_code?,clause_numbers?,process_names?,identifier?,owner?} }`. The R10 kind-confirm rides `after.kind`. Human-in-the-loop; captured for future ML labels. |
 | POST | `/admin/imports/{id}/decisions` | `import.review` | **Bulk** dimensional decision across explicit `file_ids` OR a `{kind,band,disposition}` selector (`09 §9.2a`). |
-| POST | `/admin/imports/{id}/merge` | `import.review` | **Structural** — combine ≥2 files into one version family + the per-family `reconstruct_revision_chain` opt-in (`09 §9.2`). |
+| POST | `/admin/imports/{id}/merge` | `import.review` | **Structural** — combine ≥2 files into one version family and record the per-family `reconstruct_revision_chain` opt-in (`09 §9.2`). Current commit refuses an opted-in family with `422 revision_chain_reconstruction_unsupported`; clear the flag to use the current-version-only baseline path. |
 | POST | `/admin/imports/{id}/split` | `import.review` | **Structural** — break a dupe-cluster / version-family apart (a group dropping <2 members is deleted). |
 | GET | `/admin/imports/{id}/checklist` | `import.review` | The `09 §9.3` pre-commit gate: `ready` + blocking conflicts (over the **effective** folded state) + the non-blocking mandatory-★ coverage projection + advisory counts. |
 | GET | `/admin/imports/{id}/decisions` | `import.review` | The run's append-only review-decision log (`09 §12.2`). |
@@ -885,7 +895,7 @@ sequenceDiagram
     Worker->>Vault: per item -> document + immutable Rev A version + signature_event(import_baseline) + audit_event
     Worker->>Vault: write immutable Import Report record
     Worker->>Worker: schedule read-only FS mirror export
-    API-->>Admin: 202 { job_id }; poll GET /admin/jobs/{job_id}
+    API-->>Admin: 202 { import run }; poll GET /admin/imports/{id}
 ```
 
 ---
@@ -1007,12 +1017,12 @@ SSE topics: `actions` (My-Actions/`task` changes affecting the caller), `notific
 | Pagination | Keyset cursor over UUID v7; `limit ≤ 100`; no exact totals on hot paths. |
 | Filter/Sort/Shape | Allow-listed bracketed operators; `sort=-field`; `fields=`, `view=summary\|full`, `expand=` (depth 1, permission-checked). |
 | Errors | RFC 9457 `application/problem+json`; stable `code`; per-field `errors[]`; `request_id` always. |
-| Async | Long ops (render, import, export, backup, reindex) return `202` + `GET /admin/jobs/{id}`; progress via SSE `jobs`. |
+| Async | Shipped long-running flows expose status on their domain resource (for example, poll `GET /admin/imports/{id}` after a `202`). There is no generic `/admin/jobs/{id}` or `jobs` SSE topic; `/notifications/stream` carries the shipped in-app notification feed. |
 | Blobs | Never proxied; two-step presigned PUT (content-addressed SHA-256, WORM) → finalize; presigned GET for download; integrity by `sha256`. |
 | Time / IDs | ISO 8601 UTC; UUID v7 string IDs (`audit_event` is the lone `bigint` exception, R7); full UTF-8. |
 | Audit | Every mutation writes an `audit_event` in the **same transaction**; content-changing events require `reason`; exposed read-only at `/audit-events`; append-only, hash-chained, no write verbs. |
 | Versioning | URI `/api/v1`; additive evolution; RFC 8594 `Deprecation`/`Sunset`; OpenAPI 3.1 at `/api/v1/openapi.json`. |
-| Degradation | OpenSearch down → Postgres-FTS fallback + non-blocking banner; renderer down → previews queue, check-in still works (`03 §11`). |
+| Degradation | Current search remains on PostgreSQL FTS; the OpenSearch fallback/banner design applies only if OpenSearch is deployed in a future profile. Renderer down → previews queue, check-in still works (`03 §11`). |
 | Rate limiting | Redis token bucket (per-user + per-IP) at app and proxy; `429` + `Retry-After`. |
 
 ---

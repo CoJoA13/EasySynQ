@@ -9,7 +9,7 @@
 ## Critical rules — NEVER violate
 
 - **D1 — Self-hosted, single-org.** Org's own server; browser access; data never leaves their infra; admin-controlled backups; no phone-home.
-- **D2 — The vault is the source of truth** (PostgreSQL + object storage). Filesystem = a read-only mirror, regenerated from Released versions only. **⚠ Authority flows vault → mirror, never the reverse.**
+- **D2 — The vault is the source of truth** (PostgreSQL + object storage). Filesystem = a read-only mirror, regenerated from Effective versions only. **⚠ Authority flows vault → mirror, never the reverse.**
 - **D3 — ISO 9001:2015 foundation, *architected* (not built) for Part 11 + multi-standard.** Reserved hooks (`signature_event`, `framework_id`, M:N clause mapping) — don't implement in v1, **don't remove**.
 - **D4 — Stack is fixed** (see below) — do not substitute components.
 - **Deny-by-default; deny-always-wins.** Hybrid RBAC + ABAC; ADMIN sits *outside* the QMS (System Administrator holds **no `document.*`**). System permissions (user/storage/backup/restore/config/import) stay admin-only.
@@ -21,21 +21,22 @@
 EasySynQ is a **self-hosted, browser-based ISO 9001:2015 Quality Management System (QMS)**. It *inverts
 authority* so document drift becomes an **enforced invariant**: a managed controlled vault owns the master
 copy of every controlled document/record; the on-disk filesystem is only a read-only mirror regenerated
-from Released versions. UI/UX flows the way ISO 9001 flows (clause spine / process map / PDCA) — calm,
+from Effective versions. UI/UX flows the way ISO 9001 flows (clause spine / process map / PDCA) — calm,
 modern, progressively disclosed, never overwhelming.
 
 ## Repository layout
 
 - `apps/api/` — FastAPI / Python 3.12. Under `src/easysynq_api/`: `api/` (routes) · `services/` (use-cases, txn owners) · `domain/` (pure logic) · `db/models/` (ORM) · `db/seeds/` · `tasks/` (Celery) · `cli/`. Tests in `apps/api/tests/{unit,integration}` (latter via testcontainers).
-- `apps/web/` — React/TS + Mantine + Tailwind SPA. The web-UI track is feature-complete (test count + per-slice list in **Current status** + `docs/slice-history.md`). Stack-free tests: vitest + MSW + jest-axe (`npm test`); under `src/`: `app/shell/` · `features/` · `lib/` · `theme/` · `test/`.
+- `apps/web/` — React/TS + Mantine + Tailwind SPA. It has broad routed coverage of the operational workflow families, but no dedicated Records/Retention or Evidence Pack management route; distinguish an API/worker-complete slice from a standalone browser surface. Stack-free tests: vitest + MSW + jest-axe (`npm test`); under `src/`: `app/shell/` · `features/` · `lib/` · `theme/` · `test/`.
 - `migrations/` — Alembic (single tree; current head in **Current status**; `env.py` excludes migration-managed expression/partial indexes).
-- `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen). Document new endpoints in-PR.
-- `infra/compose/` — Docker Compose (S/M/L) + Caddy; `just` recipes wrap it. `docs/` — the spec (`00`–`18` + `decisions-register.md`) + `runbooks/`. `mockup/easysynq-mockup.html` — owner-approved UI mockup.
+- `packages/contracts/openapi.yaml` — the living API contract; `scripts/gen-contracts.sh` lints/bundles it and generates the Pydantic server models + TypeScript types. Document new endpoints in-PR.
+- `infra/compose/` — Docker Compose (shipped S/M overlays; L is reserved) + Caddy; `just` recipes wrap it. `docs/` — the spec (`00`–`18` + `decisions-register.md`), task-oriented manuals, and operator runbooks. `mockup/easysynq-mockup.html` — owner-approved UI mockup.
 
 ## Stack (D4 — fixed)
 
-React/TS + Mantine + Tailwind (SPA) · FastAPI / Python 3.12 · PostgreSQL 16 + MinIO + OpenSearch + Redis ·
+React/TS + Mantine + Tailwind (SPA) · FastAPI / Python 3.12 · PostgreSQL 16 + MinIO + Redis ·
 Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy (TLS) · Docker Compose (single host).
+Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no shipped S/M overlay deploys OpenSearch.
 
 ## Conventions
 
@@ -43,7 +44,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 - Permission keys are `domain.action` (catalog in `docs/07`; seed in `docs/14 §3.1`). **Additive-only** (R38) — no rename/removal; a new capability may add keys with a register entry (ask the owner).
 - `signature_event.meaning` (v1): `review, approval, release, obsolete, verify, disposition, import_baseline, review_confirmed`; `authored`/`responsibility` reserved for Part-11.
 - 8 personas: Avery (Admin), Mara (Quality Manager), Diego (Process Owner), Priya (Author), Ken (Approver), Ingrid (Internal Auditor), Sam (Employee), Olsen (External Auditor).
-- **Stakeholder-locked:** import default = current-version-only (revision-chain reconstruction opt-in per family; kind always human-confirmed); tamper-evidence requires a mandatory off-host / append-only audit-checkpoint anchor.
+- **Stakeholder-locked:** import default = current-version-only; revision-chain reconstruction remains an opt-in-per-family design but the current commit path refuses an opted-in family as unsupported; kind is always human-confirmed. Tamper-evidence requires a mandatory off-host / append-only audit-checkpoint anchor.
 
 ## Workflow
 
@@ -122,7 +123,8 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 
 ## Current status
 
-> **MVP COMPLETE (S0–S11)**; the **ISO 9001:2015 ★ spine and the web-UI track are feature-complete**. All three
+> **MVP COMPLETE (S0–S11)**; the **ISO 9001:2015 ★ spine and the routed operational web-UI track are substantially delivered**.
+> Records/Retention and Evidence Packs are API/worker-complete but have no dedicated SPA management route. All three
 > register families — **R49 Risk (6.1) · R50 Context (4.1) · R51 Interested Parties (4.2)** — are done end-to-end
 > (core · lifecycle · governing summary + MR consumer · SPA + steward console), and the whole **Notification
 > family (S-notify-1 → 5c)** is complete, with **R29 fully closed** (manager-graph · business-day offsets · admin

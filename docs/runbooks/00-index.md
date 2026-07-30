@@ -4,12 +4,17 @@ Operator-facing procedures for running a self-hosted EasySynQ install (the MVP e
 doc 18 §7/§12). The authoritative design lives in `docs/` (esp. 03 architecture/NFRs, 08 setup, 12
 security); these are the hands-on steps.
 
+For an end-to-end entry point, start with the
+[Installation Guide](../manuals/installation-guide.md) or
+[Administrator & IT Manual](../manuals/administrator-it-manual.md).
+
 | Runbook | When to use |
 |---|---|
 | [fresh-linux-setup.md](fresh-linux-setup.md) | **Developer** dev-stack: stand up Docker + the test gates on a clean Linux box (e.g. after a distro reinstall — no data carries over). |
 | [install-online.md](install-online.md) | First install on a host with internet. |
 | [install-airgapped.md](install-airgapped.md) | Install on a network with no outbound internet. |
-| [backup-restore.md](backup-restore.md) | Configure backups; run the restore-test drill; restore from a backup (WORM-aware, to a verified target) + cut over; `easysynq upgrade`. |
+| [appliance-install.md](appliance-install.md) | Install the Hyper-V appliance on Windows Server. |
+| [backup-restore.md](backup-restore.md) | Configure backups; run the restore-test drill; restore from a backup (WORM-aware, to a verified target) + cut over; `./scripts/easysynq upgrade`. |
 | [spof-fast-restart.md](spof-fast-restart.md) | Keycloak or Beat is down (the two single-host SPOFs, R14). |
 | [key-rotation.md](key-rotation.md) | Rotate the KEK / backup key / signing keys / Keycloak secret. |
 | [minio-object-lock-prereq.md](minio-object-lock-prereq.md) | Provision the WORM (object-lock) vault bucket — a hard prereq. |

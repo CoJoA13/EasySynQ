@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# EasySynQ admin CLI (host-side). Dispatches to backup / restore / mirror / upgrade.
-# In S0 these are skeletons; the real implementations land in slice S11 (backup/restore,
-# WORM-aware restore R37) and S7 (mirror rebuild).
+# EasySynQ admin CLI (host-side). Dispatches to backup, restore, mirror, integrity,
+# upgrade, migration, setup, and break-glass administration commands.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,6 +19,8 @@ usage: easysynq <command>
                     WORM-aware live restore to a VERIFIED TARGET (fresh bucket;
                     blob-snapshot aligned; checkpoint-not-ahead check; chain
                     re-verify). Leaves a standing target; cut over per runbook. [S11]
+  restore --discard <scratch-db>
+                    Tear down a previously left-standing verified restore target.
   mirror rebuild    Regenerate the read-only filesystem mirror from the vault. [S7]
   blob verify [--full] [--sample-size N]
                     D1 integrity re-hash of vault blobs against blob.sha256
@@ -28,7 +29,7 @@ usage: easysynq <command>
   upgrade --confirm Pre-backup -> migrate -> health-gate (pre-backup is the
                     disaster safety net on a failed migration).             [S11]
   migrate           Run 'alembic upgrade head' inside the api image.
-  grant-role <sub> ["Role"]
+  grant-role <sub> ["Role"] [--org CODE] [--bound-scope JSON]
                     Break-glass: assign a seeded role (default "System
                     Administrator") to a Keycloak subject directly (bypasses the
                     wizard). Idempotent.                                     [S2]
@@ -48,12 +49,19 @@ case "$cmd" in
     "${COMPOSE[@]}" run --rm migrate
     ;;
   grant-role)
-    sub="${1:-}"; role="${2:-System Administrator}"
+    sub="${1:-}"
     if [ -z "$sub" ]; then
-      echo 'usage: easysynq grant-role <keycloak-subject> ["Role Name"]' >&2
+      echo 'usage: easysynq grant-role <keycloak-subject> ["Role Name"] [--org CODE] [--bound-scope JSON]' >&2
       exit 2
     fi
-    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.grant_role --subject "$sub" --role "$role"
+    shift
+    role="System Administrator"
+    if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+      role="$1"
+      shift
+    fi
+    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.grant_role \
+      --subject "$sub" --role "$role" "$@"
     ;;
   seed-personas)
     # Dev fixture: SoD-correct author/approver/releaser grants (S-web-5 demo). `just seed-personas`

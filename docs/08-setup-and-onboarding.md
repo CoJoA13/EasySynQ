@@ -2,6 +2,15 @@
 
 This section specifies how an EasySynQ instance goes from a freshly-installed Docker Compose stack to a running, audit-ready QMS, and how it is administered thereafter. It details the **First-Run Setup Wizard** that **Avery (System Admin)** completes screen by screen — admin account, organization profile, vault/mirror storage, backup, authentication, organization roles & permissions, users, QMS scope & process map, and pointing the install at an existing QMS to import — followed by the ongoing administration surfaces (user lifecycle, role management, system settings, instance/license config, and the health-and-backup dashboard). The unifying principle, reinforced throughout, is **Avery sits OUTSIDE the QMS**: Avery owns the *system* (identity, storage, backup, recoverability, the permission machinery) but does **not** author or approve QMS content by default. The wizard scaffolds the *containers* of quality (scope, processes, roles, accounts); **Mara (Quality Manager)** and the QMS personas fill those containers with controlled documents and retained records. Everything below aligns to the canonical Vision, Domain Model, and Architecture sections: the Controlled Vault (PostgreSQL + MinIO) is the single source of truth; the filesystem is a read-only mirror; clauses are seeded read-only reference data; permissions are hybrid RBAC+ABAC; and every consequential action is written to the append-only audit trail.
 
+> **Implementation status (audited 2026-07-30).** The ten-step flow below remains the canonical
+> onboarding **design model** from R4. The shipped `/setup` UI deliberately implements its blocking
+> core as six screens: **Activate → Organization → Storage → Backup → Authentication → Finalize**.
+> Deferrable roles, users, process ownership, and import work continues after finalize in
+> **Administration** and the **Import** surface. Today the Roles tab inspects seeded bundles rather
+> than editing custom roles, and an EasySynQ user invite binds a Keycloak account that the operator
+> created first. Follow the [Installation Guide](manuals/installation-guide.md) and
+> [Administrator & IT Manual](manuals/administrator-it-manual.md) for current procedures.
+
 ---
 
 ## 1. Scope, Principles & Terms
@@ -32,7 +41,7 @@ This is a **separation-of-duties** boundary enforced in three concrete ways, rep
 
 | Term | Meaning here |
 |---|---|
-| **Bootstrap secret** | A one-time, single-use token printed by `install.sh` (and stored hashed in PG) that authorizes creation of the *first* admin account. Invalidated the instant the first admin is created. |
+| **Bootstrap secret** | A one-time, single-use token minted with `easysynq setup mint-bootstrap` (and stored hashed in PG) that authorizes creation of the *first* admin account. Invalidated the instant the first admin is created. |
 | **First-Run Setup Wizard** | The guided, resumable, one-time configuration flow (this section); the only thing reachable on a virgin instance. |
 | **Setup state** | An instance-level enum: `UNINITIALIZED → IN_SETUP → OPERATIONAL`. The QMS is unreachable until `OPERATIONAL`. |
 | **Org profile** | Singleton row describing the deploying organization (the single tenant; carries `org_id`). |
@@ -44,7 +53,9 @@ This is a **separation-of-duties** boundary enforced in three concrete ways, rep
 
 ## 2. The Setup State Machine & Where the Wizard Sits
 
-A freshly-deployed stack passes Compose health gates (`/readyz` green for PG, MinIO, OpenSearch/FTS, Redis, Keycloak) and then exposes **only** the wizard. The instance advances through a strict state machine; the QMS spine does not exist for any user until setup completes.
+A freshly-deployed stack passes Compose health gates (`/readyz` green for PostgreSQL, MinIO, Redis,
+Keycloak, and the Alembic head) and then exposes **only** the wizard. The instance advances through a
+strict state machine; the QMS spine does not exist for any user until setup completes.
 
 ```mermaid
 stateDiagram-v2
@@ -82,13 +93,17 @@ stateDiagram-v2
 | G-D | An auth method is selected and a **non-bootstrap** login path proven (admin can log in via the chosen method) | Avoid lock-out before disabling the bootstrap path |
 | G-E | Org profile complete; framework = ISO 9001:2015 selected (only option in v1) | Establishes the single-tenant identity & clause catalog binding |
 
-Steps that *create QMS content shells* (roles, users, scope, process map, import) are **strongly recommended but skippable** — the wizard distinguishes **blocking system steps** (G-A…G-E) from **deferrable QMS-shell steps** (Steps 6–9), reflecting that those are Mara's domain and can be completed after go-live.
+Steps that *create QMS content shells* (roles, users, scope, process map, import) are **strongly recommended but skippable** in the canonical model. In the shipped UI they are not wizard pages:
+they are completed after go-live in Administration, the PLAN registers, Library, and Import.
 
 ---
 
 ## 3. Wizard Overview — Ordered Screen Flow
 
-> **Canonical (reconciled per Decisions Register R4).** This **ten-step wizard** — Step 0 (Bootstrap) through Step 10 (Review/Finalize) — together with the **blocking backup + restore-test gate (G-C)** before authentication, is the **canonical** first-run flow. **Org profile (Step 2) comes before storage (Step 3).** The doc 11 §5.8 wireframe must align to this step list/order (add the bootstrap step and the restore-test gate, and order org profile before storage). The blocking-before-deferrable structure (G-A…G-E blocking; Steps 6–9 deferrable) is part of the canon.
+> **Canonical design model (reconciled per Decisions Register R4).** This ten-step model—Step 0
+> (Bootstrap) through Step 10 (Review/Finalize)—defines onboarding ownership and ordering. The shipped
+> wizard preserves the blocking sequence and backup/restore-test gate while moving deferrable Steps
+> 6–9 to post-finalize surfaces; it therefore presents six screens rather than ten.
 
 ```mermaid
 flowchart TD
@@ -145,7 +160,7 @@ sequenceDiagram
 | Captures | Validates | Notes |
 |---|---|---|
 | Bootstrap secret (paste) | Hash match; not expired (TTL, default 24h); not already consumed; rate-limited (5 attempts / 15 min, then lock + CLI reissue) | Secret is **never** stored in plaintext; only a salted hash + TTL live in PG. On valid entry, a short-lived **setup session token** is issued. |
-| (display only) Instance version, build digest, sizing profile (S/M/L), host health summary | Read-only; confirms the operator is on the right instance | Surfaces `/readyz` of each store so Avery starts from a known-good baseline. |
+| (display only) Instance version, build digest, sizing profile (S/M; L reserved), host health summary | Read-only; confirms the operator is on the right instance | Surfaces the aggregate `/readyz` result so Avery starts from a known-good baseline. |
 
 **Outcome.** A scoped setup session is open; instance enters `UNINITIALIZED` interaction. No data captured yet beyond consuming the secret (audit-logged as `BOOTSTRAP_CONSUMED`).
 
@@ -202,7 +217,7 @@ sequenceDiagram
 | **Blob vault (MinIO/S3)** | Endpoint, region, access/secret (from secrets), **bucket names** (documents, renditions, records) | Live: create-if-absent buckets; **verify object-lock / WORM is enabled** (write a probe object, attempt early delete, expect denial); confirm SSE enabled |
 | **Content addressing** | (display) SHA-256 content-addressing on | Read-only confirmation of immutability guarantee |
 | **Filesystem mirror** | Absolute host path of the read-only mirror volume; layout template (by clause / by process / hybrid) | Path exists, is a mounted volume, is **writable by the worker** and **owned/empty or previously-EasySynQ-owned**; refuse a path containing foreign files to prevent clobbering |
-| **Mirror policy** | What gets mirrored (Released versions only — enforced, not optional); include rendered PDF + metadata sidecar? | Enforce "Released only"; the mirror **cannot** include drafts (drift prevention) |
+| **Mirror policy** | What gets mirrored (Effective versions only — enforced, not optional); include rendered PDF + metadata sidecar? | Enforce "Effective only"; the mirror **cannot** include drafts (drift prevention) |
 
 ### 7.2 The vault → mirror relationship (made explicit on screen)
 
@@ -213,7 +228,7 @@ flowchart LR
         OBJ[("MinIO (WORM)\nimmutable blobs\n+ renditions")]
     end
     Worker["Worker (mirror-sync job)"]
-    Mirror["READ-ONLY MIRROR\n(host volume)\nReleased versions only"]
+    Mirror["READ-ONLY MIRROR\n(host volume)\nEffective versions only"]
     PG --> Worker
     OBJ --> Worker
     Worker -->|"writes (regenerable)"| Mirror
@@ -333,6 +348,11 @@ flowchart TD
 
 **Purpose.** Create convenient **permission Role** bundles the org will assign to users. This is the **permission machinery** — squarely Avery's job and squarely *outside* the QMS. (It is distinct from QMS **OrgRoles**/RACI in Clause 5.3, which Mara owns; see §12 and Domain Model §3.4.)
 
+> **Current surface.** Administration → Roles is read-only: it expands the seeded bundles and their
+> grants. Assign/revoke those roles and add/remove **system-scoped** per-user ALLOW/DENY overrides
+> from Administration → Users. Finer scopes are available through the API. Custom role
+> create/edit/delete and the extra §10.4 self-grant confirmation are not shipped.
+
 ### 10.1 Seeded starter bundles (editable, not binding)
 
 The wizard pre-creates bundles mirroring the canonical personas so the org starts usable, then can customize. Each is a *typical bundle*, never a hard boundary (Vision permission philosophy).
@@ -347,7 +367,7 @@ The wizard pre-creates bundles mirroring the canonical personas so the org start
 | **Author** | Priya | `document.checkout`, `document.edit`, `document.submit` within assigned folders/processes | Folder/process |
 | **Approver** | Ken | `document.review`, `document.approve|reject` (the signature hook) within scope | Folder/process |
 | **Internal Auditor** | Ingrid | broad `document.read` + `record.read`, `audit.conduct`, `finding.create`, `capa.link` — **explicitly NO** `{document.create, document.edit, document.submit}`/`document.approve` (independence) | Org-wide read |
-| **Read-only Employee** | Sam | `document.read` (Released only) within area; optional `document.acknowledge` (normalized per R5; the catalog key — R42/R43 context) | Area/process |
+| **Read-only Employee** | Sam | `document.read` (Effective only) within area; optional `document.acknowledge` (normalized per R5; the catalog key — R42/R43 context) | Area/process |
 | **External Auditor (Guest)** | Olsen | `document.read` / `record.read` / `report.read` **only within the bound pack**, **time-boxed**, scope-limited; every view logged | Bound to one evidence pack |
 
 ### 10.2 What the screen captures per role
@@ -405,6 +425,12 @@ The **self-grant friction + audit (§10.4) still applies to any QMS→admin cros
 
 **Purpose.** Populate accounts and assign role bundles + scopes. Avery creates the accounts; **who authors/approves what** is governed by the bundles and scopes, keeping Avery outside content.
 
+> **Current surface.** Create the sign-in identity in Keycloak first. Then use Administration →
+> Users → **Invite user** and paste that identity's OIDC `sub`; the EasySynQ row starts `INVITED` and
+> becomes `ACTIVE` on first sign-in. The application does not currently create Keycloak passwords,
+> send tokenized email invitations, or bulk-create users from CSV. The Hyper-V appliance provides
+> `easysynq-create-user` as a host helper for the Keycloak half only.
+
 ### 11.1 Two provisioning paths
 
 | Path | When | Flow |
@@ -459,7 +485,7 @@ This is the screen where the Admin/QMS boundary is most tempting to blur, so it 
 | Toggle IA section visibility from candidate exclusions (e.g., hide Design 8.3) | Decide/justify exclusions authoritatively (that is a recorded QMS decision Mara owns) |
 | Assign **OrgRole** placeholders (Process Owner of X) for RACI | Grant permissions (that was Step 6/7) |
 
-Everything the wizard creates here is marked **`DRAFT/SEED`** and **`requirement_source=org_determined` pending QMS confirmation**, owned by the QMS not by Avery. Nothing is `Released/Effective`.
+Everything the wizard creates here is marked **`DRAFT/SEED`** and **`requirement_source=org_determined` pending QMS confirmation**, owned by the QMS not by Avery. Nothing is `Effective`.
 
 ### 12.2 What the screen captures
 
@@ -650,6 +676,11 @@ stateDiagram-v2
 
 ### 15.3 Role & permission management
 
+> **Current implementation.** The Roles tab is a read-only catalog of seeded bundles. Assignments
+> and SYSTEM-scoped per-user overrides are managed from Users; finer scoped grants remain available
+> through the API. Custom role creation/editing and the effective-permissions explorer below remain
+> target design.
+
 - Create/edit/clone/delete permission **Role** bundles; deleting a bundle in use warns and requires reassigning affected users first.
 - Edit per-user **overrides** (explicit grant/deny; deny wins).
 - **Effective-permissions explorer:** select a user + a target (doc/folder/process) and see the resolved decision with the *reason trace* (which bundle/attribute/override produced allow/deny) — essential for debugging deny-by-default and for audit defense.
@@ -658,6 +689,10 @@ stateDiagram-v2
 
 ### 15.4 System settings
 
+> **Current implementation.** The Config tab currently exposes organization email settings,
+> quiet-hour piercing, the working calendar, and notification-health details. The remaining rows
+> below are target administration surfaces unless a linked runbook supplies a current CLI.
+
 | Group | Settings |
 |---|---|
 | Notifications | SMTP relay (host/TLS/from), email templates toggle, webhook sinks. **Email bounce / delivery-failure handling is owned by ADMIN** (reconciled per Decisions Register R32): failures surface on the Health dashboard (§15.6) and as a system notification — never deferred to an out-of-scope doc |
@@ -665,15 +700,19 @@ stateDiagram-v2
 | Branding | Logo, accent token, PDF watermark text for controlled/obsolete prints |
 | Security | Session timeout, password/MFA policy (delegated to Keycloak), audit-view-of-controlled-docs toggle, IP allow-list (optional) |
 | Mirror | Layout (by clause/process/hybrid), rendition inclusion, manual "rebuild mirror now" |
-| Search | OpenSearch on/off (S-profile → Postgres FTS fallback), manual reindex |
+| Search | PostgreSQL FTS is the shipped engine in S and M; a future OpenSearch control/rebuild surface is reserved |
 | Retention | Org default retention policies (overridable per record class); disposition approval requirement |
 | Observability | Opt-in Prometheus/Grafana/Loki profile, external sink (off by default — no telemetry leaves the boundary unless enabled) |
 
 ### 15.5 Instance / license configuration
 
+> **Current implementation.** EasySynQ ships S/M profile selection through installation and a
+> backup-first `easysynq upgrade` command. There is no shipped licensing UI, named-user-cap
+> enforcement, L profile, or user-facing feature-flag panel; those items remain target design.
+
 | Item | Detail |
 |---|---|
-| Edition / license | License key (if applicable): named-user cap, sizing profile (S/M/L), feature flags (reserved: multi-standard, e-sig — **off** in v1). Self-hosted; license validated **offline** (no phone-home) via a signed key file. |
+| Edition / license | Target design: offline signed license key (if applicable), named-user cap, S/M/L profile metadata, and reserved multi-standard/e-signature flags |
 | User-count enforcement | Warn at 90% of named-user cap; soft-block new active users at 100% (existing users unaffected) |
 | Version & upgrades | Show running version/digest; `easysynq upgrade` enforces pre-upgrade backup + Alembic migration gate + health gate + rollback path (Architecture §12) |
 | Air-gap mode | Indicates offline image bundle; suppresses all outbound checks |
@@ -683,11 +722,16 @@ stateDiagram-v2
 
 The calm landing surface for Avery — the **system** analogue of Mara's PDCA wheel. Counts/RAG only; drill-down for detail (progressive disclosure).
 
+> **Current implementation.** `/healthz` is liveness and `/readyz` aggregates PostgreSQL, Redis,
+> MinIO, Keycloak, and the Alembic head. The Config tab shows notification health. The richer
+> dashboard and per-service controls diagrammed below remain target design; OpenSearch is not a
+> deployed dependency.
+
 ```mermaid
 flowchart LR
     subgraph Health["Health & Backup Dashboard (ADMIN)"]
         direction TB
-        SVC["Services /readyz\nAPI · Worker · Beat · KC · PG · MinIO · OpenSearch · Redis · Renderer"]
+        SVC["Target service dashboard\nAPI · Worker · Beat · KC · PG · MinIO · Redis · Renderer"]
         STO["Storage\nDB size · MinIO usage/disk · mirror freshness · WORM status"]
         BKP["Backups\nlast success · next run · last RESTORE-TEST age · RPO/RTO"]
         INT["Integrity\nlast blob re-hash verify · mismatches (tamper/bit-rot)"]
@@ -699,7 +743,7 @@ flowchart LR
 
 | Panel | Surfaced signals | Drill-down |
 |---|---|---|
-| Services | `/readyz` RAG per container; degraded-mode banners (e.g., search on FTS fallback) | Per-service logs/metrics (if observability profile on) |
+| Services | Target: per-container readiness and degraded-mode banners | Target: per-service logs/metrics when an observability extension is deployed |
 | Storage | PG size, MinIO usage vs. disk, **mirror last-synced**, WORM enabled | Rebuild mirror; storage trend |
 | Backups | Last success/failure, next scheduled, **last restore-test age** (nudge re-drill), RPO/RTO | Run backup now; run restore-test; download/inspect manifest |
 | Integrity | Last blob re-hash verify result; any SHA-256 mismatch (tamper/bit-rot alarm); **off-host `audit_checkpoint_sink` status** (reachable / last checkpoint age / **NOT tamper-evident if unset**, per §8.3) | Trigger full verify; view flagged blobs; open audit-anchor config |

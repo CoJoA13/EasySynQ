@@ -1,6 +1,13 @@
 # Ingestion / Import / Auto-Organization Engine
 
-This section specifies the **Ingestion Engine**: the pipeline that runs when **Avery (System Admin)** points EasySynQ at an existing QMS folder tree and turns a chaotic, drift-prone file share into a clean set of **controlled documents** living inside the **Controlled Vault** (PostgreSQL + MinIO), with a regenerated **read-only Filesystem Mirror** on top. The engine is a *staged, idempotent, resumable* pipeline that **scans and inventories** files (type, size, date, SHA-256); **extracts** metadata and text (with OCR for scanned PDFs/images); **classifies** each file by document type and proposes a **clause map**, **process link**, and **PDCA phase** using a transparent **rules + heuristics** scorer that emits **confidence scores**; **detects** exact duplicates, near-duplicates, and superseded/obsolete versions; and **proposes** a target IA-aligned folder structure and document numbering. Crucially, *nothing becomes controlled automatically*: the engine produces a **Proposal** that **Mara (Quality Manager)** reviews and corrects on a **human-in-the-loop** screen (the UJ-2 review step) before an explicit **Commit** migrates files into the vault as immutable **baseline versions** (`Rev A`, `Released/Effective`) and regenerates the mirror. The classifier is deliberately **pluggable**: rules + heuristics ship in v1, and an ML/AI classifier is a drop-in `ClassifierProvider` later with no pipeline rewrite. The whole run is captured in an append-only **Import Report** and the system **Audit Trail**.
+This section specifies the **Ingestion Engine**: the pipeline that runs when **Avery (System Admin)** points EasySynQ at an existing QMS folder tree and turns a chaotic, drift-prone file share into a clean set of **controlled documents** living inside the **Controlled Vault** (PostgreSQL + MinIO), with a regenerated **read-only Filesystem Mirror** on top. The engine is a *staged, idempotent, resumable* pipeline that **scans and inventories** files (type, size, date, SHA-256); **extracts** metadata and text (with OCR for scanned PDFs/images); **classifies** each file by document type and proposes a **clause map**, **process link**, and **PDCA phase** using a transparent **rules + heuristics** scorer that emits **confidence scores**; **detects** exact duplicates, near-duplicates, and superseded/obsolete versions; and **proposes** a target IA-aligned folder structure and document numbering. Crucially, *nothing becomes controlled automatically*: the engine produces a **Proposal** that **Mara (Quality Manager)** reviews and corrects on a **human-in-the-loop** screen (the UJ-2 review step) before an explicit **Commit** migrates files into the vault as immutable **baseline versions** (`Rev A`, `Effective`) and regenerates the mirror. The classifier is deliberately **pluggable**: rules + heuristics ship in v1, and an ML/AI classifier is a drop-in `ClassifierProvider` later with no pipeline rewrite. The whole run is captured in an append-only **Import Report** and the system **Audit Trail**.
+
+> **Implementation status (audited 2026-07-30).** The staged import and browser review cockpit
+> ship. Near-duplicate detection uses the in-process MinHash provider; OpenSearch is not deployed.
+> Extracted text is used transiently for classification/dedup and is not part of current global
+> search. The default/current commit model creates one baseline Effective version per accepted
+> document; revision-chain reconstruction is refused rather than fabricating history. Known
+> PartiallyCommitted/reaper edge cases remain in [`slice-history.md`](slice-history.md).
 
 > **Alignment anchors.** This engine implements **UJ-2 (Import an existing QMS)** from the Vision & Scope doc, respects every architecture **invariant** (vault is the source of truth, authority flows vault→mirror, blobs are immutable/content-addressed, audit is append-only), and produces artifacts that conform to the domain model's **`DocumentedInformation` taxonomy**, **maintain/retain distinction**, **read-only clause catalog**, and **universal control fields**. Personas, lifecycle states, and glossary terms are reused verbatim.
 
@@ -18,7 +25,7 @@ This section specifies the **Ingestion Engine**: the pipeline that runs when **A
 | IG4 | **Detect** exact dup, near-dup, version family, obsolescence | Dedup clusters + `version_family` groupings + `obsolete` flags |
 | IG5 | **Propose** target folder layout + document numbering | A `Proposal` tree mirroring the ISO IA; suggested `identifier` per document |
 | IG6 | **Human-in-the-loop review** by Mara (confirm/correct/merge/exclude) | A reviewed, decision-bearing `Proposal` ready to commit |
-| IG7 | **Commit / migrate** confirmed items into the vault | Controlled `Document`s at **baseline `Rev A` → Released/Effective**; immutable blobs |
+| IG7 | **Commit / migrate** confirmed items into the vault | Controlled `Document`s at **baseline `Rev A` → Effective**; immutable blobs |
 | IG8 | **Generate** the read-only mirror from committed released state | Organized, read-only directory tree |
 | IG9 | **Report & audit** the whole run | Immutable **Import Report** + append-only audit events |
 | IG10 | **Safe re-import / resume** | Idempotency keys, partial-resume, no duplicate ingestion |
@@ -59,7 +66,7 @@ graph TB
         REND["renderer (Gotenberg/LO)<br/>Office&rarr;PDF normalization"]
         PG[("PostgreSQL 16<br/>import_* staging tables<br/>+ vault tables + audit")]
         OBJ[("MinIO<br/>staging bucket (temp)<br/>+ vault blob buckets (WORM)")]
-        IDX[("OpenSearch<br/>near-dup shingles,<br/>final index")]
+        IDX[("In-process MinHash<br/>near-duplicate detection")]
         RDS[("Redis<br/>job state, locks,<br/>run idempotency keys")]
     end
 
@@ -85,7 +92,9 @@ graph TB
 **Boundary rules inherited:**
 - Source tree is mounted **read-only** (`:ro`) — the engine physically cannot write back (NG3).
 - Staging blobs live in a dedicated MinIO bucket **without** object-lock; only on **Commit** are blobs promoted (copied content-addressed) into the **WORM** vault buckets. This keeps abandoned/rolled-back imports from polluting the immutable store.
-- OpenSearch is used during the run for near-dup shingling but, per the invariant, is **rebuildable**; the authoritative dedup decisions are persisted in PG.
+- The shipped in-process MinHash provider proposes near-duplicates; authoritative human decisions
+  are persisted in PostgreSQL. A future search sidecar remains an optional provider, not a current
+  dependency.
 
 ---
 
@@ -210,7 +219,7 @@ The scan completes into a **calm summary card** (progressive disclosure): total 
 
 | Output | How | Used by |
 |---|---|---|
-| `full_text` | format-specific extractor (Tika/textract family); for Office, also via the Gotenberg/LibreOffice path already in the stack | keyword classification, near-dup shingles, final OpenSearch index |
+| `full_text` | format-specific extractor (Tika/textract family); for Office, also via the Gotenberg/LibreOffice path already in the stack | keyword classification and near-duplicate detection; stored transiently/capped, not indexed by current global search |
 | `header_block` | first N lines / first page + any title/footer region | high-signal classification (doc codes, "Procedure", rev tables) |
 | `embedded_props` | document properties: author, title, subject, created/modified, app, page count | author→owner hint, date→version hint |
 | `language` | language detector over `full_text` | OCR language selection, i18n readiness |
@@ -391,15 +400,21 @@ split out.
 
 ### 7.3 Obsolescence outcome → the version chain
 This is where dedup connects to the **maintain/retain** model:
-- For a **Document version family**, the engine proposes the canonical as the **baseline `Rev A` (Released/Effective)** and resolves the older members per family. The **default** (and recommended) handling, and the **opt-in** alternative, are governed by **R10** (see the note below):
+- For a **Document version family**, the engine proposes the canonical as the **baseline `Rev A` (Effective)** and resolves the older members per family. The **default** (and recommended) handling, and the **opt-in** alternative, are governed by **R10** (see the note below):
   - **(default) Import only the current/latest as the controlled baseline; archive the rest as provenance** — only the canonical (newest) version becomes Effective; older files are **archived as provenance** (recorded in the report and captured as provenance metadata as "superseded source, archived as provenance"), and the org's source archive retains the bytes. This is the default for every family regardless of confidence.
   - **(opt-in, per family, with explicit confirmation) Reconstruct the revision chain as provenance** — only when Mara **explicitly opts a specific document-family in and confirms it at commit time**, the engine stitches the older members into an ordered chain. Even then, the reconstructed older versions are **captured as provenance, NOT as approved revision history** — they document where the controlled baseline came from; they are never asserted as an approved canonical timeline. ⚠ **NOT IMPLEMENTED in this version** — the per-family opt-in is accepted and recorded on `import_version_family`, but nothing materializes the older members. A run carrying an opted-in family is **refused at commit** (422 `revision_chain_reconstruction_unsupported`) rather than committed under a promise the engine does not keep; clear the opt-in to import on the default terms above.
 - For **near-dup / exact-dup clusters that are not a true version chain**, the redundant copies are **not ingested**; they are recorded as "redundant copy of `<canonical>`" so nothing silently vanishes.
 - A file whose **filename screams obsolete** (`(old)`, `superseded`, `DO NOT USE`, `archive`) is pre-flagged `obsolete_candidate` even outside a family.
 
-> **Import version-handling default (reconciled per Decisions Register R10).** The import default is **current/latest-only as the controlled baseline plus archive older copies as provenance** — **NOT** approved revision history. **Revision-chain reconstruction is opt-in per document-family and requires explicit confirmation at commit time**, and even when chosen it is **captured as provenance, not approved history**. The engine never auto-builds an approved version history; the safe default keeps only the current version live and preserves the rest as provenance.
+> **Import version-handling default (reconciled per Decisions Register R10).** The import default is
+> **current/latest-only as the controlled baseline plus archive older copies as provenance** —
+> **NOT** approved revision history. The locked target design makes reconstruction an explicit
+> per-family opt-in captured as provenance, not approved history. **Current implementation records
+> the opt-in but refuses commit with `422 revision_chain_reconstruction_unsupported`; it does not
+> materialize the older members.** The safe path keeps only the current version live and preserves
+> source lineage without inventing an approved timeline.
 
-> **Result:** exactly **one Released/Effective** version per resulting document (enforcing **A7** and **M2**) the moment the import commits — drift is eliminated at the source, which is the entire point of the import.
+> **Result:** exactly **one Effective** version per resulting imported document (enforcing **A7** and **M2**) the moment the import commits — drift is eliminated at the source, which is the entire point of the import.
 
 ---
 
@@ -523,7 +538,7 @@ sequenceDiagram
         WK->>OBJ: promote staging blob -> vault bucket (content-addressed, object-lock ON)
         WK->>PG: create Document (identifier, kind, clause_map, process_links, pdca_phase, owner, framework_id)
         WK->>PG: create Version Rev A (immutable) referencing source blob
-        WK->>PG: set lifecycle = Released/Effective (baseline)
+        WK->>PG: set lifecycle = Effective (baseline)
         WK->>PG: write import provenance (source rel_path, sha256, run_id, classifier_version, confidence, decided_by)
         WK->>AUD: append IMPORT_ITEM_COMMITTED (who/when/what)
         WK->>PG: commit tx
@@ -538,7 +553,7 @@ sequenceDiagram
 
 | Rule | Detail |
 |---|---|
-| **Baseline state** | Every imported Document lands at **`Rev A`, Released/Effective** — it is treated as the org's *currently governing* version (these are existing, in-force documents, not new drafts). Per family, only the canonical (current/latest) is Effective; by **default** older members are **archived as provenance** (not ingested as versions). **Only** when a family is **explicitly opted into revision-chain reconstruction and confirmed at commit time** are older members materialized — and then as **provenance, not approved history** (reconciled per Decisions Register R10; see §7.3). ⚠ **NOT IMPLEMENTED in this version**: an opted-in family is refused at commit (422 `revision_chain_reconstruction_unsupported`) — see §7.2. |
+| **Baseline state** | Every imported Document lands at **`Rev A`, Effective** — it is treated as the org's *currently governing* version (these are existing, in-force documents, not new drafts). Per family, only the canonical (current/latest) is Effective; by **default** older members are **archived as provenance** (not ingested as versions). **Only** when a family is **explicitly opted into revision-chain reconstruction and confirmed at commit time** would older members be materialized as provenance, not approved history (R10). **Current behavior:** an opted-in family is refused at commit (422 `revision_chain_reconstruction_unsupported`) rather than fabricating a chain; see §7.2. |
 | **Immutability** | The source bytes become an **immutable, content-addressed blob** in a **WORM/object-lock** vault bucket; the Version snapshot is immutable. (Architecture invariant 3.) |
 | **Records are retained, not versioned** | Items classified **RECORD** are committed as immutable **Record** entities with `captured_at` (best-effort from embedded/mtime), `retention` (org default policy, Mara-set), and **no edit affordance** — honoring the maintain/retain distinction. A Record pins its source where evidence allows. |
 | **Reviewed ownership** | The folded reviewed owner is materialized on both imported Documents and Records. Ownership is separate from commit attribution: `created_by` / `captured_by` and the `import_baseline` signer remain the human committer. An unresolved best-effort engine hint falls back to the committer. An unresolved or ambiguous explicit human assignment blocks the initial commit while the run remains reviewable; the review→commit transaction stores the validated directory ID in internal run-level materialization state, leaving accepted/corrected counts and decision history untouched. Resume lazily snapshots remaining items from older partial runs; failed/remaining files may receive a per-file correction, while successful/no-op items are immutable. The worker still fails closed on a missing, guest, or cross-org snapshot. |
@@ -654,7 +669,7 @@ These `import_*` tables are **staging only** (transient per run; purged after a 
 | **Throughput** | Scan/extract/classify fan out across the dedicated `import` Celery queue; bounded concurrency keeps interactive check-in/render pipelines responsive (imports never block normal operation). |
 | **OCR cost** | The dominant cost; size-capped, per-file progress, can be deferred/disabled (S profile runs OCR-off and re-runs later via resume). |
 | **Large trees** | Streamed hashing (one read pass), batched walking, checkpointed stages so a 1M-file ceiling (architecture target) is approached incrementally; the review UI paginates and filters rather than rendering all rows. |
-| **Search dependency** | Near-dup shingling can use OpenSearch *or* an in-process MinHash if OpenSearch is disabled (S profile / search-down) — dedup degrades gracefully to exact + filename-family detection, with a banner noting near-dup detection is reduced. |
+| **Near-duplicate provider** | Shipped S/M use in-process MinHash, so import does not depend on a separate search service. OpenSearch remains a possible future provider behind the seam. |
 | **Target** | Supports **M8** (first-run setup → first imported QMS browsable in **< 1 working day** for a typical existing QMS) by front-loading auto-classification and making the High-confidence bulk-accept the default path. |
 
 ---
@@ -690,7 +705,9 @@ Consistent with the locked decisions, the engine reserves clean extension points
 
 1. **One pipeline, staged & resumable.** Scan → Extract(+OCR) → Classify → Dedup → Propose → **Review** → Commit → Mirror, each stage idempotent and checkpointed, all driven by the existing `worker`/`api`/stores — no new service.
 2. **Transparent, pluggable classification.** Rules + heuristics emit per-dimension **confidence + evidence**; PDCA phase is *derived* from the clause map; an AI `ClassifierProvider` is additive.
-3. **Drift killed at the source.** Exact/near-dup detection and version-family reconstruction guarantee exactly **one Released/Effective** version per resulting document on commit (**A7 / M2**).
+3. **Drift killed at the source.** Exact/near-duplicate detection plus human-confirmed canonical
+   selection produce exactly **one Effective** baseline per resulting document on commit (**A7 /
+   M2**). Revision-chain reconstruction is intentionally refused in the current implementation.
 4. **Humans decide.** Nothing is controlled until **Mara** confirms on the calm, banded, bulk-accept review screen with a non-blocking mandatory-coverage advisory — never an auto-compliance judgment (**N9**).
 5. **Immutable, provenanced, audited.** Committed items are WORM blobs at baseline `Rev A`/Effective, carrying full import provenance, a baseline `signature_event`, an immutable **Import Report**, and a complete append-only audit trail.
 6. **Safe to re-run.** Content-hash + provenance idempotency means re-pointing at the same source surfaces only net-new/changed files, and changed files become **new versions**, never duplicate documents.

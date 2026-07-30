@@ -116,8 +116,9 @@ if [ ! -f "$ENV_FILE" ]; then
   set_kv KEYCLOAK_DB_PASSWORD "$KC_DB_PW"
   # Off-host audit-checkpoint sink creds (doc 12 §4.4): GENERATE the secrets so a fresh install never
   # provisions the minio-init sink users with the repo-known .env.example placeholders (the dev
-  # overlay publishes MinIO on loopback :9000; the read user can list/download checkpoint objects). Usernames are
-  # non-secret; an operator pointing a sink at an EXTERNAL host replaces these with that host's creds.
+  # overlay publishes MinIO on loopback :9000; the read user can list/download checkpoint objects).
+  # Usernames are non-secret; an operator pointing a sink at an EXTERNAL host replaces these with
+  # that host's credentials.
   set_kv AUDIT_SINK_ACCESS_KEY audit-sink
   set_kv AUDIT_SINK_SECRET_KEY "$AUDIT_SINK_SECRET"
   set_kv AUDIT_SINK_READ_ACCESS_KEY audit-sink-read

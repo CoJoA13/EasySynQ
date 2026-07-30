@@ -2,6 +2,14 @@
 
 EasySynQ is a self-hosted Quality Management System whose value rests entirely on one promise: **what the controlled vault says is true, is true** — the right people did the right things, the evidence is intact, and nobody (including a privileged insider) can quietly rewrite history. This section specifies how that promise is kept. It defines authentication (local password policy + optional MFA, LDAP/AD federation, OIDC/SAML SSO, sessions, lockout); centralized, defense-in-depth authorization enforcement; the **tamper-evident, append-only, hash-chained audit trail** that records who/what/when/before-and-after/why for every security- and content-relevant event; encryption in transit and at rest (DB, object storage, backups); secrets management; document-binary integrity via content addressing and scheduled re-hashing; backup, restore, and disaster recovery; data retention and deletion including GDPR/PII handling for *user* (not QMS) data; an OWASP-aligned threat model with concrete mitigations; and the reserved **electronic-signature hooks** (signature meaning, re-authentication at point of signing, signature manifest) that let EasySynQ satisfy 21 CFR Part 11 later as an *additive* change rather than a rewrite. Everything here is built **for ISO 9001:2015 traceability now**, and **architected to satisfy Part 11 later** (non-goal N1), per the locked foundational decisions.
 
+> **Implementation status (audited 2026-07-30).** This document combines shipped controls and
+> target defense-in-depth design. Current S/M deployments use PostgreSQL, MinIO, Redis, Keycloak,
+> Caddy, and the application/worker services; OpenSearch and a bundled observability stack are not
+> deployed. The generic audit-log UI/search/export described below is not shipped, while
+> append-only audit writes, hash linking/checkpoints, chain verification, document-scoped history,
+> backup/restore, blob verification, and operational alarms are implemented. Use the
+> [Administrator & IT Manual](manuals/administrator-it-manual.md) for executable procedures.
+
 ---
 
 ## 1. Scope, Principles & Threat Surface
@@ -363,7 +371,7 @@ Integrity of the *bytes* (not just the metadata) is what makes EasySynQ's eviden
 | **Renditions are derived** | The normalized PDF preview and thumbnails are *derived* blobs (also content-addressed). The **source blob is the integrity anchor**; renditions are rebuildable and never authoritative. |
 | **Scheduled re-hash verify** | A `beat` job re-reads blobs and recomputes SHA-256: a **rolling sample continuously** + a **full sweep periodically** (cadence by sizing profile; full sweep weekly on M). Any mismatch (tampering or bit-rot) raises a high-severity integrity alarm + audit row and flags the affected version/record in the UI. |
 | **Download integrity** | Downloads/exports include the SHA-256; evidence packs ship a manifest of digests so an external auditor can independently verify nothing changed in transit or at rest. |
-| **Mirror integrity** | The read-only filesystem mirror is **regenerated from released versions only** (authority flows vault→mirror). The mirror is never read back as truth; if it is altered on disk, the next mirror-sync overwrites it, and the discrepancy is not trusted. |
+| **Mirror integrity** | The read-only filesystem mirror is **regenerated from Effective versions only** (authority flows vault→mirror). The mirror is never read back as truth; if it is altered on disk, the next mirror-sync overwrites it, and the discrepancy is not trusted. |
 
 ---
 
@@ -445,13 +453,16 @@ flowchart TD
 | Keycloak realm | Realm export JSON (encrypted) | On config change + nightly | Realm import |
 | Config / secrets | `.env` + Compose snapshot (encrypted) | On change | Redeploy |
 | **Audit checkpoints** | Latest signed chain checkpoints bundled into every backup | Each backup | Verifies chain integrity post-restore |
-| OpenSearch | **Not backed up** | — | Reindex from PG+MinIO |
+| OpenSearch (reserved) | **Not deployed or backed up in shipped S/M** | — | Rebuild from authoritative stores if a future extension is deployed |
 | Filesystem mirror | **Not backed up** | — | Regenerate from vault |
 
 ### 8.2 Backup/restore flow & consistency
 
 - `easysynq backup` briefly **quiesces** (short consistency lock) to align the DB dump with the blob manifest, then produces a **single timestamped, checksummed, encrypted archive** (DB dump + MinIO manifest + Keycloak realm + config + audit checkpoint) written to the admin-configured target. Backup success/failure is an audited event and alertable.
-- `easysynq restore` **verifies checksums and decrypts**, restores PG + MinIO, re-imports the realm, **re-walks and verifies the audit hash chain against the bundled checkpoint** (a restore that fails chain verification is flagged, not silently accepted), then triggers **reindex + mirror-sync**.
+- `easysynq restore` **verifies checksums and decrypts**, restores PG + MinIO, re-imports the realm,
+  and **re-walks and verifies the audit hash chain against the bundled checkpoint** (a restore that
+  fails chain verification is flagged, not silently accepted). After cutover, the operator runs
+  `easysynq mirror rebuild`; a future derived search index would also be rebuilt if deployed.
 - A documented **restore drill** is part of the admin runbook and is itself an auditable, recommended-periodic activity (the only way to trust a backup is to have restored one).
 
 ### 8.2.1 WORM-aware restore, PITR ↔ blob alignment & quiesce bound (reconciled per Decisions Register R37)

@@ -1,6 +1,12 @@
 # Document Control & The Controlled Vault
 
-This section specifies the engine that implements ISO 9001:2015 Clause 7.5 ("control of documented information") and is the root fix for **document drift**: the **Controlled Vault** — PostgreSQL (metadata, lifecycle, audit) plus MinIO (immutable, content-addressed blobs) — is the single source of truth, and the on-disk **Filesystem Mirror** is a regenerated, read-only export written *only* from Released versions, so authority always flows vault → mirror and never the reverse. It defines the maintained-**Document** lifecycle state machine (the canonical 7-state engine `Draft → InReview → Approved → Effective → UnderRevision → Superseded → Obsolete`, displayed as Draft / In Review / Approved / Effective / Under Revision / Superseded / Obsolete) with allowed transitions, triggering actors, and side effects; the immutable-version vs mutable-working-draft model; check-out/check-in and distributed locking; the document metadata schema and the numbering/identification scheme; controlled-copy vs uncontrolled-copy semantics with on-print/on-export watermarking and revision-bearing headers/footers; distribution lists with read-and-understood acknowledgement; periodic review and obsolescence cycles; and the read-only organized filesystem mirror. Everything here governs **Documents (maintained)**; the parallel rules for **Records (retained)** — immutability, retention, disposition — are referenced where they intersect but specified in the domain model (§4, doc 02) and the Records/Evidence section. Approval is modeled throughout as the recorded review decision and is the explicit **signature hook** for additive 21 CFR Part 11 e-signatures.
+This section specifies the engine that implements ISO 9001:2015 Clause 7.5 ("control of documented information") and is the root fix for **document drift**: the **Controlled Vault** — PostgreSQL (metadata, lifecycle, audit) plus MinIO (immutable, content-addressed blobs) — is the single source of truth, and the on-disk **Filesystem Mirror** is a regenerated, read-only export written *only* from Effective versions, so authority always flows vault → mirror and never the reverse. It defines the maintained-**Document** lifecycle state machine (the canonical 7-state engine `Draft → InReview → Approved → Effective → UnderRevision → Superseded → Obsolete`, displayed as Draft / In Review / Approved / Effective / Under Revision / Superseded / Obsolete) with allowed transitions, triggering actors, and side effects; the immutable-version vs mutable-working-draft model; check-out/check-in and distributed locking; the document metadata schema and the numbering/identification scheme; controlled-copy vs uncontrolled-copy semantics with on-print/on-export watermarking and revision-bearing headers/footers; distribution lists with read-and-understood acknowledgement; periodic review and obsolescence cycles; and the read-only organized filesystem mirror. Everything here governs **Documents (maintained)**; the parallel rules for **Records (retained)** — immutability, retention, disposition — are referenced where they intersect but specified in the domain model (§4, doc 02) and the Records/Evidence section. Approval is modeled throughout as the recorded review decision and is the explicit **signature hook** for additive 21 CFR Part 11 e-signatures.
+
+> **Implementation status (audited 2026-07-30).** The shipped lifecycle omits target transition T5
+> (rescind an Approved version) and T8 (discard an open revision); the transition table marks these
+> deferrals. Current global search indexes Effective-document metadata only, so references below to
+> history indexing describe target design. Use the [User Manual](manuals/user-manual.md) for the
+> current routed workflow.
 
 > **Scope note.** "Document" in this section means a maintained `DocumentedInformation` of `kind = DOCUMENT` (Quality Policy, Manual, Scope Statement, Process Definition, Procedure/SOP, Work Instruction, Form/Template, Quality Objective, registers). Records (`kind = RECORD`) do not have this lifecycle: they are captured-immutable and follow Retention/Disposition (§9.4 cross-reference). Every behavior below is enforced **server-side in the `api` tier, deny-by-default**, and writes an **append-only audit event**.
 
@@ -12,9 +18,9 @@ This section specifies the engine that implements ISO 9001:2015 Clause 7.5 ("con
 |---|---|
 | **Controlled Vault** | The authoritative store: PostgreSQL (metadata, lifecycle state, versions, approvals, distribution, audit) + MinIO (immutable content-addressed blobs). Nothing is "controlled" unless it lives here. |
 | **Document** | A logical maintained item with stable identity (`document.id`, `identifier`), a lifecycle, and an ordered chain of immutable **Versions**. |
-| **Version (Revision)** | An immutable snapshot of a Document at a point in time (e.g. Rev C / v3.0). Owns its own metadata snapshot, one **source blob** + derived **renditions**, an approval record, and a lifecycle `version_state`. Never mutated after creation. |
+| **Version (Revision)** | An immutable content/metadata snapshot of a Document at a point in time (e.g. Rev C / v3.0). Owns its own metadata snapshot, one **source blob** + derived **renditions**, an approval record, and a lifecycle `version_state`. Controlled lifecycle fields (state/effectivity/supersession pointers) transition; snapshot content does not. |
 | **Working Draft** | The *only* mutable surface in the Document world: a Version in state `Draft` or `Under Revision` that is checked out and being edited. On check-in it becomes an immutable Version snapshot. |
-| **Effective / Released Version** | The single Version of a Document that currently governs (the authority). Exactly **one per Document at a time** (or zero, if never released / fully obsolete). This is what the mirror exports and what Records pin. |
+| **Effective Version** | The single Version of a Document that currently governs (the authority). There is **at most one per Document at a time**: an active released document has one, while a never-released or fully Obsolete document has none. This is what the mirror exports and what Records pin. |
 | **Blob** | An immutable binary identified by its SHA-256 digest, stored once (content-addressed, deduplicated) in MinIO under object-lock/WORM. |
 | **Rendition** | A derived blob (normalized PDF, thumbnail, extracted text) produced by the renderer from a source blob. Rebuildable; never authoritative. |
 | **Check-out / Check-in** | The mandatory edit protocol: check-out acquires an exclusive lock and opens a Working Draft; check-in creates a new immutable Version and **requires a Change Reason/Summary**. |
@@ -22,13 +28,13 @@ This section specifies the engine that implements ISO 9001:2015 Clause 7.5 ("con
 | **Uncontrolled Copy** | Any manifestation EasySynQ cannot keep current (an ad-hoc print, a downloaded PDF taken offline). Stamped "UNCONTROLLED COPY" with a freshness warning so it can never masquerade as the authority. |
 | **Distribution List** | The set of users/roles/processes to whom a Document is *issued*, optionally requiring **read-and-understood acknowledgement**. |
 | **Periodic Review** | A scheduled re-confirmation that an Effective Document is still valid, on a per-document `review_period`. |
-| **Supersession** | The atomic act of a newly Released Version replacing the prior Effective Version, which is moved to `Superseded`. |
+| **Supersession** | The atomic act of a newly Effective Version replacing the prior Effective Version, which is moved to `Superseded`. |
 | **Obsolescence** | Withdrawal of a Document (or all its versions) from effective use; retained read-only for traceability per the standard's "control of obsolete documented information." |
 | **Signature hook** | The approval/transition decision modeled as an append-only `signature_event` row (signer, meaning, intent, timestamp, method) — single-factor today, Part 11 e-signature later, additively. |
 
 > **Assumption A1.** v1 normalizes editable source files (Office, Markdown, etc.) to a PDF rendition for preview, watermarking, and mirror; the **source blob remains the editable master** for the next revision. In-app rich authoring is a non-goal (N4); editing happens in the user's native tool around the check-out/check-in protocol.
 
-> **Assumption A2.** "One Effective version at a time" is enforced by a database constraint, not merely by convention (see §3.4). This directly serves success metric **M (zero uncontrolled effective versions)**.
+> **Assumption A2.** "At most one Effective version at a time" is enforced by a database constraint, not merely by convention (see §3.4). An active released document has one. This directly serves success metric **M (zero uncontrolled effective versions)**.
 
 > **Assumption A3.** Registers (Context 4.1, Interested Parties 4.2, Risk/Opportunity 6.1) are maintained Documents whose *rows* version together; they use the same lifecycle but typically a **lightweight approval profile** (§4.5). All other rules apply unchanged.
 
@@ -110,7 +116,7 @@ This is the **canonical 7-state machine** (reconciled per Decisions Register R1)
 | **`Approved`** | Approved | Review decision recorded (signature hook fired); not yet effective (awaiting effective date / release). | No | No | No | Internal-only |
 | **`Effective`** | Effective | The single governing revision. | No | **Yes** | **Yes** | Yes |
 | **`UnderRevision`** | Under Revision | A *new* Working Draft (next revision) is open while the current Effective revision **keeps governing**. | Yes (the new draft only) | The prior Effective still governs | Prior Effective stays in mirror | Prior Effective stays indexed |
-| **`Superseded`** | Superseded | A previously Effective revision replaced by a newer Released revision. Retained read-only for traceability. | No | No | No (removed/marked) | Yes (history search) |
+| **`Superseded`** | Superseded | A previously Effective revision replaced by a newer Effective revision. Retained read-only for traceability. | No | No | No (removed/marked) | Yes (history search) |
 | **`Obsolete`** | Obsolete | The Document (or version) is withdrawn from effective use entirely; retained read-only. | No | No | No | Yes (history search) |
 
 > **Document-level vs Version-level state.** A Document has a `current_state` (the headline status users see), but state lives precisely on **versions** because multiple versions coexist (e.g. one `Effective` while another is `UnderRevision`). The Document's `effective_version_id` points to the single governing version; `current_state` is derived (e.g. `UnderRevision` if any version is being revised while an Effective one exists).
@@ -132,15 +138,16 @@ stateDiagram-v2
     UnderRevision --> Effective: Revision abandoned\n(discard draft; effective unchanged)
     UnderRevision --> InReview: Revised draft submitted
 
-    Effective --> Superseded: A newer revision is Released\n(this revision moved to Superseded)
+    Effective --> Superseded: A newer revision becomes Effective\n(this revision moved to Superseded)
     Effective --> Obsolete: Withdraw / make obsolete\n(no successor; QM decision)
     Superseded --> Obsolete: Document fully retired
 
     Obsolete --> [*]: Retained read-only (traceability)
 
     note right of Effective
-        Exactly ONE Effective
-        version per document at a time.
+        At most ONE Effective
+        version per document at a time;
+        an active released document has one.
         Only Effective versions are written
         to the read-only filesystem mirror.
     end note
@@ -173,11 +180,12 @@ Each transition lists the **typical persona** trigger (permissions are atomic an
 
 > **Who can do what is *granted*, not role-bound.** The "Trigger (typical)" column maps to canonical personas (Priya/Ken/Mara/Diego) only as the *usual* bundle. The actual gate is the atomic permission in column 4, evaluated against scope (system/process/folder/document) with per-user overrides. Ingrid (Internal Auditor) is **explicitly denied** all mutating document permissions (T1–T12) to preserve audit independence; Sam (Read-only) and Olsen (External Auditor) likewise hold none.
 
-### 3.4 The "exactly one Effective" invariant (enforced, not advisory)
+### 3.4 The single-Effective invariant (enforced, not advisory)
 
 This is the linchpin against drift and is enforced at the database layer, not by application logic alone:
 
 - A **partial unique index** on `document_version (document_id) WHERE version_state = 'Effective'` makes a second concurrent Effective row impossible (reconciled per Decisions Register R1: canonical state token `Effective`).
+- The constraint is **at most one**, not "one at every instant": a document can have no Effective version before its first release or after it is made Obsolete. An active released document has one governing Effective version.
 - Supersession (T6/T10) executes inside **one serializable transaction**: insert/flip new version to `Effective`, flip prior to `Superseded`, update `document.effective_version_id`. Either all succeed or none do.
 - The Redis check-out lock prevents two authors racing to release competing revisions.
 
@@ -197,7 +205,7 @@ sequenceDiagram
     PG->>PG: append audit (RELEASED, SUPERSEDED)
     PG->>PG: append signature_event (meaning=release)
     API->>PG: COMMIT  (partial-unique index guarantees single effective)
-    API-->>Mara: 200 Released
+    API-->>Mara: 200 Effective
     API->>Worker: enqueue mirror-sync, distribution, ack, index
     Worker->>Mirror: write new Effective; remove superseded
 ```
@@ -515,13 +523,13 @@ Documents retain *superseded versions* for traceability and are *withdrawn* (obs
 
 ### 10.1 Purpose & cardinal rule
 
-The Mirror is a regenerated, **read-only** directory tree reflecting the **current Released/Effective state** of the vault, for offline browsing, OS-level backup convenience, and human reassurance (people can still "see the files"). **Authority flows vault → mirror, never the reverse** — the filesystem is never the master. This inversion is the structural root-cause fix for document drift.
+The Mirror is a regenerated, **read-only** directory tree reflecting the **current Effective state** of the vault, for offline browsing, OS-level backup convenience, and human reassurance (people can still "see the files"). **Authority flows vault → mirror, never the reverse** — the filesystem is never the master. This inversion is the structural root-cause fix for document drift.
 
 ### 10.2 What is mirrored
 
 | Included | Excluded |
 |---|---|
-| **Only Released/Effective versions** (the single governing revision of each Document) | Drafts, In Review, Approved-but-not-yet-effective |
+| **Only Effective versions** (the single governing revision of each Document) | Drafts, In Review, Approved-but-not-yet-effective |
 | Normalized **PDF rendition** (watermarked "CONTROLLED COPY", §11), stamped header/footer | Editable source blobs (the master stays in the vault) |
 | A per-document `metadata.json` + human `CHANGELOG` (revision, effective date, change reason) | Superseded versions (kept in vault; optionally a separate `_history/` export) |
 | A top-level `INDEX` / manifest with SHA-256 of each file | Records (separate evidence export, scope-limited; see Evidence Pack) |
@@ -565,7 +573,7 @@ A configurable **secondary index by Process** (symlinks or a parallel `by-proces
 
 ### 10.5 Why this kills drift
 
-Because only Released versions reach the mirror, drafts can never appear on disk as if governing; because the mirror is read-only and reconciled against vault checksums, an edited on-disk file is detected — its bytes quarantined for forensics (§10.6) — and overwritten (and alarmed) rather than becoming a competing truth; and because the editable master never leaves the vault, there is no "the real Word file on someone's laptop" path. The three classic drift vectors are structurally closed.
+Because only Effective versions reach the mirror, drafts can never appear on disk as if governing; because the mirror is read-only and reconciled against vault checksums, an edited on-disk file is detected — its bytes quarantined for forensics (§10.6) — and overwritten (and alarmed) rather than becoming a competing truth; and because the editable master never leaves the vault, there is no "the real Word file on someone's laptop" path. The three classic drift vectors are structurally closed.
 
 ### 10.6 Mirror drift detection, quarantine & mount contract (reconciled per Decisions Register R11)
 

@@ -2,6 +2,15 @@
 
 EasySynQ enforces a **hybrid RBAC + ABAC** authorization model in which the atomic unit of access is the **Permission** (a `resource.action` capability), **Roles** are nothing more than convenient org-defined *bundles* of permissions (never a hard boundary), and every grant is **scoped** by attributes (system / process-area / folder / document-class / single artifact) and may be tuned by **direct per-user overrides**. Authorization is **deny-by-default**, evaluated **server-side in the `api` tier on every request** (never trusted from the client), and produces an append-only audit row for every permission change. This section defines the ADMIN super-role and its deliberate separation from quality-content authority; the complete permission catalog as `resource × action`; the role-bundle and per-user-override mechanics; the attribute-based scoping model; separation-of-duties (SoD) constraints; delegation / acting-on-behalf-of; the deterministic permission-evaluation/resolution order; and worked examples mapping the canonical personas (Avery, Mara, Diego, Priya, Ken, Ingrid, Sam, Olsen) to concrete grants — including a granular per-document override. It aligns verbatim to the locked terminology of the Vision & Scope, Domain Model, and Architecture sections, and reserves (without building) the hooks needed for 21 CFR Part 11 and multi-standard extension.
 
+> **Implementation status (audited 2026-07-30).** The 102-key catalog, seeded role bundles,
+> deny-wins PDP/PEP, scoped assignments, overrides, two-tier grant boundary, and SoD gates ship.
+> Administration → Roles is a read-only bundle inspector; Users manages assignments and
+> system-scoped overrides, while finer scopes remain API-level. Custom-role editing, delegation,
+> and the effective-permissions explorer remain target design. The host `grant-role` recovery CLI
+> writes directly as the DB owner and is outside the normal audited API mutation path; production
+> use requires an independent change/incident record as described in the
+> [Administrator & IT Manual](manuals/administrator-it-manual.md).
+
 ---
 
 ## 1. Concepts, Terms & Invariants
@@ -103,7 +112,7 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 | `document.submit` | Submit Draft → In Review | ARTIFACT | yes (author side) | – |
 | `document.review` | Record review comments / request changes (In Review) | ARTIFACT | yes | – |
 | `document.approve` | Record the approval decision (In Review → Approved) | ARTIFACT | **yes (core)** | **yes** |
-| `document.release` | Approved → Released/Effective (sets the one effective version) | ARTIFACT | **yes (core)** | **yes** |
+| `document.release` | Approved → Effective (sets the governing version) | ARTIFACT | **yes (core)** | **yes** |
 | `document.obsolete` | Released → Obsolete (supersede/withdraw) | ARTIFACT | yes | yes |
 | `document.delete_draft` | Discard a never-released Draft (hard rule: released versions are immutable, never deletable) | ARTIFACT | – | – |
 | `document.manage_metadata` | Edit clause_map, process_links, owner, identifier scheme, review cadence | ARTIFACT / DOC_CLASS | – | – |

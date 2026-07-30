@@ -1,6 +1,12 @@
 # Revision / Change Management & Document Drift Prevention
 
-This section specifies the **heart of EasySynQ**: how controlled **Documents** (maintained documented information, ISO 9001:2015 Clause 7.5) acquire immutable versions, how change is governed end-to-end through a **Document Change Request (DCR)** with reason-for-change, impact assessment, and approval routing, and — most importantly — how **document drift is structurally PREVENTED** and, where it can still occur outside the system's reach (paper printouts, copied files), **DETECTED**. The root architectural fix is inherited from the Vision and Architecture docs: the **Controlled Vault** (PostgreSQL + MinIO) is the single source of truth, the **Filesystem Mirror** is a read-only, regenerated export written *only* from Released/Effective versions, and authority flows **vault → mirror, never the reverse**. Every Document version is an immutable, content-addressed snapshot; editing happens only through **Check-out / Check-in** under a Redis distributed lock with a mandatory Change Reason; and exactly **one** Released/Effective version exists per Document at any instant. This section also defines major/minor revision semantics, effectivity dates and scheduled future revisions, text and metadata redline/diff, the strict separation of the effective version from the working copy, scheduled re-review, and **where-used / impact analysis** across processes, records, and links. It aligns verbatim to the canonical lifecycle `Draft → In Review → Approved → Released/Effective → Obsolete`, the maintain/retain distinction, the append-only audit trail, and the Part-11 `signature_event` extension hook — building none of the deferred non-goals (N1–N10).
+This section specifies the **heart of EasySynQ**: how controlled **Documents** (maintained documented information, ISO 9001:2015 Clause 7.5) acquire immutable versions, how change is governed end-to-end through a **Document Change Request (DCR)** with reason-for-change, impact assessment, and approval routing, and — most importantly — how **document drift is structurally PREVENTED** and, where it can still occur outside the system's reach (paper printouts, copied files), **DETECTED**. The root architectural fix is inherited from the Vision and Architecture docs: the **Controlled Vault** (PostgreSQL + MinIO) is the single source of truth, the **Filesystem Mirror** is a read-only, regenerated export written *only* from Effective versions, and authority flows **vault → mirror, never the reverse**. Every Document version is an immutable, content-addressed snapshot; editing happens only through **Check-out / Check-in** under a Redis distributed lock with a mandatory Change Reason; and at most **one** Effective version exists per Document at any instant. This section also defines major/minor revision semantics, effectivity dates and scheduled future revisions, text and metadata redline/diff, the strict separation of the effective version from the working copy, scheduled re-review, and **where-used / impact analysis** across processes, records, and links. It aligns to the canonical lifecycle `Draft → InReview → Approved → Effective → UnderRevision → Superseded → Obsolete`, the maintain/retain distinction, the append-only audit trail, and the Part-11 `signature_event` extension hook — building none of the deferred non-goals (N1–N10).
+
+> **Implementation status (audited 2026-07-30).** Scheduled effectivity is applied by the
+> five-minute Beat sweep or an explicit release trigger; ordinary reads do not run a lazy cutover.
+> T5 approval rescission/rescheduling and T8 open-revision discard remain unmounted. Version content
+> and frozen metadata are immutable, while controlled lifecycle fields such as `version_state`,
+> `effective_to`, and `superseded_by_version_id` change only through lifecycle services.
 
 ---
 
@@ -13,7 +19,7 @@ This section specifies the **heart of EasySynQ**: how controlled **Documents** (
 | The **version model** for Documents (maintained): revision numbering, immutable snapshots, effectivity dates, scheduled future revisions. | Record (retained) immutability and retention/disposition — covered by the domain model §4 and a future Records/Retention section. Records do **not** revise; corrections create a new record via `correction_of`. |
 | **Document Change Request (DCR)**: trigger, reason-for-change, impact assessment, approval routing, link to the resulting version. | Full permission catalog / ABAC scope resolution — the Permissions section. We reference `permission keys` here but do not define their evaluation. |
 | **Redline / diff** between two versions (text content and metadata). | CAPA workflow internals — the Improvement section. We define only the **DCR ↔ CAPA link** and how a CAPA can spawn a DCR. |
-| **Drift prevention** (single source of truth, lock, no edits to Released, controlled distribution) and **drift detection** (hashes, mirror tamper detection, uncontrolled-copy flagging, scheduled re-review). | Part 11 e-signature cryptographic detail — non-goal **N1**; we only keep the `signature_event` hook intact. |
+| **Drift prevention** (single source of truth, lock, no edits to Effective versions, controlled distribution) and **drift detection** (hashes, mirror tamper detection, uncontrolled-copy flagging, scheduled re-review). | Part 11 e-signature cryptographic detail — non-goal **N1**; we only keep the `signature_event` hook intact. |
 | **Where-used / impact analysis** across processes, records, and document links. | Import/ingest of an existing QMS — the Import section. We define how an *imported* document acquires its initial baseline version (§2.6). |
 
 ### 1.2 Terms (precise, additive to the canonical glossary)
@@ -22,8 +28,8 @@ This section specifies the **heart of EasySynQ**: how controlled **Documents** (
 |---|---|
 | **Document** | A logical controlled item of *maintained* documented information with a stable `document_id`, a lifecycle, and an ordered chain of immutable **Versions**. (Domain model: a `DocumentedInformation` with `kind = DOCUMENT`.) |
 | **Version (Revision)** | An immutable point-in-time snapshot of a Document: its content blob(s), its full metadata set, its change reason, its approval/`signature_event` record, and its effectivity window. Identified by `version_id` (uuid) and an ordered, human revision label (§2.2). |
-| **Baseline version** | The first Released version of a Document (revision `1.0` / `A`). Imported documents are baselined at ingest (§2.6). |
-| **Effective version** | The single Version whose effectivity window contains *now* and whose Document state is Released/Effective. Exactly one per Document at any instant (invariant **INV-1**). |
+| **Baseline version** | The first Effective version of a Document (revision `1.0` / `A`). Imported documents are baselined at ingest (§2.6). |
+| **Effective version** | The single Version whose effectivity window contains *now* and whose Document state is Effective. At most one per Document can exist at an instant; an active released Document has one (invariant **INV-1**). |
 | **Working copy** | The *mutable editing surface* created by Check-out. It is **not** a Version, is **never** mirrored, is **never** the source of truth, and is visible as a Draft only to those with `document.read_draft` scope. Becomes an immutable Version on Check-in. |
 | **DCR (Document Change Request)** | The governed request-to-change object: what document, why, impact assessment, routing, decision, and the resulting version. The DCR is a controlled **workflow object** with a *mutable* `state` column and an append-only history of stage events — **not** a `kind=RECORD` immutable artifact; its closed form is retained as a record-like snapshot (reconciled per Decisions Register R22). It is the auditable answer to "why did this change?". |
 | **Change Reason / Summary** | The mandatory free-text + classified justification captured at Check-in *and* on the DCR. Never optional. Drives the revision-history presentation and the diff header. |
@@ -58,9 +64,9 @@ flowchart LR
 
     subgraph CHAIN["Immutable Version chain (append-only)"]
       direction LR
-      V1["v1  Rev 1.0\nReleased -> Obsolete"]
-      V2["v2  Rev 1.1\nReleased -> Obsolete"]
-      V3["v3  Rev 2.0\nReleased/Effective"]
+      V1["v1  Rev 1.0\nEffective -> Obsolete"]
+      V2["v2  Rev 1.1\nEffective -> Obsolete"]
+      V3["v3  Rev 2.0\nEffective"]
       V4["v4  Rev 2.1\nDraft (working copy checked in)"]
       V1 --> V2 --> V3 --> V4
     end
@@ -110,10 +116,10 @@ EasySynQ stores a system-owned monotonic `version_seq` (1, 2, 3, …) and projec
 **Worked numbering example (numeric scheme, `version_seq` in brackets):**
 
 ```
-[1] Rev 1.0  Released  2024-02-01  (baseline)         <- MAJOR
-[2] Rev 1.1  Released  2024-06-15  (fix typo in §4)   <- MINOR
-[3] Rev 2.0  Released  2025-01-10  (new approval step)<- MAJOR
-[4] Rev 2.1  Released  2025-09-01  (clarify wording)  <- MINOR
+[1] Rev 1.0  Effective  2024-02-01  (baseline)         <- MAJOR
+[2] Rev 1.1  Effective  2024-06-15  (fix typo in §4)   <- MINOR
+[3] Rev 2.0  Effective  2025-01-10  (new approval step)<- MAJOR
+[4] Rev 2.1  Effective  2025-09-01  (clarify wording)  <- MINOR
 [5] Rev 3.0  scheduled 2026-07-01  (regulatory change)<- MAJOR, future-effective
 ```
 
@@ -133,7 +139,10 @@ When a Version is created (at Check-in for a Draft, finalized at Release), the f
 | `effective_from`, `effective_to` (window) | Permanent effectivity history. |
 | `created_by`, `created_at` | Authorship. |
 
-Mutation is **physically prevented**: blobs sit under MinIO object-lock/WORM; Version rows have no UPDATE path in the API (only INSERT of a successor); the audit table is append-only and partitioned (Architecture invariant 3). The only mutable thing about history is the *Document's pointer* to which version is currently effective.
+Snapshot mutation is **physically prevented**: blobs sit under MinIO object-lock/WORM; the API has
+no edit-in-place path for a checked-in version's content or frozen metadata, and change creates a
+successor. Lifecycle services do update controlled state/effectivity/supersession fields. The audit
+table is append-only and partitioned (Architecture invariant 3).
 
 ### 2.4 Effectivity dates & scheduled future revisions
 
@@ -142,14 +151,16 @@ Each Version carries an effectivity window `[effective_from, effective_to)`. Thi
 | Field | Set when | Behavior |
 |---|---|---|
 | `effective_from` (`timestamptz`, UTC) | At Release (or scheduled at approval) | Captured in the UI as a DATE = local-midnight in the org timezone, converted to UTC at save; displayed in org tz (reconciled per Decisions Register R8). If `<= now` (server UTC), the version becomes Effective immediately. If `> now`, it is **Approved + scheduled**; it does **not** govern yet and is **not** mirrored yet. |
-| `effective_to` | Auto-set when a successor's `effective_from` is reached | Marks the close of this version's reign; version becomes Obsolete/Superseded. |
+| `effective_to` | Auto-set when a successor's `effective_from` is reached | Marks the close of this version's reign; the version becomes Superseded and may later be archived as Obsolete. |
 
 **Scheduled future revision invariants:**
 
-- **INV-1 (single effective):** At any instant, at most one Version of a Document has `effective_from <= now < effective_to` AND Document state Released/Effective. Enforced by a partial unique constraint + the transition logic.
+- **INV-1 (single effective):** At any instant, at most one Version of a Document has `effective_from <= now < effective_to` AND Document state Effective. Enforced by a partial unique constraint + the transition logic.
 - A scheduled version sits in state **Approved (scheduled)**. The currently-Effective version keeps governing until the scheduled `effective_from`.
-- At `effective_from`, the **effectivity cutover** (Celery Beat sweep, §2.5) atomically: sets predecessor `effective_to = effective_from`, flips predecessor → Obsolete, flips scheduled → Released/Effective, repoints `Document.effective_version_id`, enqueues mirror-sync + re-acknowledge (if MAJOR), and writes audit events.
-- A scheduled version can be **rescheduled or cancelled** before its `effective_from` via a controlled action (audited); cancellation returns it to Draft/Obsolete without ever having governed.
+- At `effective_from`, the **effectivity cutover** (Celery Beat sweep, §2.5) atomically: sets predecessor `effective_to = effective_from`, flips predecessor → Superseded, flips scheduled → Effective, repoints `Document.effective_version_id`, enqueues mirror-sync + re-acknowledge (if MAJOR), and writes audit events.
+- **Current limitation:** T5 approval rescission/rescheduling is not mounted. Verify a future
+  `effective_from` before approval; the scheduled version will otherwise become Effective when the
+  release sweep processes it.
 
 ```mermaid
 sequenceDiagram
@@ -164,23 +175,27 @@ sequenceDiagram
     Note over PG: Rev 2.1 (v4) STILL Effective. INV-1 holds.
     Beat->>API: cutover sweep @ 2026-07-01T00:00Z
     API->>PG: BEGIN TX
-    API->>PG: v4.effective_to = 2026-07-01; v4 -> Obsolete
-    API->>PG: v5 -> Released/Effective; Document.effective_version_id = v5
+    API->>PG: v4.effective_to = 2026-07-01; v4 -> Superseded
+    API->>PG: v5 -> Effective; Document.effective_version_id = v5
     API->>PG: append AUDIT (CUTOVER, EFFECTIVE_CHANGED)
     API->>PG: COMMIT TX
     API->>W: enqueue mirror-sync + re-acknowledge (MAJOR)
 ```
 
-### 2.5 Effectivity evaluation (Beat sweep + lazy read)
+### 2.5 Effectivity evaluation (Beat sweep + explicit triggers)
 
 Two mechanisms keep effectivity correct:
 
-1. **Celery Beat cutover sweep** (default every 5 min, configurable): finds Approved-scheduled versions whose `effective_from <= now` and performs the atomic cutover (§2.4). Also closes any window edge cases.
-2. **Lazy read guard:** every read of `Document.effective_version_id` is validated against the clock; if a cutover is due but the sweep has not yet run, the read path performs (or triggers) the cutover so the user is never served a stale effective pointer. This makes correctness independent of sweep latency.
+1. **Celery Beat cutover sweep** (every 5 minutes): finds Approved-scheduled versions whose
+   `effective_from <= now` and performs the atomic cutover (§2.4).
+2. **Explicit release triggers:** an immediate release performs the cutover in its transaction, and
+   DCR implementation enqueues the due-release task. Ordinary read paths do **not** mutate lifecycle
+   state or run a lazy cutover. A scheduled version can therefore remain Approved until the next
+   successful sweep if Beat is late or unavailable; readiness/operations must monitor Beat.
 
 ### 2.6 Baseline of imported documents
 
-When the Import process ingests an existing file as a controlled Document, EasySynQ creates a **baseline version** (`version_seq = 1`, default `Rev 1.0` / `A`) in state Released/Effective, with:
+When the Import process ingests an existing file as a controlled Document, EasySynQ creates a **baseline version** (`version_seq = 1`, default `Rev 1.0` / `A`) in state Effective, with:
 - `change_reason = "Imported baseline (migration)"`, `change_significance = MAJOR`,
 - `source_blob_digest` computed at ingest (the integrity anchor for all future drift detection),
 - `effective_from = import date` (or an admin-supplied "as-of"),
@@ -196,18 +211,18 @@ This separation is the single most important runtime rule for drift prevention. 
 
 | | **Effective version** | **Working copy** |
 |---|---|---|
-| Nature | An immutable Released Version | A mutable editing surface (a Draft-in-progress) |
-| Exists | Always (exactly one per Document) | Only between Check-out and Check-in |
+| Nature | An immutable Effective Version | A mutable editing surface (a Draft-in-progress) |
+| Exists | While the Document is actively released (at most one; none before first release or after full obsolescence) | Only between Check-out and Check-in |
 | Source of truth? | **Yes** | **No, never** |
-| Mirrored to filesystem? | **Yes** (only Released) | **Never** |
+| Mirrored to filesystem? | **Yes** (only Effective) | **Never** |
 | Served to readers / external auditors? | Yes (controlled rendition) | No (only `document.read_draft` holders) |
 | Editable? | **No** (no edit path exists) | Yes (the only place edits happen) |
 | Lock | n/a | Holds the Redis exclusive lock |
 | On Check-in | unchanged | Becomes a new immutable Draft Version (does not auto-release) |
 
 **Hard rules (server-enforced, deny-by-default):**
-- **No edit-in-place of a Released version, ever.** There is no API verb to mutate a Released Version's content. Change requires Check-out, which creates a *new* working copy / Draft version — the Effective version keeps governing untouched until a successor is *released*.
-- **Check-in does not release.** A checked-in working copy becomes a Draft version and must traverse `Draft → In Review → Approved → Released/Effective`. Until then, the prior version remains Effective (INV-1).
+- **No edit-in-place of an Effective version, ever.** There is no API verb to mutate an Effective Version's content. Change requires Check-out, which creates a *new* working copy / Draft version — the Effective version keeps governing untouched until a successor is *released*.
+- **Check-in does not release.** A checked-in working copy becomes a Draft version and must traverse `Draft → In Review → Approved → Effective`. Until then, the prior version remains Effective (INV-1).
 - The **working copy is invisible to ordinary readers**; Sam (read-only) and Olsen (external auditor) only ever see the Effective version. Ingrid (internal auditor) sees drafts as read-only for independence but cannot edit.
 
 ```mermaid
@@ -216,14 +231,17 @@ stateDiagram-v2
     Draft --> InReview: Submit for review (with Change Reason)
     InReview --> Draft: Changes requested (recorded reason)
     InReview --> Approved: Approver approves (signature_event)
-    Approved --> Released: effective_from reached / released now
+    Approved --> Effective: effective_from reached / released now
     note right of Approved
       If effective_from is future-dated,
       state = Approved (scheduled);
       prior version stays Effective (INV-1).
     end note
-    Released --> Draft: Check out for revision (new working copy)
-    Released --> Obsolete: superseded by successor / withdrawn
+    Effective --> UnderRevision: Start revision (effective version still governs)
+    UnderRevision --> InReview: Submit revised draft
+    Effective --> Superseded: Successor becomes Effective
+    Effective --> Obsolete: Withdraw without a successor
+    Superseded --> Obsolete: Archive superseded version
     Obsolete --> [*]
 ```
 
@@ -274,7 +292,7 @@ sequenceDiagram
 |---|---|
 | Concurrency | Exactly one holder. Second check-out → `409 Conflict` with holder + since-timestamp. |
 | Lock TTL | Default 8h, renewed on editor heartbeat; prevents permanent locks from a closed tab. |
-| Abandoned lock | On TTL expiry the lock auto-releases; the in-progress working copy is **PRESERVED as recoverable scratch** — never silently discarded (reconciled per Decisions Register R9, aligning with doc 04). The displaced editor may **check in as a new draft** if no successor was released; if a successor exists, their work is **offered as a starting point for a fresh revision**. An audit `LOCK_EXPIRED` event is written. No partial/uncontrolled state can leak (the scratch is a Draft surface, never Released or mirrored). |
+| Abandoned lock | On TTL expiry the lock auto-releases; the in-progress working copy is **PRESERVED as recoverable scratch** — never silently discarded (reconciled per Decisions Register R9, aligning with doc 04). The displaced editor may **check in as a new draft** if no successor was released; if a successor exists, their work is **offered as a starting point for a fresh revision**. An audit `LOCK_EXPIRED` event is written. No partial/uncontrolled state can leak (the scratch is a Draft surface, never Effective or mirrored). |
 | Forced takeover / break-lock | Requires `document.checkout` (typically Mara/Quality Manager) and a **confirm warning**. Audited as `LOCK_BROKEN` with reason; notifies the displaced holder. As with lock expiry, the displaced holder's working copy is **preserved as recoverable scratch** (R9): check in as a new draft if no successor was released, otherwise offered as a starting point for a fresh revision. |
 | Cancel check-out | `POST /checkout/cancel` discards the working copy, releases the lock, writes audit; no Version is created. |
 | Mandatory Change Reason | Check-in is **rejected** (422) if `change_reason` is empty or `change_significance` unset. This is the non-bypassable provenance gate (metric M2/M4 support). |
@@ -289,7 +307,7 @@ The DCR is the governed wrapper around a change: *why* it is needed, *what* it i
 
 | Scenario | DCR required? |
 |---|---|
-| Major revision to a Released document | **Yes** (always). |
+| Major revision to an Effective document | **Yes** (always). |
 | Minor/editorial revision | Org-configurable; default = lightweight DCR auto-created and fast-tracked (single editorial approver). |
 | New document creation | A "create" DCR (or the first authoring flow) records origin + initial approval. |
 | Change driven by a CAPA corrective action | **Yes**; the DCR is linked to the `capa_id` (closes the §10 → §7.5 loop; supports metric M4 traceability). |
@@ -349,7 +367,7 @@ stateDiagram-v2
     Routed --> InApproval: Linked draft submitted for review
     InApproval --> Open: Changes requested (re-assess + re-route)
     InApproval --> Approved: All required approvals signed
-    Approved --> Implemented: Version Released (or scheduled)
+    Approved --> Implemented: Version made Effective (or scheduled)
     Implemented --> Closed: Effective + downstream actions done
     Open --> Cancelled: Withdrawn (reason recorded)
     Routed --> Cancelled: Withdrawn (reason recorded)
@@ -371,21 +389,21 @@ Drift is prevented by removing every path through which the governing copy and t
 
 ### 6.1 Single controlled source of truth (the architectural inversion)
 
-The Controlled Vault (PostgreSQL + MinIO) is the master. The filesystem is a **read-only Mirror** regenerated from Released versions only; authority flows **vault → mirror, never reverse**. There is no "save back to the network share" path, because the network share is no longer the master. This is the root fix for problem P1 (the wall poster, the intranet PDF, and the laptop Word file can no longer each claim to be official — only the vault is official).
+The Controlled Vault (PostgreSQL + MinIO) is the master. The filesystem is a **read-only Mirror** regenerated from Effective versions only; authority flows **vault → mirror, never reverse**. There is no "save back to the network share" path, because the network share is no longer the master. This is the root fix for problem P1 (the wall poster, the intranet PDF, and the laptop Word file can no longer each claim to be official — only the vault is official).
 
-### 6.2 No edits to Released versions + lock + immutability
+### 6.2 No edits to Effective versions + lock + immutability
 
-- Released versions are immutable (§2.3); there is no mutate verb.
+- Effective versions are immutable (§2.3); there is no mutate verb.
 - Editing requires Check-out (exclusive Redis lock, §4) → guarantees no concurrent divergent edits.
 - Check-in creates a new immutable Draft version → every saved state is permanent and attributable; nothing is silently overwritten.
-- INV-1 guarantees exactly one Effective version → there is never ambiguity about "which one governs."
+- INV-1 guarantees at most one Effective version; an active released document has one → there is never ambiguity about "which one governs."
 
 ### 6.3 Controlled distribution
 
 | Channel | How drift is prevented |
 |---|---|
 | **In-app view** | Readers always fetch the *live* Effective version via the API; they cannot pin to a stale copy. The artifact header shows `Rev <x> — Effective` so it is unambiguous. |
-| **Mirror (filesystem)** | Written only from Released versions, regenerated on every cutover; obsolete files are removed/replaced, so the organized export cannot present an old revision as current. |
+| **Mirror (filesystem)** | Written only from Effective versions, regenerated on every cutover; obsolete files are removed/replaced, so the organized export cannot present an old revision as current. |
 | **Print / download** | Produces a **controlled rendition** (§6.4) watermarked + stamped + integrity-tokened. The act of printing/downloading is audited (who/when/which version). |
 | **Read-acknowledge** | For MAJOR revisions of docs that require acknowledgement, affected employees are re-prompted; the dashboard tracks un-acknowledged effective changes. |
 | **External auditor** | Olsen receives a scope-limited, time-boxed, read-only view of *Effective* versions and an Evidence Pack — never editable, never a stale snapshot. |
@@ -573,7 +591,7 @@ The revision history is the human-facing proof of control. It is rendered as an 
 | Rev | seq | State | Effective from | Effective to | Sig. | Change reason (class) | DCR | Approved by | Content digest |
 |---|---|---|---|---|---|---|---|---|---|
 | **3.0** | 5 | Approved (scheduled) | 2026-07-01 | — | MAJOR | New EU supplier due-diligence (regulatory) | DCR-2026-0042 | Ken, Mara | `sha256:7b1f…` |
-| **2.1** | 4 | **Released/Effective** | 2025-09-01 | (open) | MINOR | Clarify §6 wording (error_correction) | DCR-2025-0301 | Ken | `sha256:0ac2…` |
+| **2.1** | 4 | **Effective** | 2025-09-01 | (open) | MINOR | Clarify §6 wording (error_correction) | DCR-2025-0301 | Ken | `sha256:0ac2…` |
 | 2.0 | 3 | Obsolete | 2025-01-10 | 2025-09-01 | MAJOR | Dual-approval > $10k (regulatory) | DCR-2024-0117 | Ken, Mara | `sha256:9f8e…` |
 | 1.1 | 2 | Obsolete | 2024-06-15 | 2025-01-10 | MINOR | Fix typo §4 (error_correction) | DCR-2024-0044 | Ken | `sha256:c3d4…` |
 | 1.0 | 1 | Obsolete | 2024-02-01 | 2024-06-15 | MAJOR | Imported baseline (migration) | DCR-2024-0001 | Mara | `sha256:a1b2…` |
@@ -593,10 +611,10 @@ The full revision history, the diffs, the DCRs, and the signature events for a d
 | ID | Invariant |
 |---|---|
 | **INV-1** | At most one Effective version per Document at any instant (partial unique constraint + cutover logic). |
-| **INV-2** | Released versions and their blobs are immutable; no mutate path exists (WORM + no UPDATE verb). |
+| **INV-2** | Effective versions and their blobs are immutable; no mutate path exists (WORM + no UPDATE verb). |
 | **INV-3** | Check-in requires a non-empty `change_reason` and a set `change_significance` (422 otherwise). |
 | **INV-4** | The author of a version cannot be its sole approver; internal auditors cannot approve controlled-doc changes (independence). |
-| **INV-5** | The filesystem mirror is written only from Released versions; any divergence is corrected vault→mirror and audited. |
+| **INV-5** | The filesystem mirror is written only from Effective versions; any divergence is corrected vault→mirror and audited. |
 | **INV-6** | Every state transition, check-out/in, approval, schedule, cutover, download/print, and integrity anomaly writes an append-only audit + (for approvals) a `signature_event` (Part-11 hook). |
 | **INV-7** | A Record's `produced_under` version pin is immutable; revising a document never retroactively alters historical records. |
 
@@ -618,4 +636,4 @@ The full revision history, the diffs, the DCRs, and the signature events for a d
 
 ## 12. Summary
 
-EasySynQ prevents document drift by **inverting authority**: the Controlled Vault is the only master, the filesystem is a regenerated read-only mirror, Released versions are immutable, and the *only* way to change anything is Check-out → edit working copy → Check-in (mandatory Change Reason) → DCR-routed approval (a `signature_event`) → release now or on a scheduled effectivity date — with exactly one Effective version governing at all times. Where drift can still occur beyond the system's direct control — a tampered mirror file, a stale printout, a document that quietly went out of date — EasySynQ **detects** it via blob hashing, mirror tamper/staleness scans that auto-correct from the vault, verifiable controlled-rendition tokens, and scheduled re-review. Major/minor revision significance, effectivity windows, text+metadata redlines, where-used impact analysis, and an immutable revision-history timeline give every actor — from Priya authoring, to Ken approving, to Olsen auditing — an unambiguous, traceable, tamper-evident answer to the only question that matters: **"Is this the current, governing version, and how did it get here?"** Every mechanism keeps the Part-11 `signature_event` hook and the multi-standard `framework_id`/`clause_map` data model intact, so the deferred non-goals remain additive, never a rewrite.
+EasySynQ prevents document drift by **inverting authority**: the Controlled Vault is the only master, the filesystem is a regenerated read-only mirror, Effective versions are immutable, and the *only* way to change anything is Check-out → edit working copy → Check-in (mandatory Change Reason) → DCR-routed approval (a `signature_event`) → release now or on a scheduled effectivity date — with at most one Effective version, and one governing version whenever the document is actively released. Where drift can still occur beyond the system's direct control — a tampered mirror file, a stale printout, a document that quietly went out of date — EasySynQ **detects** it via blob hashing, mirror tamper/staleness scans that auto-correct from the vault, verifiable controlled-rendition tokens, and scheduled re-review. Major/minor revision significance, effectivity windows, text+metadata redlines, where-used impact analysis, and an immutable revision-history timeline give every actor — from Priya authoring, to Ken approving, to Olsen auditing — an unambiguous, traceable, tamper-evident answer to the only question that matters: **"Is this the current, governing version, and how did it get here?"** Every mechanism keeps the Part-11 `signature_event` hook and the multi-standard `framework_id`/`clause_map` data model intact, so the deferred non-goals remain additive, never a rewrite.

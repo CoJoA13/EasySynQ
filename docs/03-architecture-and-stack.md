@@ -2,6 +2,14 @@
 
 EasySynQ is a self-hosted, multi-user web Quality Management System (QMS) built around a **managed controlled document vault**: the relational database plus object storage are the single source of truth for every controlled document, version, record, and audit event, while the on-disk filesystem is reduced to a read-only, organized mirror/export. This section specifies the deployment topology, the recommended technology stack, security posture, sizing, observability, and the binding non-functional requirements (NFRs) that all downstream design documents must respect. Every choice is made to satisfy an ISO 9001:2015 foundation today while leaving a clean extension path toward 21 CFR Part 11-style electronic signatures and multi-standard frameworks (ISO 13485 / 14001 / 45001 / IATF 16949) later — without painting us into a corner. The guiding principles are: **simplicity of self-hosted operation** (a single-host Docker Compose footprint a small IT team can run), **immutability and traceability** (append-only audit, content-addressed binaries), and **calm, progressive UX** delivered by a modern SPA.
 
+> **Implementation status (audited 2026-07-30).** This document contains the target architecture as
+> well as shipped behavior. The production packaging currently provides **S and M** Compose overlays;
+> both use **PostgreSQL full-text search**. The L overlay, OpenSearch service, and
+> Prometheus/Grafana/Loki observability overlay remain designed extension points and are **not
+> shipped**. `/readyz` currently checks PostgreSQL, Redis, MinIO, Keycloak, and the Alembic head.
+> Use the [Installation Guide](manuals/installation-guide.md) and
+> [Administrator & IT Manual](manuals/administrator-it-manual.md) for current procedures.
+
 ---
 
 ## 1. Definitions & Scope
@@ -13,7 +21,7 @@ EasySynQ is a self-hosted, multi-user web Quality Management System (QMS) built 
 | **Document** | A logical controlled item (e.g., "QM-001 Quality Manual") with a stable identity, a lifecycle, and an ordered chain of **versions**. |
 | **Version (Revision)** | An immutable snapshot of a document at a point in time (e.g., Rev C). Has its own metadata, one or more blobs (source + renditions), and an approval record. |
 | **Record / Documented Evidence** | An ISO 9001 §7.5.3 "documented information to be retained" — proof an activity happened (audit report, training log, calibration cert). Stored with the same immutability guarantees as document versions, plus retention rules. |
-| **Filesystem Mirror** | A read-only directory tree EasySynQ writes (and rewrites) to reflect the current released state of the vault, for offline browsing, OS backup, and human reassurance. **Authority flows vault → mirror, never the reverse.** |
+| **Filesystem Mirror** | A read-only directory tree EasySynQ writes (and rewrites) to reflect the current Effective state of the vault, for offline browsing and human reassurance. It is derived output, not a recovery source. **Authority flows vault → mirror, never the reverse.** |
 | **Self-hosted** | Runs entirely on infrastructure the customer controls (their server / VM / network). No EasySynQ component phones home; no document data leaves the customer boundary. |
 | **Single-host footprint** | The entire system installs and runs on one Linux host via Docker Compose, suitable for small-to-mid organizations (target ≤ 250 named users, ≤ 1M documents/versions). A documented horizontal-scale path exists but is not required for v1. |
 
@@ -33,21 +41,21 @@ The following is the **single concrete recommended stack**. Alternatives and rat
 | --- | --- | --- | --- |
 | **Frontend framework** | **React + TypeScript** (Vite build) | React 18+, TS 5+ | SPA delivering progressive-disclosure, clause-aligned UI |
 | **UI components / styling** | **Mantine** component library + **Tailwind CSS** utility layer + CSS variables design-token system | Mantine 7+, Tailwind 3+ | Accessible primitives (WCAG 2.2 AA baseline), calm theming, dark/light |
-| **Client data layer** | **TanStack Query** + a hand-written typed API client (`apps/web/src/lib/api.ts`); `openapi.yaml` is the contract (redocly-lint only, **not** codegen) | — | Caching, optimistic UX, request dedupe |
+| **Client data layer** | **TanStack Query** + a hand-written API transport (`apps/web/src/lib/api.ts`); `openapi.yaml` is linted/bundled and generates Pydantic server models + TypeScript schema types | — | Caching, optimistic UX, request dedupe |
 | **Backend language/framework** | **Python 3.12 + FastAPI** (ASGI, Uvicorn/Gunicorn) | FastAPI >= 0.137 | REST/JSON API, OpenAPI-first, async I/O |
 | **ORM / migrations** | **SQLAlchemy 2.x + Alembic** | — | Typed data access, versioned schema migrations |
 | **Relational database** | **PostgreSQL** | 16+ | Source of truth for metadata, lifecycle, audit, permissions |
 | **Object / blob storage** | **MinIO** (S3-compatible), self-hosted | latest LTS | Immutable, content-addressed document binaries & renditions |
-| **Search engine** | **OpenSearch** | 2.x | Full-text + metadata + faceted search; audit log search |
+| **Search** | **PostgreSQL FTS now; OpenSearch extension reserved** | PostgreSQL 16; OpenSearch 2.x target | Current effective-document search; future richer faceting/highlighting behind the R34 seam |
 | **Background jobs / workers** | **Celery** workers + **Redis** broker/result backend; **Celery Beat** for schedules | Celery 5+, Redis 7+ | Rendering, indexing, mirror sync, retention, notifications |
 | **Cache / locks / queue** | **Redis** | 7+ | Broker, ephemeral cache, distributed locks (check-in/out), rate limits |
 | **AuthN / Identity broker** | **Keycloak** (embedded option) — local accounts **and** LDAP/AD federation **and** OIDC/SAML SSO | latest LTS | One identity broker covering all three required auth modes |
 | **Document rendering** | **LibreOffice (headless)** for Office→PDF + **PDF.js** (client) for preview; **pdfium**/Ghostscript for thumbnails | — | Server-side normalization to PDF; in-browser preview |
 | **Reverse proxy / TLS** | **Caddy** (auto-TLS) or Nginx | — | TLS termination, HTTP/2, static asset serving, gzip/brotli |
 | **Packaging** | **Docker Compose** (single `compose.yml` + `.env`), versioned images, install script | Compose v2 | One-command self-hosted install on a single host |
-| **Observability** | **OpenTelemetry** SDK → optional Prometheus + Grafana + Loki bundle (opt-in profile) | — | Metrics, structured logs, traces |
+| **Observability** | Structured JSON/stdout logs + health endpoints now; OpenTelemetry/Prometheus/Grafana/Loki target | — | Current operational diagnostics and a reserved richer observability path |
 
-> **One-line justification:** Python/FastAPI gives the fastest path to a correct, OpenAPI-first API with first-class async and an ecosystem rich in document/PDF tooling; PostgreSQL + MinIO + OpenSearch + Redis are the canonical, license-friendly, self-hostable building blocks for an immutable vault + search; Keycloak collapses the three mandatory auth modes (local, LDAP/AD, OIDC/SAML) into one battle-tested broker; React + Mantine + Tailwind delivers an accessible, calm, progressively-disclosed SPA.
+> **One-line justification:** Python/FastAPI gives the fastest path to a correct, OpenAPI-first API with first-class async and an ecosystem rich in document/PDF tooling; PostgreSQL + MinIO + Redis are the shipped, license-friendly building blocks for the immutable vault, jobs, and current search, with OpenSearch reserved behind an engine seam; Keycloak collapses the three mandatory auth modes (local, LDAP/AD, OIDC/SAML) into one battle-tested broker; React + Mantine + Tailwind delivers an accessible, calm, progressively-disclosed SPA.
 
 ---
 
@@ -58,7 +66,7 @@ The following is the **single concrete recommended stack**. Alternatives and rat
 | Backend | **Python / FastAPI** | Node.js/NestJS, Java/Spring Boot, Go | FastAPI is OpenAPI-first (interactive docs + a lint-checked hand-authored contract aid the spec-driven approach), async-capable, and Python's document/PDF/Office tooling (LibreOffice UNO, pypdf, ReportLab) is the deepest. Spring is heavier to operate single-host; Node lacks Python's doc-processing depth; Go is excellent for throughput but slower to build the rich domain logic and lacks library breadth here. The workload is I/O-bound (DB, storage, rendering), where FastAPI shines. |
 | Database | **PostgreSQL** | MySQL/MariaDB, SQL Server | Postgres offers transactional integrity, `JSONB` for flexible metadata + extensible standards mapping, robust row-level constructs, partitioning for the append-only audit table, and full open-source self-hosting with no licensing cost. Best fit for an immutable, audit-heavy vault. |
 | Blob store | **MinIO (S3 API)** | Filesystem-only, MongoDB GridFS, Ceph | S3 semantics give object-lock/versioning (WORM), content-addressing, and a clean swap to AWS S3 / Azure Blob later **without code change**. Filesystem-only loses WORM + integrity guarantees and conflicts with our "filesystem = read-only mirror" rule. Ceph is overkill for single-host. |
-| Search | **OpenSearch** | Elasticsearch, Postgres FTS, Typesense, Meilisearch | OpenSearch is Apache-2.0 (clean license for redistribution in a self-hosted product), powerful faceting/highlighting, and scales later. Postgres FTS is tempting for small installs but caps facet/relevance richness; we keep Postgres FTS as a **fallback profile** for tiny installs to save RAM (see §7). Elasticsearch's SSPL license complicates redistribution. |
+| Search | **PostgreSQL FTS now; OpenSearch later** | Elasticsearch, Typesense, Meilisearch | PostgreSQL FTS keeps every shipped S/M install smaller and is sufficient for the current effective-document search. The R34 engine seam reserves OpenSearch as the Apache-2.0 route to richer faceting/highlighting and later scale without changing callers. |
 | Jobs | **Celery + Redis** | RQ, Dramatiq, Arq, DB-backed queue | Celery is mature, supports scheduling (Beat), retries, routing, and chords (multi-step render→index→mirror pipelines). Redis is already present for cache/locks, minimizing moving parts. |
 | AuthN | **Keycloak** | Authentik, hand-rolled OIDC, Authelia | One component delivers local accounts, LDAP/AD federation, **and** OIDC/SAML SSO/IdP brokering, plus password policies and MFA — directly satisfying the auth requirement and pre-positioning for Part 11 (re-authentication, MFA) without rebuild. Hand-rolling all three modes is risky and slow. Authentik is a viable alternative but Keycloak's SAML + LDAP maturity is stronger. |
 | Frontend | **React + Mantine + Tailwind** | Vue/Nuxt, Angular, SvelteKit, MUI-only | React's hiring pool and ecosystem are largest; Mantine ships accessible, dense-data components (tables, modals, steppers) ideal for clause-aligned forms; Tailwind tokens give calm, consistent theming and easy white-labeling. Angular is heavier; Svelte's component ecosystem is thinner for enterprise data UIs. |
@@ -122,7 +130,7 @@ graph TB
 
         PG[("PostgreSQL 16<br/>metadata, versions, lifecycle,<br/>permissions, append-only audit")]
         OBJ[("MinIO (S3)<br/>immutable blobs +<br/>renditions, WORM/object-lock")]
-        IDX[("OpenSearch<br/>full-text + faceted + metadata,<br/>audit search")]
+        IDX[("Target search sidecar<br/>OpenSearch<br/>(not shipped in S/M)")]
         RDS[("Redis<br/>broker, cache, distributed locks")]
         REND["Renderer<br/>Gotenberg / LibreOffice headless<br/>Office -> PDF, thumbnails"]
     end
@@ -170,11 +178,13 @@ graph TB
 | `keycloak` | Identity broker | Yes (own DB schema or shared PG) | 1 (HA later) |
 | `postgres` | Authoritative metadata + audit | **Yes** | 1 primary (+ replica later) |
 | `minio` | Authoritative blobs | **Yes** | 1 (distributed later) |
-| `opensearch` | Search index (rebuildable from PG+MinIO) | Derived | 1 (cluster later) |
+| `opensearch` | Target search index (rebuildable from PG+MinIO); **not present in shipped S/M** | Derived | Reserved |
 | `redis` | Broker/cache/locks (ephemeral) | Ephemeral | 1 |
 | `renderer` (Gotenberg) | Stateless rendering | No | N replicas |
 
-**Key invariant:** OpenSearch and the filesystem mirror are **always rebuildable** from PostgreSQL + MinIO. Only PostgreSQL and MinIO hold non-derivable truth → these two are the backup-critical stores.
+**Key invariant:** the filesystem mirror—and OpenSearch if that reserved sidecar is added—must always
+be rebuildable from PostgreSQL + MinIO. Only PostgreSQL and MinIO hold non-derivable truth, so those
+are the backup-critical stores.
 
 ---
 
@@ -244,13 +254,14 @@ stateDiagram-v2
 
 ## 7. Sizing & Scalability (small-to-mid organizations)
 
-Single-host deployment is the baseline. Three sizing profiles ship as Compose overlays.
+Single-host deployment is the baseline. Two sizing profiles currently ship as Compose overlays; L
+remains a documented target rather than an installable profile.
 
-| Profile | Target | Users (named) | Docs+versions | Host minimum | Notes |
-| --- | --- | --- | --- | --- | --- |
-| **S — Tiny** | very small org / pilot | ≤ 25 | ≤ 50k | 2 vCPU, 8 GB RAM, 50 GB SSD | **Postgres-FTS-only — OpenSearch disabled — documented degraded mode** (see §7.1): single worker; saves ~2 GB RAM; loses OpenSearch faceting/relevance/highlighting richness |
-| **M — Standard** | small-to-mid (default) | ≤ 100 | ≤ 300k | 4 vCPU, 16 GB RAM, 200 GB SSD | Full stack; 2 API + 2 worker + 2 renderer replicas |
-| **L — Busy mid** | active mid-size | ≤ 250 | ≤ 1M | 8 vCPU, 32 GB RAM, 500 GB+ SSD | OpenSearch given 4 GB+ heap; MinIO on dedicated disk; nightly index integrity verify |
+| Profile | Status | Target | Users (named) | Docs+versions | Host minimum | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| **S — Tiny** | Shipped | very small org / pilot | ≤ 25 | ≤ 50k | 2 vCPU, 8 GB RAM, 50 GB SSD | PostgreSQL FTS; single API/worker/renderer |
+| **M — Standard** | Shipped | small-to-mid | ≤ 100 | ≤ 300k | 4 vCPU, 16 GB RAM, 200 GB SSD | PostgreSQL FTS; 2 API + 2 worker + 2 renderer replicas; Beat remains single |
+| **L — Busy mid** | Reserved, not installable | active mid-size | ≤ 250 design target | ≤ 1M design target | 8 vCPU, 32 GB RAM, 500 GB+ SSD planning figure | Intended OpenSearch/dedicated-storage path; no `compose.l.yml` exists |
 
 **Scaling path (documented, not built in v1):**
 - **Vertical first**: add vCPU/RAM; bump replica counts of stateless `api`/`worker`/`renderer` in Compose.
@@ -261,15 +272,20 @@ Single-host deployment is the baseline. Three sizing profiles ship as Compose ov
 
 ### 7.1 Search & render capacity budget (reconciled per Decisions Register R34)
 
-The sizing profiles above assume the following quantified search and render costs. These are planning figures used to size disk/RAM and to set the performance budget; they are validated against the integration-test corpus before release.
+The sizing targets above retain the following quantified search and render planning figures. The
+OpenSearch figure applies to the reserved future sidecar, not to a current S/M service.
 
 - **OpenSearch index size per 1M docs.** Budget **~0.6–1.2 GB of OpenSearch index per 1 million documents/versions** for the full-text + metadata index (extracted body text plus faceted metadata, with stored highlights), i.e. roughly **1 GB per 1M docs** as the planning rule of thumb. Heavily-OCR'd or large-body corpora trend toward the upper end; metadata-light catalogs toward the lower end. The L profile's ≤ 1M ceiling therefore implies an index on the order of ~1 GB, comfortably within its 4 GB+ OpenSearch heap.
 - **OCR throughput.** Text-layer extraction from already-digital PDFs/Office files is cheap; **OCR of image-only/scanned pages is the expensive path** and is **async on the worker pool**. Budget **~2–5 scanned pages/second per worker core** (typical for a Tesseract-class engine at screen DPI). A bulk import of scanned documents is therefore **throughput-bound on OCR**, not on the API tier; sizing OCR-heavy installs means adding worker replicas/cores, and OCR work is explicitly excluded from the interactive request budget.
 - **Per-request watermark/stamp render cost is a real budget line.** Applying the per-recipient "uncontrolled-when-printed" watermark/stamp to a rendition is **not free** — it re-renders/overlays the PDF at download time. This **per-request watermark/stamp rendering cost belongs in the performance budget**: budget it on the same async/cached-rendition path as preview render (a watermarked download of a cached rendition targets the **≤ 2 s** cached-PDF budget; first-time stamping of a large or many-page doc may be queued like an Office→PDF render). It must never be assumed to be a zero-cost transform layered on a static blob.
 
-#### 7.1.1 Postgres-FTS-only degraded mode (S profile)
+#### 7.1.1 Current PostgreSQL FTS mode (S and M profiles)
 
-The **S sizing profile runs Postgres-FTS-only with OpenSearch disabled**, and this is a **documented degraded mode**, not merely a "fallback": on S, the dedicated search engine is absent by design to save ~2 GB RAM. In this mode the system uses PostgreSQL full-text search, which **caps facet richness, relevance tuning, and highlighting** compared to OpenSearch. The UI surfaces that search is in degraded mode. (This is distinct from the §11 runtime graceful-degradation behavior, where OpenSearch is *configured but temporarily down*; on S it is *deliberately not deployed*.)
+Both shipped profiles use PostgreSQL full-text search, and neither deploys an OpenSearch container.
+The current search surface covers Effective documents by identifier, title, legacy identifier, and
+area code, with authorization filtering; returned hits also display clause references. Rich
+OpenSearch-only body search, facets, relevance tuning, highlighting, runtime fallback banners, and
+audit-log search are future behavior; the current UI does not claim a "degraded mode."
 
 ---
 
@@ -316,11 +332,14 @@ The append-only audit trail (§8.3) is tamper-**evident**, but an attacker with 
 | MinIO blobs | `mc mirror` to backup target, or MinIO bucket replication; WORM means objects are immutable so incremental mirror is safe | Nightly incremental | `mc mirror` back / repoint |
 | Keycloak realm | realm export JSON | On config change + nightly | realm import |
 | Config / secrets | `.env` + Compose files snapshot (encrypted) | On change | redeploy |
-| OpenSearch | **Not backed up** — rebuilt from PG+MinIO via reindex job | n/a | run reindex task |
+| OpenSearch (reserved) | Not applicable to shipped S/M; any future index remains derived | n/a | rebuild from authoritative stores |
 | Filesystem mirror | **Not backed up** — regenerated from vault | n/a | run mirror-sync task |
 
 - A bundled `easysynq backup` command produces a single timestamped, checksummed, optionally-encrypted archive (DB dump + MinIO manifest + Keycloak realm + config) and writes it to the admin-configured target. Quiescing/locking briefly ensures DB↔blob consistency.
-- `easysynq restore` validates checksums, restores PG + MinIO, re-imports the realm, then triggers reindex + mirror-sync. A documented **restore drill** is part of the admin runbook (RPO/RTO below).
+- `easysynq restore` validates checksums, restores PG + MinIO, re-imports the realm, and verifies the
+  restored audit chain. The operator then runs `easysynq mirror rebuild` after cutover. A future
+  derived search index would also be rebuilt if that extension is deployed. A documented **restore
+  drill** is part of the admin runbook (RPO/RTO below).
 - **RPO** ≤ 24 h with nightly (≤ minutes with WAL archiving enabled); **RTO** target ≤ 2 h on the M profile for a full restore.
 
 ### 9.1 WORM-aware restore, PITR↔blob alignment & quiesce window (reconciled per Decisions Register R37)
@@ -338,14 +357,14 @@ Because the document/record buckets are under **object-lock / WORM** (§8.2), an
 
 | Concern | Approach |
 | --- | --- |
-| **Application logs** | Structured JSON to stdout (12-factor); correlation/request IDs propagated through `api` → `worker`. Collected by the bundled Loki (opt-in profile) or shipped to the customer's existing log stack. |
-| **Audit log** (compliance) | **Distinct from operational logs** — lives in PostgreSQL (append-only, partitioned), searchable in-app and in OpenSearch, exportable for auditors. Never rotated/deleted before retention policy. |
-| **Metrics** | OpenTelemetry → Prometheus; dashboards in Grafana (opt-in `observability` Compose profile): request latency/error rates, queue depth, render times, index lag, storage utilization, login/auth failures. |
-| **Tracing** | OpenTelemetry spans across API → worker → renderer for diagnosing slow pipelines. |
-| **Health** | `/healthz` (liveness) and `/readyz` (DB, MinIO, OpenSearch, Redis, Keycloak reachability) on every service for Compose healthchecks and proxy gating. |
-| **Alerting** | Optional Prometheus Alertmanager rules: disk pressure, queue backlog, failed integrity verify, backup failure, auth-failure spikes. |
+| **Application logs** | Structured logs to stdout; use `docker compose logs` or forward them to the organization's log collector. |
+| **Audit log** (compliance) | **Distinct from operational logs** — lives in PostgreSQL as an append-only, partitioned chain. There is no generic in-app audit-log search page in the shipped SPA. |
+| **Metrics / tracing** | OpenTelemetry, Prometheus, Grafana, and Loki remain target architecture; no observability overlay ships today. |
+| **Health** | `/healthz` is API liveness. `/readyz` checks PostgreSQL, Redis, MinIO, Keycloak, and the Alembic migration head. |
+| **Alerting** | Backup and integrity jobs can alert in-app and through configured out-of-band syslog/SMTP/webhook channels; see the administrator manual. |
 
-Observability stack is **opt-in** (a `--profile observability` overlay) so the S/M profiles aren't forced to carry Grafana/Loki/Prometheus RAM cost; logs always at least go to stdout.
+An organization may add its own log/metrics collection with a local Compose override. A bundled
+`observability` overlay is not currently present.
 
 ---
 
@@ -353,8 +372,8 @@ Observability stack is **opt-in** (a `--profile observability` overlay) so the S
 
 | Category | Requirement |
 | --- | --- |
-| **Performance** | P95 interactive action ≤ 1.5 s (M profile, nominal load); metadata read P95 ≤ 300 ms; search P95 ≤ 800 ms; cached-PDF first page ≤ 2 s. **Per-request watermark/stamp rendering is a real, budgeted cost** on the cached-rendition path (≤ 2 s for a cached rendition; large/first-time stamping is queued like a render) — not a free transform. Capacity assumptions (≈ 1 GB OpenSearch index per 1M docs; ≈ 2–5 OCR pages/s per worker core) are quantified in §7.1. Long operations (render, import, bulk export, reindex, **OCR**) are async with progress feedback — never block the request thread. (Reconciled per Decisions Register R34.) |
-| **Availability** | Single-host target **99.0% monthly** (excludes planned maintenance), **including** the auth (**Keycloak**) and scheduler (**Beat**) dependencies — both are **single points of failure** on this profile, each addressed by a **fast-restart runbook** (see §11.1). **99.5%+ is achievable only via the documented HA/K8s path** (§7 horizontal-scale path); we do **not** claim 99.5% on a single host running six single-instance stateful services. Graceful degradation: if OpenSearch is down, search falls back to Postgres FTS and the UI surfaces a non-blocking banner; if the renderer is down, previews queue and metadata/check-in still work. (Reconciled per Decisions Register R14.) |
+| **Performance** | P95 interactive action ≤ 1.5 s (M profile, nominal load); metadata read P95 ≤ 300 ms; search P95 ≤ 800 ms; cached-PDF first page ≤ 2 s. **Per-request watermark/stamp rendering is a real, budgeted cost** on the cached-rendition path (≤ 2 s for a cached rendition; large/first-time stamping is queued like a render) — not a free transform. Future OpenSearch capacity assumptions (≈ 1 GB index per 1M docs) and current OCR capacity assumptions (≈ 2–5 pages/s per worker core) are quantified in §7.1. Long operations (render, import, bulk export, **future index rebuild**, **OCR**) are async with progress feedback — never block the request thread. (Reconciled per Decisions Register R34.) |
+| **Availability** | Single-host target **99.0% monthly** (excludes planned maintenance), **including** the auth (**Keycloak**) and scheduler (**Beat**) dependencies — both are **single points of failure** on this profile, each addressed by a **fast-restart runbook** (see §11.1). **99.5%+ requires the documented future HA/K8s path** (§7); the shipped single-host profiles do not claim it. If the renderer is down, previews queue while metadata operations remain available. (Reconciled per Decisions Register R14.) |
 | **Durability** | No acknowledged document version or audit event is ever lost: writes to PG are committed before success is returned; blobs are written to MinIO (with object-lock) before the version is marked complete. |
 | **Data integrity** | Content-addressed blobs + periodic re-hash verification; append-only audit; DB foreign-key + check constraints enforce lifecycle legality. |
 | **Accessibility** | **WCAG 2.2 Level AA** across the SPA: full keyboard operability, visible focus, ARIA on all custom components (Mantine baseline + audited custom widgets), color-contrast ≥ 4.5:1 (text), respects `prefers-reduced-motion`, target-size and focus-not-obscured (new 2.2 criteria) verified. Automated axe checks in CI + manual screen-reader passes (NVDA/VoiceOver) before release. |
@@ -372,7 +391,9 @@ The single-host profile is honest about its limits: every stateful service runs 
 - **`beat` (scheduler) — SPOF.** While Beat is down, periodic tasks (review-due, retention sweeps, integrity verify, audit-chain linking) do not fire; queued/async work already enqueued still drains via the workers. Beat is `exactly 1` by design (two schedulers would double-fire), so it cannot be replicated within the single-host model.
 
 **Fast-restart runbook (target: restore each SPOF within minutes, inside the 99.0% budget):**
-1. **Detect** — `/readyz` on `api` reports Keycloak reachability; Compose healthchecks flag a stopped `keycloak`/`beat`; Alertmanager (observability profile) raises on the failing healthcheck.
+1. **Detect** — `/readyz` on `api` reports Keycloak reachability and Compose healthchecks expose
+   stopped services. There is no bundled Alertmanager; route Compose/host health into the
+   organization's monitor if automated paging is required.
 2. **Keycloak restart** — `docker compose restart keycloak`; wait for its healthcheck; confirm `api` `/readyz` clears the Keycloak dependency. Keycloak state lives in PostgreSQL (its own schema or shared PG), so a restart loses no realm/session-store data.
 3. **Beat restart** — `docker compose restart beat`; the schedule lives in the DB, so it resumes without reconstruction. Missed periodic windows are caught up by the next tick (retention/verify/chain-linker tasks are idempotent and pick up backlog).
 4. **Escalate to HA** — repeated SPOF outages are the documented trigger to move to the **HA/K8s path** (§7): clustered Keycloak and a leader-elected scheduler remove these SPOFs and unlock the **99.5%+** target.
@@ -383,15 +404,19 @@ The single-host profile is honest about its limits: every stateful service runs 
 
 ## 12. On-Prem Packaging & Install (developer-facing summary)
 
-- **Single artifact:** a versioned `compose.yml` + profile overlays (`s`, `m`, `l`, `observability`, `airgap`) + a `.env.example` + an `install.sh` wizard that generates secrets, picks a sizing profile, configures TLS, and brings the stack up.
-- **Images:** all first-party and third-party images pinned by digest; an **air-gapped bundle** (`docker save` tarball + offline install guide) for disconnected networks.
-- **First-run:** Admin completes setup (admin account, org realm, storage paths, backup target, optional IdP federation, and pointing the install at an existing QMS folder for import) through a guided wizard.
+- **Shipped artifact:** a base `compose.yml`, `s` and `m` sizing overlays, production/dev/air-gap
+  overlays, `.env.example`, and `install.sh`. L and observability overlays remain reserved.
+- **Images:** the release ceremony pins non-development images by digest before building an
+  **air-gapped bundle** (`docker save` tarball + offline install guide).
+- **First-run:** Admin completes the six-screen browser wizard (Activate, Organization, Storage,
+  Backup, Authentication, Finalize), then provisions users/process owners and starts imports in the
+  post-finalize application surfaces.
 - **Upgrades:** `easysynq upgrade` enforces a pre-upgrade backup, runs Alembic migrations, performs a health gate, and supports rollback to the prior image set + DB snapshot.
 
 ```mermaid
 graph LR
     A["install.sh wizard"] --> B["generate secrets + .env"]
-    B --> C["select sizing profile (S/M/L)"]
+    B --> C["select sizing profile (S/M)"]
     C --> D["docker compose up -d"]
     D --> E["healthchecks pass /readyz"]
     E --> F["Admin first-run setup (web)"]

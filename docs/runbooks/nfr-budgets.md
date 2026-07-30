@@ -32,6 +32,6 @@ interactive request path. Per-recipient watermark/stamp rendering is a real budg
 re-overlays the PDF at download time and rides the same cached-rendition ≤ 2 s budget.
 
 ## Sizing context
-Budgets assume the S/M profiles (doc 03 §7). On **S**, OpenSearch is intentionally absent (Postgres-
-FTS only — a documented degraded mode); search relevance/faceting is reduced but the ≤ 800 ms budget
-still applies to the FTS query.
+
+Budgets assume the S/M profiles (doc 03 §7). Both shipped profiles use PostgreSQL FTS; OpenSearch is
+reserved and not deployed. The ≤ 800 ms search budget applies to the current FTS query.

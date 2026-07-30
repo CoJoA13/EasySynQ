@@ -8,9 +8,14 @@ import { SearchResultsPage } from "./SearchResultsPage";
 
 test("renders ranked rows + the hidden_by_scope footer for ?q=", async () => {
   renderWithProviders(<SearchResultsPage />, { route: "/search?q=supplier" });
-  expect(await screen.findByRole("link", { name: "Supplier Selection & Evaluation" })).toBeInTheDocument();
+  expect(
+    await screen.findByRole("link", { name: "Supplier Selection & Evaluation" }),
+  ).toBeInTheDocument();
   expect(screen.getByText(/2 hidden by your access scope/)).toBeInTheDocument();
   expect(screen.getByText(/Effective documents only/)).toBeInTheDocument();
+  expect(
+    screen.getByText(/Clause references are displayed but are not search terms/),
+  ).toBeInTheDocument();
 });
 
 test("prompts to type when ?q= is empty", () => {
