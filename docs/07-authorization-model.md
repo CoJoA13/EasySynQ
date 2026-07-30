@@ -96,7 +96,7 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 |---|---|---|---|---|
 | `document.read` | View a Document's live metadata row in any lifecycle state, plus released/effective content when available | ARTIFACT | – | – |
 | `document.read_obsolete` | View superseded/obsolete version content and history; does not substitute for metadata-row read | ARTIFACT | – | – |
-| `document.read_draft` | View Draft / In-Review (non-released) version content; does not substitute for metadata-row read | ARTIFACT | – | – |
+| `document.read_draft` | View Draft / InReview / Approved (non-released) version content; does not substitute for metadata-row read | ARTIFACT | – | – |
 | `document.create` | Create a new Document (from template/blank) | FOLDER / DOC_CLASS | yes | – |
 | `document.checkout` | Acquire the exclusive edit lock (Redis lock; Architecture §6.1) | ARTIFACT | – | – |
 | `document.edit` | Check in a new Draft revision (with mandatory Change Reason) | ARTIFACT | yes (author side) | – |
@@ -118,6 +118,23 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 > nor grant metadata-row access by themselves; they are the additional version-content/history
 > capabilities described above. Lifecycle remains part of the `document.read` `ResourceContext`, so
 > an organization may still narrow or deny metadata access by state with an explicit grant predicate.
+
+**Immutable version-history matrix (R59, issue #406).** Every immutable version read first needs
+`document.read` against the live Document metadata scope. Each selected immutable version then adds
+the key below; its own `version_state`, not the mutable Document headline, drives the decision.
+
+| Immutable `version_state` | Additional key |
+|---|---|
+| `Effective` | none |
+| `Draft`, `InReview`, `Approved` | `document.read_draft` |
+| `Superseded`, `Obsolete` | `document.read_obsolete` |
+
+The version collection returns only rows authorized by this matrix, newest first; only denial of
+the base `document.read` gate denies the collection as a whole. Detail and download enforce their
+selected row. Text and visual comparisons enforce both sides, so a Draft-to-Superseded comparison
+needs both specialized keys. Specialized decisions derive from the full canonical Document
+`ResourceContext`, replacing its lifecycle/version/author fields with the immutable version's
+values while preserving scope selectors, live source IP/time, and deny-always-wins behavior.
 
 ### 3.2 Documented information — Records (retained, immutable)
 

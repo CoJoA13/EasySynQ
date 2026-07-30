@@ -40,8 +40,8 @@ export function ImplementCreateDcrModal({
   const approvedVersion = (versions.data ?? []).find((v) => v.version_state === "Approved");
   const noApproved =
     docId !== null && !versions.isLoading && !versions.isError && approvedVersion === undefined;
-  // A release-capable user who lacks document.read_draft gets a 403 resolving the version; surface it
-  // (don't leave a silently-disabled button — Codex).
+  // R59 filters inaccessible Approved rows from the collection. A true request failure still gets
+  // its own message instead of leaving a silently-disabled button.
   const versionsError = docId !== null && versions.isError;
 
   async function submit() {
@@ -86,13 +86,14 @@ export function ImplementCreateDcrModal({
         {docId !== null && versions.isLoading && <Loader size="sm" />}
         {noApproved && (
           <InlineState kind="error">
-            That document has no approved version to release. Approve it first.
+            That document has no Approved version you can access. Approve it or ask for draft-read
+            access.
           </InlineState>
         )}
         {versionsError && (
           <InlineState kind="error">
-            Couldn&apos;t load this document&apos;s versions — this step needs draft-read access to
-            resolve the version to release. Ask someone with document access to implement.
+            Couldn&apos;t load this document&apos;s versions — this step needs document access.
+            Ask someone with document access to implement.
           </InlineState>
         )}
         <Group justify="flex-end">

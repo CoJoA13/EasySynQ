@@ -126,7 +126,7 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
                   </Anchor>
                   {/* S-dcr-ui-3: the page-image visual diff + redline of the resulting version vs its
                       predecessor — REVISE only (a CREATE doc's first version has no predecessor; RETIRE
-                      has no resulting version). Gated document.read_draft on the target → calm-degrades. */}
+                      has no resulting version). R59 authorizes both versions by state → calm-degrades. */}
                   {dcr.change_type === "REVISE" ? (
                     <Anchor component={Link} to={`/dcrs/${dcr.id}/diff`}>
                       View visual diff <span aria-hidden="true">→</span>

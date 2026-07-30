@@ -3,8 +3,9 @@ import { ApiError } from "../../lib/api";
 import { EmptyState, InlineState, LoadingState } from "../../lib/states";
 import { useDocumentVersions } from "./useDocumentVersions";
 
-// The History tab: the immutable version timeline (newest first), read-only. Gated
-// document.read_draft server-side — a 403 renders as quiet "no access" (DP-6), not an error.
+// The History tab: the server-authorized immutable version subset (newest first), read-only.
+// Missing state-specific keys filter rows; a base document.read 403 renders as quiet "no access"
+// (DP-6), not an error.
 export function HistoryTab({ documentId, active }: { documentId: string | null; active: boolean }) {
   const { data, isLoading, isError, error } = useDocumentVersions(documentId, active);
 

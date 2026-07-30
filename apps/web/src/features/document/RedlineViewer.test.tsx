@@ -74,7 +74,7 @@ test("RedlineViewer degrades to a source-download fallback when text is unavaila
   await waitFor(() => expect(openSpy).toHaveBeenCalled());
 });
 
-test("RedlineViewer shows quiet no-access on a 403 (document.read_draft)", async () => {
+test("RedlineViewer shows quiet no-access on a state-aware authorization 403", async () => {
   server.use(
     http.get("/api/v1/documents/:id/versions/:vid/diff", () =>
       HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),

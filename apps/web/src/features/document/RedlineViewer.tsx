@@ -12,9 +12,9 @@ function fmt(v: unknown): string {
 }
 
 // S-web-4 (doc 11 §4.7): the Text-redline + Metadata-diff viewer for two immutable versions of one
-// document. The visual page-image (side-by-side) mode is S-web-4b. Read-only; gated
-// document.read_draft (403 → quiet, DP-6). Status is NEVER color-only — insert/delete carry +/-
-// markers + <ins>/<del> semantics (DP-7 / WCAG 2.2). n/p navigate the changes; a change index
+// document. The visual page-image (side-by-side) mode is S-web-4b. Read-only; R59 authorizes both
+// immutable sides by state (403 → quiet, DP-6). Status is NEVER color-only — insert/delete carry
+// +/- markers + <ins>/<del> semantics (DP-7 / WCAG 2.2). n/p navigate the changes; a change index
 // lists them for screen-reader users.
 export function RedlineViewer({
   documentId,

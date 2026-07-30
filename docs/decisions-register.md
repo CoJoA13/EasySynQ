@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R58) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R59) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R58
+## Part 3 — Resolutions R1–R59
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1624,9 +1624,8 @@ The metadata/version separation preserves ordinary readers' discovery of a curre
 document while its next revision moves through `UnderRevision`, `InReview`, or `Approved`. It also
 keeps one stable metadata key for never-released and retired rows without weakening version-content
 controls. General search remains Effective-only as a product/query-scope choice; R57 does not expand
-its candidate set. Enforcing `document.read_obsolete` on obsolete/superseded **version-history**
-surfaces is separate follow-up [#406](https://github.com/CoJoA13/EasySynQ/issues/406) because that
-key currently has no complete runtime consumer.
+its candidate set. The state-aware version-history boundary is completed by R59 / issue
+[#406](https://github.com/CoJoA13/EasySynQ/issues/406).
 
 No runtime authorization branch, schema migration, or permission-catalog change is required. A
 Docker-backed truth table locks all seven states across Library, detail, and register and proves
@@ -1673,6 +1672,45 @@ backfill of historical non-DRAFT rows to `created_by`.
 **Back-propagation:** 06 §7, 14 §5.7, 15 §8.15a, engineering patterns, remediation tracker.
 
 Bumps the resolutions range **R1–R57 → R1–R58**.
+
+---
+
+### R59 — Immutable Document version-history authorization matrix (issue #406) — 2026-07-29
+
+Every immutable version-history read surface first requires `document.read` against the live
+Document's full canonical metadata `ResourceContext`; `document.read_draft` and
+`document.read_obsolete` never substitute for that base boundary. Each selected version then adds
+the permission chosen by its immutable `version_state`:
+
+| Immutable `version_state` | Additional permission |
+|---|---|
+| `Effective` | none |
+| `Draft`, `InReview`, `Approved` | `document.read_draft` |
+| `Superseded`, `Obsolete` | `document.read_obsolete` |
+
+The mutable Document headline never chooses a version key. An Effective governing version remains
+base-readable while its Document headline is `UnderRevision`. The version collection is a
+row-filtered surface: after the base gate it returns the authorized subset newest first, rather
+than denying the whole collection for a missing specialized key. Version detail and download
+enforce the selected row. Text diff plus visual-diff request, poll, and page streaming enforce both
+selected versions before extraction, cache access, enqueue, or byte streaming; a
+Draft-to-Superseded comparison therefore needs both specialized keys.
+
+Every specialized decision derives from the canonical Document context and replaces only
+version-relative fields: `lifecycle_state` becomes the immutable `version_state`, `version_id`
+becomes that version's id, and `author_user_id` becomes its immutable author. ARTIFACT, PROCESS,
+FOLDER, DOC_CLASS, FRAMEWORK, and future canonical selectors remain intact. The decision uses the
+live request time, source IP, and actor, and retains deny-by-default plus deny-always-wins
+semantics. Detail/download/diff decisions use the audited PEP; collection row filtering mirrors
+Library's pure-PDP filtering so it does not emit one audit record per visible or hidden row.
+
+No migration, permission key, seeded role grant, endpoint, request field, response field, or
+frontend behavior branch is introduced.
+
+**Back-propagation:** 07 §3.1, 15 §8.6, OpenAPI, slice history, engineering patterns, and SPA
+implementation comments.
+
+Bumps the resolutions range **R1–R58 → R1–R59**.
 
 ---
 

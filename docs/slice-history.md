@@ -349,6 +349,29 @@ request context UTC while the report snapshot resolves Pacific/Kiritimati, provi
 follow the snapshot. Web tests lock the UTC/org-date crossover and contract guards require the
 date/date-time union plus lower/upper semantics on both endpoint declarations.
 
+### Issue #406 — enforce immutable version-state authorization across history and diffs (API + OpenAPI/docs + web comments + tests; NO migration [head stays `0083`]; NO new permission key [catalog 102]; closes [#406](https://github.com/CoJoA13/EasySynQ/issues/406))
+
+**Owner decision (R59).** Every immutable version-history read surface retains `document.read` as the
+non-substitutable live-Document boundary. Each immutable version then selects its additional key:
+Effective needs none; Draft/InReview/Approved need `document.read_draft`; and
+Superseded/Obsolete need `document.read_obsolete`. The mutable Document headline never chooses the
+version key.
+
+**Surface posture.** The version list returns the authorized subset newest first after the base
+gate. Detail and download enforce the selected row. Text diff plus visual-diff request, poll, and
+page streaming enforce both versions before extraction, cache access, enqueue, or byte streaming.
+One shared policy projects each version onto the full canonical Document `ResourceContext`, so
+ARTIFACT/PROCESS/FOLDER/DOC_CLASS/FRAMEWORK scope, lifecycle and request predicates, source IP,
+validity windows, and explicit DENYs continue to apply. There is no endpoint, request, response,
+role, catalog, schema, migration, visual-cache, or SPA behavior change.
+
+**Regression proof and documentation.** A Docker-backed integration truth table covers all six
+immutable states across list/detail/download, specialized-only base denial, newest-first
+filtering, ARTIFACT + lifecycle + source-IP scope, deny-always-wins, and mixed text/visual
+comparisons that need both sides' keys. R59, authorization/API docs, OpenAPI, engineering patterns,
+and SPA implementation comments now publish the same matrix. The remediation tracker contained no
+separate #406 entry; this slice-history residual was the handoff item and is now closed.
+
 ### Issue #331 — publish repeatable Document clause filters correctly (OpenAPI + contract tests + docs; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#331](https://github.com/CoJoA13/EasySynQ/issues/331); PR [#408](https://github.com/CoJoA13/EasySynQ/pull/408))
 
 **Contract correction.** `GET /documents` and `GET /reports/document-control` now publish
@@ -391,9 +414,9 @@ must see every state, while a caller holding only `document.read_draft` +
 `document.read_obsolete` must see none (the register caller also holds `report.read` so the test
 isolates its row gate). R57, the authorization model, search/reporting model, API design, OpenAPI,
 and implementation comments now state the same metadata/version separation. Complete
-`document.read_obsolete` enforcement on version-history surfaces remains explicitly tracked as a
-separate follow-up [#406](https://github.com/CoJoA13/EasySynQ/issues/406) rather than being partially
-wired here. The review follow-up also removed the last stale search wording: Effective-only remains
+state-aware version-history enforcement is delivered by R59 / follow-up
+[#406](https://github.com/CoJoA13/EasySynQ/issues/406). The review follow-up also removed the last
+stale search wording: Effective-only remains
 the shipped candidate default, while a future non-Effective **metadata** facet still post-filters
 with `document.read` under R57.
 

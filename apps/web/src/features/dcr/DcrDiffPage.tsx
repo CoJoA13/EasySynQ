@@ -13,8 +13,9 @@ import { resolvePredecessor } from "./resolvePredecessor";
 
 // S-dcr-ui-3: the page-image visual diff + text/metadata redline of a REVISE DCR's resulting version
 // against the version it supersedes. Reuses the S-web-4b document diff components verbatim, pinned to
-// the (predecessor → resulting) pair. The diff content is gated document.read_draft on the TARGET
-// document (a separate key from changeRequest.read) — a reviewer without it sees a calm "no access".
+// the (predecessor → resulting) pair. R59 requires document.read plus both versions' state-selected
+// keys (separate from changeRequest.read). A base denial calm-degrades to "no access"; if a
+// specialized key filters one side from the list, no inaccessible pair is constructed.
 export function DcrDiffPage() {
   const { id } = useParams();
   const dcrId = id ?? null;

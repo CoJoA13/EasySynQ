@@ -409,14 +409,23 @@ stateDiagram-v2
 
 Immutable snapshots (`14 §5.3`). Two-step presigned upload keeps large blobs off the API tier; blobs are **content-addressed by SHA-256** and WORM-locked in MinIO (`14 §5.4`).
 
+All version-history reads first require `document.read` against the live Document. The immutable
+row then selects its additional key: `Effective` needs none; `Draft`, `InReview`, and `Approved`
+need `document.read_draft`; `Superseded` and `Obsolete` need `document.read_obsolete` (R59).
+Collections filter to the authorized subset. Detail/download enforce the selected row, and every
+text or visual diff authorizes both versions before content or cached bytes are accessed.
+
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/documents/{id}/versions` | `document.read` | — | Newest first: `version_seq`, `revision_label`, `change_significance`, `version_state`, `change_reason`. |
+| GET | `/documents/{id}/versions` | `document.read` + per-row state key | — | Authorized subset, newest first: `version_seq`, `revision_label`, `change_significance`, `version_state`, `change_reason`. |
 | POST | `/documents/{id}/versions:init-upload` | `document.checkout` | ✓ | Returns a **MinIO presigned PUT URL** + required headers + intended `object_key`. Client uploads bytes directly. |
 | POST | `/documents/{id}/checkin` | `document.edit` | ✓ | Finalize (see §8.5): server verifies the uploaded object's `sha256` + `size_bytes`, dedups against existing `blob`, creates the immutable `document_version`, bumps `version_seq`. |
-| GET | `/documents/{id}/versions/{vid}` | `document.read` | — | Includes `metadata_snapshot` (title/type/owner/clause map **as they were**). |
-| GET | `/documents/{id}/versions/{vid}/download` | `document.read` | — | Presigned GET to the immutable source or PDF rendition. |
-| GET | `/documents/{id}/versions/{vid}/diff?from={vid2}` | `document.read_draft` | — | Rendered/text diff between two versions (the drift-prevention view). Gated `document.read_draft` because the diff can expose non-released Draft content (S-dcr-3a). |
+| GET | `/documents/{id}/versions/{vid}` | `document.read` + selected row's state key | — | Includes `metadata_snapshot` (title/type/owner/clause map **as they were**). |
+| GET | `/documents/{id}/versions/{vid}/download` | `document.read` + selected row's state key | — | Presigned GET to the immutable source or PDF rendition. |
+| GET | `/documents/{id}/versions/{vid}/diff?from={vid2}` | `document.read` + both rows' state keys | — | Metadata/text redline between two versions (S-dcr-3a); both sides authorize before extraction. |
+| POST | `/documents/{id}/versions/{vid}/visual-diff?from={vid2}` | `document.read` + both rows' state keys | ✓ | Requests the worker-rendered page-image diff; both sides authorize before cache creation/enqueue. |
+| GET | `/documents/{id}/versions/{vid}/visual-diff?from={vid2}` | `document.read` + both rows' state keys | — | Polls the cached visual-diff result; every retrieval re-authorizes both sides. |
+| GET | `/documents/{id}/versions/{vid}/visual-diff/page/{page}?from={vid2}` | `document.read` + both rows' state keys | — | Streams one authorized `from`, `to`, or `diff` PNG layer. |
 
 **`versions:init-upload` 200:**
 ```json
