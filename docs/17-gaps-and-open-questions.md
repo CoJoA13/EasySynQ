@@ -1,5 +1,12 @@
 # Gaps, Contradictions, Risks & Open Questions — Completeness & Consistency Audit
 
+> **Historical design-audit input.** This file preserves the adversarial review that fed the
+> Decisions Register; it is not the current implementation queue. Many statements intentionally
+> describe the pre-reconciliation specification. Read `decisions-register.md` for binding
+> resolutions, `slice-history.md` for deliberate implementation residuals, and
+> [the 2026-07-30 documentation audit](documentation-audit-2026-07-30.md) for current documentation
+> status.
+
 This document is an adversarial completeness-and-consistency review of the EasySynQ specification (files `01`–`15`). It is organized as the brief requested: **(A) Gaps**, **(B) Contradictions / Inconsistencies**, **(C) Risks & Hard Problems**, and **(D) Open Questions (each with a recommended default)**. Items are prioritized within each section (P1 = must-fix before build, P2 = should-fix, P3 = nice-to-have / watch-item). Every finding cites the section file(s) it concerns.
 
 The spec is, overall, unusually coherent and self-cross-referencing (the data model `14` even includes an explicit reconciliation table, §14, that pre-empts several conflicts). This audit therefore concentrates on the residual holes, the places the reconciliation did *not* reach, and the hard real-world problems the prose asserts as "solved" but that carry genuine engineering risk.

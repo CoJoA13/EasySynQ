@@ -2,6 +2,13 @@
 
 This section specifies how EasySynQ captures, protects, retains, and surfaces **Records / Documented Evidence** — the *retained* half of ISO 9001:2015 Clause 7.5, the "proof we did it" that stands in hard contrast to the *maintained* Documents covered by the lifecycle engine. Records are **immutable, captured-at-a-point-in-time, never revised**: corrections create a new record via a `correction_of` chain, every record pins the exact Document **Version** it was produced under, and every record carries a **Retention** period and a controlled **Disposition** lifecycle. The whole module exists to make one auditor question answerable in seconds rather than days: *"show me the evidence that this requirement, in this process, governed by this document, was actually met."* EasySynQ answers that by walking a single, fully-linked traceability chain — **requirement → process → document → record → evidence (blob)** — and by letting any user assemble and export a clause-, process-, or finding-scoped **Evidence Pack** on demand. This document inherits the canonical taxonomy, the maintain/retain rule, the persona names, the lifecycle state machine, and the architecture invariants from the Vision & Scope, Domain Model, and Architecture sections verbatim; it does not re-derive them.
 
+> **Implementation status (audited 2026-07-30).** Record capture/correction, retention/disposition,
+> Evidence Pack build/seal/download/share, and their API/worker controls ship. They do not yet have
+> dedicated Records/Retention or Evidence Pack management routes in the SPA; record selection
+> appears inside supported workflows such as CAPA evidence linking. Current global search does not
+> index Record metadata or body content. Use the [User Manual](manuals/user-manual.md) for current
+> browser coverage.
+
 ---
 
 ## 1. Scope, Terms & Position in the Model

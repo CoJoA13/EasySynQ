@@ -36,7 +36,7 @@ specific role under deny-by-default permissions.
 EasySynQ is a **self-hosted, browser-based ISO 9001:2015 Quality Management System** that **inverts
 authority so document drift becomes an enforced invariant.** A managed controlled vault (PostgreSQL +
 object storage) owns the master copy of every controlled document and record; the on-disk filesystem
-is only a read-only mirror, regenerated from *Released* versions. Authority flows vault → mirror,
+is only a read-only mirror, regenerated from *Effective* versions. Authority flows vault → mirror,
 never the reverse — so the single hardest problem in a real QMS (the uncontrolled copy, the stale PDF
 on someone's desktop) is designed out rather than policed.
 

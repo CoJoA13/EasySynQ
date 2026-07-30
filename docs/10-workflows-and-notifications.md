@@ -1,6 +1,11 @@
 # Workflows, Approvals, Tasks & Notifications
 
-This section specifies the **active machinery** of EasySynQ — the engines that move documented information and quality events through their lifecycles, route work to the right people, hold them accountable with timers, and keep everyone informed without overwhelming them. It defines a single, declarative, configurable **Workflow Engine** that powers every multi-step process in the product (document approval, Document Change Requests, periodic review, internal audit, nonconformity/CAPA, and management review), the per-user **My Tasks** task inbox that is the universal "what do I have to do" surface, and the dual-channel (in-app + email) **Notification System** with templates, digests, escalation timers, and quiet hours. Everything here aligns to the locked decisions: the Controlled Vault is the source of truth, the document lifecycle is `Draft → In Review → Approved → Released/Effective → Obsolete`, approvals are recorded as append-only `signature_event` rows (the Part 11 hook), and authorization is hybrid RBAC+ABAC enforced server-side. Workflows are **data, not code**: every routing rule is a versioned, org-editable definition so that adding standards, signature requirements, or new event types later is additive, never a rewrite.
+This section specifies the **active machinery** of EasySynQ — the engines that move documented information and quality events through their lifecycles, route work to the right people, hold them accountable with timers, and keep everyone informed without overwhelming them. It defines a single, declarative, configurable **Workflow Engine** that powers every multi-step process in the product (document approval, Document Change Requests, periodic review, internal audit, nonconformity/CAPA, and management review), the per-user **My Tasks** task inbox that is the universal "what do I have to do" surface, and the dual-channel (in-app + email) **Notification System** with templates, digests, escalation timers, and quiet hours. Everything here aligns to the locked decisions: the Controlled Vault is the source of truth, the document lifecycle is `Draft → InReview → Approved → Effective → UnderRevision → Superseded → Obsolete`, approvals are recorded as append-only `signature_event` rows (the Part 11 hook), and authorization is hybrid RBAC+ABAC enforced server-side. Workflows are **data, not code**: every routing rule is a versioned, org-editable definition so that adding standards, signature requirements, or new event types later is additive, never a rewrite.
+
+> **Implementation status (audited 2026-07-30).** The workflow/task engine, routed document and
+> quality-process decisions, My Tasks, in-app/email notifications, digest/quiet-hours preferences,
+> escalations, and notification SSE ship. Workflow definitions are seeded/versioned data, but no
+> generic workflow-definition editor is mounted; use the specific routed workflow surfaces.
 
 ---
 
@@ -192,7 +197,7 @@ stateDiagram-v2
       no schema change.
     end note
     note right of Released
-      Exactly ONE Released/Effective version
+      At most ONE Effective version
       per document at any time. On Release,
       the prior Effective version becomes
       Obsolete/Superseded and the read-only
@@ -201,7 +206,7 @@ stateDiagram-v2
 ```
 
 Key rules:
-- **One Effective version invariant** is enforced at the `Approved → Released` transition inside the same transaction that obsoletes the predecessor.
+- **Single-Effective invariant** is enforced at the `Approved → Effective` transition inside the same transaction that supersedes the predecessor.
 - **Scheduled effectivity:** `Approved` may carry a future `effective_date`; Beat releases it automatically at that date (a timed transition), notifying subscribers and rewriting the mirror.
 - **Reject = "Changes requested"** returns to `Draft` with structured comments captured as tasks for the author; the version number does **not** advance on reject (it advances on the next check-in).
 - **Separation of duties:** the author/last check-in user is excluded from approval stages by default (`sod_author_excluded`), configurable only with an explicit, audited override flag.

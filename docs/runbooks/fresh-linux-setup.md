@@ -74,8 +74,8 @@ HTTPS/hostname overlays. Start from `.env.example` and ensure:
   `PUBLIC_BASE_URL=APP_BASE_URL=http://localhost`. If `HTTP_PORT` is set to a nondefault host port,
   Keycloak derives its public hostname as `http://localhost:<HTTP_PORT>`; set `OIDC_ISSUER` to the
   same origin plus `/realms/easysynq`.
-- `AUDIT_SINK_SECRET_KEY=audit-sink-secret-change-me` (the minio-init container gets no `env_file`, so it
-  provisions that hardcoded fallback — they must match).
+- Keep `AUDIT_SINK_*` write/read credentials consistent in `.env`. `minio-init` has no `env_file`,
+  but Compose passes these variables explicitly, so the sink users and worker use the same values.
 
 Keep the file `0600`.
 
@@ -93,7 +93,7 @@ freeing :80: `just up s` again (or `docker compose … up -d --force-recreate pr
 ## 5. Bring up the stack
 
 ```bash
-just up s                              # 11 services; app at http://localhost
+just up s                              # start the dev stack; app at http://localhost
 docker ps --format '{{.Names}}\t{{.Status}}' | grep easysynq
 ```
 
@@ -130,6 +130,9 @@ A fresh DB boots `setup_state = UNINITIALIZED` — the whole `/api/v1/*` returns
 until the wizard completes. The old box's OPERATIONAL state lived in the (now-gone) `pgdata` volume.
 
 ```bash
+# create the identity used to activate this fresh instance
+just demo-user
+
 # mint the bootstrap token
 docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
   -f infra/compose/compose.dev.yml \
@@ -144,7 +147,7 @@ and non-blocking in dev** (the audit-checkpoint anchor is same-host MinIO, not o
 ## 7. Seed logins (Keycloak persists in PostgreSQL)
 
 ```bash
-just demo-user        # demo / Demo-Password-1   (System Administrator)
+just demo-user        # idempotently reset demo / Demo-Password-1 (the bootstrap administrator)
 just seed-personas    # priya (Author) · ken (Approver) · mara (Releaser) — the SoD trio
 ```
 

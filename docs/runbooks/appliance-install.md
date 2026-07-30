@@ -51,7 +51,8 @@ All provisioning is on the seed ISO in plain text — auditable before anything 
    password), and the **one-time bootstrap secret** the wizard asks for.
 
 5. From any workstation: **https://easysynq.local** → sign in → paste the secret →
-   complete the wizard (org profile → storage + WORM verify → backup drill → finalize).
+   complete the wizard (organization → storage + WORM verify → backup drill → authentication →
+   finalize).
 
 ## The certificate warning (fix once, via GPO)
 
@@ -104,7 +105,7 @@ Do this **before** real usage starts — changing the OIDC issuer signs everyone
 |---|---|
 | `easysynq-status` | Container health + `/readyz` + provisioned version |
 | `easysynq-status --remint` | Re-issue the one-time bootstrap secret (expired/lost) |
-| `sudo easysynq-create-user <name>` | Add a Keycloak sign-in account (temporary password) |
+| `sudo easysynq-create-user <name>` | Add/reset a Keycloak sign-in account (temporary password). Bind its `sub` and assign EasySynQ roles separately in Administration → Users. |
 | `sudo easysynq-mount-qms //srv/share [user]` | Attach the QMS share read-only |
 | `sudo easysynq-reconfigure --host <fqdn>` | Move off mDNS to a real DNS name |
 | `easysynq-status --ca` | Print the root CA for the GPO trust rollout |

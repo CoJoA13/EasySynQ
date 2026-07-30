@@ -1,0 +1,518 @@
+# EasySynQ Administrator & IT Manual
+
+## 1. Role of the administrator
+
+The **System Administrator** runs infrastructure, identity, recoverability, and system
+configuration. The role deliberately contains no QMS content authority by default.
+
+Keep these responsibilities separate:
+
+| System / IT responsibility | QMS responsibility |
+|---|---|
+| Host, Docker, TLS, DNS, ports | Document ownership and content |
+| Keycloak identities and federation | Clause/process mappings |
+| EasySynQ user lifecycle and system grants | Review, approval, release |
+| Storage, WORM, backups, restore, upgrade | Audit findings and CAPA decisions |
+| SMTP, alarms, health, logs | Register stewardship and compliance interpretation |
+
+If one person must wear both hats, assign the additional QMS role explicitly. Do not turn the
+System Administrator bundle into an all-powerful role; the separate assignment and audit trail are
+the control.
+
+Start with the [Installation Guide](installation-guide.md) for a new system and the
+[Operator Runbook Index](../runbooks/00-index.md) for focused recovery procedures.
+
+## 2. Current system boundary
+
+### Deployment
+
+- One organization per installation.
+- One Linux host/VM managed with Docker Compose.
+- Shipped profiles: S and M.
+- S: one API, worker, and renderer.
+- M: two API, worker, and renderer replicas.
+- PostgreSQL, MinIO, Redis, Keycloak, Tika, web, proxy, and Beat remain single services; Beat must
+  have exactly one replica.
+- Both profiles use PostgreSQL full-text search. OpenSearch is not deployed.
+- L, Kubernetes/Helm, and the observability overlay are reserved rather than supported artifacts.
+
+### Authoritative data
+
+- PostgreSQL is authoritative for metadata, workflow, authorization, identity schema, and the
+  append-only audit trail.
+- MinIO is authoritative for immutable blobs and renditions.
+- Redis is ephemeral broker/cache/lock state.
+- The filesystem mirror is generated read-only output.
+- Search state is currently PostgreSQL FTS; no separate index backup/rebuild is required.
+
+Back up PostgreSQL and MinIO together. Never treat the mirror as a recovery source.
+
+### External ports
+
+| Port | Exposure |
+|---|---|
+| 80 | ACME/redirect as applicable |
+| 443 | SPA, API, health, Keycloak realm |
+| 9443 | browser-facing presigned S3 operations |
+
+All other service ports stay on the private Compose network.
+
+## 3. Standard Compose context
+
+Run production commands from the repository root. To avoid omitting the profile or production
+overlay, define this array for the current shell:
+
+```bash
+EASYSYNQ_PROFILE_NAME="$(sed -n 's/^EASYSYNQ_PROFILE=\([^[:space:]#]*\).*/\1/p' .env)"
+EASYSYNQ_COMPOSE=(
+  docker compose --env-file .env
+  -f infra/compose/compose.yml
+  -f "infra/compose/compose.${EASYSYNQ_PROFILE_NAME}.yml"
+  -f infra/compose/compose.production.yml
+)
+```
+
+Use `"${EASYSYNQ_COMPOSE[@]}" <command>` in the examples below. The host helper
+`./scripts/easysynq` intentionally dispatches supported one-off administration jobs.
+
+## 4. First-run ownership handoff
+
+The browser wizard is six screens:
+
+1. Activate
+2. Organization
+3. Storage
+4. Backup
+5. Authentication
+6. Finalize
+
+User, role, process-owner, and import work occurs after finalize. The ten-step flow in the design
+specification is an onboarding ownership model, not the current screen count.
+
+Before handoff:
+
+- ensure WORM verification and the restore-test gate passed;
+- record whether an independent audit witness exists;
+- create a separate QMS Owner identity/assignment;
+- create a second System Administrator before disabling the bootstrap administrator;
+- set the working calendar and timezone;
+- test notification delivery/alerts; and
+- document backup key and signing-key custody.
+
+## 5. Identity and user lifecycle
+
+### 5.1 Two linked identities
+
+Every person has:
+
+1. a Keycloak identity used to authenticate; and
+2. an EasySynQ `app_user` row carrying status, roles, overrides, and scope.
+
+Creating an EasySynQ user does not create a Keycloak account. Conversely, a first successful
+Keycloak sign-in can JIT-provision an unprivileged ACTIVE `app_user` row when none was pre-created.
+Use the EasySynQ Users screen to pre-bind the exact OIDC subject (`sub`), identity metadata, and
+intended assignments before normal access.
+
+### 5.2 Create a local Keycloak identity
+
+Use the organization's Keycloak administration procedure for normal operations. On a local-only
+installation, the following controlled host procedure creates a temporary account:
+
+```bash
+EASYSYNQ_KC_ADMIN_USER="$(sed -n 's/^KEYCLOAK_ADMIN_USER=\([^[:space:]#]*\).*/\1/p' .env)"
+EASYSYNQ_KC_ADMIN_PASSWORD="$(sed -n 's/^KEYCLOAK_ADMIN_PASSWORD=\([^[:space:]#]*\).*/\1/p' .env)"
+read -rp "New username: " EASYSYNQ_NEW_USERNAME
+read -rsp "Temporary password: " EASYSYNQ_TEMP_PASSWORD
+printf '\n'
+
+"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
+  /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://localhost:8080 --realm master \
+  --user "$EASYSYNQ_KC_ADMIN_USER" --password "$EASYSYNQ_KC_ADMIN_PASSWORD"
+
+"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
+  /opt/keycloak/bin/kcadm.sh create users -r easysynq \
+  -s "username=${EASYSYNQ_NEW_USERNAME}" -s enabled=true
+
+"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
+  /opt/keycloak/bin/kcadm.sh set-password -r easysynq \
+  --username "$EASYSYNQ_NEW_USERNAME" \
+  --new-password "$EASYSYNQ_TEMP_PASSWORD" --temporary
+
+"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
+  /opt/keycloak/bin/kcadm.sh get users -r easysynq \
+  -q "username=${EASYSYNQ_NEW_USERNAME}" --fields id,username
+
+unset EASYSYNQ_TEMP_PASSWORD EASYSYNQ_KC_ADMIN_PASSWORD EASYSYNQ_KC_ADMIN_USER
+```
+
+Copy the returned `id` as the subject. On the Hyper-V appliance,
+`sudo easysynq-create-user <name>` performs the Keycloak portion and prints a temporary password.
+
+Never use a shared generic login for approval or acknowledgement work.
+
+### 5.3 Bind the user in EasySynQ
+
+1. Sign in as an administrator with `user.*`/grant authority.
+2. Open Account → **Administration → Users**.
+3. Select **Invite user**.
+4. Paste the Keycloak subject and enter display name/email.
+5. Select **Invite**.
+6. Open **Manage** and assign only the required seeded role(s).
+
+The row starts `INVITED` and becomes `ACTIVE` at first login. EasySynQ does not currently send an
+email invitation or create the Keycloak password.
+
+### 5.4 Disable, re-enable, and retire access
+
+- **Disable** prevents application access without deleting historical attribution.
+- **Enable** returns a disabled user to active use.
+- Keycloak should also be disabled/removed according to the organization's identity process.
+- Do not delete historical user rows or replace identifiers: audit/signature attribution depends on
+  stable principals.
+- The service refuses disabling the last active administrator. Maintain at least two.
+- External Auditor access should be narrowly scoped and time-boxed.
+
+For urgent recovery,
+`./scripts/easysynq grant-role <sub> "System Administrator" --org <short-code>` is a host-level
+break-glass bypass. It writes the assignment directly and does **not** traverse the normal API audit
+path, so record the command, operator, reason, subject, and time in the organization's independent
+change/incident record. Use it only after identifying the exact Keycloak subject and organization
+short code.
+
+## 6. Roles, overrides, and process ownership
+
+### Seeded role bundles
+
+The current Roles tab is read-only and shows the seeded role grants. Common bundles include:
+
+- System Administrator
+- QMS Owner
+- Process Owner
+- Author
+- Approver
+- Internal Auditor
+- Employee (Read-only)
+- External Auditor (Guest)
+- Top Management
+- Register Steward
+
+Custom role creation/editing is not available in the current UI.
+
+### Assign and revoke roles
+
+Administration → Users → Manage shows the user's role assignments. Assign or revoke a bundle there.
+Changes are immediately subject to the centralized policy engine.
+
+### Overrides
+
+The current Users UI creates **SYSTEM-scoped** direct ALLOW or DENY overrides from an exact
+permission key. Finer process/folder/document scopes are API-level operations.
+
+Controls:
+
+- validate permission keys against the current catalog;
+- use roles before one-off ALLOWs;
+- use DENY sparingly and document why;
+- remember that DENY always wins, including over a role ALLOW;
+- never grant SYSTEM permissions through the content-authority tier; and
+- review self-grants and broad overrides as privileged changes.
+
+The permission catalog currently contains 102 additive keys. Do not invent or rename a key.
+
+### Process owners
+
+Administration → Processes lists existing processes. **Manage owners** assigns/revokes the
+accountable owner. Assignment records the Clause 5.3 relationship and mints the Process Owner
+permission set scoped to that process.
+
+The tab does not create process definitions; it manages ownership of existing process rows.
+
+## 7. Organization configuration
+
+Administration → Config contains:
+
+- **Email delivery (organization-wide)** — enable only after SMTP is configured and tested;
+- **Escalation pierces quiet hours** — controls critical/escalation delivery behavior;
+- **Working Calendar** — working weekdays/holidays/timezone used by due dates and reminders; and
+- **Notification health** — current delivery/queue health.
+
+Individual users control email cadence, digest hour/timezone, and quiet hours under Account →
+Notification settings. The in-app bell remains immediate.
+
+Relevant `.env` groups:
+
+- `SMTP_*` — application email relay;
+- `OPS_ALERT_CHANNELS` — comma-separated `syslog,smtp,webhook`;
+- `OPS_ALERT_SMTP_TO`, `OPS_ALERT_WEBHOOK_*`, `OPS_ALERT_SYSLOG_ADDRESS`;
+- `AUDIT_WITNESS_REQUIRED` and `AUDIT_WITNESS_GRACE_HOURS`;
+- `BACKUP_PATH` and encryption/signing-key paths; and
+- browser origins, which must stay a coherent FQDN tuple.
+
+After changing `.env`, recreate/restart only the affected services and re-check readiness.
+
+## 8. Health, logs, and monitoring
+
+### Health endpoints
+
+```bash
+curl -fsS "https://<host>/healthz"
+curl -fsS "https://<host>/readyz"
+```
+
+`/healthz` proves the API process is alive. `/readyz` returns HTTP 200 only when these current checks
+are ready:
+
+- PostgreSQL;
+- Redis;
+- MinIO;
+- Keycloak/JWKS; and
+- the database's Alembic revision equals the application head.
+
+OpenSearch is intentionally not checked because it is not deployed.
+
+### Compose state and logs
+
+```bash
+"${EASYSYNQ_COMPOSE[@]}" ps
+"${EASYSYNQ_COMPOSE[@]}" logs --tail=200 api
+"${EASYSYNQ_COMPOSE[@]}" logs --tail=200 worker beat
+"${EASYSYNQ_COMPOSE[@]}" logs --tail=200 keycloak postgres minio
+```
+
+Use `-f` only while actively watching; retain relevant logs according to the organization's incident
+policy. Operational logs are separate from the compliance audit trail.
+
+There is no bundled Prometheus/Grafana/Loki overlay. Forward stdout/health into the organization's
+monitor with a local, reviewed override if automatic paging is required.
+
+### Alarm path
+
+Backup and integrity failures try in-app/admin notification plus configured out-of-band channels.
+Do not rely on in-app delivery alone: a PostgreSQL outage prevents recipient lookup and audit-row
+creation.
+
+After configuring a channel, force a controlled test and confirm the
+`ops_alert.dispatched` log reports the expected result. UDP syslog “sent” means emitted, not
+confirmed delivered.
+
+## 9. Backups and restore drills
+
+The backup-critical stores are PostgreSQL and MinIO. Keycloak's durable schema lives in PostgreSQL;
+the archive also attempts a realm export. The encrypted archive includes the DB dump, blob manifest,
+config snapshot, realm leg when available, and latest signed audit checkpoint.
+
+### Commands
+
+```bash
+./scripts/easysynq backup run
+./scripts/easysynq backup restore-test
+```
+
+The restore-test:
+
+- restores to a throwaway database and non-WORM scratch bucket;
+- re-hashes blobs;
+- compares table counts;
+- verifies document-version/blob references; and
+- tears down the scratch namespace.
+
+Run it after backup-target, credential, storage, database, or release changes—not only at initial
+setup.
+
+### Key custody
+
+`BACKUP_ENCRYPTION_KEY` is not stored in the archive. Losing it makes every archive sealed with that
+key unrecoverable. Retain old backup keys for as long as their archives must remain restorable.
+Store keys independently from both the host and its backup destination.
+
+### Live restore
+
+```bash
+./scripts/easysynq restore <archive.tar.enc> --confirm
+```
+
+The command leaves a verified target standing; production cutover is manual. A checkpoint-ahead
+result exits flagged and requires an explicit `--audit-checkpoint-ack`, which must be investigated
+and documented. Follow the complete
+[backup/restore runbook](../runbooks/backup-restore.md); never overwrite the existing WORM bucket.
+
+After cutover:
+
+```bash
+./scripts/easysynq mirror rebuild
+```
+
+No separate search reindex is needed in shipped S/M.
+
+## 10. Upgrades
+
+Plan a maintenance window, stage a reviewed release, confirm recovery keys, and run a fresh backup
+and restore test.
+
+Normal helper:
+
+```bash
+./scripts/easysynq upgrade --confirm
+```
+
+It performs a pre-backup, Alembic upgrade, and readiness gate. It does not make an unsafe migration
+lock disappear.
+
+For any release whose migration builds an index on `audit_event`, stop writers first because the
+current migration environment has no `lock_timeout`:
+
+```bash
+"${EASYSYNQ_COMPOSE[@]}" stop api worker beat
+./scripts/easysynq upgrade --confirm
+"${EASYSYNQ_COMPOSE[@]}" start api worker beat
+curl -fsS "https://<host>/readyz"
+```
+
+Before the first upgrade from a legacy H2-backed Keycloak install, run:
+
+```bash
+./scripts/migrate-keycloak-h2.sh
+```
+
+`install.sh` invokes it automatically; raw Compose recreation does not. Follow the
+[upgrade section](../runbooks/backup-restore.md) for lock sizing and recovery.
+
+## 11. Integrity, mirror, and audit witness
+
+### Blob integrity
+
+```bash
+./scripts/easysynq blob verify
+./scripts/easysynq blob verify --full
+```
+
+The rolling scan is routine; use full verification after a restore or suspected storage event.
+Follow [Blob integrity verification](../runbooks/blob-integrity-verify.md) on any mismatch.
+
+### Mirror
+
+```bash
+./scripts/easysynq mirror rebuild
+```
+
+The mirror is vault-derived. Investigate a drift alarm, preserve evidence, and let the controlled
+sync/rebuild restore it. Never ingest a modified mirror file as authoritative. See
+[Mirror drift scan](../runbooks/mirror-drift-scan.md).
+
+### Audit chain and off-host witness
+
+An append-only on-host chain alone cannot prove integrity against a privileged host owner. Configure
+a genuinely separate append-only/WORM sink before setting:
+
+```dotenv
+AUDIT_WITNESS_REQUIRED=true
+```
+
+Do not turn it on first; that intentionally produces nightly alarms. After provisioning the sink,
+verify independent read-back:
+
+```bash
+"${EASYSYNQ_COMPOSE[@]}" run --rm worker \
+  uv run python -m easysynq_api.cli.audit verify-offhost
+```
+
+The current verifier checks the newest off-host checkpoint, not the complete checkpoint lineage.
+Signing-key history across audit-checkpoint rotation is also not modeled. Preserve old public keys
+and follow [Key rotation](../runbooks/key-rotation.md).
+
+## 12. Security operations
+
+### Secrets
+
+- Keep `.env` mode `0600` and out of version control.
+- Never copy plaintext secrets into tickets, chat, logs, or backup manifests.
+- Separate custody for app KEK, backup key, audit signing key, verify-token key, and witness
+  credentials.
+- Restart affected containers and run a new backup after rotation.
+- Retain old verification/backup material for the retention period it must validate.
+
+### TLS and hostname
+
+Changing the hostname changes the OIDC issuer and signs users out. Update the entire browser-origin
+tuple together: site, public/app base URLs, Keycloak hostname/issuer, SPA callback, and S3 public
+endpoint. Use the appliance's `easysynq-reconfigure` helper where applicable.
+
+### WORM
+
+`GOVERNANCE` supports controlled privileged retention handling; `COMPLIANCE` cannot be bypassed even
+by root before expiry. Confirm policy/legal requirements before choosing COMPLIANCE. All restores
+target a fresh bucket.
+
+### Access review
+
+At least quarterly:
+
+- review active/disabled/guest accounts;
+- inspect broad SYSTEM overrides and explicit DENYs;
+- confirm process owners and Top Management membership;
+- verify the second administrator;
+- test guest expiry/scope;
+- review Keycloak MFA/password/federation policy; and
+- reconcile role assignments with employment/organizational changes.
+
+## 13. Routine operations schedule
+
+| Cadence | Minimum action |
+|---|---|
+| Daily | Check `/readyz`, Compose health, disk pressure, backup/integrity alarms, and worker/Beat health. |
+| Nightly automated | Backup, audit-chain verification, blob sample, due-date/review/retention sweeps. |
+| Weekly | Review failed jobs/notifications, mirror/blob findings, backup archive arrival, and capacity trend. |
+| Monthly | Run/confirm a restore test, verify off-host witness read-back, review admin/guest access, patch host. |
+| Quarterly | Full blob verify, key/access review, recovery tabletop, certificate/retention review. |
+| Before upgrade | Reviewed release, full backup, recent restore PASS, migration review, maintenance plan. |
+| After upgrade | Readiness, login, upload/download on 9443, task worker, backup, and critical QMS smoke checks. |
+
+Adjust cadence to the organization's risk and retention policy.
+
+## 14. Incident response quick map
+
+| Incident | First response |
+|---|---|
+| Keycloak down / login failure | Preserve logs; restart Keycloak; verify `/readyz`; use [SPOF fast restart](../runbooks/spof-fast-restart.md). |
+| Beat down / scheduled work stopped | Restart Beat only; ensure exactly one replica; verify next idempotent sweep. |
+| PostgreSQL down | Stop writes/restarts that churn; restore database service; use out-of-band alarm path. |
+| MinIO/WORM unavailable | Stop content mutations, preserve logs, restore service; do not redirect to an unlocked bucket. |
+| Backup failed | Investigate destination, credentials, space, and `pg_dump`; run backup + restore test after repair. |
+| Blob hash mismatch | Preserve affected object/evidence; follow the blob-integrity runbook; do not overwrite blindly. |
+| Mirror drift | Quarantine/record the mismatch and run the controlled scan/rebuild procedure. |
+| Audit-chain/witness alarm | Preserve host, DB, checkpoint, and logs; restrict privileged access; verify independently before repair. |
+| Certificate expiry/trust | Restore valid certificate/CA trust without changing issuer hostname unless intentionally reconfigured. |
+| Failed migration/readiness | Keep service closed, inspect the migration/pre-backup reference, and recover from the verified target if needed. |
+
+## 15. Known limitations and residuals
+
+Operational planning must account for:
+
+- no L profile, OpenSearch service, or bundled observability stack;
+- no in-app custom-role editor or Keycloak account creator;
+- no automated live restore cutover;
+- no migration `lock_timeout`;
+- no mounted T5 approval-rescind/reschedule or T8 revision-draft discard transition; monitor Beat
+  because scheduled effectivity is applied by the five-minute release sweep, not by reads;
+- newest-checkpoint-only off-host verification and no audit public-key history;
+- import revision-chain reconstruction refused as unsupported;
+- known ingestion progress/retry edges around reaping and PartiallyCommitted runs; and
+- a known CAPA multi-approver reject/changes-requested wedge/coverage gap.
+
+The authoritative residual ledger is [`slice-history.md`](../slice-history.md). Zero open GitHub
+issues does not supersede that ledger.
+
+## 16. Destructive-operation warning
+
+These are materially destructive and require an approved recovery/retention decision:
+
+- `docker compose down -v`;
+- deleting PostgreSQL/MinIO named volumes;
+- deleting or replacing `.env` without retained secrets;
+- changing WORM retention or removing buckets;
+- reusing an old database with mismatched blob storage; or
+- force-removing audit/identity rows.
+
+Prefer verified, fresh-target recovery. Record every production restore, key rotation, hostname
+change, and break-glass grant in the organization's change-control system.

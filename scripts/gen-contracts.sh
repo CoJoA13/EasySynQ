@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OpenAPI-first codegen (doc 18 §2): lint + bundle the contract, then generate the
-# server Pydantic models and the TS client. `--check` regenerates and fails if the
+# server Pydantic models and the TypeScript schema types. `--check` regenerates and fails if the
 # bundled contract hash drifts from packages/contracts/.contract.lock.
 set -euo pipefail
 
@@ -13,7 +13,10 @@ DIST="$SPEC/dist"
 LOCK="$SPEC/.contract.lock"
 CHECK="${1:-}"
 
-mkdir -p "$DIST"
+mkdir -p \
+  "$DIST" \
+  "$ROOT/apps/api/src/easysynq_api/_generated" \
+  "$ROOT/apps/web/src/api/_generated"
 
 # 1. lint + bundle the (possibly split) spec into one file
 npx --yes @redocly/cli lint "$SPEC/openapi.yaml"
@@ -38,6 +41,7 @@ echo "$NEW_HASH" > "$LOCK"
     --input "$DIST/openapi.json" --input-file-type openapi \
     --output src/easysynq_api/_generated/models.py \
     --output-model-type pydantic_v2.BaseModel \
+    --set-default-enum-member \
     --use-standard-collections --use-annotated --target-python-version 3.12 )
 
 # 4. client: TS types

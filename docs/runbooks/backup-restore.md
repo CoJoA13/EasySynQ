@@ -1,13 +1,14 @@
 # Backup, restore-test drill, restore & upgrade
 
-Only **PostgreSQL + MinIO** are backup-critical; OpenSearch + the filesystem mirror are regenerable
-(D-6 / R11). The backup/restore/upgrade CLIs run on the **worker** (it carries `postgresql-client`
+Only **PostgreSQL + MinIO** are backup-critical; the filesystem mirror is regenerable
+(D-6 / R11). OpenSearch is also designed as a derived store, but is not deployed by the shipped
+S/M profiles. The backup/restore/upgrade CLIs run on the **worker** (it carries `postgresql-client`
 + the OWNER `DATABASE_URL_SYNC`). MVP scope = nightly `pg_dump` + WORM-aware restore-to-verified-
 target; **continuous WAL/PITR, retention pruning, and S3 destinations are v1.x** (D-6).
 
 ## The durable backup archive
 
-`easysynq backup run` (and the nightly Beat job `easysynq.backup.run`) writes one timestamped,
+`./scripts/easysynq backup run` (and the nightly Beat job `easysynq.backup.run`) writes one timestamped,
 checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy's destination):
 
 * `db.dump` (`pg_dump -Fc`, including Keycloak's durable `keycloak` schema) + `manifest.json` (the
@@ -67,7 +68,7 @@ The same channel carries **`integrity.alarm`** from the nightly chain verificati
 
 ## The restore-test drill (gate G-C / AC#5)
 
-`easysynq backup restore-test` runs a real backup → restore into a throwaway scratch DATABASE →
+`./scripts/easysynq backup restore-test` runs a real backup → restore into a throwaway scratch DATABASE →
 copies the manifested blobs into the non-WORM `restore-scratch` bucket → runs the integrity triad
 (blob SHA-256 re-hash · per-table row-count parity · `document_version→blob` FK check) and tears the
 scratch namespace down. Only a **PASS** satisfies the setup gate. "Configured but unverified" does
@@ -75,7 +76,7 @@ not count.
 
 ## Live restore (WORM-aware, to a VERIFIED TARGET)
 
-`easysynq restore <archive.tar.enc> --confirm` decrypts + verifies the archive, restores PG into a
+`./scripts/easysynq restore <archive.tar.enc> --confirm` decrypts + verifies the archive, restores PG into a
 fresh scratch DATABASE, copies blobs into the fresh non-WORM bucket (the locked vault is **read**,
 never written), runs the triad, the **checkpoint-not-ahead** tamper check, and a **restored-chain
 re-verify** — then **leaves the verified target standing** for you to cut over to. It exits:
@@ -116,20 +117,21 @@ The MVP produces a verified target; **cutover is a documented operator action, n
    `easysynq_keycloak`. For a legacy archive, it creates the empty schema while preserving the
    staged realm for Keycloak's offline import. Verify a restored account and the `easysynq-web`
    client before reopening access.
-6. Run `easysynq mirror rebuild` plus a reindex.
+6. Run `./scripts/easysynq mirror rebuild`. Shipped S/M search uses PostgreSQL FTS and needs no separate
+   reindex operation.
 
-Discard an unused target with `easysynq restore --discard <scratch_db>`.
+Discard an unused target with `./scripts/easysynq restore --discard <scratch_db>`.
 
 ## Upgrade
 
-`easysynq upgrade --confirm` enforces **pre-backup → `alembic upgrade head` → readiness health-gate**
+`./scripts/easysynq upgrade --confirm` enforces **pre-backup → `alembic upgrade head` → readiness health-gate**
 and audits `UPGRADE_STARTED`/`UPGRADE_COMPLETED`/`UPGRADE_FAILED`. The pre-backup archive is the
 disaster safety net (named in `UPGRADE_FAILED.after`): a failed migration auto-rolls-back its own
-transaction; if the health-gate fails, recover with `easysynq restore <pre-backup>` + cutover.
+transaction; if the health-gate fails, recover with `./scripts/easysynq restore <pre-backup>` + cutover.
 
 ### ⚠ Stop the writers first when a revision builds an index on `audit_event`
 
-`easysynq upgrade` runs on a **one-off worker while api/worker/beat stay up**, so any migration that
+`./scripts/easysynq upgrade` runs on a **one-off worker while api/worker/beat stay up**, so any migration that
 locks a hot table contends with live traffic. This is unlike a fresh boot, where the compose
 `migrate` one-shot completes *before* those services start.
 
@@ -142,7 +144,7 @@ commits. Budget roughly **50 MB of index per million audit rows**, with build ti
 
 ```bash
 docker compose -f infra/compose/compose.yml stop api worker beat
-easysynq upgrade --confirm
+./scripts/easysynq upgrade --confirm
 docker compose -f infra/compose/compose.yml start api worker beat
 ```
 

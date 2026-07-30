@@ -2,8 +2,9 @@
 
 A single Linux host with Docker Compose **2.24.4 or newer**. The minimum is enforced before any
 legacy Keycloak migration because the production overlay uses Compose's fail-closed `!reset` merge
-tag. Profiles: **S** (≤25 users, Postgres-FTS only) or **M** (≤100 users, full stack). See doc 03 §7
-for sizing.
+tag. Profiles: **S** (≤25 users) or **M** (≤100 users, with 2 API + 2 worker + 2 renderer
+replicas). Both shipped profiles use PostgreSQL FTS; OpenSearch and the L profile are reserved,
+not deployed. See doc 03 §7 for sizing.
 
 ## Steps
 
@@ -54,9 +55,12 @@ for sizing.
      exec -T proxy cat /data/caddy/pki/authorities/local/root.crt > easysynq-root-ca.crt
    ```
 
-4. **First-run setup wizard** at `https://<host>/setup`:
+4. **Create the first sign-in identity, then run the setup wizard** at
+   `https://<host>/setup`. The bootstrap secret grants EasySynQ administration but does not create a
+   Keycloak password. Create or federate the intended administrator identity first; see
+   [Installation Guide §4.3](../manuals/installation-guide.md#43-create-the-first-sign-in-identity).
 
-   1. Operator runs `easysynq setup mint-bootstrap` → paste the one-time secret to become the first
+   1. Operator runs `./scripts/easysynq setup mint-bootstrap` → paste the one-time secret to become the first
       **System Administrator**.
    2. **Organization** profile (legal name / short code / timezone).
    3. **Storage** — *Verify storage* (the WORM probe, gate **G-B**). The `documents` bucket MUST be

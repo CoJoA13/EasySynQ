@@ -2,6 +2,12 @@
 
 This section specifies the **complete user-experience layer** of EasySynQ: the design principles, the navigation model, the visual design language (typography, color, spacing, elevation, motion), the component library, and detailed wireframes for the key screens. Everything here is in service of three non-negotiable product qualities established upstream — the product must be **modern, elegant, and calm**, it must **flow exactly the way ISO 9001:2015 flows** (clause spine + process map + PDCA, the *three lenses, one QMS* from the domain model), and it must use **progressive disclosure** so a user is never confronted with the entire standard, every permission, or every record at once. The visual system is built on the locked stack — **React + TypeScript, Mantine components, Tailwind design tokens, TanStack Query, OpenAPI client** — and binds to the locked NFRs, above all **WCAG 2.2 Level AA**. The single most load-bearing UX rule is inherited verbatim from the domain model: **Documents (maintained) and Records (retained) must feel visually different** — the UI *teaches* the maintain/retain distinction by making the two genuinely different to look at and to touch.
 
+> **Implementation status (audited 2026-07-30).** This document is the UX target and design
+> vocabulary, not an inventory of mounted React routes. The current route inventory is documented
+> in the [User Manual](manuals/user-manual.md). In particular, global search currently covers
+> authorized Effective-document metadata rather than Records, people, commands, body text, or
+> OpenSearch facets, and Records/Retention and Evidence Packs have no dedicated management routes.
+
 ---
 
 ## 1. Design Principles
@@ -84,9 +90,10 @@ flowchart LR
 
 The Home dashboard is a **PDCA wheel** with four quadrants. Each quadrant shows **only counts and RAG status** (DP-2). Drilling into a quadrant opens the relevant clause section, pre-filtered (progressive disclosure DP-3). The signals surfaced per quadrant are inherited from domain §5.3 (Plan: objectives off-target, overdue reviews; Do: pending approvals, checked-out drift risk; Check: overdue audits, KPI breaches; Act: open/overdue CAPAs).
 
-### 2.4 Global search
+### 2.4 Target global search
 
-Global search (⌘K) is a single **command-and-search palette**, the fastest path to any artifact and the keyboard entry point for power users.
+The table below is the full target. The current ⌘K palette searches Effective-document metadata
+only, as described in the implementation-status note and User Manual.
 
 | Feature | Behavior |
 |---|---|
@@ -141,14 +148,14 @@ Two complete themes (**light** and **dark**) generated from the same token names
 | `--accent-hover` | `#1F58B5` | Accent hover/active |
 | `--focus-ring` | `#2A6FDB` @ 3px, 2px offset | Focus indicator (never removed) |
 
-**Semantic status colors for DOCUMENT states** — these are the lifecycle states from the canonical state machine (Draft → In Review → Approved → Released/Effective → Obsolete). Each state has a token used consistently in badges, timelines, and dashboards. **Color is never the only signal** (DP-7): each state also carries an icon and a text label.
+**Semantic status colors for DOCUMENT states** — these are the lifecycle states from the canonical state machine (Draft → In Review → Approved → Effective → Under Revision → Superseded → Obsolete). Each state has a token used consistently in badges, timelines, and dashboards. **Color is never the only signal** (DP-7): each state also carries an icon and a text label.
 
 | Document state | Token | Light hex | Icon | Meaning |
 |---|---|---|---|---|
 | **Draft** | `--state-draft` | `#8A91A0` (slate) | ✎ pencil | Editable working version, not controlled-effective |
 | **In Review** | `--state-review` | `#B26A00` (amber) | ◔ clock-circle | Submitted; awaiting reviewer/approver decision |
 | **Approved** | `--state-approved` | `#2E6FAE` (blue) | ✓ check | Decision recorded; awaiting effective date/release |
-| **Released / Effective** | `--state-effective` | `#1F8A52` (green) | ★ filled-star / shield | The single governing version (one per document) |
+| **Released / Effective** | `--state-effective` | `#1F8A52` (green) | ★ filled-star / shield | The single governing version (one for an active released document; otherwise none) |
 | **Obsolete / Superseded** | `--state-obsolete` | `#6B7280` on hachure | ⊘ slash | Retained, read-only, not governing |
 
 **Semantic status for RECORDS** — records do not have lifecycle states; they have **retention status**, which is its own visual family to reinforce DP-4:

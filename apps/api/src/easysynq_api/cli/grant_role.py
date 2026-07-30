@@ -1,13 +1,13 @@
-"""Dev/ops bootstrap: assign a seeded role to a user by Keycloak subject.
+"""Host-level break-glass: assign a seeded role to a user by Keycloak subject.
 
-A **pre-S8 stopgap** so the authz admin API is usable before the first-run wizard (slice
-S8) grants the first System Administrator. This is an explicit operator action — like
-recreating the demo Keycloak user (CLAUDE.md) — **not** an app-logic auto-grant, so
-AZ-INV-6 and the setup-wizard model stay intact.
+This is an explicit operator action — **not** an app-logic auto-grant — for bootstrap
+recovery when the normal administration API is unavailable. It bypasses the API audit
+path, so production use requires an independent change/incident record.
 
 Run it inside the api container (where the DB is reachable):
 
-    easysynq grant-role <keycloak-subject> ["Role Name"]
+    easysynq grant-role <keycloak-subject> ["Role Name"] [--org CODE]
+        [--bound-scope JSON]
 
 Idempotent: re-running is a no-op. JIT-creates the ``app_user`` row if absent. Uses a sync
 engine — it is a one-shot script, not coupled to the app's event loop.

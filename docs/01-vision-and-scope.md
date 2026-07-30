@@ -236,7 +236,7 @@ flowchart LR
 1. Priya **checks out** the released document (locks it for editing; status visible to all).
 2. Priya edits and **checks in** a new Draft revision with a change reason; submits for review.
 3. **Ken** receives a review task in **My Tasks**, sees a **diff vs. the prior released version** + change reason, and **approves or rejects** with a recorded decision (the approval = the v1 **signature hook**).
-4. On approval, the new version transitions **Approved → Released/Effective**; the prior version becomes **Obsolete** (retained, marked superseded).
+4. On release, the new version transitions **Approved → Effective**; the prior Effective version becomes **Superseded** (retained read-only and optionally archived as Obsolete later).
 5. The read-only mirror regenerates; affected employees (e.g., **Sam**) are notified / asked to re-acknowledge if required. All steps are audit-logged.
 
 ```mermaid
@@ -325,8 +325,8 @@ These definitions are **authoritative** for all EasySynQ specification sections.
 | **Read-only Mirror / Export** | App | The on-disk, organized, **read-only** representation regenerated from the vault. Never the master; used for browsing/backup convenience. |
 | **Document Drift** | App | Divergence between the controlled master and uncontrolled copies (or between which version people believe is current). The core problem EasySynQ prevents. |
 | **Version / Revision** | App | An immutable, point-in-time state of a Document, annotated with author, timestamp, and change reason. Superseded versions are retained and marked obsolete. |
-| **Document Lifecycle** | App | The controlled state machine a Document moves through: **Draft → In Review → Approved → Released/Effective → Obsolete**. *(Note: this five-state form is the simplified, user-facing summary view; the canonical engine/data-model lifecycle is the seven-state machine — `Draft`, `InReview`, `Approved`, `Effective`, `UnderRevision`, `Superseded`, `Obsolete` — defined in doc 04 section 3.1. See the canonical 7-state machine, reconciled per Decisions Register R1.)* |
-| **Released / Effective** | App | The lifecycle state in which a Document version is the governing, currently-in-force copy. Exactly one effective version per controlled document. |
+| **Document Lifecycle** | App | The controlled state machine a Document moves through: **Draft → In Review → Approved → Effective → Obsolete**. *(Note: this five-state form is the simplified, user-facing summary view; the canonical engine/data-model lifecycle is the seven-state machine — `Draft`, `InReview`, `Approved`, `Effective`, `UnderRevision`, `Superseded`, `Obsolete` — defined in doc 04 section 3.1. See the canonical 7-state machine, reconciled per Decisions Register R1.)* |
+| **Released / Effective** | App | The lifecycle state in which a Document version is the governing, currently-in-force copy. At most one version per controlled document can be Effective; an active released document has one. |
 | **Obsolete / Superseded** | App | A previously effective version retained for history but no longer governing. |
 | **Check-out / Check-in** | App | The control mechanism granting one editor at a time exclusive edit rights (check-out) and committing a new revision with a mandatory change reason (check-in). |
 | **Change Reason / Summary** | App | The mandatory annotation captured at check-in / submission describing *what changed and why*. |
@@ -369,4 +369,4 @@ These definitions are **authoritative** for all EasySynQ specification sections.
 | A4 | "Approval" in v1 satisfies ISO 9001 recorded-authorization needs; cryptographic/Part-11 signatures are a future additive layer (N1, G11). |
 | A5 | One organization (single tenant) per EasySynQ install (N3). |
 | A6 | Browser access on modern desktop browsers; responsive but no native mobile app (N10). |
-| A7 | Exactly one **Released/Effective** version exists per controlled document at any time; all prior effective versions are retained as Obsolete. |
+| A7 | At most one **Effective** version exists per controlled document at any time; prior effective versions are retained as Superseded and may later be archived as Obsolete. |
