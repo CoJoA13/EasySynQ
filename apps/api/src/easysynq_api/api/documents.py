@@ -58,7 +58,11 @@ from ..services.ack.sink import get_ack_enqueue_sink
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.authz.resource import build_document_resource_context, resource_from_doc
-from ..services.authz.version_history import enforce_version_reads, filter_readable_versions
+from ..services.authz.version_history import (
+    can_read_any_version_state,
+    enforce_version_reads,
+    filter_readable_versions,
+)
 from ..services.common.org_clock import current_org_tz
 from ..services.dcr import build_where_used
 from ..services.diff import build_version_diff, get_or_create_visual_diff, get_visual_diff
@@ -402,20 +406,36 @@ _CAPABILITY_KEYS: dict[str, str] = {
     "edit": "document.edit",  # check-in + start-revision
     "manage_metadata": "document.manage_metadata",  # clause mapping
     "submit": "document.submit",
-    "read_draft": "document.read_draft",  # Draft/InReview/Approved version content
 }
 
 
 async def _document_capabilities(
-    session: AsyncSession, caller: AppUser, doc: DocumentedInformation
+    session: AsyncSession,
+    request: Request,
+    caller: AppUser,
+    doc: DocumentedInformation,
 ) -> dict[str, bool]:
     base = await _document_scope_by_id(session, doc.id)
     now = datetime.datetime.now(datetime.UTC)
-    ctx = RequestContext(now=now, actor_user_id=str(caller.id))
+    ctx = RequestContext(
+        now=now,
+        source_ip=request.client.host if request.client else None,
+        actor_user_id=str(caller.id),
+    )
     caps: dict[str, bool] = {}
     for short_key, perm_key in _CAPABILITY_KEYS.items():
         grants = await gather_grants(session, caller.id, caller.org_id, perm_key)
         caps[short_key] = authorize(grants, perm_key, base, ctx).allow
+    # R59: unlike authoring actions, this capability ranges over immutable version states. Probe
+    # Draft/InReview/Approved contexts so a lifecycle predicate never evaluates against the mutable
+    # Document headline (for example UnderRevision), while keeping this an authz-only affordance.
+    caps["read_draft"] = await can_read_any_version_state(
+        session,
+        request,
+        caller,
+        base,
+        "document.read_draft",
+    )
     # obsolete: a sig-hook action (no SoD overlay). The §7.3 coverage gate is a separate runtime
     # check, not authz — the capability just says "you hold document.obsolete on this doc".
     obs_grants = await gather_grants(session, caller.id, caller.org_id, "document.obsolete")
@@ -921,13 +941,14 @@ async def create_document_endpoint(
 @router.get("/documents/{document_id}")
 async def get_document_endpoint(
     document_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
     rows = await vault_repo.list_clause_mappings(session, doc.id)
     eff = await _effective_from_map(session, [doc])
-    caps = await _document_capabilities(session, caller, doc)
+    caps = await _document_capabilities(session, request, caller, doc)
     return _document(
         doc,
         clause_refs=[c.number for _, c in rows],

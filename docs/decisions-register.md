@@ -1704,6 +1704,12 @@ live request time, source IP, and actor, and retains deny-by-default plus deny-a
 semantics. Detail/download/diff decisions use the audited PEP; collection row filtering mirrors
 Library's pure-PDP filtering so it does not emit one audit record per visible or hidden row.
 
+The Document-detail `capabilities.read_draft` affordance follows the same immutable-state model:
+it is true when `document.read_draft` admits at least one candidate Draft/InReview/Approved state
+for the canonical Document context and live request context. It never evaluates lifecycle
+predicates against the mutable Document headline and remains an authorization answer rather than
+a claim that a matching version row currently exists.
+
 No migration, permission key, seeded role grant, endpoint, request field, response field, or
 frontend behavior branch is introduced.
 

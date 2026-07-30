@@ -108,6 +108,46 @@ async def filter_readable_versions(
     return visible
 
 
+async def can_read_any_version_state(
+    session: AsyncSession,
+    request: Request,
+    caller: AppUser,
+    document_resource: ResourceContext,
+    permission_key: str,
+) -> bool:
+    """Return whether one specialized key admits any immutable state assigned to that key.
+
+    This is the authz-only answer used by the Document detail ``read_draft`` affordance.  It
+    intentionally probes the candidate immutable states rather than the mutable Document headline
+    or the existence of a particular history row: capabilities describe what the caller may do,
+    while the history collection separately describes what rows currently exist.  Every probe
+    preserves the canonical Document selectors and the live request context.
+    """
+    states = tuple(
+        state
+        for state, required_key in _PERMISSION_BY_STATE.items()
+        if required_key == permission_key
+    )
+    if not states:
+        return False
+    grants = await gather_grants(session, caller.id, caller.org_id, permission_key)
+    context = _request_context(request, caller)
+    return any(
+        authorize(
+            grants,
+            permission_key,
+            dataclasses.replace(
+                document_resource,
+                lifecycle_state=state.value,
+                version_id=None,
+                author_user_id=None,
+            ),
+            context,
+        ).allow
+        for state in states
+    )
+
+
 async def enforce_version_reads(
     session: AsyncSession,
     sink: AuthzAuditSink,

@@ -7248,7 +7248,11 @@ components:
         obsolete: { type: boolean }
         read_draft:
           type: boolean
-          description: Draft / InReview / Approved version content (document.read_draft).
+          description: >-
+            Whether document.read_draft admits at least one immutable Draft, InReview, or Approved
+            state for this document under the current request context. Evaluated against candidate
+            version states, never the mutable Document headline; row existence is reported by the
+            version collection.
 
     PageMeta:
       type: object

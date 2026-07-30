@@ -8,8 +8,10 @@ then add the state-specific content capability:
 * Superseded / Obsolete -> ``document.read_obsolete``.
 
 The list returns only authorized rows.  Detail/download enforce one row, and text/visual diffs
-enforce both sides.  These proofs use all six version states, mixed-state pairs, an ARTIFACT-scoped
-ALLOW with request/lifecycle predicates, and a lifecycle-scoped explicit DENY.
+enforce both sides.  The Document-detail ``read_draft`` affordance probes the same immutable-state
+contexts rather than the mutable headline.  These proofs use all six version states, mixed-state
+pairs, an ARTIFACT-scoped ALLOW with request/lifecycle predicates, and a lifecycle-scoped explicit
+DENY.
 """
 
 from __future__ import annotations
@@ -283,12 +285,41 @@ async def test_version_resource_preserves_artifact_lifecycle_ip_and_deny_wins(
         headers=scoped_headers,
     )
     assert draft.status_code == 200, draft.text
+    # The live headline is UnderRevision, but the Draft predicate admits an immutable Draft state.
+    scoped_detail = await app_client.get(
+        f"/api/v1/documents/{matrix.document_id}",
+        headers=scoped_headers,
+    )
+    assert scoped_detail.status_code == 200, scoped_detail.text
+    assert scoped_detail.json()["capabilities"]["read_draft"] is True
     in_review = await app_client.get(
         f"/api/v1/documents/{matrix.document_id}/versions/"
         f"{matrix.version_ids[VersionState.InReview]}",
         headers=scoped_headers,
     )
     assert in_review.status_code == 403, in_review.text
+
+    headline_reader = _subject("headline")
+    await _grant(headline_reader, ("document.read",))
+    await _grant(
+        headline_reader,
+        ("document.read_draft",),
+        level=ScopeLevel.ARTIFACT,
+        selector={"artifact_id": matrix.document_id},
+        predicates={"lifecycle_state": [DocumentCurrentState.UnderRevision.value]},
+    )
+    headline_headers = _auth(token_factory, headline_reader)
+    headline_detail = await app_client.get(
+        f"/api/v1/documents/{matrix.document_id}",
+        headers=headline_headers,
+    )
+    assert headline_detail.status_code == 200, headline_detail.text
+    assert headline_detail.json()["capabilities"]["read_draft"] is False
+    headline_draft = await app_client.get(
+        f"/api/v1/documents/{matrix.document_id}/versions/{matrix.version_ids[VersionState.Draft]}",
+        headers=headline_headers,
+    )
+    assert headline_draft.status_code == 403, headline_draft.text
 
     deny_reader = _subject("deny")
     await _grant(deny_reader, ("document.read", "document.read_obsolete"))
