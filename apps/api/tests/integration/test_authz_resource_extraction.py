@@ -57,6 +57,7 @@ async def test_build_document_resource_context_matches_delegate(
     assert rc.lifecycle_state is not None  # the doc's current_state.value
     assert rc.framework_id is not None  # #333: FRAMEWORK-scope selector
     assert rc.kind == "DOCUMENT"  # #333: DOC_CLASS kind selector
+    assert rc.concrete_type == "SOP"  # R60/#345: stable DocumentType.code selector
 
 
 async def test_build_document_resource_context_missing_doc_degrades(

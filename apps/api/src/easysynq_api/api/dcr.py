@@ -190,10 +190,9 @@ async def _dcr_doc_scope(session: AsyncSession, doc_id: uuid.UUID | None) -> Res
     doc = await session.get(DocumentedInformation, doc_id)
     if doc is None:
         return ResourceContext.system()  # the service raises the real 404/422
-    level: str | None = None
+    document_type: DocumentType | None = None
     if doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
+        document_type = await session.get(DocumentType, doc.document_type_id)
     # #333/#346: full scope tuple via the shared helper (adds kind; framework_id/lifecycle were
     # already inline). process_ids come from the canonical satellite-aware loader (NOT
     # list_process_links) so a DCR targeting an objective includes its quality_objective.process_id
@@ -202,7 +201,7 @@ async def _dcr_doc_scope(session: AsyncSession, doc_id: uuid.UUID | None) -> Res
     # objective binds its process on the satellite, not a ProcessLink).
     return resource_from_doc(
         doc,
-        document_level=level,
+        document_type=document_type,
         process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
 

@@ -137,17 +137,18 @@ async def _decision_scope(session: AsyncSession, task: Task) -> ResourceContext:
     if doc is None:
         return ResourceContext.system()
     version = await vault_repo.latest_version(session, doc.id)
-    level: str | None = None
+    document_type: DocumentType | None = None
     if doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
+        document_type = await session.get(DocumentType, doc.document_type_id)
     # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK- or
     # kind-scoped review/approve/release DENY isn't dropped at the decision gate — the most
     # security-sensitive document surface) INCLUDING process_ids, so a PROCESS-scoped DENY on a
     # linked process participates too — else the new framework ALLOW would beat a dropped PROCESS
     # DENY (#346 review). Then fold the SoD inputs (the version under decision + its author).
     base = resource_from_doc(
-        doc, document_level=level, process_ids=await vault_repo.process_ids_for_doc(session, doc.id)
+        doc,
+        document_type=document_type,
+        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
     return dataclasses.replace(
         base,
@@ -393,15 +394,14 @@ async def get_instance_endpoint(
     # S-process-scope-1: carry the subject doc's process_ids so a bound Process Owner's
     # PROCESS-scoped document.read authorizes this read (mirrors the detail _document_scope).
     process_ids = await vault_repo.process_ids_for_doc(session, instance.subject_id)
-    level: str | None = None
+    document_type: DocumentType | None = None
     if doc is not None and doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
+        document_type = await session.get(DocumentType, doc.document_type_id)
     if doc is not None and doc.kind is DocumentKind.DOCUMENT:
         # #333: a genuine DOCUMENT subject gets the FULL scope tuple, so a FRAMEWORK- or kind-scoped
         # document.read DENY isn't dropped (and lifecycle predicates narrow, consistent with the
         # detail read).
-        resource = resource_from_doc(doc, document_level=level, process_ids=process_ids)
+        resource = resource_from_doc(doc, document_type=document_type, process_ids=process_ids)
     else:
         # A non-document subject: no documented_information row, OR a RECORD-backed one — a CAPA/
         # audit/MR subject_id resolves to the shared documented_information row (record.id ->
@@ -412,7 +412,9 @@ async def get_instance_endpoint(
         resource = ResourceContext(
             artifact_id=str(instance.subject_id),
             folder_path=doc.folder_path if doc is not None else None,
-            document_level=level,
+            document_level=(
+                document_type.document_level.value if document_type is not None else None
+            ),
             process_ids=process_ids,
         )
     await enforce(session, authz_sink, request, caller, "document.read", resource)
@@ -435,14 +437,13 @@ async def get_document_approval_endpoint(
     doc = await vault_repo.get_document(session, document_id)
     if doc is None or doc.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Document not found")
-    level: str | None = None
+    document_type: DocumentType | None = None
     if doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
+        document_type = await session.get(DocumentType, doc.document_type_id)
     # S-process-scope-1: process_ids so a bound Process Owner's PROCESS document.read matches.
     process_ids = await vault_repo.process_ids_for_doc(session, doc.id)
     if doc.kind is DocumentKind.DOCUMENT:
-        resource = resource_from_doc(doc, document_level=level, process_ids=process_ids)
+        resource = resource_from_doc(doc, document_type=document_type, process_ids=process_ids)
     else:
         # A RECORD-backed id (records share documented_information via record.id): don't extend
         # DOCUMENT framework/kind scoping to a record on this document.read gate (#346 review); a
@@ -450,7 +451,9 @@ async def get_document_approval_endpoint(
         resource = ResourceContext(
             artifact_id=str(doc.id),
             folder_path=doc.folder_path,
-            document_level=level,
+            document_level=(
+                document_type.document_level.value if document_type is not None else None
+            ),
             process_ids=process_ids,
         )
     await enforce(session, authz_sink, request, caller, "document.read", resource)

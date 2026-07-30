@@ -20,9 +20,8 @@ from ..vault import repository as vault_repo
 def resource_from_doc(
     doc: DocumentedInformation,
     *,
-    document_level: str | None,
+    document_type: DocumentType | None,
     process_ids: frozenset[str],
-    concrete_type: str | None = None,
 ) -> ResourceContext:
     """Build a document's FULL authz scope tuple from an already-loaded row — the single
     completion source shared by every document-scope builder (issue #333).
@@ -36,15 +35,13 @@ def resource_from_doc(
       * FRAMEWORK  → ``framework_id``
       * DOC_CLASS  → ``document_level`` + ``kind`` (+ ``concrete_type``)
     plus ``lifecycle_state`` (the ABAC lifecycle predicate). ``framework_id``/``kind`` are direct
-    NOT-NULL columns; ``process_ids`` and ``document_level`` are resolved by the caller (they need
-    the session) and passed in, so this stays a pure, session-free function both the async builder
-    and the register's batched builder can call without drifting.
-
-    ``concrete_type`` is a documented-but-unimplemented leaf-type selector — there is no column on
-    ``documented_information``, no producer, and no grant selector references it in v1 — so it is
-    threaded as an explicit ``None`` (today's behavior). When a source is defined it is populated in
-    this one place; tracked in #345.
+    NOT-NULL columns; ``process_ids`` and the resolved ``DocumentType`` are supplied by callers
+    because they need the session. Deriving both ``document_level`` and ``concrete_type`` from that
+    one catalog row prevents the pair from drifting while this helper remains pure and
+    session-free for async and batched builders alike (R60/#345).
     """
+    document_level = document_type.document_level.value if document_type is not None else None
+    concrete_type = document_type.code if document_type is not None else None
     return ResourceContext(
         artifact_id=str(doc.id),
         folder_path=doc.folder_path,
@@ -68,12 +65,11 @@ async def build_document_resource_context(
     doc = await session.get(DocumentedInformation, doc_id)
     if doc is None:
         return ResourceContext(artifact_id=str(doc_id))
-    level: str | None = None
+    document_type: DocumentType | None = None
     if doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
+        document_type = await session.get(DocumentType, doc.document_type_id)
     return resource_from_doc(
         doc,
-        document_level=level,
+        document_type=document_type,
         process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )

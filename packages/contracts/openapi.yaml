@@ -7078,7 +7078,10 @@ components:
         selector:
           type: [object, "null"]
           additionalProperties: true
-          description: e.g. { process_id } / { folder_path } / { document_level } / { artifact_id }.
+          description: >-
+            e.g. { process_id } / { folder_path } /
+            { document_level, concrete_type } / { artifact_id }. For DOC_CLASS,
+            concrete_type is the exact case-sensitive document_type.code (for example SOP).
         predicates:
           type: [object, "null"]
           additionalProperties: true

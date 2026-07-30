@@ -238,9 +238,10 @@ erDiagram
 
 > `clause_map[]` and `process_links[]` are the `clause_mapping` / `process_link` join tables (§4), keyed to `documented_information_id`. Registers, objectives, etc. are also `documented_information` rows (see §6 reconciliation R3).
 > v1 does not store separate `concrete_type`, `requirement_source`, `pdca_phase`, or
-> `owner_org_role_id` columns on this root. Document type/level comes from `document_type_id`,
-> record type from the `record` satellite, requirement/process context from audited mappings, and
-> QMS responsibility from the organization-role tables.
+> `owner_org_role_id` columns on this root. Per R60, Document `concrete_type` is resolved as the
+> exact `document_type.code`, and its level comes from that same `document_type_id` catalog row.
+> Record type comes from the `record` satellite, requirement/process context from audited mappings,
+> and QMS responsibility from the organization-role tables.
 
 ### 5.2 Maintained-Document fields (stored on `documented_information`)
 

@@ -346,17 +346,18 @@ async def _objective_release_scope(
     cutover will promote (the latest Approved): its author + approval signers. Mirrors the
     document ``_release_scope`` (documents.py) — same base fields as ``_document_scope_by_id``
     (artifact + folder + doc-class + lifecycle), then the shared SoD-2 enrichment."""
-    level: str | None = None
+    document_type: DocumentType | None = None
     if doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
+        document_type = await session.get(DocumentType, doc.document_type_id)
     # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK- or
     # kind-scoped release DENY isn't dropped), INCLUDING process_ids so a PROCESS-scoped DENY on the
     # objective's bound process participates too (#346 review — process_ids_for_doc unions the
     # quality_objective satellite; an objective binds its process there, not a ProcessLink), then
     # fold SoD inputs.
     base = resource_from_doc(
-        doc, document_level=level, process_ids=await vault_repo.process_ids_for_doc(session, doc.id)
+        doc,
+        document_type=document_type,
+        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
     return await enrich_release_sod_scope(session, base, doc.id, None)
 

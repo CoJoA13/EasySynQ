@@ -160,11 +160,11 @@
 
 ### S-scope-tuple — complete the document ResourceContext scope tuple (closes #333; BE; NO migration [head stays `0070`]; NO new key [catalog 102]; PR #346 squash `26360bb`)
 
-**What shipped — the canonical `build_document_resource_context` (behind EVERY document gate + the notification audience resolver) set `document_level` but omitted `framework_id` + `kind`, so `pdp._matches_scope` could never structurally match a FRAMEWORK- or kind-scoped grant → a FRAMEWORK/kind-scoped DENY was silently DROPPED (deny-always-wins, R3, violated on all document surfaces). #329 had patched the register's OWN inline copy, leaving the canonical builder behind — the drift this resolves.** Factored one pure `resource_from_doc(doc, *, document_level, process_ids, concrete_type=None)` that builds the FULL tuple (artifact + folder + doc-class + `kind` + `concrete_type` + process_ids + `lifecycle_state` + `framework_id`) and routed EVERY document-scope builder through it so they can't drift again: the canonical builder, the register + library row-filters, objective release, the workflow instance-read + approval-read, the task-decision gate (the most security-sensitive surface — a FRAMEWORK/kind `document.release` DENY was being dropped there), search + suggest, dcr, ack.
+**What shipped — the canonical `build_document_resource_context` (behind EVERY document gate + the notification audience resolver) set `document_level` but omitted `framework_id` + `kind`, so `pdp._matches_scope` could never structurally match a FRAMEWORK- or kind-scoped grant → a FRAMEWORK/kind-scoped DENY was silently DROPPED (deny-always-wins, R3, violated on all document surfaces). #329 had patched the register's OWN inline copy, leaving the canonical builder behind — the drift this resolves.** Factored one pure `resource_from_doc(...)` that builds the FULL tuple (artifact + folder + doc-class + `kind` + `concrete_type` + process ids + `lifecycle_state` + `framework_id`) and routed EVERY document-scope builder through it so they can't drift again: the canonical builder, the register + library row-filters, objective release, the workflow instance-read + approval-read, the task-decision gate (the most security-sensitive surface — a FRAMEWORK/kind `document.release` DENY was being dropped there), search + suggest, dcr, ack.
 
 ⚠ **The latent-hole cascade.** Completing the FRAMEWORK selector ACTIVATED a whole family of previously-dormant deny-wins holes, and 5 Codex rounds walked them: (1) the other inline builders; (2) **record over-grant** — a RECORD-backed workflow subject (`capa.id → record.id → documented_information.id`, `kind=RECORD`) fed a record's framework/kind to the `document.read` gate → guarded on `doc.kind is DocumentKind.DOCUMENT`; (3) **empty `process_ids`** — the decision/release scopes passed `frozenset()` so a PROCESS DENY dropped while the framework ALLOW matched → populated real process_ids everywhere; (4) **the objective satellite** — an objective binds its process on `quality_objective.process_id`, NOT a `ProcessLink`, so `process_ids_for_docs` returned empty → made the canonical BATCH loader satellite-aware (it unions `quality_objective.process_id`; an objective IS its own `documented_information`, `QualityObjective.id == doc.id`); (5) **`list_process_links` holdouts** — the DCR target scope + the record capture/correction (deny-broader floor) scopes derived process_ids from `list_process_links` (ProcessLink-only) → routed onto the canonical satellite-aware loader. **The convergence point was ONE canonical satellite-aware process loader that every gate routes through.**
 
-⚠ `list_process_links` (INNER-JOINs Process, takes `Process.id`) and `process_ids_for_docs` (`ProcessLink.process_id` direct) are IDENTICAL for a normal doc — `ProcessLink.process_id` is `NOT NULL` + `RESTRICT` FK, so the link always resolves — the swap only ADDS the satellite for objectives. ⚠ **`quality_objective` is the ONLY shared-PK `documented_information` subtype with a `process_id` satellite** (context/interested_party/mgmt_review have no process; risk is a register-HEAD model — `RiskOpportunity` has its own id + `register_doc_id`, never a document id) → the union is COMPLETE and risk correctly needs none. `concrete_type` stays a deferred DOC_CLASS selector (#345 — no column/producer in v1, threaded as an explicit `None`).
+⚠ `list_process_links` (INNER-JOINs Process, takes `Process.id`) and `process_ids_for_docs` (`ProcessLink.process_id` direct) are IDENTICAL for a normal doc — `ProcessLink.process_id` is `NOT NULL` + `RESTRICT` FK, so the link always resolves — the swap only ADDS the satellite for objectives. ⚠ **`quality_objective` is the ONLY shared-PK `documented_information` subtype with a `process_id` satellite** (context/interested_party/mgmt_review have no process; risk is a register-HEAD model — `RiskOpportunity` has its own id + `register_doc_id`, never a document id) → the union is COMPLETE and risk correctly needs none. `concrete_type` was deferred here and is completed by R60 / issue #345 from the existing Document Type catalog.
 
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
@@ -371,6 +371,26 @@ filtering, ARTIFACT + lifecycle + source-IP scope, deny-always-wins, and mixed t
 comparisons that need both sides' keys. R59, authorization/API docs, OpenAPI, engineering patterns,
 and SPA implementation comments now publish the same matrix. The remediation tracker contained no
 separate #406 entry; this slice-history residual was the handoff item and is now closed.
+
+### Issue #345 — define the DOC_CLASS `concrete_type` selector source (API + OpenAPI/docs + tests; NO migration [head stays `0083`]; NO new permission key [catalog 102]; closes [#345](https://github.com/CoJoA13/EasySynQ/issues/345))
+
+**Owner decision (R60).** A Document's exact, case-sensitive `document_type.code` is its
+`ResourceContext.concrete_type`; the display name is never an authorization identifier. The
+canonical helper receives one resolved `DocumentType` and derives both `document_level` and
+`concrete_type`, eliminating independently supplied strings that could drift.
+
+**Surface completion.** Every row-backed document scope, batched Library/register filter,
+workflow/lifecycle/acknowledgement/DCR decision, and version projection inherits the completed
+canonical context. Search and suggestion candidate contracts project `dt.code` beside the level,
+while the pre-create base and per-process scopes use the already-loaded catalog row. The two
+Record-backed workflow fallbacks intentionally remain outside Document concrete typing.
+
+**Compatibility and regression proof.** No migration, backfill, permission, role, endpoint,
+request, response, or frontend change is introduced. Existing DOC_CLASS grants without the
+selector are unchanged; a matching concrete-type DENY now beats broader ALLOWs. A pure mutation
+proof blanks only `concrete_type` and observes DENY→ALLOW, while Docker-backed integration covers
+the canonical builder, pre-create 403, detail/list filtering, and search/suggest discrimination
+between two equal-level catalog codes.
 
 ### Issue #331 — publish repeatable Document clause filters correctly (OpenAPI + contract tests + docs; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#331](https://github.com/CoJoA13/EasySynQ/issues/331); PR [#408](https://github.com/CoJoA13/EasySynQ/pull/408))
 
