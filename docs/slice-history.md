@@ -349,7 +349,7 @@ request context UTC while the report snapshot resolves Pacific/Kiritimati, provi
 follow the snapshot. Web tests lock the UTC/org-date crossover and contract guards require the
 date/date-time union plus lower/upper semantics on both endpoint declarations.
 
-### Issue #406 — enforce immutable version-state authorization across history and diffs (API + OpenAPI/docs + web comments + tests; NO migration [head stays `0083`]; NO new permission key [catalog 102]; closes [#406](https://github.com/CoJoA13/EasySynQ/issues/406))
+### Issue #406 — enforce immutable version-state authorization across history and diffs (API + OpenAPI/docs + web comments + tests; NO migration [head stays `0083`]; NO new permission key [catalog 102]; closes [#406](https://github.com/CoJoA13/EasySynQ/issues/406); PR [#415](https://github.com/CoJoA13/EasySynQ/pull/415))
 
 **Owner decision (R59).** Every immutable version-history read surface retains `document.read` as the
 non-substitutable live-Document boundary. Each immutable version then selects its additional key:
