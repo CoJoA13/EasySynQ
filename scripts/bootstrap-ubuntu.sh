@@ -16,6 +16,7 @@ QMS_SHARE=""
 QMS_USER=""
 SKIP_FIREWALL=0
 SKIP_UPGRADES=0
+RESET_CREDENTIALS=0
 FORCE=0
 DRY_RUN=0
 
@@ -34,6 +35,7 @@ usage: sudo ./scripts/bootstrap-ubuntu.sh --host <fqdn> [options]
   --qms-user <account>   Service account for that share (requires --qms-share)
   --skip-firewall        Leave ufw untouched (a managed/external firewall)
   --skip-upgrades        Do not enable unattended-upgrades
+  --reset-credentials    Re-prompt for the share password, replacing the stored one
   --force                Proceed despite a failed sizing preflight
   --dry-run              Print every command; execute nothing
   -h, --help             This message
@@ -63,6 +65,7 @@ while [ $# -gt 0 ]; do
     --qms-user)  [ $# -ge 2 ] || { usage; exit 2; }; QMS_USER="$2"; shift 2 ;;
     --skip-firewall) SKIP_FIREWALL=1; shift ;;
     --skip-upgrades) SKIP_UPGRADES=1; shift ;;
+    --reset-credentials) RESET_CREDENTIALS=1; shift ;;
     --force)   FORCE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -114,16 +117,26 @@ fi
 [ "$(uname -m)" = "x86_64" ] || preflight_fail "x86_64 required (found $(uname -m))"
 
 CPU_COUNT="$(nproc 2>/dev/null || echo 0)"
-MEM_GB=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0) / 1024 / 1024 ))
+
+# Compare RAW KiB, not truncated GiB. Firmware and the kernel reserve several percent, so a host
+# sold and documented as 8 GB reports ~7.5 GiB in MemTotal; truncating that to an integer 7 would
+# reject the machine at the s profile's own advertised 8 GB floor. Allow a 10% reservation
+# tolerance against the raw value instead.
+MEM_KIB="$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+MEM_KIB="${MEM_KIB:-0}"
+MIN_MEM_KIB=$(( MIN_MEM * 1048576 * 90 / 100 ))
+
 DISK_GB="$(df -BG --output=size / 2>/dev/null | tail -1 | tr -dc '0-9')"
 DISK_GB="${DISK_GB:-0}"
 
-printf '    profile=%s  cpu=%s (min %s)  mem=%sG (min %sG)  disk=%sG (min %sG)\n' \
-  "$PROFILE" "$CPU_COUNT" "$MIN_CPU" "$MEM_GB" "$MIN_MEM" "$DISK_GB" "$MIN_DISK"
+printf '    profile=%s  cpu=%s (min %s)  mem=%s.%s GiB (min %s GB, tolerance-adjusted)  disk=%sG (min %sG)\n' \
+  "$PROFILE" "$CPU_COUNT" "$MIN_CPU" \
+  "$(( MEM_KIB / 1048576 ))" "$(( (MEM_KIB % 1048576) * 10 / 1048576 ))" \
+  "$MIN_MEM" "$DISK_GB" "$MIN_DISK"
 
-[ "$CPU_COUNT" -ge "$MIN_CPU" ]  || preflight_fail "profile ${PROFILE} needs >= ${MIN_CPU} vCPU"
-[ "$MEM_GB"    -ge "$MIN_MEM" ]  || preflight_fail "profile ${PROFILE} needs >= ${MIN_MEM} GB RAM"
-[ "$DISK_GB"   -ge "$MIN_DISK" ] || preflight_fail "profile ${PROFILE} needs >= ${MIN_DISK} GB disk on /"
+[ "$CPU_COUNT" -ge "$MIN_CPU" ]   || preflight_fail "profile ${PROFILE} needs >= ${MIN_CPU} vCPU"
+[ "$MEM_KIB"  -ge "$MIN_MEM_KIB" ] || preflight_fail "profile ${PROFILE} needs >= ${MIN_MEM} GB RAM"
+[ "$DISK_GB"  -ge "$MIN_DISK" ]   || preflight_fail "profile ${PROFILE} needs >= ${MIN_DISK} GB disk on /"
 
 # ---------------------------------------------------------------- step 1: base packages
 step "Base packages"
@@ -133,7 +146,11 @@ run apt-get install -y -qq \
 
 # ---------------------------------------------------------------- step 2: Docker CE
 step "Docker CE repository"
-if [ -x /usr/bin/dockerd ] && [ -r /etc/apt/keyrings/docker.asc ]; then
+# Detection inputs are overridable so the test harness can exercise BOTH the install branch and the
+# skip-if-done branch regardless of whether the machine running the tests already has Docker.
+DOCKERD_BIN="${EASYSYNQ_DOCKERD_BIN:-/usr/bin/dockerd}"
+DOCKER_KEYRING="${EASYSYNQ_DOCKER_KEYRING:-/etc/apt/keyrings/docker.asc}"
+if [ -x "$DOCKERD_BIN" ] && [ -r "$DOCKER_KEYRING" ]; then
   skip_note "docker engine + keyring present"
 else
   # Probe the suite before trusting it. Silently falling back to another Ubuntu series would
@@ -256,28 +273,38 @@ if [ -z "$QMS_SHARE" ]; then
 else
   run install -d -m 0755 "$IMPORT_ROOT"
 
-  if [ "$DRY_RUN" = "1" ]; then
-    printf 'DRY-RUN: write %s (0600, root) with the share credentials\n' "$CRED_FILE"
-  elif [ -f "$CRED_FILE" ]; then
-    skip_note "$CRED_FILE"
+  # Anonymous access is a MOUNT OPTION, not a credentials-file field. A credentials file holds
+  # username=/password=/domain=; writing a bare "guest" line there is not a recognised field and
+  # the mount fails instead of falling back to anonymous.
+  if [ -n "$QMS_USER" ]; then
+    AUTH_OPT="credentials=${CRED_FILE}"
   else
-    if [ -n "$QMS_USER" ]; then
-      printf 'Password for %s (input hidden): ' "$QMS_USER" >&2
-      read -rs QMS_PASS; printf '\n' >&2
-      umask 077
-      printf 'username=%s\npassword=%s\n' "$QMS_USER" "$QMS_PASS" > "$CRED_FILE"
-      unset QMS_PASS
-    else
-      umask 077
-      printf 'guest\n' > "$CRED_FILE"
-    fi
+    AUTH_OPT="guest"
+  fi
+
+  if [ -z "$QMS_USER" ]; then
+    printf '    no --qms-user given; mounting anonymously (guest)\n'
+  elif [ "$DRY_RUN" = "1" ]; then
+    printf 'DRY-RUN: write %s (0600, root) with the share credentials\n' "$CRED_FILE"
+  elif [ -f "$CRED_FILE" ] && [ "$RESET_CREDENTIALS" != "1" ]; then
+    skip_note "$CRED_FILE (re-run with --reset-credentials to replace it)"
+  else
+    printf 'Password for %s (input hidden): ' "$QMS_USER" >&2
+    read -rs QMS_PASS; printf '\n' >&2
+    umask 077
+    printf 'username=%s\npassword=%s\n' "$QMS_USER" "$QMS_PASS" > "$CRED_FILE"
+    unset QMS_PASS
     chmod 0600 "$CRED_FILE"
     chown root:root "$CRED_FILE"
   fi
 
+  # fstab fields are whitespace-delimited, and Windows permits spaces in share names
+  # ("//FILESRV/Quality Documents"). Encode them as \040 or mount(8) parses the UNC as two fields.
+  QMS_SHARE_FSTAB="${QMS_SHARE// /\\040}"
+
   # ro is the whole point: the import engine reads the existing QMS tree and never writes it.
   # _netdev defers the mount until networking is up so a reboot does not strand it.
-  FSTAB_LINE="${QMS_SHARE} ${IMPORT_ROOT} cifs ro,_netdev,vers=3.0,noserverino,credentials=${CRED_FILE},uid=0,gid=0 0 0"
+  FSTAB_LINE="${QMS_SHARE_FSTAB} ${IMPORT_ROOT} cifs ro,_netdev,vers=3.0,noserverino,${AUTH_OPT},uid=0,gid=0 0 0"
   if [ "$DRY_RUN" = "1" ]; then
     printf 'DRY-RUN: append to /etc/fstab <- %s\n' "$FSTAB_LINE"
     printf 'DRY-RUN: mount %s\n' "$IMPORT_ROOT"
@@ -287,9 +314,31 @@ else
     printf '%s\n' "$FSTAB_LINE" >> /etc/fstab
   fi
 
+  # ---- Order Docker AFTER this mount. _netdev only orders the mount relative to the network; it
+  # does NOT make docker.service wait for it. The compose services are `restart: unless-stopped`,
+  # so on reboot Docker can restore api/worker and bind the still-EMPTY /srv/easysynq/import
+  # before CIFS lands — imports then read an empty tree for that entire boot, silently.
+  # RequiresMountsFor makes systemd synthesise After= + Requires= on the generated mount unit.
+  DOCKER_DROPIN="/etc/systemd/system/docker.service.d/10-easysynq-import.conf"
+  if [ "$DRY_RUN" = "1" ]; then
+    printf 'DRY-RUN: write %s <- [Unit] RequiresMountsFor=%s\n' "$DOCKER_DROPIN" "$IMPORT_ROOT"
+    printf 'DRY-RUN: systemctl daemon-reload\n'
+  else
+    install -d /etc/systemd/system/docker.service.d
+    cat > "$DOCKER_DROPIN" <<DROPIN
+[Unit]
+# EasySynQ: the import bind source must be mounted before Docker starts any container that
+# binds it, or the container captures the empty underlying directory for the whole boot.
+RequiresMountsFor=${IMPORT_ROOT}
+DROPIN
+    systemctl daemon-reload
+  fi
+
   if [ "$DRY_RUN" != "1" ]; then
     mountpoint -q "$IMPORT_ROOT" || mount "$IMPORT_ROOT" \
-      || die "could not mount ${QMS_SHARE} at ${IMPORT_ROOT} — check the share path, the service account password, and that TCP 445 reaches the file server"
+      || die "could not mount ${QMS_SHARE} at ${IMPORT_ROOT} — check the share path and that TCP 445
+       reaches the file server. If the password was mistyped, re-run with --reset-credentials
+       (a stored credentials file is otherwise reused as-is)."
     ls "$IMPORT_ROOT" >/dev/null 2>&1 \
       || die "${IMPORT_ROOT} mounted but is not readable — check the share and NTFS permissions for ${QMS_USER:-guest}"
     printf '    mounted %s read-only at %s\n' "$QMS_SHARE" "$IMPORT_ROOT"

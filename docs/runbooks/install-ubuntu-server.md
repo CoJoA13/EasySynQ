@@ -57,8 +57,7 @@ Expected: an `A` record pointing at row 4.
 
 ### 1.2 Create the read-only service account
 
-This account only reads the QMS share. It needs no interactive logon rights and no group membership
-beyond `Domain Users`.
+This account only reads the QMS share, and needs no group membership beyond `Domain Users`.
 
 ```powershell
 New-ADUser `
@@ -72,6 +71,20 @@ New-ADUser `
 ```
 
 Record that password — you will type it once, on the Ubuntu host, in step 2.
+
+**Deny this account interactive logon.** `Domain Users` membership normally *does* permit logging on
+locally to member workstations, and `-CannotChangePassword` only governs password changes — neither
+restricts logon. Because this is a long-lived credential stored in a file on the Ubuntu host, an
+attacker who reads that file would otherwise get a usable domain logon. Add the account to both of
+these user-right assignments in a GPO scoped to your workstations and servers:
+
+*Computer Configuration → Policies → Windows Settings → Security Settings → Local Policies → User
+Rights Assignment*
+
+- **Deny log on locally**
+- **Deny log on through Remote Desktop Services**
+
+Leave *Deny access to this computer from the network* alone — the share mount needs network logon.
 
 ### 1.3 Grant read-only access to the QMS share
 
@@ -142,6 +155,15 @@ sudo ./scripts/bootstrap-ubuntu.sh \
 It prompts once for the service-account password and writes it to a root-owned `0600` credentials
 file. Add `--dry-run` first if you want to read every command before anything executes.
 
+If the password was mistyped, the stored file is reused as-is on a re-run — replace it with
+`--reset-credentials`. Omit `--qms-user` entirely to mount the share anonymously (guest).
+
+The script also installs a `docker.service` drop-in with
+`RequiresMountsFor=/srv/easysynq/import`. This is load-bearing across reboots: `_netdev` orders the
+mount relative to networking but does **not** make Docker wait for it, and the compose services are
+`restart: unless-stopped` — so without the drop-in, a reboot could start `worker` against the
+still-empty directory and imports would silently read nothing for that entire boot.
+
 **Then log out and back in** so your account picks up the `docker` group. Without this, every
 subsequent `docker` command fails with a permission error.
 
@@ -199,8 +221,20 @@ gpupdate /force
 Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -like '*Caddy*'
 ```
 
-Expected: one certificate. The CA is generated uniquely on your host at install, so trusting it
-trusts only this box.
+Expected: one certificate.
+
+> ⚠️ **Understand what you are trusting.** Adding this root to the domain's Trusted Root store makes
+> every workstation trust **any certificate this CA signs, for any hostname** — not only
+> `<row 2>`. The CA is generated uniquely on your host, which stops any other Caddy install from
+> sharing its key, but that uniqueness does **not** constrain the names it can issue for. If the
+> CA's private key on the EasySynQ host were compromised, an attacker could issue a trusted
+> certificate for any site and impersonate it to those workstations.
+>
+> Treat the CA key as a domain-wide secret: it lives in the Caddy data volume on this host, so the
+> host's disk encryption, physical access, and root access all become part of your certificate
+> trust boundary. If your organization already runs an internal enterprise CA, the lower-risk
+> alternative is to have it issue a **host-specific leaf certificate** for `<row 2>` and configure
+> Caddy to use that instead — then nothing new enters the Trusted Root store at all.
 
 ## 5. First-run setup wizard
 
@@ -301,7 +335,9 @@ document upload **and** download both succeed (the latter exercises port 9443 �
 | Sign-in loops, or OIDC errors after any rename | The issuer must match the URL in the browser exactly. Changing the hostname after install signs everyone out and requires reconfiguring the issuer — pick the name before go-live. |
 | `docker: permission denied` | The `docker` group needs a fresh login session. Log out and back in, or `newgrp docker` for the current shell. |
 | Import finds nothing | Either `IMPORT_SOURCE_PATH` was never set (§6), or `api`/`worker` were started **before** the mount existed. Confirm with `findmnt /srv/easysynq/import`, then recreate the containers per §6. |
-| Mount fails at boot | Missing `_netdev` in `/etc/fstab` (the mount raced networking), or the service-account password changed. Re-run `sudo mount /srv/easysynq/import` to see the error. |
+| Mount fails at boot | Missing `_netdev` in `/etc/fstab` (the mount raced networking), or the service-account password changed. Re-run `sudo mount /srv/easysynq/import` to see the error; re-run bootstrap with `--reset-credentials` to replace a stale password. |
+| Imports empty **only after a reboot** | The `docker.service` drop-in is missing, so Docker started `worker` before the CIFS mount landed. Check `systemctl show docker.service -p RequiresMountsFor` — it must list `/srv/easysynq/import`. |
+| Mount fails and the share name has a space | The `/etc/fstab` entry must encode spaces as `\040` (fstab fields are whitespace-delimited). Bootstrap does this automatically; a hand-edited line may not. |
 | Mount succeeds but the directory is empty | Share-level **or** NTFS permission missing for the service account — §1.3 requires both. |
 | Host went offline overnight | Sleep/suspend re-enabled, or the machine was shut down manually. `systemctl is-masked sleep.target` should report `masked`. |
 | `/readyz` never goes green | `docker compose logs` on the host; most often a dependency container failed to start or a `.env` origin tuple is inconsistent. |
