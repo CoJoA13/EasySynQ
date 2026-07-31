@@ -25,6 +25,7 @@ validating them.
 
 | Environment | Procedure |
 |---|---|
+| Bare Ubuntu host on a Windows LAN | Follow [Install Ubuntu server](../runbooks/install-ubuntu-server.md) — bootstraps the host and covers the Windows-side DNS/account/GPO work, then §4. |
 | Linux host with internet | Follow §4, then [Install online](../runbooks/install-online.md) for edge details. |
 | Linux host without internet | Build and transfer a pinned bundle using [Install air-gapped](../runbooks/install-airgapped.md). |
 | Windows Server / Hyper-V | Use the [Hyper-V appliance runbook](../runbooks/appliance-install.md). |
@@ -34,7 +35,9 @@ validating them.
 
 ### Host
 
-- A supported Linux host/VM with Docker Engine and Docker Compose **2.24.4 or newer**.
+- A supported Linux host/VM with Docker Engine and Docker Compose **2.24.4 or newer**. On an
+  unprovisioned Ubuntu host, `sudo ./scripts/bootstrap-ubuntu.sh --host <fqdn>` installs and
+  configures all of the host prerequisites in this section.
 - Standard Linux command-line tools used by the installer, including Bash, OpenSSL, `curl`, `sed`,
   `grep`, and GNU coreutils.
 - S profile: 2 vCPU, 8 GB RAM, and 50 GB SSD minimum.
