@@ -125,7 +125,64 @@ printf '    profile=%s  cpu=%s (min %s)  mem=%sG (min %sG)  disk=%sG (min %sG)\n
 [ "$MEM_GB"    -ge "$MIN_MEM" ]  || preflight_fail "profile ${PROFILE} needs >= ${MIN_MEM} GB RAM"
 [ "$DISK_GB"   -ge "$MIN_DISK" ] || preflight_fail "profile ${PROFILE} needs >= ${MIN_DISK} GB disk on /"
 
-# Tasks 2-4 append their steps below this line.
+# ---------------------------------------------------------------- step 1: base packages
+step "Base packages"
+run apt-get update -qq
+run apt-get install -y -qq \
+  ca-certificates curl git openssl gnupg ufw cifs-utils unattended-upgrades
+
+# ---------------------------------------------------------------- step 2: Docker CE
+step "Docker CE repository"
+if [ -x /usr/bin/dockerd ] && [ -r /etc/apt/keyrings/docker.asc ]; then
+  skip_note "docker engine + keyring present"
+else
+  # Probe the suite before trusting it. Silently falling back to another Ubuntu series would
+  # install a mismatched build that fails much later and far less legibly.
+  PROBE_CODENAME="${CODENAME:-unknown}"
+  printf '    probing https://download.docker.com/linux/ubuntu/dists/%s/Release\n' "$PROBE_CODENAME"
+  if [ "$DRY_RUN" != "1" ]; then
+    curl -fsI "https://download.docker.com/linux/ubuntu/dists/${PROBE_CODENAME}/Release" >/dev/null \
+      || die "Docker publishes no '${PROBE_CODENAME}' suite yet.
+       Check https://download.docker.com/linux/ubuntu/dists/ and either wait for the suite or
+       install Docker by another supported means. Do NOT substitute a different codename."
+  fi
+
+  run install -m 0755 -d /etc/apt/keyrings
+  run curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  run chmod a+r /etc/apt/keyrings/docker.asc
+
+  DOCKER_LIST="deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${PROBE_CODENAME} stable"
+  if [ "$DRY_RUN" = "1" ]; then
+    printf 'DRY-RUN: write /etc/apt/sources.list.d/docker.list <- %s\n' "$DOCKER_LIST"
+  else
+    printf '%s\n' "$DOCKER_LIST" > /etc/apt/sources.list.d/docker.list
+  fi
+
+  run apt-get update -qq
+  run apt-get install -y -qq \
+    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+fi
+
+# ---------------------------------------------------------------- step 3: Compose floor
+step "Docker Compose version floor"
+if [ "$DRY_RUN" = "1" ]; then
+  printf 'DRY-RUN: bash %s/scripts/require-compose-version.sh\n' "$ROOT"
+else
+  bash "$ROOT/scripts/require-compose-version.sh" \
+    || die "Compose floor not met — see the message above"
+fi
+
+# ---------------------------------------------------------------- step 4: service + group
+step "Docker service and group"
+run systemctl enable --now docker
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER:-}" != "root" ]; then
+  run usermod -aG docker "$SUDO_USER"
+  printf '    %s added to the docker group — log out and back in for it to take effect\n' "$SUDO_USER"
+else
+  printf '    no SUDO_USER to add to the docker group (running as root directly)\n'
+fi
+
+# Tasks 3-4 append their steps below this line.
 
 step "Done"
 printf '    (steps 1-10 land in tasks 2-4)\n'
