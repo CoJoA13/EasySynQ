@@ -32,6 +32,18 @@ Every command below refers to these names. Fill the table once, then substitute 
 Give the Ubuntu host a **static IP or a DHCP reservation** before you start. Row 4 must not change
 after install: the certificate and the OIDC issuer are bound to the name that resolves to it.
 
+> ⚠ **Row 2 must be entirely lowercase.** An AD zone is often *displayed* capitalised
+> (`CONTOSO.local`), and copying that casing into the FQDN produces an install that looks completely
+> healthy — DNS resolves, TLS serves, `/readyz` is green — and then **fails at the first login** with
+> `Invalid parameter: redirect_uri`. Keycloak compares redirect URIs as a **case-sensitive string**,
+> while browsers normalise the hostname to lowercase before sending the request, so a callback
+> registered as `https://easysynq.CONTOSO.local/*` can never match what the browser sends. Typing the
+> URL in a different case does not help. If you hit this after install, lowercase every host value in
+> `.env` (`SITE_ADDRESS`, `MINIO_SITE_ADDRESS`, `KEYCLOAK_HOSTNAME`, `S3_PUBLIC_ENDPOINT`,
+> `OIDC_ISSUER`, `PUBLIC_BASE_URL`, `APP_BASE_URL`), re-register the callback, and recreate the
+> stack — the Caddy **root** CA is unchanged, so a GPO trust rollout already performed stays valid.
+> Do it before go-live: changing the issuer afterwards signs every user out.
+
 ## 1. Windows server preparation
 
 Run these on the domain controller / file server as appropriate, in an elevated PowerShell.
@@ -309,12 +321,17 @@ On the Ubuntu host:
 ```bash
 docker compose version              # >= 2.24.4
 systemctl is-enabled docker         # enabled
-systemctl is-masked sleep.target    # masked
+systemctl is-enabled sleep.target   # masked   <- NOT `is-masked`, see below
 ufw status                          # OpenSSH, 80, 443, 9443 allowed
 timedatectl                         # "System clock synchronized: yes"
 hostname -f                         # row 2
 findmnt /srv/easysynq/import        # present, and flagged ro
 ```
+
+> ⚠ **`systemctl is-masked` does not exist on systemd 259** (Ubuntu 26.04). It fails with
+> `Unknown command verb 'is-masked'`, which reads like sleep was never masked when in fact it was.
+> Use `systemctl is-enabled <target>` — a masked unit reports `masked` — or check for the
+> `/dev/null` symlink under `/etc/systemd/system/`.
 
 Release-time security check:
 
@@ -339,5 +356,5 @@ document upload **and** download both succeed (the latter exercises port 9443 �
 | Imports empty **only after a reboot** | The `docker.service` drop-in is missing, so Docker started `worker` before the CIFS mount landed. Check `systemctl show docker.service -p RequiresMountsFor` — it must list `/srv/easysynq/import`. |
 | Mount fails and the share name has a space | The `/etc/fstab` entry must encode spaces as `\040` (fstab fields are whitespace-delimited). Bootstrap does this automatically; a hand-edited line may not. |
 | Mount succeeds but the directory is empty | Share-level **or** NTFS permission missing for the service account — §1.3 requires both. |
-| Host went offline overnight | Sleep/suspend re-enabled, or the machine was shut down manually. `systemctl is-masked sleep.target` should report `masked`. |
+| Host went offline overnight | Sleep/suspend re-enabled, or the machine was shut down manually. `systemctl is-enabled sleep.target` should report `masked` (`is-masked` is not a valid verb on systemd 259). |
 | `/readyz` never goes green | `docker compose logs` on the host; most often a dependency container failed to start or a `.env` origin tuple is inconsistent. |
