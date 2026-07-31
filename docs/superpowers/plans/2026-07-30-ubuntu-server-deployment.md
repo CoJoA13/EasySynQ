@@ -285,7 +285,7 @@ chmod +x scripts/bootstrap-ubuntu.sh
 ./scripts/tests/test-bootstrap-ubuntu.sh
 ```
 
-Expected: the four `assert_exit` cases and "prints the fixed import root" **PASS**; the docker/ufw/mount assertions still **FAIL** (those steps arrive in Tasks 2–4). That split is the point — it proves arg parsing and the dry-run harness work before any privileged logic exists.
+Expected: the four `assert_exit` cases **PASS**; every content assertion (docker, ufw, import root, mount) still **FAILS** — those steps arrive in Tasks 2–4, and `IMPORT_ROOT` is only assigned in the skeleton, never printed until Task 4's summary. That split is the point: it proves arg parsing and the dry-run harness work before any privileged logic exists.
 
 - [ ] **Step 5: Commit**
 
