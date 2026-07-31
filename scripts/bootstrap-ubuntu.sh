@@ -182,7 +182,72 @@ else
   printf '    no SUDO_USER to add to the docker group (running as root directly)\n'
 fi
 
-# Tasks 3-4 append their steps below this line.
+# ---------------------------------------------------------------- step 5: never sleep
+# Repurposed workstation hardware suspends on an idle timer or a closed lid; either takes the QMS
+# down outside hours with no obvious cause.
+step "Disable sleep, suspend and hibernate"
+run systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+if [ "$DRY_RUN" = "1" ]; then
+  printf 'DRY-RUN: set logind HandleLidSwitch*/HandleSuspendKey=ignore\n'
+else
+  install -d /etc/systemd/logind.conf.d
+  cat > /etc/systemd/logind.conf.d/10-easysynq.conf <<'LOGIND'
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchDocked=ignore
+HandleLidSwitchExternalPower=ignore
+HandleSuspendKey=ignore
+HandleHibernateKey=ignore
+LOGIND
+  systemctl restart systemd-logind
+fi
+
+# ---------------------------------------------------------------- step 6: time + hostname
+# Clock skew breaks OIDC token validation and misorders audit events.
+step "Time sync and hostname"
+run timedatectl set-ntp true
+run hostnamectl set-hostname "$HOST_NAME"
+
+HOST_SHORT="${HOST_NAME%%.*}"
+if [ "$DRY_RUN" = "1" ]; then
+  printf 'DRY-RUN: ensure /etc/hosts has "127.0.1.1 %s %s"\n' "$HOST_NAME" "$HOST_SHORT"
+elif grep -qE "^127\.0\.1\.1[[:space:]]+${HOST_NAME}([[:space:]]|$)" /etc/hosts; then
+  skip_note "/etc/hosts entry"
+else
+  printf '127.0.1.1\t%s\t%s\n' "$HOST_NAME" "$HOST_SHORT" >> /etc/hosts
+fi
+
+# ---------------------------------------------------------------- step 7: firewall
+step "Firewall"
+if [ "$SKIP_FIREWALL" = "1" ]; then
+  printf '    skipped (--skip-firewall)\n'
+else
+  # ORDER IS LOAD-BEARING: allow SSH before enabling, or a remote session is severed mid-install.
+  run ufw allow OpenSSH
+  run ufw allow 80/tcp     # ACME challenge / HTTPS redirect
+  run ufw allow 443/tcp    # SPA, API, Keycloak
+  run ufw allow 9443/tcp   # presigned object-store origin — omit and every file transfer fails
+  run ufw --force enable
+fi
+
+# ---------------------------------------------------------------- step 8: security updates
+step "Unattended security upgrades"
+if [ "$SKIP_UPGRADES" = "1" ]; then
+  printf '    skipped (--skip-upgrades)\n'
+elif [ "$DRY_RUN" = "1" ]; then
+  printf 'DRY-RUN: enable unattended-upgrades (security only, Automatic-Reboot false)\n'
+else
+  cat > /etc/apt/apt.conf.d/20easysynq-upgrades <<'UPG'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+Unattended-Upgrade::Allowed-Origins { "${distro_id}:${distro_codename}-security"; };
+// Patching must never restart the QMS unannounced — reboot on your own schedule.
+Unattended-Upgrade::Automatic-Reboot "false";
+UPG
+  systemctl enable --now unattended-upgrades
+fi
+
+# Task 4 appends its steps below this line.
 
 step "Done"
 printf '    (steps 1-10 land in tasks 2-4)\n'
