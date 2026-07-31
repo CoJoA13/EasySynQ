@@ -247,7 +247,86 @@ UPG
   systemctl enable --now unattended-upgrades
 fi
 
-# Task 4 appends its steps below this line.
+# ---------------------------------------------------------------- step 9: QMS import mount
+step "QMS import source"
+if [ -z "$QMS_SHARE" ]; then
+  printf '    no --qms-share given; skipping.\n'
+  printf '    To attach one later, mount it at %s and set IMPORT_SOURCE_PATH to that path —\n' "$IMPORT_ROOT"
+  printf '    the mount must exist BEFORE the containers that bind it start.\n'
+else
+  run install -d -m 0755 "$IMPORT_ROOT"
 
-step "Done"
-printf '    (steps 1-10 land in tasks 2-4)\n'
+  if [ "$DRY_RUN" = "1" ]; then
+    printf 'DRY-RUN: write %s (0600, root) with the share credentials\n' "$CRED_FILE"
+  elif [ -f "$CRED_FILE" ]; then
+    skip_note "$CRED_FILE"
+  else
+    if [ -n "$QMS_USER" ]; then
+      printf 'Password for %s (input hidden): ' "$QMS_USER" >&2
+      read -rs QMS_PASS; printf '\n' >&2
+      umask 077
+      printf 'username=%s\npassword=%s\n' "$QMS_USER" "$QMS_PASS" > "$CRED_FILE"
+      unset QMS_PASS
+    else
+      umask 077
+      printf 'guest\n' > "$CRED_FILE"
+    fi
+    chmod 0600 "$CRED_FILE"
+    chown root:root "$CRED_FILE"
+  fi
+
+  # ro is the whole point: the import engine reads the existing QMS tree and never writes it.
+  # _netdev defers the mount until networking is up so a reboot does not strand it.
+  FSTAB_LINE="${QMS_SHARE} ${IMPORT_ROOT} cifs ro,_netdev,vers=3.0,noserverino,credentials=${CRED_FILE},uid=0,gid=0 0 0"
+  if [ "$DRY_RUN" = "1" ]; then
+    printf 'DRY-RUN: append to /etc/fstab <- %s\n' "$FSTAB_LINE"
+    printf 'DRY-RUN: mount %s\n' "$IMPORT_ROOT"
+  elif grep -qF " ${IMPORT_ROOT} cifs " /etc/fstab; then
+    skip_note "/etc/fstab entry for ${IMPORT_ROOT}"
+  else
+    printf '%s\n' "$FSTAB_LINE" >> /etc/fstab
+  fi
+
+  if [ "$DRY_RUN" != "1" ]; then
+    mountpoint -q "$IMPORT_ROOT" || mount "$IMPORT_ROOT" \
+      || die "could not mount ${QMS_SHARE} at ${IMPORT_ROOT} — check the share path, the service account password, and that TCP 445 reaches the file server"
+    ls "$IMPORT_ROOT" >/dev/null 2>&1 \
+      || die "${IMPORT_ROOT} mounted but is not readable — check the share and NTFS permissions for ${QMS_USER:-guest}"
+    printf '    mounted %s read-only at %s\n' "$QMS_SHARE" "$IMPORT_ROOT"
+  fi
+fi
+
+# ---------------------------------------------------------------- step 10: summary
+step "Host ready"
+cat <<SUMMARY
+
+  Host provisioned for profile '${PROFILE}' as ${HOST_NAME}.
+
+  Next — provision the APP (this script deliberately does not):
+
+    ./scripts/install.sh ${PROFILE} --host ${HOST_NAME} --tls internal
+
+  Use --tls internal for a private/LAN name; --tls acme only if ${HOST_NAME} is publicly
+  resolvable and reachable by a public CA.
+
+SUMMARY
+
+if [ -n "$QMS_SHARE" ]; then
+  cat <<IMPORTNOTE
+  After install.sh completes, point the import engine at the mount and recreate the two
+  containers that bind it:
+
+    sed -i 's|^IMPORT_SOURCE_PATH=.*|IMPORT_SOURCE_PATH=${IMPORT_ROOT}|' .env
+    docker compose --env-file .env \\
+      -f infra/compose/compose.yml -f infra/compose/compose.${PROFILE}.yml \\
+      -f infra/compose/compose.production.yml up -d api worker
+
+  The mount already exists, so the bind resolves on recreate. (A bind mount never sees a
+  filesystem mounted over its source after the container has started.)
+
+IMPORTNOTE
+fi
+
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER:-}" != "root" ]; then
+  printf '  Log out and back in first so the docker group applies to %s.\n\n' "$SUDO_USER"
+fi

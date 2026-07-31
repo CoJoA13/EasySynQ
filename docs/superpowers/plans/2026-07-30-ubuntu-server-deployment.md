@@ -608,7 +608,7 @@ printf '    (steps 1-10 land in tasks 2-4)\n'
 ./scripts/tests/test-bootstrap-ubuntu.sh
 ```
 
-Expected: `16 passed, 0 failed`.
+Expected: `14 passed, 0 failed`.
 
 - [ ] **Step 3: Full dry-run read-through**
 
