@@ -6,6 +6,11 @@ tag. Profiles: **S** (≤25 users) or **M** (≤100 users, with 2 API + 2 worker
 replicas). Both shipped profiles use PostgreSQL FTS; OpenSearch and the L profile are reserved,
 not deployed. See doc 03 §7 for sizing.
 
+> On a host that is not yet provisioned (no Docker, firewall, or NTP), run
+> [`scripts/bootstrap-ubuntu.sh`](../../scripts/bootstrap-ubuntu.sh) first — see
+> [install-ubuntu-server.md](install-ubuntu-server.md), which also covers the Windows-side AD DNS,
+> service account and GPO certificate trust. This runbook assumes those prerequisites are met.
+
 ## Steps
 
 1. **DNS + firewall** — create the app's DNS record before installation. Allow inbound TCP

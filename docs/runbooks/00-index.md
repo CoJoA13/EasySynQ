@@ -11,6 +11,7 @@ For an end-to-end entry point, start with the
 | Runbook | When to use |
 |---|---|
 | [fresh-linux-setup.md](fresh-linux-setup.md) | **Developer** dev-stack: stand up Docker + the test gates on a clean Linux box (e.g. after a distro reinstall — no data carries over). |
+| [install-ubuntu-server.md](install-ubuntu-server.md) | End-to-end first install on a bare Ubuntu 26.04 host serving a Windows LAN — host bootstrap, AD DNS + read-only service account, GPO CA trust. |
 | [install-online.md](install-online.md) | First install on a host with internet. |
 | [install-airgapped.md](install-airgapped.md) | Install on a network with no outbound internet. |
 | [appliance-install.md](appliance-install.md) | Install the Hyper-V appliance on Windows Server. |
