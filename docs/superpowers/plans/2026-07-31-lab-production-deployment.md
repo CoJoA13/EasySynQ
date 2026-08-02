@@ -69,7 +69,7 @@ container captures the empty directory for the entire boot and the import silent
 |---|---|
 | 1. Hyper-V + vSwitch | ✅ done |
 | 2. Create the VM | ✅ done — MAC `00:15:5D:00:00:01` |
-| 3. Active Directory | ✅ done — DNS record, both service accounts, both share grants. **GPO deny-logon still outstanding.** |
+| 3. Active Directory | 🔶 **INCOMPLETE** — DNS record, both service accounts and both share grants done; **the deny-logon GPO (Step 7) is NOT applied.** Do not mark done until §Go-live gates confirms it. |
 | 4. DHCP reservation | ⏸ **deferred to IT** — running on lease `10.0.0.20` |
 | 5. Install Ubuntu 26.04 | ✅ done — reboot-validated |
 | 6. Host bootstrap | ✅ done — *without* `--qms-share`; mounts moved to Task 7 |
@@ -96,12 +96,22 @@ easysynq-backup-20260731T194637Z-11d64a5e.tar.enc            legs: realm_export 
 directory immediately after the wizard is expected and is *not* evidence the drill failed. Check
 `backup_policy.last_restore_test_result` instead (it read `PASS`).
 
-⚠ **`realm_export` failed on the first run and succeeded on the second.** The backup terminates
-PostgreSQL backends (`FATAL: terminating connection due to administrator command`), which severs
-Keycloak's connection pool; the realm export then 500s over dead connections. It is a **race, not a
-consistent defect**, and it never blocks the backup by design. On this Batch-13+ install the
-`keycloak` schema (100 tables) is inside the `pg_dump`, so identity recovery does not depend on that
-leg. Worth watching if a nightly run reports `realm_export: absent` repeatedly.
+⚠ **`realm_export` failed on the first run and succeeded on the second and on the unattended nightly.**
+Keycloak returned 500 on its own token endpoint, so the leg recorded `absent`. It never blocks the
+backup by design, and on this Batch-13+ install the `keycloak` schema (100 tables) is inside the
+`pg_dump`, so identity recovery does not depend on that leg.
+
+**Cause not established.** An earlier revision of this document asserted that the backup terminates
+PostgreSQL backends and severs Keycloak's pool. That is **wrong** and was withdrawn: there is no
+`pg_terminate_backend` anywhere under `services/backup/`, and `_capture_and_dump()` opens read
+transactions, runs an ordinary `pg_dump`, rolls back and closes its own connections. The
+`terminating connection due to administrator command` entries in the log were **container
+recreation** happening around the same time — including a `scripts/easysynq` invocation, which
+recreates services (see the trap table below) — not the dump.
+
+**If a nightly run reports `realm_export: absent` with no container churn nearby, investigate rather
+than dismiss it.** Likely candidates are stale admin credentials or Keycloak availability, and both
+persist silently until someone looks.
 
 
 ### Deviations from plan, all recorded in place
@@ -621,7 +631,43 @@ puts archives in a Docker named volume inside the VM, which is not a backup.
 - Produces: `/srv/easysynq/backup` mounted read-write; `infra/compose/compose.lab.yml` redefining the
   `backup` volume as a bind onto it.
 
-- [ ] **Step 1: Create the mountpoint and credentials file**
+- [ ] **Step 0: Create the IMPORT mount — bootstrap did not**
+
+> ⚠ **Do not skip this.** Task 6 ran without `--qms-share`/`--qms-user`, so bootstrap created no
+> import credentials file, no fstab entry and no mount. Without this step `/srv/easysynq/import`
+> stays an ordinary empty directory, the worker binds *that*, and the import finds nothing while
+> reporting success. (Alternative: re-run `bootstrap-ubuntu.sh` with the QMS arguments; these steps
+> reproduce exactly what it would have written.)
+
+```bash
+sudo install -d -m 0755 /srv/easysynq/import
+sudo install -m 0600 /dev/null /etc/easysynq-qms.cred
+sudo tee /etc/easysynq-qms.cred >/dev/null <<'EOF'
+username=svc-easysynq-ro
+password=REPLACE_WITH_THE_READ_ONLY_ACCOUNT_PASSWORD
+domain=EXAMPLE
+EOF
+sudo chmod 0600 /etc/easysynq-qms.cred && sudo chown root:root /etc/easysynq-qms.cred
+sudo nano /etc/easysynq-qms.cred          # put the real password in
+
+echo '//DC01/Quality /srv/easysynq/import cifs ro,_netdev,vers=3.0,noserverino,credentials=/etc/easysynq-qms.cred,uid=0,gid=0 0 0' \
+  | sudo tee -a /etc/fstab
+sudo mount /srv/easysynq/import
+```
+
+Verify — and check **both** directions, because a mount can succeed and still be wrong:
+
+```bash
+findmnt /srv/easysynq/import                        # present, flagged ro
+ls /srv/easysynq/import | head                      # non-empty
+sudo touch /srv/easysynq/import/.w 2>/dev/null && echo "⚠ WRITABLE — ro flag did not apply" || echo "correctly read-only"
+```
+
+An **empty** listing means a share-level or NTFS grant is missing for `svc-easysynq-ro` — Task 3
+requires both layers. A **successful write** means the `ro` flag did not apply, and the import
+engine could modify the master QMS tree.
+
+- [ ] **Step 1: Create the backup mountpoint and credentials file**
 
 ```bash
 sudo install -d -m 0755 /srv/easysynq/backup
@@ -885,7 +931,7 @@ Create the intended admin identity first.
 
 ```bash
 cd ~/EasySynQ
-./scripts/easysynq setup mint-bootstrap
+docker compose --env-file .env \n  -f infra/compose/compose.yml -f infra/compose/compose.s.yml \n  -f infra/compose/compose.production.yml -f infra/compose/compose.lab.yml \n  run --rm api uv run python -m easysynq_api.cli.setup mint-bootstrap
 ```
 
 - [ ] **Step 3: Complete the wizard at `https://easysynq.example.local/setup`**
@@ -904,6 +950,30 @@ In order — each is a gate:
 - [ ] **Step 4: Confirm the drill archive actually landed on DC01**
 
 ```bash
+ls -la /srv/easysynq/backup/
+```
+
+⚠ **Do NOT expect the drill to leave an archive.** `backup restore-test` cleans up after itself, so
+an **empty directory here is the normal result of a PASS**. Treating it as a failed backup chain
+sends you diagnosing a working system. Check the recorded verdict instead:
+
+```bash
+docker compose --env-file .env \
+  -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
+  -f infra/compose/compose.production.yml -f infra/compose/compose.lab.yml \
+  exec -T postgres psql -U easysynq -d easysynq \
+  -c "SELECT last_restore_test_at, last_restore_test_result FROM backup_policy;"
+```
+
+Expected: `PASS`.
+
+To prove the chain writes through to the share, run a **durable** backup — that one does leave a file:
+
+```bash
+docker compose --env-file .env \
+  -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
+  -f infra/compose/compose.production.yml -f infra/compose/compose.lab.yml \
+  run --rm worker uv run python -m easysynq_api.cli.backup run
 ls -la /srv/easysynq/backup/
 ```
 
@@ -1050,6 +1120,42 @@ empty tree for that entire boot.
 - [ ] **Step 5: Confirm escrow before declaring done**
 
 Verify `BACKUP_ENCRYPTION_KEY` is in the password manager and that the value there matches `.env`.
+
+---
+
+## Go-live gates — two security controls the build deliberately left open
+
+⚠ **The install is OPERATIONAL with both of these still open.** Neither breaks anything, neither
+fails a test, and nothing else in this plan closes them — which is exactly why they need to be gates
+rather than notes. Do not consider the deployment finished until both verify.
+
+- [ ] **G-1: Remove the deployment sudo rule.** Passwordless sudo was enabled to drive provisioning
+      non-interactively. While it stands, anyone holding the SSH private key on `LAB` has root on the
+      QMS host without a password — and that key is stored unencrypted.
+
+```bash
+ssh easysynq@<vm-ip> "sudo rm -f /etc/sudoers.d/90-easysynq-deploy"
+# Fail-closed verification: this MUST now prompt or refuse.
+ssh -o BatchMode=yes easysynq@<vm-ip> "sudo -n true" \
+  && echo "✘ STILL PASSWORDLESS — the file was not removed" \
+  || echo "✔ password now required"
+```
+
+- [ ] **G-2: Apply and verify the deny-logon GPO** (Task 3 Step 7). Both service-account passwords
+      live in `0600` files on the VM. Without this, reading either file yields a credential usable
+      for interactive or RDP logon across every domain machine — the mount only ever needs *network*
+      logon.
+
+Create a **new** GPO (not Default Domain Policy) adding `svc-easysynq-ro` and `svc-easysynq-bkp` to
+*Deny log on locally* **and** *Deny log on through Remote Desktop Services*. Leave *Deny access to
+this computer from the network* alone. Then verify it actually applied, rather than assuming:
+
+```powershell
+gpupdate /force
+gpresult /scope computer /r | Select-String "EasySynQ"     # the GPO must be listed as Applied
+```
+
+Only when both boxes are ticked may Task 3 be marked done.
 
 ---
 

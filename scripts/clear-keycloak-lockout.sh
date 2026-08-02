@@ -15,9 +15,18 @@ USERNAME="${1:-}"
 [ -n "$USERNAME" ] || { echo "usage: ./scripts/clear-keycloak-lockout.sh <username>" >&2; exit 2; }
 [ -f .env ] || { echo "clear-keycloak-lockout: no .env — run scripts/install.sh first" >&2; exit 1; }
 
-# Match docker compose's .env parsing: strip an inline `# comment` and surrounding whitespace.
+# Read .env the way docker compose does: strip an inline `# comment` from an UNQUOTED value, but
+# treat a quoted body as literal (Compose removes the quotes and keeps a `#` inside them).
 env_val() {
-  grep -m1 "^$1=" .env | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//'
+  local v
+  v="$(grep -m1 "^$1=" .env | cut -d= -f2-)"
+  v="${v%$'\r'}"
+  v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+$//')"
+  case "$v" in
+    \"*\"|\'*\') v="${v#?}"; v="${v%?}" ;;
+    *) v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')" ;;
+  esac
+  printf '%s' "$v" | sed -E 's/^[[:space:]]*//'
 }
 
 PROFILE="$(env_val EASYSYNQ_PROFILE)"; PROFILE="${PROFILE:-s}"
@@ -38,8 +47,17 @@ kc config credentials --server http://localhost:8080 --realm master \
   --user "$KC_ADMIN" --password "$KC_PW" >/dev/null
 unset KC_PW
 
-SUB="$(kc get users -r easysynq -q username="$USERNAME" --fields id --format csv --noquotes 2>/dev/null | tr -d '\r' | head -1)"
+# ⚠ `-q username=X` is a CONTAINS match: querying `ann` also returns `joann`. Without `exact=true`
+# this could clear — or report on — a different person's account. Parse JSON rather than CSV so the
+# result is self-describing, and re-verify the username before touching account state.
+json="$(kc get users -r easysynq -q username="$USERNAME" -q exact=true --fields id,username 2>/dev/null || true)"
+SUB="$(printf '%s' "$json"  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'       | head -1)"
+NAME="$(printf '%s' "$json" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
 [ -n "$SUB" ] || { echo "clear-keycloak-lockout: user '$USERNAME' not found in the easysynq realm" >&2; exit 1; }
+[ "$NAME" = "$USERNAME" ] || {
+  echo "clear-keycloak-lockout: refusing to act — asked for '$USERNAME', Keycloak returned '$NAME'" >&2
+  exit 1
+}
 
 echo "user: $USERNAME"
 echo "sub : $SUB"
@@ -47,7 +65,26 @@ echo "sub : $SUB"
 echo "before:"
 kc get "attack-detection/brute-force/users/$SUB" -r easysynq 2>/dev/null | sed 's/^/  /' || echo "  (no record)"
 
-kc delete "attack-detection/brute-force/users/$SUB" -r easysynq 2>/dev/null && echo "cleared" || echo "nothing to clear"
+# ⚠ Do NOT collapse this into `delete && echo cleared || echo nothing to clear`. Keycloak returns
+# success whether or not a lockout record exists, so ANY non-zero result here is a real failure —
+# an expired admin session, a 403, a 5xx, the service being down. Reporting those as "nothing to
+# clear" and exiting 0 leaves the user locked while the operator believes it was remediated.
+if ! out="$(kc delete "attack-detection/brute-force/users/$SUB" -r easysynq 2>&1)"; then
+  echo "clear-keycloak-lockout: Keycloak refused the lockout deletion:" >&2
+  printf '  %s\n' "$out" >&2
+  exit 1
+fi
+echo "delete: accepted"
 
+# Verify the absence rather than assume it — the only trustworthy "no-op" is an observed one.
 echo "after:"
-kc get "attack-detection/brute-force/users/$SUB" -r easysynq 2>/dev/null | sed 's/^/  /' || echo "  (no record — not locked)"
+if after="$(kc get "attack-detection/brute-force/users/$SUB" -r easysynq 2>/dev/null)"; then
+  printf '%s\n' "$after" | sed 's/^/  /'
+  if printf '%s' "$after" | grep -qE '"numFailures"[[:space:]]*:[[:space:]]*[1-9]'; then
+    echo "clear-keycloak-lockout: failures still recorded after delete — investigate" >&2
+    exit 1
+  fi
+  echo "not locked."
+else
+  echo "  (no record — not locked)"
+fi

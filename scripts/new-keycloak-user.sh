@@ -26,10 +26,19 @@ EMAIL="${2:-}"; FIRST="${3:-}"; LAST="${4:-}"
 
 [ -f .env ] || { echo "new-keycloak-user: no .env — run scripts/install.sh first" >&2; exit 1; }
 
-# Read .env the way docker compose parses it: drop an inline `# comment` and surrounding
-# whitespace, otherwise a naive `cut -d=` feeds the comment to kcadm as part of the value.
+# Read .env the way docker compose does. A naive `cut -d=` feeds an inline `# comment` to kcadm as
+# part of the value; a naive comment-strip corrupts a QUOTED value that legitimately contains `#`.
+# Compose strips surrounding quotes and treats a quoted body as literal, so mirror both rules.
 env_val() {
-  grep -m1 "^$1=" .env | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//'
+  local v
+  v="$(grep -m1 "^$1=" .env | cut -d= -f2-)"
+  v="${v%$'\r'}"                                            # tolerate a CRLF .env
+  v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+$//')"      # trim first, so a quote ends the value
+  case "$v" in
+    \"*\"|\'*\') v="${v#?}"; v="${v%?}" ;;                  # quoted: literal, `#` included
+    *) v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')" ;;
+  esac
+  printf '%s' "$v" | sed -E 's/^[[:space:]]*//'
 }
 
 PROFILE="$(env_val EASYSYNQ_PROFILE)"; PROFILE="${PROFILE:-s}"
@@ -50,6 +59,22 @@ kc() {
     exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null
 }
 
+# ⚠ `-q username=X` is a CONTAINS match: querying `ann` also returns `joann`. Without `exact=true`
+# this would report another account's `sub`, or reset the wrong person's password. Re-verify the
+# returned username anyway — never act on an account we did not ask for.
+user_sub() {
+  local want="$1" json id name
+  json="$(kc get users -r easysynq -q username="$want" -q exact=true --fields id,username 2>/dev/null || true)"
+  id="$(printf '%s' "$json"   | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'       | head -1)"
+  name="$(printf '%s' "$json" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  [ -n "$id" ] || return 1
+  if [ "$name" != "$want" ]; then
+    echo "new-keycloak-user: refusing to act — asked for '$want', Keycloak returned '$name'" >&2
+    exit 1
+  fi
+  printf '%s' "$id"
+}
+
 kc config credentials --server http://localhost:8080 --realm master \
   --user "$KC_ADMIN" --password "$KC_PW" >/dev/null
 unset KC_PW
@@ -64,7 +89,7 @@ while :; do
   echo "passwords do not match — try again" >&2
 done
 
-if kc get users -r easysynq -q username="$USERNAME" 2>/dev/null | grep -q '"username"'; then
+if user_sub "$USERNAME" >/dev/null 2>&1; then
   echo "'$USERNAME' already exists — resetting its password only"
 else
   args=(-s "username=$USERNAME" -s enabled=true)
@@ -77,8 +102,8 @@ fi
 kc set-password -r easysynq --username "$USERNAME" --new-password "$pw1" --temporary
 unset pw1 pw2
 
-SUB="$(kc get users -r easysynq -q username="$USERNAME" --fields id --format csv --noquotes 2>/dev/null | tr -d '\r' | head -1)"
-[ -n "$SUB" ] || { echo "new-keycloak-user: created the account but could not resolve its sub" >&2; exit 1; }
+SUB="$(user_sub "$USERNAME")" \
+  || { echo "new-keycloak-user: created the account but could not resolve its sub" >&2; exit 1; }
 
 cat <<EOF
 
