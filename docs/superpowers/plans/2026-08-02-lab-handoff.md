@@ -75,7 +75,7 @@ folder path is strong evidence for clause mapping.
 ### B. PR 1 — clause IA + Library polish — **approved, not started**
 
 1. **Clause 7 (Support) → DO.** Currently seeded `PLAN` for clause 7 *and its whole subtree*.
-   Needs: **R61 decisions-register entry (owner-approved)** → seed edit in
+   Needs: **R62 decisions-register entry (owner-approved; R61 is now the site-data rule)** → seed edit in
    `apps/api/src/easysynq_api/db/seeds/iso9001_clauses.py` → migration **`0084`** (head is `0083`;
    this install already holds the old values) → `docs/02` §3.2 **and** its section heading, which
    currently reads `### Clause 7 — Support (PLAN/DO)`.

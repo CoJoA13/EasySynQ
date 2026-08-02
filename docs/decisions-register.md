@@ -1753,6 +1753,56 @@ Bumps the resolutions range **R1–R59 → R1–R60**.
 
 ---
 
+### R61 — Site-specific operational records never enter this repository — 2026-08-02
+
+**A deployment record is a reconnaissance profile.** Written honestly it enumerates account names,
+network topology, hostnames and addresses, security-product vendors and *versions*, backup providers
+and bucket names, share names, and — in its risk section — a curated list of that site's known
+weaknesses. That is the target package an attacker would otherwise have to assemble. It does not
+belong in a code repository.
+
+**Normative rule.** Records describing a real installation MUST NOT be committed here. This holds
+**regardless of repository visibility**: private repositories are made public, forked, cloned by
+contractors, handed to auditors, and restored from backups. Visibility is a setting, not a control,
+and MUST NOT be relied on as one.
+
+The concrete values — the filled worksheet from
+[`docs/runbooks/install-ubuntu-server.md`](runbooks/install-ubuntu-server.md) §0, credentials,
+addresses, inventories — live wherever that organization keeps its other operational documentation.
+
+**What MAY be committed** is the generalized lesson: the *shape* of an environment where it explains
+a design decision, procedure corrections, and traps worth warning the next operator about — always
+with placeholders (`<ORG>`, `example.local`, `DC01`, `10.0.0.0/24`, `<edge firewall>`).
+
+**Specifically excluded**, in any document, commit message, code comment, test fixture or issue:
+
+| Category | Examples |
+|---|---|
+| Identities | account names, real display names, who holds Domain Admin, SIDs |
+| Addressing | real hostnames, FQDNs, IPs, subnets, MAC addresses |
+| Organization | legal names, site names, anything naming the customer |
+| Vendor inventory | security products, RMM/remote-access agents, backup providers, **and their versions** — a version maps to known CVEs |
+| Storage | share names, bucket names, backup destinations |
+| Per-install secrets material | certificate fingerprints, key fingerprints or prefixes, bootstrap secrets |
+| Weakness inventories | "risks accepted" lists naming a real site's exposure |
+
+**Procedure — sanitize at write time, not after.** Author site records with placeholders from the
+first draft. Removing real values later does not undo publication: the data is in git history, in
+any clone or fork, in review-tool comments quoting the diff, and possibly in a search index. The
+2026-08-02 incident is the worked example — records were pushed to a **public** repository and the
+remediation could only limit further exposure, not retract what had already been served.
+
+**Rationale for strictness.** The failure is silent and asymmetric. Nothing breaks, no test fails,
+no gate objects — the document reads as unusually thorough. The cost lands entirely on the customer,
+possibly months later, and cannot be rolled back.
+
+**Back-propagation:** `CLAUDE.md` critical rules (the session-start guard), `docs/runbooks/install-ubuntu-server.md`,
+and the deployment spec/plan templates.
+
+Bumps the resolutions range **R1–R60 → R1–R61**.
+
+---
+
 ## Part 4 — Gap-audit finding → resolution map
 
 This table maps **every** gap-audit finding id from `17-gaps-and-open-questions.md` — Section A (Gaps: A1–A14), Section B (Contradictions/Inconsistencies: B1–B15), Section C (Risks & Hard Problems: C1–C12, including C6b), and Section D (Open Questions: D1–D14) — to the R-number(s) that resolve it. Several findings share a resolution (the audit raised the same concern as a gap, a contradiction, and an open question); those rows point to the same R-number.

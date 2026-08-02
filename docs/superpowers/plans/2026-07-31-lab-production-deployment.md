@@ -221,7 +221,7 @@ Expected: `SwitchType = External`, adapter description contains `I226-V`, `Allow
 arp -a | Select-String "00-15-5d"
 ```
 
-Expected: no line containing `00-15-5d-28-40-01`. Hyper-V's OUI is `00:15:5D`; a collision is
+Expected: no line containing `00-15-5d-00-00-01`. Hyper-V's OUI is `00:15:5D`; a collision is
 unlikely here (DC01 is physical) but must be ruled out before pinning a reservation to it.
 
 - [x] **Step 2: Download the Ubuntu 26.04 ISO** — done 2026-07-31, 2.72 GB
