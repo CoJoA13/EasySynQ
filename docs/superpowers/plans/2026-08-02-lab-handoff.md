@@ -1,6 +1,6 @@
-# Handoff — EasySynQ at AHT, continuing work
+# Handoff — EasySynQ at the site, continuing work
 
-> **Read this first if you are a new session picking up the LAB/AHT deployment.**
+> **Read this first if you are a new session picking up the LAB deployment.**
 > Written 2026-08-02. The install is **live and operational**; what follows is what remains.
 >
 > Background, in order of usefulness:
@@ -12,19 +12,19 @@
 
 ## 1. What exists right now
 
-**EasySynQ is in production at `https://easysynq.aht.local`** for American Heat Treating
-(`AHT.local`), a ~5-user heat-treat shop. State `OPERATIONAL`, restore drill `PASS`.
+**EasySynQ is in production at `https://easysynq.example.local`** for <ORG>
+(`example.local`), a ~5-user heat-treat shop. State `OPERATIONAL`, restore drill `PASS`.
 
 | | |
 |---|---|
 | Host | `LAB` — Windows 11 Pro, domain-joined, Hyper-V |
-| Guest | VM `EasySynQ`, Ubuntu 26.04, **`10.10.40.183`**, MAC `00:15:5D:28:40:01` |
-| Reach it | `ssh easysynq@10.10.40.183` (key auth from LAB, no password) |
+| Guest | VM `EasySynQ`, Ubuntu 26.04, **`10.0.0.20`**, MAC `00:15:5D:00:00:01` |
+| Reach it | `ssh easysynq@10.0.0.20` (key auth from LAB, no password) |
 | Repo on VM | `~/EasySynQ` at commit `4f49c0f` |
-| Domain controller | `AHTDC.AHT.local` @ `10.10.40.222` — also file server **and** SQL host |
-| Import source | `//AHTDC/Quality` → `/srv/easysynq/import` (**ro**), 252 files |
-| Backup target | `//AHTDC/easysynq-backup` → `/srv/easysynq/backup` (**rw**) → MSP360 image → Backblaze B2 |
-| Admin | `qmsadmin` / Colton Jones — System Administrator |
+| Domain controller | `dc01.example.local` @ `10.0.0.10` — also file server **and** SQL host |
+| Import source | `//DC01/Quality` → `/srv/easysynq/import` (**ro**), 252 files |
+| Backup target | `//DC01/easysynq-backup` → `/srv/easysynq/backup` (**rw**) → whole-disk image → the offsite object store |
+| Admin | `qmsadmin` / the owner — System Administrator |
 
 **Always use all four compose files, in this order.** Omitting `compose.lab.yml` resolves a
 different backup volume:
@@ -41,7 +41,7 @@ docker compose --env-file .env \
 
 Full host-reboot resilience was tested 2026-08-02: LAB rebooted → VM auto-started → both CIFS
 mounts landed → containers restarted → `/readyz` green, all inside ~1 minute. Network identity,
-DNS override and beat's schedule state all survived. Four encrypted archives sit on the AHTDC
+DNS override and beat's schedule state all survived. Four encrypted archives sit on the DC01
 share, at least one written unattended by the nightly job.
 
 ---
@@ -77,7 +77,7 @@ folder path is strong evidence for clause mapping.
 1. **Clause 7 (Support) → DO.** Currently seeded `PLAN` for clause 7 *and its whole subtree*.
    Needs: **R61 decisions-register entry (owner-approved)** → seed edit in
    `apps/api/src/easysynq_api/db/seeds/iso9001_clauses.py` → migration **`0084`** (head is `0083`;
-   AHT's install already holds the old values) → `docs/02` §3.2 **and** its section heading, which
+   this install already holds the old values) → `docs/02` §3.2 **and** its section heading, which
    currently reads `### Clause 7 — Support (PLAN/DO)`.
    ⚠ Leave `import_classification.pdca_phase` alone — it is a *derived stored snapshot* of what the
    classifier concluded; rewriting it would falsify an analysis record. Moot anyway: zero import runs.
@@ -116,7 +116,7 @@ just a wider `WHERE` with the existing per-row filter still applying. Touches th
 |---|---|
 | **Remove deployment sudo** | `sudo rm /etc/sudoers.d/90-easysynq-deploy` — passwordless sudo was for provisioning; leaving it means the SSH key on LAB is root on the QMS host |
 | **SMTP relay** | `OPS_ALERT_CHANNELS` / `OPS_ALERT_SMTP_TO` are empty, so a failed nightly backup notifies **only in-app** — via the database that may be what failed |
-| **DHCP reservation** | Ask IT to reserve `10.10.40.183` for `00:15:5D:28:40:01`, or exclude it from the pool. Device is a **WatchGuard Firebox** at `10.10.40.1` (mgmt on `:8080`, WSM on 4117/4118). If IT manages it from a saved Policy Manager config, ask them to record it there or a push will erase it. |
+| **DHCP reservation** | Ask IT to reserve `10.0.0.20` for `00:15:5D:00:00:01`, or exclude it from the pool. Device is a **edge firewall** at `10.0.0.1` (mgmt on `:8080`, WSM on 4117/4118). If IT manages it from a saved Policy Manager config, ask them to record it there or a push will erase it. |
 | **Deny-logon GPO** | Both service accounts (`svc-easysynq-ro`, `svc-easysynq-bkp`) need *Deny log on locally* + *Deny log on through Remote Desktop Services* in a **new** GPO. Leave *Deny access from the network* alone — the mounts need it. |
 | **R13 anchor** | Install reports **NOT tamper-evident** until an off-host audit-checkpoint anchor exists somewhere this host's operator cannot rewrite. Non-blocking, real for an ISO 9001 audit trail. Scheduled, not waived. |
 

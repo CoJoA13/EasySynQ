@@ -1,8 +1,8 @@
-# Design — EasySynQ production deployment on `LAB` (AHT.local)
+# Design — EasySynQ production deployment on `LAB` (example.local)
 
 > **Status:** approved design, pending implementation.
 > **Date:** 2026-07-31 · **Repo commit at design time:** `4f49c0f` · **Migration head:** `0083`
-> **Site:** American Heat Treating (`AHT.local`), single-site heat-treat shop, ~5 QMS users.
+> **Site:** <ORG> (`example.local`), single-site heat-treat shop, ~5 QMS users.
 >
 > This is a site-specific deployment design. The generic procedure lives in
 > [`docs/runbooks/install-ubuntu-server.md`](../../runbooks/install-ubuntu-server.md); this document
@@ -13,10 +13,10 @@
 ## 1. Why this document exists
 
 The existing runbooks assume a bare Ubuntu host on a LAN with a separate Windows file server. Neither
-assumption holds at AHT:
+assumption holds at this site:
 
 - the intended host is a **domain-joined Windows 11 Pro workstation**, not a Linux box;
-- there is **no file server** — `AHTDC` is simultaneously domain controller, file server, and SQL host;
+- there is **no file server** — `DC01` is simultaneously domain controller, file server, and SQL host;
 - the deployment target must remain manageable by the existing IT provider.
 
 Every fact below was **verified on the machine**, not taken from documentation. Several published
@@ -26,68 +26,70 @@ notes (notably `.claude/rules/windows-dev.md`) describe a *different* workstatio
 
 ## 2. Discovered environment
 
+> ⚠ **Sanitized.** Hostnames, addresses, account names, vendor products and versions are replaced
+> with placeholders. **Do not restore real values into this repository** — a site inventory
+> (user list, network layout, security-product versions, documented weaknesses) is exactly the
+> reconnaissance material an attacker wants, and a code repository is the wrong place for it. Keep
+> the concrete worksheet wherever the organization's other operational records live. Only the
+> *shape* of the environment is recorded here, because the design decisions do not survive without it.
+
 ### 2.1 Intended host — `LAB`
 
-| Property | Value |
-|---|---|
-| Hostname / domain | `LAB` · joined to `AHT.local` |
-| OS | Windows 11 Pro, build 26200 |
-| CPU | AMD Ryzen 7 7735HS — 16 logical processors, SLAT + virtualization enabled in firmware |
-| RAM | 29.7 GB |
-| Disk | `C:` 951.8 GB total, 885.8 GB free |
-| Chassis | Desktop (type 3), no battery; AC sleep timeout already `0` |
-| Interactive account | `LAB\colton` — **local** account (SID `…-1002`), NTLM, only profile on the box |
-| Installed tooling | Git only. **No Docker, no `bash` on PATH, no `uv`/`node`/`just`/`gh`.** No `.env`. |
+A domain-joined **Windows 11 Pro** desktop-class workstation: 16 logical processors, ~30 GB RAM,
+~880 GB free, SLAT and firmware virtualization enabled, no battery, AC sleep already disabled.
+
+Two facts drove the plan: it was joined to the domain but the **interactive account was local**, so
+the session had no domain rights at all; and it carried **Git only** — no Docker, no `bash` on PATH,
+no `uv`/`node`/`just`/`gh`, no `.env`.
 
 ### 2.2 Network
 
-| Property | Value |
-|---|---|
-| Live link | `Wi-Fi 2` — 10.10.40.94/24, DHCP, 573 Mbps |
-| Wired NIC | `Ethernet 3` — Intel I226-V gigabit, **currently `Disconnected`** |
-| Gateway / DHCP server | `10.10.40.1` |
-| Gateway identity | **WatchGuard Firebox** — confirmed by TLS cert `CN=Fireware web CA, O=WatchGuard` on :8080; WSM open on 4117/4118 |
-| DNS | `10.10.40.222` (= `AHTDC`) |
-| Also present | Ubiquiti UniFi controller |
+The only live link at the outset was **Wi-Fi**; the gigabit wired NIC was **disconnected**, which
+mattered because a Hyper-V External vSwitch cannot bridge reliably over a wireless adapter.
+
+The site **edge appliance is both gateway and DHCP server**, and it hands out **public DNS
+resolvers** — which cannot resolve the AD zone. That single fact would have broken both CIFS mounts
+at boot, and with them the import and the entire backup chain. Its management interface was not
+reachable with available credentials, so no DHCP reservation could be created during the build.
 
 ### 2.3 Active Directory
 
-| Property | Value |
-|---|---|
-| Domain | `AHT.local` · NetBIOS `AHT` · functional level `Windows2016Domain` |
-| Domain controller | `AHTDC.AHT.local` @ 10.10.40.222 — Windows Server 2019 Standard, sole server |
-| DNS zone | `AHT.local`, Primary, AD-integrated |
-| `easysynq` A record | does not exist — name is free |
-| Enterprise CA (ADCS) | **none published** |
-| GPOs | only `Default Domain Policy`, `Default Domain Controllers Policy` |
-| Enabled users | 9 (`Administrator`, `Chuck`, `Colton`, `Jennifer`, `Krystina`, `Maintenance`, `Michael`, `Production`, `Tyler`) |
-| Service accounts | none — no `svc-*` exists yet |
-| Operator rights | `AHT\Colton` ∈ **Domain Admins** + `BUILTIN\Administrators`; elevated on the DC |
+A single Windows Server domain controller — **also the file server and the SQL host**. Zone is
+AD-integrated, the intended app name was free, only the two default GPOs existed, and **no
+Enterprise CA (ADCS) is published**, which is what forces TLS mode `internal` and the CA-trust
+rollout in §7 R-1. No service accounts existed prior to this deployment.
 
 ### 2.4 The QMS source tree
 
-`\\AHTDC\Quality` → `C:\quality` — **215 files, 53.4 MB**, newest 2026-07-28.
+One read-only share, **~250 files / ~56 MB**, actively maintained. Composition matters for the
+import classifier:
 
 | Type | Count | Type | Count |
 |---|---|---|---|
 | `.docx` | 144 | `.html` | 4 |
 | `.pdf` | 28 | `.vsdx` | 2 |
 | `.xlsx` | 24 | `.pdc` / `.zip` / `.xlsm` / `.xlsx#` | 1 each |
-| `.png` | 9 | | |
+| `.png` | 9 | `Thumbs.db` | 37 |
 
-`AHTDC` also shares `Data`, `finances`, `Maintenance`, `SSI`, `ann-htsw`. Only `Quality` is in scope.
+It splits into two trees of **different kinds**, both organised by ISO 9001 clause: controlled
+**documents** (procedures, work instructions, forms, the Quality Manual) and dated **records**
+(calibration certificates, inspection and tester certifications). See Task 11 in the plan.
+
+The DC hosts several other unrelated shares; only the QMS share is in scope.
 
 ### 2.5 Existing backup posture
 
-| Product | Covers | Schedule | Destination |
-|---|---|---|---|
-| **MSP360** ("Online Backup 7.9.3", Network Technology Inc) | `BackupDiskImagePlan` — whole 1.73 TB RAID-10 disk, all 4 partitions, **`<ExcludeRules />` empty** | `Weekly` + `Monthly` | **Backblaze B2**, bucket `Americanheat` |
-| **SQLBackupAndFTP** 12.8.2 | SQL Server 2022 databases only | Nightly 00:08, ~2 min, succeeding | (not inspected) |
+Two independent products were already running:
 
-**`C:\quality` is therefore covered** by the image plan — implicitly, via whole-volume selection.
+- A **whole-volume image backup** of the DC to **cloud object storage**, on a *weekly + monthly*
+  recurrence with no exclusion rules — so the QMS share is covered implicitly rather than by name.
+- A **database-only** nightly job covering the SQL instance. It does **not** cover files.
 
-**Management/remote-access agents on `AHTDC`:** Atera RMM, Splashtop Streamer (installed 2026-07-22),
-GoTo Opener, a TeamViewer updater task, Webroot SecureAnywhere.
+The owner believed the server was "backed up in whole nightly." What is verifiable is that the
+*databases* are nightly and the *files* ride a weekly image. That gap shapes the backup design in §5.
+
+**Several independent remote-access and management agents** are installed on the DC — the same host
+that holds the source documents and would hold the QMS backups. Recorded as risk **R-2**.
 
 ---
 
@@ -124,16 +126,16 @@ Windows-native shape the project does not support.
 
 ```
 Workstations ──┐
-               ├─► https://easysynq.AHT.local        (Caddy :443 — SPA, API, Keycloak)
-               └─► https://easysynq.AHT.local:9443   (Caddy — presigned MinIO/S3 origin)
+               ├─► https://easysynq.example.local        (Caddy :443 — SPA, API, Keycloak)
+               └─► https://easysynq.example.local:9443   (Caddy — presigned MinIO/S3 origin)
                           │
-                   [ WatchGuard Firebox 10.10.40.1 — gateway + DHCP ]
+                   [ edge firewall 10.0.0.1 — gateway + DHCP ]
                           │
         ┌─────────────────┴──────────────────┐
         │                                    │
-   AHTDC (DC / file / SQL)            LAB (Windows 11 Pro)
-   ├── \\AHTDC\Quality  (RO) ────────► Hyper-V External vSwitch → "Ethernet 3"
-   └── \\AHTDC\easysynq-backup (RW) ◄─┐        │
+   DC01 (DC / file / SQL)            LAB (Windows 11 Pro)
+   ├── \\DC01\Quality  (RO) ────────► Hyper-V External vSwitch → "Ethernet 3"
+   └── \\DC01\easysynq-backup (RW) ◄─┐        │
                                       │   ┌────▼──────────────────────────┐
                                       │   │ VM "EasySynQ" — Ubuntu 26.04  │
                                       │   │  Docker Compose, profile s:   │
@@ -160,15 +162,15 @@ Workstations ──┐
 
 | # | Item | Value |
 |---|---|---|
-| 1 | AD DNS zone | `AHT.local` |
-| 2 | App FQDN | `easysynq.AHT.local` |
+| 1 | AD DNS zone | `example.local` |
+| 2 | App FQDN | `easysynq.example.local` |
 | 3 | Short name | `easysynq` |
-| 4 | VM IP | DHCP **reservation** on the WatchGuard, keyed to the VM's virtual MAC |
-| 5 | QMS share (import) | `//AHTDC/Quality` → `/srv/easysynq/import` (read-only) |
+| 4 | VM IP | DHCP **reservation** on the edge firewall, keyed to the VM's virtual MAC |
+| 5 | QMS share (import) | `//DC01/Quality` → `/srv/easysynq/import` (read-only) |
 | 6 | Share local path | `C:\quality` |
 | 7 | Import service account | `svc-easysynq-ro` (read-only) |
 | 8 | Backup service account | `svc-easysynq-bkp` (write, backup share only) |
-| 9 | NetBIOS domain | `AHT` |
+| 9 | NetBIOS domain | `EXAMPLE` |
 | 10 | Sizing profile | `s` |
 | 11 | TLS mode | `internal` (Caddy CA) — no ADCS exists |
 
@@ -176,7 +178,7 @@ Workstations ──┐
 
 ## 5. Backup design
 
-EasySynQ's own logical backup is **not optional and not replaceable** by the MSP360 image: setup gate
+EasySynQ's own logical backup is **not optional and not replaceable** by the whole-disk image: setup gate
 **G-C** blocks finalization until a real backup **and** restore-test drill PASS. "Configured but
 unverified" does not satisfy it. An image of a running PostgreSQL/MinIO is crash-consistent at best.
 
@@ -186,14 +188,14 @@ unverified" does not satisfy it. An image of a running PostgreSQL/MinIO is crash
 EasySynQ nightly job (pg_dump + blob manifest + Keycloak realm + config + audit checkpoint)
    └─ AES-256-GCM encrypted → *.tar.enc
       └─ written to  /srv/easysynq/backup  (CIFS mount, RW, svc-easysynq-bkp)
-         └─ lands on  \\AHTDC\easysynq-backup  (C:\easysynq-backup)
-            └─ swept by the MSP360 whole-disk image (no exclusions)
-               └─ offsite to Backblaze B2, bucket "Americanheat"
+         └─ lands on  \\DC01\easysynq-backup  (C:\easysynq-backup)
+            └─ swept by the whole-disk image (no exclusions)
+               └─ offsite to the offsite object store, bucket "<offsite-bucket>"
 ```
 
 ### Why this is sound
 
-The archive is encrypted **before it leaves the VM**, so neither the MSP nor Backblaze can read AHT's
+The archive is encrypted **before it leaves the VM**, so neither the IT provider nor the offsite store can read the organization's
 quality records. That makes an opaque, third-party-managed offsite path acceptable for confidentiality
 — the trust requirement reduces to availability only.
 
@@ -203,8 +205,8 @@ quality records. That makes an opaque, third-party-managed offsite path acceptab
   lost and the key was never escrowed, every archive in B2 is unrecoverable noise. It must be copied
   into password-manager custody **the hour it is generated**, stored separately from the backups.
 - **Offsite RPO is the image cadence (weekly/monthly), not nightly.** An archive written Monday may
-  not reach B2 until the weekly image runs. Local copies on `AHTDC` are same-day; offsite is not.
-- **`AHTDC` concentration.** It would hold the domain, the source QMS documents, and the QMS backups.
+  not reach B2 until the weekly image runs. Local copies on `DC01` are same-day; offsite is not.
+- **`DC01` concentration.** It would hold the domain, the source QMS documents, and the QMS backups.
   The B2 copy is the only thing that survives its loss.
 
 ---
@@ -213,13 +215,13 @@ quality records. That makes an opaque, third-party-managed offsite path acceptab
 
 | # | Phase | Owner | Gate to proceed |
 |---|---|---|---|
-| 0 | Ethernet cable made + tested; DHCP reservation prepared on the WatchGuard | Colton | `Ethernet 3` links at **1 Gbps** |
+| 0 | Ethernet cable made + tested; DHCP reservation prepared on the edge firewall | Owner | `Ethernet 3` links at **1 Gbps** |
 | 1 | Hyper-V role, External vSwitch, VM created | Claude (elevated) | VM MAC captured for the reservation |
-| 2 | AD: A record · `svc-easysynq-ro` · `svc-easysynq-bkp` · share + NTFS ACLs · deny-logon GPO | Colton (Domain Admin) | `Resolve-DnsName easysynq.AHT.local` succeeds **from a workstation** |
+| 2 | AD: A record · `svc-easysynq-ro` · `svc-easysynq-bkp` · share + NTFS ACLs · deny-logon GPO | Owner (Domain Admin) | `Resolve-DnsName easysynq.example.local` succeeds **from a workstation** |
 | 3 | Ubuntu 26.04 install; clone at reviewed commit; `bootstrap-ubuntu.sh` | Claude + console | `findmnt /srv/easysynq/import` shows `ro` |
-| 4 | `install.sh s --host easysynq.AHT.local --tls internal`; **escrow key**; `OPS_ALERT_CHANNELS` | Claude | `/readyz` green |
-| 5 | Export Caddy root CA → **new** GPO → workstation trust | Colton | `Get-ChildItem Cert:\LocalMachine\Root` shows it after `gpupdate` |
-| 6 | Setup wizard: bootstrap → org → WORM verify → **backup + restore drill** → auth → finalize | Colton | state `OPERATIONAL` |
+| 4 | `install.sh s --host easysynq.example.local --tls internal`; **escrow key**; `OPS_ALERT_CHANNELS` | Claude | `/readyz` green |
+| 5 | Export Caddy root CA → **new** GPO → workstation trust | Owner | `Get-ChildItem Cert:\LocalMachine\Root` shows it after `gpupdate` |
+| 6 | Setup wizard: bootstrap → org → WORM verify → **backup + restore drill** → auth → finalize | Owner | state `OPERATIONAL` |
 | 7 | `IMPORT_SOURCE_PATH`; recreate `api`/`worker`; first import run | Claude | worker sees the 215 files |
 
 **Ordering constraint (load-bearing):** the CIFS mount must exist *before* any container starts against
@@ -238,13 +240,13 @@ active session runs over Wi-Fi, so this will **not** interrupt work in progress.
 | # | Risk | Severity | Disposition |
 |---|---|---|---|
 | R-1 | **Caddy root CA enters the domain trust store.** It can sign a certificate for *any* hostname; its key lives in the VM's Caddy volume, so `LAB`'s disk and root access join the domain's certificate trust boundary. | High | **Accepted** — no ADCS exists. Mitigate by scoping a dedicated GPO (not Default Domain Policy) and treating the VM as a tier-0-adjacent asset. Revisit if ADCS is ever deployed: a host-specific leaf would put nothing new in the root store. |
-| R-2 | **Broad remote-access surface** — Atera, Splashtop, GoTo, TeamViewer all reach `AHTDC`, which holds source documents and would hold backups. Compounds R-1. | High | **Out of scope, flagged.** Owner decision; recorded so it is inherited knowingly. |
-| R-3 | **Offsite RPO is weekly**, not nightly, for files. | Medium | Accepted for 5 users / 53 MB. Raising MSP360 to daily is an IT request, not a blocker. |
+| R-2 | **Broad remote-access surface** — several independent remote-access and RMM agents reach `DC01`, which holds source documents and would hold backups. Compounds R-1. | High | **Out of scope, flagged.** Owner decision; recorded so it is inherited knowingly. |
+| R-3 | **Offsite RPO is weekly**, not nightly, for files. | Medium | Accepted for 5 users / 53 MB. Raising the image backup to daily is an IT request, not a blocker. |
 | R-4 | **Backup key loss** makes every offsite archive worthless. | Critical | Escrow at Phase 4; verified before Phase 6 finalize. |
 | R-5 | **Single-host availability** — target is 99.0%/month inclusive of Keycloak + Beat (R14). No HA. | Medium | Accepted; matches shop scale. |
 | R-6 | **Not tamper-evident** until an off-host audit-checkpoint anchor is configured (R13). Non-blocking for go-live but real for an ISO 9001 audit trail — the anchor must live where this host's operator cannot rewrite it. | Medium | **Scheduled, not waived.** Post-go-live item. |
 | R-7 | `OPS_ALERT_CHANNELS` empty by default → a failed nightly backup notifies only in-app, via the database that may itself be the failure. | Medium | Configure at Phase 4. `syslog` requires a compose override to mount `/dev/log`; `smtp` needs a relay (to be identified); `webhook` needs a receiver. |
-| R-8 | Hostname changes after go-live invalidate the OIDC issuer and sign everyone out. | Low | Name fixed at design time: `easysynq.AHT.local`. |
+| R-8 | Hostname changes after go-live invalidate the OIDC issuer and sign everyone out. | Low | Name fixed at design time: `easysynq.example.local`. |
 | R-9 | Host reboots (Windows Update) take the VM down. | Low | `AutomaticStartAction=Start`. |
 | R-10 | An account able to write the backup share can also delete backups (ransomware path). | Medium | Separate least-privilege `svc-easysynq-bkp`; the B2 copy is the real mitigation. |
 
@@ -253,15 +255,15 @@ active session runs over Wi-Fi, so this will **not** interrupt work in progress.
 ## 8. Definition of done
 
 - `Ethernet 3` linked at 1 Gbps; VM holds its reserved address across a reboot.
-- `Resolve-DnsName easysynq.AHT.local` resolves **from a workstation**, not just the DC.
+- `Resolve-DnsName easysynq.example.local` resolves **from a workstation**, not just the DC.
 - `docker compose version` ≥ 2.24.4 · `systemctl is-enabled docker` · `is-masked sleep.target` ·
   `timedatectl` synchronized · `findmnt /srv/easysynq/import` present and `ro`.
-- `https://easysynq.AHT.local` loads with **no certificate warning** on a domain workstation.
+- `https://easysynq.example.local` loads with **no certificate warning** on a domain workstation.
 - TLS 1.1 refused; CSP / HSTS / Referrer-Policy / X-Content-Type / Permissions-Policy headers present.
 - A Keycloak login round-trips; a document upload **and** download both succeed (download exercises 9443).
 - Setup state `OPERATIONAL`, reached through a **passing** backup + restore drill.
 - `BACKUP_ENCRYPTION_KEY` escrowed in password-manager custody, verified separately from backups.
-- An import run ingests the 215 files from `//AHTDC/Quality`.
+- An import run ingests the 215 files from `//DC01/Quality`.
 - The VM survives a host reboot unattended.
 
 ---
@@ -270,8 +272,8 @@ active session runs over Wi-Fi, so this will **not** interrupt work in progress.
 
 1. **SMTP relay** for `OPS_ALERT_SMTP_TO` — not yet identified. Until set, backup-failure alarms reach
    only the container log and in-app notifications.
-2. **Reserved IP address** — to be chosen on the WatchGuard, inside the correct scope.
-3. **MSP360 coverage of the new backup folder** — `C:\easysynq-backup` sits on the imaged volume with
+2. **Reserved IP address** — to be chosen on the edge firewall, inside the correct scope.
+3. **image-backup coverage of the new backup folder** — `C:\easysynq-backup` sits on the imaged volume with
    no exclusions, so it should be covered by construction. Confirm after the first image run rather
    than assuming.
 4. **Audit-checkpoint anchor** (R13) — schedule after go-live.
