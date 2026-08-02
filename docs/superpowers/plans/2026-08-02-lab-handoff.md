@@ -153,7 +153,21 @@ user→role, `role_grant` is role→permission · there is **no** `backup_run` t
 
 ---
 
-## 4. Git state
+## 4. Owner's backlog — captured, not yet specified
+
+Raised 2026-08-02 from real friction during this deployment. **Not designed or scoped** — recorded
+so they are not lost. Each needs its own brainstorm before any work.
+
+1. **Easier user creation.** Today it is two disconnected steps: create the Keycloak account, then
+   paste its `sub` into Administration → Users. `scripts/new-keycloak-user.sh` reduces the friction
+   but does not remove the seam.
+2. **Permission-key visibility under "Manage" on a user.** What a user can actually do is not
+   legible from the user surface.
+3. **Browse/picker when importing**, instead of typing a source path by hand.
+
+---
+
+## 5. Git state
 
 - Branch **`feat/ops-lab-deployment`** — pushed, PR open, CI running. Contains the two Keycloak admin
   scripts, two runbook fixes, and the deployment spec + plan.
