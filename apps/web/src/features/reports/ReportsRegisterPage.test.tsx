@@ -539,6 +539,10 @@ describe("ReportsRegisterPage", () => {
     await screen.findByText("SOP-QA-001");
     await waitFor(() => expect(seenUrls.at(-1)).toContain("filter%5Bclause_refs%5D%5Bhas%5D=7.5"));
     expect(screen.getByLabelText("Current query")).toHaveTextContent("clause=7.5");
+    // The controlled Select must DISPLAY the accepted parent (Codex P2: options built only from
+    // exact row refs rendered it blank over a filtered register — an invisible active filter).
+    // Ancestors are now facet options, which also makes the parent re-selectable after clearing.
+    expect(screen.getByRole("textbox", { name: "Clause" })).toHaveValue("7.5");
   });
 
   // Codex round 6 FIX 2: `scope` alone (always `org:<short_code>`) can't distinguish an org-wide

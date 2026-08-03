@@ -46,11 +46,21 @@ const REPORT: DocumentControlRegister = {
 };
 
 describe("register report facet derivation", () => {
-  it("deduplicates and naturally sorts only values present in visible rows", () => {
+  it("deduplicates, naturally sorts, and rolls clause ANCESTORS into the options", () => {
     const source = deriveRegisterFacetSource(REPORT);
-    expect(source.clauseValues).toEqual(["8.4", "10"]);
+    // S-clause-rollup: 8.4 also contributes 8 — every ancestor is a representable subtree filter,
+    // and a controlled Select can only display an accepted parent deep link it has as an option.
+    expect(source.clauseValues).toEqual(["8", "8.4", "10"]);
     expect(source.processValues).toEqual(["process-2", "process-10"]);
     expect(source.processValues).not.toContain("process-hidden");
+  });
+
+  it("expands deep refs to every ancestor level, deduplicated across rows", () => {
+    const deep: DocumentControlRegister = {
+      ...REPORT,
+      rows: [row("C", ["7.5.3"], []), row("D", ["7.5.2", "7.5.3"], [])],
+    };
+    expect(deriveRegisterFacetSource(deep).clauseValues).toEqual(["7", "7.5", "7.5.2", "7.5.3"]);
   });
 
   it("uses provenance and optional catalog names without letting either add choices", () => {
