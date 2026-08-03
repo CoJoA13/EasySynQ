@@ -292,6 +292,64 @@ describe("CreateUserModal", () => {
     });
   });
 
+  it("the collision Alert warns that a selected role will not be assigned by linking", async () => {
+    grant(["permission.grant"]);
+    server.use(http.get("/api/v1/roles", () => HttpResponse.json(ROLES)));
+    server.use(
+      http.post("/api/v1/users/provision", () =>
+        HttpResponse.json(
+          {
+            code: "keycloak_username_exists_unlinked",
+            title: "A sign-in account with that username already exists",
+            keycloak_subject: COLLISION_SUBJECT,
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.type(screen.getByLabelText(/Username/), "orphan");
+    await screen.findByText("Roles");
+    await user.click(screen.getByPlaceholderText(/assign roles/i));
+    await user.click(await screen.findByText("Employee"));
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await screen.findByRole("button", { name: "Link the existing account" });
+    // linkMut must still send only the fields it always sent — the warning is informational,
+    // not a behavior change.
+    expect(screen.getByText(/will not be assigned by linking/)).toBeInTheDocument();
+  });
+
+  it("the collision Alert has no role-drop warning when no role was selected", async () => {
+    grant(["permission.grant"]);
+    server.use(http.get("/api/v1/roles", () => HttpResponse.json(ROLES)));
+    server.use(
+      http.post("/api/v1/users/provision", () =>
+        HttpResponse.json(
+          {
+            code: "keycloak_username_exists_unlinked",
+            title: "A sign-in account with that username already exists",
+            keycloak_subject: COLLISION_SUBJECT,
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderModal();
+
+    // The role picker is available (permission.grant is held, roles are loaded) but nothing is
+    // picked — the warning must not appear just because the caller COULD select roles.
+    await user.type(screen.getByLabelText(/Username/), "orphan");
+    await screen.findByText("Roles");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await screen.findByRole("button", { name: "Link the existing account" });
+    expect(screen.queryByText(/will not be assigned by linking/)).toBeNull();
+  });
+
   it("has no axe violations (Mantine portals the modal onto document.body)", async () => {
     // A custom queryClient lets the test wait for the background usePermissions() fetch to fully
     // settle (the LeftRail no-clause-links precedent) before auditing — otherwise its resolution

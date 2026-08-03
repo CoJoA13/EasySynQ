@@ -44,6 +44,7 @@ interface Override {
 // CreateUserModal's "link the existing account" path still calls on a username collision).
 export function UsersAdmin({ token }: { token: string | null }) {
   const qc = useQueryClient();
+  const canCreate = usePermissions().can("user.create");
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [manage, setManage] = useState<AdminUser | null>(null);
@@ -83,7 +84,7 @@ export function UsersAdmin({ token }: { token: string | null }) {
         <Text c="dimmed" size="sm">
           Create a user account, assign seeded roles, or disable access.
         </Text>
-        <Button onClick={() => setCreateOpen(true)}>Create user</Button>
+        {canCreate && <Button onClick={() => setCreateOpen(true)}>Create user</Button>}
       </Group>
 
       <Table withTableBorder striped>
@@ -142,7 +143,9 @@ export function UsersAdmin({ token }: { token: string | null }) {
         </Table.Tbody>
       </Table>
 
-      <CreateUserModal opened={createOpen} onClose={() => setCreateOpen(false)} token={token} />
+      {canCreate && (
+        <CreateUserModal opened={createOpen} onClose={() => setCreateOpen(false)} token={token} />
+      )}
 
       <Drawer
         opened={!!manage}
@@ -156,7 +159,15 @@ export function UsersAdmin({ token }: { token: string | null }) {
         {/* Keyed by user id: switching the managed user must not carry over stale local drawer
             state — most importantly an already-issued temp password from the PREVIOUS user (see
             ManageUser's credential state below). */}
-        {manage && <ManageUser key={manage.id} user={manage} token={token} onChange={refresh} />}
+        {manage && (
+          <ManageUser
+            key={manage.id}
+            user={manage}
+            token={token}
+            onChange={refresh}
+            canIssuePassword={canCreate}
+          />
+        )}
       </Drawer>
     </Stack>
   );
@@ -166,13 +177,17 @@ function ManageUser({
   user,
   token,
   onChange,
+  canIssuePassword,
 }: {
   user: AdminUser;
   token: string | null;
   onChange: () => void;
+  // Threaded from UsersAdmin, which already resolves `user.create` to gate the Create-user
+  // button/modal — reuse that single value instead of a second usePermissions() call for the
+  // same key.
+  canIssuePassword: boolean;
 }) {
   const qc = useQueryClient();
-  const canIssuePassword = usePermissions().can("user.create");
   const [roleId, setRoleId] = useState<string | null>(null);
   const [ov, setOv] = useState({ permission_key: "", effect: "ALLOW" });
   const [error, setError] = useState<string | null>(null);

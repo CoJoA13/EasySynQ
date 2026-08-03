@@ -125,6 +125,19 @@ export function CreateUserModal({
               Link it to a new EasySynQ user instead of creating a duplicate Keycloak account, or
               choose a different username.
             </Text>
+            {/* Deliberately conservative: linking calls POST /users, whose request model has no
+                role_ids field, so any roles picked above would silently vanish if we didn't say
+                so here. We warn instead of chaining a role-assignment request onto this recovery
+                flow — linking exists to recover an account that already exists, role management
+                already has its own dedicated surface one click away in the Manage drawer, and
+                chaining extra requests here would add a new partial-failure state to a recovery
+                path. */}
+            {form.role_ids.length > 0 && (
+              <Text size="sm" fw={600}>
+                Selected roles will not be assigned by linking — assign them from Manage after
+                linking.
+              </Text>
+            )}
             {error && (
               <Text size="sm" c="red">
                 {error}

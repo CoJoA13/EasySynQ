@@ -2112,7 +2112,7 @@ export interface ProvisionedUser {
   password_delivery: "shown_once";
 }
 
-// POST /api/v1/users/{id}/temporary-password response (201) — the reissue-only counterpart of
+// POST /api/v1/users/{id}/temporary-password response (200) — the reissue-only counterpart of
 // ProvisionedUser (no `user` — the target already exists).
 export interface IssuedTemporaryPassword {
   temporary_password: string;

@@ -126,6 +126,9 @@ test("revoke and remove controls name the specific assignment they affect", asyn
 });
 
 test("the roster header offers Create user directly; the retired paste-a-subject Invite flow is gone", async () => {
+  // The header button is gated on user.create (S-user-create final review Fix 2) — without it
+  // this test would fail for the wrong reason (dead-control gating, not the retired Invite flow).
+  grantUserCreate();
   server.use(http.get("/api/v1/users", () => HttpResponse.json([USER])));
   // A dedicated queryClient lets the absence assertion wait for EVERY background fetch (the roster
   // list, plus CreateUserModal's always-mounted usePermissions() check) to settle first — otherwise
@@ -139,6 +142,22 @@ test("the roster header offers Create user directly; the retired paste-a-subject
 
   expect(screen.getByRole("button", { name: "Create user" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Invite user" })).toBeNull();
+});
+
+test("the Create user button is absent without user.create (DP-6: no dead control)", async () => {
+  server.use(http.get("/api/v1/users", () => HttpResponse.json([USER])));
+  // The default MSW handler grants no permissions — no grantUserCreate() call here, unlike the
+  // test above.
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+
+  await screen.findByText(USER.display_name);
+  // Settle-aware: wait for every background fetch (the roster list, the header's own
+  // usePermissions() check) before asserting the absence — a DOM-negative assertion that races
+  // the render passes against unreverted (un-gated) code too.
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+
+  expect(screen.queryByRole("button", { name: "Create user" })).toBeNull();
 });
 
 test("the Manage drawer's Issue new temp password action posts to the reissue endpoint for the right user and renders the show-once password", async () => {
@@ -240,6 +259,9 @@ test("switching the Manage drawer directly to a different user does not carry ov
 });
 
 test("opening the modal removes the ambiguous duplicate of the Create user button name", async () => {
+  // Both the header button and the modal mount are gated on user.create (S-user-create final
+  // review Fix 2) — grant it so the button (and thus the modal) render at all.
+  grantUserCreate();
   server.use(http.get("/api/v1/users", () => HttpResponse.json([USER])));
   const user = userEvent.setup();
   renderWithProviders(<UsersAdmin token="test-token" />);
