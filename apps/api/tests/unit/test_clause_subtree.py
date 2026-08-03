@@ -19,7 +19,7 @@ pytestmark = pytest.mark.unit
 def test_code_in_subtree_truth_table() -> None:
     assert code_in_subtree("9.2", "9.2") is True  # itself
     assert code_in_subtree("9.2", "9.2.2") is True  # child
-    assert code_in_subtree("9.2", "9.2.2.1") is True  # any depth
+    assert code_in_subtree("9", "9.2.2") is True  # any depth (grandchild)
     assert code_in_subtree("9.2", "9.22") is False  # the dot anchor — NOT a descendant
     assert code_in_subtree("9.2", "9.20") is False
     assert code_in_subtree("9.2", "9") is False  # never ancestors
