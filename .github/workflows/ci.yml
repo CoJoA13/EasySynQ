@@ -17,6 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # R61 backstop lives in THIS job because contracts IS in branch protection's required
+      # checks — `security` is warn-only until its ratchet (see its preamble), so a site-data
+      # match there would not block a merge.
+      - name: R61 site-data backstop (check-no-site-data)
+        run: ./scripts/check-no-site-data.sh
       - uses: actions/setup-node@v7
         with: { node-version: "22" }
       - name: lint OpenAPI
@@ -209,8 +214,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: R61 site-data backstop (check-no-site-data)
-        run: ./scripts/check-no-site-data.sh
       - name: install uv
         uses: astral-sh/setup-uv@v9.0.0
         with:

@@ -47,6 +47,17 @@ hits="$(grep -nHoIE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "${FILES[@]}" 2>/dev/null 
   | grep -vE ':(10\.0\.0\.[0-9]{1,3}|10\.99\.99\.99|192\.0\.2\.[0-9]{1,3}|198\.51\.100\.[0-9]{1,3}|203\.0\.113\.[0-9]{1,3}|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|0\.0\.0\.0|255\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|8\.8\.8\.8|8\.8\.4\.4|7\.1\.5\.[12]|8\.2\.3\.[12]|3\.3\.1\.0)$' || true)"
 [ -z "$hits" ] || report "IPv4 address outside the sanctioned documentation/placeholder set (R61):" $hits
 
+# --- IPv6 addresses --------------------------------------------------------------------------
+# Two shapes, chosen to stay false-positive-safe: the FULL 8-group form, and a `::`-compressed
+# form with at least one leading hex group (times/ratios never contain `::`; 6-group MACs have
+# no `::`; a BARE leading `::1`/`::` is structural loopback/unspecified and is deliberately
+# unmatched so Python slice syntax `a[::2]` cannot false-positive — every real site address
+# has leading groups). Sanctioned: the RFC 3849 documentation prefix 2001:db8::/32 · the
+# expanded loopback 0:0:0:0:0:0:0:1 (the established `inet`-canonicalization test literal).
+hits="$(grep -nHoIE '\b([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b|\b([0-9A-Fa-f]{1,4}:){1,7}:([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6}\b)?' "${FILES[@]}" 2>/dev/null \
+  | grep -viE ':2001:db8(:|$)|:0:0:0:0:0:0:0:1$' || true)"
+[ -z "$hits" ] || report "IPv6 address outside the RFC 3849 documentation prefix (R61):" $hits
+
 # --- .local FQDNs other than the sanctioned examples ------------------------------------------
 # Matches SINGLE-label zones too (`customer.local` — a real AD base domain is site data even
 # without a host label). Allowed: example.local / *.example.local · CONTOSO.local /

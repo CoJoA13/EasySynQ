@@ -149,6 +149,12 @@ just a wider `WHERE` with the existing per-row filter still applying. Touches th
 | `systemctl is-masked` errors | Not a verb on systemd 259. Use `systemctl is-enabled` (reports `masked`). |
 | Import finds nothing | Check `IMPORT_SOURCE_PATH=/srv/easysynq/import` in `.env` — it defaults to `../../.import-source`, an empty dir. This was missed once already. |
 
+**Script availability:** the recorded checkout (`4f49c0f`, see §1) **predates**
+`scripts/clear-keycloak-lockout.sh` and `scripts/new-keycloak-user.sh` — both land with PR #419.
+Before invoking either, update the checkout: `git -C ~/EasySynQ pull --ff-only` once that PR is on
+`main`. This is safe for the site-local state: `infra/compose/compose.lab.yml` and `.env` are
+untracked, and neither a fast-forward pull nor a checkout touches untracked files.
+
 **Schema names that mislead:** `system_config` holds the bootstrap fields · `role_assignment` is
 user→role, `role_grant` is role→permission · there is **no** `backup_run` table; run state lives on
 `backup_policy.last_restore_test_*`.

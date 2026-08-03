@@ -40,8 +40,10 @@ These apply to **every** task. Values are exact; do not substitute.
 > was reissued.
 - **Domain:** `example.local` · NetBIOS `EXAMPLE` · DC `dc01.example.local` @ `10.0.0.10`
 - **VM IP:** **`10.0.0.20`** — currently a DHCP lease bound to the pinned MAC. Owner-accepted
-  2026-07-31: proceed on the lease now, and have IT convert it to a reservation (or exclude it from
-  the pool) when reachable. Edge-firewall credentials were unavailable and no saved config exists on
+  2026-07-31: proceed on the lease now, and have IT convert it to a reservation when reachable.
+  An exclusion alone is **not** an equivalent (the VM runs `dhcp4: true`, so excluding `.20`
+  denies it to this VM at renewal — pair any exclusion with a static netplan address, Task 4).
+  Edge-firewall credentials were unavailable and no saved config exists on
   DC01, so the pool range could not be determined and a safe static could not be chosen.
 - **VM DNS:** **`10.0.0.10` only.** The edge firewall DHCP supplies `8.8.8.8`/`8.8.4.4`, which cannot
   resolve `example.local` — and both CIFS mounts would fail. Must be overridden post-install.
@@ -119,6 +121,17 @@ persist silently until someone looks.
 1. Bootstrap ran without `--qms-share` (AD wasn't ready); both mounts done by hand in Task 7.
 2. **Not in the original design:** the edge firewall DHCP serves `8.8.8.8`/`8.8.4.4`, which cannot resolve
    `example.local`. Overridden to the DC on the VM *and* on LAB. Without it both CIFS mounts fail at boot.
+   The LAB side is a host-level Wi-Fi DNS override — reproduce it on any rebuild/recovery
+   (elevated PowerShell), or every `Resolve-DnsName`/`ssh`/`scp` from LAB fails while the VM is healthy:
+
+   ```powershell
+   Get-NetAdapter | Where-Object Status -eq 'Up'                                  # find the active adapter, e.g. "Wi-Fi"
+   Set-DnsClientServerAddress -InterfaceAlias "Wi-Fi" -ServerAddresses 10.0.0.10  # the DC
+   Resolve-DnsName easysynq.example.local                                         # must answer 10.0.0.20
+   ```
+
+   The DC forwards external queries, so ordinary browsing keeps working. Revert if LAB leaves this
+   LAN: `Set-DnsClientServerAddress -InterfaceAlias "Wi-Fi" -ResetServerAddresses`.
 3. **Not in the original design:** subiquity left ~98 GB unallocated; root LV extended to 194 GB.
 4. Passwordless sudo enabled for deployment — **remove at go-live**:
    `sudo rm /etc/sudoers.d/90-easysynq-deploy`
