@@ -548,13 +548,29 @@ async def issue_temporary_password(
             status=502, code="keycloak_unavailable", title="Keycloak could not be reached"
         ) from exc
 
-    # Records THAT a credential was issued — never its value.
-    _emit_user_event(
-        session,
-        caller,
-        EventType.USER_CREDENTIAL_ISSUED,
-        target.id,
-        after={"credential_issued": True},
-    )
-    await session.commit()
-    return {"temporary_password": password, "password_delivery": "shown_once"}
+    # Build the response before the try block so it can still be returned on failure.
+    response: dict[str, Any] = {"temporary_password": password, "password_delivery": "shown_once"}
+
+    # Records THAT a credential was issued — never its value. This commit is deliberately NON-FATAL
+    # to the response: the credential is already live in Keycloak and the generated password exists
+    # only in `response` at this point, so losing the response to an unhandled 500 here is strictly
+    # worse than losing this one audit row. The credential is already live, so an audit UNDER-claim
+    # is the safe direction for an append-only, hash-chained trail (R12).
+    try:
+        _emit_user_event(
+            session,
+            caller,
+            EventType.USER_CREDENTIAL_ISSUED,
+            target.id,
+            after={"credential_issued": True},
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        logger.warning(
+            "users.credential_issued_audit_failed",
+            exc_info=True,
+            extra={"extra_fields": {"user_id": str(target.id)}},
+        )
+
+    return response

@@ -762,6 +762,7 @@ paths:
             application/json:
               schema:
                 type: object
+                additionalProperties: false
                 required: [temporary_password, password_delivery]
                 properties:
                   temporary_password: { type: string }
