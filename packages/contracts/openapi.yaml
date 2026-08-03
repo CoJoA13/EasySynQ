@@ -744,6 +744,34 @@ paths:
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /users/{user_id}/temporary-password:
+    post:
+      tags: [users]
+      operationId: issueTemporaryPassword
+      summary: >-
+        Issue a fresh temporary password for a linked user, returned once (S-user-create). Repairs a
+        provision whose credential step failed, and replaces scripts/new-keycloak-user.sh as the
+        password-reset path. Needs user.create.
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: >-
+            The new temporary password. Returned ONCE; never stored, logged, or re-readable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [temporary_password, password_delivery]
+                properties:
+                  temporary_password: { type: string }
+                  password_delivery: { type: string, enum: [shown_once] }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "502": { $ref: "#/components/responses/ProblemResponse" }
+        "503": { $ref: "#/components/responses/ProblemResponse" }
+
   /users/{user_id}/roles:
     get:
       tags: [authz]
@@ -6915,6 +6943,7 @@ components:
             - keycloak_email_exists
             - keycloak_username_exists_unlinked
             - keycloak_unavailable
+            - user_not_linked
         detail: { type: [string, "null"] }
         instance: { type: [string, "null"] }
         request_id: { type: [string, "null"] }

@@ -293,6 +293,7 @@ The user representation backs `app_user`. It carries a nullable `manager_id` (se
 | PATCH | `/users/{id}` | `user.update` | — | `display_name`, attributes, `manager_id`, `status` (`ACTIVE/LOCKED/DISABLED`). `If-Match`. |
 | POST | `/users/{id}/retire` | `user.update` | ✓ | `status→RETIRED`; PII anonymizable while `id`/`audit` chain stays intact (`14 §12`, `12 §9.4`). **Never hard-deleted** (attribution integrity). |
 | POST | `/users/{id}/guest-grant` | `permission.grant` | ✓ | Time-boxed external-auditor access: `{ evidence_pack_id, valid_until, ip_allow?, read_only:true }` (`14 §3` `guest_grant`). |
+| POST | `/users/{id}/temporary-password` | `user.create` | — | Reissues a generated temporary password for an existing linked user, shown once (`password_delivery: shown_once`, S-user-create) — repairs a provision whose credential step failed and replaces `scripts/new-keycloak-user.sh` as the password-reset path. 409 `user_not_linked` if the user has no linked Keycloak subject; 502 `keycloak_unavailable`; 503 `keycloak_not_configured`. |
 
 ### 8.2 Roles (`/roles`)
 

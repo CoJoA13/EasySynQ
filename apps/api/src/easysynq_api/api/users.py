@@ -509,3 +509,52 @@ async def update_user_status(
     await session.refresh(target)
     names = await _role_names_by_user(session, caller.org_id, [target.id])
     return _represent(target, names.get(target.id, []))
+
+
+@router.post("/users/{user_id}/temporary-password")
+async def issue_temporary_password(
+    user_id: uuid.UUID,
+    caller: AppUser = Depends(_user_create),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Issue a fresh temporary password for an existing linked user (slice S-user-create).
+
+    Two jobs: it repairs a provision that committed the row but failed to set the credential, and it
+    removes the last operational reason to run ``scripts/new-keycloak-user.sh``. Gated on
+    ``user.create`` — issuing a credential is the same authority as creating the account.
+    """
+    target = await _get_user(session, user_id, caller.org_id)
+    if not target.keycloak_subject:
+        raise ProblemException(
+            status=409,
+            code="user_not_linked",
+            title="That user has no linked sign-in account",
+        )
+    # `app_user` does not store the Keycloak username, so the closest identifier we hold is passed
+    # to the policy guard. The generated value is 20 random characters and cannot collide with any
+    # username in practice — the check is a belt-and-braces guard, not the primary defence.
+    password = generate_temporary_password(target.display_name or "")
+    try:
+        async with _kc_client() as kc:
+            await kc.set_temporary_password(subject=target.keycloak_subject, password=password)
+    except KeycloakNotConfigured as exc:
+        raise ProblemException(
+            status=503,
+            code="keycloak_not_configured",
+            title="Keycloak admin access is not configured on this install",
+        ) from exc
+    except KeycloakUnavailable as exc:
+        raise ProblemException(
+            status=502, code="keycloak_unavailable", title="Keycloak could not be reached"
+        ) from exc
+
+    # Records THAT a credential was issued — never its value.
+    _emit_user_event(
+        session,
+        caller,
+        EventType.USER_CREDENTIAL_ISSUED,
+        target.id,
+        after={"credential_issued": True},
+    )
+    await session.commit()
+    return {"temporary_password": password, "password_delivery": "shown_once"}
