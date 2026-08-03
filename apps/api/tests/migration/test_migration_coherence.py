@@ -32,6 +32,7 @@ _M10_REVISION = "0080_schema_index_design"
 _PURGE_AUTHORITY_REVISION = "0081_pending_purge_authority"
 _PACK_ERASURE_REVISION = "0082_pack_legal_erasure"
 _PACK_PRINCIPAL_REVISION = "0083_pack_build_principal"
+_CLAUSE7_PLAN_ROWS = ("7", "7.1", "7.1.5.1", "7.2", "7.4")  # spot set of the 13 flipped rows
 _CANONICAL_CHECK = "ck_process_edge_no_self_loop"
 _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
 _RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
@@ -147,6 +148,31 @@ def _table_indexes(connection: sa.Connection, table_name: str) -> set[str]:
             {"table_name": table_name},
         ).scalars()
     }
+
+
+def _clause_phases(connection: sa.Connection, framework_id: object) -> dict[str, str]:
+    return {
+        str(number): str(phase)
+        for number, phase in connection.execute(
+            sa.text(
+                "SELECT number, pdca_phase::text FROM clause "
+                "WHERE framework_id = :framework "
+                "AND (number = '7' OR number LIKE '7.%' OR number IN ('6.2', '8'))"
+            ),
+            {"framework": framework_id},
+        )
+    }
+
+
+def _clause7_intent(connection: sa.Connection, framework_id: object) -> str:
+    return str(
+        connection.execute(
+            sa.text(
+                "SELECT intent_text FROM clause WHERE framework_id = :framework AND number = '7'"
+            ),
+            {"framework": framework_id},
+        ).scalar_one()
+    )
 
 
 def test_populated_historical_transitions_and_head_repairs(
@@ -791,6 +817,50 @@ def test_populated_historical_transitions_and_head_repairs(
             command.upgrade(config, "head")
             with engine.connect() as connection:
                 assert _process_edge_checks(connection) == {_CANONICAL_CHECK}
+
+            # 0084: clause 7 moves wholly to DO (R62). A fresh chain seeds the NEW catalog via
+            # 0018, so only the downgrade->upgrade cycle exercises the populated flip — run it
+            # with a live clause_mapping on 7.2 in place to prove no dependent-row interference.
+            with engine.begin() as connection:
+                clause_72_id = connection.execute(
+                    sa.text(
+                        "SELECT id FROM clause WHERE framework_id = :framework AND number = '7.2'"
+                    ),
+                    {"framework": framework_id},
+                ).scalar_one()
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO clause_mapping "
+                        "(org_id, framework_id, clause_id, documented_information_id, created_by) "
+                        "VALUES (:org, :framework, :clause, :document, :user)"
+                    ),
+                    {
+                        "org": org_id,
+                        "framework": framework_id,
+                        "clause": clause_72_id,
+                        "document": document_id,
+                        "user": user_id,
+                    },
+                )
+            with engine.connect() as connection:
+                phases = _clause_phases(connection, framework_id)
+                assert phases["7"] == "DO"  # fresh seed already carries the R62 catalog
+                assert phases["7.2"] == "DO"
+            command.downgrade(config, _PACK_PRINCIPAL_REVISION)
+            with engine.connect() as connection:
+                phases = _clause_phases(connection, framework_id)
+                for number in _CLAUSE7_PLAN_ROWS:
+                    assert phases[number] == "PLAN", number  # historical split restored
+                for number in ("7.5", "7.5.3", "8"):
+                    assert phases[number] == "DO", number  # DO side of the old split untouched
+                assert "split across PLAN" in _clause7_intent(connection, framework_id)
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                phases = _clause_phases(connection, framework_id)
+                for number in (*_CLAUSE7_PLAN_ROWS, "7.5"):
+                    assert phases[number] == "DO", number
+                assert phases["6.2"] == "PLAN"  # neighbors untouched
+                assert "split across PLAN" not in _clause7_intent(connection, framework_id)
             command.check(config)
         finally:
             engine.dispose()
