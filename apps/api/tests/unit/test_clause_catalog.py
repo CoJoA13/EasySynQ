@@ -80,6 +80,23 @@ def test_every_clause_has_a_valid_pdca_phase() -> None:
         assert phase in PDCA_PHASE_VALUES
 
 
+# R62 — PDCA is uniform per top-level clause (the clause-7 PLAN/DO split is corrected).
+_EXPECTED_PHASE_BY_TOP = {
+    "4": "PLAN",
+    "5": "PLAN",
+    "6": "PLAN",
+    "7": "DO",
+    "8": "DO",
+    "9": "CHECK",
+    "10": "ACT",
+}
+
+
+def test_pdca_phase_is_uniform_per_top_level_clause() -> None:
+    for number, _p, _t, _i, _s, phase, _r in CLAUSES:
+        assert phase == _EXPECTED_PHASE_BY_TOP[number.split(".")[0]], number
+
+
 def test_clause_audit_events_exist() -> None:
     assert EventType.CLAUSE_MAPPED.value == "CLAUSE_MAPPED"
     assert EventType.CLAUSE_UNMAPPED.value == "CLAUSE_UNMAPPED"

@@ -1,8 +1,8 @@
 """Native-PG enum bindings for the clause/IA cluster (slice S9, doc 02 §3.2, doc 14 §4).
 
 ``pdca_phase`` tags each clause with its Plan-Do-Check-Act phase (the temporal axis of doc 02 §3:
-PLAN = clauses 4,5,6 + clause-7 resourcing; DO = clause-7 operating + 8; CHECK = 9; ACT = 10 —
-clause 7 is deliberately *split*, so the phase rides on the clause, not the top-level number).
+PLAN = clauses 4-6; DO = clauses 7-8; CHECK = 9; ACT = 10 — uniform per top-level clause since
+R62 corrected the historical clause-7 PLAN/DO split; the phase still rides on each clause row).
 Created by the Alembic migration; referenced here with ``create_type=False``.
 """
 
