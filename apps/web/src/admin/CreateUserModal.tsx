@@ -71,13 +71,32 @@ export function CreateUserModal({
 
   const createMut = useMutation({
     mutationFn: () => apiSend<ProvisionedUser>("POST", "/api/v1/users/provision", token, form),
+    // TanStack Query's mutation cache retains the FULL response — including temporary_password —
+    // as `state.data` until this mutation's observer detaches, and this component never unmounts
+    // while the modal is merely closed (UsersAdmin renders it unconditionally, gated only on
+    // `opened`). gcTime: 0 lets a detached mutation be dropped from the cache right away instead of
+    // after the default 5-minute window; createMut.reset() (below) is what actually triggers that
+    // detachment, called the instant the password is copied into `issued` — the one place the UI
+    // reads it from — so the cache holds the credential for as little time as possible.
+    gcTime: 0,
     onSuccess: (data) => {
       setIssued(data.temporary_password);
+      createMut.reset();
       void qc.invalidateQueries({ queryKey: ["users"] });
     },
     onError: (e: unknown) => {
       setError(null);
       setEmailError(null);
+      // keycloak_unavailable is also returned for the POST-COMMIT failure: the app_user row
+      // already committed and only the later Keycloak set-password call failed, so a real,
+      // credential-less user now sits in the roster (api/users.py's detail tells the operator to
+      // reissue a password, never to retry create). Invalidate unconditionally on this code so that
+      // user becomes visible for the reissue action the error message advertises — the same code
+      // also covers a PRE-commit failure where no row was ever created, where invalidating is just
+      // a harmless no-op refetch, so a single check here is correct and needs no finer distinction.
+      if (e instanceof ApiError && e.code === "keycloak_unavailable") {
+        void qc.invalidateQueries({ queryKey: ["users"] });
+      }
       // The collision subject comes off the RFC 9457 problem body, which ApiError already carries
       // as `problem` (members={"keycloak_subject": ...} in api/users.py::provision_user).
       if (e instanceof ApiError && e.code === "keycloak_username_exists_unlinked") {

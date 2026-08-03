@@ -265,9 +265,20 @@ function ManageUser({
         `/api/v1/users/${user.id}/temporary-password`,
         token,
       ),
+    // Matches CreateUserModal's createMut: TanStack Query's mutation cache otherwise retains the
+    // issued password as `state.data` independently of the `issued` React state below, and
+    // clicking "Done" (ShowOncePassword's onDone, just below) only clears that local state — it
+    // does not unmount this component or its mutation observer. gcTime: 0 lets a detached mutation
+    // be dropped from the cache right away instead of after the default 5-minute window;
+    // resetMut.reset() is what actually triggers that detachment, called the instant the password
+    // is copied into `issued`, so the cache holds the credential for as little time as possible.
+    gcTime: 0,
     onMutate: () => setError(null),
     onError,
-    onSuccess: (data) => setIssued(data.temporary_password),
+    onSuccess: (data) => {
+      setIssued(data.temporary_password);
+      resetMut.reset();
+    },
   });
 
   return (

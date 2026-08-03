@@ -1,9 +1,10 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, useQuery } from "@tanstack/react-query";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
+import { apiGet } from "../lib/api";
 import type { AdminUser, ProvisionedUser, RoleSummary } from "../lib/types";
 import { server } from "../test/msw/server";
 import { renderWithProviders } from "../test/render";
@@ -115,6 +116,99 @@ describe("CreateUserModal", () => {
     await screen.findByLabelText(/Username/);
     expect(screen.queryByText(PROVISION_RESPONSE.temporary_password)).toBeNull();
     expect(screen.getByLabelText(/Username/)).toHaveValue("");
+  });
+
+  it("does not retain the issued password in TanStack Query's mutation cache after issuing and closing", async () => {
+    // Fix 2: the mutation cache keeps `state.data` (INCLUDING temporary_password) on its OWN
+    // Mutation object, entirely separate from the `issued` React state cleared above — this
+    // component never unmounts on close, so nothing but an explicit createMut.reset() scrubs it.
+    server.use(
+      http.post("/api/v1/users/provision", () =>
+        HttpResponse.json(PROVISION_RESPONSE, { status: 201 }),
+      ),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderWithProviders(<CreateUserModal opened onClose={onClose} token="test-token" />, {
+      queryClient,
+    });
+
+    await user.type(screen.getByLabelText(/Username/), "newhire");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText(PROVISION_RESPONSE.temporary_password)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalled();
+
+    await waitFor(() => {
+      const stillCached = queryClient
+        .getMutationCache()
+        .getAll()
+        .some((m) =>
+          JSON.stringify(m.state.data ?? null).includes(PROVISION_RESPONSE.temporary_password),
+        );
+      expect(stillCached).toBe(false);
+    });
+  });
+
+  it("a 502 keycloak_unavailable (the post-commit credential failure) still refreshes the roster, while still showing the error", async () => {
+    // Fix 1: the API sets the Keycloak password only AFTER the app_user row commits, so a failure
+    // here leaves a real, credential-less user in the roster that the error message tells the
+    // operator to repair via reissue — but only onSuccess invalidated ["users"], so that user
+    // stayed invisible without a manual reload. Mount a probe query on the SAME queryClient
+    // (mirroring how UsersAdmin actually shares one with this modal in production) so an
+    // invalidation here has an active observer to refetch, and count real GET requests rather than
+    // just asserting a method was called.
+    let usersRequests = 0;
+    server.use(
+      http.get("/api/v1/users", () => {
+        usersRequests += 1;
+        return HttpResponse.json([]);
+      }),
+      http.post("/api/v1/users/provision", () =>
+        HttpResponse.json(
+          {
+            code: "keycloak_unavailable",
+            title: "User created but the temporary password could not be set",
+            detail:
+              "The Keycloak account and EasySynQ user were created, but Keycloak could not be " +
+              "reached to set the temporary password. Do not retry create — reissue a temporary " +
+              "password for this user instead.",
+          },
+          { status: 502 },
+        ),
+      ),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+
+    function RosterProbe() {
+      useQuery({
+        queryKey: ["users"],
+        queryFn: () => apiGet<AdminUser[]>("/api/v1/users", "test-token"),
+      });
+      return null;
+    }
+    renderWithProviders(
+      <>
+        <RosterProbe />
+        <CreateUserModal opened onClose={() => {}} token="test-token" />
+      </>,
+      { queryClient },
+    );
+    await waitFor(() => expect(usersRequests).toBe(1));
+
+    await user.type(screen.getByLabelText(/Username/), "newhire");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByText("Couldn't create user")).toBeInTheDocument();
+    expect(
+      screen.getByText(/reissue a temporary password for this user instead/),
+    ).toBeInTheDocument();
+    // The roster query was invalidated and, since it has an active observer, actually refetched —
+    // not just marked stale for a refetch that never comes.
+    await waitFor(() => expect(usersRequests).toBe(2));
   });
 
   it("a 409 keycloak_username_exists_unlinked offers Link the existing account, posting the collision subject to POST /users", async () => {

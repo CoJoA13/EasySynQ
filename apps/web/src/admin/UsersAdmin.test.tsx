@@ -191,6 +191,47 @@ test("the Manage drawer's Issue new temp password action posts to the reissue en
   expect(capturedUrl).toContain(`/api/v1/users/${USER_ID}/temporary-password`);
 });
 
+test("the Manage drawer's reissued password does not linger in TanStack Query's mutation cache after Done is clicked", async () => {
+  // Fix 2: "Done" (ShowOncePassword's onDone) only clears the local `issued` state — it does not
+  // close the drawer or unmount ManageUser, so this is the scenario where nothing but an explicit
+  // resetMut.reset() scrubs the mutation cache's own retained copy of the password.
+  const NEW_PASSWORD = "Zq7-Falcon-Anchor-19";
+  grantUserCreate();
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.post("/api/v1/users/:id/temporary-password", () =>
+      HttpResponse.json(
+        {
+          temporary_password: NEW_PASSWORD,
+          password_delivery: "shown_once",
+        } satisfies IssuedTemporaryPassword,
+        { status: 200 },
+      ),
+    ),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await user.click(await within(drawer).findByRole("button", { name: "Issue new temp password" }));
+  await within(drawer).findByText(NEW_PASSWORD);
+
+  await user.click(within(drawer).getByRole("button", { name: "Done" }));
+  expect(within(drawer).queryByText(NEW_PASSWORD)).toBeNull();
+
+  await waitFor(() => {
+    const stillCached = queryClient
+      .getMutationCache()
+      .getAll()
+      .some((m) => JSON.stringify(m.state.data ?? null).includes(NEW_PASSWORD));
+    expect(stillCached).toBe(false);
+  });
+});
+
 test("the Issue new temp password action is absent without user.create (DP-6: no dead control)", async () => {
   server.use(
     http.get("/api/v1/users", () => HttpResponse.json([USER])),
