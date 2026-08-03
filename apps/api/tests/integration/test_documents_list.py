@@ -180,6 +180,30 @@ async def test_filter_clause_refs_subtree_rollup(
             assert miss not in ids, parent  # 7.2 is NOT under 7.1/7.1.5
 
 
+async def test_filter_clause_refs_repeated_keys_and_across_subtrees(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Repeated has-keys AND under rollup: each value is its own subtree-membership condition, so
+    has=7&has=8 requires a mapping under BOTH trees — one under 7 alone is excluded."""
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    both_id = (await _create(app_client, ha, type_id))["id"]
+    await _map(app_client, ha, both_id, await _clause_by_number("7.1.5.1"))
+    await _map(app_client, ha, both_id, await _clause_by_number("8.4"))
+    only_seven = (await _create(app_client, ha, type_id))["id"]
+    await _map(app_client, ha, only_seven, await _clause_by_number("7.1.5.1"))
+
+    r = await app_client.get(
+        "/api/v1/documents?limit=100&filter[clause_refs][has]=7&filter[clause_refs][has]=8",
+        headers=ha,
+    )
+    assert r.status_code == 200, r.text
+    ids = [d["id"] for d in r.json()["data"]]
+    assert both_id in ids
+    assert only_seven not in ids
+
+
 async def test_filter_clause_refs_rollup_is_dot_anchored_and_literal(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:

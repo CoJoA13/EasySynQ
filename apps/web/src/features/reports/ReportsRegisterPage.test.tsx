@@ -517,6 +517,30 @@ describe("ReportsRegisterPage", () => {
     );
   });
 
+  // S-clause-rollup: the server filter matches descendants, so a PARENT clause deep link is now a
+  // meaningful, OpenAPI-documented filter — the representability guard must accept it when any
+  // visible row maps to a descendant (7.5 over a 7.5.3-mapped row), not strip it as stale.
+  it("applies a parent ?clause= URL filter whose subtree the report data represents", async () => {
+    const seenUrls: string[] = [];
+    server.use(
+      http.get("/api/v1/reports/document-control", ({ request }) => {
+        seenUrls.push(request.url);
+        return HttpResponse.json(REG);
+      }),
+      http.get("/api/v1/clauses", () => HttpResponse.json({ title: "Forbidden" }, { status: 403 })),
+    );
+    renderWithProviders(
+      <>
+        <ReportsRegisterPage />
+        <QueryProbe />
+      </>,
+      { route: "/?clause=7.5" },
+    );
+    await screen.findByText("SOP-QA-001");
+    await waitFor(() => expect(seenUrls.at(-1)).toContain("filter%5Bclause_refs%5D%5Bhas%5D=7.5"));
+    expect(screen.getByLabelText("Current query")).toHaveTextContent("clause=7.5");
+  });
+
   // Codex round 6 FIX 2: `scope` alone (always `org:<short_code>`) can't distinguish an org-wide
   // register from a PROCESS-scoped one — the banner must call it out explicitly when
   // `process_scope` is populated.
