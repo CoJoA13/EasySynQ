@@ -3880,7 +3880,9 @@ paths:
       description: >-
         The 20 ★ mandatory clauses (doc 02 §2.1 / R30) with per-clause coverage status —
         COVERED (≥1 mapped doc has an Effective version), PARTIAL (mapped, none Effective yet), or
-        GAP (unmapped) — plus a rollup. Computed from PostgreSQL only (doc 13 §1.2).
+        GAP (unmapped) — plus a rollup. Coverage counts mappings to the ★ clause OR any of its
+        descendant clauses (R63 — subtree-inclusive, matching the clause filter's rollup;
+        descendants only, never siblings). Computed from PostgreSQL only (doc 13 §1.2).
       responses:
         "200":
           description: The compliance checklist.
