@@ -256,7 +256,8 @@ active session runs over Wi-Fi, so this will **not** interrupt work in progress.
 
 - `Ethernet 3` linked at 1 Gbps; VM holds its reserved address across a reboot.
 - `Resolve-DnsName easysynq.example.local` resolves **from a workstation**, not just the DC.
-- `docker compose version` ≥ 2.24.4 · `systemctl is-enabled docker` · `is-masked sleep.target` ·
+- `docker compose version` ≥ 2.24.4 · `systemctl is-enabled docker` · `systemctl is-enabled
+  sleep.target` returns `masked` (systemd 259 has no `is-masked` verb) ·
   `timedatectl` synchronized · `findmnt /srv/easysynq/import` present and `ro`.
 - `https://easysynq.example.local` loads with **no certificate warning** on a domain workstation.
 - TLS 1.1 refused; CSP / HSTS / Referrer-Policy / X-Content-Type / Permissions-Policy headers present.

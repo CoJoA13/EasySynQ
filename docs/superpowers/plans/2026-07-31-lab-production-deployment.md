@@ -933,7 +933,10 @@ Create the intended admin identity first.
 
 ```bash
 cd ~/EasySynQ
-docker compose --env-file .env \n  -f infra/compose/compose.yml -f infra/compose/compose.s.yml \n  -f infra/compose/compose.production.yml -f infra/compose/compose.lab.yml \n  run --rm api uv run python -m easysynq_api.cli.setup mint-bootstrap
+docker compose --env-file .env \
+  -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
+  -f infra/compose/compose.production.yml -f infra/compose/compose.lab.yml \
+  run --rm api uv run python -m easysynq_api.cli.setup mint-bootstrap
 ```
 
 - [ ] **Step 3: Complete the wizard at `https://easysynq.example.local/setup`**
@@ -987,12 +990,47 @@ encrypted archive through the CIFS mount onto the volume the whole-disk image pl
 Until this is set, a failed nightly backup notifies **only in-app** — through the database that may
 itself be the failure. Requires the SMTP relay identified in spec §9 item 1.
 
+⚠ Setting the channel alone is NOT enough: `.env` still carries the `.env.example` default
+`SMTP_HOST=mailpit`, and Mailpit sits behind Compose's `dev` profile — it does not run in this
+four-file production stack, so every alert would die on an unresolvable host. Point the relay at
+the real thing, then prove one delivery.
+
 ```bash
+sed -i 's|^SMTP_HOST=.*|SMTP_HOST=<relay-host>|' .env
+sed -i 's|^SMTP_PORT=.*|SMTP_PORT=587|' .env    # 25 for an unauthenticated LAN relay — then SMTP_USE_TLS=false unless it offers STARTTLS
 sed -i 's|^OPS_ALERT_CHANNELS=.*|OPS_ALERT_CHANNELS=smtp|' .env
 sed -i 's|^OPS_ALERT_SMTP_TO=.*|OPS_ALERT_SMTP_TO=<operator-mailbox>|' .env
 ```
 
-Then recreate `worker` and `beat` using the four-file Compose invocation from Task 8 Step 5.
+An authenticated relay additionally needs `SMTP_USERNAME=` / `SMTP_PASSWORD=` lines in `.env`
+(absent from `.env.example`; the settings bind case-insensitively).
+
+Then recreate `worker` and `beat` using the four-file Compose invocation from Task 8 Step 5, and
+verify one real delivery through the exact settings and library the worker will use:
+
+```bash
+docker compose --env-file .env \
+  -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
+  -f infra/compose/compose.production.yml -f infra/compose/compose.lab.yml \
+  run --rm worker uv run python -c "
+import asyncio
+from email.message import EmailMessage
+import aiosmtplib
+from easysynq_api.config import get_settings
+s = get_settings()
+m = EmailMessage()
+m['From'] = f'{s.smtp_from_name} <{s.smtp_from_address}>'
+m['To'] = s.ops_alert_smtp_to
+m['Subject'] = 'EasySynQ alert-channel probe'
+m.set_content('Task 10 Step 5 delivery verification.')
+asyncio.run(aiosmtplib.send(m, hostname=s.smtp_host, port=s.smtp_port,
+    username=s.smtp_username or None, password=s.smtp_password or None,
+    start_tls=s.smtp_use_tls))
+print('accepted by', s.smtp_host)
+"
+```
+
+Do not mark this step complete until the probe lands in `<operator-mailbox>`.
 
 - [ ] **Step 6: Invite the users**
 

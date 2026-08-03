@@ -130,9 +130,11 @@ just a wider `WHERE` with the existing per-row filter still applying. Touches th
    hardcoded `86400.0` interval (`apps/api/src/easysynq_api/tasks/app.py:58`) and never reads it.
    Backups fire 24 h after beat last **started**, so they currently run ~2:18 PM Chicago, and every
    container *recreation* (not reboot — the writable layer survives a restart) moves the time.
-3. **Realm export races the backup.** `pg_dump` terminates PostgreSQL backends, severing Keycloak's
-   pool, so `realm_export` can record `absent`. Observed once, succeeded on retry and on the
-   unattended run. Not recovery-critical here: the `keycloak` schema (100 tables) is inside the dump.
+3. **Realm export once recorded `absent`.** Observed once; succeeded on retry and on the unattended
+   run. Cause NOT established — do not repeat the earlier "pg_dump kills Keycloak backends" theory:
+   `_capture_and_dump()` only holds a read snapshot and rolls back, it terminates nothing. Suspect
+   admin credentials, Keycloak availability, or container churn, and investigate if it recurs. Not
+   recovery-critical here: the `keycloak` schema (100 tables) is inside the dump.
 
 ---
 
