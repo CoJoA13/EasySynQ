@@ -16,19 +16,10 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, apiGet, apiSend } from "../lib/api";
+import type { AdminUser } from "../lib/types";
 import { ErrorState, LoadingState } from "../lib/states";
 import { UserStatusBadge } from "./UserStatusBadge";
 
-interface User {
-  id: string;
-  keycloak_subject: string;
-  display_name: string | null;
-  email: string | null;
-  status: string;
-  mfa_enrolled: boolean;
-  is_guest: boolean;
-  roles: string[];
-}
 interface Role {
   id: string;
   name: string;
@@ -51,11 +42,11 @@ export function UsersAdmin({ token }: { token: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invite, setInvite] = useState({ keycloak_subject: "", display_name: "", email: "" });
-  const [manage, setManage] = useState<User | null>(null);
+  const [manage, setManage] = useState<AdminUser | null>(null);
 
   const users = useQuery({
     queryKey: ["users"],
-    queryFn: () => apiGet<User[]>("/api/v1/users", token),
+    queryFn: () => apiGet<AdminUser[]>("/api/v1/users", token),
     enabled: !!token,
   });
 
@@ -210,7 +201,7 @@ function ManageUser({
   token,
   onChange,
 }: {
-  user: User;
+  user: AdminUser;
   token: string | null;
   onChange: () => void;
 }) {
