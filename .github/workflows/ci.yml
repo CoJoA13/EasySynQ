@@ -209,6 +209,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: R61 site-data backstop (check-no-site-data)
+        run: ./scripts/check-no-site-data.sh
       - name: install uv
         uses: astral-sh/setup-uv@v9.0.0
         with:

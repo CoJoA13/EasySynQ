@@ -33,15 +33,19 @@ else
 fi
 [ ${#FILES[@]} -gt 0 ] || exit 0
 
-# --- private IPv4 outside the documentation ranges -------------------------------------------
+# --- IPv4 addresses (public OR private) outside the sanctioned set ---------------------------
 # ⚠ Must match all FOUR octets. A three-octet pattern makes every ISO clause number (10.2.1,
-# 9.1.3) look like an RFC1918 address — in a QMS repository that is most of the false positives,
-# and a check that cries wolf gets switched off. 10.0.0.x is the sanctioned example.
-# 10.99.99.99 is the established synthetic address in the `ip_allow` predicate tests.
-hits="$(grep -nHoIE '\b(10\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]{1,3}\.[0-9]{1,3}\b' "${FILES[@]}" 2>/dev/null \
-  | grep -vE ':10\.0\.0\.[0-9]{1,3}$' \
-  | grep -vE ':10\.99\.99\.99$' || true)"
-[ -z "$hits" ] || report "Private IPv4 outside the documentation ranges (R61):" $hits
+# 9.1.3) look like an address — in a QMS repository that is most of the false positives, and a
+# check that cries wolf gets switched off. R61 covers ALL real addresses, not just RFC1918 — a
+# WAN endpoint is site data too. Sanctioned: 10.0.0.x (the worked example) · 10.99.99.99 (the
+# established `ip_allow` test address) · the RFC 5737 documentation ranges · loopback ·
+# 0.0.0.0 (bind-all) · 255.x netmask/broadcast literals (structure, not an address) ·
+# 8.8.8.8/8.8.4.4 (well-known anycast resolvers, placeholder-grade) · the FOUR-part ISO 9001:2015
+# clause numbers (7.1.5.1/7.1.5.2/8.2.3.1/8.2.3.2 — the complete set in the standard) ·
+# 3.3.1.0 (the apache/tika image pin; a version bump that reds here is extended deliberately).
+hits="$(grep -nHoIE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "${FILES[@]}" 2>/dev/null \
+  | grep -vE ':(10\.0\.0\.[0-9]{1,3}|10\.99\.99\.99|192\.0\.2\.[0-9]{1,3}|198\.51\.100\.[0-9]{1,3}|203\.0\.113\.[0-9]{1,3}|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|0\.0\.0\.0|255\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|8\.8\.8\.8|8\.8\.4\.4|7\.1\.5\.[12]|8\.2\.3\.[12]|3\.3\.1\.0)$' || true)"
+[ -z "$hits" ] || report "IPv4 address outside the sanctioned documentation/placeholder set (R61):" $hits
 
 # --- .local FQDNs other than the sanctioned examples ------------------------------------------
 # Allowed: *.example.local · *.CONTOSO.local (the runbook's worked example) ·
