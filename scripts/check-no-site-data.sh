@@ -25,9 +25,11 @@ report() { fail=1; printf '\n%s\n' "$1"; shift; printf '  %s\n' "$@"; }
 if [ $# -gt 0 ]; then
   mapfile -t FILES < <(git ls-files -- "$@")
 else
-  # Text only. Skip lockfiles and this script (it quotes the patterns it hunts for).
-  mapfile -t FILES < <(git ls-files -- '*.md' '*.sh' '*.ps1' '*.py' '*.ts' '*.tsx' '*.yml' '*.yaml' \
-    | grep -vE 'scripts/check-no-site-data\.sh|\.lock$|images\.lock')
+  # EVERY tracked file — binaries are skipped by `grep -I` below, not by an extension allowlist
+  # (an allowlist silently exempts JSON/TOML/HTML/Dockerfiles, exactly where a stray IP hides).
+  # Skip lockfiles (machine-written) and this script (it quotes the patterns it hunts for).
+  mapfile -t FILES < <(git ls-files \
+    | grep -vE '^scripts/check-no-site-data\.sh$|\.lock$|images\.lock')
 fi
 [ ${#FILES[@]} -gt 0 ] || exit 0
 
@@ -36,7 +38,7 @@ fi
 # 9.1.3) look like an RFC1918 address — in a QMS repository that is most of the false positives,
 # and a check that cries wolf gets switched off. 10.0.0.x is the sanctioned example.
 # 10.99.99.99 is the established synthetic address in the `ip_allow` predicate tests.
-hits="$(grep -nHoE '\b(10\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]{1,3}\.[0-9]{1,3}\b' "${FILES[@]}" 2>/dev/null \
+hits="$(grep -nHoIE '\b(10\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]{1,3}\.[0-9]{1,3}\b' "${FILES[@]}" 2>/dev/null \
   | grep -vE ':10\.0\.0\.[0-9]{1,3}$' \
   | grep -vE ':10\.99\.99\.99$' || true)"
 [ -z "$hits" ] || report "Private IPv4 outside the documentation ranges (R61):" $hits
@@ -44,17 +46,17 @@ hits="$(grep -nHoE '\b(10\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9
 # --- .local FQDNs other than the sanctioned examples ------------------------------------------
 # Allowed: *.example.local · *.CONTOSO.local (the runbook's worked example) ·
 # errors.easysynq.local (an RFC-7807 problem-type URN namespace, not a host).
-hits="$(grep -nHoE '\b[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z0-9][a-zA-Z0-9.-]*\.local\b' "${FILES[@]}" 2>/dev/null \
+hits="$(grep -nHoIE '\b[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z0-9][a-zA-Z0-9.-]*\.local\b' "${FILES[@]}" 2>/dev/null \
   | grep -viE '\.example\.local$|\.contoso\.local$|:errors\.easysynq\.local$' || true)"
 [ -z "$hits" ] || report "Non-example .local hostname (R61) — use example.local:" $hits
 
 # --- MAC addresses other than the placeholder ------------------------------------------------
-hits="$(grep -nHoiE '\b([0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b' "${FILES[@]}" 2>/dev/null \
+hits="$(grep -nHoiIE '\b([0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b' "${FILES[@]}" 2>/dev/null \
   | grep -viE '00[:-]15[:-]5D[:-]00[:-]00[:-]01$' || true)"
 [ -z "$hits" ] || report "MAC address (R61) — use 00:15:5D:00:00:01 as the placeholder:" $hits
 
 # --- certificate / key fingerprints ----------------------------------------------------------
-hits="$(grep -nHoE '\b([0-9A-F]{2}:){15,}[0-9A-F]{2}\b' "${FILES[@]}" 2>/dev/null || true)"
+hits="$(grep -nHoIE '\b([0-9A-F]{2}:){15,}[0-9A-F]{2}\b' "${FILES[@]}" 2>/dev/null || true)"
 [ -z "$hits" ] || report "Certificate/key fingerprint (R61) — per-install, do not commit:" $hits
 
 if [ "$fail" -ne 0 ]; then

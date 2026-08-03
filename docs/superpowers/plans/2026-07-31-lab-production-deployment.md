@@ -156,7 +156,7 @@ persist silently until someone looks.
 
 ## Task 1: Hyper-V role and External vSwitch
 
-**Runs on:** `LAB`, **elevated** PowerShell (`LAB\colton` is a local admin; UAC will prompt).
+**Runs on:** `LAB`, **elevated** PowerShell (a local-admin account; UAC will prompt).
 
 **Interfaces:**
 - Consumes: a live 1 Gbps link on `Ethernet 3` (Phase 0, owner-supplied).
@@ -660,7 +660,9 @@ Verify — and check **both** directions, because a mount can succeed and still 
 ```bash
 findmnt /srv/easysynq/import                        # present, flagged ro
 ls /srv/easysynq/import | head                      # non-empty
-sudo touch /srv/easysynq/import/.w 2>/dev/null && echo "⚠ WRITABLE — ro flag did not apply" || echo "correctly read-only"
+sudo touch /srv/easysynq/import/.w 2>/dev/null \
+  && { sudo rm -f /srv/easysynq/import/.w; echo "⚠ WRITABLE — ro flag did not apply"; } \
+  || echo "correctly read-only"   # the probe is removed at once — never leave artifacts in the master tree
 ```
 
 An **empty** listing means a share-level or NTFS grant is missing for `svc-easysynq-ro` — Task 3
@@ -1086,7 +1088,9 @@ OpenSSH/80/443/9443 · FQDN `easysynq.example.local` · import mount `ro` · bac
 - [ ] **Step 2: Release-time security check**
 
 ```bash
-curl -sI https://easysynq.example.local/ | grep -iE 'content-security|strict-transport|referrer|x-content-type|permissions-policy'
+# --cacert: the VM itself trusts nothing from Caddy's internal CA — Task 9 deploys the root
+# only to Windows workstations. Without it curl fails (silently, under -sI) even when healthy.
+curl -sI --cacert ~/EasySynQ/easysynq-root-ca.crt https://easysynq.example.local/ | grep -iE 'content-security|strict-transport|referrer|x-content-type|permissions-policy'
 openssl s_client -connect easysynq.example.local:443 -tls1_1 </dev/null
 ```
 
@@ -1134,11 +1138,19 @@ rather than notes. Do not consider the deployment finished until both verify.
       QMS host without a password — and that key is stored unencrypted.
 
 ```bash
-ssh easysynq@<vm-ip> "sudo rm -f /etc/sudoers.d/90-easysynq-deploy"
-# Fail-closed verification: this MUST now prompt or refuse.
-ssh -o BatchMode=yes easysynq@<vm-ip> "sudo -n true" \
-  && echo "✘ STILL PASSWORDLESS — the file was not removed" \
-  || echo "✔ password now required"
+ssh easysynq@<vm-ip> "sudo rm -f /etc/sudoers.d/90-easysynq-deploy" \
+  || echo "✘ removal did not run — fix SSH before judging the gate"
+# Fail-closed verification: only sudo's OWN refusal counts as PASS. An unreachable host or a
+# rejected key also exits non-zero, so judging the exit status alone reports success while the
+# passwordless rule may still be installed — inspect the message, not just the code.
+out="$(ssh -o BatchMode=yes easysynq@<vm-ip> 'sudo -n true' 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "✘ STILL PASSWORDLESS — the file was not removed"
+elif printf '%s' "$out" | grep -qi 'password is required'; then
+  echo "✔ password now required"
+else
+  echo "✘ UNVERIFIED — ssh/sudo failed for another reason: $out"
+fi
 ```
 
 - [ ] **G-2: Apply and verify the deny-logon GPO** (Task 3 Step 7). Both service-account passwords

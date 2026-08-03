@@ -77,8 +77,11 @@ fi
 echo "delete: accepted"
 
 # Verify the absence rather than assume it — the only trustworthy "no-op" is an observed one.
+# ⚠ This GET returns 200 with a (possibly zeroed) status map even when no record exists, so a
+# non-zero exit is never "no record" — it is an API failure (expired admin session, 403, 5xx).
+# Reporting that as "not locked" would exit 0 with the remediation unverified.
 echo "after:"
-if after="$(kc get "attack-detection/brute-force/users/$SUB" -r easysynq 2>/dev/null)"; then
+if after="$(kc get "attack-detection/brute-force/users/$SUB" -r easysynq 2>&1)"; then
   printf '%s\n' "$after" | sed 's/^/  /'
   if printf '%s' "$after" | grep -qE '"numFailures"[[:space:]]*:[[:space:]]*[1-9]'; then
     echo "clear-keycloak-lockout: failures still recorded after delete — investigate" >&2
@@ -86,5 +89,7 @@ if after="$(kc get "attack-detection/brute-force/users/$SUB" -r easysynq 2>/dev/
   fi
   echo "not locked."
 else
-  echo "  (no record — not locked)"
+  echo "clear-keycloak-lockout: could not verify — the post-delete status read failed:" >&2
+  printf '  %s\n' "$after" >&2
+  exit 1
 fi
