@@ -436,9 +436,9 @@ config exists on DC01 — so the DHCP pool range is unknown and no safe static c
 
 **Decision taken instead:** the VM keeps the DHCP lease **`10.0.0.20`** it received on first boot.
 The MAC is pinned static, so the lease is stable in practice — DHCP servers reissue the same address
-to the same MAC almost indefinitely. Everything downstream is built against `.183`.
+to the same MAC almost indefinitely. Everything downstream is built against `.20`.
 
-**Residual risk:** if the lease expires while the VM is powered off long enough for `.183` to be
+**Residual risk:** if the lease expires while the VM is powered off long enough for `.20` to be
 reassigned, the certificate and OIDC issuer would no longer match the address behind
 `easysynq.example.local`, and sign-in would break. Slim for an always-on host; **closed entirely** by the
 ask below.
@@ -448,7 +448,12 @@ ask below.
 Either is sufficient, and neither requires knowing the pool range:
 
 - **Preferred** — a DHCP reservation binding `00:15:5D:00:00:01` → `10.0.0.20`, or
-- **Equivalent** — exclude `10.0.0.20` from the DHCP pool so nothing else can be handed it.
+- **Fallback** — exclude `10.0.0.20` from the pool **and** switch the VM to a static address.
+  An exclusion alone is NOT a reservation: the VM still runs `dhcp4: true`, so at renewal the
+  server may hand it a different address — with `.20` excluded, never that one — while DNS, SSH,
+  and both CIFS-dependent paths keep targeting `.20`. Pair the exclusion with a static netplan
+  config on the VM (address `10.0.0.20/24`, gateway and DNS per the site worksheet), then
+  re-run Step 2.
 
 ⚠ If IT manages this Firebox from a saved Policy Manager configuration, ask them to record the change
 in **that** master config — a Web-UI-only edit is overwritten on their next push.
@@ -712,10 +717,13 @@ Expected: `WRITE OK`. A failure here means the `Change`/`Modify` grants in Task 
 
 - [ ] **Step 4: Extend the Docker ordering drop-in to cover BOTH mounts**
 
-The bootstrap wrote this file listing only the import path. `_netdev` orders the mount relative to
-networking but does **not** make Docker wait for it, and the services are `restart: unless-stopped`.
+A `--qms-share` bootstrap wrote this file listing only the import path — but **this host ran
+bootstrap without the QMS arguments** (Task 6), so the drop-in directory itself may not exist yet
+and a bare `tee` would fail. `_netdev` orders the mount relative to networking but does **not**
+make Docker wait for it, and the services are `restart: unless-stopped`.
 
 ```bash
+sudo install -d /etc/systemd/system/docker.service.d
 sudo tee /etc/systemd/system/docker.service.d/10-easysynq-import.conf >/dev/null <<'EOF'
 [Unit]
 # EasySynQ: both CIFS bind sources must be mounted before Docker starts any container that
@@ -1095,8 +1103,14 @@ calibration certificates into an approval workflow they do not belong in.
 | `*.xlsx#` | 1 | Excel lock artifact |
 | `*.pdc` | 1 | Proprietary; confirm before deciding |
 
-37 `Thumbs.db` + a lock artifact is exactly the **252 vs 215** gap between the live count and the
-earlier Windows-side scan (`Get-ChildItem -Recurse -File` skips hidden/system files without `-Force`).
+The 37 `Thumbs.db` caches are exactly the **252 vs 215** gap between the live count and the earlier
+Windows-side scan (`Get-ChildItem -Recurse -File` skips hidden/system files without `-Force`; the
+lock artifact and `QMS.zip` were visible to both counts).
+
+**Expected commit set: 213 files** (252 − 37 `Thumbs.db` − 1 `QMS.zip` − 1 lock artifact) — or
+**212** if the `.pdc` is excluded after confirmation. Use this as the completion check, NOT the
+earlier 215: that was a raw Windows count that still included `QMS.zip` and the lock artifact and
+predates the exclusion decisions.
 
 The clause-folder structure is a genuine asset: it maps onto EasySynQ's clause spine, so folder path
 is strong evidence for clause mapping rather than a flat pile needing manual assignment.

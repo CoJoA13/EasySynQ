@@ -222,7 +222,7 @@ quality records. That makes an opaque, third-party-managed offsite path acceptab
 | 4 | `install.sh s --host easysynq.example.local --tls internal`; **escrow key**; `OPS_ALERT_CHANNELS` | Claude | `/readyz` green |
 | 5 | Export Caddy root CA → **new** GPO → workstation trust | Owner | `Get-ChildItem Cert:\LocalMachine\Root` shows it after `gpupdate` |
 | 6 | Setup wizard: bootstrap → org → WORM verify → **backup + restore drill** → auth → finalize | Owner | state `OPERATIONAL` |
-| 7 | `IMPORT_SOURCE_PATH`; recreate `api`/`worker`; first import run | Claude | worker sees the 215 files |
+| 7 | `IMPORT_SOURCE_PATH`; recreate `api`/`worker`; first import run | Claude | worker sees the source tree (252 files; commit set 213 after exclusions) |
 
 **Ordering constraint (load-bearing):** the CIFS mount must exist *before* any container starts against
 that path. A bind mount never sees a filesystem mounted over its source after container start — the
@@ -264,7 +264,8 @@ active session runs over Wi-Fi, so this will **not** interrupt work in progress.
 - A Keycloak login round-trips; a document upload **and** download both succeed (download exercises 9443).
 - Setup state `OPERATIONAL`, reached through a **passing** backup + restore drill.
 - `BACKUP_ENCRYPTION_KEY` escrowed in password-manager custody, verified separately from backups.
-- An import run ingests the 215 files from `//DC01/Quality`.
+- An import run ingests the expected commit set from `//DC01/Quality` — 213 files after
+  exclusions (212 if the `.pdc` is excluded); see plan Task 11 Step 3.
 - The VM survives a host reboot unattended.
 
 ---

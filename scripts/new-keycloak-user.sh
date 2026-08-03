@@ -35,7 +35,8 @@ env_val() {
   v="${v%$'\r'}"                                            # tolerate a CRLF .env
   v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+$//')"      # trim first, so a quote ends the value
   case "$v" in
-    \"*\"|\'*\') v="${v#?}"; v="${v%?}" ;;                  # quoted: literal, `#` included
+    \"*\"*) v="${v#\"}"; v="${v%%\"*}" ;;                   # quoted: body literal (`#` included); a comment after the closing quote falls off
+    \'*\'*) v="${v#\'}"; v="${v%%\'*}" ;;
     *) v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')" ;;
   esac
   printf '%s' "$v" | sed -E 's/^[[:space:]]*//'
