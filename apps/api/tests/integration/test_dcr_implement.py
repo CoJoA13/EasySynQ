@@ -271,6 +271,79 @@ async def test_direct_obsolete_blocked_by_effective_referencer(
     assert forced.status_code == 200, forced.text
 
 
+async def test_obsolete_blocked_when_sole_descendant_coverer_of_star(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """R63: the §7.3 gate scores ★ coverage with the checklist's SUBTREE semantics — a doc mapped
+    only to 10.2.1 (a non-★ child) that is the sole Effective coverer of ★ 10.2 must 409, or an
+    un-gated obsoletion silently flips the ★ row COVERED→GAP."""
+    from .test_documents_list import _clause_by_number, _map
+
+    author = _subject("star-sole-author")
+    await s5.grant_lifecycle(author)
+    await _grant(author, ("report.compliance_checklist.read",))
+    ha = _auth(token_factory, author)
+    approver = _subject("star-sole-approver")
+    await s5.grant_role(approver, "Approver")
+    hb = _auth(token_factory, approver)
+    releaser = _subject("star-sole-releaser")
+    await s5.grant_lifecycle(releaser)
+    hrel = _auth(token_factory, releaser)
+
+    doc = (
+        await s5.drive_to_effective(app_client, ha, hb, hrel, await s5.type_id("SOP"), b"star-sole")
+    )["id"]
+    await _map(app_client, ha, doc, await _clause_by_number("10.2.1"))
+
+    # Premise (shared DB): OUR doc is the only Effective coverer of the ★ 10.2 subtree. If another
+    # test ever maps an Effective doc under 10.2, this assert fails loudly — fix the premise, don't
+    # weaken the gate assert (the only Draft mapper elsewhere doesn't count for Effective coverage).
+    checklist = await app_client.get("/api/v1/reports/compliance-checklist", headers=ha)
+    row_102 = next(r for r in checklist.json()["rows"] if r["number"] == "10.2")
+    assert row_102["effective_count"] == 1, "premise: sole Effective coverer of the 10.2 subtree"
+
+    blocked = await app_client.post(
+        f"/api/v1/documents/{doc}/obsolete", headers=ha, json={"reason": "retire sole coverer"}
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "obsoletion_blocked"
+    sole = [e for e in blocked.json().get("errors", []) if e["code"] == "sole_star_coverage"]
+    assert sole and any("10.2" in e["message"] for e in sole)
+
+
+async def test_obsolete_allowed_when_descendant_replacement_covers_star(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """R63 inverse: an Effective replacement mapped to a DESCENDANT (8.2.3.2) keeps ★ 8.2.3
+    covered, so obsoleting the exact-8.2.3 doc must NOT 409 on sole_star_coverage (extra coverage
+    from other tests only reinforces this direction — shard-safe)."""
+    from .test_documents_list import _clause_by_number, _map
+
+    author = _subject("star-repl-author")
+    await s5.grant_lifecycle(author)
+    ha = _auth(token_factory, author)
+    approver = _subject("star-repl-approver")
+    await s5.grant_role(approver, "Approver")
+    hb = _auth(token_factory, approver)
+    releaser = _subject("star-repl-releaser")
+    await s5.grant_lifecycle(releaser)
+    hrel = _auth(token_factory, releaser)
+
+    exact = (
+        await s5.drive_to_effective(app_client, ha, hb, hrel, await s5.type_id("SOP"), b"star-ex")
+    )["id"]
+    await _map(app_client, ha, exact, await _clause_by_number("8.2.3"))
+    replacement = (
+        await s5.drive_to_effective(app_client, ha, hb, hrel, await s5.type_id("SOP"), b"star-rep")
+    )["id"]
+    await _map(app_client, ha, replacement, await _clause_by_number("8.2.3.2"))
+
+    r = await app_client.post(
+        f"/api/v1/documents/{exact}/obsolete", headers=ha, json={"reason": "replaced by child"}
+    )
+    assert r.status_code == 200, r.text  # pre-R63 the exact-only replacement check wrongly 409'd
+
+
 async def test_capa_spawn_dcr_idempotent_and_one_to_many(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

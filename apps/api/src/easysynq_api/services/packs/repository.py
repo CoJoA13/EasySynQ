@@ -14,6 +14,7 @@ import uuid
 
 from sqlalchemy import Date, asc, cast, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from ...db.models._evidence_enums import EvidenceForTargetType
 from ...db.models._pack_enums import PackInclusionStatus, PackItemType, PackScopeKind, PackStatus
@@ -24,6 +25,7 @@ from ...db.models.audit import Audit
 from ...db.models.audit_finding import AuditFinding
 from ...db.models.capa import Capa
 from ...db.models.capa_stage import CapaStage
+from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.disposition_event import DispositionEvent
 from ...db.models.document_version import DocumentVersion
@@ -35,6 +37,7 @@ from ...db.models.pack_share_link import PackShareLink
 from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
 from ...db.models.signature_event import SignatureEvent
+from ..common.clause_subtree import clause_subtree_on
 
 # --- pack header CRUD --------------------------------------------------------------------
 
@@ -628,6 +631,28 @@ async def pack_subjects_destroyed(session: AsyncSession, pack: EvidencePack) -> 
     subjects + their cross-references (no member/pack-record noise)."""
     embedded_ids = await _pack_embedded_record_ids(session, pack)
     return await _count_destroy_tombstones(session, embedded_ids) > 0
+
+
+async def star_ancestor_ids(session: AsyncSession, clause_ids: set[str]) -> set[str]:
+    """★ clauses whose SUBTREE intersects ``clause_ids`` (R63): the gap report's raw in-scope set
+    holds the exact clauses the scope's documents map to, but the checklist rows carry the ★
+    ANCHOR ids — a scope containing only ``9.2.2`` must still select the ★ ``9.2`` row (the
+    shared ``clause_subtree_on`` predicate; a ★ id in the raw set selects itself)."""
+    if not clause_ids:
+        return set()
+    member = aliased(Clause)
+    star_ids = (
+        await session.scalars(
+            select(Clause.id)
+            .join(member, clause_subtree_on(Clause, member))
+            .where(
+                Clause.is_mandatory_star.is_(True),
+                member.id.in_([uuid.UUID(c) for c in clause_ids]),
+            )
+            .distinct()
+        )
+    ).all()
+    return {str(star_id) for star_id in star_ids}
 
 
 async def process_clause_ids(

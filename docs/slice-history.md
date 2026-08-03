@@ -142,9 +142,57 @@
 
 ## PRODUCT IA — clause-spine corrections from the first production deployment (the LAB handoff work queue)
 
-> The first product slice after the MVP-complete ops arc, worked from the 2026-08-02 LAB handoff's
-> owner-approved queue (`docs/superpowers/plans/2026-08-02-lab-handoff.md` §2B). Its sibling, PR 2
-> (the `?clause=` subtree-rollup filter, handoff §2C), is approved with its own review cycle.
+> The first product slices after the MVP-complete ops arc, worked from the 2026-08-02 LAB handoff's
+> owner-approved queue (`docs/superpowers/plans/2026-08-02-lab-handoff.md` §2B + §2C) — both shipped
+> 2026-08-03.
+
+### S-clause-rollup — `filter[clause_refs][has]=N` matches N + every descendant (handoff §2C; BE+web+contract; NO migration [head stays `0084`]; NO new key [catalog 102]; PR #427 squash `958f00d`)
+
+**What shipped — the subtree rollup that makes PR 1's clause spine actually return documents.** The
+clause filter was an exact string match, so a top-level clause always returned zero rows (why #426
+removed the rail's clause links). **ONE chokepoint** — `_filter_condition("clause_refs","has",…)` in
+`api/documents.py` — serves BOTH published surfaces (`GET /documents` directly; the register via
+`parse_document_filters_for_snapshot_with_applied`), so one edit fixes both:
+`or_(Clause.number == value, Clause.number.startswith(value + ".", autoescape=True))`. ⚠ **The
+handoff's named trap is load-bearing:** the prefix is `.`-anchored (`'8.%'`, NEVER a bare
+`LIKE '8%'` — clause `1` would match `10`; a dedicated live test maps `10.2` and asserts `has=1`
+excludes it) and `autoescape=True` keeps a user-supplied `%`/`_` literal (SQLAlchemy compiles it as
+`'8.' || '%' ESCAPE '/'` — the unit SQL pin asserts the dot INSIDE the literal prefix + `ESCAPE` +
+the surviving exact arm + a hostile `%` escaped, NOT a single `'8.%'` literal, which is how it
+actually renders). Repeated keys still AND (each value its own subtree condition — proven by a
+`has=7&has=8` integration case); per-row authz, pagination, the provenance echo (raw applied
+params), and the row-data-only `content_hash` are all untouched. **Exactness stays exact where it
+IS the semantic:** the compliance checklist's ★ computation, search projections, and the
+register-family literal pins were each verified non-consumers of the chokepoint (diff-critic).
+
+**Web faithfulness + the two reviewer/Codex catches.** The MSW documents handler mirrors the rollup
+(`ref === clause || ref.startsWith(clause + ".")`); the Library drill-down test proves the top-level
+click now KEEPS both 8.x fixture docs before the sub-clause narrows (empirically
+mutation-verified: reverting the MSW handler fails the test — the click unmounts the table into a
+skeleton, so no settle-blind window exists; no `placeholderData` anywhere in the SPA). ⚠
+**diff-critic MINOR (fixed):** the register page's clause-facet *representability guard* still
+enforced exact membership — it silently STRIPPED a now-valid parent deep link (`?clause=7.5` over a
+`7.5.3`-mapped register) and rendered the unfiltered register; the guard is now subtree-aware. ⚠
+**Codex round-1 P2 (fixed, `79f1bf1`):** fixing the guard alone left the accepted parent INVISIBLE —
+Mantine's controlled `Select` can't display a value absent from its options, so the register showed
+a blank "Clause: All" over a filtered list (an invisible active filter, and un-re-selectable after
+clearing). `deriveRegisterFacetSource` now expands every visible ref to its full ancestor chain
+(`7.5.3` → `7`, `7.5`, `7.5.3`; deduped, naturally sorted) — each ancestor is a representable,
+non-empty subtree filter; the page test asserts the Select DISPLAYS `7.5`, mutation-verified RED
+against the pre-expansion source. Codex round 2 (owner-requested, post-fix head): clean.
+
+**Owner-approved follow-up (next slice, not faked):** the compliance checklist divergence —
+its ★ status is exact-★ while the row's clause link now opens a rolled-up Library list, so a ★
+clause with descendant-only mappings can read "GAP" yet click through to a non-empty list. Owner
+decided 2026-08-03: **fix it so it doesn't read as a gap** (i.e. make ★ coverage subtree-aware,
+not merely annotated) — needs its own design check (whether checklist exactness is register-locked
+→ a possible R63) + spec/plan/PR. Also named: no end-to-end `/clauses`-serializer phase pin
+(carried from #426).
+
+(S-clause-rollup, BE+web+contract [both `filter[clause_refs][has]` OpenAPI descriptions + docs/15
+§2.1], NO migration [head `0084`], NO new key [catalog 102], api unit 1251→1252, web 1431→1433
+[+1 reportFacets ancestor-expansion unit, +1 register parent-deep-link page test], PR #427 squash
+`958f00d`; the S-clause7-ia finish-slice records rode in as its first commit.)
 
 ### S-clause7-ia — clause 7 (Support) wholly DO (R62) + Library clause-spine polish (handoff §2B, all 4 items + 2 ride-alongs; BE+web+docs; migration **0084** [head `0083→0084`]; NO new key [catalog 102]; PR #426 squash `9bef384`)
 

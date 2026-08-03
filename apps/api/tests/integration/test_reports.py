@@ -161,6 +161,88 @@ async def test_checklist_gap_to_partial_to_covered(
     assert after_eff["status"] == "COVERED"
 
 
+async def test_checklist_star_coverage_rolls_up_descendants(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """R63: a doc mapped ONLY to a descendant of a ★ clause (9.2 via its non-★ child 9.2.2) moves
+    the ★ row's counts — Draft → PARTIAL leg, Effective → COVERED leg. Delta-asserted."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await _grant(subj.a, ("report.compliance_checklist.read",))
+    org_id = await s5.default_org_id()
+    await s5.set_approver_release(org_id, True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    clause_922 = await _clause_by_number("9.2.2")
+
+    base = _row((await app_client.get(_CHECKLIST, headers=ha)).json(), "9.2")
+    m0, e0 = base["mapped_count"], base["effective_count"]
+
+    draft = (await _create(app_client, ha, await s5.type_id("SOP")))["id"]
+    await _map(app_client, ha, draft, clause_922)
+    after_map = _row((await app_client.get(_CHECKLIST, headers=ha)).json(), "9.2")
+    assert after_map["mapped_count"] == m0 + 1  # the descendant mapping counts for the ★ ancestor
+    assert after_map["effective_count"] == e0
+    if e0 == 0:
+        assert after_map["status"] == "PARTIAL"  # no longer GAP
+
+    eff = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"cov-922")
+    await _map(app_client, ha, eff["id"], clause_922)
+    after_eff = _row((await app_client.get(_CHECKLIST, headers=ha)).json(), "9.2")
+    assert after_eff["effective_count"] == e0 + 1
+    assert after_eff["status"] == "COVERED"
+
+
+async def test_checklist_projection_rolls_up_descendant_codes(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """R63 projection leg (mutation-distinguishing vs the old exact `in` membership): a projected
+    keep-item clause CODE that is a ★ DESCENDANT (8.3.4) projects COVERED onto ★ 8.3."""
+    from easysynq_api.db.session import get_sessionmaker
+    from easysynq_api.services.reports.checklist import compute_checklist
+
+    org_id = await s5.default_org_id()
+    async with get_sessionmaker()() as s:
+        out = await compute_checklist(s, org_id, projected_clause_numbers={"8.3.4"})
+        # Codex P2 (#428): an unknown, descendant-SHAPED code must NOT project coverage — commit
+        # resolves codes by exact catalog lookup and silently omits unknowns.
+        bogus = await compute_checklist(s, org_id, projected_clause_numbers={"8.3.99"})
+    row = next(r for r in out["rows"] if r["number"] == "8.3")
+    # Premise (shared DB): no test drives an Effective doc into the 8.3 subtree today — if one
+    # ever does, this fails loudly here; pick another quiet ★ subtree rather than weaken the test.
+    assert row["status"] != "COVERED", "premise: ★ 8.3 must not be live-COVERED"
+    assert row["projected_status"] == "COVERED"  # the descendant code covers the ★ ancestor
+    bogus_row = next(r for r in bogus["rows"] if r["number"] == "8.3")
+    assert bogus_row["projected_status"] == bogus_row["status"]  # unknown code projects nothing
+
+
+async def test_checklist_star_leaf_never_inherits_from_siblings_or_parent(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """R63 reverse edge: coverage flows from DESCENDANTS only. Mapping docs to 7.1.5 (the non-★
+    parent) and to 7.1.5.2 (a ★ sibling) must leave ★ 7.1.5.1's counts unchanged, while the
+    sibling mapping raises ★ 7.1.5.2's own count (the positive control)."""
+    await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, ("report.compliance_checklist.read",))
+    ha = _auth(token_factory, subj.a)
+
+    body = (await app_client.get(_CHECKLIST, headers=ha)).json()
+    leaf0 = _row(body, "7.1.5.1")
+    sib0 = _row(body, "7.1.5.2")
+
+    parent_doc = (await _create(app_client, ha, await s5.type_id("SOP")))["id"]
+    await _map(app_client, ha, parent_doc, await _clause_by_number("7.1.5"))
+    sibling_doc = (await _create(app_client, ha, await s5.type_id("SOP")))["id"]
+    await _map(app_client, ha, sibling_doc, await _clause_by_number("7.1.5.2"))
+
+    body = (await app_client.get(_CHECKLIST, headers=ha)).json()
+    leaf1 = _row(body, "7.1.5.1")
+    sib1 = _row(body, "7.1.5.2")
+    assert leaf1["mapped_count"] == leaf0["mapped_count"]  # no sibling/parent inheritance
+    assert leaf1["effective_count"] == leaf0["effective_count"]
+    assert sib1["mapped_count"] == sib0["mapped_count"] + 1  # the sibling's own row moved
+
+
 async def test_internal_auditor_holds_checklist_key(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:

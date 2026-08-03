@@ -243,6 +243,11 @@ async def gap_summary(
         in_scope = await repo.process_clause_ids(session, org_id, scope_ids)
     else:  # pragma: no cover - fail-closed; unknown kinds are rejected upstream
         raise ValueError(f"unknown pack scope_kind: {scope_kind}")
+    # R63: the raw set holds the EXACT clauses in scope, but checklist rows carry the ★ anchor
+    # ids — roll descendants up so a scope whose documents map only to 9.2.2 still selects the ★
+    # 9.2 row (else a sealed pack could read zero in-scope gaps while the subtree coverage is
+    # PARTIAL — the Codex P1 on #428).
+    in_scope = await repo.star_ancestor_ids(session, in_scope)
     rows = [r for r in checklist["rows"] if r["clause_id"] in in_scope]
     gaps = [r for r in rows if r["status"] in ("GAP", "PARTIAL")]
     return {

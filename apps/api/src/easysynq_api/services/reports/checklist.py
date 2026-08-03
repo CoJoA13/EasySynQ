@@ -10,7 +10,8 @@ never from the search index (doc 13 §1.2: "reports and KPIs compute from Postgr
 
 This is **status against a rule, never an auto-compliance verdict** (doc 13 N9). Coverage counts
 **any** clause mapping (``is_requirement_level`` ignored — a finer, rarely-set qualifier) targeting
-the **exact** ★ clause (no subtree rollup — the discrete-item intuition of doc 02 §2.1). The view is
+the ★ clause **or any of its descendants** (R63 — subtree-inclusive, matching the clause filter's
+rollup; DESCENDANTS only, so a ★ leaf never inherits from siblings or its parent). The view is
 org-wide (gated on the SYSTEM key ``report.compliance_checklist.read``), so counts are not per-doc
 permission-filtered. Each row also carries ``overdue_review`` (True when ≥1 Effective mapped doc has
 ``next_review_due`` ≤ today) — orthogonal to the COVERED/PARTIAL/GAP status; the rollup carries
@@ -27,11 +28,13 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.documented_information import DocumentedInformation
+from ..common.clause_subtree import clause_subtree_on, code_in_subtree
 from ..vault.repository import get_framework
 from ..vault.review import today_org
 
@@ -93,6 +96,11 @@ async def compute_checklist(
         )
         .label("overdue")
     )
+    # R63: coverage is subtree-inclusive — mappings to the ★ clause itself OR any DESCENDANT
+    # count (the shared clause_subtree_on predicate — also the §7.3 obsoletion gate's, so the
+    # gate and this report can never disagree). count(DISTINCT doc) dedupes a doc mapped to
+    # several subtree members.
+    member = aliased(Clause)
     rows = (
         await session.execute(
             select(
@@ -105,10 +113,11 @@ async def compute_checklist(
                 overdue_count,
             )
             .select_from(Clause)
+            .outerjoin(member, clause_subtree_on(Clause, member))
             .outerjoin(
                 ClauseMapping,
                 sa.and_(
-                    ClauseMapping.clause_id == Clause.id,
+                    ClauseMapping.clause_id == member.id,
                     ClauseMapping.org_id == org_id,
                 ),
             )
@@ -123,6 +132,18 @@ async def compute_checklist(
 
     projecting = projected_clause_numbers is not None
     projected = projected_clause_numbers or set()
+    if projected:
+        # R63 + the Codex P2 on #428: an unknown, descendant-SHAPED code ("8.3.not-a-clause")
+        # must not project coverage — commit resolves codes by EXACT catalog lookup and silently
+        # omits unknowns, so the pre-commit advisory validates against the same catalog.
+        catalog_numbers = set(
+            (
+                await session.scalars(
+                    select(Clause.number).where(Clause.framework_id == framework.id)
+                )
+            ).all()
+        )
+        projected = projected & catalog_numbers
     out_rows: list[dict[str, Any]] = []
     covered = partial = gap = 0
     proj_covered = proj_partial = proj_gap = 0
@@ -151,7 +172,10 @@ async def compute_checklist(
         if projecting:
             # An import only ever IMPROVES coverage: a confirmed-DOCUMENT mapping to a GAP/PARTIAL
             # ★ clause → COVERED (it commits as a Rev A Effective baseline); never demotes.
-            proj_status = "COVERED" if status == "COVERED" or number in projected else status
+            # R63: the projected membership rolls up the same subtree the live counts do —
+            # review.py passes UNFILTERED keep-item clause codes, so a 9.2.2 code covers ★ 9.2.
+            proj_covers = any(code_in_subtree(number, p) for p in projected)
+            proj_status = "COVERED" if status == "COVERED" or proj_covers else status
             row["projected_status"] = proj_status
             if proj_status == "COVERED":
                 proj_covered += 1
