@@ -46,6 +46,25 @@ def test_policy_rejects_password_equal_to_username_case_insensitively() -> None:
     assert satisfies_realm_policy("short", "jdoe") is False
 
 
+def test_policy_distinguishes_equality_from_containment() -> None:
+    """The realm's ``notUsername`` is an EQUALITY rule, not containment.
+
+    This is the mutation-discriminating case, and the only test in this file that is: a password
+    at or above the length floor that CONTAINS the username without being equal to it must be
+    ACCEPTED. An implementation using ``username not in password`` returns False here and this
+    test fails — which is exactly the point. Every other assertion in this file passes under
+    both rules, because they use sub-floor passwords whose length leg short-circuits first.
+    """
+    username = "quality-manager"  # >= MIN_LENGTH, so the length leg cannot mask the comparison
+    contains_but_not_equal = f"Xk4m-{username}-Pq7r"
+    assert len(contains_but_not_equal) >= MIN_LENGTH
+    assert satisfies_realm_policy(contains_but_not_equal, username) is True
+
+    # Equality is still rejected at a length that likewise cannot short-circuit on the length leg.
+    long_username = username * 2
+    assert satisfies_realm_policy(long_username, long_username) is False
+
+
 def test_alphabet_excludes_visually_ambiguous_characters() -> None:
     # The value is transcribed by hand or read aloud, so 0/O and 1/l/I must not appear.
     generated = "".join(generate_temporary_password("jdoe") for _ in range(50))
