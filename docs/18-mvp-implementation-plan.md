@@ -40,7 +40,7 @@
 > repo/monorepo layout + tooling, the Docker Compose dev stack, the Alembic schema derived from
 > `14-data-model.md`, the FastAPI/OpenAPI surface from `15-api-design.md`, the ordered vertical
 > slices, and a definition-of-done per slice. It stays strictly inside the four locked decisions
-> (D1–D4) and the **Decisions Register** (R1–R37 at MVP-authoring time; now R1–R62 — see
+> (D1–D4) and the **Decisions Register** (R1–R37 at MVP-authoring time; now R1–R63 — see
 > `decisions-register.md`), which supersedes any conflicting section text.
 >
 > **How it was produced.** A fan-out of deep readers over the MVP-critical sections (03/04/07/08/11/12,
@@ -379,7 +379,7 @@ S0 walking skeleton ─┬─ S1 AuthN ── S2 AuthZ[AC#3,4] ── S3 Vault �
 ## 11. Decisions for the owner (flagged; recommendation in **bold**)
 
 Most build choices are settled by the Register/docs and are baked into this plan. The following are the genuinely
-open ones; **none contradict D1–D4 or the Decisions Register** (R1–R37 at MVP-authoring time; now R1–R62 —
+open ones; **none contradict D1–D4 or the Decisions Register** (R1–R37 at MVP-authoring time; now R1–R63 —
 see `decisions-register.md`)**.** The first three are the strategic ones worth an explicit call.
 
 | # | Decision | Options | Recommendation |
