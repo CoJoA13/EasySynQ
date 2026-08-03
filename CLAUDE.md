@@ -1,7 +1,7 @@
 # EasySynQ — Project Context
 
 > Orientation for a new session. The **authoritative** detail lives in `docs/` — start with
-> `docs/00-overview.md` (front door) and `docs/decisions-register.md` (binding decisions, R1–R61).
+> `docs/00-overview.md` (front door) and `docs/decisions-register.md` (binding decisions, R1–R62).
 > The recurring-patterns catalog + the machine playbook live in `.claude/rules/`; the slice changelog
 > + operator/dev reference live in `docs/` (all linked under Deep Dive — read on demand). Keep this
 > file lean; new lessons go to **Recent learnings** (below) or `engineering-patterns`, not inline.
@@ -65,7 +65,7 @@ Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no sh
 
 ## Deep Dive — read on demand
 
-- **`docs/decisions-register.md`** — AUTHORITATIVE (R1–R61); supersedes conflicting section text. Read before any design call.
+- **`docs/decisions-register.md`** — AUTHORITATIVE (R1–R62); supersedes conflicting section text. Read before any design call.
 - **`docs/14-data-model.md`** (ERD) — schema source of truth; read before a migration/ORM change.
 - **`docs/15-api-design.md`** — endpoints + gates; read before adding/changing an endpoint (update `openapi.yaml` in-PR).
 - **`docs/07-authorization-model.md`** — permission catalog, RBAC+ABAC scoping, deny-wins; read before authz work.

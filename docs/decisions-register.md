@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R61) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R62) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R61
+## Part 3 — Resolutions R1–R62
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1800,6 +1800,35 @@ possibly months later, and cannot be rolled back.
 and the deployment spec/plan templates.
 
 Bumps the resolutions range **R1–R60 → R1–R61**.
+
+---
+
+### R62 — Clause 7 (Support) sits wholly in the DO PDCA phase — 2026-08-02
+
+The seeded ISO 9001:2015 clause catalog assigned clause 7 and its resourcing subtree (`7`,
+`7.1`–`7.4` and their children — thirteen rows) to PLAN, splitting Support across PLAN and DO
+(only the `7.5` subtree was DO). ISO 9001:2015's own PDCA figure places Support (7) and
+Operation (8) together in **Do**; the split also made the IA's phase↔clause-range labels
+unstatable — the rail and Home chips could say `PLAN: Cl 4–6 / DO: Cl 7–8` or match the data,
+never both — and doubled clause 7's mirror placement.
+
+**Normative rule.** `clause.pdca_phase` is uniform per top-level clause: PLAN = 4–6, DO = 7–8,
+CHECK = 9, ACT = 10. The clause-7 header's intent text no longer describes a split.
+
+Migration `0084` flips the thirteen already-seeded rows on a live install (`clause` is
+INSERT-by-seed only — doc 07 §3.6 — so no user edit can be clobbered) and restores them on
+downgrade; fresh installs seed the corrected catalog through `0018`, whose data module now
+carries DO. `import_classification.pdca_phase` is untouched: it is a derived stored snapshot of
+what the classifier concluded at analysis time, and rewriting it would falsify an analysis
+record. The ingestion classifier and the mirror derive phase from the live catalog and
+self-correct. No permission key, endpoint, request field, or response schema changes.
+
+**Back-propagation:** 02 §2/§3.2, 04 §10.3 build note, 09 §5/§8.1, 13 §7 dashboard row,
+`db/seeds/iso9001_clauses.py`, `db/models/_clause_enums.py`, `services/vault/mirror.py`
+placement docstring, the mirror cross-phase tests, and the SPA PDCA labels (Home PLAN card +
+left-rail chips).
+
+Bumps the resolutions range **R1–R61 → R1–R62**.
 
 ---
 
