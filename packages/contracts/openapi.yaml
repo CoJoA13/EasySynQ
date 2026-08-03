@@ -673,6 +673,7 @@ paths:
                 role_ids:
                   type: array
                   items: { type: string, format: uuid }
+                  uniqueItems: true
       responses:
         "201":
           description: >-
@@ -682,6 +683,7 @@ paths:
             application/json:
               schema:
                 type: object
+                additionalProperties: false
                 required: [user, temporary_password, password_delivery]
                 properties:
                   user: { $ref: "#/components/schemas/UserAdmin" }
@@ -6908,6 +6910,11 @@ components:
             - idempotency_replay
             - internal_error
             - dependency_unavailable
+            - user_exists
+            - keycloak_not_configured
+            - keycloak_email_exists
+            - keycloak_username_exists_unlinked
+            - keycloak_unavailable
         detail: { type: [string, "null"] }
         instance: { type: [string, "null"] }
         request_id: { type: [string, "null"] }
@@ -6927,6 +6934,9 @@ components:
         conflicting_duty:
           type: [object, "null"]
           description: "On sod_violation: the violated duty pair (duty_a/duty_b/target_binding)."
+        keycloak_subject:
+          type: [string, "null"]
+          description: "On keycloak_username_exists_unlinked: the existing Keycloak account's subject to link instead of creating a new one."
 
     AuthConfig:
       type: object

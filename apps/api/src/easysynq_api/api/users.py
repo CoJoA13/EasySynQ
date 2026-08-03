@@ -49,6 +49,12 @@ from ..services.keycloak_provisioning import (
     KeycloakUnavailable,
 )
 
+# Reuse the established ROLE_ASSIGN audit shape (object_type=permission, scope_ref names the
+# target user) so a role minted through this endpoint is visible to the same audit queries as one
+# minted via POST /users/{id}/roles — api/authz.py imports only services/db models, never
+# api/users.py, so this is not a cycle (the .dcr/.improvement precedent in management_review.py).
+from .authz import _audit_authz_change
+
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
 # Dependency singletons — a require(...) call must not sit in an argument default (ruff B008).
@@ -177,9 +183,6 @@ async def list_users(
     return [_represent(u, names.get(u.id, [])) for u in users]
 
 
-_permission_grant = require("permission.grant")
-
-
 def _kc_client() -> KeycloakProvisioningClient:
     settings = get_settings()
     return KeycloakProvisioningClient(
@@ -220,23 +223,27 @@ async def provision_user(
             status=422, code="validation_error", title="username must not be empty"
         )
 
+    # De-duplicate while preserving order: role_ids: [X, X] must not insert two identical
+    # RoleAssignment rows — there is no uniqueness constraint on that table.
+    role_ids: list[uuid.UUID] = list(dict.fromkeys(body.role_ids))
+
     # Roles are a distinct authority with their own key and SoD guard; only demand it when asked
     # for, so a plain create still works for a caller holding only `user.create`. `enforce` is the
     # in-handler equivalent of `require(...)` for a check whose need comes from the request body.
-    if body.role_ids:
+    role_names: dict[uuid.UUID, str] = {}
+    if role_ids:
         await enforce(session, sink, request, caller, "permission.grant", ResourceContext.system())
         # Validate BEFORE touching Keycloak: an unknown role id would otherwise reach the INSERT and
         # raise an FK violation as a 500, after an account had already been created in Keycloak.
-        known = set(
-            (
-                await session.execute(
-                    select(Role.id).where(Role.org_id == caller.org_id, Role.id.in_(body.role_ids))
+        role_rows = (
+            await session.execute(
+                select(Role.id, Role.name).where(
+                    Role.org_id == caller.org_id, Role.id.in_(role_ids)
                 )
             )
-            .scalars()
-            .all()
-        )
-        unknown = [str(r) for r in body.role_ids if r not in known]
+        ).all()
+        role_names = {rid: rname for rid, rname in role_rows}
+        unknown = [str(r) for r in role_ids if r not in role_names]
         if unknown:
             raise ProblemException(
                 status=422,
@@ -244,7 +251,7 @@ async def provision_user(
                 title="Unknown role id(s)",
                 detail=", ".join(unknown),
             )
-        for role_id in body.role_ids:
+        for role_id in role_ids:
             await assert_can_assign_role(session, sink, caller, role_id)
 
     password = generate_temporary_password(username)
@@ -305,8 +312,27 @@ async def provision_user(
         )
         session.add(user)
         await session.flush()
-        for role_id in body.role_ids:
-            session.add(RoleAssignment(org_id=caller.org_id, user_id=user.id, role_id=role_id))
+        # Each assignment gets its own ROLE_ASSIGN audit row — the established shape from
+        # api/authz.py's assign_user_role/_audit_authz_change (object_type=permission, scope_ref
+        # names the target user) — so a privilege grant minted here is visible to the same audit
+        # queries as one minted via POST /users/{id}/roles. Part of the SAME transaction as the
+        # assignment: both flush/commit together, never split across the commit below.
+        for role_id in role_ids:
+            assignment = RoleAssignment(org_id=caller.org_id, user_id=user.id, role_id=role_id)
+            session.add(assignment)
+            await session.flush()  # populate assignment.id for the audit row's object_id
+            _audit_authz_change(
+                session,
+                caller,
+                EventType.ROLE_ASSIGN,
+                assignment.id,
+                user.id,
+                after={
+                    "role_id": str(role_id),
+                    "role_name": role_names.get(role_id),
+                    "bound_scope": None,
+                },
+            )
         _emit_user_event(
             session,
             caller,
@@ -316,10 +342,21 @@ async def provision_user(
                 "status": UserStatus.INVITED.value,
                 "email": body.email,
                 "provisioning": "keycloak_created",
-                "credential_issued": True,
             },
         )
         await session.commit()
+
+        # Read everything the response needs NOW, before set_temporary_password: both are reads, and
+        # running them after the credential goes live would mean a failure here (pool exhaustion,
+        # connection reset) 500s the caller while a live, credentialed account sits unreported —
+        # exactly the state the ordering property forbids.
+        await session.refresh(user)
+        names = await _role_names_by_user(session, caller.org_id, [user.id])
+        response: dict[str, Any] = {
+            "user": _represent(user, names.get(user.id, [])),
+            "temporary_password": password,
+            "password_delivery": "shown_once",
+        }
 
         # Only now does the account become usable. A failure here leaves a real app_user whose
         # account has no credential — repaired by POST /users/{id}/temporary-password, never by
@@ -339,13 +376,19 @@ async def provision_user(
                 ),
             ) from exc
 
-    await session.refresh(user)
-    names = await _role_names_by_user(session, caller.org_id, [user.id])
-    return {
-        "user": _represent(user, names.get(user.id, [])),
-        "temporary_password": password,
-        "password_delivery": "shown_once",
-    }
+        # The credential is now live — record that truthfully as its own event, separate from
+        # USER_CREATED (whose `after` above no longer claims one exists): audit_event is append-only
+        # and hash-chained (R12), so USER_CREATED must never assert this before it's actually true.
+        _emit_user_event(
+            session,
+            caller,
+            EventType.USER_CREDENTIAL_ISSUED,
+            user.id,
+            after={"credential_issued": True},
+        )
+        await session.commit()
+
+    return response
 
 
 @router.get("/users/{user_id}")
