@@ -1,7 +1,13 @@
 # Handoff — EasySynQ at the site, continuing work
 
-> **Read this first if you are a new session picking up the LAB deployment.**
-> Written 2026-08-02. The install is **live and operational**; what follows is what remains.
+> **Read this first if you are a new session picking up the site deployment.**
+> Written 2026-08-02. The install is live; what follows is what remains, generalized.
+>
+> **Where the concrete state lives (R61):** the current-state worksheet — host/guest identity,
+> addresses, access paths, the admin account, the source-tree inventory, and the outstanding
+> go-live security gates — is a site record and lives in the organization's own operational
+> documentation, **not** in this repository. This file keeps only what transfers: procedures,
+> judgment calls, traps, and the product work queue.
 >
 > Background, in order of usefulness:
 > [implementation plan](2026-07-31-lab-production-deployment.md) (what was done, and every deviation) ·
@@ -10,24 +16,10 @@
 
 ---
 
-## 1. What exists right now
+## 1. The operating rule that bites first
 
-**EasySynQ is in production at `https://easysynq.example.local`** for <ORG>
-(`example.local`), a ~5-user heat-treat shop. State `OPERATIONAL`, restore drill `PASS`.
-
-| | |
-|---|---|
-| Host | `LAB` — Windows 11 Pro, domain-joined, Hyper-V |
-| Guest | VM `EasySynQ`, Ubuntu 26.04, **`10.0.0.20`**, MAC `00:15:5D:00:00:01` |
-| Reach it | `ssh easysynq@10.0.0.20` (key auth from LAB, no password) |
-| Repo on VM | `~/EasySynQ` at commit `4f49c0f` |
-| Domain controller | `dc01.example.local` @ `10.0.0.10` — also file server **and** SQL host |
-| Import source | `//DC01/Quality` → `/srv/easysynq/import` (**ro**), 252 files |
-| Backup target | `//DC01/easysynq-backup` → `/srv/easysynq/backup` (**rw**) → whole-disk image → the offsite object store |
-| Admin | `qmsadmin` / the owner — System Administrator |
-
-**Always use all four compose files, in this order.** Omitting `compose.lab.yml` resolves a
-different backup volume:
+**Always use all four compose files, in this order.** Omitting the untracked site overlay
+(`compose.lab.yml`) resolves a different backup volume:
 
 ```bash
 docker compose --env-file .env \
@@ -37,47 +29,36 @@ docker compose --env-file .env \
   -f infra/compose/compose.lab.yml <cmd>
 ```
 
-### Proven, not assumed
-
-Full host-reboot resilience was tested 2026-08-02: LAB rebooted → VM auto-started → both CIFS
-mounts landed → containers restarted → `/readyz` green, all inside ~1 minute. Network identity,
-DNS override and beat's schedule state all survived. Four encrypted archives sit on the DC01
-share, at least one written unattended by the nightly job.
-
 ---
 
 ## 2. The work queue
 
 ### A. Import the QMS tree — **do this first, needs the owner**
 
-The plumbing is correct and verified (worker sees 252 files, read-only). Nothing has been imported;
-that is a deliberate, reviewed action, not an automatic one.
+The mount plumbing is verified read-only; nothing has been imported. That is a deliberate,
+reviewed action, not an automatic one.
 
-Pipeline: **scan → extract/classify → human review → commit.** Stages 1–2 are mechanical and can be
-run unattended. Stage 3 needs the owner's judgment:
+Pipeline: **scan → extract/classify → human review → commit.** Stages 1–2 are mechanical and can
+be run unattended. Stage 3 needs the owner's judgment. The source tree splits into a documents
+branch (SOPs, work instructions, forms, the Quality Manual — confirm **DOCUMENT**, the 7-state
+lifecycle) and a data branch (calibration and inspection certificates — confirm **RECORD**,
+retention/disposition). The exact folder inventory, counts, and exclusions are in the site
+worksheet and in plan Task 11.
 
-| Path | Files | Confirm as | Why |
-|---|---|---|---|
-| `QMS/` | 195 | **DOCUMENT** | SOPs, work instructions, forms, Quality Manual — the 7-state lifecycle |
-| `QMS_DATA/` | 56 | **RECORD** | Calibration certs, crane inspections, King Tester certs — retention/disposition |
+⚠ **Open CARs are a third case.** Historical *closed* CARs are records. Anything still **open**
+is better recreated as a live CAPA so it inherits due dates, escalation and the overdue sweep — a
+static PDF gets none of that. Decide before commit; moving a record into the CAPA workflow
+afterwards is not a rename.
 
-**Exclude:** 37 × `Thumbs.db`, `QMS.zip` (18.5 MB archive snapshot), one `*.xlsx#` lock artifact.
-Confirm the single `.pdc` before deciding.
-
-⚠ **Open CARs are a third case.** Owner's framing: `QMS_DATA` is "audit data, certifications, CARs".
-Historical *closed* CARs are records. Anything still **open** is better recreated as a live CAPA so
-it inherits due dates, escalation and the overdue sweep — a static PDF gets none of that. Decide
-before commit; moving a record into the CAPA workflow afterwards is not a rename.
-
-The clause-folder structure (`1.0 Scope` … `10.0 Improvement`) maps onto EasySynQ's clause spine, so
-folder path is strong evidence for clause mapping.
+A clause-numbered folder structure (`1.0 Scope` … `10.0 Improvement`) maps onto EasySynQ's clause
+spine, so folder path is strong evidence for clause mapping.
 
 ### B. PR 1 — clause IA + Library polish — **approved, not started**
 
 1. **Clause 7 (Support) → DO.** Currently seeded `PLAN` for clause 7 *and its whole subtree*.
    Needs: **R62 decisions-register entry (owner-approved; R61 is now the site-data rule)** → seed edit in
    `apps/api/src/easysynq_api/db/seeds/iso9001_clauses.py` → migration **`0084`** (head is `0083`;
-   this install already holds the old values) → `docs/02` §3.2 **and** its section heading, which
+   a live install already holds the old values) → `docs/02` §3.2 **and** its section heading, which
    currently reads `### Clause 7 — Support (PLAN/DO)`.
    ⚠ Leave `import_classification.pdca_phase` alone — it is a *derived stored snapshot* of what the
    classifier concluded; rewriting it would falsify an analysis record. Moot anyway: zero import runs.
@@ -110,17 +91,15 @@ Not blocked by the deferred per-clause counts: counts are an authz-sensitive agg
 just a wider `WHERE` with the existing per-row filter still applying. Touches the query, its tests,
 `packages/contracts/openapi.yaml` and `docs/15-api-design.md`, so it runs the `contracts` job.
 
-### D. Deployment loose ends
+### D. Go-live security gates — tracked in the site worksheet
 
-| Item | Detail |
-|---|---|
-| **Remove deployment sudo** | `sudo rm /etc/sudoers.d/90-easysynq-deploy` — passwordless sudo was for provisioning; leaving it means the SSH key on LAB is root on the QMS host |
-| **SMTP relay** | `OPS_ALERT_CHANNELS` / `OPS_ALERT_SMTP_TO` are empty, so a failed nightly backup notifies **only in-app** — via the database that may be what failed |
-| **DHCP reservation** | Ask IT to reserve `10.0.0.20` for `00:15:5D:00:00:01`. An exclusion alone is **not** equivalent — the VM runs `dhcp4: true`, so excluding `.20` denies it to this VM at renewal; pair any exclusion with a static netplan address (plan Task 4). Device is a **edge firewall** at `10.0.0.1` (mgmt on `:8080`, WSM on 4117/4118). If IT manages it from a saved Policy Manager config, ask them to record it there or a push will erase it. |
-| **Deny-logon GPO** | Both service accounts (`svc-easysynq-ro`, `svc-easysynq-bkp`) need *Deny log on locally* + *Deny log on through Remote Desktop Services* in a **new** GPO. Leave *Deny access from the network* alone — the mounts need it. |
-| **R13 anchor** | Install reports **NOT tamper-evident** until an off-host audit-checkpoint anchor exists somewhere this host's operator cannot rewrite. Non-blocking, real for an ISO 9001 audit trail. Scheduled, not waived. |
+The outstanding gates (deployment-sudo removal · out-of-band alerting · DHCP reservation, never a
+bare exclusion · the deny-logon GPO · the R13 off-host anchor) are **site state** and are tracked
+in the organization's operational documentation. Their generic procedures stay in this repo: plan
+**G-1/G-2**, **Task 4 Step 1**, **Task 10 Step 5**; the R13 anchor is the named audit
+checkpoint-lineage residual in `docs/slice-history.md`.
 
-### E. Defects found, logged, not fixed
+### E. Product defects found here, logged, not fixed
 
 1. **`scripts/easysynq` uses only `compose.yml`** (line 7). Every `backup`/`restore`/`upgrade`/
    `mirror` call resolves without the profile, production and site overlays, and recreates services
@@ -128,13 +107,12 @@ just a wider `WHERE` with the existing per-row filter still applying. Touches th
    Workaround: `docker compose <all four -f> run --rm worker uv run python -m easysynq_api.cli.<mod>`.
 2. **`backup_policy.cron` is write-only.** The wizard stores `0 2 * * *`; the scheduler uses a
    hardcoded `86400.0` interval (`apps/api/src/easysynq_api/tasks/app.py:58`) and never reads it.
-   Backups fire 24 h after beat last **started**, so they currently run ~2:18 PM Chicago, and every
-   container *recreation* (not reboot — the writable layer survives a restart) moves the time.
-3. **Realm export once recorded `absent`.** Observed once; succeeded on retry and on the unattended
-   run. Cause NOT established — do not repeat the earlier "pg_dump kills Keycloak backends" theory:
-   `_capture_and_dump()` only holds a read snapshot and rolls back, it terminates nothing. Suspect
-   admin credentials, Keycloak availability, or container churn, and investigate if it recurs. Not
-   recovery-critical here: the `keycloak` schema (100 tables) is inside the dump.
+   Backups fire 24 h after beat last **started**, and every container *recreation* (not reboot —
+   the writable layer survives a restart) moves the time.
+3. **`realm_export: absent` in a backup is not pg_dump's fault.** `_capture_and_dump()` only holds
+   a read snapshot and rolls back — it terminates nothing. Suspect admin credentials, Keycloak
+   availability, or container churn, and investigate if it recurs. A single absence is not
+   recovery-critical: the `keycloak` schema (100 tables) is inside the dump.
 
 ---
 
@@ -145,15 +123,15 @@ just a wider `WHERE` with the existing per-row filter still applying. Touches th
 | `Invalid parameter: redirect_uri` | Mixed-case FQDN. Keycloak matches redirect URIs **case-sensitively**; browsers lowercase the host. Typing the URL differently cannot help. **Use lowercase everywhere.** |
 | Correct password rejected | Keycloak brute-force lockout (`user_temporarily_disabled`). Survives a password reset. → `./scripts/clear-keycloak-lockout.sh <user>` |
 | `Invalid bootstrap secret` | The CLI prints it **indented four spaces**; copying the whitespace fails identically to a wrong secret. Verify by character count. |
-| Containers recreate unexpectedly | `scripts/easysynq` overlay bug — see D/E above. |
+| Containers recreate unexpectedly | `scripts/easysynq` overlay bug — see §2E above. |
 | `systemctl is-masked` errors | Not a verb on systemd 259. Use `systemctl is-enabled` (reports `masked`). |
 | Import finds nothing | Check `IMPORT_SOURCE_PATH=/srv/easysynq/import` in `.env` — it defaults to `../../.import-source`, an empty dir. This was missed once already. |
 
-**Script availability:** the recorded checkout (`4f49c0f`, see §1) **predates**
-`scripts/clear-keycloak-lockout.sh` and `scripts/new-keycloak-user.sh` — both land with PR #419.
-Before invoking either, update the checkout: `git -C ~/EasySynQ pull --ff-only` once that PR is on
-`main`. This is safe for the site-local state: `infra/compose/compose.lab.yml` and `.env` are
-untracked, and neither a fast-forward pull nor a checkout touches untracked files.
+**Script availability:** a checkout that predates PR #419 lacks
+`scripts/clear-keycloak-lockout.sh` and `scripts/new-keycloak-user.sh`. Update with
+`git -C ~/EasySynQ pull --ff-only` once that PR is on `main` — safe for site-local state: the
+site compose overlay and `.env` are untracked, and neither a fast-forward pull nor a checkout
+touches untracked files.
 
 **Schema names that mislead:** `system_config` holds the bootstrap fields · `role_assignment` is
 user→role, `role_grant` is role→permission · there is **no** `backup_run` table; run state lives on
@@ -172,13 +150,3 @@ so they are not lost. Each needs its own brainstorm before any work.
 2. **Permission-key visibility under "Manage" on a user.** What a user can actually do is not
    legible from the user surface.
 3. **Browse/picker when importing**, instead of typing a source path by hand.
-
----
-
-## 5. Git state
-
-- Branch **`feat/ops-lab-deployment`** — pushed, PR open, CI running. Contains the two Keycloak admin
-  scripts, two runbook fixes, and the deployment spec + plan.
-- This handoff is **uncommitted**.
-- `gh auth login` now works on LAB. Earlier sessions could not push (permission classifier); if a
-  push is blocked, the owner runs it from a terminal on LAB.
