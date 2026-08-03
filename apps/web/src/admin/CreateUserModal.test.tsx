@@ -30,10 +30,13 @@ const PROVISION_RESPONSE = {
 
 const COLLISION_SUBJECT = "kc-existing-orphan-42";
 
+// Named (not ROLES[0].id) so a `role_ids` assertion never trips noUncheckedIndexedAccess.
+const EMPLOYEE_ROLE_ID = "ro000001-0001-0001-0001-000000000001";
+
 // Pinned to _role (api/authz.py) via `satisfies`.
 const ROLES = [
   {
-    id: "ro000001-0001-0001-0001-000000000001",
+    id: EMPLOYEE_ROLE_ID,
     name: "Employee",
     description: null,
     is_reserved: false,
@@ -82,6 +85,36 @@ describe("CreateUserModal", () => {
     expect(screen.getByText(/cannot be shown again/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy temporary password" })).toBeInTheDocument();
     expect(body).toMatchObject({ username: "newhire" });
+  });
+
+  it("clears the issued temporary password and form when the modal is closed and reopened (same instance, not a fresh mount)", async () => {
+    server.use(
+      http.post("/api/v1/users/provision", () =>
+        HttpResponse.json(PROVISION_RESPONSE, { status: 201 }),
+      ),
+    );
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const { rerender } = renderModal(onClose);
+
+    await user.type(screen.getByLabelText(/Username/), "newhire");
+    await user.click(screen.getByRole("button", { name: "Create user" }));
+    expect(await screen.findByText(PROVISION_RESPONSE.temporary_password)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalled();
+
+    // Toggle `opened` on the SAME component instance via rerender — never unmount + freshly mount,
+    // since a brand-new instance would pass this assertion even with the reset bug (useState always
+    // starts blank on a fresh mount, masking a missing reset in close()).
+    rerender(<CreateUserModal opened={false} onClose={onClose} token="test-token" />);
+    rerender(<CreateUserModal opened onClose={onClose} token="test-token" />);
+
+    // The plain form only renders once BOTH `issued` and `collision` are falsy — if close() stops
+    // resetting them, this never resolves and the test fails here (loudly), not silently.
+    await screen.findByLabelText(/Username/);
+    expect(screen.queryByText(PROVISION_RESPONSE.temporary_password)).toBeNull();
+    expect(screen.getByLabelText(/Username/)).toHaveValue("");
   });
 
   it("a 409 keycloak_username_exists_unlinked offers Link the existing account, posting the collision subject to POST /users", async () => {
@@ -161,6 +194,34 @@ describe("CreateUserModal", () => {
     expect(screen.queryByRole("button", { name: "Link the existing account" })).toBeNull();
   });
 
+  it("a malformed 409 (no usable keycloak_subject) surfaces an error instead of a blank form", async () => {
+    server.use(
+      http.post("/api/v1/users/provision", () =>
+        HttpResponse.json(
+          {
+            code: "keycloak_username_exists_unlinked",
+            title: "A sign-in account with that username already exists",
+            // No keycloak_subject at all — the real backend always sets it for this code, but the
+            // client must not silently blank the form on a malformed body.
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderModal();
+    await user.type(screen.getByLabelText(/Username/), "orphan");
+    await user.click(screen.getByRole("button", { name: "Create user" }));
+
+    expect(await screen.findByText("Couldn't create user")).toBeInTheDocument();
+    expect(
+      screen.getByText("A sign-in account with that username already exists"),
+    ).toBeInTheDocument();
+    // The generic error path, not the collision Alert — the editable form must still be present.
+    expect(screen.queryByRole("button", { name: "Link the existing account" })).toBeNull();
+    expect(screen.getByLabelText(/Username/)).toHaveValue("orphan");
+  });
+
   it("a 409 keycloak_email_exists surfaces inline against the Email field", async () => {
     server.use(
       http.post("/api/v1/users/provision", () =>
@@ -201,6 +262,34 @@ describe("CreateUserModal", () => {
     await user.click(screen.getByPlaceholderText(/assign roles/i));
     expect(await screen.findByText("Employee")).toBeInTheDocument();
     expect(screen.getByText("Quality Manager")).toBeInTheDocument();
+  });
+
+  it("selecting a role reaches role_ids in the POST body, alongside other optional fields", async () => {
+    grant(["permission.grant"]);
+    server.use(http.get("/api/v1/roles", () => HttpResponse.json(ROLES)));
+    let body: unknown;
+    server.use(
+      http.post("/api/v1/users/provision", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(PROVISION_RESPONSE, { status: 201 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.type(screen.getByLabelText(/Username/), "newhire");
+    await user.type(screen.getByLabelText("Display name"), "New Hire");
+    await screen.findByText("Roles");
+    await user.click(screen.getByPlaceholderText(/assign roles/i));
+    await user.click(await screen.findByText("Employee"));
+    await user.click(screen.getByRole("button", { name: "Create user" }));
+
+    await screen.findByText(PROVISION_RESPONSE.temporary_password);
+    expect(body).toMatchObject({
+      username: "newhire",
+      display_name: "New Hire",
+      role_ids: [EMPLOYEE_ROLE_ID],
+    });
   });
 
   it("has no axe violations (Mantine portals the modal onto document.body)", async () => {

@@ -82,8 +82,13 @@ export function CreateUserModal({
       // as `problem` (members={"keycloak_subject": ...} in api/users.py::provision_user).
       if (e instanceof ApiError && e.code === "keycloak_username_exists_unlinked") {
         const subject = e.problem?.keycloak_subject;
-        setCollision(typeof subject === "string" ? subject : null);
-        return;
+        if (typeof subject === "string") {
+          setCollision(subject);
+          return;
+        }
+        // Malformed 409 — the code promises a collision subject but didn't include a usable string
+        // one. Fall through to the generic error path below instead of leaving `collision` null,
+        // which would silently render the blank form with no explanation for the failed submit.
       }
       if (e instanceof ApiError && e.code === "keycloak_email_exists") {
         setEmailError(e.message);
