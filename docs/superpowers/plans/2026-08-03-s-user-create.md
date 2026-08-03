@@ -274,7 +274,6 @@ def _token_ok(request: httpx.Request) -> httpx.Response | None:
     return None
 
 
-@pytest.mark.asyncio
 async def test_lookup_requires_exact_and_reverifies_the_returned_username() -> None:
     seen: dict[str, str] = {}
 
@@ -297,7 +296,6 @@ async def test_lookup_requires_exact_and_reverifies_the_returned_username() -> N
     assert result.subject is None
 
 
-@pytest.mark.asyncio
 async def test_lookup_returns_the_subject_on_an_exact_match() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         token = _token_ok(request)
@@ -312,7 +310,6 @@ async def test_lookup_returns_the_subject_on_an_exact_match() -> None:
     assert result.subject == "sub-jdoe"
 
 
-@pytest.mark.asyncio
 async def test_lookup_failure_is_not_absence() -> None:
     """A transient 5xx must raise — never fall through to CREATE as if the user were absent."""
 
@@ -327,7 +324,6 @@ async def test_lookup_failure_is_not_absence() -> None:
             await kc.find_user_by_username("jdoe")
 
 
-@pytest.mark.asyncio
 async def test_create_user_sends_no_credential_and_returns_the_subject() -> None:
     posted: list[dict[str, object]] = []
 
@@ -356,7 +352,6 @@ async def test_create_user_sends_no_credential_and_returns_the_subject() -> None
     assert "credentials" not in body
 
 
-@pytest.mark.asyncio
 async def test_create_user_maps_a_conflict_to_the_offending_field() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         token = _token_ok(request)
@@ -373,7 +368,6 @@ async def test_create_user_maps_a_conflict_to_the_offending_field() -> None:
     assert excinfo.value.field == "email"
 
 
-@pytest.mark.asyncio
 async def test_set_temporary_password_marks_the_credential_temporary() -> None:
     sent: list[dict[str, object]] = []
 
@@ -393,7 +387,6 @@ async def test_set_temporary_password_marks_the_credential_temporary() -> None:
     assert sent[0]["type"] == "password"
 
 
-@pytest.mark.asyncio
 async def test_missing_admin_credentials_fail_closed() -> None:
     client = KeycloakProvisioningClient(
         base_url="http://keycloak:8080", realm="easysynq", admin_user="", admin_password=""
@@ -776,18 +769,20 @@ git commit -m "feat(audit): add USER_CREDENTIAL_ISSUED event (migration 0085)"
 In `apps/api/src/easysynq_api/api/users.py`, extend the existing imports:
 
 ```python
+from fastapi import Request  # add to the existing fastapi import line
+
 from ..config import get_settings
+from ..domain.authz.types import ResourceContext
 from ..domain.identity.temp_password import generate_temporary_password
 from ..services.authz import (
+    AuthzAuditSink,
     assert_can_assign_role,
-    authorize_or_raise,
     disable_removes_last_admin,
-    gather_grants,
+    enforce,
+    get_authz_audit_sink,
     invalidate_user_permissions,
     require,
 )
-from ..services.authz.pep import get_authz_audit_sink
-from ..services.authz.audit import AuthzAuditSink
 from ..services.backup.realm_export import realm_name_from_issuer
 from ..services.keycloak_provisioning import (
     KeycloakConflict,
@@ -797,7 +792,7 @@ from ..services.keycloak_provisioning import (
 )
 ```
 
-If any of `authorize_or_raise` / `gather_grants` is not exported from `services.authz`, import it from its defining module — check `services/authz/__init__.py` first and adjust rather than guessing. Add the model beside `UserInvite`:
+All of these are verified exports of `services/authz/__init__.py`. Add the model beside `UserInvite`:
 
 ```python
 class UserProvision(BaseModel):
@@ -827,6 +822,7 @@ def _kc_client() -> KeycloakProvisioningClient:
 
 @router.post("/users/provision", status_code=status.HTTP_201_CREATED)
 async def provision_user(
+    request: Request,
     body: UserProvision,
     caller: AppUser = Depends(_user_create),
     session: AsyncSession = Depends(get_session),
@@ -846,9 +842,13 @@ async def provision_user(
             status=422, code="validation_error", title="username must not be empty"
         )
 
-    # Roles are a distinct authority with their own key and SoD guard; only demand it when asked for.
+    # Roles are a distinct authority with their own key and SoD guard; only demand it when asked
+    # for, so a plain create still works for a caller holding only `user.create`. `enforce` is the
+    # in-handler equivalent of `require(...)` for a check whose need comes from the request body.
     if body.role_ids:
-        await authorize_or_raise(session, caller, "permission.grant")
+        await enforce(
+            session, sink, request, caller, "permission.grant", ResourceContext.system()
+        )
         # Validate BEFORE touching Keycloak: an unknown role id would otherwise reach the INSERT and
         # raise an FK violation as a 500, after an account had already been created in Keycloak.
         known = set(
