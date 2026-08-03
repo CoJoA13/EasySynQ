@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R60) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R61) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R60
+## Part 3 — Resolutions R1–R61
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1750,6 +1750,56 @@ or frontend behavior change is introduced.
 patterns, and repository orientation.
 
 Bumps the resolutions range **R1–R59 → R1–R60**.
+
+---
+
+### R61 — Site-specific operational records never enter this repository — 2026-08-02
+
+**A deployment record is a reconnaissance profile.** Written honestly it enumerates account names,
+network topology, hostnames and addresses, security-product vendors and *versions*, backup providers
+and bucket names, share names, and — in its risk section — a curated list of that site's known
+weaknesses. That is the target package an attacker would otherwise have to assemble. It does not
+belong in a code repository.
+
+**Normative rule.** Records describing a real installation MUST NOT be committed here. This holds
+**regardless of repository visibility**: private repositories are made public, forked, cloned by
+contractors, handed to auditors, and restored from backups. Visibility is a setting, not a control,
+and MUST NOT be relied on as one.
+
+The concrete values — the filled worksheet from
+[`docs/runbooks/install-ubuntu-server.md`](runbooks/install-ubuntu-server.md) §0, credentials,
+addresses, inventories — live wherever that organization keeps its other operational documentation.
+
+**What MAY be committed** is the generalized lesson: the *shape* of an environment where it explains
+a design decision, procedure corrections, and traps worth warning the next operator about — always
+with placeholders (`<ORG>`, `example.local`, `DC01`, `10.0.0.0/24`, `<edge firewall>`).
+
+**Specifically excluded**, in any document, commit message, code comment, test fixture or issue:
+
+| Category | Examples |
+|---|---|
+| Identities | account names, real display names, who holds Domain Admin, SIDs |
+| Addressing | real hostnames, FQDNs, IPs, subnets, MAC addresses |
+| Organization | legal names, site names, anything naming the customer |
+| Vendor inventory | security products, RMM/remote-access agents, backup providers, **and their versions** — a version maps to known CVEs |
+| Storage | share names, bucket names, backup destinations |
+| Per-install secrets material | certificate fingerprints, key fingerprints or prefixes, bootstrap secrets |
+| Weakness inventories | "risks accepted" lists naming a real site's exposure |
+
+**Procedure — sanitize at write time, not after.** Author site records with placeholders from the
+first draft. Removing real values later does not undo publication: the data is in git history, in
+any clone or fork, in review-tool comments quoting the diff, and possibly in a search index. The
+2026-08-02 incident is the worked example — records were pushed to a **public** repository and the
+remediation could only limit further exposure, not retract what had already been served.
+
+**Rationale for strictness.** The failure is silent and asymmetric. Nothing breaks, no test fails,
+no gate objects — the document reads as unusually thorough. The cost lands entirely on the customer,
+possibly months later, and cannot be rolled back.
+
+**Back-propagation:** `CLAUDE.md` critical rules (the session-start guard), `docs/runbooks/install-ubuntu-server.md`,
+and the deployment spec/plan templates.
+
+Bumps the resolutions range **R1–R60 → R1–R61**.
 
 ---
 
