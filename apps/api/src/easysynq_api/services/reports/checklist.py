@@ -132,6 +132,18 @@ async def compute_checklist(
 
     projecting = projected_clause_numbers is not None
     projected = projected_clause_numbers or set()
+    if projected:
+        # R63 + the Codex P2 on #428: an unknown, descendant-SHAPED code ("8.3.not-a-clause")
+        # must not project coverage — commit resolves codes by EXACT catalog lookup and silently
+        # omits unknowns, so the pre-commit advisory validates against the same catalog.
+        catalog_numbers = set(
+            (
+                await session.scalars(
+                    select(Clause.number).where(Clause.framework_id == framework.id)
+                )
+            ).all()
+        )
+        projected = projected & catalog_numbers
     out_rows: list[dict[str, Any]] = []
     covered = partial = gap = 0
     proj_covered = proj_partial = proj_gap = 0

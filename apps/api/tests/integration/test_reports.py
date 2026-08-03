@@ -204,11 +204,16 @@ async def test_checklist_projection_rolls_up_descendant_codes(
     org_id = await s5.default_org_id()
     async with get_sessionmaker()() as s:
         out = await compute_checklist(s, org_id, projected_clause_numbers={"8.3.4"})
+        # Codex P2 (#428): an unknown, descendant-SHAPED code must NOT project coverage — commit
+        # resolves codes by exact catalog lookup and silently omits unknowns.
+        bogus = await compute_checklist(s, org_id, projected_clause_numbers={"8.3.99"})
     row = next(r for r in out["rows"] if r["number"] == "8.3")
     # Premise (shared DB): no test drives an Effective doc into the 8.3 subtree today — if one
     # ever does, this fails loudly here; pick another quiet ★ subtree rather than weaken the test.
     assert row["status"] != "COVERED", "premise: ★ 8.3 must not be live-COVERED"
     assert row["projected_status"] == "COVERED"  # the descendant code covers the ★ ancestor
+    bogus_row = next(r for r in bogus["rows"] if r["number"] == "8.3")
+    assert bogus_row["projected_status"] == bogus_row["status"]  # unknown code projects nothing
 
 
 async def test_checklist_star_leaf_never_inherits_from_siblings_or_parent(

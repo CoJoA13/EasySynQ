@@ -605,3 +605,88 @@ async def test_pack_authz_403_without_generate(
         json={"title": "denied", "scope_kind": "CLAUSE", "clause_ids": [str(uuid.uuid4())]},
     )
     assert r.status_code == 403, r.text
+
+
+async def test_gap_summary_rolls_descendant_scope_up_to_star_anchors(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """R63 / Codex P1 (#428): a PROCESS scope whose linked doc maps only to a ★ DESCENDANT
+    (4.4.2 under ★ 4.4) must still select the ★ 4.4 checklist row — pre-fix, the exact
+    clause-id intersection dropped it and a sealed pack could read zero in-scope gaps while
+    the subtree coverage was PARTIAL."""
+    from sqlalchemy import select as sa_select
+
+    from easysynq_api.db.models._vault_enums import DocumentKind
+    from easysynq_api.db.models.clause import Clause
+    from easysynq_api.db.models.clause_mapping import ClauseMapping
+    from easysynq_api.db.models.framework import Framework
+    from easysynq_api.db.models.process_link import ProcessLink
+    from easysynq_api.services.packs.service import gap_summary
+
+    subject = _subject("gap-rollup")
+    await _grant(subject, _PACK_PERMS)
+    async with get_sessionmaker()() as s:
+        user = (
+            await s.execute(sa_select(AppUser).where(AppUser.keycloak_subject == subject))
+        ).scalar_one()
+        org_id = user.org_id
+        framework_id = (
+            await s.execute(
+                sa_select(Framework.id).where(
+                    Framework.org_id == org_id, Framework.code == "iso9001:2015"
+                )
+            )
+        ).scalar_one()
+        clause_442 = (
+            await s.execute(
+                sa_select(Clause.id).where(
+                    Clause.framework_id == framework_id, Clause.number == "4.4.2"
+                )
+            )
+        ).scalar_one()
+        proc = Process(
+            org_id=org_id,
+            name=f"GAP-{uuid.uuid4().hex[:8]}",
+            pdca_phase=PdcaPhase.DO,
+            created_by=user.id,
+        )
+        s.add(proc)
+        doc = DocumentedInformation(
+            org_id=org_id,
+            framework_id=framework_id,
+            kind=DocumentKind.DOCUMENT,
+            identifier=f"GAPDOC-{uuid.uuid4().hex[:10]}",
+            title="descendant-mapped",
+            owner_user_id=user.id,
+            created_by=user.id,
+        )
+        s.add(doc)
+        await s.flush()
+        s.add(
+            ClauseMapping(
+                org_id=org_id,
+                framework_id=framework_id,
+                clause_id=clause_442,
+                documented_information_id=doc.id,
+                created_by=user.id,
+            )
+        )
+        s.add(
+            ProcessLink(
+                org_id=org_id,
+                process_id=proc.id,
+                documented_information_id=doc.id,
+                created_by=user.id,
+            )
+        )
+        await s.commit()
+        proc_id = proc.id
+
+    async with get_sessionmaker()() as s:
+        out = await gap_summary(s, org_id, scope_kind="PROCESS", scope_ids=[proc_id])
+    numbers = {c["number"]: c["status"] for c in out["clauses"]}
+    # Premise (shared DB): the Draft doc leaves ★ 4.4 PARTIAL — a gap row. If a future test ever
+    # drives an Effective doc into the 4.4 subtree, this fails loudly here (the row would leave
+    # the gap list as COVERED); pick another quiet ★ subtree rather than weaken the assert.
+    assert "4.4" in numbers, out
+    assert numbers["4.4"] == "PARTIAL"
