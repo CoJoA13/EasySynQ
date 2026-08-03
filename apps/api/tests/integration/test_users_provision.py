@@ -25,7 +25,7 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from easysynq_api.api import users as users_api
 from easysynq_api.db.models._audit_enums import EventType
@@ -63,13 +63,6 @@ _ADMIN = "System Administrator"
 # local BEFORE the try block that contains the rollback, and log that local instead of touching
 # the ORM instance afterward. The two tests that pinned this defect (below) are therefore no
 # longer `xfail` — they are ordinary passing tests proving the non-fatal degrade actually holds.
-_ROLLBACK_EXPIRY_BUG = (
-    "api/users.py's except-block logs `extra={'user_id': str(user.id)}` AFTER "
-    "await session.rollback(), which expires the ORM instance regardless of "
-    "expire_on_commit=False -> the sync attribute touch lazy-loads with no greenlet -> "
-    "MissingGreenlet propagates uncaught, instead of the intended non-fatal degrade. "
-    "Confirmed production bug; see module comment."
-)
 
 
 def _sub(prefix: str) -> str:
@@ -90,8 +83,11 @@ def _install_kc(
     create_body: dict[str, object] | None = None,
     new_subject: str = "kc-provisioned",
     lookup_status: int = 200,
+    password_status: int = 204,
 ) -> dict[str, list[object]]:
-    """Script the identity service. ``existing`` makes the username resolve to that subject."""
+    """Script the identity service. ``existing`` makes the username resolve to that subject.
+    ``password_status`` scripts the ``reset-password`` leg — a non-204 fails it AFTER the account
+    lookup/create has already succeeded, to exercise a post-commit Keycloak failure."""
     calls: dict[str, list[object]] = {"password": []}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -112,6 +108,8 @@ def _install_kc(
             )
         if request.method == "PUT" and request.url.path.endswith("/reset-password"):
             calls["password"].append(request.url.path)
+            if password_status != 204:
+                return httpx.Response(password_status, json={"error": "boom"})
             return httpx.Response(204)
         raise AssertionError(f"unexpected: {request.method} {request.url}")
 
@@ -178,8 +176,10 @@ async def _subjectless_user_id() -> uuid.UUID:
     """A user with an EMPTY ``keycloak_subject`` — the ``issue_temporary_password`` 409
     ``user_not_linked`` branch is otherwise unreachable via the API (``invite_user`` and
     ``provision_user`` both reject an empty/blank subject), so this inserts the edge case directly
-    at the DB layer. ``keycloak_subject`` is UNIQUE, so an already-present "" row (e.g. a prior run
-    of this same test against this DB) is reused rather than risking a duplicate-key error.
+    at the DB layer. ``keycloak_subject`` is UNIQUE, so an already-present "" row (e.g. a crash
+    before a prior run's cleanup could complete) is reused rather than risking a duplicate-key
+    error; the sole caller deletes the row in a ``finally`` once it is done with it, so this
+    fallback should normally be dead code, not the steady-state path.
     """
     sm = get_sessionmaker()
     async with sm() as s:
@@ -209,12 +209,11 @@ def _break_credential_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     needs no call-counting) — the simplest of three mechanisms tried, and the only one exercised
     below; the other two (replacing ``AsyncSession.commit`` outright, and a ``before_commit`` ORM
     event) were NOT superseded-because-broken: before the fix, they hit the exact same downstream
-    ``sqlalchemy.exc.MissingGreenlet`` this one did, for the SAME reason (``_ROLLBACK_EXPIRY_BUG``,
-    module comment above), not an artifact of any one injection technique — whichever way the fault
-    landed in this try block, the caller's own ``except Exception: await session.rollback()`` then
-    touched an ORM attribute on the now-expired instance and crashed the same way. Both handlers now
-    capture the id into a local BEFORE the rollback (see ``api/users.py``), so this helper's choice
-    of injection point is unchanged but the crash is gone — these tests now pass for real.
+    ``sqlalchemy.exc.MissingGreenlet``, for the same reason — the caller's own
+    ``except Exception: await session.rollback()`` touched an ORM attribute on the now-expired
+    instance and crashed, regardless of which injection technique raised the fault. Both handlers
+    now capture the id into a local BEFORE the rollback (see ``api/users.py``), so this helper's
+    choice of injection point is unchanged but the crash is gone — these tests now pass for real.
     """
     real_emit = users_api._emit_user_event
 
@@ -301,6 +300,44 @@ async def test_keycloak_failure_creates_no_app_user(
     assert resp.status_code == 502
     assert resp.json()["code"] == "keycloak_unavailable"
     assert await _app_user_count() == before  # delta-based, never an absolute count
+
+
+async def test_set_password_failure_after_commit_leaves_the_row_but_no_credential_audit(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The single most load-bearing failure path in the slice, and the counterpart to the
+    pre-commit failure above: the Keycloak account + ``app_user`` row are ALREADY committed by the
+    time ``set_temporary_password`` runs, so a failure there must not be treated like the pre-commit
+    case. The row must PERSIST (never retry create — it would only collide on the now-existing
+    username), the caller gets 502 ``keycloak_unavailable`` with guidance to reissue instead of
+    retrying create, and — critically — no ``USER_CREDENTIAL_ISSUED`` audit row may exist, because
+    no credential was actually issued; the trail must never claim otherwise."""
+    subject = _sub("pwfail")
+    _install_kc(monkeypatch, new_subject=subject, password_status=500)
+    headers = await _admin(token_factory)
+
+    resp = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": f"pwfail-{uuid.uuid4().hex[:6]}"},
+    )
+
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["code"] == "keycloak_unavailable"
+
+    sm = get_sessionmaker()
+    async with sm() as s:
+        user = await s.scalar(select(AppUser).where(AppUser.keycloak_subject == subject))
+        assert user is not None  # the app_user row survives a post-commit Keycloak failure
+        issued = await s.scalar(
+            select(AuditEvent).where(
+                AuditEvent.object_id == user.id,
+                AuditEvent.event_type == EventType.USER_CREDENTIAL_ISSUED,
+            )
+        )
+        assert issued is None  # no credential was ever actually issued for this user
 
 
 async def test_provision_with_roles_assigns_them_and_audits_in_order(
@@ -512,11 +549,20 @@ async def test_reissue_without_linked_subject_returns_409(
 ) -> None:
     headers = await _admin(token_factory)
     unlinked_id = await _subjectless_user_id()
+    try:
+        resp = await app_client.post(
+            f"/api/v1/users/{unlinked_id}/temporary-password", headers=headers
+        )
 
-    resp = await app_client.post(f"/api/v1/users/{unlinked_id}/temporary-password", headers=headers)
-
-    assert resp.status_code == 409, resp.text
-    assert resp.json()["code"] == "user_not_linked"
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["code"] == "user_not_linked"
+    finally:
+        # `keycloak_subject` is UNIQUE — never leave the "" sentinel row for the next run to trip
+        # over (shared-DB discipline, .claude/rules/engineering-patterns.md).
+        sm = get_sessionmaker()
+        async with sm() as s:
+            await s.execute(delete(AppUser).where(AppUser.id == unlinked_id))
+            await s.commit()
 
 
 async def test_provision_survives_a_failed_credential_audit_commit(
@@ -561,7 +607,11 @@ async def test_provision_survives_a_failed_credential_audit_commit(
                 AuditEvent.event_type == EventType.USER_CREDENTIAL_ISSUED,
             )
         )
-        assert issued is None  # proves the forced failure really did roll back ONLY this row
+        # The injected failure raises INSIDE _emit_user_event itself, before the row is ever
+        # staged, so there is nothing here for session.rollback() to undo. This only confirms no
+        # USER_CREDENTIAL_ISSUED row exists despite the forced failure — paired with the asserts
+        # above, which confirm the EARLIER commit (the app_user row + USER_CREATED) is untouched.
+        assert issued is None
 
 
 async def test_reissue_survives_a_failed_credential_audit_commit(

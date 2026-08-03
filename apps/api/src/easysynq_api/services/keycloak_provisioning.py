@@ -12,8 +12,10 @@ Two behaviours are inherited from ``scripts/new-keycloak-user.sh`` and are load-
 
 * the admin ``GET /users?username=`` query is a CONTAINS match (``ann`` also returns ``joann``), so
   ``exact=true`` is sent AND the returned username is re-verified;
-* a FAILED lookup is not proof of absence — a transient 403/5xx raises rather than reporting the
-  user as absent, because falling through to CREATE would conflict on a real account.
+* a FAILED lookup is not proof of absence — a transient 403/5xx raises, and so does a NON-EMPTY
+  response in which no item's username matches exactly (Keycloak normalizes usernames, so
+  provisioning ``JDoe`` while ``jdoe`` already exists must never read as absent). Only an EMPTY
+  response is "definitively absent" and may fall through to CREATE.
 """
 
 from __future__ import annotations
@@ -143,6 +145,23 @@ class KeycloakProvisioningClient:
             # never act on an account we did not ask for.
             if item.get("username") == username and isinstance(item.get("id"), str):
                 return UserLookup(found=True, subject=item["id"])
+        if body:
+            # A NON-EMPTY response with no exact match is a lookup FAILURE, not absence: Keycloak
+            # normalizes usernames (lowercases them), so provisioning `JDoe` when `jdoe` already
+            # exists returns exactly this shape. Reporting absent here would let the caller CREATE
+            # and 409 against that very account instead of surfacing the "link the existing
+            # account" affordance — the same hazard `scripts/new-keycloak-user.sh`'s `user_sub`
+            # refuses to act on. Only a genuinely EMPTY response is definitively absent.
+            returned = sorted(
+                {
+                    item["username"]
+                    for item in body
+                    if isinstance(item, dict) and isinstance(item.get("username"), str)
+                }
+            )
+            raise KeycloakUnavailable(
+                f"Keycloak username lookup mismatch: asked for {username!r}, got {returned!r}"
+            )
         return UserLookup(found=False)
 
     async def create_user(

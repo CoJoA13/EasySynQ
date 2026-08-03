@@ -13,7 +13,7 @@ placed in an audit payload.
 ``status``, so this slice needs only the additive enum value.
 
 Additive enum (the 0011-0016 precedent): ``ALTER TYPE event_type ADD VALUE`` is in-txn-safe on PG16
-(no row USES the value here), irreversible → no-op enum downgrade (0001's downgrade DROP TYPEs
+(no row USES the value here), irreversible → no-op enum downgrade (0010's downgrade DROP TYPEs
 ``event_type`` wholesale, so the up↔down round-trip still passes). The Python ``EventType`` carries
 the new member too (``_audit_enums.py``) so a from-scratch ``upgrade head`` — which rebuilds the type
 from ``EVENT_TYPE_VALUES`` — matches a migrated DB.
@@ -40,6 +40,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # The ADD VALUE on event_type is irreversible in PostgreSQL → no-op (0001's downgrade DROP TYPEs
+    # The ADD VALUE on event_type is irreversible in PostgreSQL → no-op (0010's downgrade DROP TYPEs
     # event_type wholesale, so the round-trip still passes). No columns were added.
     pass

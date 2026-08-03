@@ -36,6 +36,9 @@ def _token_ok(request: httpx.Request) -> httpx.Response | None:
 
 
 async def test_lookup_requires_exact_and_reverifies_the_returned_username() -> None:
+    """Keycloak echoing a DIFFERENT user (the contains-match hazard) must raise — it must never be
+    accepted as a match, and it must never be collapsed into "definitively absent" either, since
+    that would let the caller fall through to CREATE and conflict on the real existing account."""
     seen: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -44,17 +47,32 @@ async def test_lookup_requires_exact_and_reverifies_the_returned_username() -> N
             return token
         if request.method == "GET" and request.url.path == "/admin/realms/easysynq/users":
             seen.update(dict(request.url.params))
-            # Keycloak echoing a DIFFERENT user (the contains-match hazard) must not be accepted.
             return httpx.Response(200, json=[{"id": "sub-joann", "username": "joann"}])
         raise AssertionError(f"unexpected: {request.method} {request.url}")
 
     async with _client(handler) as kc:
-        result = await kc.find_user_by_username("ann")
+        with pytest.raises(KeycloakUnavailable):
+            await kc.find_user_by_username("ann")
 
     assert seen["exact"] == "true"
     assert seen["username"] == "ann"
-    assert result.found is False
-    assert result.subject is None
+
+
+async def test_lookup_mismatch_from_username_normalization_raises() -> None:
+    """The reachable real-world case: Keycloak lowercases usernames, so provisioning `JDoe` while
+    `jdoe` already exists returns exactly this shape. It must raise rather than report absent —
+    reporting absent would let the caller fall through to CREATE and 409 against that very
+    account instead of surfacing the "link the existing account" affordance."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(200, json=[{"id": "sub-jdoe", "username": "jdoe"}])
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable):
+            await kc.find_user_by_username("JDoe")
 
 
 async def test_lookup_returns_the_subject_on_an_exact_match() -> None:

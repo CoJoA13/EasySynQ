@@ -3,12 +3,16 @@
 The per-user role/override *grants* live in ``api/authz.py`` (shipped in S2, reused unchanged); this
 router owns the ``app_user`` lifecycle. All routes are PEP-gated + org-scoped + audited pre-commit.
 
-**Invite** pre-creates an ``INVITED`` ``app_user`` bound to a Keycloak ``sub`` the operator supplies
-(the operator creates the Keycloak account out-of-band — in-app Keycloak admin-API provisioning is a
-v1 convenience, D1/no-Keycloak-in-CI). The row reconciles with the existing JIT lookup on that
-subject's first login (``auth/dependencies.py`` matches on ``keycloak_subject`` and flips
-INVITED→ACTIVE). **Enable/disable** toggles ``status`` between ACTIVE and DISABLED; disabling the
-sole active System Administrator is refused (the break-glass principle, doc 08 §9.1).
+**provision_user** (``POST /users/provision``) creates the Keycloak account and the ``app_user``
+row together, returning a generated temporary password shown once (slice S-user-create).
+**invite_user** (``POST /users``) remains for binding an EXISTING Keycloak subject the operator
+already created — the fallback path, and the target of the "link the existing account"
+affordance when a provision collides with an unlinked Keycloak account; the row reconciles with
+the existing JIT lookup on that subject's first login (``auth/dependencies.py`` matches on
+``keycloak_subject`` and flips INVITED→ACTIVE). **issue_temporary_password** reissues a
+credential, whether to repair a provision whose password step failed or as an ordinary reset.
+**Enable/disable** toggles ``status`` between ACTIVE and DISABLED; disabling the sole active
+System Administrator is refused (the break-glass principle, doc 08 §9.1).
 """
 
 from __future__ import annotations

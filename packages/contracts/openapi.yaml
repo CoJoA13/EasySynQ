@@ -6945,6 +6945,7 @@ components:
             - keycloak_username_exists_unlinked
             - keycloak_unavailable
             - user_not_linked
+            - last_admin
         detail: { type: [string, "null"] }
         instance: { type: [string, "null"] }
         request_id: { type: [string, "null"] }
