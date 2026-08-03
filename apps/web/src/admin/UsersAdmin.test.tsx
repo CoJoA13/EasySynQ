@@ -238,3 +238,27 @@ test("switching the Manage drawer directly to a different user does not carry ov
   ).toBeInTheDocument();
   expect(within(drawer).queryByText(MARAS_PASSWORD)).toBeNull();
 });
+
+test("opening the modal removes the ambiguous duplicate of the Create user button name", async () => {
+  server.use(http.get("/api/v1/users", () => HttpResponse.json([USER])));
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />);
+
+  // Wait for the roster to load before asserting.
+  await screen.findByText(USER.display_name);
+
+  // With the modal closed, there is one "Create user" button (the header).
+  expect(screen.getByRole("button", { name: "Create user" })).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Create user" })).toHaveLength(1);
+
+  // Open the modal by clicking the header button.
+  await user.click(screen.getByRole("button", { name: "Create user" }));
+
+  // Wait for the modal's form to render (via the Username input field).
+  await screen.findByLabelText(/Username/);
+
+  // With the modal open, the modal's submit button is now "Create" (not "Create user"),
+  // so there is still only ONE "Create user" button (the header), not a duplicate.
+  expect(screen.getAllByRole("button", { name: "Create user" })).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Create" })).toBeInTheDocument();
+});

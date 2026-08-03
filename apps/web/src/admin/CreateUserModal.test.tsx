@@ -79,7 +79,7 @@ describe("CreateUserModal", () => {
     // Mantine v7 injects an aria-hidden " *" into a required-field label's textContent (the
     // ImplementCreateDcrModal precedent) — match by regex, not the exact "Username".
     await user.type(screen.getByLabelText(/Username/), "newhire");
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(await screen.findByText(PROVISION_RESPONSE.temporary_password)).toBeInTheDocument();
     expect(screen.getByText(/cannot be shown again/)).toBeInTheDocument();
@@ -98,7 +98,7 @@ describe("CreateUserModal", () => {
     const { rerender } = renderModal(onClose);
 
     await user.type(screen.getByLabelText(/Username/), "newhire");
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByText(PROVISION_RESPONSE.temporary_password)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Done" }));
@@ -155,7 +155,7 @@ describe("CreateUserModal", () => {
     renderModal(onClose);
 
     await user.type(screen.getByLabelText(/Username/), "orphan");
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(
       await screen.findByText(/sign-in account with that username already exists/),
@@ -185,7 +185,7 @@ describe("CreateUserModal", () => {
     const user = userEvent.setup();
     renderModal();
     await user.type(screen.getByLabelText(/Username/), "orphan");
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
     await screen.findByRole("button", { name: "Link the existing account" });
 
     await user.click(screen.getByRole("button", { name: "Choose a different username" }));
@@ -211,7 +211,7 @@ describe("CreateUserModal", () => {
     const user = userEvent.setup();
     renderModal();
     await user.type(screen.getByLabelText(/Username/), "orphan");
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(await screen.findByText("Couldn't create user")).toBeInTheDocument();
     expect(
@@ -238,7 +238,7 @@ describe("CreateUserModal", () => {
     renderModal();
     await user.type(screen.getByLabelText(/Username/), "dupe");
     await user.type(screen.getByLabelText("Email"), "dupe@example.com");
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(await screen.findByText(/already used by another sign-in account/)).toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toHaveAttribute("aria-invalid", "true");
@@ -282,7 +282,7 @@ describe("CreateUserModal", () => {
     await screen.findByText("Roles");
     await user.click(screen.getByPlaceholderText(/assign roles/i));
     await user.click(await screen.findByText("Employee"));
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
 
     await screen.findByText(PROVISION_RESPONSE.temporary_password);
     expect(body).toMatchObject({

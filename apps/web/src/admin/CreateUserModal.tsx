@@ -209,7 +209,7 @@ export function CreateUserModal({
               loading={createMut.isPending}
               disabled={!form.username.trim()}
             >
-              Create user
+              Create
             </Button>
           </Group>
         </Stack>
