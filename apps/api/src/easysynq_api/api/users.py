@@ -322,7 +322,7 @@ async def provision_user(
         await session.commit()
 
         # Only now does the account become usable. A failure here leaves a real app_user whose
-        # account has no credential — repaired by reissuing a temporary password, never by
+        # account has no credential — repaired by POST /users/{id}/temporary-password, never by
         # retrying create (which would just collide on the now-existing username) and never by
         # deleting the Keycloak account.
         try:
