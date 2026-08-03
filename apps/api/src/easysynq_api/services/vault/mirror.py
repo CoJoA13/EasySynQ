@@ -19,7 +19,8 @@ MinIO and is **never backup-critical**.
 flat ``current/{identifier}_{revision_label}/`` layout becomes the IA tree a human browsing the disk
 recognizes: ``current/{PHASE}/{NN}-{Word}/{identifier}_{revision_label}/`` where ``PHASE`` is the
 *mapped clause's own* ``pdca_phase`` (PLAN/DO/CHECK/ACT) and ``{NN}-{Word}`` is its top-level
-ancestor (e.g. ``DO/08-Operation``; clause 7 splits 7.1-7.4 → PLAN, 7.5 → DO). A document mapping
+ancestor (e.g. ``DO/08-Operation``; clause 7 is wholly DO since R62, so a doc appears in two
+phase trees only when its mapped clauses span phases). A document mapping
 several clauses lives **once** under its numerically-lowest mapped clause and is reached from every
 other mapped clause folder via a **relative symlink** (spec-faithful "without duplicating bytes",
 §10.3/§10.4). A document with no mappings (only reachable as a pre-S9 upgrade artifact — the

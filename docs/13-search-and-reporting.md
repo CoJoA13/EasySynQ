@@ -301,7 +301,7 @@ RAG colors come from **explicit, org-configurable, audited thresholds** stored a
 | Quadrant | Widgets (Stat/RAG tiles, drill-through to filtered search) |
 |---|---|
 | **PLAN** (Cl 4–6) | Quality Objectives on/off target (gauge); open high-risk register items (resolved against the real `risk_rating` field — `risk_rating in (high, critical)` on `risk_opportunity`, reconciled per Decisions Register R18, not an ad-hoc risk flag); overdue document reviews |
-| **DO** (Cl 7 operating, 8) | Documents pending approval (count + aging); items checked-out > X days (drift risk); procedures past review date |
+| **DO** (Cl 7–8) | Documents pending approval (count + aging); items checked-out > X days (drift risk); procedures past review date |
 | **CHECK** (Cl 9) | Upcoming/overdue internal audits; KPI breaches; days-to next Management Review |
 | **ACT** (Cl 10) | Open CAPAs by age band; overdue corrective actions; improvement initiatives in progress |
 
