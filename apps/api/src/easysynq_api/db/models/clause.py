@@ -10,7 +10,8 @@ clause text is reserved for the multi-standard ``framework.author`` extension, D
 ``framework`` row, and ``framework`` is itself org-scoped — so the catalog is per-org seed data
 without duplicating ``org_id`` here (doc 14 §4's column list). ``is_mandatory_star`` marks the
 doc 02 §2.1 ★ mandatory documented-information set (Register R30) that drives the compliance
-checklist; ``pdca_phase`` places the clause on the PDCA axis (doc 02 §3.2, clause 7 split).
+checklist; ``pdca_phase`` places the clause on the PDCA axis (doc 02 §3.2; uniform per
+top-level clause since R62).
 """
 
 from __future__ import annotations

@@ -8,8 +8,9 @@ rebuild post-commit; the render deferral marks ``render_status:"pending"`` (NOT 
 ``no_controlled_rendition``); metadata/INDEX/manifest are written; the rebuild is byte-idempotent;
 the advisory lock serializes overlapping syncs. **S9b:** a doc is placed under its
 ``{PHASE}/{NN}-Word/`` clause folder, reachable from every other mapped clause via a relative
-symlink; the clause-7 PLAN/DO split, multi-clause symlinks, the symlink-survives-swap chain, and the
-``_unmapped/`` upgrade fallback are all exercised.
+symlink; a cross-phase mapping (R62: clause 7 is wholly DO, so 6.2 PLAN + 7.5 DO), multi-clause
+symlinks, the symlink-survives-swap chain, and the ``_unmapped/`` upgrade fallback are all
+exercised.
 
 The multi-actor setup reuses the S5 helpers: author ``a`` checks in + submits; approver/releaser
 ``b`` approves + releases (``allow_approver_release`` on). The mirror writer reads as the non-owner
@@ -516,23 +517,24 @@ async def test_mirror_multi_clause_symlink(
     assert _all_file_bytes(mirror).count(b"multi") == 1  # the source is stored exactly once
 
 
-async def test_mirror_clause7_split_two_phases(
+async def test_mirror_cross_phase_two_dirs(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
     subj: SimpleNamespace,
     tmp_path: Path,
 ) -> None:
-    """Clause 7's PLAN/DO split: a doc mapped to 7.2 (PLAN) + 7.5 (DO) is real under PLAN/07-Support
-    and symlinked under DO/07-Support — the same top-level folder appears in two phase trees."""
+    """A cross-phase mapping: a doc mapped to 6.2 (PLAN) + 7.5 (DO) is real under PLAN/06-Planning
+    and symlinked under DO/07-Support (R62 moved all of clause 7 to DO, so a doc splits across
+    phase trees only when its mapped clauses span phases)."""
     mirror = tmp_path / "m"
     await _grant_release_actors(subj)
     ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
     doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"split")
-    await _remap_exactly(app_client, ha, doc["id"], ["7.2", "7.5"])
+    await _remap_exactly(app_client, ha, doc["id"], ["6.2", "7.5"])
 
     await _sync(mirror)
     real = _doc_dir(mirror, doc["identifier"])
-    assert real.parent == mirror / "current" / "PLAN" / "07-Support"  # 7.2 is lower than 7.5
+    assert real.parent == mirror / "current" / "PLAN" / "06-Planning"  # 6.2 is lower than 7.5
     link = mirror / "current" / "DO" / "07-Support" / real.name
     assert link.is_symlink() and link.resolve() == real.resolve()
 

@@ -6,6 +6,7 @@ import type {
   AuditPlanList,
   AuditProgramList,
   Capa,
+  Clause,
   Complaint,
   ContextIssue,
   ContextListResponse,
@@ -369,7 +370,7 @@ export const clauseFixture = [
     pdca_phase: "ACT",
     requirement_node: false,
   },
-];
+] satisfies Clause[];
 
 // ---- S-web-3 authoring fixtures -------------------------------------------------------
 export const createdDocFixture = {

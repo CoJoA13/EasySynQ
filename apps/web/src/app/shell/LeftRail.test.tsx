@@ -1,5 +1,5 @@
+import { QueryClient } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { expect, it, test } from "vitest";
 import { server } from "../../test/msw/server";
@@ -70,40 +70,22 @@ test("Objectives sits under the PLAN section (gated on objective.read)", async (
   expect(plan).toContainElement(objectives);
 });
 
-test("each phase's clause-filter links nest under a collapsed per-phase disclosure", async () => {
-  renderWithProviders(<LeftRail />, { route: "/library" });
-  const plan = await screen.findByRole("group", { name: "PLAN section" });
-  // The clause-browse links live behind one collapsed "Clauses 4–6" disclosure per phase (they are
-  // Library filters, not registers). Collapsed → no clause link is exposed to the a11y tree, and the
-  // toggle MUST announce its state (Mantine emits only data-expanded — a styling hook AT can't hear).
-  const toggle = await within(plan).findByRole("button", { name: /Clauses 4–6/ });
-  expect(toggle).toHaveAttribute("aria-expanded", "false");
+test("the rail exposes no clause-filter links and never fetches /clauses (removed — every exact-match top-level filter returned zero documents)", async () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  renderWithProviders(<LeftRail />, { route: "/library", queryClient });
+  await screen.findByText(/PLAN ·/);
+  // Settle-aware: the OLD rail mounted its clause links only after the async useClauses()
+  // fetch landed, so a pre-fetch DOM negative would pass against reverted code too. The
+  // ["clauses"] query never being REGISTERED is the deterministic revert-RED signal (and pins
+  // the "no /clauses call on every page load" claim).
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+  expect(queryClient.getQueryState(["clauses"])).toBeUndefined();
   expect(
-    within(plan)
+    screen
       .queryAllByRole("link")
       .some((a) => a.getAttribute("href")?.startsWith("/library?clause=")),
   ).toBe(false);
-  await userEvent.click(toggle);
-  expect(toggle).toHaveAttribute("aria-expanded", "true");
-  expect(
-    within(plan)
-      .getAllByRole("link")
-      .some((a) => a.getAttribute("href")?.startsWith("/library?clause=")),
-  ).toBe(true);
-});
-
-test("a deep link to a clause filter auto-opens the owning phase's disclosure", async () => {
-  // Landing directly on /library?clause=4.1 (CompliancePage/search links do this) must not hide the
-  // applied filter's own rail link behind a collapsed disclosure.
-  renderWithProviders(<LeftRail />, { route: "/library?clause=4.1" });
-  const plan = await screen.findByRole("group", { name: "PLAN section" });
-  const toggle = await within(plan).findByRole("button", { name: /Clauses 4–6/ });
-  expect(toggle).toHaveAttribute("aria-expanded", "true");
-  expect(
-    within(plan)
-      .getAllByRole("link")
-      .some((a) => a.getAttribute("href")?.startsWith("/library?clause=4")),
-  ).toBe(true);
+  expect(screen.queryByRole("button", { name: /Clauses/ })).not.toBeInTheDocument();
 });
 
 test("the Nonconformity and CAPA entry is always shown (discoverable; page handles 403)", async () => {

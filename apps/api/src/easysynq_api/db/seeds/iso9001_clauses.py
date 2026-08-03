@@ -3,7 +3,7 @@
 The authoritative source for the ``clause`` reference table seeded by migration
 ``0018_seed_clauses``. Authored from doc 02 §2 (the clause-by-clause walkthrough), §2.1 (the ★
 mandatory documented-information set, Register R30 — exactly 20 rows incl. 8.5.6), and §3.2 (the
-PDCA↔clause mapping; clause 7 is split across PLAN and DO). Drafted and adversarially verified
+PDCA↔clause mapping; clause 7 is wholly DO — R62). Drafted and adversarially verified
 against doc 02 before freezing (two corrections: 7.5 is not a §2.1 ★ row; 5.1.1's official title is
 "General"). Kept as a data module (not inline in the migration) so it is reviewable and unit-testable
 (``tests/unit/test_clause_catalog.py``) and a single source of truth for any future re-seed.
@@ -193,9 +193,9 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "7",
         None,
         "Support",
-        "Resources, competence, awareness, communication, and the control of documented information itself. Section header for clauses 7.1–7.5; split across PLAN (resourcing) and DO (operating/document control).",
+        "Resources, competence, awareness, communication, and the control of documented information itself. Section header for clauses 7.1–7.5.",
         False,
-        "PLAN",
+        "DO",
         False,
     ),
     (
@@ -204,7 +204,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "Resources",
         "Determine and provide the resources needed for the QMS. Section header covering people, infrastructure, environment, monitoring/measuring resources, and organizational knowledge.",
         False,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -213,7 +213,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "General",
         "Consider the capabilities and constraints of existing internal resources and what is needed from external providers when determining and providing QMS resources.",
         False,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -222,7 +222,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "People",
         "Determine and provide the people necessary for the effective implementation of the QMS and the operation and control of its processes.",
         False,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -231,7 +231,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "Infrastructure",
         "Determine, provide and maintain the infrastructure (buildings, equipment, transport, ICT) needed for process operation and conformity of products and services.",
         False,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -240,7 +240,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "Environment for the operation of processes",
         "Determine, provide and maintain the environment (social, psychological, physical factors) necessary for process operation and product/service conformity.",
         False,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -249,7 +249,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "Monitoring and measuring resources",
         "Determine and provide the resources needed to ensure valid and reliable monitoring and measurement results. Section header covering 7.1.5.1 and 7.1.5.2.",
         False,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -258,7 +258,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "General",
         "Ensure monitoring and measuring resources are suitable, maintained, and fit for purpose; retain documented evidence of their fitness. Mandatory retained record.",
         True,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -267,7 +267,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "Measurement traceability",
         "Where traceability is a requirement, calibrate or verify measuring equipment against traceable standards and retain the calibration basis as documented information. Mandatory retained record.",
         True,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -276,7 +276,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "Organizational knowledge",
         "Determine the knowledge necessary for process operation and conformity, maintain it, and make it available; acquire additional knowledge to address changing needs.",
         False,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -285,7 +285,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "Competence",
         "Determine and ensure the competence of persons affecting QMS performance and retain documented information as evidence of competence (education, training, skills, experience). Mandatory retained record.",
         True,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -294,7 +294,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "Awareness",
         "Ensure persons are aware of the Quality Policy, relevant quality objectives, their contribution to QMS effectiveness, and the implications of nonconformity.",
         False,
-        "PLAN",
+        "DO",
         True,
     ),
     (
@@ -303,7 +303,7 @@ CLAUSES: tuple[tuple[str, str | None, str, str, bool, str, bool], ...] = (
         "Communication",
         "Determine the internal and external communications relevant to the QMS — what, when, with whom, how, and who communicates.",
         False,
-        "PLAN",
+        "DO",
         True,
     ),
     (

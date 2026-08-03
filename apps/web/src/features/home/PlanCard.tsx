@@ -8,7 +8,7 @@ import { QuadrantCard, TileNoAccess, TileSkeleton } from "./QuadrantCard";
 import { StatLine } from "./StatLine";
 import { countRag, overdueRag, planObjectivesRag, worstRag, type Rag } from "./rag";
 
-// PLAN (Cl 4–7): Quality Objectives on target (server by_rag) + overdue document reviews + the
+// PLAN (Cl 4–6, R62): Quality Objectives on target (server by_rag) + overdue document reviews + the
 // high-risk count (clause 6.1; the GOVERNING read-of-record via GET /risks/summary — S-risk-4a).
 export function PlanCard() {
   const sc = useObjectiveScorecard();
@@ -116,7 +116,7 @@ export function PlanCard() {
   return (
     <QuadrantCard
       phase="PLAN"
-      clauseLabel="Cl 4–7"
+      clauseLabel="Cl 4–6"
       rag={rags.length ? worstRag(rags) : null}
       openTo="/objectives"
       openLabel="Open objectives"

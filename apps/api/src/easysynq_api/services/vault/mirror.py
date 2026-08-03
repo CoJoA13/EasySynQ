@@ -19,7 +19,8 @@ MinIO and is **never backup-critical**.
 flat ``current/{identifier}_{revision_label}/`` layout becomes the IA tree a human browsing the disk
 recognizes: ``current/{PHASE}/{NN}-{Word}/{identifier}_{revision_label}/`` where ``PHASE`` is the
 *mapped clause's own* ``pdca_phase`` (PLAN/DO/CHECK/ACT) and ``{NN}-{Word}`` is its top-level
-ancestor (e.g. ``DO/08-Operation``; clause 7 splits 7.1-7.4 → PLAN, 7.5 → DO). A document mapping
+ancestor (e.g. ``DO/08-Operation``; clause 7 is wholly DO since R62, so a doc appears in two
+phase trees only when its mapped clauses span phases). A document mapping
 several clauses lives **once** under its numerically-lowest mapped clause and is reached from every
 other mapped clause folder via a **relative symlink** (spec-faithful "without duplicating bytes",
 §10.3/§10.4). A document with no mappings (only reachable as a pre-S9 upgrade artifact — the
@@ -365,9 +366,10 @@ def _placement_dirs(
     Returns ``(primary_dir, other_dirs)``: the real doc folder is written under ``primary_dir`` (the
     placement of the numerically-lowest mapped clause), and every OTHER distinct placement in
     ``other_dirs`` gets a relative symlink to it. Placements are deduped by ``(phase, top_number)``:
-    two clauses in one top-level bucket collapse to one folder, while the clause-7 PLAN/DO split
-    yields two. ``other_dirs`` is ordered canonically (PLAN<DO<CHECK<ACT, then top number) for a
-    deterministic tree/manifest. No mappings → ``(_unmapped, [])`` (a pre-S9 upgrade artifact)."""
+    two clauses in one top-level bucket collapse to one folder, while a cross-phase mapping
+    (e.g. 6.2 PLAN + 7.5 DO) yields two. ``other_dirs`` is ordered canonically
+    (PLAN<DO<CHECK<ACT, then top number) for a deterministic tree/manifest. No mappings →
+    ``(_unmapped, [])`` (a pre-S9 upgrade artifact)."""
     if not clause_refs:
         return _UNMAPPED_DIR, []
     ordered = sorted(clause_refs, key=lambda c: c.sort_key)
