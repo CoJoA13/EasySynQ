@@ -146,6 +146,61 @@
 > owner-approved queue (`docs/superpowers/plans/2026-08-02-lab-handoff.md` §2B + §2C) — both shipped
 > 2026-08-03.
 
+### S-star-rollup — ★ mandatory-clause coverage is subtree-inclusive (R63; owner-decided from the #427 divergence flag; BE+contract; NO migration [head stays `0084`]; NO new key [catalog 102]; PR #428 squash `98f10f8`)
+
+**What shipped — the ★ status correction that closes the #427 divergence, converging FOUR coverage
+consumers onto ONE predicate.** The Compliance Checklist scored each ★ clause by EXACT
+`clause_mapping` membership, so a doc mapped only to a descendant (9.2 via 9.2.2) read GAP — and
+post-#427, that "GAP" row's own clause link opened a non-empty rolled-up Library list. Owner
+decision (2026-08-03, **R63**): fix the status, not annotate it. **Design-check first:** R30 locks
+only the ★ SET; exactness was the module docstring's "discrete-item intuition," never register
+text → R63 records the decision (range swept R1–R62→R1–R63, the same 10-live-refs pattern).
+Mechanically: NEW `services/common/clause_subtree.py` (`clause_subtree_on` SQL join predicate +
+`code_in_subtree` for codes; descendants only — a ★ leaf never inherits from siblings/parent; no
+★ is a descendant of another ★ in the seeded set, verified) consumed by: (1) `compute_checklist`
+(aliased subtree-member join; `mapped`/`effective`/`overdue_review` widen together;
+`count(DISTINCT doc)` dedupes multi-member docs); (2) the import pre-commit projection
+(`review.py` passes UNFILTERED keep-item codes → a 9.2.2 code projects COVERED onto ★ 9.2).
+
+⚠ **The review rounds found TWO MORE independent ★-coverage computations — the drift class kept
+paying out:** (3) **diff-critic MAJOR:** the §7.3 obsoletion-safety gate's `_sole_star_clauses`
+docstring bound it to "the checklist coverage semantics" but BOTH legs stayed exact — post-R63 it
+would have let obsoleting the sole DESCENDANT coverer flip a ★ row COVERED→GAP **un-gated** (the
+false-PASS direction: the gate exists precisely to prevent that) and wrongly 409'd retiring an
+exact-★ doc whose Effective replacement maps a descendant. Both legs rewritten on the shared
+predicate; both directions proven RED against the old gate. The DCR where-used
+`mandatory_star_clauses` list deliberately keeps its literal directly-★-mapped meaning (the
+coverage-impact truth in that dimension is the shared gate's `obsoletion_star_gap`) — documented
+in R63's back-prop note. (4) **Codex P1:** pack `gap_summary` intersected checklist rows with the
+EXACT scope-derived clause ids — a PROCESS pack whose linked doc maps only 9.2.2 dropped the ★
+9.2 row entirely (a sealed pack could read zero in-scope gaps over PARTIAL subtree coverage) →
+new `packs/repository.star_ancestor_ids` rolls the raw set (PROCESS + CLAUSE branches) up to its
+★ anchors. **Codex P2:** an unknown descendant-SHAPED projected code (`8.3.not-a-clause`) newly
+projected COVERED while commit's exact catalog lookup silently omits it (pre-R63 unknown codes
+could never equal a ★ number — R63 introduced the hazard) → projected codes now intersect the
+framework catalog before membership.
+
+⚠ **Every fix is empirically mutation-verified** (the gate: stash-revert to main; packs +
+projection + validation: targeted in-place mutations — note a stash-based "mutation run" is FALSE
+once the semantics are already committed on the branch; the first projection attempt only reverted
+a cosmetic refactor and passed, the honest run required hand-mutating the line). ⚠ **Both dot
+anchors are UNIT-pinned because the real catalog cannot falsify them** — the seeded 83 numbers
+contain no ambiguous prefix pair (no `9.22` beside `9.2`), so a de-anchored `LIKE 'N%'`/bare
+`startswith` regression stays green against every seed-backed integration test
+(`test_clause_subtree.py`: the truth table incl. the 1-vs-10 trap + a compiled-SQL pin). ⚠ **The
+quiet-★-subtree convention:** shared-DB coverage tests each claim a ★ subtree and PREMISE-ASSERT
+its state (9.2 checklist rollup · 10.2 gate-sole · 8.2.3 gate-inverse · 8.3 projection [must stay
+non-COVERED] · 4.4 pack gap · 7.1.5.x leaf edge) — a future Effective doc mapped into a claimed
+subtree fails that test's premise loudly; move to another quiet subtree rather than weaken the
+assert. ⚠ The R61 site-data backstop flags 4-segment clause literals as IPv4-shaped (a `9.2.2.x`
+leaf) — use a grandchild case instead, and write such examples with a non-numeric final
+segment so the note itself does not trip the check.
+
+(S-star-rollup, BE+contract [checklist OpenAPI description; docs 13 §3.1 + 05 §7.3 + R63], NO
+migration [head `0084`], NO new key [catalog 102], api unit 1252→1254 [+2 `test_clause_subtree`],
++6 integration [reports ×3 · dcr_implement ×2 · packs ×1], web 1433 unchanged, PR #428 squash
+`98f10f8`; the S-clause-rollup finish-slice records rode in as its first commit.)
+
 ### S-clause-rollup — `filter[clause_refs][has]=N` matches N + every descendant (handoff §2C; BE+web+contract; NO migration [head stays `0084`]; NO new key [catalog 102]; PR #427 squash `958f00d`)
 
 **What shipped — the subtree rollup that makes PR 1's clause spine actually return documents.** The
