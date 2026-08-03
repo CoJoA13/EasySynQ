@@ -1854,8 +1854,14 @@ its ★ ancestor. No migration, permission key, endpoint, request field, or resp
 addressed — auditors map to sub-clauses deliberately, and the checklist must not misread that
 precision as a gap ("status you can't misread").
 
-**Back-propagation:** 13 §5.1 checklist bullet, the `/reports/compliance-checklist` OpenAPI
-description, and `services/reports/checklist.py`'s module docstring.
+**Back-propagation:** 13 §3.1 checklist bullet, 05 §7.3 (the obsoletion-safety gate scores ★
+coverage with the SAME subtree semantics via the shared `services/common/clause_subtree.py`
+predicate — `services/vault/obsoletion.py`'s sole-coverer leg both blocks a sole DESCENDANT
+coverer's retirement and accepts a descendant-mapped Effective replacement), the
+`/reports/compliance-checklist` OpenAPI description, and `services/reports/checklist.py`'s module
+docstring. The DCR where-used advisory's `mandatory_star_clauses` list deliberately keeps its
+literal meaning (the doc's DIRECTLY-★ mappings); the coverage-impact truth in that same dimension
+is the shared gate's `obsoletion_star_gap` advisory.
 
 Bumps the resolutions range **R1–R62 → R1–R63**.
 

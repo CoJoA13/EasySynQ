@@ -193,6 +193,24 @@ async def test_checklist_star_coverage_rolls_up_descendants(
     assert after_eff["status"] == "COVERED"
 
 
+async def test_checklist_projection_rolls_up_descendant_codes(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """R63 projection leg (mutation-distinguishing vs the old exact `in` membership): a projected
+    keep-item clause CODE that is a ★ DESCENDANT (8.3.4) projects COVERED onto ★ 8.3."""
+    from easysynq_api.db.session import get_sessionmaker
+    from easysynq_api.services.reports.checklist import compute_checklist
+
+    org_id = await s5.default_org_id()
+    async with get_sessionmaker()() as s:
+        out = await compute_checklist(s, org_id, projected_clause_numbers={"8.3.4"})
+    row = next(r for r in out["rows"] if r["number"] == "8.3")
+    # Premise (shared DB): no test drives an Effective doc into the 8.3 subtree today — if one
+    # ever does, this fails loudly here; pick another quiet ★ subtree rather than weaken the test.
+    assert row["status"] != "COVERED", "premise: ★ 8.3 must not be live-COVERED"
+    assert row["projected_status"] == "COVERED"  # the descendant code covers the ★ ancestor
+
+
 async def test_checklist_star_leaf_never_inherits_from_siblings_or_parent(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:

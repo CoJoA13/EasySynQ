@@ -22,6 +22,7 @@ import uuid
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from ...db.models._process_enums import ProcessState
 from ...db.models._vault_enums import DocumentCurrentState, DocumentLinkType
@@ -31,6 +32,7 @@ from ...db.models.document_link import DocumentLink
 from ...db.models.documented_information import DocumentedInformation
 from ...domain.dcr import ObsoletionSafety, evaluate_obsoletion
 from ...problems import ProblemException
+from ..common.clause_subtree import clause_subtree_on
 from . import repository as vault_repo
 
 
@@ -64,33 +66,46 @@ async def _sole_star_clauses(
     session: AsyncSession, org_id: uuid.UUID, doc_id: uuid.UUID
 ) -> list[tuple[str, str]]:
     """★ clauses for which ``doc_id`` is the SOLE Effective coverer (the §7.3 'no replacement'
-    leg) — any OTHER document with an Effective version mapped to the same ★ clause clears the leg.
+    leg) — any OTHER document with an Effective version covering the same ★ clause clears the leg.
     Moved here from ``services/dcr/repository.py`` so the gate + the advisory share ONE query (no
-    vault→dcr cycle); Effective = ``current_effective_version_id IS NOT NULL`` (the checklist
-    coverage semantics)."""
+    vault→dcr cycle); Effective = ``current_effective_version_id IS NOT NULL``, and coverage is
+    the checklist's R63 SUBTREE semantics via the shared ``clause_subtree_on`` predicate — a doc
+    mapped only to ``9.2.2`` covers ★ ``9.2``, and a ``9.2.2``-mapped Effective replacement
+    clears the leg for an exact-``9.2`` doc. The gate and the checklist cannot disagree about
+    what covers a ★ clause."""
+    doc_member = aliased(Clause)
     doc_star = (
-        select(ClauseMapping.clause_id)
-        .join(Clause, Clause.id == ClauseMapping.clause_id)
+        select(Clause.id.label("clause_id"))
+        .select_from(Clause)
+        .join(doc_member, clause_subtree_on(Clause, doc_member))
+        .join(ClauseMapping, ClauseMapping.clause_id == doc_member.id)
         .where(
             ClauseMapping.documented_information_id == doc_id, Clause.is_mandatory_star.is_(True)
         )
+        .distinct()
         .subquery()
     )
+    other_star = aliased(Clause)
+    other_member = aliased(Clause)
     other_effective = (
         select(
-            ClauseMapping.clause_id, func.count(func.distinct(DocumentedInformation.id)).label("n")
+            other_star.id.label("clause_id"),
+            func.count(func.distinct(DocumentedInformation.id)).label("n"),
         )
+        .select_from(other_star)
+        .join(other_member, clause_subtree_on(other_star, other_member))
+        .join(ClauseMapping, ClauseMapping.clause_id == other_member.id)
         .join(
             DocumentedInformation,
             DocumentedInformation.id == ClauseMapping.documented_information_id,
         )
         .where(
-            ClauseMapping.clause_id.in_(select(doc_star.c.clause_id)),
+            other_star.id.in_(select(doc_star.c.clause_id)),
             ClauseMapping.documented_information_id != doc_id,
             DocumentedInformation.org_id == org_id,
             DocumentedInformation.current_effective_version_id.isnot(None),
         )
-        .group_by(ClauseMapping.clause_id)
+        .group_by(other_star.id)
         .subquery()
     )
     rows = await session.execute(

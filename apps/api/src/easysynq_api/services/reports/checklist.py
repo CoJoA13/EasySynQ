@@ -34,6 +34,7 @@ from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.documented_information import DocumentedInformation
+from ..common.clause_subtree import clause_subtree_on, code_in_subtree
 from ..vault.repository import get_framework
 from ..vault.review import today_org
 
@@ -96,8 +97,8 @@ async def compute_checklist(
         .label("overdue")
     )
     # R63: coverage is subtree-inclusive — mappings to the ★ clause itself OR any DESCENDANT
-    # count (the '.'-anchored prefix admits children only, never siblings; catalog-trusted
-    # numbers carry no LIKE metacharacters). count(DISTINCT doc) dedupes a doc mapped to
+    # count (the shared clause_subtree_on predicate — also the §7.3 obsoletion gate's, so the
+    # gate and this report can never disagree). count(DISTINCT doc) dedupes a doc mapped to
     # several subtree members.
     member = aliased(Clause)
     rows = (
@@ -112,13 +113,7 @@ async def compute_checklist(
                 overdue_count,
             )
             .select_from(Clause)
-            .outerjoin(
-                member,
-                sa.and_(
-                    member.framework_id == Clause.framework_id,
-                    sa.or_(member.id == Clause.id, member.number.like(Clause.number + ".%")),
-                ),
-            )
+            .outerjoin(member, clause_subtree_on(Clause, member))
             .outerjoin(
                 ClauseMapping,
                 sa.and_(
@@ -167,7 +162,7 @@ async def compute_checklist(
             # ★ clause → COVERED (it commits as a Rev A Effective baseline); never demotes.
             # R63: the projected membership rolls up the same subtree the live counts do —
             # review.py passes UNFILTERED keep-item clause codes, so a 9.2.2 code covers ★ 9.2.
-            proj_covers = any(p == number or p.startswith(number + ".") for p in projected)
+            proj_covers = any(code_in_subtree(number, p) for p in projected)
             proj_status = "COVERED" if status == "COVERED" or proj_covers else status
             row["projected_status"] = proj_status
             if proj_status == "COVERED":
