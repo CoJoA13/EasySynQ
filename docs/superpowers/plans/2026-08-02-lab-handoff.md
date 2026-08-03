@@ -116,7 +116,7 @@ just a wider `WHERE` with the existing per-row filter still applying. Touches th
 |---|---|
 | **Remove deployment sudo** | `sudo rm /etc/sudoers.d/90-easysynq-deploy` — passwordless sudo was for provisioning; leaving it means the SSH key on LAB is root on the QMS host |
 | **SMTP relay** | `OPS_ALERT_CHANNELS` / `OPS_ALERT_SMTP_TO` are empty, so a failed nightly backup notifies **only in-app** — via the database that may be what failed |
-| **DHCP reservation** | Ask IT to reserve `10.0.0.20` for `00:15:5D:00:00:01`, or exclude it from the pool. Device is a **edge firewall** at `10.0.0.1` (mgmt on `:8080`, WSM on 4117/4118). If IT manages it from a saved Policy Manager config, ask them to record it there or a push will erase it. |
+| **DHCP reservation** | Ask IT to reserve `10.0.0.20` for `00:15:5D:00:00:01`. An exclusion alone is **not** equivalent — the VM runs `dhcp4: true`, so excluding `.20` denies it to this VM at renewal; pair any exclusion with a static netplan address (plan Task 4). Device is a **edge firewall** at `10.0.0.1` (mgmt on `:8080`, WSM on 4117/4118). If IT manages it from a saved Policy Manager config, ask them to record it there or a push will erase it. |
 | **Deny-logon GPO** | Both service accounts (`svc-easysynq-ro`, `svc-easysynq-bkp`) need *Deny log on locally* + *Deny log on through Remote Desktop Services* in a **new** GPO. Leave *Deny access from the network* alone — the mounts need it. |
 | **R13 anchor** | Install reports **NOT tamper-evident** until an off-host audit-checkpoint anchor exists somewhere this host's operator cannot rewrite. Non-blocking, real for an ISO 9001 audit trail. Scheduled, not waived. |
 

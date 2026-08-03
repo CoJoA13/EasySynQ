@@ -48,10 +48,14 @@ hits="$(grep -nHoIE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "${FILES[@]}" 2>/dev/null 
 [ -z "$hits" ] || report "IPv4 address outside the sanctioned documentation/placeholder set (R61):" $hits
 
 # --- .local FQDNs other than the sanctioned examples ------------------------------------------
-# Allowed: *.example.local · *.CONTOSO.local (the runbook's worked example) ·
-# errors.easysynq.local (an RFC-7807 problem-type URN namespace, not a host).
-hits="$(grep -nHoIE '\b[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z0-9][a-zA-Z0-9.-]*\.local\b' "${FILES[@]}" 2>/dev/null \
-  | grep -viE '\.example\.local$|\.contoso\.local$|:errors\.easysynq\.local$' || true)"
+# Matches SINGLE-label zones too (`customer.local` — a real AD base domain is site data even
+# without a host label). Allowed: example.local / *.example.local · CONTOSO.local /
+# *.CONTOSO.local (the runbook's worked example) · easysynq.local (the product's own default
+# from-address token) and errors.easysynq.local (an RFC-7807 problem-type URN namespace) ·
+# settings.local (a gitignore FILENAME token, not a host) · test-smtp.local (the established
+# synthetic SMTP host in the integration tests, the 10.99.99.99 of hostnames).
+hits="$(grep -nHoIE '\b[a-zA-Z0-9][a-zA-Z0-9-]*(\.[a-zA-Z0-9][a-zA-Z0-9-]*)*\.local\b' "${FILES[@]}" 2>/dev/null \
+  | grep -viE ':([a-z0-9.-]+\.)?example\.local$|:([a-z0-9.-]+\.)?contoso\.local$|:(errors\.)?easysynq\.local$|:settings\.local$|:test-smtp\.local$' || true)"
 [ -z "$hits" ] || report "Non-example .local hostname (R61) — use example.local:" $hits
 
 # --- MAC addresses other than the placeholder ------------------------------------------------
@@ -62,6 +66,11 @@ hits="$(grep -nHoiIE '\b([0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b' "${FILES[@]}" 2>/dev/
 # --- certificate / key fingerprints ----------------------------------------------------------
 hits="$(grep -nHoIE '\b([0-9A-F]{2}:){15,}[0-9A-F]{2}\b' "${FILES[@]}" 2>/dev/null || true)"
 [ -z "$hits" ] || report "Certificate/key fingerprint (R61) — per-install, do not commit:" $hits
+
+# OpenSSH-style fingerprints: `SHA256:` + 43 unpadded base64 chars. Case-sensitive on purpose —
+# docker/OCI image digests are lowercase `sha256:<hex>` and must not match.
+hits="$(grep -nHoE '\bSHA256:[A-Za-z0-9+/]{43}' "${FILES[@]}" 2>/dev/null || true)"
+[ -z "$hits" ] || report "OpenSSH SHA256 key fingerprint (R61) — per-install, do not commit:" $hits
 
 if [ "$fail" -ne 0 ]; then
   cat >&2 <<'EOF'

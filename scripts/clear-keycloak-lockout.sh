@@ -51,7 +51,13 @@ unset KC_PW
 # ⚠ `-q username=X` is a CONTAINS match: querying `ann` also returns `joann`. Without `exact=true`
 # this could clear — or report on — a different person's account. Parse JSON rather than CSV so the
 # result is self-describing, and re-verify the username before touching account state.
-json="$(kc get users -r easysynq -q username="$USERNAME" -q exact=true --fields id,username 2>/dev/null || true)"
+# A failed lookup must not read as "user not found" — that misdiagnosis sends the operator
+# chasing a typo while the real problem is an expired admin session, a 403/5xx, or availability.
+if ! json="$(kc get users -r easysynq -q username="$USERNAME" -q exact=true --fields id,username 2>&1)"; then
+  echo "clear-keycloak-lockout: user lookup failed (auth/API error — NOT 'user not found'):" >&2
+  printf '  %s\n' "$json" >&2
+  exit 1
+fi
 SUB="$(printf '%s' "$json"  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'       | head -1)"
 NAME="$(printf '%s' "$json" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
 [ -n "$SUB" ] || { echo "clear-keycloak-lockout: user '$USERNAME' not found in the easysynq realm" >&2; exit 1; }

@@ -63,15 +63,23 @@ kc() {
 # ⚠ `-q username=X` is a CONTAINS match: querying `ann` also returns `joann`. Without `exact=true`
 # this would report another account's `sub`, or reset the wrong person's password. Re-verify the
 # returned username anyway — never act on an account we did not ask for.
+# Returns 0 (found; id on stdout) · 1 (lookup SUCCEEDED and the user is definitively absent) ·
+# 2 (lookup failed or identity mismatch — reason on stderr). Callers must never read 2 as
+# "absent": a transient 403/5xx would then fall through to CREATE, conflict on the existing
+# account, and skip the password reset that was actually requested.
 user_sub() {
   local want="$1" json id name
-  json="$(kc get users -r easysynq -q username="$want" -q exact=true --fields id,username 2>/dev/null || true)"
+  if ! json="$(kc get users -r easysynq -q username="$want" -q exact=true --fields id,username 2>&1)"; then
+    echo "new-keycloak-user: user lookup failed (auth/API error — not proof of absence):" >&2
+    printf '  %s\n' "$json" >&2
+    return 2
+  fi
   id="$(printf '%s' "$json"   | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'       | head -1)"
   name="$(printf '%s' "$json" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
   [ -n "$id" ] || return 1
   if [ "$name" != "$want" ]; then
     echo "new-keycloak-user: refusing to act — asked for '$want', Keycloak returned '$name'" >&2
-    exit 1
+    return 2
   fi
   printf '%s' "$id"
 }
@@ -90,14 +98,17 @@ while :; do
   echo "passwords do not match — try again" >&2
 done
 
-if user_sub "$USERNAME" >/dev/null 2>&1; then
+found=0; user_sub "$USERNAME" >/dev/null || found=$?
+if [ "$found" -eq 0 ]; then
   echo "'$USERNAME' already exists — resetting its password only"
-else
+elif [ "$found" -eq 1 ]; then
   args=(-s "username=$USERNAME" -s enabled=true)
   [ -n "$EMAIL" ] && args+=(-s "email=$EMAIL" -s emailVerified=true)
   [ -n "$FIRST" ] && args+=(-s "firstName=$FIRST")
   [ -n "$LAST"  ] && args+=(-s "lastName=$LAST")
   kc create users -r easysynq "${args[@]}"
+else
+  exit 1   # user_sub printed why — an unverified lookup must not choose between CREATE and RESET
 fi
 
 kc set-password -r easysynq --username "$USERNAME" --new-password "$pw1" --temporary
