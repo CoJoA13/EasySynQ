@@ -266,10 +266,13 @@ def test_placement_dedup_same_top_level_bucket() -> None:
     assert others == []
 
 
-def test_placement_clause7_split_two_phases() -> None:
-    """The clause-7 PLAN/DO split: 7.2 (PLAN) + 7.5 (DO) → primary under PLAN, symlink under DO."""
-    primary, others = _placement_dirs([_ref("7.5", "DO"), _ref("7.2", "PLAN")], _TOP_WORDS)
-    assert primary == "PLAN/07-Support"  # 7.2 is numerically lower
+def test_placement_cross_phase_two_dirs() -> None:
+    """A cross-phase mapping (6.2 PLAN + 7.5 DO) → primary under PLAN, symlink under DO.
+
+    R62 moved all of clause 7 to DO, so placements split only when a doc's clauses span
+    phases — the old single-clause-7 PLAN/DO split no longer exists."""
+    primary, others = _placement_dirs([_ref("7.5", "DO"), _ref("6.2", "PLAN")], _TOP_WORDS)
+    assert primary == "PLAN/06-Planning"  # 6.2 is numerically lower
     assert others == ["DO/07-Support"]
 
 

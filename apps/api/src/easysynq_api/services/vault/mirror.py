@@ -365,8 +365,8 @@ def _placement_dirs(
     Returns ``(primary_dir, other_dirs)``: the real doc folder is written under ``primary_dir`` (the
     placement of the numerically-lowest mapped clause), and every OTHER distinct placement in
     ``other_dirs`` gets a relative symlink to it. Placements are deduped by ``(phase, top_number)``:
-    two clauses in one top-level bucket collapse to one folder, while the clause-7 PLAN/DO split
-    yields two. ``other_dirs`` is ordered canonically (PLAN<DO<CHECK<ACT, then top number) for a
+    two clauses in one top-level bucket collapse to one folder, while a cross-phase mapping
+    (e.g. 6.2 PLAN + 7.5 DO) yields two. ``other_dirs`` is ordered canonically (PLAN<DO<CHECK<ACT, then top number) for a
     deterministic tree/manifest. No mappings → ``(_unmapped, [])`` (a pre-S9 upgrade artifact)."""
     if not clause_refs:
         return _UNMAPPED_DIR, []
