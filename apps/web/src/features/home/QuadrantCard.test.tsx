@@ -8,7 +8,7 @@ it("renders the PDCA chip, the RAG badge and a single Open link", () => {
   renderWithProviders(
     <QuadrantCard
       phase="PLAN"
-      clauseLabel="Cl 4–7"
+      clauseLabel="Cl 4–6"
       rag="amber"
       openTo="/objectives"
       openLabel="Open objectives"
@@ -17,7 +17,7 @@ it("renders the PDCA chip, the RAG badge and a single Open link", () => {
     </QuadrantCard>,
   );
   const card = screen.getByRole("group", { name: /plan quadrant/i });
-  expect(within(card).getByText(/PLAN · Cl 4–7/)).toBeInTheDocument();
+  expect(within(card).getByText(/PLAN · Cl 4–6/)).toBeInTheDocument();
   expect(within(card).getByLabelText(/status: needs attention/i)).toBeInTheDocument();
   const open = within(card).getByRole("link", { name: /open objectives/i });
   expect(open).toHaveAttribute("href", "/objectives");
