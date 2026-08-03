@@ -14,6 +14,7 @@ sole active System Administrator is refused (the break-glass principle, doc 08 �
 from __future__ import annotations
 
 import datetime
+import logging
 import uuid
 from typing import Any, Literal
 
@@ -55,6 +56,7 @@ from ..services.keycloak_provisioning import (
 # api/users.py, so this is not a cycle (the .dcr/.improvement precedent in management_review.py).
 from .authz import _audit_authz_change
 
+logger = logging.getLogger("easysynq.users")
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
 # Dependency singletons — a require(...) call must not sit in an argument default (ruff B008).
@@ -312,11 +314,27 @@ async def provision_user(
         )
         session.add(user)
         await session.flush()
+        # Emitted BEFORE the role-assignment loop so an auditor reading the trail by `occurred_at`
+        # sees the user created before any role is granted to them (each event stamps its own
+        # timestamp at call time via _emit_user_event/_audit_authz_change) — a role can't precede
+        # the user it's granted to. Still the SAME transaction as the loop below: both flush/commit
+        # together, never split across the commit below; only the audit-row insertion ORDER changed.
+        _emit_user_event(
+            session,
+            caller,
+            EventType.USER_CREATED,
+            user.id,
+            after={
+                "status": UserStatus.INVITED.value,
+                "email": body.email,
+                "provisioning": "keycloak_created",
+            },
+        )
         # Each assignment gets its own ROLE_ASSIGN audit row — the established shape from
         # api/authz.py's assign_user_role/_audit_authz_change (object_type=permission, scope_ref
         # names the target user) — so a privilege grant minted here is visible to the same audit
-        # queries as one minted via POST /users/{id}/roles. Part of the SAME transaction as the
-        # assignment: both flush/commit together, never split across the commit below.
+        # queries as one minted via POST /users/{id}/roles. Part of the SAME transaction as
+        # USER_CREATED above: both flush/commit together, never split across the commit below.
         for role_id in role_ids:
             assignment = RoleAssignment(org_id=caller.org_id, user_id=user.id, role_id=role_id)
             session.add(assignment)
@@ -333,17 +351,6 @@ async def provision_user(
                     "bound_scope": None,
                 },
             )
-        _emit_user_event(
-            session,
-            caller,
-            EventType.USER_CREATED,
-            user.id,
-            after={
-                "status": UserStatus.INVITED.value,
-                "email": body.email,
-                "provisioning": "keycloak_created",
-            },
-        )
         await session.commit()
 
         # Read everything the response needs NOW, before set_temporary_password: both are reads, and
@@ -379,14 +386,30 @@ async def provision_user(
         # The credential is now live — record that truthfully as its own event, separate from
         # USER_CREATED (whose `after` above no longer claims one exists): audit_event is append-only
         # and hash-chained (R12), so USER_CREATED must never assert this before it's actually true.
-        _emit_user_event(
-            session,
-            caller,
-            EventType.USER_CREDENTIAL_ISSUED,
-            user.id,
-            after={"credential_issued": True},
-        )
-        await session.commit()
+        # This commit is deliberately NON-FATAL to the response: the credential is already live in
+        # Keycloak and the generated password exists only in `response` at this point, so losing the
+        # response to an unhandled 500 here is strictly worse than losing this one audit row. The
+        # user's creation and role grants are already durably audited by the FIRST commit above
+        # (USER_CREATED + ROLE_ASSIGN); only this credential-issuance event is at risk here, and an
+        # audit UNDER-claim is the safe direction for an append-only, hash-chained trail (R12) — the
+        # opposite direction (claiming a credential was issued when it was not) is exactly what
+        # emitting this event separately from, and after, USER_CREATED was introduced to prevent.
+        try:
+            _emit_user_event(
+                session,
+                caller,
+                EventType.USER_CREDENTIAL_ISSUED,
+                user.id,
+                after={"credential_issued": True},
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.warning(
+                "users.credential_issued_audit_failed",
+                exc_info=True,
+                extra={"extra_fields": {"user_id": str(user.id)}},
+            )
 
     return response
 
