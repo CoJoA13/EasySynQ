@@ -607,11 +607,14 @@ def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
     # filter[effective_from][gte|lte]=<ISO> — bound on the current effective version
     if field == "effective_from":
         return effective_from_filter_condition(op, value)
-    if field == "clause_refs":  # filter[clause_refs][has]=8.4 — exact clause-number membership
+    if field == "clause_refs":  # filter[clause_refs][has]=8 — clause-number SUBTREE membership
         # Constrain to the document's OWN framework (clause.number is unique only per framework —
         # uq_clause_framework_id_number): multi-standard safety (D3), matching the clause-map write
         # guard + the checklist query. Today the map guard already keeps a doc's mappings
         # framework-consistent, so this is defense-in-depth against a future second seeded standard.
+        # Subtree rollup (S-clause-rollup): N matches N or N.<anything>. The '.'-anchored prefix
+        # keeps clause 1 from matching 10 (never a bare LIKE 'N%'), and autoescape keeps a
+        # user-supplied %/_ literal instead of widening the match.
         return (
             select(1)
             .select_from(ClauseMapping)
@@ -619,7 +622,10 @@ def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
             .where(
                 ClauseMapping.documented_information_id == DocumentedInformation.id,
                 Clause.framework_id == DocumentedInformation.framework_id,
-                Clause.number == value,
+                or_(
+                    Clause.number == value,
+                    Clause.number.startswith(value + ".", autoescape=True),
+                ),
             )
             .exists()
         )

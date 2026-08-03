@@ -118,15 +118,16 @@ Bracketed operators. Only fields explicitly declared filterable on a resource ar
 | `filter[field][gte]` / `[lte]` / `[gt]` / `[lt]` | range | `filter[created_at][gte]=2026-01-01T00:00:00Z` |
 | `filter[field][contains]=v` | substring (FTS-backed where indexed) | `filter[title][contains]=calibration` |
 | `filter[field][is]=null` | null check | `filter[effective_version_id][is]=null` |
-| `filter[clause_refs][has]=8.4` | array contains | `text[]`/array columns |
+| `filter[clause_refs][has]=8.4` | clause-subtree membership (`N` or `N.…`) | `text[]`/array columns |
 | `filter[metadata.site][eq]=Plant-A` | JSONB path | `metadata_snapshot`/`payload` keys |
 
 Filter parameters are scalar unless a resource explicitly publishes an array parameter.
 `GET /documents` and `GET /reports/document-control` publish `filter[clause_refs][has]` as an
-exploded form array: repeat the query key for each exact clause number, and the server ANDs every
-supplied membership condition. For example,
-`filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3` requires a document mapped to both
-clauses. The other filters on those two endpoints remain single-valued.
+exploded form array: repeat the query key for each clause number, and the server ANDs every
+supplied subtree-membership condition — each value matches its clause OR any descendant
+(`8` matches `8`, `8.4`, `8.5.6`; the prefix is `.`-anchored, so `1` never matches `10`). For
+example, `filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3` requires a document mapped
+under both clauses. The other filters on those two endpoints remain single-valued.
 
 The shared `effective_from` `gte`/`lte` bounds accept either a date or a date-time on both
 endpoints. A bare `YYYY-MM-DD` is a calendar date in the canonical organization timezone: `gte`

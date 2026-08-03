@@ -954,7 +954,8 @@ paths:
             type: array
             items: { type: string }
           description: >-
-            Documents mapped to every supplied exact clause number (logical AND; no subtree rollup).
+            Documents mapped to every supplied clause number OR any of its sub-clauses (logical AND
+            across repeated keys; each value rolls up its subtree — 8 matches 8, 8.4, 8.5.6).
             Repeat the query key for each clause, for example
             filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3.
         - name: "filter[current_state][eq]"
@@ -3923,7 +3924,8 @@ paths:
             type: array
             items: { type: string }
           description: >-
-            Documents mapped to every supplied exact clause number (logical AND; no subtree rollup).
+            Documents mapped to every supplied clause number OR any of its sub-clauses (logical AND
+            across repeated keys; each value rolls up its subtree — 8 matches 8, 8.4, 8.5.6).
             Repeat the query key for each clause, for example
             filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3.
         - name: "filter[current_state][eq]"

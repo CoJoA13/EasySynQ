@@ -1,7 +1,8 @@
 """S10 + S-web-2 integration proofs — clause_refs in the GET /documents list serializer + the
-bracketed filter grammar (doc 15 §2.1/§3.2): filter[clause_refs][has] (exact clause-number match), a
-scalar filter, and the 400 unknown_filter / 422 bad-value rejections. S-web-2 adds the {data, page}
-pagination envelope (authz-correct offset/has_more) and the effective_from date facet.
+bracketed filter grammar (doc 15 §2.1/§3.2): filter[clause_refs][has] (clause-number SUBTREE
+membership since S-clause-rollup — N matches N or N.…), a scalar filter, and the 400
+unknown_filter / 422 bad-value rejections. S-web-2 adds the {data, page} pagination envelope
+(authz-correct offset/has_more) and the effective_from date facet.
 """
 
 from __future__ import annotations
@@ -149,9 +150,55 @@ async def test_filter_clause_refs_has(
     data = r.json()["data"]
     ids = [d["id"] for d in data]
     assert did_84 in ids
-    assert did_87 not in ids  # mapped to 8.7, not 8.4 — excluded by the exact-number filter
+    assert did_87 not in ids  # mapped to 8.7, not under 8.4 — excluded by the subtree filter
     for d in data:
-        assert "8.4" in d["clause_refs"]  # every returned doc maps to 8.4
+        # every returned doc maps to 8.4 or a descendant (shared DB — another test's 8.4.x doc
+        # legitimately satisfies the rollup filter)
+        assert any(ref == "8.4" or ref.startswith("8.4.") for ref in d["clause_refs"])
+
+
+async def test_filter_clause_refs_subtree_rollup(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """S-clause-rollup: filter[clause_refs][has]=N matches N AND its descendants at every level."""
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    deep = (await _create(app_client, ha, type_id))["id"]
+    await _map(app_client, ha, deep, await _clause_by_number("7.1.5.1"))
+    sibling = (await _create(app_client, ha, type_id))["id"]
+    await _map(app_client, ha, sibling, await _clause_by_number("7.2"))
+
+    for parent, hit, miss in (("7", deep, None), ("7.1", deep, sibling), ("7.1.5", deep, sibling)):
+        r = await app_client.get(
+            f"/api/v1/documents?limit=100&filter[clause_refs][has]={parent}", headers=ha
+        )
+        assert r.status_code == 200, r.text
+        ids = [d["id"] for d in r.json()["data"]]
+        assert hit in ids, parent
+        if miss is not None:
+            assert miss not in ids, parent  # 7.2 is NOT under 7.1/7.1.5
+
+
+async def test_filter_clause_refs_rollup_is_dot_anchored_and_literal(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The two injection edges: '1' must NOT match a 10.x mapping (the LIKE '1%' trap — the
+    handoff's named ⚠), and user-supplied LIKE metacharacters stay literal (autoescape)."""
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    ten = (await _create(app_client, ha, type_id))["id"]
+    await _map(app_client, ha, ten, await _clause_by_number("10.2"))
+    eight = (await _create(app_client, ha, type_id))["id"]
+    await _map(app_client, ha, eight, await _clause_by_number("8.4"))
+
+    for value, absent in (("1", ten), ("8%", eight), ("_", eight), ("8._", eight)):
+        r = await app_client.get(
+            f"/api/v1/documents?limit=100&filter[clause_refs][has]={quote(value)}", headers=ha
+        )
+        assert r.status_code == 200, r.text
+        assert absent not in [d["id"] for d in r.json()["data"]], value
 
 
 async def test_scalar_filter_current_state(
