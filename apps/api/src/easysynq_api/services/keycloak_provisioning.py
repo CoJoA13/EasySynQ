@@ -112,9 +112,15 @@ class KeycloakProvisioningClient:
                     },
                 )
                 response.raise_for_status()
-                token = response.json().get("access_token")
+                body = response.json()
             except (httpx.HTTPError, ValueError) as exc:
                 raise KeycloakUnavailable(f"Keycloak admin token request failed: {exc}") from exc
+            if not isinstance(body, dict):
+                # A 200 with a JSON body that isn't an object (`null`, an array, ...) — `.json()`
+                # succeeds, so this must be checked explicitly before `.get`, mirroring
+                # `find_user_by_username`'s `isinstance(body, list)` guard below.
+                raise KeycloakUnavailable("Keycloak token response was not an object")
+            token = body.get("access_token")
             if not isinstance(token, str) or not token:
                 raise KeycloakUnavailable("Keycloak token response omitted access_token")
             self._token = token

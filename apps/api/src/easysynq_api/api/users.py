@@ -40,6 +40,7 @@ from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
     assert_can_assign_role,
+    assert_can_reset_credential,
     disable_removes_last_admin,
     enforce,
     get_authz_audit_sink,
@@ -527,12 +528,18 @@ async def issue_temporary_password(
     user_id: uuid.UUID,
     caller: AppUser = Depends(_user_create),
     session: AsyncSession = Depends(get_session),
+    sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Issue a fresh temporary password for an existing linked user (slice S-user-create).
 
-    Two jobs: it repairs a provision that committed the row but failed to set the credential, and it
-    removes the last operational reason to run ``scripts/new-keycloak-user.sh``. Gated on
-    ``user.create`` — issuing a credential is the same authority as creating the account.
+    Two jobs: it repairs a provision that committed the row but failed to set the credential, and
+    it removes the last operational reason to run ``scripts/new-keycloak-user.sh``. Gated on
+    ``user.create`` — issuing a credential is the same authority as creating the account — but
+    resetting an EXISTING user's credential is not always equivalent to creating a brand-new
+    unprivileged one: a caller who could reset a System Administrator's password could sign in as
+    them (the realm enforces no MFA). ``assert_can_reset_credential`` (R35's two-tier guard, the
+    same one ``assert_can_assign_role`` uses) therefore additionally requires a system-tier caller
+    whenever the target holds any system-domain permission.
     """
     target = await _get_user(session, user_id, caller.org_id)
     if not target.keycloak_subject:
@@ -541,6 +548,10 @@ async def issue_temporary_password(
             code="user_not_linked",
             title="That user has no linked sign-in account",
         )
+    # Two-tier guard (R35) BEFORE generating a password or touching Keycloak: a content-tier
+    # `user.create` holder must not be able to take over a system-tier account by resetting its
+    # credential (see the guard's own docstring for the account-takeover rationale).
+    await assert_can_reset_credential(session, sink, caller, target)
     # `app_user` does not store the Keycloak username, so the closest identifier we hold is passed
     # to the policy guard. The generated value is 20 random characters and cannot collide with any
     # username in practice — the check is a belt-and-braces guard, not the primary defence.

@@ -35,6 +35,7 @@ from .repository import (
     get_allow_approver_release,
     get_permission,
     role_system_domain_keys,
+    user_system_domain_keys,
 )
 
 ScopeResolver = Callable[[Request], ResourceContext]
@@ -362,6 +363,33 @@ async def assert_can_delete_override(
             f"target:{permission.key}",
             f"{permission.key} is a system-administration permission and its override "
             "cannot be removed by a content-tier grantor",
+        )
+
+
+async def assert_can_reset_credential(
+    session: AsyncSession, sink: AuthzAuditSink, caller: AppUser, target: AppUser
+) -> None:
+    """Two-tier guard (R35) for a credential RESET: a caller may reset another user's Keycloak
+    credential only if the caller is system-tier, OR the target holds no system-domain
+    permission. Resetting an ordinary user's password is no more powerful than creating a fresh
+    unprivileged account (both are covered by plain ``user.create``); resetting a system-tier
+    user's password is an ACCOUNT-TAKEOVER capability — a caller who can mint a new credential for
+    a System Administrator can sign in as them (the realm enforces no MFA) — so it demands the
+    same system-tier authority ``assert_can_assign_role`` requires before handing out a role that
+    bundles a system-domain permission. Denials are AUDITED via ``_two_tier_deny`` for the same
+    reason as the sibling guards: the outer ``require("user.create")`` ALLOW is already logged,
+    and a bare check+422 would leave no record of the blocked takeover attempt."""
+    target_keys = await user_system_domain_keys(session, target.id, target.org_id)
+    if not target_keys:
+        return
+    if not await _is_system_tier(session, caller):
+        await _two_tier_deny(
+            sink,
+            caller,
+            f"user:{target.id}",
+            "target holds system-administration permissions "
+            f"({', '.join(sorted(target_keys))}) and credential reset requires a system-tier "
+            "caller",
         )
 
 

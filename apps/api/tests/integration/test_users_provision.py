@@ -659,3 +659,87 @@ async def test_reissue_survives_a_failed_credential_audit_commit(
     body = resp.json()
     assert len(body["temporary_password"]) >= MIN_LENGTH
     assert await _issued_count() == before  # the reissue's own commit rolled back; no new row
+
+
+# --- two-tier credential-reset guard (R35) — CONFIRMED account-takeover fix (P1) --------------
+#
+# `issue_temporary_password` used to gate on `user.create` alone. That permission can be granted
+# INDEPENDENTLY of `permission.grant` (see `_grant_user_create_only` above), so a caller holding
+# only `user.create` could reset the Keycloak password of ANY user in the org — including a
+# System Administrator — and sign in as them (the realm enforces no MFA). The fix mirrors the
+# existing R35 two-tier guard (`assert_can_assign_role`): a caller may reset another user's
+# credential only if the caller is system-tier, OR the target holds no system-domain permission.
+
+
+async def _plain_user_id(subject: str) -> uuid.UUID:
+    """A linked user with NO grants at all — the credential-reset guard's "ordinary, unprivileged
+    user" baseline. `user_system_domain_keys` must read empty for them, so the guard is a no-op."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        await s.commit()
+        return user.id
+
+
+async def test_reset_credential_needs_only_user_create_for_an_unprivileged_target(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A content-tier caller holding ONLY `user.create` (never `permission.grant`) may still reset
+    an ordinary user's credential: resetting an unprivileged account is no more powerful than
+    creating a fresh one, so the two-tier guard (R35) must not over-restrict this common case."""
+    calls = _install_kc(monkeypatch)
+    caller_sub = _sub("resetcaller")
+    await _grant_user_create_only(caller_sub)
+    headers = _auth(token_factory, caller_sub)
+    target_id = await _plain_user_id(_sub("resettarget"))
+
+    resp = await app_client.post(f"/api/v1/users/{target_id}/temporary-password", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["temporary_password"]) >= MIN_LENGTH
+    assert len(calls["password"]) == 1
+
+
+async def test_reset_credential_of_a_system_domain_target_requires_system_tier(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SAME content-tier caller as above must NOT be able to reset the credential of a user
+    who holds a system-domain permission — a fresh credential (no realm MFA) would let them sign
+    in AS that user; this is the account-takeover hole the fix closes. The guard must refuse
+    BEFORE any Keycloak call is made: `_install_kc`'s handler raises `AssertionError` on any call
+    its scripted branches don't recognize, so a bypassed guard would surface loudly, not silently
+    pass; asserting `calls["password"] == []` additionally proves the specific reset-password call
+    never happened."""
+    calls = _install_kc(monkeypatch)
+    caller_sub = _sub("resetcaller2")
+    await _grant_user_create_only(caller_sub)
+    headers = _auth(token_factory, caller_sub)
+    target_id = await s5.grant_role(_sub("resettarget2"), _ADMIN)
+
+    resp = await app_client.post(f"/api/v1/users/{target_id}/temporary-password", headers=headers)
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "two_tier_violation"
+    assert calls["password"] == []
+
+
+async def test_system_tier_caller_can_reset_a_privileged_targets_credential(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Positive control (no over-restriction): a system-tier caller (System Administrator) MAY
+    reset a privileged target's credential — the guard gates the content tier, not the
+    capability itself."""
+    calls = _install_kc(monkeypatch)
+    headers = await _admin(token_factory)
+    target_id = await s5.grant_role(_sub("resettarget3"), _ADMIN)
+
+    resp = await app_client.post(f"/api/v1/users/{target_id}/temporary-password", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["temporary_password"]) >= MIN_LENGTH
+    assert len(calls["password"]) == 1

@@ -228,6 +228,24 @@ async def test_lookup_finds_the_exact_match_among_contains_match_siblings() -> N
     assert result.subject == "sub-ann"
 
 
+async def test_token_response_that_is_not_an_object_raises_unavailable() -> None:
+    """A 200 with valid-but-non-object JSON (Keycloak or an intermediary returning `null` or a
+    bare array) must not reach `.get("access_token")` on a non-dict — `response.json()` succeeds
+    either way, so the shape must be checked BEFORE reading the field, mirroring
+    `find_user_by_username`'s `isinstance(body, list)` guard. Pre-fix, `[].get(...)` raised an
+    uncaught `AttributeError` the surrounding `except (httpx.HTTPError, ValueError)` does not
+    catch, surfacing as an internal 500 instead of the documented `keycloak_unavailable` 502."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/protocol/openid-connect/token"):
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable):
+            await kc.find_user_by_username("jdoe")
+
+
 async def test_create_user_falls_back_to_lookup_when_location_is_absent() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         token = _token_ok(request)
