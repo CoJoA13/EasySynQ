@@ -16,6 +16,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
+from easysynq_api.db.seeds.iso9001_clauses import CLAUSES
+
 revision: str = "0084_clause7_support_do"
 down_revision: str | None = "0083_pack_build_principal"
 branch_labels: str | None = None
@@ -41,12 +43,11 @@ _FLIPPED = (
     "7.3",
     "7.4",
 )
-# The clause-7 header intent, verbatim from db/seeds/iso9001_clauses.py at each side of R62
-# (frozen ISO-text reference data carries en-dashes — the seed module's noqa precedent).
-_NEW_INTENT_7 = (
-    "Resources, competence, awareness, communication, and the control of documented "
-    "information itself. Section header for clauses 7.1–7.5."  # noqa: RUF001
-)
+# Source the new intent from the data module (the 0018/0010 precedent) so a future seed-only
+# intent edit cannot be silently reverted by this migration on a fresh chain; the OLD text left
+# the module with R62, so the downgrade carries it frozen (verbatim ISO-adjacent prose keeps its
+# en-dashes — the seed module's noqa precedent).
+_NEW_INTENT_7 = next(row[3] for row in CLAUSES if row[0] == "7")
 _OLD_INTENT_7 = (
     "Resources, competence, awareness, communication, and the control of documented "
     "information itself. Section header for clauses 7.1–7.5; split across PLAN (resourcing) "  # noqa: RUF001

@@ -32,7 +32,8 @@ _M10_REVISION = "0080_schema_index_design"
 _PURGE_AUTHORITY_REVISION = "0081_pending_purge_authority"
 _PACK_ERASURE_REVISION = "0082_pack_legal_erasure"
 _PACK_PRINCIPAL_REVISION = "0083_pack_build_principal"
-_CLAUSE7_PLAN_ROWS = ("7", "7.1", "7.1.5.1", "7.2", "7.4")  # spot set of the 13 flipped rows
+# Clause 7 has exactly 17 seeded rows: the 13 flipped by 0084 + the 4-row 7.5 subtree.
+_CLAUSE7_ROW_COUNT = 17
 _CANONICAL_CHECK = "ck_process_edge_no_self_loop"
 _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
 _RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
@@ -849,16 +850,22 @@ def test_populated_historical_transitions_and_head_repairs(
             command.downgrade(config, _PACK_PRINCIPAL_REVISION)
             with engine.connect() as connection:
                 phases = _clause_phases(connection, framework_id)
-                for number in _CLAUSE7_PLAN_ROWS:
-                    assert phases[number] == "PLAN", number  # historical split restored
-                for number in ("7.5", "7.5.3", "8"):
-                    assert phases[number] == "DO", number  # DO side of the old split untouched
+                # Structural, not a spot set: an _FLIPPED omission in 0084 is otherwise
+                # CI-blind (fresh chains seed DO via 0018, so head state still looks right).
+                sevens = {n: p for n, p in phases.items() if n == "7" or n.startswith("7.")}
+                assert len(sevens) == _CLAUSE7_ROW_COUNT
+                for number, phase in sevens.items():
+                    expected = "DO" if number == "7.5" or number.startswith("7.5.") else "PLAN"
+                    assert phase == expected, number  # historical split restored exactly
+                assert phases["8"] == "DO"
                 assert "split across PLAN" in _clause7_intent(connection, framework_id)
             command.upgrade(config, "head")
             with engine.connect() as connection:
                 phases = _clause_phases(connection, framework_id)
-                for number in (*_CLAUSE7_PLAN_ROWS, "7.5"):
-                    assert phases[number] == "DO", number
+                sevens = {n: p for n, p in phases.items() if n == "7" or n.startswith("7.")}
+                assert len(sevens) == _CLAUSE7_ROW_COUNT
+                for number, phase in sevens.items():
+                    assert phase == "DO", number  # the whole clause-7 tree is DO (R62)
                 assert phases["6.2"] == "PLAN"  # neighbors untouched
                 assert "split across PLAN" not in _clause7_intent(connection, framework_id)
             command.check(config)
