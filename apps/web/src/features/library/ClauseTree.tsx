@@ -9,14 +9,14 @@ const PHASES: { phase: PdcaPhase; label: string }[] = [
   { phase: "ACT", label: "Act" },
 ];
 
-// The in-page clause-spine filter (PDCA-banded). Clicking a clause sets the exact-number Clause
-// filter (clicking the active one clears it). Top-level clauses always render; only the SELECTED
+// The in-page clause-spine filter (PDCA-banded). Clicking a clause sets the Clause filter
+// (clicking the active one clears it). Top-level clauses always render; only the SELECTED
 // top-level clause exposes its direct sub-clauses (collapse-to-selection keeps the spine ~12 rows
-// instead of ~40, and a deep link to a sub-clause keeps its parent subtree open). Documents map to
-// specific (often sub-)clauses and the GET /documents clause filter is an EXACT number match (no
-// subtree rollup yet), so the sub-clauses must stay pickable. Per-clause doc counts are deferred
-// (an authz-correct count is an aggregation — see the S-web-2 spec §9). Filter buttons, not nav
-// links — these refine the list, they don't navigate.
+// instead of ~40, and a deep link to a sub-clause keeps its parent subtree open). The
+// GET /documents clause filter ROLLS UP the subtree (S-clause-rollup: N matches N or N.…), so a
+// top-level pick returns its whole subtree and the sub-clauses stay pickable to NARROW within it.
+// Per-clause doc counts are deferred (an authz-correct count is an aggregation — see the S-web-2
+// spec §9). Filter buttons, not nav links — these refine the list, they don't navigate.
 export function ClauseTree({
   selected,
   onSelect,
