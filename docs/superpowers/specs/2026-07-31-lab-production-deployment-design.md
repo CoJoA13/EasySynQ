@@ -195,9 +195,19 @@ EasySynQ nightly job (pg_dump + blob manifest + Keycloak realm + config + audit 
 
 ### Why this is sound
 
-The archive is encrypted **before it leaves the VM**, so neither the IT provider nor the offsite store can read the organization's
+The **nightly archive** is encrypted before it leaves the VM, so neither the IT provider nor the offsite store can read the organization's
 quality records. That makes an opaque, third-party-managed offsite path acceptable for confidentiality
 — the trust requirement reduces to availability only.
+
+⚠ **One scoped exception: the restore-test drill.** `run_drill` proves the destination round-trips
+by writing a TRANSIENT **plaintext** `easysynq-backup-<id>.tar` to the policy destination and
+best-effort deleting it afterwards — the drill never encrypts. During a drill (setup gate G-C, or
+an operator-triggered restore test) the full database is briefly plaintext on `DC01`, capturable by
+an overlapping image sweep or stranded by a cleanup failure. Operational rule: never drill during
+the image-backup window; check for a stranded `easysynq-backup-*.tar` after any FAILED drill.
+Closing this properly (encrypt the transient drill archive, or drill against a local scratch
+destination) is a tracked code follow-up — until it lands, the confidentiality claim above is
+scoped to the nightly `*.tar.enc` legs.
 
 ### Consequences accepted
 

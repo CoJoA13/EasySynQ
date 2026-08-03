@@ -827,9 +827,11 @@ Identify it, prove it is empty, then remove it:
 
 ```bash
 cd ~/EasySynQ
-docker volume ls --format '{{.Name}}' | grep backup      # e.g. easysynq_backup
-VOL=$(docker volume ls --format '{{.Name}}' | grep -E '_backup$' | head -1)
-echo "volume: $VOL"
+# Deterministic: the base Compose file pins `name: easysynq`, so the volume is exactly
+# `easysynq_backup`. Never select by suffix — `grep '_backup$' | head -1` can pick an
+# unrelated project's backup volume, and the `rm` below would destroy it.
+VOL=easysynq_backup
+docker volume inspect "$VOL" --format 'project={{ index .Labels "com.docker.compose.project" }}'   # must print: project=easysynq
 sudo ls -la "$(docker volume inspect "$VOL" --format '{{.Mountpoint}}')"
 ```
 
@@ -965,6 +967,14 @@ In order — each is a gate:
 ```bash
 ls -la /srv/easysynq/backup/
 ```
+
+⚠ **While a drill runs, a TRANSIENT PLAINTEXT archive exists on the share.** The drill proves the
+destination round-trips by writing an unencrypted `easysynq-backup-<id>.tar` to the policy
+destination, restoring from it, then best-effort deleting it — only the nightly `*.tar.enc` is
+encrypted. On this deployment that plaintext window sits on `DC01`, which the whole-disk image
+sweeps with **no exclusions**: never run a drill while the image backup is running, and after any
+FAILED drill check the share for a stranded `easysynq-backup-*.tar` and delete it. Encrypting the
+transient drill archive is a tracked code follow-up.
 
 ⚠ **Do NOT expect the drill to leave an archive.** `backup restore-test` cleans up after itself, so
 an **empty directory here is the normal result of a PASS**. Treating it as a failed backup chain
