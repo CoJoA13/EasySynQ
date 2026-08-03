@@ -17,19 +17,37 @@ import datetime
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models.app_user import AppUser, UserStatus
 from ..db.models.audit_event import AuditEvent
 from ..db.models.role import Role, RoleAssignment
 from ..db.session import get_session
+from ..domain.authz.types import ResourceContext
+from ..domain.identity.temp_password import generate_temporary_password
 from ..logging import request_id_var
 from ..problems import ProblemException
-from ..services.authz import disable_removes_last_admin, invalidate_user_permissions, require
+from ..services.authz import (
+    AuthzAuditSink,
+    assert_can_assign_role,
+    disable_removes_last_admin,
+    enforce,
+    get_authz_audit_sink,
+    invalidate_user_permissions,
+    require,
+)
+from ..services.backup.realm_export import realm_name_from_issuer
+from ..services.keycloak_provisioning import (
+    KeycloakConflict,
+    KeycloakNotConfigured,
+    KeycloakProvisioningClient,
+    KeycloakUnavailable,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
@@ -80,6 +98,15 @@ class UserInvite(BaseModel):
     keycloak_subject: str
     display_name: str | None = None
     email: str | None = None
+
+
+class UserProvision(BaseModel):
+    username: str
+    display_name: str | None = None
+    email: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    role_ids: list[uuid.UUID] = []
 
 
 class UserStatusUpdate(BaseModel):
@@ -148,6 +175,177 @@ async def list_users(
     users = list((await session.execute(stmt.order_by(AppUser.display_name))).scalars().all())
     names = await _role_names_by_user(session, caller.org_id, [u.id for u in users])
     return [_represent(u, names.get(u.id, [])) for u in users]
+
+
+_permission_grant = require("permission.grant")
+
+
+def _kc_client() -> KeycloakProvisioningClient:
+    settings = get_settings()
+    return KeycloakProvisioningClient(
+        base_url=settings.keycloak_admin_url,
+        realm=realm_name_from_issuer(settings.oidc_issuer),
+        admin_user=settings.keycloak_admin_user,
+        admin_password=settings.keycloak_admin_password,
+    )
+
+
+@router.post("/users/provision", status_code=status.HTTP_201_CREATED)
+async def provision_user(
+    request: Request,
+    body: UserProvision,
+    caller: AppUser = Depends(_user_create),
+    session: AsyncSession = Depends(get_session),
+    sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+) -> dict[str, Any]:
+    """Create the Keycloak account AND the ``app_user`` row in one call, returning a generated
+    temporary password shown once (slice S-user-create).
+
+    Ordering is deliberate: the Keycloak account is created WITHOUT a credential, the PostgreSQL row
+    commits, and only then is the password set. A failed write therefore leaves an unusable orphan
+    that ``POST /users`` adopts via the ``keycloak_username_exists_unlinked`` link path — EasySynQ
+    never deletes a Keycloak account.
+
+    The Keycloak calls are split across TWO try/except legs, one on each side of the commit — not
+    one try spanning lookup through set-password — so ``user``/``subject`` are only ever read on the
+    single fall-through path where both are already bound (every other branch raises first, so
+    neither name is ever actually unbound where it's used), and so a post-commit
+    ``KeycloakUnavailable`` gets its own detail: the account is real and just missing a credential,
+    and the fix is to reissue a password, never to retry create (it would only collide on the
+    username) and never to delete the Keycloak account.
+    """
+    username = body.username.strip()
+    if not username:
+        raise ProblemException(
+            status=422, code="validation_error", title="username must not be empty"
+        )
+
+    # Roles are a distinct authority with their own key and SoD guard; only demand it when asked
+    # for, so a plain create still works for a caller holding only `user.create`. `enforce` is the
+    # in-handler equivalent of `require(...)` for a check whose need comes from the request body.
+    if body.role_ids:
+        await enforce(session, sink, request, caller, "permission.grant", ResourceContext.system())
+        # Validate BEFORE touching Keycloak: an unknown role id would otherwise reach the INSERT and
+        # raise an FK violation as a 500, after an account had already been created in Keycloak.
+        known = set(
+            (
+                await session.execute(
+                    select(Role.id).where(Role.org_id == caller.org_id, Role.id.in_(body.role_ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        unknown = [str(r) for r in body.role_ids if r not in known]
+        if unknown:
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title="Unknown role id(s)",
+                detail=", ".join(unknown),
+            )
+        for role_id in body.role_ids:
+            await assert_can_assign_role(session, sink, caller, role_id)
+
+    password = generate_temporary_password(username)
+
+    async with _kc_client() as kc:
+        try:
+            lookup = await kc.find_user_by_username(username)
+            if lookup.found:
+                assert lookup.subject is not None  # noqa: S101 — found=True only with a subject
+                linked = await session.scalar(
+                    select(AppUser.id).where(AppUser.keycloak_subject == lookup.subject)
+                )
+                if linked is not None:
+                    raise ProblemException(
+                        status=409,
+                        code="user_exists",
+                        title="That username already has an EasySynQ user",
+                    )
+                raise ProblemException(
+                    status=409,
+                    code="keycloak_username_exists_unlinked",
+                    title="A sign-in account with that username already exists",
+                    detail="Link the existing account instead of creating a new one.",
+                    members={"keycloak_subject": lookup.subject},
+                )
+
+            subject = await kc.create_user(
+                username=username,
+                email=body.email,
+                first_name=body.first_name,
+                last_name=body.last_name,
+            )
+        except KeycloakNotConfigured as exc:
+            raise ProblemException(
+                status=503,
+                code="keycloak_not_configured",
+                title="Keycloak admin access is not configured on this install",
+            ) from exc
+        except KeycloakConflict as exc:
+            code = "keycloak_email_exists" if exc.field == "email" else "user_exists"
+            title = (
+                "That email is already used by another sign-in account"
+                if exc.field == "email"
+                else "That username already exists"
+            )
+            raise ProblemException(status=409, code=code, title=title) from exc
+        except KeycloakUnavailable as exc:
+            raise ProblemException(
+                status=502, code="keycloak_unavailable", title="Keycloak could not be reached"
+            ) from exc
+
+        user = AppUser(
+            org_id=caller.org_id,
+            keycloak_subject=subject,
+            display_name=body.display_name or username,
+            email=body.email,
+            status=UserStatus.INVITED,
+        )
+        session.add(user)
+        await session.flush()
+        for role_id in body.role_ids:
+            session.add(RoleAssignment(org_id=caller.org_id, user_id=user.id, role_id=role_id))
+        _emit_user_event(
+            session,
+            caller,
+            EventType.USER_CREATED,
+            user.id,
+            after={
+                "status": UserStatus.INVITED.value,
+                "email": body.email,
+                "provisioning": "keycloak_created",
+                "credential_issued": True,
+            },
+        )
+        await session.commit()
+
+        # Only now does the account become usable. A failure here leaves a real app_user whose
+        # account has no credential — repaired by reissuing a temporary password, never by
+        # retrying create (which would just collide on the now-existing username) and never by
+        # deleting the Keycloak account.
+        try:
+            await kc.set_temporary_password(subject=subject, password=password)
+        except KeycloakUnavailable as exc:
+            raise ProblemException(
+                status=502,
+                code="keycloak_unavailable",
+                title="User created but the temporary password could not be set",
+                detail=(
+                    "The Keycloak account and EasySynQ user were created, but Keycloak could not "
+                    "be reached to set the temporary password. Do not retry create — reissue a "
+                    "temporary password for this user instead."
+                ),
+            ) from exc
+
+    await session.refresh(user)
+    names = await _role_names_by_user(session, caller.org_id, [user.id])
+    return {
+        "user": _represent(user, names.get(user.id, [])),
+        "temporary_password": password,
+        "password_delivery": "shown_once",
+    }
 
 
 @router.get("/users/{user_id}")

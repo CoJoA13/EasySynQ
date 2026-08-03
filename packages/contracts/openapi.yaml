@@ -648,6 +648,51 @@ paths:
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /users/provision:
+    post:
+      tags: [users]
+      operationId: provisionUser
+      summary: >-
+        Create the Keycloak sign-in account AND the INVITED app_user in one call, returning a
+        generated temporary password shown once (S-user-create). Needs user.create; role_ids
+        additionally needs permission.grant. 409 keycloak_username_exists_unlinked carries the
+        existing keycloak_subject so the caller can link instead via POST /users.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string }
+                display_name: { type: [string, "null"] }
+                email: { type: [string, "null"] }
+                first_name: { type: [string, "null"] }
+                last_name: { type: [string, "null"] }
+                role_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "201":
+          description: >-
+            The created user plus its temporary password. The password is returned ONCE and is
+            never stored, logged, or re-readable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, temporary_password, password_delivery]
+                properties:
+                  user: { $ref: "#/components/schemas/UserAdmin" }
+                  temporary_password: { type: string }
+                  password_delivery: { type: string, enum: [shown_once] }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+        "502": { $ref: "#/components/responses/ProblemResponse" }
+        "503": { $ref: "#/components/responses/ProblemResponse" }
+
   /users/{user_id}:
     get:
       tags: [users]

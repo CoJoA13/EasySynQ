@@ -288,6 +288,7 @@ The user representation backs `app_user`. It carries a nullable `manager_id` (se
 |---|---|---|---|---|
 | GET | `/users` | `user.read` | — | Filter `status`, `email`, `is_guest`, `manager_id`. Sort `display_name`, `created_at`. |
 | POST | `/users` | `user.create` | ✓ | Invite/create; provisions the Keycloak account, status begins `INVITED`. Optional `manager_id`. |
+| POST | `/users/provision` | `user.create` | — | Creates the Keycloak sign-in account AND the `INVITED` `app_user` row in one call (S-user-create), returning a generated temporary password shown once (`password_delivery: shown_once`). Non-empty `role_ids` additionally needs `permission.grant` (SoD-guarded via `assert_can_assign_role`). 409 `keycloak_username_exists_unlinked` carries `keycloak_subject` so the caller can link instead via `POST /users`; 409 `user_exists` / `keycloak_email_exists`; 502 `keycloak_unavailable` (incl. the created-but-no-password case); 503 `keycloak_not_configured`. |
 | GET | `/users/{id}` | `user.read` | — | `expand=roles,overrides,manager`. |
 | PATCH | `/users/{id}` | `user.update` | — | `display_name`, attributes, `manager_id`, `status` (`ACTIVE/LOCKED/DISABLED`). `If-Match`. |
 | POST | `/users/{id}/retire` | `user.update` | ✓ | `status→RETIRED`; PII anonymizable while `id`/`audit` chain stays intact (`14 §12`, `12 §9.4`). **Never hard-deleted** (attribution integrity). |
