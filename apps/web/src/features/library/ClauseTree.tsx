@@ -36,6 +36,10 @@ export function ClauseTree({
         const items: { clause: Clause; indent: boolean }[] = [];
         for (const c of top) {
           items.push({ clause: c, indent: false });
+          // A11y posture (deliberate, owner-flagged in the R62 PR): revealing sub-clauses is a
+          // SIDE EFFECT of the announced pressed/filter state — the rows follow in DOM order —
+          // so the control keeps aria-pressed only; stacking aria-expanded on the same button
+          // would double its announced state vocabulary.
           if (c.number === selectedTop) {
             for (const ch of all.filter((k) => k.parent_id === c.id)) {
               items.push({ clause: ch, indent: true });

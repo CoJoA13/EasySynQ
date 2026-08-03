@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { expect, it, test } from "vitest";
@@ -69,9 +70,16 @@ test("Objectives sits under the PLAN section (gated on objective.read)", async (
   expect(plan).toContainElement(objectives);
 });
 
-test("the rail exposes no clause-filter links (removed — every exact-match top-level filter returned zero documents)", async () => {
-  renderWithProviders(<LeftRail />, { route: "/library" });
+test("the rail exposes no clause-filter links and never fetches /clauses (removed — every exact-match top-level filter returned zero documents)", async () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  renderWithProviders(<LeftRail />, { route: "/library", queryClient });
   await screen.findByText(/PLAN ·/);
+  // Settle-aware: the OLD rail mounted its clause links only after the async useClauses()
+  // fetch landed, so a pre-fetch DOM negative would pass against reverted code too. The
+  // ["clauses"] query never being REGISTERED is the deterministic revert-RED signal (and pins
+  // the "no /clauses call on every page load" claim).
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+  expect(queryClient.getQueryState(["clauses"])).toBeUndefined();
   expect(
     screen
       .queryAllByRole("link")
