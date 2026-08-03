@@ -272,7 +272,7 @@ This is the analytical heart. The classifier assigns, **per file**, four indepen
 | **Document/Record type** | Quality Policy, Quality Manual, Scope Statement, Process Definition, Procedure/SOP, Work Instruction, Form/Template, Quality Objective, register-type … / Audit, Mgmt Review, CAPA, Competence, Calibration, KPI, Supplier eval, Release, Filled Form … | concrete leaf type in the taxonomy (§6 of domain model) |
 | **Clause map** | one or more `Clause` ids from the **read-only clause catalog** (M:N) | `clause_map[]` |
 | **Process link** | one or more existing `Process` ids, or "new-process suggestion" | `process_links[]` |
-| (derived) **PDCA phase** | `PLAN`\|`DO`\|`CHECK`\|`ACT` | `pdca_phase` — **derived** from clause map via the canonical PDCA↔clause mapping (Clause 7 split resolved by type: resourcing→PLAN, operating→DO) |
+| (derived) **PDCA phase** | `PLAN`\|`DO`\|`CHECK`\|`ACT` | `pdca_phase` — **derived** from clause map via the canonical PDCA↔clause mapping (uniform per top-level clause; clause 7 is wholly DO — R62) |
 
 > **PDCA is derived, not guessed.** Because the domain model fixes the PDCA↔clause mapping, the engine computes `pdca_phase` from the chosen clause(s); it only has to *infer* clause, not phase. This keeps the engine aligned with the enforced mapping and avoids a redundant guess.
 
@@ -431,9 +431,8 @@ QMS-Mirror/
     04-Context/            (Scope Statement, Context, Interested Parties)
     05-Leadership/         (Quality Policy, Roles)
     06-Planning/           (Quality Objectives, Risk Register)
-    07-Support/            (resourcing docs)            ← Cl.7 PLAN-tagged
   DO/
-    07-Support/            (operating docs, Document Control artifacts)  ← Cl.7 DO-tagged
+    07-Support/            (Support docs, Document Control artifacts)   ← Cl.7 (wholly DO — R62)
     08-Operation/          (Procedures, Work Instructions by process)
   CHECK/
     09-Performance/        (KPIs, Audit program; audit RECORDS under Records/)

@@ -85,7 +85,7 @@ Notes:
 - **Risk scoring (reconciled per Decisions Register R18).** Each `risk_opportunity` register entry carries **`likelihood`**, **`severity`**, a **`risk_rating`** (derived/stored from likelihood × severity), and **`scoring_method`** (records the matrix/scale used). The stored `risk_rating` is the real field that downstream workflow routing (on `subject.risk_rating`) and the high-risk dashboards resolve against — no more proxy/placeholder.
 - `QualityObjective` is mandatory documented info and is **measurable by construction** (target value, unit, owner, due date, current value) so it drives the PDCA "Check" dashboard.
 
-### Clause 7 — Support (PLAN/DO)
+### Clause 7 — Support (DO)
 
 Intent: resources, competence, awareness, communication, and the **control of documented information** itself — i.e., this clause governs EasySynQ's core engine.
 
@@ -212,10 +212,9 @@ flowchart LR
       C4["Clause 4\nContext"]
       C5["Clause 5\nLeadership"]
       C6["Clause 6\nPlanning"]
-      C7p["Clause 7\nSupport (resourcing)"]
     end
     subgraph DO
-      C7d["Clause 7\nSupport (operating)"]
+      C7["Clause 7\nSupport"]
       C8["Clause 8\nOperation"]
     end
     subgraph CHECK
@@ -230,12 +229,12 @@ flowchart LR
 
 | PDCA stage | Clauses | "The question the user is answering" | Primary EasySynQ artifacts |
 |---|---|---|---|
-| **Plan** | 4, 5, 6, 7 (resourcing) | *What do we do, why, and with what targets?* | Context, Policy, Objectives, Risk register, Processes |
-| **Do** | 7 (operating), 8 | *Are we operating as planned?* | Procedures, Work Instructions, Operation records |
+| **Plan** | 4, 5, 6 | *What do we do, why, and with what targets?* | Context, Policy, Objectives, Risk register, Processes |
+| **Do** | 7, 8 | *Are we operating as planned?* | Procedures, Work Instructions, Operation records |
 | **Check** | 9 | *Is it working? What does the evidence say?* | KPIs, Audits, Management Review |
 | **Act** | 10 | *What do we fix / improve?* | CAPA, Improvement initiatives |
 
-> **Rationale for splitting Clause 7 across Plan and Do:** Support is genuinely dual — *determining/providing* resources and competence is Plan; *applying* them and controlling documented information during operation is Do. EasySynQ tags Clause-7 artifacts with a `pdca_phase` so the dashboard can place them correctly without forcing the user to choose.
+> **Clause 7 sits wholly in Do (R62).** Earlier drafts split Support across Plan (resourcing) and Do (operating/document control). The split diverged from ISO 9001:2015's own PDCA figure — which places Support (7) and Operation (8) together in Do — made the IA's phase↔clause-range labels unstatable, and doubled clause 7's mirror placement. R62 restores the standard's own mapping: every clause-7 artifact is DO. Each clause row still carries its own `pdca_phase` tag, uniform per top-level clause.
 
 ### 3.3 Process-level PDCA (fractal model)
 

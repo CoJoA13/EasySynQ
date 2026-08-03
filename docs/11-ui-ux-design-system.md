@@ -319,7 +319,7 @@ Home › Dashboard                                    [ Density ▾ ] [ ? Help ]
 QMS Health        ●  Certified-ready          Next mgmt review: 18 days
 ────────────────────────────────────────────────────────────────────────────
         ┌─────────────────────────┐   ┌─────────────────────────┐
-        │  PLAN            (Cl 4–7)│   │  DO            (Cl 7–8)  │
+        │  PLAN            (Cl 4–6)│   │  DO            (Cl 7–8)  │
         │  ● 6/7 objectives on tgt │   │  ▲ 3 docs pending appr.  │
         │  ▲ 2 reviews overdue     │   │  ▲ 1 checked-out 9d (drift│
         │  ● 0 high risks open     │   │      risk)               │
