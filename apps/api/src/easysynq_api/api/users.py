@@ -394,6 +394,13 @@ async def provision_user(
         # audit UNDER-claim is the safe direction for an append-only, hash-chained trail (R12) — the
         # opposite direction (claiming a credential was issued when it was not) is exactly what
         # emitting this event separately from, and after, USER_CREATED was introduced to prevent.
+        # Capture the id as a plain `str` now, while `user` is still a live, attached instance:
+        # `session.rollback()` below unconditionally expires every loaded ORM instance regardless
+        # of `expire_on_commit=False`, and a subsequent attribute access on an expired instance
+        # triggers a lazy refresh whose I/O raises `sqlalchemy.exc.MissingGreenlet` on an async
+        # session (the S-ing-4 lesson, `.claude/rules/engineering-patterns.md`) — never touch
+        # `user.*` after rollback.
+        user_id_str = str(user.id)
         try:
             _emit_user_event(
                 session,
@@ -408,7 +415,7 @@ async def provision_user(
             logger.warning(
                 "users.credential_issued_audit_failed",
                 exc_info=True,
-                extra={"extra_fields": {"user_id": str(user.id)}},
+                extra={"extra_fields": {"user_id": user_id_str}},
             )
 
     return response
@@ -556,6 +563,13 @@ async def issue_temporary_password(
     # only in `response` at this point, so losing the response to an unhandled 500 here is strictly
     # worse than losing this one audit row. The credential is already live, so an audit UNDER-claim
     # is the safe direction for an append-only, hash-chained trail (R12).
+    # Capture the id as a plain `str` now, while `target` is still a live, attached instance:
+    # `session.rollback()` below unconditionally expires every loaded ORM instance regardless of
+    # `expire_on_commit=False`, and a subsequent attribute access on an expired instance triggers
+    # a lazy refresh whose I/O raises `sqlalchemy.exc.MissingGreenlet` on an async session (the
+    # S-ing-4 lesson, `.claude/rules/engineering-patterns.md`) — never touch `target.*` after
+    # rollback.
+    target_id_str = str(target.id)
     try:
         _emit_user_event(
             session,
@@ -570,7 +584,7 @@ async def issue_temporary_password(
         logger.warning(
             "users.credential_issued_audit_failed",
             exc_info=True,
-            extra={"extra_fields": {"user_id": str(target.id)}},
+            extra={"extra_fields": {"user_id": target_id_str}},
         )
 
     return response

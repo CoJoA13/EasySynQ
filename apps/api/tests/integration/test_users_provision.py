@@ -59,9 +59,10 @@ _ADMIN = "System Administrator"
 # its own comments describe ("This commit is deliberately NON-FATAL to the response"). Exactly
 # the rollback-then-touch-expired-attribute lesson in .claude/rules/engineering-patterns.md ("A
 # replay/no-op path that rollback()s must capture any ORM ids it returns BEFORE the rollback").
-# Per this task's constraints we do not fix production code; xfail(strict=True) keeps the suite
-# green while pinning the defect so a future fix (capture `str(user.id)`/`str(target.id)` into a
-# local BEFORE calling rollback) flips this to an unexpected-pass, forcing the marker's removal.
+# FIXED in this same change: both handlers now capture `str(user.id)`/`str(target.id)` into a
+# local BEFORE the try block that contains the rollback, and log that local instead of touching
+# the ORM instance afterward. The two tests that pinned this defect (below) are therefore no
+# longer `xfail` — they are ordinary passing tests proving the non-fatal degrade actually holds.
 _ROLLBACK_EXPIRY_BUG = (
     "api/users.py's except-block logs `extra={'user_id': str(user.id)}` AFTER "
     "await session.rollback(), which expires the ORM instance regardless of "
@@ -207,12 +208,13 @@ def _break_credential_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     (keyed on ``event_type``, so it can never be confused with the earlier USER_CREATED call and
     needs no call-counting) — the simplest of three mechanisms tried, and the only one exercised
     below; the other two (replacing ``AsyncSession.commit`` outright, and a ``before_commit`` ORM
-    event) are NOT superseded-because-broken, they hit the exact same downstream
-    ``sqlalchemy.exc.MissingGreenlet`` this one does, for the SAME reason: it is a confirmed
-    production bug (``_ROLLBACK_EXPIRY_BUG``, module comment above), not an artifact of any one
-    injection technique. Whichever way the fault lands in this try block, the caller's own
-    ``except Exception: await session.rollback(); logger.warning(..., extra={"user_id":
-    str(user.id)})`` touches the now-expired ``.id`` attribute and crashes the same way.
+    event) were NOT superseded-because-broken: before the fix, they hit the exact same downstream
+    ``sqlalchemy.exc.MissingGreenlet`` this one did, for the SAME reason (``_ROLLBACK_EXPIRY_BUG``,
+    module comment above), not an artifact of any one injection technique — whichever way the fault
+    landed in this try block, the caller's own ``except Exception: await session.rollback()`` then
+    touched an ORM attribute on the now-expired instance and crashed the same way. Both handlers now
+    capture the id into a local BEFORE the rollback (see ``api/users.py``), so this helper's choice
+    of injection point is unchanged but the crash is gone — these tests now pass for real.
     """
     real_emit = users_api._emit_user_event
 
@@ -517,7 +519,6 @@ async def test_reissue_without_linked_subject_returns_409(
     assert resp.json()["code"] == "user_not_linked"
 
 
-@pytest.mark.xfail(strict=True, reason=_ROLLBACK_EXPIRY_BUG)
 async def test_provision_survives_a_failed_credential_audit_commit(
     app_client: httpx.AsyncClient,
     token_factory: Callable[..., str],
@@ -528,9 +529,6 @@ async def test_provision_survives_a_failed_credential_audit_commit(
     response would be strictly worse than losing this one audit row. Force ONLY that commit to fail
     and assert the caller still gets a 2xx carrying the temporary password, while the EARLIER
     commit (the app_user row + USER_CREATED) is provably untouched.
-
-    XFAIL (strict, confirmed production bug — see ``_ROLLBACK_EXPIRY_BUG``): this is what the
-    handler is DOCUMENTED to do, but is not what it currently does.
     """
     subject = _sub("auditfail")
     _install_kc(monkeypatch, new_subject=subject)
@@ -566,16 +564,12 @@ async def test_provision_survives_a_failed_credential_audit_commit(
         assert issued is None  # proves the forced failure really did roll back ONLY this row
 
 
-@pytest.mark.xfail(strict=True, reason=_ROLLBACK_EXPIRY_BUG)
 async def test_reissue_survives_a_failed_credential_audit_commit(
     app_client: httpx.AsyncClient,
     token_factory: Callable[..., str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """As above, for the reissue endpoint's own non-fatal commit.
-
-    XFAIL (strict, confirmed production bug — see ``_ROLLBACK_EXPIRY_BUG``).
-    """
+    """As above, for the reissue endpoint's own non-fatal commit."""
     subject = _sub("auditfail2")
     _install_kc(monkeypatch, new_subject=subject)
     headers = await _admin(token_factory)
