@@ -10,7 +10,8 @@ never from the search index (doc 13 §1.2: "reports and KPIs compute from Postgr
 
 This is **status against a rule, never an auto-compliance verdict** (doc 13 N9). Coverage counts
 **any** clause mapping (``is_requirement_level`` ignored — a finer, rarely-set qualifier) targeting
-the **exact** ★ clause (no subtree rollup — the discrete-item intuition of doc 02 §2.1). The view is
+the ★ clause **or any of its descendants** (R63 — subtree-inclusive, matching the clause filter's
+rollup; DESCENDANTS only, so a ★ leaf never inherits from siblings or its parent). The view is
 org-wide (gated on the SYSTEM key ``report.compliance_checklist.read``), so counts are not per-doc
 permission-filtered. Each row also carries ``overdue_review`` (True when ≥1 Effective mapped doc has
 ``next_review_due`` ≤ today) — orthogonal to the COVERED/PARTIAL/GAP status; the rollup carries
@@ -27,6 +28,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models.clause import Clause
@@ -93,6 +95,11 @@ async def compute_checklist(
         )
         .label("overdue")
     )
+    # R63: coverage is subtree-inclusive — mappings to the ★ clause itself OR any DESCENDANT
+    # count (the '.'-anchored prefix admits children only, never siblings; catalog-trusted
+    # numbers carry no LIKE metacharacters). count(DISTINCT doc) dedupes a doc mapped to
+    # several subtree members.
+    member = aliased(Clause)
     rows = (
         await session.execute(
             select(
@@ -106,9 +113,16 @@ async def compute_checklist(
             )
             .select_from(Clause)
             .outerjoin(
+                member,
+                sa.and_(
+                    member.framework_id == Clause.framework_id,
+                    sa.or_(member.id == Clause.id, member.number.like(Clause.number + ".%")),
+                ),
+            )
+            .outerjoin(
                 ClauseMapping,
                 sa.and_(
-                    ClauseMapping.clause_id == Clause.id,
+                    ClauseMapping.clause_id == member.id,
                     ClauseMapping.org_id == org_id,
                 ),
             )
@@ -151,7 +165,10 @@ async def compute_checklist(
         if projecting:
             # An import only ever IMPROVES coverage: a confirmed-DOCUMENT mapping to a GAP/PARTIAL
             # ★ clause → COVERED (it commits as a Rev A Effective baseline); never demotes.
-            proj_status = "COVERED" if status == "COVERED" or number in projected else status
+            # R63: the projected membership rolls up the same subtree the live counts do —
+            # review.py passes UNFILTERED keep-item clause codes, so a 9.2.2 code covers ★ 9.2.
+            proj_covers = any(p == number or p.startswith(number + ".") for p in projected)
+            proj_status = "COVERED" if status == "COVERED" or proj_covers else status
             row["projected_status"] = proj_status
             if proj_status == "COVERED":
                 proj_covered += 1
