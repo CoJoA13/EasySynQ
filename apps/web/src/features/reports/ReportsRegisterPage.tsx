@@ -75,7 +75,15 @@ export function ReportsRegisterPage() {
     () => (facetSource ? buildProcessFacetOptions(facetSource, processes ?? []) : []),
     [facetSource, processes],
   );
-  const clauseValueSet = useMemo(() => new Set(clauseValues), [clauseValues]);
+  // Subtree-aware representability (S-clause-rollup): the server filter rolls up descendants, so
+  // a URL clause is applicable when ANY visible row maps to it OR a descendant — a parent deep
+  // link (?clause=8 over rows mapped 8.4/8.5) is meaningful and must survive the guard. The
+  // predicate mirrors the backend's dot-anchored match.
+  const clauseRepresentable = useMemo(() => {
+    const clause = uf.clause;
+    if (!clause) return false;
+    return clauseValues.some((ref) => ref === clause || ref.startsWith(clause + "."));
+  }, [clauseValues, uf.clause]);
   const processValueSet = useMemo(
     () => new Set(processOptions.map((option) => option.value)),
     [processOptions],
@@ -94,7 +102,7 @@ export function ReportsRegisterPage() {
   // facets are applied only after a freshly fetched, caller-visible baseline proves the URL value
   // is representable. This generalizes the old process-only guard to clause and makes neither
   // catalog endpoint authoritative for filter applicability.
-  if (uf.clause && (!facetBaselineReady || !clauseValueSet.has(uf.clause))) {
+  if (uf.clause && (!facetBaselineReady || !clauseRepresentable)) {
     delete filters.clause;
   }
   if (uf.process && facetBaselineReady && processValueSet.has(uf.process)) {
@@ -104,7 +112,7 @@ export function ReportsRegisterPage() {
   // Remove stale/bookmarked values only after this mount has fetched the permission-filtered
   // universe. They were never sent to the API (the guards above), and replacing the URL prevents an
   // invisible ghost filter without deleting a newly valid value from an older cached snapshot.
-  const invalidClause = Boolean(facetBaselineReady && uf.clause && !clauseValueSet.has(uf.clause));
+  const invalidClause = Boolean(facetBaselineReady && uf.clause && !clauseRepresentable);
   const invalidProcess = Boolean(
     facetBaselineReady && uf.process && !processValueSet.has(uf.process),
   );

@@ -18,11 +18,19 @@ function naturalCompare(a: string, b: string): number {
 // Facet membership comes only from the unfiltered report rows the caller may read. This keeps a
 // delegated report reader inside the exact same report.read + document.read boundary as the table,
 // without making GET /clauses or GET /processes an accidental prerequisite for filtering it.
+// Clause options include every ANCESTOR of a visible ref (7.5.3 → also 7.5, 7): the server filter
+// rolls up subtrees (S-clause-rollup), so each ancestor is a representable, non-empty filter — and
+// a controlled Select can only DISPLAY an accepted parent deep link if it is among the options.
 export function deriveRegisterFacetSource(report: DocumentControlRegister): RegisterFacetSource {
   const clauses = new Set<string>();
   const processes = new Set<string>();
   for (const row of report.rows) {
-    for (const ref of row.clause_refs) clauses.add(ref.clause);
+    for (const ref of row.clause_refs) {
+      const segments = ref.clause.split(".");
+      for (let depth = 1; depth <= segments.length; depth += 1) {
+        clauses.add(segments.slice(0, depth).join("."));
+      }
+    }
     for (const processId of row.process_links) processes.add(processId);
   }
 

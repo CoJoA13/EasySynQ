@@ -9,9 +9,9 @@ const PHASES: PdcaPhase[] = ["PLAN", "DO", "CHECK", "ACT"];
 // The IA flows the way ISO 9001 flows (design principle 1): the feature nav is grouped by PDCA phase,
 // mirroring the Home quadrants + the clause spine (one PLAN/DO/CHECK/ACT label set, no duplication).
 // Phase ↔ clause-range labels match the Home QuadrantCard chips. The per-phase clause-filter links
-// were removed: each was an exact-match /library?clause=N link on a TOP-LEVEL clause, so every one
-// returned zero documents — the Library's in-page ClauseTree is the clause-spine surface (and the
-// rail no longer fetches /clauses on every page load).
+// were removed: at the time each was an exact-match /library?clause=N link on a TOP-LEVEL clause
+// (pre-rollup — always zero documents); the Library's in-page ClauseTree is the clause-spine
+// surface, and the rail deliberately stays off the per-page /clauses fetch.
 const PHASE_CLAUSES: Record<PdcaPhase, string> = {
   PLAN: "Cl 4–6",
   DO: "Cl 7–8",

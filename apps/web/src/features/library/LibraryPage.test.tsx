@@ -82,8 +82,11 @@ test("filtering by a clause narrows the list and shows a removable chip", async 
   await waitFor(() => expect(screen.getByText("SOP-PRD-007")).toBeInTheDocument());
 
   // Collapse-to-selection: the 8.4 sub-clause button only renders once its top-level clause is
-  // selected, so drill 8 → 8.4 (the final filter is the exact sub-clause, as before).
+  // selected. The top-level pick itself now returns results (S-clause-rollup: clause 8 rolls up
+  // its subtree — both 8.x-mapped fixture docs stay), then the sub-clause narrows within it.
   await userEvent.click(screen.getByRole("button", { name: /8 Operation/ }));
+  await waitFor(() => expect(screen.getByText("SOP-PUR-014")).toBeInTheDocument());
+  expect(screen.getByText("SOP-PRD-007")).toBeInTheDocument(); // 8.5-mapped — kept by the rollup
   await userEvent.click(
     await screen.findByRole("button", { name: /8\.4 Control of external providers/ }),
   );

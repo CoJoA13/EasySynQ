@@ -426,7 +426,11 @@ function listDocuments({ request }: { request: Request }) {
   const owner = sp.get("filter[owner_user_id][eq]");
   if (owner) rows = rows.filter((d) => d.owner_user_id === owner);
   const clause = sp.get("filter[clause_refs][has]");
-  if (clause) rows = rows.filter((d) => (d.clause_refs ?? []).includes(clause));
+  // Subtree rollup, mirroring the real _filter_condition (S-clause-rollup): N matches N or N.…
+  if (clause)
+    rows = rows.filter((d) =>
+      (d.clause_refs ?? []).some((ref) => ref === clause || ref.startsWith(clause + ".")),
+    );
   const gte = sp.get("filter[effective_from][gte]");
   if (gte) rows = rows.filter((d) => d.effective_from !== null && d.effective_from >= gte);
   const limit = Number(sp.get("limit") ?? "50");

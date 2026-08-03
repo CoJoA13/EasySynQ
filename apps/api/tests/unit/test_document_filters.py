@@ -116,3 +116,22 @@ def test_owner_user_id_bad_uuid_422() -> None:
 
 def test_clause_refs_builds_a_condition() -> None:
     assert isinstance(_filter_condition("clause_refs", "has", "8.4"), ColumnElement)
+
+
+def test_clause_refs_rollup_pattern_is_dot_anchored_and_escaped() -> None:
+    """S-clause-rollup: the subtree prefix is '.'-anchored (a bare LIKE '8%' would make clause 1
+    match 10 — the handoff's named trap), the exact-number arm survives, and a user-supplied LIKE
+    metacharacter is escaped rather than widening the match."""
+    sql = str(
+        _filter_condition("clause_refs", "has", "8").compile(compile_kwargs={"literal_binds": True})
+    )
+    assert "'8.' || '%'" in sql  # the dot rides INSIDE the literal prefix, before the wildcard
+    assert "ESCAPE" in sql  # autoescape active
+    assert "= '8'" in sql  # the exact arm survives
+
+    hostile = str(
+        _filter_condition("clause_refs", "has", "8%").compile(
+            compile_kwargs={"literal_binds": True}
+        )
+    )
+    assert "'8/%.' || '%'" in hostile  # the user's % is escaped literal, not a wildcard

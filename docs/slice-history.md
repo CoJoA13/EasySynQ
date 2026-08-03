@@ -2,7 +2,8 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0083` (next `0084`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0084` (next `0085`).** Code: https://github.com/CoJoA13/EasySynQ (`main` unprotected —
+> free-plan private repo; the PR + green CI + squash flow is convention/discipline).
 > (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
 > cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
 > `0075` the audit `scope_ref` index; M5 added `0076`'s import-owner snapshot; M7 added `0077`'s
@@ -10,7 +11,8 @@
 > operational-install coherence repair; M10 added `0080`'s dead-field removal and query-path
 > indexes; Issue #360 added `0081`'s pending-purge authority binding; Issue #361 added `0082`'s
 > Evidence Pack legal-erasure status and source-event lineage; Issue #363 added `0083`'s
-> Evidence Pack build-attempt principal and source-IP context.)
+> Evidence Pack build-attempt principal and source-IP context; S-clause7-ia added `0084`'s
+> clause-7 PDCA flip to DO.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -137,6 +139,84 @@
 - **Audit checkpoint key rotation** (Batch 7, PR #364). v1 is single-key; restoring a pre-rotation backup
   after a future rotation would verify the historical signature against the current key. **Closing it
   needs** a key-id on the checkpoint + a retained public-key history.
+
+## PRODUCT IA — clause-spine corrections from the first production deployment (the LAB handoff work queue)
+
+> The first product slice after the MVP-complete ops arc, worked from the 2026-08-02 LAB handoff's
+> owner-approved queue (`docs/superpowers/plans/2026-08-02-lab-handoff.md` §2B). Its sibling, PR 2
+> (the `?clause=` subtree-rollup filter, handoff §2C), is approved with its own review cycle.
+
+### S-clause7-ia — clause 7 (Support) wholly DO (R62) + Library clause-spine polish (handoff §2B, all 4 items + 2 ride-alongs; BE+web+docs; migration **0084** [head `0083→0084`]; NO new key [catalog 102]; PR #426 squash `9bef384`)
+
+**What shipped — the R62 IA correction + three Library/rail polish items.** (1) **R62:** the seeded
+catalog split clause 7 across PLAN (the 7.1–7.4 resourcing subtree, 13 rows) and DO (7.5) — diverging
+from ISO 9001:2015's own PDCA figure (Support + Operation together in Do), making the phase↔clause-range
+labels unstatable (`PLAN: Cl 4–6 / DO: Cl 7–8` vs the data), and doubling clause 7's mirror placement.
+`clause.pdca_phase` is now uniform per top-level clause (PLAN 4–6 · DO 7–8 · CHECK 9 · ACT 10): the
+frozen seed flips the 13 tuples + drops the split sentence from clause 7's intent; **data-only migration
+`0084`** flips a live install (framework by stable code — the 0018 pattern, survives the operational
+short_code rename; `clause` is INSERT-by-seed only so nothing user-authored can be clobbered) and
+restores both phase + old intent on downgrade; register range swept R1–R61→R1–R62 (10 live refs;
+historical bump notes untouched); docs 02/04/09/11/13 + the seed/enum/model/mirror docstrings follow.
+`import_classification.pdca_phase` deliberately untouched (a derived analysis snapshot; zero import runs
+exist). (2) **Nav rail:** the per-phase clause dropdowns removed — each was an exact-match top-level
+`/library?clause=N` link, so every one returned zero documents; kills `activeClauseTop`/`openedPhases`/
+`useClauses()` in `LeftRail` (one less `/clauses` fetch per page load); the PLAN/DO/CHECK/ACT heading
+chips stay and are now truthful. (3) **ClauseTree:** `size="compact-sm"` has a FIXED height while
+`whiteSpace:"normal"` wraps → wrapped titles overflowed the next row; now auto-height + min-height +
+`paddingBlock` + `lineHeight:1.35` with a **structural hanging indent** (number/title as flex spans —
+wrapped text aligns under the title, not the number; the literal `{" "}` between spans keeps the
+accessible name one string). Owner-locked: NO title truncation. (4) **Collapse-to-selection:** top-level
+clauses always render; direct sub-clauses only under the selected top-level clause (~40 rows → ~12; a
+deep link to a sub-clause keeps its parent subtree open via `selected?.split(".")[0]`). Side-effect
+sweep (grep-verified, not assumed): the Home PLAN chip said `Cl 4–7` and DISAGREED with the rail →
+`Cl 4–6`, chips now consistent. Ride-alongs: CLAUDE.md Workflow reworded (`main` has NO enforced
+protection — free-plan private repo; discipline, not enforcement) · handoff §4 gains the user-profile
+idea.
+
+⚠ **The fresh-DB blind spot is the load-bearing migration lesson:** 0018 imports `CLAUSES` live, so a
+fresh chain seeds the NEW values and 0084's upgrade is a NO-OP there — an `_FLIPPED` omission would ship
+green everywhere while a LIVE install's row stayed PLAN forever. The populated coherence stanza
+(`test_migration_coherence.py`, the `migrations` CI job) therefore proves the flip via head →
+downgrade-to-0083 (assert the split restored) → upgrade-head, **structurally over all 17 clause-7 rows**
+(13 flipped + the 4-row 7.5 subtree; migration-reviewer: a 5-row spot set left 8 rows CI-blind), with a
+live `clause_mapping` on 7.2 in place. The migration sources `_NEW_INTENT_7` from the seed module (the
+0018/0010 source-from-the-data-module precedent; migration-reviewer: a frozen copy would silently revert
+a future seed-only intent edit on fresh chains); `_OLD_INTENT_7` stays frozen (the text left the module
+with R62).
+
+⚠ **The catalog flip genuinely breaks tests that exercised the split:** the integration mirror proof
+(7.2 PLAN + 7.5 DO → two phase trees) FAILS post-0084 (both clauses collapse to one DO placement) — both
+mirror cross-phase proofs re-fixtured to 6.2 + 7.5 (`PLAN/06-Planning` primary, symlink
+`DO/07-Support`). A new unit freeze (`test_pdca_phase_is_uniform_per_top_level_clause`, RED-first)
+pins the R62 mapping; the ingestion fixtures' `_CLAUSE_PDCA` maps track the live catalog (diff-critic:
+not load-bearing today, but a future pdca-asserting corpus entry would validate against the retired
+catalog).
+
+⚠ **The web-test-trap catch was a real false-PASS:** the first no-clause-links rail guard synced on the
+phase heading (renders on the FIRST synchronous pass) while the OLD rail's links only mounted after the
+async `useClauses()` fetch — the negative assertions passed against reverted code. Fixed settle-aware
+(`waitFor(isFetching()===0)` + `getQueryState(["clauses"]) === undefined` — the query never being
+REGISTERED is the deterministic revert-RED signal) and **mutation-verified** (old `LeftRail.tsx` from
+main + the new test = RED). `clauseFixture` now `satisfies Clause[]`. **Owner-ratified a11y posture:**
+the collapse reveals sub-rows as a side effect of the announced pressed/filter state — `aria-pressed`
+only, NO stacked `aria-expanded` (recorded at the site in ClauseTree).
+
+**Review + deferrals (named, not faked).** migration-reviewer 2 minors (both folded: the structural
+17-row assert · module-sourced intent) · diff-critic ZERO functional defects + 3 stale-prose stragglers
+(mirror module docstring, `clause.py` docstring, docs/13 DO row) + the fixture drift, all folded ·
+web-test-trap 1 MAJOR (the timing-blind guard, above) + 2 minors folded/ratified · Codex round 1: one P2
+— an in-flight import run's persisted `import_proposal_node.target_ia_path` could display a stale
+`PLAN/07-Support` until the next `rebuild_proposals` — REAL but bounded-safe, deferred on-thread +
+resolved (display-only preview: commit + mirror derive from the LIVE catalog; zero import runs exist;
+self-heals on any review structural op; the downgrade direction is NOT invertible without per-node
+clause codes — if it ever matters, the fix is an app-side `rebuild_proposals` sweep on upgrade, not a
+string UPDATE in 0084); Codex round 2 (owner-requested pre-merge): clean. Deferred: the `?clause=`
+subtree rollup is PR 2 (handoff §2C — `number = '8' OR number LIKE '8.%'`, NOT `LIKE '8%'`) · no
+end-to-end `/clauses`-serializer pin of the clause-7 phase (unit freeze + coherence cover the two ends).
+
+(S-clause7-ia, BE+web+docs, migration **0084** [head `0083→0084`], NO new key [catalog 102], api unit
+1250→1251, web 1427→1431 [+5 ClauseTree, −2+1 LeftRail], PR #426 squash `9bef384`.)
 
 ## POST-GA HARDENING — the systemic-issue backlog (deny-wins scope completeness + register-report provenance/tz edges; no migration, head stays `0070`)
 

@@ -848,6 +848,33 @@ async def test_process_id_filter_narrows_register_to_linked_documents(
     assert doc_out["identifier"] not in ids
 
 
+async def test_clause_refs_filter_rolls_up_the_subtree(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """S-clause-rollup reaches the register too — both surfaces share the ONE
+    ``_filter_condition`` chokepoint, so ``filter[clause_refs][has]=7`` includes a document mapped
+    only to a deep descendant, and the provenance echoes the raw applied param unchanged."""
+    from .test_documents_list import _clause_by_number, _map
+
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+
+    deep = await _create(app_client, ha, type_id)
+    await _map(app_client, ha, deep["id"], await _clause_by_number("7.1.5.1"))
+    outside = await _create(app_client, ha, type_id)
+    await _map(app_client, ha, outside["id"], await _clause_by_number("9.2"))
+
+    await _grant(subj.a, ("report.read",))
+    resp = await app_client.get(f"{_ROUTE}?filter[clause_refs][has]=7", headers=ha)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    ids = {r["identifier"] for r in body["rows"]}
+    assert deep["identifier"] in ids  # mapped only to 7.1.5.1 — the rollup includes it
+    assert outside["identifier"] not in ids
+    assert body["provenance"]["filters"]["filter[clause_refs][has]"] == ["7"]
+
+
 async def test_process_id_filter_includes_objective_satellite_binding(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
