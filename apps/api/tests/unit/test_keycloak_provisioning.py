@@ -155,3 +155,73 @@ async def test_missing_admin_credentials_fail_closed() -> None:
     with pytest.raises(KeycloakNotConfigured):
         async with client as kc:
             await kc.find_user_by_username("jdoe")
+
+
+async def test_create_user_classifies_a_username_conflict() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(409, json={"errorMessage": "User exists with same username"})
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakConflict) as excinfo:
+            await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
+
+    assert excinfo.value.field == "username"
+
+
+async def test_set_password_failure_never_leaks_the_password() -> None:
+    secret = "Xk4m-Pq7r-Ts2v-Wy8n-Bd3h"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(500, json={"error": "boom"})
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable) as excinfo:
+            await kc.set_temporary_password(subject="sub-new", password=secret)
+
+    assert secret not in str(excinfo.value)
+    assert secret not in repr(excinfo.value)
+
+
+async def test_lookup_finds_the_exact_match_among_contains_match_siblings() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        # Keycloak's username query is a CONTAINS match: asking for `ann` returns all of these.
+        return httpx.Response(
+            200,
+            json=[
+                {"id": "sub-joann", "username": "joann"},
+                {"id": "sub-ann", "username": "ann"},
+                {"id": "sub-annette", "username": "annette"},
+            ],
+        )
+
+    async with _client(handler) as kc:
+        result = await kc.find_user_by_username("ann")
+
+    assert result.found is True
+    assert result.subject == "sub-ann"
+
+
+async def test_create_user_falls_back_to_lookup_when_location_is_absent() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "POST" and request.url.path == "/admin/realms/easysynq/users":
+            return httpx.Response(201)  # no Location header
+        if request.method == "GET" and request.url.path == "/admin/realms/easysynq/users":
+            return httpx.Response(200, json=[{"id": "sub-recovered", "username": "jdoe"}])
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        subject = await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
+
+    assert subject == "sub-recovered"
