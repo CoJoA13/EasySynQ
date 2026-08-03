@@ -751,7 +751,8 @@ paths:
       summary: >-
         Issue a fresh temporary password for a linked user, returned once (S-user-create). Repairs a
         provision whose credential step failed, and replaces scripts/new-keycloak-user.sh as the
-        password-reset path. Needs user.create.
+        password-reset path. Needs user.create; resetting the credential of a user who holds any
+        system-domain permission additionally requires system tier (two-tier guard, R35).
       parameters:
         - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -770,6 +771,13 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: >-
+            two_tier_violation (target holds system-domain permissions; credential reset needs a
+            system-tier caller).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "502": { $ref: "#/components/responses/ProblemResponse" }
         "503": { $ref: "#/components/responses/ProblemResponse" }
 

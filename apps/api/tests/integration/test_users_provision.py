@@ -680,6 +680,31 @@ async def _plain_user_id(subject: str) -> uuid.UUID:
         return user.id
 
 
+async def _grant_system_domain_override(subject: str, key: str) -> uuid.UUID:
+    """A target privileged in a system-domain permission ONLY via a per-user
+    ``PermissionOverride`` — never a role. Mirrors ``_grant_user_create_only`` above (which mints
+    this exact principal shape for the CALLER); this mints it for the TARGET, to isolate the
+    override leg of ``user_system_domain_keys`` (`services/authz/repository.py`), the guard's own
+    threat model."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        perm = (await s.execute(select(Permission).where(Permission.key == key))).scalar_one()
+        scope = Scope(org_id=user.org_id, level=ScopeLevel.SYSTEM)
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=perm.id,
+                effect=Effect.ALLOW,
+                scope_id=scope.id,
+            )
+        )
+        await s.commit()
+        return user.id
+
+
 async def test_reset_credential_needs_only_user_create_for_an_unprivileged_target(
     app_client: httpx.AsyncClient,
     token_factory: Callable[..., str],
@@ -743,3 +768,31 @@ async def test_system_tier_caller_can_reset_a_privileged_targets_credential(
     assert resp.status_code == 200, resp.text
     assert len(resp.json()["temporary_password"]) >= MIN_LENGTH
     assert len(calls["password"]) == 1
+
+
+async def test_reset_credential_of_an_override_only_privileged_target_requires_system_tier(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`user_system_domain_keys` has TWO legs — role-derived grants and per-user
+    `PermissionOverride` grants — and the three guard tests above only ever exercise a target
+    privileged via a ROLE (`test_reset_credential_of_a_system_domain_target_requires_system_tier`)
+    or a target with no grants at all. The override leg is precisely this branch's own threat
+    model: `_grant_user_create_only` mints exactly that principal shape for the CALLER (a
+    system-domain-free `user.create`-only override), so leaving the TARGET side of that same leg
+    unproven would let a future refactor silently drop the override half of the query (e.g.
+    collapse the `UNION` to the role leg alone) with every existing test still green. Pin it: the
+    target holds a system-domain permission (`backup.run`) ONLY through an override, never a
+    role, and the content-tier caller must still be refused — before any Keycloak call."""
+    calls = _install_kc(monkeypatch)
+    caller_sub = _sub("resetcaller4")
+    await _grant_user_create_only(caller_sub)
+    headers = _auth(token_factory, caller_sub)
+    target_id = await _grant_system_domain_override(_sub("resettarget4"), "backup.run")
+
+    resp = await app_client.post(f"/api/v1/users/{target_id}/temporary-password", headers=headers)
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "two_tier_violation"
+    assert calls["password"] == []
