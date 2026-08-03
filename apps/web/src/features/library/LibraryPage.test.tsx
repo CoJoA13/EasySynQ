@@ -81,7 +81,12 @@ test("filtering by a clause narrows the list and shows a removable chip", async 
   renderWithProviders(<LibraryPage />, { route: "/library" });
   await waitFor(() => expect(screen.getByText("SOP-PRD-007")).toBeInTheDocument());
 
-  await userEvent.click(screen.getByRole("button", { name: /8\.4 Control of external providers/ }));
+  // Collapse-to-selection: the 8.4 sub-clause button only renders once its top-level clause is
+  // selected, so drill 8 → 8.4 (the final filter is the exact sub-clause, as before).
+  await userEvent.click(screen.getByRole("button", { name: /8 Operation/ }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: /8\.4 Control of external providers/ }),
+  );
 
   // The 8.5-mapped doc drops out; the 8.4-mapped doc stays.
   await waitFor(() => expect(screen.queryByText("SOP-PRD-007")).not.toBeInTheDocument());
