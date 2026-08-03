@@ -150,3 +150,5 @@ so they are not lost. Each needs its own brainstorm before any work.
 2. **Permission-key visibility under "Manage" on a user.** What a user can actually do is not
    legible from the user surface.
 3. **Browse/picker when importing**, instead of typing a source path by hand.
+4. **User profile.** A user-facing profile surface (owner idea 2026-08-02); likely intersects
+   item 2's permission-key visibility.

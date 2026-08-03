@@ -49,7 +49,7 @@ Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no sh
 
 ## Workflow
 
-- `main` is protected. Slice work on a `feat/sN-*` branch → PR → green CI → squash-merge.
+- `main` has **no enforced protection** (branch protection is unavailable on this free-plan private repo — verified 2026-08-02 via API, `protected: false`; rulesets are paywalled). The five required checks and no-direct-push are **convention/discipline, not enforcement**: slice work on a `feat/sN-*` branch → PR → green CI → squash-merge.
 - CI (all five required): `contracts` (redocly), `api` (ruff/mypy-strict/unit), `migrations` (alembic up↔down + `alembic check`), `web` (eslint/tsc/build/test), `integration` (pytest -m integration).
 - Toolchain: `uv` + managed **Python 3.12** at `~/.local/bin/uv` (system `python3` is 3.14). Node 22. Docker v29.
 - Run the stack: `just up s` → http://localhost; stop `just down`. ⚠ Point the app at the **non-owner** DB role for S6+ — see `docs/dev-workflow.md`.

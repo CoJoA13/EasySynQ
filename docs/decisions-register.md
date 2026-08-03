@@ -1823,7 +1823,7 @@ what the classifier concluded at analysis time, and rewriting it would falsify a
 record. The ingestion classifier and the mirror derive phase from the live catalog and
 self-correct. No permission key, endpoint, request field, or response schema changes.
 
-**Back-propagation:** 02 §2/§3.2, 04 §10.3 build note, 09 §5/§8.1, 13 §7 dashboard row,
+**Back-propagation:** 02 §2/§3.2, 04 §10.3 build note, 09 §5/§8.1, 11 §dashboard sketch, 13 §7 dashboard row,
 `db/seeds/iso9001_clauses.py`, `db/models/_clause_enums.py`, `services/vault/mirror.py`
 placement docstring, the mirror cross-phase tests, and the SPA PDCA labels (Home PLAN card +
 left-rail chips).
