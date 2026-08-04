@@ -1895,12 +1895,20 @@ implementation prose.
    the safe direction for an append-only chain.
 5. **Credential-reset authority (extends R35 to a non-grant operation).** Resetting an existing
    identity's credential is an account-takeover capability, unlike creating a permission-less one.
-   A caller may reset another user's credential **only if the caller is system-tier, or the target
-   holds no system-domain permission**. `user.create` alone is insufficient, because it is grantable
-   independently through a per-user override. The refusal is audited as `two_tier_violation`, exactly
-   as the R35 grant guards are. `POST /users/provision` is exempt: it refuses any existing username,
-   so it can never touch an existing account's credential, and its role leg is already gated by
-   `permission.grant` + the R35 role guard.
+   A caller may reset another user's credential **only if the caller is system-tier — full stop**;
+   the target's own authority is never inspected. `user.create` alone is insufficient, because it is
+   grantable independently through a per-user override. An earlier draft of this rule instead
+   permitted the reset whenever the target held no *system-domain* permission — that form was
+   abandoned because content-domain authority (approving and releasing regulated documents) is
+   privilege the system-domain test could not see: a caller holding only `user.create` could mint a
+   fresh credential for an Approver and sign in as them, forging an approval or release signature —
+   at least as damaging, in an ISO 9001 QMS, as a system-domain takeover — and enumerating which
+   content roles count as "privileged" would only trade one fragile check for another. The refusal
+   is audited as `two_tier_violation`, under the reset operation's own key rather than
+   `permission.grant`, exactly as the R35 grant guards audit their own denials. `POST
+   /users/provision` is exempt: it refuses any existing username, so it can never touch an existing
+   account's credential, and its role leg is already gated by `permission.grant` + the R35 role
+   guard.
 
 **No new permission key** — both endpoints ride the existing `user.create` (catalog stays at 102;
 R38 unbroken). The paste-a-`sub` `POST /users` keeps its contract as the fallback when the Keycloak

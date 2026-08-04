@@ -126,6 +126,40 @@ def _install_kc(
     return calls
 
 
+def _install_kc_race(monkeypatch: pytest.MonkeyPatch, *, winner_subject: str) -> None:
+    """Script the identity service for the CREATE-CONFLICT RACE (FIX 2): our own precheck GET
+    (lookup call #1) reports the username absent, our POST create then 409s (another request won
+    the race and created it in between), and the conflict-classification re-read GET (lookup call
+    #2) now finds ``winner_subject``. Distinct from ``_install_kc``'s ``existing=`` param, which
+    makes EVERY lookup resolve the same way and so can only script the PRE-check-finds-it case,
+    never this race where the two lookups genuinely disagree."""
+    calls = {"lookup": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "t"})
+        if request.method == "GET" and request.url.path.endswith("/users"):
+            calls["lookup"] += 1
+            username = request.url.params["username"]
+            if calls["lookup"] == 1:
+                return httpx.Response(200, json=[])
+            return httpx.Response(200, json=[{"id": winner_subject, "username": username}])
+        if request.method == "POST" and request.url.path.endswith("/users"):
+            return httpx.Response(409, json={"errorMessage": "User exists with same username"})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    def factory() -> KeycloakProvisioningClient:
+        return KeycloakProvisioningClient(
+            base_url="http://kc",
+            realm="easysynq",
+            admin_user="admin",
+            admin_password="secret",
+            _transport=httpx.MockTransport(handler),
+        )
+
+    monkeypatch.setattr(users_api, "_kc_client", factory)
+
+
 async def _app_user_count() -> int:
     sm = get_sessionmaker()
     async with sm() as s:
@@ -454,6 +488,61 @@ async def test_already_linked_username_collision_returns_user_exists(
     assert "keycloak_subject" not in body
 
 
+async def test_create_conflict_race_finds_unlinked_subject_offers_the_link_path(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FIX 2 — the race where another request creates the SAME username between our precheck
+    (reports absent) and our POST (409s). ``_classify_create_conflict``'s re-read now FINDS the
+    colliding subject, and the handler must not reduce that to a bare `user_exists`: it must
+    classify it exactly as the precheck-found path already does. Unlinked case: 409
+    `keycloak_username_exists_unlinked` carrying `keycloak_subject`, so the "link the existing
+    account" affordance is still offered even though OUR precheck never saw the collision."""
+    winner = _sub("racewinner")
+    _install_kc_race(monkeypatch, winner_subject=winner)
+    headers = await _admin(token_factory)
+
+    resp = await app_client.post(
+        "/api/v1/users/provision", headers=headers, json={"username": "racey-unlinked"}
+    )
+
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["code"] == "keycloak_username_exists_unlinked"
+    assert body["keycloak_subject"] == winner
+
+
+async def test_create_conflict_race_finds_linked_subject_returns_user_exists(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """As above, but the winning subject is ALREADY bound to an `app_user` row (a concurrent
+    provision that ran all the way through) — the race re-read must classify this as
+    `user_exists`, not the unlinked link-path, exactly mirroring
+    `test_already_linked_username_collision_returns_user_exists` for the precheck-found case."""
+    subject = _sub("racelinked")
+    _install_kc(monkeypatch, new_subject=subject)
+    headers = await _admin(token_factory)
+    first = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": f"racelinked-{uuid.uuid4().hex[:6]}"},
+    )
+    assert first.status_code == 201, first.text
+
+    _install_kc_race(monkeypatch, winner_subject=subject)
+    resp = await app_client.post(
+        "/api/v1/users/provision", headers=headers, json={"username": "someone-else-race"}
+    )
+
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["code"] == "user_exists"
+    assert "keycloak_subject" not in body
+
+
 async def test_duplicate_email_returns_keycloak_email_exists(
     app_client: httpx.AsyncClient,
     token_factory: Callable[..., str],
@@ -687,19 +776,29 @@ async def test_reissue_survives_a_failed_credential_audit_commit(
     assert await _issued_count() == before  # the reissue's own commit rolled back; no new row
 
 
-# --- two-tier credential-reset guard (R35) — CONFIRMED account-takeover fix (P1) --------------
+# --- two-tier credential-reset guard (R35/R64 rule 5) — CONFIRMED account-takeover fix (P1) ----
 #
 # `issue_temporary_password` used to gate on `user.create` alone. That permission can be granted
 # INDEPENDENTLY of `permission.grant` (see `_grant_user_create_only` above), so a caller holding
 # only `user.create` could reset the Keycloak password of ANY user in the org — including a
-# System Administrator — and sign in as them (the realm enforces no MFA). The fix mirrors the
-# existing R35 two-tier guard (`assert_can_assign_role`): a caller may reset another user's
-# credential only if the caller is system-tier, OR the target holds no system-domain permission.
+# System Administrator — and sign in as them (the realm enforces no MFA).
+#
+# An intermediate fix mirrored the existing R35 two-tier guard by inspecting the TARGET: a caller
+# could reset a credential if system-tier, OR if the target held no *system-domain* permission
+# (`user_system_domain_keys`, since removed). That was still a hole: an Approver's, Process
+# Owner's, or Register Steward's authority is entirely CONTENT-domain (approving/releasing
+# regulated documents), invisible to a system-domain test — a caller holding only `user.create`
+# could still mint a fresh credential for an Approver and sign in as them, forging an
+# approval/release signature. The guard now TIGHTENS instead of enumerating "privileged" content
+# roles: resetting ANOTHER user's credential always requires a system-tier caller, full stop, with
+# no inspection of the target at all.
 
 
 async def _plain_user_id(subject: str) -> uuid.UUID:
     """A linked user with NO grants at all — the credential-reset guard's "ordinary, unprivileged
-    user" baseline. `user_system_domain_keys` must read empty for them, so the guard is a no-op."""
+    user" baseline. Under the tightened R64 rule 5 the guard never inspects the target at all, so
+    this baseline now proves the OPPOSITE of what it once did: a non-system-tier caller is refused
+    even here (see `test_reset_credential_of_an_unprivileged_target_still_requires_system_tier`)."""
     async with get_sessionmaker()() as s:
         user = await _ensure_user(s, subject)
         await s.commit()
@@ -709,9 +808,10 @@ async def _plain_user_id(subject: str) -> uuid.UUID:
 async def _grant_system_domain_override(subject: str, key: str) -> uuid.UUID:
     """A target privileged in a system-domain permission ONLY via a per-user
     ``PermissionOverride`` — never a role. Mirrors ``_grant_user_create_only`` above (which mints
-    this exact principal shape for the CALLER); this mints it for the TARGET, to isolate the
-    override leg of ``user_system_domain_keys`` (`services/authz/repository.py`), the guard's own
-    threat model."""
+    this exact principal shape for the CALLER); this mints it for the TARGET. Originally isolated
+    the override leg of the now-removed ``user_system_domain_keys``; kept as regression coverage
+    proving the tightened guard refuses this shape too, for the same reason it refuses every other
+    shape — it no longer inspects the target's grants at all."""
     async with get_sessionmaker()() as s:
         user = await _ensure_user(s, subject)
         perm = (await s.execute(select(Permission).where(Permission.key == key))).scalar_one()
@@ -731,14 +831,19 @@ async def _grant_system_domain_override(subject: str, key: str) -> uuid.UUID:
         return user.id
 
 
-async def test_reset_credential_needs_only_user_create_for_an_unprivileged_target(
+async def test_reset_credential_of_an_unprivileged_target_still_requires_system_tier(
     app_client: httpx.AsyncClient,
     token_factory: Callable[..., str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A content-tier caller holding ONLY `user.create` (never `permission.grant`) may still reset
-    an ordinary user's credential: resetting an unprivileged account is no more powerful than
-    creating a fresh one, so the two-tier guard (R35) must not over-restrict this common case."""
+    """RETARGETED (R64 rule 5, tightened): a content-tier caller holding ONLY `user.create`
+    (never `permission.grant`) may NOT reset another user's credential — not even an ordinary,
+    unprivileged target. An earlier round of this guard permitted exactly this case (a target
+    holding no system-domain permission needed no system-tier caller); that test asserted a 200
+    here. It is retargeted to assert refusal because the narrower rule could not see CONTENT-domain
+    authority (an Approver's `document.approve`/`document.release`) as privilege worth protecting
+    — the guard no longer inspects the target at all, so resetting ANY other user's credential
+    demands a system-tier caller, full stop."""
     calls = _install_kc(monkeypatch)
     caller_sub = _sub("resetcaller")
     await _grant_user_create_only(caller_sub)
@@ -747,9 +852,23 @@ async def test_reset_credential_needs_only_user_create_for_an_unprivileged_targe
 
     resp = await app_client.post(f"/api/v1/users/{target_id}/temporary-password", headers=headers)
 
-    assert resp.status_code == 200, resp.text
-    assert len(resp.json()["temporary_password"]) >= MIN_LENGTH
-    assert len(calls["password"]) == 1
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "two_tier_violation"
+    assert calls["password"] == []
+
+    sm = get_sessionmaker()
+    async with sm() as s:
+        event = await s.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_type == EventType.TWO_TIER_VIOLATION,
+                AuditEvent.scope_ref == f"user:{target_id}",
+            )
+        )
+        assert event is not None
+        # FIX 3: the denial must name the RESET operation, never the unrelated `permission.grant`
+        # — this caller never attempted a grant, and recording it as one would misfile the trail.
+        assert event.after["permission_key"] == "user.reset_credential"
+        assert event.after["permission_key"] != "permission.grant"
 
 
 async def test_reset_credential_of_a_system_domain_target_requires_system_tier(
@@ -759,9 +878,12 @@ async def test_reset_credential_of_a_system_domain_target_requires_system_tier(
 ) -> None:
     """The SAME content-tier caller as above must NOT be able to reset the credential of a user
     who holds a system-domain permission — a fresh credential (no realm MFA) would let them sign
-    in AS that user; this is the account-takeover hole the fix closes. The guard must refuse
-    BEFORE any Keycloak call is made: `_install_kc`'s handler raises `AssertionError` on any call
-    its scripted branches don't recognize, so a bypassed guard would surface loudly, not silently
+    in AS that user; this is the account-takeover scenario the guard exists to stop. Under the
+    tightened R64 rule 5 this is just one instance of the blanket "caller must be system-tier"
+    rule (see the unprivileged-target test above for the general case), kept as its own test
+    because it is the sharpest illustration of the stakes. The guard must refuse BEFORE any
+    Keycloak call is made: `_install_kc`'s handler raises `AssertionError` on any call its
+    scripted branches don't recognize, so a bypassed guard would surface loudly, not silently
     pass; asserting `calls["password"] == []` additionally proves the specific reset-password call
     never happened."""
     calls = _install_kc(monkeypatch)
@@ -784,7 +906,8 @@ async def test_system_tier_caller_can_reset_a_privileged_targets_credential(
 ) -> None:
     """Positive control (no over-restriction): a system-tier caller (System Administrator) MAY
     reset a privileged target's credential — the guard gates the content tier, not the
-    capability itself."""
+    capability itself. This is the path the product actually uses (an Admin resetting any user's
+    credential), so it must keep working end-to-end under the tightened R64 rule 5."""
     calls = _install_kc(monkeypatch)
     headers = await _admin(token_factory)
     target_id = await s5.grant_role(_sub("resettarget3"), _ADMIN)
@@ -801,16 +924,13 @@ async def test_reset_credential_of_an_override_only_privileged_target_requires_s
     token_factory: Callable[..., str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`user_system_domain_keys` has TWO legs — role-derived grants and per-user
-    `PermissionOverride` grants — and the three guard tests above only ever exercise a target
-    privileged via a ROLE (`test_reset_credential_of_a_system_domain_target_requires_system_tier`)
-    or a target with no grants at all. The override leg is precisely this branch's own threat
-    model: `_grant_user_create_only` mints exactly that principal shape for the CALLER (a
-    system-domain-free `user.create`-only override), so leaving the TARGET side of that same leg
-    unproven would let a future refactor silently drop the override half of the query (e.g.
-    collapse the `UNION` to the role leg alone) with every existing test still green. Pin it: the
-    target holds a system-domain permission (`backup.run`) ONLY through an override, never a
-    role, and the content-tier caller must still be refused — before any Keycloak call."""
+    """Regression coverage for a target privileged ONLY via a per-user `PermissionOverride` —
+    never a role. This test used to isolate the override leg of `user_system_domain_keys`
+    (`services/authz/repository.py`), which the R64 rule-5 tightening removed entirely: the guard
+    no longer inspects the target's grants AT ALL, role-derived, override-derived, or otherwise.
+    Kept — retargeted rather than deleted — to prove no future change can quietly resurrect
+    target inspection for exactly this shape: the content-tier caller must still be refused,
+    before any Keycloak call, for the same reason it is refused against every other target."""
     calls = _install_kc(monkeypatch)
     caller_sub = _sub("resetcaller4")
     await _grant_user_create_only(caller_sub)

@@ -35,7 +35,6 @@ from .repository import (
     get_allow_approver_release,
     get_permission,
     role_system_domain_keys,
-    user_system_domain_keys,
 )
 
 ScopeResolver = Callable[[Request], ResourceContext]
@@ -253,14 +252,24 @@ async def _is_system_tier(session: AsyncSession, granter: AppUser) -> bool:
 
 
 async def _two_tier_deny(
-    sink: AuthzAuditSink, granter: AppUser, scope_ref: str, detail: str
+    sink: AuthzAuditSink,
+    granter: AppUser,
+    scope_ref: str,
+    detail: str,
+    *,
+    permission_key: str = "permission.grant",
 ) -> None:
+    """Audit + raise a 422 ``two_tier_violation``. ``permission_key`` names the OPERATION being
+    denied and defaults to ``"permission.grant"`` so every existing R35 grant/role/override guard
+    stays byte-identical; ``assert_can_reset_credential`` passes its own operation key instead, so
+    a credential-reset refusal is not misrecorded in the audit trail as a privilege-grant attempt
+    the caller never actually made — the actual denied operation must be the one that appears."""
     await sink.record(
         AuthzAuditEvent(
             occurred_at=_now(),
             actor_id=str(granter.id),
             org_id=str(granter.org_id),
-            permission_key="permission.grant",
+            permission_key=permission_key,
             decision="deny",
             reason="two_tier_violation",
             scope_ref=scope_ref,
@@ -369,27 +378,32 @@ async def assert_can_delete_override(
 async def assert_can_reset_credential(
     session: AsyncSession, sink: AuthzAuditSink, caller: AppUser, target: AppUser
 ) -> None:
-    """Two-tier guard (R35) for a credential RESET: a caller may reset another user's Keycloak
-    credential only if the caller is system-tier, OR the target holds no system-domain
-    permission. Resetting an ordinary user's password is no more powerful than creating a fresh
-    unprivileged account (both are covered by plain ``user.create``); resetting a system-tier
-    user's password is an ACCOUNT-TAKEOVER capability — a caller who can mint a new credential for
-    a System Administrator can sign in as them (the realm enforces no MFA) — so it demands the
-    same system-tier authority ``assert_can_assign_role`` requires before handing out a role that
-    bundles a system-domain permission. Denials are AUDITED via ``_two_tier_deny`` for the same
-    reason as the sibling guards: the outer ``require("user.create")`` ALLOW is already logged,
-    and a bare check+422 would leave no record of the blocked takeover attempt."""
-    target_keys = await user_system_domain_keys(session, target.id, target.org_id)
-    if not target_keys:
-        return
+    """Two-tier guard (R35/R64 rule 5) for a credential RESET: resetting ANOTHER user's Keycloak
+    credential always requires the caller to be system-tier — full stop, with NO inspection of the
+    target's own authority.
+
+    Resetting a credential is itself the account-takeover primitive: a fresh password lets the
+    caller sign in AS the target (the realm enforces no MFA), regardless of what the target can
+    do — so it belongs to the administrative tier by definition. An EARLIER, narrower version of
+    this guard instead permitted the reset whenever the target held no SYSTEM-DOMAIN permission
+    (the now-removed ``user_system_domain_keys``); that test could not see CONTENT-domain
+    authority — an Approver's or Process Owner's ability to approve/release regulated documents —
+    so a caller holding only the independently-grantable ``user.create`` could mint a fresh
+    credential for an Approver and sign in as them, forging an approval/release signature. In an
+    ISO 9001 QMS a forged approval or release is at least as damaging as a system-domain takeover,
+    and enumerating "privileged" content roles would only trade one fragile enumeration for
+    another — so the guard tightens instead: no target inspection at all. Denials are AUDITED via
+    ``_two_tier_deny`` under the reset operation's OWN key (never ``permission.grant``, which this
+    is not) for the same reason as the sibling guards: the outer ``require("user.create")`` ALLOW
+    is already logged, and a bare check+422 would leave no record of the blocked takeover attempt.
+    """
     if not await _is_system_tier(session, caller):
         await _two_tier_deny(
             sink,
             caller,
             f"user:{target.id}",
-            "target holds system-administration permissions "
-            f"({', '.join(sorted(target_keys))}) and credential reset requires a system-tier "
-            "caller",
+            "credential reset for another user requires a system-tier caller",
+            permission_key="user.reset_credential",
         )
 
 

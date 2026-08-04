@@ -297,6 +297,10 @@ async def test_create_conflict_classifies_username_when_reread_finds_it() -> Non
             await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
 
     assert excinfo.value.field == "username"
+    # FIX 2: the re-read RESOLVED the colliding subject — it must be carried out of the conflict,
+    # not thrown away, so `provision_user` can classify it linked-vs-unlinked instead of reducing
+    # a genuine race to a bare, undifferentiated `user_exists`.
+    assert excinfo.value.keycloak_subject == "sub-jdoe"
 
 
 async def test_create_conflict_classifies_email_when_username_absent_on_reread() -> None:
@@ -322,6 +326,8 @@ async def test_create_conflict_classifies_email_when_username_absent_on_reread()
             )
 
     assert excinfo.value.field == "email"
+    # No username collision was found, so there is no subject to carry.
+    assert excinfo.value.keycloak_subject is None
 
 
 async def test_create_conflict_falls_back_when_reread_itself_fails() -> None:
@@ -349,6 +355,9 @@ async def test_create_conflict_falls_back_when_reread_itself_fails() -> None:
             )
 
     assert excinfo.value.field == "username"
+    # The re-read itself failed, so no subject was ever resolved — the fallback heuristic must
+    # not fabricate one.
+    assert excinfo.value.keycloak_subject is None
 
 
 # --- a 4xx other than 409 is rejected input, never an outage (P2 fix) --------------------------

@@ -43,10 +43,20 @@ class KeycloakUnavailable(KeycloakProvisioningError):
 
 
 class KeycloakConflict(KeycloakProvisioningError):
-    """Keycloak refused the create as a duplicate. ``field`` is ``username`` or ``email``."""
+    """Keycloak refused the create as a duplicate. ``field`` is ``username`` or ``email``.
 
-    def __init__(self, field: str, message: str) -> None:
+    ``keycloak_subject`` carries the colliding subject when the CONFLICT-CLASSIFICATION re-read
+    (``_classify_create_conflict``) found it — the race where another request created the exact
+    same username between our precheck and our POST. The caller (``provision_user``) needs this to
+    classify the collision as ``user_exists`` (already linked to an ``app_user``) vs
+    ``keycloak_username_exists_unlinked`` (offer the "link the existing account" affordance),
+    exactly as it already does for the precheck-found case — never left as a bare, undifferentiated
+    ``user_exists``. ``None`` for an email collision, or when the re-read itself failed and
+    classification fell back to the response-message heuristic (no subject was ever resolved)."""
+
+    def __init__(self, field: str, message: str, *, keycloak_subject: str | None = None) -> None:
         self.field = field
+        self.keycloak_subject = keycloak_subject
         super().__init__(message)
 
 
@@ -239,10 +249,12 @@ class KeycloakProvisioningClient:
         a message containing "email" even when the request supplied none at all and the collision
         is purely on username. Re-read the username with the same ``exact=true``, re-verified
         lookup used elsewhere (``find_user_by_username``): if it now resolves, the conflict IS the
-        username; if it is definitively absent, the collision must be the email — create only
-        409s on one of the two unique fields. Only if the re-read itself fails do we fall back to
-        the message heuristic: a lookup outage must not escape as a mismatched conflict, and must
-        not be guessed at either.
+        username (and we carry the resolved subject out — see ``KeycloakConflict.keycloak_subject``
+        — so the caller can classify it linked-vs-unlinked instead of throwing that fact away); if
+        it is definitively absent, the collision must be the email — create only 409s on one of the
+        two unique fields. Only if the re-read itself fails do we fall back to the message
+        heuristic: a lookup outage must not escape as a mismatched conflict, and must not be
+        guessed at either.
         """
         try:
             lookup = await self.find_user_by_username(username)
@@ -250,8 +262,13 @@ class KeycloakProvisioningClient:
             return KeycloakConflict(
                 _conflict_field(response), "Keycloak refused the account as a duplicate"
             )
-        field = "username" if lookup.found else "email"
-        return KeycloakConflict(field, "Keycloak refused the account as a duplicate")
+        if lookup.found:
+            return KeycloakConflict(
+                "username",
+                "Keycloak refused the account as a duplicate",
+                keycloak_subject=lookup.subject,
+            )
+        return KeycloakConflict("email", "Keycloak refused the account as a duplicate")
 
     async def set_temporary_password(self, *, subject: str, password: str) -> None:
         headers = await self._headers()

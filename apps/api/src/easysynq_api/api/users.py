@@ -159,6 +159,34 @@ async def _role_names_by_user(
     return out
 
 
+async def _raise_username_conflict(session: AsyncSession, subject: str) -> None:
+    """Classify a username collision against a KNOWN Keycloak ``subject`` and raise the matching
+    409 — always raises.
+
+    ``user_exists`` if an ``app_user`` already binds the subject; otherwise
+    ``keycloak_username_exists_unlinked`` (carrying ``keycloak_subject`` for the SPA's "Link the
+    existing account" affordance). Shared by both places a username collision can be discovered:
+    the PRE-CHECK lookup (the username already resolved before we even attempted create) and the
+    POST-409 conflict re-read (``KeycloakConflict.keycloak_subject`` — the race where another
+    request created this exact username between our precheck and our POST) — so both converge on
+    identical behaviour instead of the race silently degrading to a bare ``user_exists``.
+    """
+    linked = await session.scalar(select(AppUser.id).where(AppUser.keycloak_subject == subject))
+    if linked is not None:
+        raise ProblemException(
+            status=409,
+            code="user_exists",
+            title="That username already has an EasySynQ user",
+        )
+    raise ProblemException(
+        status=409,
+        code="keycloak_username_exists_unlinked",
+        title="A sign-in account with that username already exists",
+        detail="Link the existing account instead of creating a new one.",
+        members={"keycloak_subject": subject},
+    )
+
+
 async def _get_user(session: AsyncSession, user_id: uuid.UUID, org_id: uuid.UUID) -> AppUser:
     # Org-scoped lookup; a cross-org target reads as not-found (no existence leak), keeping the
     # surface tenant-safe for the additive multi-org path (matches authz.py).
@@ -269,22 +297,7 @@ async def provision_user(
             lookup = await kc.find_user_by_username(username)
             if lookup.found:
                 assert lookup.subject is not None  # noqa: S101 — found=True only with a subject
-                linked = await session.scalar(
-                    select(AppUser.id).where(AppUser.keycloak_subject == lookup.subject)
-                )
-                if linked is not None:
-                    raise ProblemException(
-                        status=409,
-                        code="user_exists",
-                        title="That username already has an EasySynQ user",
-                    )
-                raise ProblemException(
-                    status=409,
-                    code="keycloak_username_exists_unlinked",
-                    title="A sign-in account with that username already exists",
-                    detail="Link the existing account instead of creating a new one.",
-                    members={"keycloak_subject": lookup.subject},
-                )
+                await _raise_username_conflict(session, lookup.subject)
 
             subject = await kc.create_user(
                 username=username,
@@ -299,6 +312,12 @@ async def provision_user(
                 title="Keycloak admin access is not configured on this install",
             ) from exc
         except KeycloakConflict as exc:
+            if exc.field == "username" and exc.keycloak_subject is not None:
+                # The conflict-classification re-read FOUND the colliding subject (the race:
+                # another request created this exact username between our precheck and our POST)
+                # — reuse the precheck's own linked/unlinked classification, don't reduce this to
+                # a bare `user_exists` and throw away the "link the existing account" path.
+                await _raise_username_conflict(session, exc.keycloak_subject)
             code = "keycloak_email_exists" if exc.field == "email" else "user_exists"
             title = (
                 "That email is already used by another sign-in account"
