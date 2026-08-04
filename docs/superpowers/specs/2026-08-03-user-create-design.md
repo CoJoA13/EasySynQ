@@ -273,7 +273,7 @@ renders only when the caller holds `permission.grant`; the create button only wi
 
 | Path | Event | Payload |
 |---|---|---|
-| Provision (new Keycloak account) | `USER_CREATED` (existing) | `after = {status: INVITED, email, provisioning: "keycloak_created", credential_issued: true}` |
+| Provision (new Keycloak account) | `USER_CREATED` (existing) | `after = {status: INVITED, email, provisioning: "keycloak_created"}` — **no `credential_issued`**: this event commits *before* Keycloak is asked to set the password, so claiming one exists here would leave a permanent false statement in the append-only trail when the credential step then fails (R64 rule 4). The credential is recorded only by the `USER_CREDENTIAL_ISSUED` event below, emitted after Keycloak accepts it. |
 | Link an existing account (via kept `POST /users`) | `USER_CREATED` (existing, unchanged) | unchanged |
 | Issue temp password (§4.3) | **`USER_CREDENTIAL_ISSUED`** (new) | `after = {credential_issued: true}` — **never the value** |
 
