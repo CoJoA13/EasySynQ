@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R63) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R64) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R63
+## Part 3 — Resolutions R1–R64
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1864,6 +1864,66 @@ literal meaning (the doc's DIRECTLY-★ mappings); the coverage-impact truth in 
 is the shared gate's `obsoletion_star_gap` advisory.
 
 Bumps the resolutions range **R1–R62 → R1–R63**.
+
+### R64 — In-app identity provisioning: ordering, non-deletion, and credential-reset authority — 2026-08-03
+
+Creating a user was two disconnected steps in two systems — create the Keycloak account at the
+server's shell, read back its `sub`, paste it into Administration → Users — which made onboarding a
+physical trip to the machine. Slice S-user-create moves provisioning into the Admin SPA
+(`POST /users/provision`, `POST /users/{id}/temporary-password`). Because the identity provider is an
+external system that cannot join the database transaction, the safety of that flow rests on ordering
+and on refusing to compensate destructively; those rules are recorded here rather than left to
+implementation prose.
+
+**Normative rules.**
+
+1. **Ordering.** The Keycloak account is created **without a credential**; the `app_user` row and any
+   role assignments commit; **only then** is the temporary password set. A failed database write
+   therefore leaves an unusable orphan account, never a live account whose password nobody was shown.
+2. **Non-deletion (absolute).** EasySynQ **never deletes a Keycloak account**, on any path. Orphans
+   are recovered by *adoption* — the existing `POST /users` binds the orphaned subject — not by
+   erasure. Destructive compensation would turn a transient failure into identity loss, and a
+   pre-existing account must never be removable by a failed provision attempt.
+3. **Credential secrecy.** A generated temporary password is returned in exactly one response and is
+   persisted nowhere: not in the database, a log, an audit payload, a problem detail, an exception
+   message, or browser storage. It is not re-readable; reissuing means resetting.
+4. **Audit truthfulness.** The trail never claims a credential was issued when it was not.
+   `USER_CREATED` commits before the credential exists and does not assert one;
+   `USER_CREDENTIAL_ISSUED` (migration `0085`) is committed only after Keycloak accepts the password.
+   That final audit write is deliberately **non-fatal**: the password exists only in the response, so
+   losing the response is strictly worse than losing one audit row, and an audit **under**-claim is
+   the safe direction for an append-only chain.
+5. **Credential-reset authority (extends R35 to a non-grant operation).** Resetting an existing
+   identity's credential is an account-takeover capability, unlike creating a permission-less one.
+   A caller may reset another user's credential **only if the caller is system-tier, or the target
+   holds no system-domain permission**. `user.create` alone is insufficient, because it is grantable
+   independently through a per-user override. The refusal is audited as `two_tier_violation`, exactly
+   as the R35 grant guards are. `POST /users/provision` is exempt: it refuses any existing username,
+   so it can never touch an existing account's credential, and its role leg is already gated by
+   `permission.grant` + the R35 role guard.
+
+**No new permission key** — both endpoints ride the existing `user.create` (catalog stays at 102;
+R38 unbroken). The paste-a-`sub` `POST /users` keeps its contract as the fallback when the Keycloak
+admin API is unreachable and as the adoption path in rule 2.
+
+**Rationale.** Rules 1, 2 and 4 exist because a two-system write cannot be made atomic: the only
+durable guarantee available is that every failure mode leaves a state a human can safely recover
+from, and that the record never overstates what happened. Rule 5 exists because R35 drew the
+ADMIN/QMS tier boundary for *granting* authority and this is the first operation that can seize an
+identity without granting anything.
+
+**Back-propagation:** 08 §10/§11 and `docs/manuals/administrator-it-manual.md` §5.2/§5.3 (the
+one-step flow, the show-once handover, and the shell script demoted to a documented fallback), 15
+(both endpoints, their gates, and the `two_tier_violation` 422), 07 (the reset guard alongside the
+R35 grant guards).
+
+**Deferred, deliberately (recorded so it is not mistaken for an oversight):** a role carrying a
+parameterized scope template (`:assigned_folder`, `:assigned_doc_class`, `:assignment_process`)
+assigned without a binding resolves with the placeholder intact and confers none of its intended
+access. This slice does **not** fix that — it is pre-existing behaviour of the shipped role-assignment
+surface, and the failure direction is **under**-grant. A binding UI is its own slice.
+
+Bumps the resolutions range **R1–R63 → R1–R64**.
 
 ---
 
