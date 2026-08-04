@@ -52,6 +52,7 @@ from ..services.keycloak_provisioning import (
     KeycloakConflict,
     KeycloakNotConfigured,
     KeycloakProvisioningClient,
+    KeycloakRejected,
     KeycloakUnavailable,
 )
 
@@ -305,6 +306,16 @@ async def provision_user(
                 else "That username already exists"
             )
             raise ProblemException(status=409, code=code, title=title) from exc
+        except KeycloakRejected as exc:
+            # A 4xx other than 409: the dependency IS reachable and retrying the identical form
+            # cannot succeed (an invalid email, or a value the realm's user-profile validation
+            # refuses) — distinct from an outage, and actionable by the operator.
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title="Keycloak rejected the account details",
+                detail=exc.detail,
+            ) from exc
         except KeycloakUnavailable as exc:
             raise ProblemException(
                 status=502, code="keycloak_unavailable", title="Keycloak could not be reached"

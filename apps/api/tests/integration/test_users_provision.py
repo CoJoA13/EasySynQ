@@ -474,6 +474,32 @@ async def test_duplicate_email_returns_keycloak_email_exists(
     assert resp.json()["code"] == "keycloak_email_exists"
 
 
+async def test_keycloak_400_on_create_returns_422_validation_error(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Keycloak 400 (an invalid email, or a value the realm's user-profile validation refuses)
+    is a client error, not an outage: the dependency IS reachable and retrying the identical form
+    cannot succeed. It must surface as 422 validation_error (never 502 keycloak_unavailable), and
+    — like every other pre-commit Keycloak failure — must create no app_user row."""
+    _install_kc(
+        monkeypatch, create_status=400, create_body={"errorMessage": "Invalid email address."}
+    )
+    headers = await _admin(token_factory)
+    before = await _app_user_count()
+
+    resp = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": f"bademail-{uuid.uuid4().hex[:6]}", "email": "not-an-email"},
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "validation_error"
+    assert await _app_user_count() == before
+
+
 async def test_role_leg_requires_permission_grant(
     app_client: httpx.AsyncClient,
     token_factory: Callable[..., str],

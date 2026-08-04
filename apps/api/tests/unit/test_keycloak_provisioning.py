@@ -11,6 +11,7 @@ from easysynq_api.services.keycloak_provisioning import (
     KeycloakConflict,
     KeycloakNotConfigured,
     KeycloakProvisioningClient,
+    KeycloakRejected,
     KeycloakUnavailable,
 )
 
@@ -261,3 +262,128 @@ async def test_create_user_falls_back_to_lookup_when_location_is_absent() -> Non
         subject = await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
 
     assert subject == "sub-recovered"
+
+
+# --- create-conflict classification is ground-truth, not message-guessed (P2 fix) -------------
+#
+# Keycloak's duplicate-user 409 commonly reports the COMBINED message "User exists with same
+# username or email" — which contains "email" even for a pure username collision, and even when
+# the request supplied no email at all. The old `_conflict_field(response)`-only classification
+# read that as an email duplicate, so `provision_user` raised `keycloak_email_exists` and the SPA
+# highlighted the email field instead of offering "Link the existing account". The fix re-reads
+# the username (the same `exact=true`, re-verified lookup `find_user_by_username` already uses)
+# and classifies from that ground truth; only if the re-read itself fails does it fall back to the
+# message heuristic — which itself now prefers "username" whenever the message is ambiguous.
+
+
+async def test_create_conflict_classifies_username_when_reread_finds_it() -> None:
+    """The exact case this fix corrects: a combined 409 message, but the username genuinely
+    resolves on re-read — the true collision is the username, not the (possibly absent) email."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "POST" and request.url.path == "/admin/realms/easysynq/users":
+            return httpx.Response(
+                409, json={"errorMessage": "User exists with same username or email"}
+            )
+        if request.method == "GET" and request.url.path == "/admin/realms/easysynq/users":
+            return httpx.Response(200, json=[{"id": "sub-jdoe", "username": "jdoe"}])
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakConflict) as excinfo:
+            await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
+
+    assert excinfo.value.field == "username"
+
+
+async def test_create_conflict_classifies_email_when_username_absent_on_reread() -> None:
+    """When the re-read comes back definitively empty, the collision must be the email: create
+    only 409s on one of the two unique fields, and the username is provably not it. The message
+    here names only "username" — a message-only classifier would say "username"; only trusting
+    the re-read's ground truth over the message gets this right."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "POST" and request.url.path == "/admin/realms/easysynq/users":
+            return httpx.Response(409, json={"errorMessage": "User exists with same username"})
+        if request.method == "GET" and request.url.path == "/admin/realms/easysynq/users":
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakConflict) as excinfo:
+            await kc.create_user(
+                username="jdoe", email="taken@example.local", first_name=None, last_name=None
+            )
+
+    assert excinfo.value.field == "email"
+
+
+async def test_create_conflict_falls_back_when_reread_itself_fails() -> None:
+    """If the re-read itself fails (a transient lookup outage), classification must degrade to the
+    message heuristic — never let the lookup failure escape as an unrelated outage, and never
+    guess. The combined message mentions BOTH words, so the heuristic must not read it as an email
+    collision either: it prefers "username" (the field with a recovery path) when ambiguous."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "POST" and request.url.path == "/admin/realms/easysynq/users":
+            return httpx.Response(
+                409, json={"errorMessage": "User exists with same username or email"}
+            )
+        if request.method == "GET" and request.url.path == "/admin/realms/easysynq/users":
+            return httpx.Response(503, json={"error": "boom"})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakConflict) as excinfo:
+            await kc.create_user(
+                username="jdoe", email="taken@example.local", first_name=None, last_name=None
+            )
+
+    assert excinfo.value.field == "username"
+
+
+# --- a 4xx other than 409 is rejected input, never an outage (P2 fix) --------------------------
+
+
+async def test_create_user_400_raises_rejected_not_unavailable() -> None:
+    """A Keycloak 400 (an invalid email, or a value the realm's user-profile validation refuses)
+    is a client error, not an outage: the dependency IS reachable, and retrying the identical form
+    cannot succeed. It must raise the distinct rejected-input exception, never KeycloakUnavailable,
+    and the detail must carry Keycloak's own explanation (bounded/sanitised, never the raw body)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(400, json={"errorMessage": "Invalid email address."})
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakRejected) as excinfo:
+            await kc.create_user(
+                username="jdoe", email="not-an-email", first_name=None, last_name=None
+            )
+
+    assert "Invalid email address" in excinfo.value.detail
+
+
+async def test_create_user_500_still_raises_unavailable() -> None:
+    """5xx is still an outage — only a non-409 4xx maps to the distinct rejected-input exception."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(500, json={"error": "boom"})
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable):
+            await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)

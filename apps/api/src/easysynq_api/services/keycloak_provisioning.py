@@ -50,6 +50,17 @@ class KeycloakConflict(KeycloakProvisioningError):
         super().__init__(message)
 
 
+class KeycloakRejected(KeycloakProvisioningError):
+    """Keycloak refused the create as invalid input — a 4xx other than 409 (an invalid email, or a
+    value the realm's user-profile validation rejects). Distinct from ``KeycloakUnavailable``: the
+    dependency IS reachable and retrying the same, unchanged form cannot succeed. ``detail`` is a
+    bounded, sanitised explanation built by ``_bounded_message`` — never the raw response body."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
 @dataclass(frozen=True)
 class UserLookup:
     """A DEFINITIVE lookup outcome. A failure raises instead of being represented here, so a
@@ -200,9 +211,13 @@ class KeycloakProvisioningClient:
         except httpx.HTTPError as exc:
             raise KeycloakUnavailable(f"Keycloak user create failed: {exc}") from exc
         if response.status_code == 409:
-            raise KeycloakConflict(
-                _conflict_field(response), "Keycloak refused the account as a duplicate"
-            )
+            raise await self._classify_create_conflict(username, response)
+        if 400 <= response.status_code < 500:
+            # Any other 4xx is rejected input, not an outage: the dependency IS reachable, and
+            # retrying the identical form cannot succeed (an invalid email, or a value the realm's
+            # user-profile validation refuses). Never surface the raw body — only a bounded,
+            # sanitised explanation (`_bounded_message`).
+            raise KeycloakRejected(_bounded_message(response))
         if response.status_code not in (200, 201):
             raise KeycloakUnavailable(f"Keycloak user create returned {response.status_code}")
         location = response.headers.get("Location", "")
@@ -214,6 +229,29 @@ class KeycloakProvisioningClient:
         if not lookup.found or lookup.subject is None:
             raise KeycloakUnavailable("Keycloak created the account but its id could not be read")
         return lookup.subject
+
+    async def _classify_create_conflict(
+        self, username: str, response: httpx.Response
+    ) -> KeycloakConflict:
+        """Classify a create 409 from ground truth, not the error message.
+
+        Keycloak's duplicate-user 409 commonly reports "User exists with same username or email" —
+        a message containing "email" even when the request supplied none at all and the collision
+        is purely on username. Re-read the username with the same ``exact=true``, re-verified
+        lookup used elsewhere (``find_user_by_username``): if it now resolves, the conflict IS the
+        username; if it is definitively absent, the collision must be the email — create only
+        409s on one of the two unique fields. Only if the re-read itself fails do we fall back to
+        the message heuristic: a lookup outage must not escape as a mismatched conflict, and must
+        not be guessed at either.
+        """
+        try:
+            lookup = await self.find_user_by_username(username)
+        except KeycloakUnavailable:
+            return KeycloakConflict(
+                _conflict_field(response), "Keycloak refused the account as a duplicate"
+            )
+        field = "username" if lookup.found else "email"
+        return KeycloakConflict(field, "Keycloak refused the account as a duplicate")
 
     async def set_temporary_password(self, *, subject: str, password: str) -> None:
         headers = await self._headers()
@@ -234,14 +272,43 @@ class KeycloakProvisioningClient:
 
 
 def _conflict_field(response: httpx.Response) -> str:
-    """Classify a Keycloak 409 as an email or username duplicate.
+    """Classify a Keycloak 409 as an email or username duplicate — the FALLBACK heuristic, used
+    only when ``_classify_create_conflict``'s ground-truth re-read is itself unavailable.
 
     ``loginWithEmailAllowed`` is true in the shipped realm and duplicate emails are disallowed, so a
-    conflict can come from either field and the operator needs to know which one to edit.
+    conflict can come from either field and the operator needs to know which one to edit. Keycloak's
+    own combined message ("User exists with same username or email") mentions BOTH words — that must
+    NOT be read as proof of an email collision, or a pure username collision (the common case, and
+    the one supplying no email at all) gets wrongly told its email collided. Prefer "username"
+    whenever the message is ambiguous (mentions both, or neither): a username conflict has a
+    recovery path (the "link the existing account" affordance) that guessing "email" would hide.
     """
     try:
         body = response.json()
     except ValueError:
         return "username"
-    message = body.get("errorMessage", "") if isinstance(body, dict) else ""
-    return "email" if "email" in str(message).lower() else "username"
+    message = str(body.get("errorMessage", "") if isinstance(body, dict) else "").lower()
+    return "email" if "email" in message and "username" not in message else "username"
+
+
+_MAX_REJECTED_DETAIL = 200
+
+
+def _bounded_message(response: httpx.Response) -> str:
+    """A short, sanitised explanation for a Keycloak 4xx rejection — never the raw response body.
+
+    Only ``errorMessage`` (Keycloak's own human-readable admin-REST error field, the same one
+    ``_conflict_field`` reads) is taken, and it is capped to a bounded length so neither a malformed
+    nor a surprisingly large body can inflate a problem detail. This can never carry the temporary
+    password (the create payload never contains a credential — see ``create_user``) or the admin
+    bearer token (which lives only in this client's own request headers, never in Keycloak's
+    response body).
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return "Keycloak rejected the request"
+    message = body.get("errorMessage") if isinstance(body, dict) else None
+    if not isinstance(message, str) or not message:
+        return "Keycloak rejected the request"
+    return message[:_MAX_REJECTED_DETAIL]
