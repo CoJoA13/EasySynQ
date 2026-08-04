@@ -1,7 +1,9 @@
-import { screen, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
+import type { AdminUser, IssuedTemporaryPassword } from "../lib/types";
 import { server } from "../test/msw/server";
 import { renderWithProviders } from "../test/render";
 import { UsersAdmin } from "./UsersAdmin";
@@ -16,7 +18,33 @@ const USER = {
   mfa_enrolled: true,
   is_guest: false,
   roles: [],
-};
+} satisfies AdminUser;
+
+const OTHER_USER_ID = "us000002-0002-0002-0002-000000000002";
+const OTHER_USER = {
+  id: OTHER_USER_ID,
+  keycloak_subject: "kc-diego",
+  display_name: "Diego Process",
+  email: "diego@example.com",
+  status: "ACTIVE",
+  mfa_enrolled: false,
+  is_guest: false,
+  roles: [],
+} satisfies AdminUser;
+
+// Grants `user.create` — the same key the API gates .../temporary-password on — so the Manage
+// drawer's "Issue new temp password" affordance renders (S-user-create Task 8 gates it client-side
+// too, per DP-6: never offer a control the caller cannot exercise).
+function grantUserCreate() {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "user.create", effect: "ALLOW", source: null }],
+      }),
+    ),
+  );
+}
 
 test("a manage action failure renders inside the open user drawer", async () => {
   server.use(
@@ -95,4 +123,309 @@ test("revoke and remove controls name the specific assignment they affect", asyn
       name: "Remove deny system override for document.release",
     }),
   ).toBeInTheDocument();
+});
+
+test("the roster header offers Create user directly; the retired paste-a-subject Invite flow is gone", async () => {
+  // The header button is gated on user.create (S-user-create final review Fix 2) — without it
+  // this test would fail for the wrong reason (dead-control gating, not the retired Invite flow).
+  grantUserCreate();
+  server.use(http.get("/api/v1/users", () => HttpResponse.json([USER])));
+  // A dedicated queryClient lets the absence assertion wait for EVERY background fetch (the roster
+  // list, plus CreateUserModal's always-mounted usePermissions() check) to settle first — otherwise
+  // "Invite user" being absent could pass merely because nothing had rendered yet, not because the
+  // button is truly gone (the repeated DOM-negative-guard trap in this codebase).
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+
+  await screen.findByText(USER.display_name);
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+
+  expect(screen.getByRole("button", { name: "Create user" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Invite user" })).toBeNull();
+});
+
+test("the Create user button is absent without user.create (DP-6: no dead control)", async () => {
+  server.use(http.get("/api/v1/users", () => HttpResponse.json([USER])));
+  // The default MSW handler grants no permissions — no grantUserCreate() call here, unlike the
+  // test above.
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+
+  await screen.findByText(USER.display_name);
+  // Settle-aware: wait for every background fetch (the roster list, the header's own
+  // usePermissions() check) before asserting the absence — a DOM-negative assertion that races
+  // the render passes against unreverted (un-gated) code too.
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+
+  expect(screen.queryByRole("button", { name: "Create user" })).toBeNull();
+});
+
+test("the Manage drawer's Issue new temp password action posts to the reissue endpoint for the right user and renders the show-once password", async () => {
+  const NEW_PASSWORD = "Zq7-Falcon-Anchor-19";
+  let capturedUrl: string | undefined;
+  grantUserCreate();
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.post("/api/v1/users/:id/temporary-password", ({ request }) => {
+      capturedUrl = request.url;
+      return HttpResponse.json(
+        {
+          temporary_password: NEW_PASSWORD,
+          password_delivery: "shown_once",
+        } satisfies IssuedTemporaryPassword,
+        { status: 200 },
+      );
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />);
+
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await user.click(await within(drawer).findByRole("button", { name: "Issue new temp password" }));
+
+  expect(await within(drawer).findByText(NEW_PASSWORD)).toBeInTheDocument();
+  expect(within(drawer).getByText(/cannot be shown again/)).toBeInTheDocument();
+  expect(capturedUrl).toContain(`/api/v1/users/${USER_ID}/temporary-password`);
+});
+
+test("the Manage drawer's reissued password does not linger in TanStack Query's mutation cache after Done is clicked", async () => {
+  // Fix 2: "Done" (ShowOncePassword's onDone) only clears the local `issued` state — it does not
+  // close the drawer or unmount ManageUser, so this is the scenario where nothing but an explicit
+  // resetMut.reset() scrubs the mutation cache's own retained copy of the password.
+  const NEW_PASSWORD = "Zq7-Falcon-Anchor-19";
+  grantUserCreate();
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.post("/api/v1/users/:id/temporary-password", () =>
+      HttpResponse.json(
+        {
+          temporary_password: NEW_PASSWORD,
+          password_delivery: "shown_once",
+        } satisfies IssuedTemporaryPassword,
+        { status: 200 },
+      ),
+    ),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await user.click(await within(drawer).findByRole("button", { name: "Issue new temp password" }));
+  await within(drawer).findByText(NEW_PASSWORD);
+
+  await user.click(within(drawer).getByRole("button", { name: "Done" }));
+  expect(within(drawer).queryByText(NEW_PASSWORD)).toBeNull();
+
+  await waitFor(() => {
+    const stillCached = queryClient
+      .getMutationCache()
+      .getAll()
+      .some((m) => JSON.stringify(m.state.data ?? null).includes(NEW_PASSWORD));
+    expect(stillCached).toBe(false);
+  });
+});
+
+test("the Issue new temp password action is absent without user.create (DP-6: no dead control)", async () => {
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+  );
+  const user = userEvent.setup();
+  // The default MSW handler grants no permissions — no grantUserCreate() call here, unlike the
+  // test above.
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  // Settle-aware: wait for the drawer's roles/assignments/overrides/me-permissions fetches to
+  // resolve before asserting an absence, so this cannot pass merely because nothing had loaded yet.
+  await within(drawer).findByText("Roles");
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+
+  expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
+  expect(within(drawer).queryByText("Credentials")).toBeNull();
+});
+
+test("switching the Manage drawer directly to a different user does not carry over the previous user's issued password", async () => {
+  const MARAS_PASSWORD = "Mara-Only-Secret-1";
+  grantUserCreate();
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER, OTHER_USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.post("/api/v1/users/:id/temporary-password", () =>
+      HttpResponse.json(
+        {
+          temporary_password: MARAS_PASSWORD,
+          password_delivery: "shown_once",
+        } satisfies IssuedTemporaryPassword,
+        { status: 200 },
+      ),
+    ),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />);
+
+  // Scope each click to its own named row (not array position) so this doesn't depend on API
+  // response ordering.
+  const maraRow = (await screen.findByText(USER.display_name)).closest("tr");
+  const diegoRow = (await screen.findByText(OTHER_USER.display_name)).closest("tr");
+  if (!maraRow || !diegoRow) throw new Error("expected both roster rows to render");
+
+  // Open Manage for Mara and issue HER a temp password.
+  await user.click(within(maraRow).getByRole("button", { name: "Manage" }));
+  let drawer = await screen.findByRole("dialog");
+  await user.click(await within(drawer).findByRole("button", { name: "Issue new temp password" }));
+  expect(await within(drawer).findByText(MARAS_PASSWORD)).toBeInTheDocument();
+
+  // Switch DIRECTLY to Diego's Manage — without closing the drawer first. `ManageUser` is keyed by
+  // user id specifically so this forces a fresh instance rather than reusing Mara's local `issued`
+  // state (the brief's "switching away from the drawer must clear it so it cannot resurface").
+  await user.click(within(diegoRow).getByRole("button", { name: "Manage" }));
+  drawer = await screen.findByRole("dialog");
+
+  expect(
+    await within(drawer).findByRole("button", { name: "Issue new temp password" }),
+  ).toBeInTheDocument();
+  expect(within(drawer).queryByText(MARAS_PASSWORD)).toBeNull();
+});
+
+test("the Manage drawer refuses to close while a temporary password issuance is in flight, then closes normally once it resolves", async () => {
+  // P1 (PR #429 review): closing the drawer mid-issuance would unmount ManageUser while apiSend
+  // kept going — Keycloak replaces the password successfully, but the response then lands only on
+  // an unmounted component's callback, so the operator never sees it and is locked out. An MSW
+  // handler that does not resolve until `release` is called reproduces the "still in flight" window
+  // long enough to prove every closing route is blocked for its entire duration.
+  const NEW_PASSWORD = "In-Flight-Guard-Pw-7";
+  grantUserCreate();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.post("/api/v1/users/:id/temporary-password", async () => {
+      await gate;
+      return HttpResponse.json(
+        {
+          temporary_password: NEW_PASSWORD,
+          password_delivery: "shown_once",
+        } satisfies IssuedTemporaryPassword,
+        { status: 200 },
+      );
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />);
+
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await user.click(await within(drawer).findByRole("button", { name: "Issue new temp password" }));
+
+  // In flight: the panel explains why it refuses to close, and its own close (X) control is gone
+  // (withCloseButton is false for the duration, not merely wired to a no-op onClick).
+  expect(
+    await within(drawer).findByText(/stays open until the password is shown/),
+  ).toBeInTheDocument();
+  expect(within(drawer).queryByRole("button", { name: "Close" })).toBeNull();
+
+  // Escape must not close it either — closeOnEscape is false for the whole in-flight window — and
+  // ManageUser (proven by its "Roles" heading) is still mounted, not swapped for nothing.
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(within(drawer).getByText("Roles")).toBeInTheDocument();
+
+  // Release the response: the password is shown, and ONLY NOW does the drawer become closable.
+  act(() => release?.());
+  expect(await within(drawer).findByText(NEW_PASSWORD)).toBeInTheDocument();
+  expect(await within(drawer).findByRole("button", { name: "Close" })).toBeInTheDocument();
+
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("a failed temporary password issuance leaves the Manage drawer closable, not wedged open", async () => {
+  // The busy flag is set in resetMut's onMutate and must be cleared in onSettled (fires on BOTH
+  // outcomes) — not only in onSuccess — or a failed issuance would wedge the drawer open forever.
+  grantUserCreate();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.post("/api/v1/users/:id/temporary-password", async () => {
+      await gate;
+      return HttpResponse.json(
+        {
+          code: "keycloak_unavailable",
+          title: "Could not reach Keycloak",
+          detail: "Try again.",
+        },
+        { status: 502 },
+      );
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />);
+
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await user.click(await within(drawer).findByRole("button", { name: "Issue new temp password" }));
+
+  // Confirm it is genuinely blocked first — proving the reset below is a real transition, not a
+  // vacuous pass because the guard never engaged.
+  expect(
+    await within(drawer).findByText(/stays open until the password is shown/),
+  ).toBeInTheDocument();
+  expect(within(drawer).queryByRole("button", { name: "Close" })).toBeNull();
+
+  act(() => release?.());
+
+  // The failed mutation settled — the drawer is closable again, proving the flag cannot wedge it.
+  expect(await within(drawer).findByText("Action failed")).toBeInTheDocument();
+  expect(await within(drawer).findByRole("button", { name: "Close" })).toBeInTheDocument();
+
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("opening the modal removes the ambiguous duplicate of the Create user button name", async () => {
+  // Both the header button and the modal mount are gated on user.create (S-user-create final
+  // review Fix 2) — grant it so the button (and thus the modal) render at all.
+  grantUserCreate();
+  server.use(http.get("/api/v1/users", () => HttpResponse.json([USER])));
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />);
+
+  // Wait for the roster to load before asserting.
+  await screen.findByText(USER.display_name);
+
+  // With the modal closed, there is one "Create user" button (the header).
+  expect(screen.getByRole("button", { name: "Create user" })).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Create user" })).toHaveLength(1);
+
+  // Open the modal by clicking the header button.
+  await user.click(screen.getByRole("button", { name: "Create user" }));
+
+  // Wait for the modal's form to render (via the Username input field).
+  await screen.findByLabelText(/Username/);
+
+  // With the modal open, the modal's submit button is now "Create" (not "Create user"),
+  // so there is still only ONE "Create user" button (the header), not a duplicate.
+  expect(screen.getAllByRole("button", { name: "Create user" })).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Create" })).toBeInTheDocument();
 });

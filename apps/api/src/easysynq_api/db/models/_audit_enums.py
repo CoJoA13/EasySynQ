@@ -126,6 +126,10 @@ class EventType(enum.Enum):
     # (object_type ``user``). Added via ALTER TYPE … ADD VALUE in 0016 (the 0011-0015 pattern).
     USER_CREATED = "USER_CREATED"
     USER_STATUS_CHANGED = "USER_STATUS_CHANGED"
+    # Credential issuance for in-app Keycloak provisioning (S-user-create). Records THAT a temporary
+    # password was issued — never its value. Added via ALTER TYPE … ADD VALUE in 0085 (the 0011-0016
+    # additive pattern); a from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES.
+    USER_CREDENTIAL_ISSUED = "USER_CREDENTIAL_ISSUED"
     # clause IA / clause_mapping (S9, doc 02 §2.1, doc 14 §4) — the audited document↔clause link
     # (object_type ``document``, keyed to the mapped artifact). Added via ALTER TYPE … ADD VALUE in
     # 0017 (the 0011-0016 additive pattern).

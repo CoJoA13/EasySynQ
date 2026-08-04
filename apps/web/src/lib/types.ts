@@ -2078,3 +2078,43 @@ export interface DocumentControlRegister {
   provenance: RegisterProvenance;
   rows: RegisterRow[];
 }
+
+// ---- S-user-create (Task 7): in-app Keycloak user provisioning — pinned to api/users.py
+// (_represent / UserProvision / provision_user's response) ----
+
+// Mirrors api/users.py::_represent — pinned to the serializer, not to the mockup. Moved here from a
+// local `interface User` in admin/UsersAdmin.tsx (Task 7); the shape is unchanged.
+export interface AdminUser {
+  id: string;
+  keycloak_subject: string;
+  display_name: string | null;
+  email: string | null;
+  status: string;
+  mfa_enrolled: boolean;
+  is_guest: boolean;
+  roles: string[];
+}
+
+// POST /api/v1/users/provision body — api/users.py::UserProvision.
+export interface ProvisionUserRequest {
+  username: string;
+  display_name?: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  role_ids?: string[];
+}
+
+// POST /api/v1/users/provision response (201) — `user` is the standard _represent(...) shape.
+export interface ProvisionedUser {
+  user: AdminUser;
+  temporary_password: string;
+  password_delivery: "shown_once";
+}
+
+// POST /api/v1/users/{id}/temporary-password response (200) — the reissue-only counterpart of
+// ProvisionedUser (no `user` — the target already exists).
+export interface IssuedTemporaryPassword {
+  temporary_password: string;
+  password_delivery: "shown_once";
+}

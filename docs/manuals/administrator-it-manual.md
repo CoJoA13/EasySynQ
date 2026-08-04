@@ -108,60 +108,58 @@ Every person has:
 1. a Keycloak identity used to authenticate; and
 2. an EasySynQ `app_user` row carrying status, roles, overrides, and scope.
 
-Creating an EasySynQ user does not create a Keycloak account. Conversely, a first successful
-Keycloak sign-in can JIT-provision an unprivileged ACTIVE `app_user` row when none was pre-created.
-Use the EasySynQ Users screen to pre-bind the exact OIDC subject (`sub`), identity metadata, and
-intended assignments before normal access.
+The Admin SPA's one-step **Create user** action (§5.2) creates the Keycloak account and the
+`app_user` row together; only *linking* an already-existing Keycloak identity to a new `app_user`
+row leaves Keycloak untouched. Conversely, a first successful Keycloak sign-in can JIT-provision an
+unprivileged ACTIVE `app_user` row when none was pre-created. Use the EasySynQ Users screen to
+pre-bind the exact OIDC subject (`sub`), identity metadata, and intended assignments before normal
+access.
 
-### 5.2 Create a local Keycloak identity
+### 5.2 Create a user (Admin SPA)
 
-Use the organization's Keycloak administration procedure for normal operations. On a local-only
-installation, the following controlled host procedure creates a temporary account:
+1. Sign in as an administrator holding `user.create` (add `permission.grant` too if you also want
+   to assign a role in the same step).
+2. Open Account → **Administration → Users** and select **Create user**.
+3. Enter a **username** (required). Display name, email, first name, and last name are optional. A
+   **Roles** picker appears only for a caller holding `permission.grant` — pick zero or more seeded
+   roles to assign immediately, or leave it and assign roles later from **Manage**.
+4. Select **Create**.
 
-```bash
-EASYSYNQ_KC_ADMIN_USER="$(sed -n 's/^KEYCLOAK_ADMIN_USER=\([^[:space:]#]*\).*/\1/p' .env)"
-EASYSYNQ_KC_ADMIN_PASSWORD="$(sed -n 's/^KEYCLOAK_ADMIN_PASSWORD=\([^[:space:]#]*\).*/\1/p' .env)"
-read -rp "New username: " EASYSYNQ_NEW_USERNAME
-read -rsp "Temporary password: " EASYSYNQ_TEMP_PASSWORD
-printf '\n'
+Submitting creates the Keycloak sign-in account and the EasySynQ `app_user` row together, in one
+call, and displays a generated **temporary password once**. It is not stored anywhere and cannot be
+shown again — copy it or hand it to the person directly before closing the dialog. EasySynQ does
+not email it, or an account invitation, to them: realm SMTP is not configured on this install. The
+row starts `INVITED`; Keycloak forces the person to choose their own password at first sign-in, and
+EasySynQ flips the row `INVITED` → `ACTIVE` on that first successful sign-in.
 
-"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
-  /opt/keycloak/bin/kcadm.sh config credentials \
-  --server http://localhost:8080 --realm master \
-  --user "$EASYSYNQ_KC_ADMIN_USER" --password "$EASYSYNQ_KC_ADMIN_PASSWORD"
+If the username already exists in Keycloak but is not yet linked to an EasySynQ user — for example,
+an account created directly in the Keycloak console, or via §5.3's fallback below — the form offers
+**Link the existing account** instead of failing. Linking binds the existing Keycloak account to a
+new `app_user` row without creating a second Keycloak account and without touching its password,
+but it does **not** assign any roles picked in step 3 above — assign those afterward from
+**Manage**.
 
-"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
-  /opt/keycloak/bin/kcadm.sh create users -r easysynq \
-  -s "username=${EASYSYNQ_NEW_USERNAME}" -s enabled=true
-
-"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
-  /opt/keycloak/bin/kcadm.sh set-password -r easysynq \
-  --username "$EASYSYNQ_NEW_USERNAME" \
-  --new-password "$EASYSYNQ_TEMP_PASSWORD" --temporary
-
-"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
-  /opt/keycloak/bin/kcadm.sh get users -r easysynq \
-  -q "username=${EASYSYNQ_NEW_USERNAME}" --fields id,username
-
-unset EASYSYNQ_TEMP_PASSWORD EASYSYNQ_KC_ADMIN_PASSWORD EASYSYNQ_KC_ADMIN_USER
-```
-
-Copy the returned `id` as the subject. On the Hyper-V appliance,
-`sudo easysynq-create-user <name>` performs the Keycloak portion and prints a temporary password.
+Forgot a password, or need to reissue one later? Open **Manage** on the user's row and select
+**Issue new temp password** — it generates and displays a fresh show-once temporary password the
+same way, and is now the normal password-reset path.
 
 Never use a shared generic login for approval or acknowledgement work.
 
-### 5.3 Bind the user in EasySynQ
+### 5.3 Fallback: create the Keycloak identity at the shell
 
-1. Sign in as an administrator with `user.*`/grant authority.
-2. Open Account → **Administration → Users**.
-3. Select **Invite user**.
-4. Paste the Keycloak subject and enter display name/email.
-5. Select **Invite**.
-6. Open **Manage** and assign only the required seeded role(s).
+Use this only when Keycloak's admin connection is unavailable to the running application — **Create
+user** refuses with an explanation in that case, rather than silently failing. On a local-only
+installation, `scripts/new-keycloak-user.sh <username> [email] [FirstName] [LastName]` creates the
+Keycloak account directly (or resets its password if the username already exists) and prints its
+subject (`sub`); on the Hyper-V appliance, `sudo easysynq-create-user <name>` does the same. Either
+sets a temporary password on the Keycloak side only — the account is not yet an EasySynQ user.
 
-The row starts `INVITED` and becomes `ACTIVE` at first login. EasySynQ does not currently send an
-email invitation or create the Keycloak password.
+Bind it afterward from **Administration → Users → Create user → Link the existing account** (§5.2),
+then open **Manage** and assign only the required seeded role(s).
+
+The organization's own Keycloak administration procedure remains equally valid for normal
+operations; the script above is a convenience wrapper around that same `kcadm.sh` mechanism, not the
+only way to reach it.
 
 ### 5.4 Disable, re-enable, and retire access
 
@@ -490,7 +488,7 @@ Adjust cadence to the organization's risk and retention policy.
 Operational planning must account for:
 
 - no L profile, OpenSearch service, or bundled observability stack;
-- no in-app custom-role editor or Keycloak account creator;
+- no in-app custom-role editor;
 - no automated live restore cutover;
 - no migration `lock_timeout`;
 - no mounted T5 approval-rescind/reschedule or T8 revision-draft discard transition; monitor Beat

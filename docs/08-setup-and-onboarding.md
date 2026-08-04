@@ -425,11 +425,14 @@ The **self-grant friction + audit (§10.4) still applies to any QMS→admin cros
 
 **Purpose.** Populate accounts and assign role bundles + scopes. Avery creates the accounts; **who authors/approves what** is governed by the bundles and scopes, keeping Avery outside content.
 
-> **Current surface.** Create the sign-in identity in Keycloak first. Then use Administration →
-> Users → **Invite user** and paste that identity's OIDC `sub`; the EasySynQ row starts `INVITED` and
-> becomes `ACTIVE` on first sign-in. The application does not currently create Keycloak passwords,
-> send tokenized email invitations, or bulk-create users from CSV. The Hyper-V appliance provides
-> `easysynq-create-user` as a host helper for the Keycloak half only.
+> **Current surface.** Administration → Users → **Create user** creates the Keycloak sign-in
+> account and the EasySynQ `app_user` row together in one step, showing a generated temporary
+> password once (never stored, cannot be re-shown). The row starts `INVITED` and becomes `ACTIVE`
+> on first sign-in. If the username already exists in Keycloak but isn't yet linked to an EasySynQ
+> user, the form offers **Link the existing account** instead. The application still does not send
+> tokenized email invitations (realm SMTP is not configured) or bulk-create users from CSV.
+> `scripts/new-keycloak-user.sh` — or, on the Hyper-V appliance, `easysynq-create-user` — remains as
+> a fallback for when the Keycloak admin API itself is unreachable.
 
 ### 11.1 Two provisioning paths
 

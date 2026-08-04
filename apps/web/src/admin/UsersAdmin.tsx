@@ -4,7 +4,6 @@ import {
   Button,
   Drawer,
   Group,
-  Modal,
   SegmentedControl,
   Select,
   Stack,
@@ -15,20 +14,14 @@ import {
 } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { usePermissions } from "../app/shell/usePermissions";
 import { ApiError, apiGet, apiSend } from "../lib/api";
+import type { AdminUser, IssuedTemporaryPassword } from "../lib/types";
 import { ErrorState, LoadingState } from "../lib/states";
+import { CreateUserModal } from "./CreateUserModal";
+import { ShowOncePassword } from "./ShowOncePassword";
 import { UserStatusBadge } from "./UserStatusBadge";
 
-interface User {
-  id: string;
-  keycloak_subject: string;
-  display_name: string | null;
-  email: string | null;
-  status: string;
-  mfa_enrolled: boolean;
-  is_guest: boolean;
-  roles: string[];
-}
 interface Role {
   id: string;
   name: string;
@@ -44,18 +37,27 @@ interface Override {
   scope: { level: string };
 }
 
-// S8d: the Users admin roster — invite, enable/disable, and per-user role + override management
-// (reusing the shipped S2 grant endpoints + their two-tier guard). The Avery→Mara hand-off in-app.
+// S8d: the Users admin roster — create accounts directly, enable/disable, and per-user role +
+// override management (reusing the shipped S2 grant endpoints + their two-tier guard). S-user-create
+// (Task 8) retired the paste-a-Keycloak-subject Invite flow from this screen in favor of
+// CreateUserModal's one-call provisioning; POST /users itself is untouched (it's the fallback
+// CreateUserModal's "link the existing account" path still calls on a username collision).
 export function UsersAdmin({ token }: { token: string | null }) {
   const qc = useQueryClient();
+  const canCreate = usePermissions().can("user.create");
   const [error, setError] = useState<string | null>(null);
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [invite, setInvite] = useState({ keycloak_subject: "", display_name: "", email: "" });
-  const [manage, setManage] = useState<User | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [manage, setManage] = useState<AdminUser | null>(null);
+  // Lifted from ManageUser's resetMut.isPending (P1, PR #429 review): while a temporary password
+  // is being issued, the Drawer must not close via ANY route (onClose/close-button/click-outside/
+  // Escape) — the response lands only on ManageUser's own callback, Keycloak has already applied
+  // the new password by the time it resolves, and there is nowhere else to retrieve it once the
+  // panel showing it is gone. Reset on every terminal outcome (success AND failure) by ManageUser.
+  const [issuingPassword, setIssuingPassword] = useState(false);
 
   const users = useQuery({
     queryKey: ["users"],
-    queryFn: () => apiGet<User[]>("/api/v1/users", token),
+    queryFn: () => apiGet<AdminUser[]>("/api/v1/users", token),
     enabled: !!token,
   });
 
@@ -65,16 +67,6 @@ export function UsersAdmin({ token }: { token: string | null }) {
     setError(null);
     void qc.invalidateQueries({ queryKey: ["users"] });
   };
-
-  const inviteMut = useMutation({
-    mutationFn: () => apiSend("POST", "/api/v1/users", token, invite),
-    onError: onErr,
-    onSuccess: () => {
-      setInviteOpen(false);
-      setInvite({ keycloak_subject: "", display_name: "", email: "" });
-      refresh();
-    },
-  });
 
   const statusMut = useMutation({
     mutationFn: (v: { id: string; status: string }) =>
@@ -96,9 +88,9 @@ export function UsersAdmin({ token }: { token: string | null }) {
       )}
       <Group justify="space-between">
         <Text c="dimmed" size="sm">
-          Invite a user (bind their Keycloak subject), assign seeded roles, or disable access.
+          Create a user account, assign seeded roles, or disable access.
         </Text>
-        <Button onClick={() => setInviteOpen(true)}>Invite user</Button>
+        {canCreate && <Button onClick={() => setCreateOpen(true)}>Create user</Button>}
       </Group>
 
       <Table withTableBorder striped>
@@ -157,49 +149,47 @@ export function UsersAdmin({ token }: { token: string | null }) {
         </Table.Tbody>
       </Table>
 
-      <Modal opened={inviteOpen} onClose={() => setInviteOpen(false)} title="Invite a user">
-        <Stack gap="sm">
-          <Text size="xs" c="dimmed">
-            Create the account in Keycloak first, then paste its subject (the OIDC `sub`). The user
-            becomes active on their first sign-in.
-          </Text>
-          <TextInput
-            label="Keycloak subject"
-            value={invite.keycloak_subject}
-            onChange={(e) => setInvite({ ...invite, keycloak_subject: e.currentTarget.value })}
-          />
-          <TextInput
-            label="Display name"
-            value={invite.display_name}
-            onChange={(e) => setInvite({ ...invite, display_name: e.currentTarget.value })}
-          />
-          <TextInput
-            label="Email"
-            value={invite.email}
-            onChange={(e) => setInvite({ ...invite, email: e.currentTarget.value })}
-          />
-          <Group justify="flex-end">
-            <Button
-              onClick={() => inviteMut.mutate()}
-              loading={inviteMut.isPending}
-              disabled={!invite.keycloak_subject}
-            >
-              Invite
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+      {canCreate && (
+        <CreateUserModal opened={createOpen} onClose={() => setCreateOpen(false)} token={token} />
+      )}
 
       <Drawer
         opened={!!manage}
-        onClose={() => setManage(null)}
+        onClose={() => {
+          // Refuse the close while a temp password is being issued — see the state comment above.
+          if (issuingPassword) return;
+          setManage(null);
+        }}
+        closeOnClickOutside={!issuingPassword}
+        closeOnEscape={!issuingPassword}
+        withCloseButton={!issuingPassword}
         position="right"
         size="lg"
         title={
           manage ? `Manage — ${manage.display_name ?? manage.email ?? manage.keycloak_subject}` : ""
         }
       >
-        {manage && <ManageUser user={manage} token={token} onChange={refresh} />}
+        <Stack gap="md">
+          {issuingPassword && (
+            <Alert color="yellow" title="Issuing a temporary password">
+              This panel stays open until the password is shown, because it cannot be retrieved
+              later.
+            </Alert>
+          )}
+          {/* Keyed by user id: switching the managed user must not carry over stale local drawer
+              state — most importantly an already-issued temp password from the PREVIOUS user (see
+              ManageUser's credential state below). */}
+          {manage && (
+            <ManageUser
+              key={manage.id}
+              user={manage}
+              token={token}
+              onChange={refresh}
+              canIssuePassword={canCreate}
+              onIssuingChange={setIssuingPassword}
+            />
+          )}
+        </Stack>
       </Drawer>
     </Stack>
   );
@@ -209,15 +199,29 @@ function ManageUser({
   user,
   token,
   onChange,
+  canIssuePassword,
+  onIssuingChange,
 }: {
-  user: User;
+  user: AdminUser;
   token: string | null;
   onChange: () => void;
+  // Threaded from UsersAdmin, which already resolves `user.create` to gate the Create-user
+  // button/modal — reuse that single value instead of a second usePermissions() call for the
+  // same key.
+  canIssuePassword: boolean;
+  // Reports resetMut's pending state up to UsersAdmin (P1, PR #429 review), which uses it to keep
+  // the Drawer from closing mid-issuance. Set in resetMut's onMutate/onSettled so it is true for
+  // exactly the in-flight window and reset on BOTH success and failure — never left wedged.
+  onIssuingChange: (issuing: boolean) => void;
 }) {
   const qc = useQueryClient();
   const [roleId, setRoleId] = useState<string | null>(null);
   const [ov, setOv] = useState({ permission_key: "", effect: "ALLOW" });
   const [error, setError] = useState<string | null>(null);
+  // Never localStorage/sessionStorage/a URL/a log — React state only, and it dies with this
+  // component instance (unmount on drawer close, remount on switching managed user via the
+  // `key={manage.id}` above), so it cannot resurface for a different user or a later session.
+  const [issued, setIssued] = useState<string | null>(null);
   const onError = (e: unknown) =>
     setError(e instanceof ApiError ? `${e.code}: ${e.message}` : String(e));
 
@@ -281,6 +285,34 @@ function ManageUser({
     onError,
     onSuccess: after,
   });
+  const resetMut = useMutation({
+    mutationFn: () =>
+      apiSend<IssuedTemporaryPassword>(
+        "POST",
+        `/api/v1/users/${user.id}/temporary-password`,
+        token,
+      ),
+    // Matches CreateUserModal's createMut: TanStack Query's mutation cache otherwise retains the
+    // issued password as `state.data` independently of the `issued` React state below, and
+    // clicking "Done" (ShowOncePassword's onDone, just below) only clears that local state — it
+    // does not unmount this component or its mutation observer. gcTime: 0 lets a detached mutation
+    // be dropped from the cache right away instead of after the default 5-minute window;
+    // resetMut.reset() is what actually triggers that detachment, called the instant the password
+    // is copied into `issued`, so the cache holds the credential for as little time as possible.
+    gcTime: 0,
+    onMutate: () => {
+      setError(null);
+      onIssuingChange(true);
+    },
+    onError,
+    onSuccess: (data) => {
+      setIssued(data.temporary_password);
+      resetMut.reset();
+    },
+    // Fires after EITHER onSuccess or onError — the single place that lifts the "busy" flag back
+    // down, so a failed issuance can never wedge the drawer permanently open.
+    onSettled: () => onIssuingChange(false),
+  });
 
   return (
     <Stack gap="lg">
@@ -288,6 +320,24 @@ function ManageUser({
         <Alert color="red" title="Action failed" withCloseButton onClose={() => setError(null)}>
           {error}
         </Alert>
+      )}
+      {canIssuePassword && (
+        <Stack gap="xs">
+          <Title order={4}>Credentials</Title>
+          {issued ? (
+            <ShowOncePassword password={issued} onDone={() => setIssued(null)} />
+          ) : (
+            <Group>
+              <Button
+                variant="default"
+                loading={resetMut.isPending}
+                onClick={() => resetMut.mutate()}
+              >
+                Issue new temp password
+              </Button>
+            </Group>
+          )}
+        </Stack>
       )}
       <Stack gap="xs">
         <Title order={4}>Roles</Title>

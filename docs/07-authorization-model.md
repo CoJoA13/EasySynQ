@@ -342,6 +342,33 @@ EasySynQ ships these as a fast start; they are **not** authoritative and carry *
 
 A QMS Owner therefore administers *who governs the QMS content* without ever being able to grant *who runs the system*, and an Admin runs the system without acquiring QMS-content granting authority by default. Any **QMS→admin crossing** (e.g., an ADMIN self-granting QMS-content permissions for recovery) keeps the **self-grant friction + full audit** described in §2.2 (the `PRIVILEGE_ESCALATION` flag, mandatory reason, and surfacing on Mara's review feed). Doc 08 §10 states the same two-tier model verbatim; the two documents are reconciled and must not diverge.
 
+#### 4.3.1 Credential reset — the same tier boundary, on a non-grant operation (R64)
+
+> **Canonical statement (Decisions Register R64 rule 5).** The two-tier boundary above governs who may
+> *grant* authority. Issuing a new credential for an **existing** identity does not grant anything, yet
+> it hands over that identity outright — so it is bound by the same boundary.
+
+**Resetting another user's credential requires the caller to be system-tier.** Holding the
+`user.create` permission that gates the reset endpoint is **not** sufficient on its own, because
+`user.create` is grantable independently through a per-user override. The refusal is audited exactly as
+the §4.3 grant refusals are (`two_tier_violation`), attributed to the reset operation rather than to
+`permission.grant`.
+
+**The target's own authority is deliberately not inspected.** An earlier form of this rule permitted the
+reset whenever the target held no *system-domain* permission. That form was abandoned: content-domain
+authority — approving and releasing regulated documents — is privilege the system-domain test cannot
+see, so a caller holding only `user.create` could mint a fresh credential for an Approver and sign in as
+them, forging an approval or release signature. Enumerating "privileged" content roles would drift as
+roles change; requiring system tier for every reset does not.
+
+**Creating a new user is not comparable and is not gated this way.** A freshly provisioned account holds
+no permissions, and the provisioning endpoint refuses any username that already exists in the identity
+provider — so it can never touch an existing account's credential. Its optional role-assignment leg is
+governed by §4.3 as usual.
+
+⚠ **Any future surface that can set or reset a credential inherits this rule.** Gating such a surface on
+a `user.*` permission alone reopens the account-takeover path this closes.
+
 ---
 
 ## 5. Scoping — The ABAC Layer
