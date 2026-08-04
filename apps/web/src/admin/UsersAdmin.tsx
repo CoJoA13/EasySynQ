@@ -48,6 +48,12 @@ export function UsersAdmin({ token }: { token: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [manage, setManage] = useState<AdminUser | null>(null);
+  // Lifted from ManageUser's resetMut.isPending (P1, PR #429 review): while a temporary password
+  // is being issued, the Drawer must not close via ANY route (onClose/close-button/click-outside/
+  // Escape) — the response lands only on ManageUser's own callback, Keycloak has already applied
+  // the new password by the time it resolves, and there is nowhere else to retrieve it once the
+  // panel showing it is gone. Reset on every terminal outcome (success AND failure) by ManageUser.
+  const [issuingPassword, setIssuingPassword] = useState(false);
 
   const users = useQuery({
     queryKey: ["users"],
@@ -149,25 +155,41 @@ export function UsersAdmin({ token }: { token: string | null }) {
 
       <Drawer
         opened={!!manage}
-        onClose={() => setManage(null)}
+        onClose={() => {
+          // Refuse the close while a temp password is being issued — see the state comment above.
+          if (issuingPassword) return;
+          setManage(null);
+        }}
+        closeOnClickOutside={!issuingPassword}
+        closeOnEscape={!issuingPassword}
+        withCloseButton={!issuingPassword}
         position="right"
         size="lg"
         title={
           manage ? `Manage — ${manage.display_name ?? manage.email ?? manage.keycloak_subject}` : ""
         }
       >
-        {/* Keyed by user id: switching the managed user must not carry over stale local drawer
-            state — most importantly an already-issued temp password from the PREVIOUS user (see
-            ManageUser's credential state below). */}
-        {manage && (
-          <ManageUser
-            key={manage.id}
-            user={manage}
-            token={token}
-            onChange={refresh}
-            canIssuePassword={canCreate}
-          />
-        )}
+        <Stack gap="md">
+          {issuingPassword && (
+            <Alert color="yellow" title="Issuing a temporary password">
+              This panel stays open until the password is shown, because it cannot be retrieved
+              later.
+            </Alert>
+          )}
+          {/* Keyed by user id: switching the managed user must not carry over stale local drawer
+              state — most importantly an already-issued temp password from the PREVIOUS user (see
+              ManageUser's credential state below). */}
+          {manage && (
+            <ManageUser
+              key={manage.id}
+              user={manage}
+              token={token}
+              onChange={refresh}
+              canIssuePassword={canCreate}
+              onIssuingChange={setIssuingPassword}
+            />
+          )}
+        </Stack>
       </Drawer>
     </Stack>
   );
@@ -178,6 +200,7 @@ function ManageUser({
   token,
   onChange,
   canIssuePassword,
+  onIssuingChange,
 }: {
   user: AdminUser;
   token: string | null;
@@ -186,6 +209,10 @@ function ManageUser({
   // button/modal — reuse that single value instead of a second usePermissions() call for the
   // same key.
   canIssuePassword: boolean;
+  // Reports resetMut's pending state up to UsersAdmin (P1, PR #429 review), which uses it to keep
+  // the Drawer from closing mid-issuance. Set in resetMut's onMutate/onSettled so it is true for
+  // exactly the in-flight window and reset on BOTH success and failure — never left wedged.
+  onIssuingChange: (issuing: boolean) => void;
 }) {
   const qc = useQueryClient();
   const [roleId, setRoleId] = useState<string | null>(null);
@@ -273,12 +300,18 @@ function ManageUser({
     // resetMut.reset() is what actually triggers that detachment, called the instant the password
     // is copied into `issued`, so the cache holds the credential for as little time as possible.
     gcTime: 0,
-    onMutate: () => setError(null),
+    onMutate: () => {
+      setError(null);
+      onIssuingChange(true);
+    },
     onError,
     onSuccess: (data) => {
       setIssued(data.temporary_password);
       resetMut.reset();
     },
+    // Fires after EITHER onSuccess or onError — the single place that lifts the "busy" flag back
+    // down, so a failed issuance can never wedge the drawer permanently open.
+    onSettled: () => onIssuingChange(false),
   });
 
   return (

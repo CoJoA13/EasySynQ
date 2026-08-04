@@ -1,5 +1,5 @@
 import { QueryClient, useQuery } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
@@ -150,6 +150,89 @@ describe("CreateUserModal", () => {
         );
       expect(stillCached).toBe(false);
     });
+  });
+
+  it("refuses to close while the account is being created, then closes normally once the password is shown", async () => {
+    // The same hazard as ManageUser's reissue (P1, PR #429 review): this component never unmounts
+    // on close (UsersAdmin renders it unconditionally, gated only on `opened`), so onSuccess would
+    // still land even if the operator closed early — but by then `opened` would already be false,
+    // so the ONE moment the password is shown never happens on screen, and the very next open would
+    // show it out of context against a blank form for what looks like a brand-new user. An MSW
+    // handler that does not resolve until `release` is called reproduces that in-flight window.
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.post("/api/v1/users/provision", async () => {
+        await gate;
+        return HttpResponse.json(PROVISION_RESPONSE, { status: 201 });
+      }),
+    );
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderModal(onClose);
+
+    await user.type(screen.getByLabelText(/Username/), "newhire");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    // In flight: Cancel is disabled, the close (X) control is gone, and the panel explains why.
+    expect(await screen.findByText(/stays open until the password is shown/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+
+    // Escape must not close it either — closeOnEscape is false for the whole in-flight window.
+    await user.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // Release the response: the password is shown, and ONLY NOW does the modal become closable.
+    act(() => release?.());
+    expect(await screen.findByText(PROVISION_RESPONSE.temporary_password)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("a failed account creation leaves the modal closable, not wedged open", async () => {
+    // The busy flag is set as soon as createMut starts and must be cleared on BOTH outcomes (it
+    // rides createMut.isPending directly, which TanStack Query clears on settle regardless of
+    // success/failure) — or a failed create would wedge the modal open forever.
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.post("/api/v1/users/provision", async () => {
+        await gate;
+        return HttpResponse.json(
+          { code: "keycloak_unavailable", title: "Could not reach Keycloak" },
+          { status: 502 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderModal(onClose);
+
+    await user.type(screen.getByLabelText(/Username/), "newhire");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    // Confirm it is genuinely blocked first — proving the reset below is a real transition, not a
+    // vacuous pass because the guard never engaged.
+    expect(await screen.findByText(/stays open until the password is shown/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+
+    act(() => release?.());
+
+    // The failed mutation settled — the modal is closable again, proving the flag cannot wedge it.
+    expect(await screen.findByText("Couldn't create user")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).not.toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalled();
   });
 
   it("a 502 keycloak_unavailable (the post-commit credential failure) still refreshes the roster, while still showing the error", async () => {

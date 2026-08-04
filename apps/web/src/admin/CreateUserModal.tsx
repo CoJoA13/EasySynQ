@@ -60,7 +60,17 @@ export function CreateUserModal({
   // Resets every piece of state that must never survive a reopen — most importantly `issued`: the
   // temporary password lives in this component's state ONLY (never localStorage/sessionStorage/a
   // URL/a log), so a stale value here would otherwise resurface the last operator's credential.
+  //
+  // Refuses to run at all while createMut is in flight (P1, PR #429 review — the same hazard as
+  // ManageUser's reissue): this component never unmounts on close (UsersAdmin renders it
+  // unconditionally, gated only on `opened`), so the eventual onSuccess/onError below would still
+  // land — but by then `opened` would already be false and the operator gone, so the ONE moment
+  // the password is shown never happens on screen, and the very next open would show it out of
+  // context against a blank form for what looks like a brand-new user. Guarding here covers every
+  // route: the Modal's own onClose (X / click-outside / Escape, see the props below) AND the
+  // explicit Cancel button, which both call this same function.
   function close() {
+    if (createMut.isPending) return;
     setIssued(null);
     setCollision(null);
     setError(null);
@@ -134,7 +144,15 @@ export function CreateUserModal({
   });
 
   return (
-    <Modal opened={opened} onClose={close} title="Create a user" size="md">
+    <Modal
+      opened={opened}
+      onClose={close}
+      title="Create a user"
+      size="md"
+      closeOnClickOutside={!createMut.isPending}
+      closeOnEscape={!createMut.isPending}
+      withCloseButton={!createMut.isPending}
+    >
       {issued ? (
         <ShowOncePassword password={issued} onDone={close} />
       ) : collision ? (
@@ -232,8 +250,14 @@ export function CreateUserModal({
             A temporary password is generated automatically and shown once — hand it to the user
             directly.
           </Text>
+          {createMut.isPending && (
+            <Alert color="yellow" title="Creating the account">
+              This panel stays open until the password is shown, because it cannot be retrieved
+              later.
+            </Alert>
+          )}
           <Group justify="flex-end">
-            <Button variant="subtle" onClick={close}>
+            <Button variant="subtle" onClick={close} disabled={createMut.isPending}>
               Cancel
             </Button>
             <Button

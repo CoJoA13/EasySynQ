@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
@@ -297,6 +297,110 @@ test("switching the Manage drawer directly to a different user does not carry ov
     await within(drawer).findByRole("button", { name: "Issue new temp password" }),
   ).toBeInTheDocument();
   expect(within(drawer).queryByText(MARAS_PASSWORD)).toBeNull();
+});
+
+test("the Manage drawer refuses to close while a temporary password issuance is in flight, then closes normally once it resolves", async () => {
+  // P1 (PR #429 review): closing the drawer mid-issuance would unmount ManageUser while apiSend
+  // kept going — Keycloak replaces the password successfully, but the response then lands only on
+  // an unmounted component's callback, so the operator never sees it and is locked out. An MSW
+  // handler that does not resolve until `release` is called reproduces the "still in flight" window
+  // long enough to prove every closing route is blocked for its entire duration.
+  const NEW_PASSWORD = "In-Flight-Guard-Pw-7";
+  grantUserCreate();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.post("/api/v1/users/:id/temporary-password", async () => {
+      await gate;
+      return HttpResponse.json(
+        {
+          temporary_password: NEW_PASSWORD,
+          password_delivery: "shown_once",
+        } satisfies IssuedTemporaryPassword,
+        { status: 200 },
+      );
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />);
+
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await user.click(await within(drawer).findByRole("button", { name: "Issue new temp password" }));
+
+  // In flight: the panel explains why it refuses to close, and its own close (X) control is gone
+  // (withCloseButton is false for the duration, not merely wired to a no-op onClick).
+  expect(
+    await within(drawer).findByText(/stays open until the password is shown/),
+  ).toBeInTheDocument();
+  expect(within(drawer).queryByRole("button", { name: "Close" })).toBeNull();
+
+  // Escape must not close it either — closeOnEscape is false for the whole in-flight window — and
+  // ManageUser (proven by its "Roles" heading) is still mounted, not swapped for nothing.
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(within(drawer).getByText("Roles")).toBeInTheDocument();
+
+  // Release the response: the password is shown, and ONLY NOW does the drawer become closable.
+  act(() => release?.());
+  expect(await within(drawer).findByText(NEW_PASSWORD)).toBeInTheDocument();
+  expect(await within(drawer).findByRole("button", { name: "Close" })).toBeInTheDocument();
+
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("a failed temporary password issuance leaves the Manage drawer closable, not wedged open", async () => {
+  // The busy flag is set in resetMut's onMutate and must be cleared in onSettled (fires on BOTH
+  // outcomes) — not only in onSuccess — or a failed issuance would wedge the drawer open forever.
+  grantUserCreate();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.post("/api/v1/users/:id/temporary-password", async () => {
+      await gate;
+      return HttpResponse.json(
+        {
+          code: "keycloak_unavailable",
+          title: "Could not reach Keycloak",
+          detail: "Try again.",
+        },
+        { status: 502 },
+      );
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />);
+
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await user.click(await within(drawer).findByRole("button", { name: "Issue new temp password" }));
+
+  // Confirm it is genuinely blocked first — proving the reset below is a real transition, not a
+  // vacuous pass because the guard never engaged.
+  expect(
+    await within(drawer).findByText(/stays open until the password is shown/),
+  ).toBeInTheDocument();
+  expect(within(drawer).queryByRole("button", { name: "Close" })).toBeNull();
+
+  act(() => release?.());
+
+  // The failed mutation settled — the drawer is closable again, proving the flag cannot wedge it.
+  expect(await within(drawer).findByText("Action failed")).toBeInTheDocument();
+  expect(await within(drawer).findByRole("button", { name: "Close" })).toBeInTheDocument();
+
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
 test("opening the modal removes the ambiguous duplicate of the Create user button name", async () => {
