@@ -2,7 +2,7 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0084` (next `0085`).** Code: https://github.com/CoJoA13/EasySynQ (`main` unprotected —
+> **Migration head: `0085` (next `0086`).** Code: https://github.com/CoJoA13/EasySynQ (`main` unprotected —
 > free-plan private repo; the PR + green CI + squash flow is convention/discipline).
 > (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
 > cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
@@ -12,7 +12,7 @@
 > indexes; Issue #360 added `0081`'s pending-purge authority binding; Issue #361 added `0082`'s
 > Evidence Pack legal-erasure status and source-event lineage; Issue #363 added `0083`'s
 > Evidence Pack build-attempt principal and source-IP context; S-clause7-ia added `0084`'s
-> clause-7 PDCA flip to DO.)
+> clause-7 PDCA flip to DO; S-user-create added `0085`'s `USER_CREDENTIAL_ISSUED` audit event.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -139,6 +139,111 @@
 - **Audit checkpoint key rotation** (Batch 7, PR #364). v1 is single-key; restoring a pre-rotation backup
   after a future rotation would verify the historical signature against the current key. **Closing it
   needs** a key-id on the checkpoint + a retained public-key history.
+
+## IDENTITY PROVISIONING — one-step user creation from the Admin SPA (the LAB handoff §4 backlog)
+
+> The first slice off the handoff's §4 owner backlog (`docs/superpowers/plans/2026-08-02-lab-handoff.md`
+> §4.1), brainstormed rather than specified in advance because the shape was an open product question.
+
+### S-user-create — creating a user is one form in the Admin SPA, not a shell round trip (R64; BE+web+contract; migration `0085` [head `0084`→`0085`]; NO new key [catalog 102]; PR #429 squash `ec2e93e`)
+
+**What shipped — the deferral `api/users.py` had been naming since S8d.** Adding a person was two
+disconnected steps in two systems: create the Keycloak account at the server's shell
+(`scripts/new-keycloak-user.sh`) or in the Keycloak console, read back its `sub`, then paste that `sub`
+into Administration → Users. For an administrator who is also an ordinary user of the install, that seam
+is a physical trip to the machine. Now: **`POST /users/provision`** creates the Keycloak account over the
+admin REST API AND the `app_user` row in one call, with optional role assignment, returning a generated
+temporary password shown **once**; **`POST /users/{id}/temporary-password`** reissues one. The Users
+screen's single primary action is **Create user**, with an inline **Link the existing account** path when
+the username already exists in Keycloak unlinked, and the Manage drawer gains **Issue new temp password**.
+`POST /users` (paste-a-`sub`) is **unchanged and still published** — it is the fallback when the admin API
+is unreachable AND it is what the link action calls, which is what made "keep the API, drop the button"
+pay for itself: the collision 409 carries `keycloak_subject` as an RFC 9457 member and the SPA hands it
+straight back to the kept endpoint, so the link path needed **no new lookup surface** and no
+account-enumeration seam.
+
+**Owner decisions (brainstormed 2026-08-03).** Generated temp password shown once — *not* a Keycloak
+execute-actions email, because the shipped realm has **no `smtpServer` block at all** and `SMTP_*`
+defaults to Mailpit, so email would have blocked user creation on a site visit to configure an unknown
+relay. Recorded as the natural successor with `password_delivery: "shown_once"` left as the response
+seam. Configuring a relay would also light up the whole already-built notification family (`config.py`
+`smtp_*`, the drain worker, DB-backed templates, R54 cadence — all dormant behind an empty `smtp_host`),
+which is why it deserves its own slice rather than being welded on here.
+
+**R64 — the rules this made binding**, previously living only in implementation prose: (1) the Keycloak
+account is created **without a credential** → the row + role assignments commit → **only then** the
+password is set, so a failed write leaves an unusable orphan, never a live account whose password nobody
+saw; (2) **EasySynQ never deletes a Keycloak account**, on any path — orphans are recovered by *adoption*
+via the kept `POST /users`, not erased; (3) show-once secrecy; (4) the audit trail never claims a
+credential was issued when it was not, and its final write is deliberately **non-fatal** because the
+password exists only in the response — an audit **under**-claim is the safe direction for an append-only
+chain; (5) credential-reset authority (below). Range R1–R63 → R1–R64.
+
+⚠ **A credential reset is the account-takeover primitive, and `user.create` alone does not gate it.**
+The reset endpoint originally rode `user.create` — which is **grantable independently through a per-user
+SYSTEM override**, a shape this slice's own `_grant_user_create_only` test helper mints. A non-admin
+holding it could reset a System Administrator's password and sign in as them (the realm enforces no MFA).
+Closed with the R35 two-tier pattern on a **non-grant** operation, which is why it needed its own
+register number. ⚠ **The first form of that guard was itself wrong**: it permitted the reset whenever the
+target held no *system-domain* permission — a test that **cannot see content-domain authority**, so a
+caller could still mint a credential for an Approver and forge a release signature. Enumerating
+"privileged" content roles only trades one fragile enumeration for another → the guard tightened to
+**system-tier for every reset of another user, no target inspection**. Costs nothing in a default install
+(only System Administrator holds `user.create`, and it is system-tier). Denials audit under the reset
+operation's own key, never `permission.grant`.
+
+⚠ **The repo's own S-ing-4 rollback trap re-bit, inside a fix for a different bug.** The non-fatal
+audit-commit branch called `session.rollback()` and then read `str(user.id)`; rollback **expires every
+loaded instance**, so that access triggered an async lazy-load → uncaught `MissingGreenlet`. The branch
+that exists to save the one-time password would have destroyed it the first time it ever fired. Caught
+only by the integration tests, not by any review. Capture ids as plain `str` **before** the try.
+⚠ **The same unguarded-commit defect was then reproduced verbatim in the second endpoint** one commit
+later — a fix applied to one handler is not a fix applied to its sibling.
+
+⚠ **`.reset()` alone does NOT purge a secret from TanStack Query's mutation cache.** A successful
+response — including `temporary_password` — is retained as `state.data`; `.reset()` detaches the observer
+and schedules a **delayed** GC (5-minute default), so the credential survives. Needs `.reset()` in
+`onSuccess` **plus** `gcTime: 0`, and both halves must be pinned independently.
+⚠ **A component that unmounts mid-mutation loses the response.** `apiSend` carries no abort signal, so
+closing the Manage drawer during issuance let Keycloak replace a password while the one-time response
+landed in a dead callback — a real lockout. Every closing route (handler, close button, click-outside,
+Escape) is blocked while pending; the create modal had the same hazard in a different shape (its `close()`
+reset `issued` before the in-flight response resolved).
+
+⚠ **Keycloak status codes map to operator meaning, not to HTTP semantics.** A 200 carrying non-object
+JSON raised `AttributeError` → 500 instead of the documented 502; a 4xx from attribute validation read as
+"Keycloak could not be reached"; and a duplicate-user 409 whose message is *"User exists with same
+username or email"* classified a pure **username** collision as an email one — which suppressed the link
+affordance in exactly the race case where it is the correct recovery. The conflict is now classified by
+**re-reading the username**, not by the message.
+⚠ `redocly lint` **cannot detect an omitted or a wrong status code**, so a green `contracts` job is never
+evidence that a new problem response is documented. Both gaps here shipped past it.
+⚠ Keycloak **lowercases usernames**, so an exact-match lookup can return a *different* string than
+requested; the client refuses rather than treating a mismatch as absence. The unit test named for that
+safety property was originally pinning the unsafe collapse.
+
+**Named-not-faked deferrals** — filed as issues rather than chased, after four adversarial rounds stopped
+converging: **#430** three surfaces still describing the pre-tightening reset rule (UI gate, self-reset,
+contract summary) · **#431** stale subject reads as an outage / admin-auth failure reads as invalid input ·
+**#432** a malformed `Location` header yields a bogus subject and commits an unusable `app_user` ·
+**#433** a post-commit DB read failure returns a bare 500 with no recovery guidance · **#434** identity
+fields editable while pending, so a collision can link the wrong person's metadata · **#435** role picker
+renders without `role.read` · **#436** roles with a parameterized scope template confer no access when
+assigned unbound — **pre-existing** (the shipped Manage drawer has always done this), under-grant
+direction, and its own slice because a binding UI overlaps the §4.2 effective-access-legibility item.
+Handoff **§4.2** (permission-key visibility) and **§4.4** (user profile) remain out of scope;
+`GET /users/{id}/effective-permissions` is deliberately left unconsumed.
+
+**Process note.** Built subagent-driven across 8 tasks with a task-scoped review + fix round each, a
+whole-branch pass, and four Codex rounds. The reviews earned their cost: the whole-branch pass alone
+caught two defects invisible to any single-task review — selected roles **silently discarded** on the
+link path (the link and role-picker decisions were each specified and tested, never together), and two
+**shipped operator manuals** still instructing the deleted "Invite user" button while claiming EasySynQ
+cannot create a Keycloak password. Mutation-verification repeatedly exposed tests that passed against
+broken code (the equality-vs-containment password policy left the suite green ~83% of runs; deleting the
+credential guard's override leg left it 16/16 green).
+
+(api unit 1254→1282; +20 integration in `test_users_provision.py`; web 1433→1458.)
 
 ## PRODUCT IA — clause-spine corrections from the first production deployment (the LAB handoff work queue)
 
