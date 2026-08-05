@@ -19,7 +19,12 @@ from collections.abc import Callable
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
@@ -322,10 +327,11 @@ async def test_upgrade_aborts_when_pre_backup_raises_a_non_backup_error(
     from easysynq_api.services import upgrade as upgrade_service
 
     org_id = await _org_id()
-    dest = tempfile.mkdtemp(prefix="easysynq-upgrade-oserr-")
-    await _insert_backup_policy(org_id, dest)
     marker = "no-space-left-fixture"
     ran_alembic = False
+
+    async def _fixture_destination(_session: AsyncSession, _org_id: uuid.UUID) -> str:
+        return "fixture://upgrade-pre-backup"
 
     def _boom(*_a: object, **_k: object) -> dict[str, object]:
         raise OSError(marker)
@@ -336,6 +342,7 @@ async def test_upgrade_aborts_when_pre_backup_raises_a_non_backup_error(
 
     monkeypatch.setattr(upgrade_service, "build_durable_backup", _boom)
     monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", _spy)
+    monkeypatch.setattr(upgrade_service, "_backup_destination", _fixture_destination)
     baseline = await _max_audit_id()
 
     out = await upgrade_service.run_upgrade(org_id)
@@ -344,9 +351,10 @@ async def test_upgrade_aborts_when_pre_backup_raises_a_non_backup_error(
     assert out["stage"] == "pre_backup", out
     assert marker in str(out["reason"])
     assert ran_alembic is False, "the migration must NOT run once the pre-backup has failed"
-    assert await _upgrade_failed_reasons(
+    failures = await _upgrade_failed_reasons(
         marker, org_id=org_id, stage="pre_backup", after_id=baseline
-    ), "expected a terminal UPGRADE_FAILED audit row"
+    )
+    assert len(failures) == 1, failures
 
 
 async def test_upgrade_aborts_when_pre_backup_archive_fails_verification(
@@ -364,10 +372,11 @@ async def test_upgrade_aborts_when_pre_backup_archive_fails_verification(
     from easysynq_api.services import upgrade as upgrade_service
 
     org_id = await _org_id()
-    dest = tempfile.mkdtemp(prefix="easysynq-upgrade-unverified-")
-    await _insert_backup_policy(org_id, dest)
-    archive = f"{dest}/easysynq-backup-fixture.tar.enc"
+    archive = "fixture://upgrade-unverified.tar.enc"
     ran_alembic = False
+
+    async def _fixture_destination(_session: AsyncSession, _org_id: uuid.UUID) -> str:
+        return "fixture://upgrade-unverified"
 
     def _unverified(*_a: object, **_k: object) -> dict[str, object]:
         return {"archive": archive, "verified": False, "encrypted": True, "legs": {}}
@@ -381,6 +390,7 @@ async def test_upgrade_aborts_when_pre_backup_archive_fails_verification(
 
     monkeypatch.setattr(upgrade_service, "build_durable_backup", _unverified)
     monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", _spy)
+    monkeypatch.setattr(upgrade_service, "_backup_destination", _fixture_destination)
     # Stub readiness so the BASELINE failure (pre-fix, this test reached the health gate) cannot be
     # confused with an external-dependency failure. The proof must be about the verified flag alone.
     monkeypatch.setattr(upgrade_service, "check_all", _all_green)
@@ -391,9 +401,10 @@ async def test_upgrade_aborts_when_pre_backup_archive_fails_verification(
     assert out["result"] == "FAILED", out
     assert out["stage"] == "pre_backup", out
     assert ran_alembic is False, "must not migrate against an archive that failed verification"
-    assert await _upgrade_failed_reasons(
+    failures = await _upgrade_failed_reasons(
         archive, org_id=org_id, stage="pre_backup", after_id=baseline
-    ), "the failure must name the unusable archive"
+    )
+    assert len(failures) == 1, failures
 
 
 async def test_upgrade_never_raises_when_orchestration_fails_outside_a_stage(
@@ -410,8 +421,6 @@ async def test_upgrade_never_raises_when_orchestration_fails_outside_a_stage(
     from easysynq_api.services import upgrade as upgrade_service
 
     org_id = await _org_id()
-    dest = tempfile.mkdtemp(prefix="easysynq-upgrade-orch-")
-    await _insert_backup_policy(org_id, dest)
     marker = "alembic-head-unreadable-fixture"
 
     def _boom() -> str:
@@ -425,12 +434,13 @@ async def test_upgrade_never_raises_when_orchestration_fails_outside_a_stage(
     assert out["result"] == "FAILED", out
     assert out["stage"] == "orchestration", out
     assert marker in str(out["reason"])
-    assert await _upgrade_failed_reasons(
+    failures = await _upgrade_failed_reasons(
         marker, org_id=org_id, stage="orchestration", after_id=baseline
-    ), "expected a terminal UPGRADE_FAILED audit row"
+    )
+    assert len(failures) == 1, failures
 
 
-@pytest.mark.parametrize("failing", ["get_settings", "create_async_engine"])
+@pytest.mark.parametrize("failing", ["get_settings", "create_async_engine", "async_sessionmaker"])
 async def test_upgrade_never_raises_when_setup_fails(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
@@ -439,10 +449,10 @@ async def test_upgrade_never_raises_when_setup_fails(
 ) -> None:
     """Setup is part of the function, so it is part of the contract.
 
-    ``get_settings()`` (malformed DSN, missing required field) and ``create_async_engine()``
-    (unparseable URL, bad driver) sat ABOVE the try: and escaped exactly like the stage bodies once
-    did — the same defect one scope out. No audit row is possible here: the failure is upstream of
-    any usable session, so the structured dict is the whole honest answer.
+    ``get_settings()`` (malformed DSN, missing required field), ``create_async_engine()``
+    (unparseable URL, bad driver), and the sessionmaker sat ABOVE the try: and escaped exactly like
+    the stage bodies once did — the same defect one scope out. No audit row is possible here: the
+    failure is upstream of any usable session, so the structured dict is the whole honest answer.
     """
     from easysynq_api.services import upgrade as upgrade_service
 
@@ -479,6 +489,7 @@ async def test_upgrade_disposal_failure_does_not_replace_the_verdict(
     stage_marker = "orchestration-fixture"
     dispose_marker = "dispose-must-not-surface-fixture"
     real_create = upgrade_service.create_async_engine
+    dispose_called = False
 
     class _FailingDisposeEngine:
         """Delegates everything to a real engine but fails on ``dispose``.
@@ -489,13 +500,16 @@ async def test_upgrade_disposal_failure_does_not_replace_the_verdict(
         failure where the test actually means it.
         """
 
-        def __init__(self, inner: object) -> None:
+        def __init__(self, inner: AsyncEngine) -> None:
             self._inner = inner
 
         def __getattr__(self, name: str) -> object:
             return getattr(self._inner, name)
 
         async def dispose(self, *_a: object, **_k: object) -> None:
+            nonlocal dispose_called
+            dispose_called = True
+            await self._inner.dispose()
             raise RuntimeError(dispose_marker)
 
     def _engine_with_failing_dispose(*a: object, **k: object) -> object:
@@ -510,8 +524,115 @@ async def test_upgrade_disposal_failure_does_not_replace_the_verdict(
     out = await upgrade_service.run_upgrade(org_id)
 
     assert out["result"] == "FAILED", out
+    assert out["stage"] == "orchestration", out
     assert stage_marker in str(out["reason"]), "the STAGE failure must be what the caller sees"
     assert dispose_marker not in str(out["reason"]), "cleanup must not overwrite the verdict"
+    assert dispose_called is True, "the test must exercise engine disposal"
+
+
+async def test_upgrade_session_close_failure_preserves_committed_success(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session cleanup cannot rewrite a committed terminal result.
+
+    SQLAlchemy runs ``AsyncSession.close()`` from the session context manager's ``__aexit__``. If
+    close raises after ``UPGRADE_COMPLETED`` commits, that cleanup error must be logged without
+    converting the already-decided OK result into a contradictory orchestration failure.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    close_marker = "session-close-after-success-fixture"
+    events: list[str] = []
+
+    async def _fixture_destination(_session: AsyncSession, _org_id: uuid.UUID) -> str:
+        return "fixture://upgrade-session-close"
+
+    def _record_emit(_session: AsyncSession, *, event_type: str, **_kwargs: object) -> None:
+        events.append(event_type)
+
+    def _verified_backup(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "archive": "fixture://upgrade-session-close.tar.enc",
+            "verified": True,
+            "encrypted": True,
+            "legs": {},
+        }
+
+    async def _all_green() -> list[dict[str, object]]:
+        return [{"name": "postgres", "ready": True}, {"name": "alembic", "ready": True}]
+
+    async def _close_boom(_session: AsyncSession) -> None:
+        raise RuntimeError(close_marker)
+
+    monkeypatch.setattr(upgrade_service, "_alembic_head", lambda: "fixture-head")
+    monkeypatch.setattr(upgrade_service, "_backup_destination", _fixture_destination)
+    monkeypatch.setattr(upgrade_service, "_emit", _record_emit)
+    monkeypatch.setattr(upgrade_service, "build_durable_backup", _verified_backup)
+    monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", lambda: None)
+    monkeypatch.setattr(upgrade_service, "check_all", _all_green)
+    monkeypatch.setattr(AsyncSession, "close", _close_boom)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "OK", out
+    assert events == ["UPGRADE_STARTED", "UPGRADE_COMPLETED"]
+
+
+async def test_upgrade_session_close_failure_does_not_replace_cancellation(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ordinary cleanup error must not transform cancellation into a FAILED verdict."""
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    cancel_marker = "upgrade-cancelled-fixture"
+
+    async def _cancel_destination(_session: AsyncSession, _org_id: uuid.UUID) -> str:
+        raise asyncio.CancelledError(cancel_marker)
+
+    async def _close_boom(_session: AsyncSession) -> None:
+        raise RuntimeError("session-close-during-cancellation-fixture")
+
+    monkeypatch.setattr(upgrade_service, "_alembic_head", lambda: "fixture-head")
+    monkeypatch.setattr(upgrade_service, "_backup_destination", _cancel_destination)
+    monkeypatch.setattr(upgrade_service, "_emit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(AsyncSession, "close", _close_boom)
+
+    with pytest.raises(asyncio.CancelledError, match=cancel_marker):
+        await upgrade_service.run_upgrade(org_id)
+
+
+async def test_upgrade_failure_audit_close_failure_does_not_swallow_cancellation(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Best-effort failure auditing still propagates cancellation when its cleanup also fails."""
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    cancel_marker = "failure-audit-cancelled-fixture"
+
+    def _head_boom() -> str:
+        raise RuntimeError("orchestration-before-failure-audit-fixture")
+
+    def _cancel_emit(*_args: object, **_kwargs: object) -> None:
+        raise asyncio.CancelledError(cancel_marker)
+
+    async def _close_boom(_session: AsyncSession) -> None:
+        raise RuntimeError("failure-audit-session-close-fixture")
+
+    monkeypatch.setattr(upgrade_service, "_alembic_head", _head_boom)
+    monkeypatch.setattr(upgrade_service, "_emit", _cancel_emit)
+    monkeypatch.setattr(AsyncSession, "close", _close_boom)
+
+    with pytest.raises(asyncio.CancelledError, match=cancel_marker):
+        await upgrade_service.run_upgrade(org_id)
 
 
 async def test_restore_discard_cleans_scratch_bucket(

@@ -52,7 +52,7 @@ ledger is not built on them:
 
 ### 0.2 The planning fact that changes how M-01 must be proven
 
-`test_durable_backup_without_key_omits_sensitive_legs` (`tests/integration/test_restore.py`, line 301)
+`test_durable_backup_without_key_omits_sensitive_legs` (`tests/integration/test_restore.py`)
 asserts
 `encrypted is False`, `archive.endswith(".tar")`, `legs["realm_export"] == "absent"`,
 `legs["config_snapshot"] == "absent"` — and still treats the archive as a success.
@@ -192,7 +192,7 @@ Legend — **Status:** `C` confirmed · `P` partial · `R` refuted-as-phrased ·
 | **L-02** | The share-link download counter is an unlocked ORM read-modify-write, incremented before byte fetch. | P | Low | — | none | Lost update is real; escalation paths closed | — | `S-download-accountability` |
 | **L-09** | Two independent full-file materialisations (`hash.ts:5`, `upload.ts:8`); no client size guard. | P | Low | — | none | The proposed Blob assertion passes over the broken code — must be rewritten | — | `S-web-transfer` |
 | **M-27** | CI does not build/scan the exact web image, run install/air-gap smoke, exercise the m-profile, lint shell scripts, or run browser E2E/a11y. **Single owner** (was duplicated). | C | Med | — | 9 jobs / 12 checks | — | — | `S-ci-gaps` |
-| **NEW-09** | `.gitattributes:11-12` sets `uv.lock -diff` and `package-lock.json -diff`, so the two files carrying the entire dependency surface produce **no reviewable diff** — in `git diff`, `git show`, or any PR UI honouring gitattributes. A transitive change, intended or not, is invisible at review time. Compounds H-07: advisories do not block *and* the change is unreadable. Found while verifying the `cryptography`/`starlette` bump — the claim "only two packages moved" required `-c core.attributesfile=/dev/null` to prove. **The right tool is already used three lines above in the same file:** `linguist-generated=true` collapses a diff in GitHub's UI but keeps it expandable and keeps `git diff` working; `-diff` removes it entirely. | C | Med | — | none | — | — | `S-security-ratchet` (fold in — same supply-chain review surface) |
+| **NEW-09** | `.gitattributes:9-10` sets `uv.lock -diff` and `package-lock.json -diff`, so the two files carrying the entire dependency surface produce **no reviewable diff** — in `git diff`, `git show`, or any PR UI honouring gitattributes. A transitive change, intended or not, is invisible at review time. Compounds H-07: advisories do not block *and* the change is unreadable. Found while verifying the `cryptography`/`starlette` bump — the claim "only two packages moved" required `git diff --text` to prove; overriding `core.attributesfile` does not disable the repository's `.gitattributes`. **The right tool is already used three lines above in the same file:** `linguist-generated=true` collapses a diff in GitHub's UI but keeps it expandable and keeps `git diff` working; `-diff` removes it entirely. | C | Med | — | none | — | — | `S-security-ratchet` (fold in — same supply-chain review surface) |
 
 **Count check:** C-01, H-01…H-12, M-01…M-33, L-01…L-11 = 57 primary rows, each appearing once.
 Sub-IDs (C-01b/c, NEW-01a–e, NEW-03a–c, NEW-04a, NEW-05a, NEW-06a, NEW-07a) and `K-lock`, `COV-TABLE`
@@ -966,7 +966,7 @@ for one is a signal the fix has drifted (R38).
 | Wave 4 replaced by real slices | ✅ 12 Stage-6 slices, each with boundary, files, falsifying proof, commands, cases, migration/rollback, doc truth, residual |
 | Severity and release-blocking agree with sequencing | ✅ — *corrected after A/D-1 (M-15's "immediate release fix" wording contradicted its non-RB flag) and A/D-2 (the NEW-01a ⟷ H-01 pair spanned two stages).* |
 | Codex checkpoints A–C return no unresolved blockers | ✅ **all three run, every blocker reconciled.** **A:** 5 blockers (B-1, D-1, D-2, E-1, E-2). **B:** 1 design claim factually wrong (DR-2's immutability premise) + 14 surviving scenarios, all promoted to acceptance criteria (§2.5). **C:** 4 blocker classes — four proposed RED proofs that would have **passed**, six label-slices, migration accounting, dependency mismatches. See §7.1. |
-| No production source, audit evidence, operator data, or live state modified | ✅ |
+| During checkpoints A–C, no production source, audit evidence, operator data, or live state modified | ✅ |
 
 ---
 
@@ -1010,3 +1010,48 @@ Unchanged from v1 and still correct — each is shippable without any decision a
    operator's most destructive command. (The `lock_timeout` half needs a decision; the two edits do not.)
 3. **`S-image-ratchet` part (a)** — `cryptography 50.0.0` + `starlette 1.3.1`.
 4. **M-15's CSP token** — but only once `S-edge-headers` defines the real Caddy/browser acceptance test.
+
+## 9. Checkpoint D implementation closure
+
+The decision-independent batch received two adversarial implementation reviews. The first found that
+setup and engine disposal still sat outside the claimed operational-failure boundary; the follow-up
+moved setup under the guard and made engine disposal best-effort. The second found the same defect one
+scope inward: SQLAlchemy's session context manager can raise from `AsyncSession.close()` after a return
+or while another exception is pending. That could turn a committed `UPGRADE_COMPLETED` result into a
+contradictory `UPGRADE_FAILED`, or replace `CancelledError` with an ordinary orchestration failure.
+
+The closure explicitly manages and best-effort closes both the primary upgrade session and the fallback
+failure-audit session. Ordinary close failures are logged without replacing the primary return or
+pending exception; cancellation and process-exit signals still propagate. Three integration regressions
+in `tests/integration/test_restore.py` were observed failing before the fix and passing afterward:
+
+- `test_upgrade_session_close_failure_preserves_committed_success`
+- `test_upgrade_session_close_failure_does_not_replace_cancellation`
+- `test_upgrade_failure_audit_close_failure_does_not_swallow_cancellation`
+
+The same pass also made the earlier proofs more exact: sessionmaker construction joins the setup-failure
+matrix, the engine-disposal double proves disposal actually ran and disposes its real inner engine, each
+run-scoped audit assertion requires exactly one matching terminal row, and the three new failure tests no
+longer rewrite the shared backup-policy destination.
+
+This closes the review blockers for the immediate batch; it does **not** mark the full
+`S-upgrade-safety` slice complete. Single-flight execution, operation identity, orphaned-`STARTED`
+reconciliation, migration lock/statement timeouts, the shared typed backup-result validator,
+self-contained recovery eligibility, and the CLI's preliminary organization lookup remain owned by that
+slice. A structured `audit_recorded: false` signal is also still absent when the best-effort terminal
+audit cannot be written; the current contract deliberately returns the primary failure and logs the
+audit under-claim.
+
+Fresh integrated evidence on 2026-08-05:
+
+- the three cleanup/cancellation regressions passed together after each had been observed failing on
+  the pre-fix tree;
+- the complete restore/upgrade integration module passed 19 tests using PostgreSQL client 16.14;
+- the full integration suite passed 1,012 tests with zero failures; its two shared-DB management-review
+  skips remain the open M-29 test-isolation finding rather than being counted as coverage;
+- the API unit gate passed 1,282 tests with one release-ceremony skip, Ruff and format checks were clean,
+  and strict mypy reported no issues in 435 source files;
+- `uv lock --check` passed, and a forced text diff confirmed that only `cryptography` 48.0.0→50.0.0
+  and `starlette` 1.2.1→1.3.1 moved in `uv.lock`;
+- `scripts/check-no-site-data.sh` passed. Raw authenticated screenshots and machine evidence remain
+  ignored under `audit-results/` and are intentionally excluded from version control.

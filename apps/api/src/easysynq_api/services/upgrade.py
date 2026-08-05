@@ -105,13 +105,22 @@ async def _backup_destination(session: AsyncSession, org_id: uuid.UUID) -> str:
     return policy.destination if policy is not None else get_settings().backup_path
 
 
+async def _close_session_best_effort(session: AsyncSession, *, context: str) -> None:
+    """Close an upgrade session without replacing its primary result or pending exception."""
+    try:
+        await session.close()
+    except Exception:
+        logger.exception("upgrade: session close failed while finalizing %s", context)
+
+
 async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> dict[str, Any]:
-    """Pre-backup → migrate → health-gate. Never raises — returns ``{result: OK|FAILED, ...}``.
+    """Pre-backup → migrate → health-gate. Returns ``{result: OK|FAILED, ...}``.
 
     ``stage`` is one of ``pre_backup`` | ``migrate`` | ``health_gate`` | ``orchestration``; the last
     covers a failure outside the three guarded stages (see the outer handler). A ``pre_backup``
     failure includes an archive that was written but did NOT pass its own checksum verification —
-    an unusable safety net is not a safety net.
+    an unusable safety net is not a safety net. Ordinary operational exceptions become a structured
+    ``FAILED`` result; cancellation and process-exit signals still propagate.
     """
     # ⚠ Setup lives INSIDE the protected boundary. `get_settings()` (a malformed DSN or a missing
     # required field), `create_async_engine()` (an unparseable URL / bad driver) and the
@@ -126,7 +135,8 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
         engine = create_async_engine(settings.database_url)
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         target_head = _alembic_head()
-        async with sessionmaker() as session:
+        session = sessionmaker()
+        try:
             destination = await _backup_destination(session, org_id)
             _emit(
                 session,
@@ -209,9 +219,8 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                 )
                 await session.commit()
                 return {
-                    # Same shape as the audit row above and as every other stage: the exception
-                    # CLASS is the most useful thing an operator can read back over the phone, and a
-                    # bare str() drops it entirely for the common empty-message exceptions.
+                    # Keep the exception-bearing response consistent with its audit row: the class
+                    # is useful to an operator, and bare str() drops it for empty-message errors.
                     "result": "FAILED",
                     "stage": "migrate",
                     "reason": f"{type(exc).__name__}: {exc}"[:300],
@@ -254,6 +263,10 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                 "head": target_head,
                 "pre_backup_archive": backup["archive"],
             }
+        finally:
+            # SQLAlchemy's context-manager __aexit__ delegates to close(), whose exception would
+            # otherwise replace either the return above or a pending CancelledError/SystemExit.
+            await _close_session_best_effort(session, context="the upgrade body")
     except Exception as exc:
         # ⚠ The three guarded stages above are not the whole function. `_alembic_head()`, the
         # destination lookup, every `_emit`/`commit`, and `check_all()` all sit OUTSIDE them, and
@@ -273,7 +286,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
         # out of the function and REPLACES an already-computed OK/FAILED return — so a pool-teardown
         # hiccup could report a successful upgrade as an exception, which is the worst possible
         # direction for this command. Disposal failure is logged and otherwise ignored: by the time
-        # it runs, the migration and the health gate have already decided the real answer.
+        # it runs, the protected body has already determined the primary result or exception.
         if engine is not None:
             try:
                 await engine.dispose()
@@ -292,19 +305,24 @@ async def _try_emit_orchestration_failure(
 
     Opens its OWN session: the caller's may be mid-transaction or bound to a dead connection, and a
     session reused across a failure is the repo's documented ``MissingGreenlet``-at-pool-teardown
-    trap. Swallows its own errors deliberately — if the database is the thing that broke, the caller
-    must still receive an honest ``FAILED`` dict rather than a second exception. An audit
-    UNDER-claim is the safe direction for an append-only chain (the R64 precedent).
+    trap. Swallows its own ordinary errors deliberately — if the database is the thing that broke,
+    the caller must still receive an honest ``FAILED`` dict rather than a second exception. An audit
+    UNDER-claim is the safe direction for an append-only chain (the R64 precedent). Cancellation and
+    process-exit signals still propagate.
     """
+    session: AsyncSession | None = None
     try:
-        async with sessionmaker() as session:
-            _emit(
-                session,
-                org_id=org_id,
-                actor_id=actor_id,
-                event_type="UPGRADE_FAILED",
-                after={"stage": "orchestration", "error": reason},
-            )
-            await session.commit()
+        session = sessionmaker()
+        _emit(
+            session,
+            org_id=org_id,
+            actor_id=actor_id,
+            event_type="UPGRADE_FAILED",
+            after={"stage": "orchestration", "error": reason},
+        )
+        await session.commit()
     except Exception:
         logger.exception("upgrade: could not record the orchestration-failure audit row")
+    finally:
+        if session is not None:
+            await _close_session_best_effort(session, context="orchestration-failure auditing")
