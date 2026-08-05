@@ -1,7 +1,10 @@
 # Audit remediation programme v2 — evidence-corrected, implementation-ready
 
-> **Status:** planning pass complete; the decision-independent implementation batch is recorded in §9.
-> The remaining programme still requires its named decisions and later implementation slices.
+> **Status:** the planning pass is complete; its decision-independent implementation batch is recorded in
+> §§8–9. The ledger and checkpoint claims describe the audited `376ec1e` baseline, not a present-tense
+> statement about HEAD. Current-head dispositions are recorded separately in §10: C-01c and M-22 are
+> implemented on this branch, while C-01, C-01b, the full `S-backup-legs` contract, and the remainder of
+> the programme remain open pending their named decisions and implementation slices.
 > **Supersedes:** `2026-08-04-audit-remediation.md` (v1, preserved as the historical validation trail;
 > only its raw-evidence boundary note was clarified for publication).
 > **Revision brief:** `2026-08-04-audit-remediation-codex-handoff.md`.
@@ -86,8 +89,9 @@ once as a primary owner. Umbrella rows (NEW-01, NEW-03) are marked *superseded* 
 Legend — **Status:** `C` confirmed · `P` partial · `R` refuted-as-phrased · `K` known residual.
 **RB** = release-blocking.
 
-Ledger claims describe the audited `376ec1e` baseline. Sections 8–9 record the subset implemented on
-this branch; in particular, NEW-09's hidden-lockfile condition no longer exists in the publication diff.
+Ledger claims describe the audited `376ec1e` baseline. Sections 8–9 are the immediate-batch history;
+§10 is the current-head overlay and does not rewrite those baseline findings. In particular, NEW-09's
+hidden-lockfile condition no longer exists in the publication diff.
 
 ### 1.1 Integrity and recovery
 
@@ -289,8 +293,19 @@ is M-01's fix stated as a property.
   S3 credentials that cannot read the source buckets. Today's `_copy_blobs` fails `AccessDenied` there,
   which is exactly the RED needed. A test that merely uses a different bucket is a live-vault copy in
   disguise.
-- **Re-point the triad's blob leg at `(blob.bucket, blob.object_key)` as stored.** That single change
-  converts C-01c's tautology into a real proof and is worth landing before the object leg exists.
+- **C-01c current-head disposition.** The triad now reads each restored `(blob.bucket, blob.object_key)`
+  as stored, hashes those bytes, and fails closed for a missing, unreadable, or mismatched locator. This
+  landed as `2699e1b` with the teardown follow-ups `77a8eea` and `4f09579`; it proves resolvability only
+  against the **currently configured** object store. It does not certify an independently cut-over target,
+  object bytes in an off-vault generation, or C-01b/C-01.
+- **D-B3 — failed target accounting (open).** C-01b uses unique fresh targets, but a failed
+  object-lock target cannot be casually auto-deleted. Choose either a persisted restore-job inventory
+  that records each target and disposition, or an explicitly accepted operator-inventory residual for
+  abandoned targets. The slice must not silently choose either.
+- **D-B4 — legacy static envelope (open; recommended path stated).** For an archive labelled
+  `BACKUP_ENCRYPTION_KEY:sha256-v1`, choose a bounded decrypt-only fallback across the two configured
+  historic candidates followed by mandatory reseal (recommended), or a hard cutoff/reseal-before-upgrade.
+  Never silently map that static reference to “current”.
 
 ### DR-3 · Release and rollback contract → **decision D-E**
 
@@ -418,27 +433,51 @@ state this in the register entry.
 *Doc truth:* `docs/06:48`, `docs/12:506`, `docs/14:519`, `docs/06:298` become true in this merge.
 *Gate:* release-blocking. *Residual:* MinIO root still deletes; delete markers are detected, not prevented.
 
-**`S-backup-legs`** *(M-01)* — mandatory legs, fail-closed on no key, key IDs + history.
-*Boundary:* backup generation completeness. *Files:* `services/backup/{drill,crypto,service}.py`, `config.py`.
+**`S-backup-legs`** *(M-01)* — mandatory legs, fail-closed on no key, exact key IDs + bounded history.
+*Boundary:* a snapshot-bound, org-scoped backup generation is complete only when every mandatory leg and
+every consumer verdict agrees. *Files:* core `services/backup/{drill,crypto,archive,restore,service}.py`
+and `config.py`; the realm/config/checkpoint providers or orchestration that bind those legs to the dumped
+database snapshot; direct upgrade and setup/G-C callers; the setup API/service/OpenAPI surface that today
+exposes user-controlled but ineffective `encryption_key_ref`; unit/integration tests; and affected
+environment, operator, security, and key-rotation documentation. Deprecate or make that setup control
+inert without a migration unless a later slice explicitly migrates it.
+*Required behaviour:* no configured key refuses **before publication**; realm, config, and checkpoint each
+fail closed; a checkpoint cannot be newer than the dumped DB; new artifacts record deterministic
+`sha256(derive_key(secret))[:16]` IDs; current and previous configured keys map by exact ID; an unknown ID
+reports the specific configured-key error; restore and retained verification reject partial/legacy archives
+before scratch writes; and nightly, CLI, upgrade, and setup gates cannot accept `verified=True` alone.
 *Proof:* **inverted test** — `test_durable_backup_without_key_omits_sensitive_legs` currently pins the
-defect (§0.2); it is rewritten to assert refusal and mutation-verified against the old behaviour.
-*Cases:* each leg forced to fail; rotated key decrypts; unknown key ID gives the specific message.
-*Doc truth:* the runbook stops describing a partial archive as a backup. *Gate:* release-blocking.
+defect (§0.2), so it is rewritten to assert refusal and mutation-verified against the old behaviour;
+deterministic tests force each leg, key-selection branch, and caller/consumer verdict. The existing
+transient plaintext G-C drill does not prove durable mandatory-leg health: add a durable health gate or
+make G-C exercise the durable path.
+*Cases:* each leg forced to fail; current/previous exact-ID decryption; unknown-ID configured-key error;
+partial/legacy archive rejected before scratch creation; and each nightly/CLI/upgrade/setup consumer.
+*Decision:* D-B4 remains open for the legacy static `BACKUP_ENCRYPTION_KEY:sha256-v1` envelope; it must
+never be treated as “current”. *Doc truth:* the runbook stops describing a partial archive as a backup.
+*Gate:* release-blocking. *Residual:* this slice does not close self-contained generation, object-byte,
+version, or R27 concerns; those remain in `S-recovery-generation`.
 
-**`S-restore-target`** *(C-01b, C-01c)* — the restore-target triple, cutover guards, and the real triad.
-*Boundary:* restored-namespace resolvability. *Files:* `services/backup/{restore,drill}.py`, runbook.
-*Proof (RED against HEAD):* **rewrite one restored `blob.object_key` to a value that does not resolve,
-leaving the copied bytes intact, and assert the triad FAILs.** It passes today — the triad reads the
-scratch namespace it wrote, so an unresolvable stored key is invisible to it. ⚠ Do **not** frame this as
-"the triad cannot fail": `test_restore.py:168-194` already proves byte corruption *is* caught, and a
-proof aimed at corruption would pass over the real defect. The gap is namespace **resolvability**.
-*Gate:* release-blocking. *Note:* deliverable independent of, and cheaper than, the object leg.
+**`S-restore-target`** *(C-01b)* — the remaining restore-target cutover contract after C-01c.
+*Boundary:* a recovered stack can resolve every stored locator without source-vault reads. *Files:*
+`services/backup/{restore,drill}.py`, configuration/orchestration, and the runbook. Create fresh,
+role-preserving `documents` and `records` buckets with object lock and a fresh plain `renditions` bucket.
+Preserve every original `object_key`; only after all required copies succeed, rewrite/map restored
+`blob.bucket` to its target role, fail closed for unknown or undeclared legacy source buckets, and
+atomically switch the three matching S3 bucket settings with the restored DB. Do **not** flatten objects
+into `{restore_id}/{sha}`. Unique abandoned object-lock targets require the D-B3 persisted-inventory choice
+or its explicitly accepted operator-inventory residual.
+*Proof (RED against current HEAD):* recover into the fresh target roles, deny source-vault reads, boot the
+recovered stack, and prove each stored locator resolves there. The former C-01c mutated-locator proof is
+already GREEN on this branch and is not misrepresented as C-01b RED evidence.
+*Gate:* release-blocking. *Residual:* C-01's self-contained object-byte generation remains separate.
 
 **`S-recovery-generation`** *(C-01)* — the object-bytes leg, CAS, RW lock, capacity pre-flight, pruning GC.
 *Boundary:* recovery-set durability. *Deps:* **D-B**; consumes `S-backup-legs` + `S-restore-target`.
 *Proof (RED against HEAD):* restore with S3 credentials that cannot read the source buckets — today
-`_copy_blobs` fails `AccessDenied`. Then boot the app on the restored DB + fresh buckets and download a
-document version, a record evidence blob and a pack ZIP (three buckets, three read paths).
+`_copy_blobs` fails `AccessDenied`. Then boot the app on the restored DB + fresh buckets and read all
+physical roles: a source document from `documents`, record evidence **and the sealed pack ZIP** from
+`records`, and a controlled/portfolio rendition from `renditions`.
 *Migration:* `backup_generation` ledger. *Gate:* release-blocking, and **G-C must be re-pointed at a
 generation that passes this test** — until then the gate certifies the wrong thing.
 *Residual:* storage multiplies; the shared CAS is shared fate; still no PITR (R37 half-answered).
@@ -579,18 +618,17 @@ question — add a regression asserting both existing bindings instead.
 MIME, popup-blocked. Use a synchronously opened tab or an ordinary authorized link after presigning.
 *Gate:* release-blocking, **and its accessibility acceptance lives here**, not in Stage 5.
 
-**`S-release-consistency`** *(M-22)* — *(split from approval.)* *Boundary:* post-release cache coherence.
-*Files:* `features/authoring/hooks.ts::useInvalidateDocument` (add the distribution + acknowledgement
-query keys) and the release confirmation component. *Deps:* none. *Owner decisions:* none.
-*Proof (RED against HEAD):* a **deterministic** race arrangement, not a timing hope — MSW holds the
-distribution response open behind a manually-resolved promise; release the document; assert that at no
-render does the tree contain both the `Effective` badge and the "Not yet effective" acknowledgement text;
-then resolve. ⚠ Default refetch-on-mount makes a naive test green regardless — the held-response
-arrangement is what makes it falsifying. Mutation-verify by removing the added invalidation.
-*Commands:* `/check-web`. *Cases:* release, immediate re-render, reload, and a failed distribution fetch.
+**`S-release-consistency`** *(M-22)* — **implemented at current HEAD** (`6d0a351`, `f9ef870`,
+`02f2635`); split from approval. *Boundary:* post-release cache coherence. The release-specific path now
+invalidates document, distribution, and acknowledgement reads; the persistent Acknowledged tile says
+`Refreshing acknowledgement coverage` while the post-release refresh is pending and
+`Acknowledgement coverage unavailable` if it fails. The deterministic MSW proof holds that response,
+uses a scoped Acknowledged-card DOM contradiction oracle, asserts the actual acknowledgement query key,
+and mutation-verifies that removing distribution invalidation immediately exposes Effective plus stale
+`Not yet effective` in that card. See §10.2 for the genuine RED, 27 focused tests, and approval record.
 *Migration:* none. *Rollback:* pure UI. *Doc truth:* none. *Gate:* not release-blocking.
-*Residual:* an unawaited invalidation is still fire-and-forget; if the assertion proves flaky, the
-correct escalation is to await it in the mutation's `onSuccess` — name that as the fallback.
+*Residual:* invalidations remain fire-and-forget; if the proof later becomes flaky, await them in the
+release mutation's `onSuccess` path.
 
 **`S-calendar-contract`** *(H-10, M-14)* — **at the API boundary.** Require date-only calendar intent and
 resolve server-side in the org's validated IANA timezone; if wire compatibility needs the old datetime
@@ -631,16 +669,22 @@ available/forbidden/error/not-published semantics in any dashboard aggregate. Ca
 **`S-query-errors`** *(M-10)* — give the supporting-data hooks the three-state contract the primary hooks
 already have. *Boundary:* SPA query error semantics. *Files:* `app/shell/{useDocumentTypes,useUserDirectory,useClauses}.ts`,
 `features/objectives/hooks.ts::useProcesses`, and each consuming picker.
-*Proof (RED against HEAD):* MSW returns 500 for `GET /document-types`; assert the picker renders a scoped
-error and the dependent submit is **disabled** — today it renders as an empty list with the action live.
-*Commands:* `/check-web`. *Cases:* 403 vs 500 vs empty; each of the four hooks. *Migration:* none.
-*Rollback:* pure UI. *Doc truth:* none required. *Gate:* not release-blocking. *Residual:* none.
+*Proof (RED against HEAD):* MSW returns 500 for `GET /document-types`; today the picker is
+indistinguishable from an empty list. The New Document submit is already disabled without `typeId`, so do
+not claim that action remains live. Require a scoped error for required consumers while preserving the
+existing disabled-submit guard; define optional consumer semantics separately so a legitimate empty state
+is not conflated with transport/authorization failure.
+*Commands:* `/check-web`. *Cases:* required versus optional consumer; 403 vs 500 vs empty; each of the
+four hooks. *Migration:* none. *Rollback:* pure UI. *Doc truth:* none required. *Gate:* not
+release-blocking. *Residual:* none.
 
 **`S-url-selection`** *(M-12)* — derive drawer selection from the URL. *Boundary:* SPA routing state.
 *Files:* `features/{capa,dcr,improvement}` register pages, following `RisksRegisterPage.tsx:108-118`.
-*Proof (RED against HEAD):* open a CAPA drawer, press Back, assert the drawer closes — today the local
-state survives. *Commands:* `/check-web`. *Cases:* back, forward, deep link, replace. *Migration:* none.
-*Rollback:* pure UI. *Doc truth:* none. *Gate:* no. *Residual:* none.
+*Proof (RED against HEAD):* use controlled history, not an ordinary local drawer open (which creates no
+history entry): `/capa?capa=id` → no-parameter entry → Back closes the drawer → Forward reopens it.
+*Commands:* `/check-web`. *Cases:* that Back/Forward sequence, deep link, and replace. *Owner product
+choice:* decide whether row/card opens push the URL; the proof must reflect the chosen navigation contract.
+*Migration:* none. *Rollback:* pure UI. *Doc truth:* none. *Gate:* no. *Residual:* none.
 
 **`S-setup-resume`** *(M-07)* — per-field non-clobbering hydration from persisted setup state.
 *Boundary:* setup wizard state. *Files:* `SetupWizard.tsx` + **its first test file** (it has none today).
@@ -671,11 +715,10 @@ retained filename, revision label and content digest are on screen — today the
 of them. *Commands:* `/check-web`. *Migration:* none. *Doc truth:* the operator manual's check-in step.
 *Gate:* no. *Residual:* none.
 
-**`S-lifecycle-copy`** *(L-10, remainder)* — *Boundary:* one shared state-label mapping. *Files:* a new
-`documentStateLabel` helper + every call site rendering a raw state. *Proof (RED against HEAD):* assert no
-rendered surface contains the raw string `InReview` — today several do. *Commands:* `/check-web`.
-*Note:* `S-approval-content` consumes this helper, so it lands first within Stage 4.
-*Migration:* none. *Doc truth:* none. *Gate:* no. *Residual:* none.
+**`S-lifecycle-copy`** *(L-10, remainder)* — **likely already closed at current HEAD** by the shared
+`documentStateLabel` mapping. Do not invent a new helper or a false RED task. First run a renderer
+inventory for raw lifecycle renderers; if it finds one, create a focused correction and proof for that
+surface, otherwise record this remainder closed. *Migration:* none. *Doc truth:* none. *Gate:* no.
 
 **`S-release-copy`** *(L-10, remainder)* — *Boundary:* release-confirmation wording. *Files:* the release
 confirmation component. *Proof (RED against HEAD):* for a document with **no** prior Effective version,
@@ -847,7 +890,6 @@ Stage 4  authentication + user-facing correctness
          S-auth-baseline ──→ S-auth-shell            (baseline pins the lifetimes the shell encodes)
          S-auth-baseline ──→ S-mfa-enrollment
          S-auth-baseline ··→ [passwordBlacklist leg BLOCKED BY Stage 3 S-offline-install]
-         S-lifecycle-copy ─→ S-approval-content      (approval consumes documentStateLabel)
          S-dirty-form ────→ S-setup-resume           (resume consumes the dirty guard)
          S-session-revocation · S-release-consistency · S-calendar-contract
          S-secret-capture · S-capability-truth
@@ -893,7 +935,8 @@ it), the correction is that `S-offline-install` rewrites those exact sentences *
 | **D-B2** | *(implied by B-6, see §2.5)* **Verify a replacement generation before completing an R27 invalidation.** | Ordering inverted from the first draft; an erasure can no longer leave an install with zero recoverable backups. |
 | **Offline boot** | **A fresh install must come up without reaching PyPI / npm / Debian.** | ⚠ **H-04 is reframed and stays High.** The finding is not "the air-gap bundle is incomplete" — it is **"no install path works without network, including the appliance."** `infra/appliance/provision/easysynq-provision.sh:151` runs `compose up -d --build`, so the Hyper-V appliance builds from source at first boot. Appliance offline-boot and air-gap therefore share ~80% of the work and ship as one family: stable image identity → images pre-loaded into the VHDX → an offline overlay (`pull_policy: never`, no `build:`) → a network-disabled smoke test. `docs/runbooks/install-airgapped.md:20-22` is a *true premise with a false conclusion* — the wheels and SPA genuinely are baked into the api/web layers; those layers were simply never added to the bundle. |
 
-Remaining open: D-C, D-D, D-E, D-E2, D-F, D-F2, D-G, D-H, D-I, D-J, D-K, D-L, D-M, D-N, D-O, D-P.
+Remaining open: D-B3, D-B4, D-C, D-D, D-E, D-E2, D-F, D-F2, D-G, D-H, D-I, D-J, D-K, D-L, D-M, D-N,
+D-O, D-P.
 
 ### 5.1 Still open
 
@@ -915,6 +958,8 @@ Remaining open: D-C, D-D, D-E, D-E2, D-F, D-F2, D-G, D-H, D-I, D-J, D-K, D-L, D-
 | **D-N** | Are generated contract artifacts authoritative? If not, delete the claim | `S-contract-authority` |
 | **D-O** | Coverage: measure-only now, threshold later — and only on a combined figure | `S-coverage-policy` |
 | **D-P** | Download accountability: proxy high-assurance downloads (contradicts D1's presign rationale) vs ingest object-access logs | `S-download-accountability` |
+| **D-B3** | Failed object-lock restore targets: persisted restore-job/target inventory (recommended) vs an explicitly accepted operator inventory for abandoned targets | `S-restore-target` |
+| **D-B4** | Legacy `BACKUP_ENCRYPTION_KEY:sha256-v1`: bounded decrypt-only fallback across two historic configured candidates plus mandatory reseal (recommended) vs hard cutoff/reseal-before-upgrade | `S-backup-legs` |
 
 **Register candidates:** WORM retention + threat boundary (D-A) · recovery-set atomicity, amending R37
 (D-B) · release identity and rollback semantics, **R65 candidate** (D-E) · the MFA lockout invariant,
@@ -945,10 +990,12 @@ for one is a signal the fix has drifted (R38).
    Enum extensions use `ALTER TYPE … ADD VALUE` with a no-op downgrade (the `0011` pattern) and must
    source their tuples from the ORM `*_VALUES`, not a retyped list (the `0010` precedent).
 2. **A green new test is unproven until observed RED against HEAD.** The evidence work caught six
-   proposed proofs that pass over broken code: L-09's Blob assertion, M-24's Referrer-Policy substring,
-   NEW-02's `BackupError` stub, M-22's default refetch-on-mount, `S-restore-target`'s triad leg, and
-   `S-db-grants` without `blob`. Where a defect is *pinned as intended* (M-01), the honest proof is an
-   inverted test, mutation-verified — say so rather than manufacture a RED.
+   proposed proofs that passed over broken code at the planning baseline: L-09's Blob assertion, M-24's
+   Referrer-Policy substring, NEW-02's `BackupError` stub, M-22's default refetch-on-mount,
+   `S-restore-target`'s then-tautological triad leg, and `S-db-grants` without `blob`. At current HEAD,
+   the repaired M-22 and C-01c proofs are implemented; C-01b instead needs the fresh-target recovered-stack
+   proof in its slice. Where a defect is *pinned as intended* (M-01), the honest proof is an inverted test,
+   mutation-verified — say so rather than manufacture a RED.
 3. **Pin every MSW fixture to the real backend serializer.** Several slices write a surface's first test.
 4. **Run the full `/check-web`.** A jest-dom matcher needs `import { expect, it } from "vitest"`; a
    per-file vitest run is green while `tsc` fails.
@@ -971,10 +1018,10 @@ for one is a signal the fix has drifted (R38).
 | NEW-03…NEW-08 use corrected claims and evidence | ✅ 03 split 3 ways; 04–07 refuted-as-phrased with narrowed deltas; 08 re-premised |
 | M-01 explicit | ✅ own row, own slice, own inverted-test proof |
 | Four risky-boundary designs decision-ready | ✅ DR-1…DR-4 with options, recommendations, acceptance, residual risk; D-A1/D-B1/D-B2 settled and the remaining owner decisions listed in §5.1 |
-| Every slice has executable acceptance, dependency, rollback, documentation criteria | ✅ — *was falsely green in the first draft; six Stage-4 slices and all twelve Stage-6 slices were labels only. Filled in after Codex checkpoint A blocker E-2.* |
+| Every slice had executable acceptance, dependency, rollback, documentation criteria **at the end of this planning pass** | ✅ historical planning-pass result — *was falsely green in the first draft; six Stage-4 slices and all twelve Stage-6 slices were labels only. Filled in after Codex checkpoint A blocker E-2.* Current-head reconciliation has since repaired the C-01b/C-01c split, expanded `S-backup-legs`, and corrected frontend proofs; it is not a claim that every remaining slice is now complete. |
 | Wave 4 replaced by real slices | ✅ 12 Stage-6 slices, each with boundary, files, falsifying proof, commands, cases, migration/rollback, doc truth, residual |
 | Severity and release-blocking agree with sequencing | ✅ — *corrected after A/D-1 (M-15's "immediate release fix" wording contradicted its non-RB flag) and A/D-2 (the NEW-01a ⟷ H-01 pair spanned two stages).* |
-| Codex checkpoints A–C returned no unresolved planning blockers | ✅ **all three run, every blocker reconciled at the end of that planning pass.** **A:** 5 blockers (B-1, D-1, D-2, E-1, E-2). **B:** 1 design claim factually wrong (DR-2's immutability premise) + 14 surviving scenarios, all promoted to acceptance criteria (§2.5). **C:** 4 blocker classes — four proposed RED proofs that would have **passed**, six label-slices, migration accounting, dependency mismatches. See §7.1. Checkpoint D implementation findings and fixes are recorded separately in §9. |
+| Codex checkpoints A–C returned no unresolved planning blockers | ✅ **at the end of that historical planning pass:** all three ran and every then-known blocker was reconciled. **A:** 5 blockers (B-1, D-1, D-2, E-1, E-2). **B:** 1 design claim factually wrong (DR-2's immutability premise) + 14 surviving scenarios, all promoted to acceptance criteria (§2.5). **C:** 4 blocker classes — four proposed RED proofs that would have **passed**, six label-slices, migration accounting, dependency mismatches. See §7.1. Checkpoint D implementation findings and fixes are recorded separately in §9. |
 | During checkpoints A–C, no production source, audit evidence, operator data, or live state modified | ✅ |
 
 ---
@@ -1081,3 +1128,41 @@ Fresh integrated evidence on 2026-08-05:
   route remains part of the broader `S-edge-headers` acceptance;
 - `scripts/check-no-site-data.sh` passed. Raw authenticated screenshots and machine evidence remain
   ignored under `audit-results/` and are intentionally excluded from version control.
+
+## 10. Current-head implementation dispositions — do not rewrite the `376ec1e` baseline
+
+Sections 1–9 preserve the audit and planning-pass record. This overlay records only the two approved
+sub-slices subsequently implemented on this branch. It does **not** close C-01, C-01b,
+`S-restore-target`, `S-backup-legs`, or the overall programme.
+
+### 10.1 Task 1 — C-01c stored-locator verification implemented
+
+`2699e1b` implements exact stored-locator verification; `77a8eea` and `4f09579` complete the failed-target
+teardown proof. Against pre-fix `a7916da`, the deterministic regression changed only a restored
+`blob.object_key` to a nonexistent value while retaining copied bytes, and genuinely failed its expected
+`FAIL` assertion because production returned `PASS`. The final regression proves both exact teardown legs:
+the captured scratch database is absent and its unique copied-object prefix is absent after the `FAIL`
+path, including the unexpected-PASS fallback cleanup.
+
+Focused evidence recorded in the Task 1 report: the post-fix locator test passed (`1 passed, 22 deselected`);
+the locator-plus-corruption integration pair passed (`2 passed, 21 deselected`); focused restore/drill
+unit selection passed (`10 passed, 1273 deselected`); strict mypy, targeted Ruff, and formatting checks
+passed. Independent review approved the work after the two cleanup-review fixes. This is C-01c only:
+the triad establishes locator resolvability against the configured object store, not source-vault-independent
+recovery, target-role cutover, object-lock target handling, or recovery generation. C-01b and C-01 remain
+open.
+
+### 10.2 Task 2 — M-22 release cache coherence implemented
+
+`6d0a351` adds release-specific document, distribution, and acknowledgement invalidation;
+`f9ef870` and `02f2635` harden the race oracle. The genuine pre-fix RED used a held MSW distribution
+response: the document became Effective while the Acknowledged tile still read `Not yet effective`. The
+implemented path presents pending and failed-refresh copy, asserts the actual acknowledgement key, and
+uses the Acknowledged card's scoped DOM contradiction oracle. Its final mutation removes only the
+release-specific distribution invalidation and fails immediately at that same scoped contradiction,
+rather than timing out behind the response latch.
+
+The focused three-file suite passed 27 tests; typecheck, lint, and build passed. Independent review
+approved the work after the two oracle-review fixes. This closes M-22's release-cache boundary only;
+the invalidations remain intentionally fire-and-forget, with awaiting them in `onSuccess` as the named
+escalation if the deterministic proof later becomes flaky.
