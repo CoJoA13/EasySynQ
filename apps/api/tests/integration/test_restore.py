@@ -18,7 +18,7 @@ from collections.abc import Callable
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from easysynq_api.config import get_settings
@@ -270,19 +270,40 @@ async def test_upgrade_pre_backup_and_health_gate(
     assert completed is not None
 
 
-async def _upgrade_failed_reasons(fragment: str) -> list[str]:
-    """Run-scoped lookup: UPGRADE_FAILED reasons whose error mentions ``fragment``.
+async def _upgrade_failed_reasons(
+    fragment: str, *, org_id: uuid.UUID, stage: str, after_id: int
+) -> list[str]:
+    """Rows this test produced: UPGRADE_FAILED for ``org_id`` at ``stage``, newer than ``after_id``.
 
     Deliberately NOT a count of all UPGRADE_FAILED rows — the integration suite shares one session
-    DB and shard composition moves under us, so an absolute count is not a stable assertion.
+    DB and shard composition moves under us, so an absolute count is not a stable assertion. A
+    substring match alone is not enough either: it happens to be safe only because the markers are
+    unique, which is a property of today's fixtures rather than of the assertion. Constraining
+    org_id, stage and an explicit before/after id boundary makes it run-scoped by construction.
     """
     async with get_sessionmaker()() as s:
         rows = list(
-            await s.scalars(
-                select(AuditEvent.after).where(AuditEvent.event_type == EventType.UPGRADE_FAILED)
+            await s.execute(
+                select(AuditEvent.after).where(
+                    AuditEvent.event_type == EventType.UPGRADE_FAILED,
+                    AuditEvent.org_id == org_id,
+                    AuditEvent.id > after_id,
+                )
             )
         )
-    return [str(r) for r in rows if r and fragment in str(r.get("error", ""))]
+    out = []
+    for (after,) in rows:
+        if not after or after.get("stage") != stage:
+            continue
+        if fragment in str(after.get("error", "")):
+            out.append(str(after))
+    return out
+
+
+async def _max_audit_id() -> int:
+    """The current audit high-water mark, so a test can scope assertions to rows IT wrote."""
+    async with get_sessionmaker()() as s:
+        return int(await s.scalar(select(func.coalesce(func.max(AuditEvent.id), 0))) or 0)
 
 
 async def test_upgrade_aborts_when_pre_backup_raises_a_non_backup_error(
@@ -315,6 +336,7 @@ async def test_upgrade_aborts_when_pre_backup_raises_a_non_backup_error(
 
     monkeypatch.setattr(upgrade_service, "build_durable_backup", _boom)
     monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", _spy)
+    baseline = await _max_audit_id()
 
     out = await upgrade_service.run_upgrade(org_id)
 
@@ -322,7 +344,9 @@ async def test_upgrade_aborts_when_pre_backup_raises_a_non_backup_error(
     assert out["stage"] == "pre_backup", out
     assert marker in str(out["reason"])
     assert ran_alembic is False, "the migration must NOT run once the pre-backup has failed"
-    assert await _upgrade_failed_reasons(marker), "expected a terminal UPGRADE_FAILED audit row"
+    assert await _upgrade_failed_reasons(
+        marker, org_id=org_id, stage="pre_backup", after_id=baseline
+    ), "expected a terminal UPGRADE_FAILED audit row"
 
 
 async def test_upgrade_aborts_when_pre_backup_archive_fails_verification(
@@ -352,15 +376,24 @@ async def test_upgrade_aborts_when_pre_backup_archive_fails_verification(
         nonlocal ran_alembic
         ran_alembic = True
 
+    async def _all_green() -> list[dict[str, object]]:
+        return [{"name": "postgres", "ready": True}, {"name": "alembic", "ready": True}]
+
     monkeypatch.setattr(upgrade_service, "build_durable_backup", _unverified)
     monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", _spy)
+    # Stub readiness so the BASELINE failure (pre-fix, this test reached the health gate) cannot be
+    # confused with an external-dependency failure. The proof must be about the verified flag alone.
+    monkeypatch.setattr(upgrade_service, "check_all", _all_green)
+    baseline = await _max_audit_id()
 
     out = await upgrade_service.run_upgrade(org_id)
 
     assert out["result"] == "FAILED", out
     assert out["stage"] == "pre_backup", out
     assert ran_alembic is False, "must not migrate against an archive that failed verification"
-    assert await _upgrade_failed_reasons(archive), "the failure must name the unusable archive"
+    assert await _upgrade_failed_reasons(
+        archive, org_id=org_id, stage="pre_backup", after_id=baseline
+    ), "the failure must name the unusable archive"
 
 
 async def test_upgrade_never_raises_when_orchestration_fails_outside_a_stage(
@@ -385,13 +418,100 @@ async def test_upgrade_never_raises_when_orchestration_fails_outside_a_stage(
         raise RuntimeError(marker)
 
     monkeypatch.setattr(upgrade_service, "_alembic_head", _boom)
+    baseline = await _max_audit_id()
 
     out = await upgrade_service.run_upgrade(org_id)
 
     assert out["result"] == "FAILED", out
     assert out["stage"] == "orchestration", out
     assert marker in str(out["reason"])
-    assert await _upgrade_failed_reasons(marker), "expected a terminal UPGRADE_FAILED audit row"
+    assert await _upgrade_failed_reasons(
+        marker, org_id=org_id, stage="orchestration", after_id=baseline
+    ), "expected a terminal UPGRADE_FAILED audit row"
+
+
+@pytest.mark.parametrize("failing", ["get_settings", "create_async_engine"])
+async def test_upgrade_never_raises_when_setup_fails(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    failing: str,
+) -> None:
+    """Setup is part of the function, so it is part of the contract.
+
+    ``get_settings()`` (malformed DSN, missing required field) and ``create_async_engine()``
+    (unparseable URL, bad driver) sat ABOVE the try: and escaped exactly like the stage bodies once
+    did — the same defect one scope out. No audit row is possible here: the failure is upstream of
+    any usable session, so the structured dict is the whole honest answer.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    marker = f"{failing}-setup-fixture"
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(upgrade_service, failing, _boom)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "orchestration", out
+    assert marker in str(out["reason"])
+
+
+async def test_upgrade_disposal_failure_does_not_replace_the_verdict(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cleanup must never become the result.
+
+    ``engine.dispose()`` runs in ``finally``, so a bare await there raises straight out and REPLACES
+    an already-computed return — reporting a concluded upgrade as an exception, the worst direction
+    for this command. Here the upgrade fails at a known stage AND disposal fails; the caller must
+    still receive the stage verdict, not the disposal error.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    stage_marker = "orchestration-fixture"
+    dispose_marker = "dispose-must-not-surface-fixture"
+    real_create = upgrade_service.create_async_engine
+
+    class _FailingDisposeEngine:
+        """Delegates everything to a real engine but fails on ``dispose``.
+
+        ``AsyncEngine.dispose`` is read-only, so ``monkeypatch.setattr(engine, "dispose", ...)``
+        raises ``AttributeError`` inside ``create_async_engine`` — which the orchestration guard
+        then correctly reports, proving nothing about disposal. A delegating wrapper puts the
+        failure where the test actually means it.
+        """
+
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+        async def dispose(self, *_a: object, **_k: object) -> None:
+            raise RuntimeError(dispose_marker)
+
+    def _engine_with_failing_dispose(*a: object, **k: object) -> object:
+        return _FailingDisposeEngine(real_create(*a, **k))  # type: ignore[arg-type]
+
+    def _head_boom() -> str:
+        raise RuntimeError(stage_marker)
+
+    monkeypatch.setattr(upgrade_service, "create_async_engine", _engine_with_failing_dispose)
+    monkeypatch.setattr(upgrade_service, "_alembic_head", _head_boom)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert stage_marker in str(out["reason"]), "the STAGE failure must be what the caller sees"
+    assert dispose_marker not in str(out["reason"]), "cleanup must not overwrite the verdict"
 
 
 async def test_restore_discard_cleans_scratch_bucket(

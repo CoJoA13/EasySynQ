@@ -26,7 +26,12 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from ..config import get_settings
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
@@ -108,12 +113,18 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
     failure includes an archive that was written but did NOT pass its own checksum verification —
     an unusable safety net is not a safety net.
     """
-    settings = get_settings()
-    engine = create_async_engine(settings.database_url)
-    sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        engine, expire_on_commit=False
-    )
+    # ⚠ Setup lives INSIDE the protected boundary. `get_settings()` (a malformed DSN or a missing
+    # required field), `create_async_engine()` (an unparseable URL / bad driver) and the
+    # sessionmaker can each raise, and above the `try:` they escaped exactly like the stage bodies
+    # once did — the same defect one scope out. `sessionmaker` may therefore still be None in the
+    # handler, in which case no audit row is possible (there is no database to write to) and the
+    # structured FAILED dict is the whole of the honest answer.
+    engine: AsyncEngine | None = None
+    sessionmaker: async_sessionmaker[AsyncSession] | None = None
     try:
+        settings = get_settings()
+        engine = create_async_engine(settings.database_url)
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         target_head = _alembic_head()
         async with sessionmaker() as session:
             destination = await _backup_destination(session, org_id)
@@ -198,9 +209,12 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                 )
                 await session.commit()
                 return {
+                    # Same shape as the audit row above and as every other stage: the exception
+                    # CLASS is the most useful thing an operator can read back over the phone, and a
+                    # bare str() drops it entirely for the common empty-message exceptions.
                     "result": "FAILED",
                     "stage": "migrate",
-                    "reason": str(exc)[:300],
+                    "reason": f"{type(exc).__name__}: {exc}"[:300],
                     "pre_backup_archive": backup["archive"],
                 }
 
@@ -249,12 +263,22 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
         # and a recovery pointer, and strands UPGRADE_STARTED with no terminal event.
         logger.exception("upgrade: unexpected failure outside a guarded stage")
         reason = f"{type(exc).__name__}: {exc}"[:300]
-        await _try_emit_orchestration_failure(
-            sessionmaker, org_id=org_id, actor_id=actor_id, reason=reason
-        )
+        if sessionmaker is not None:
+            await _try_emit_orchestration_failure(
+                sessionmaker, org_id=org_id, actor_id=actor_id, reason=reason
+            )
         return {"result": "FAILED", "stage": "orchestration", "reason": reason}
     finally:
-        await engine.dispose()
+        # ⚠ Cleanup must not become the result. A bare `await engine.dispose()` here raises straight
+        # out of the function and REPLACES an already-computed OK/FAILED return — so a pool-teardown
+        # hiccup could report a successful upgrade as an exception, which is the worst possible
+        # direction for this command. Disposal failure is logged and otherwise ignored: by the time
+        # it runs, the migration and the health gate have already decided the real answer.
+        if engine is not None:
+            try:
+                await engine.dispose()
+            except Exception:
+                logger.exception("upgrade: engine disposal failed after the upgrade concluded")
 
 
 async def _try_emit_orchestration_failure(

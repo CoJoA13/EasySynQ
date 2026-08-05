@@ -52,7 +52,8 @@ ledger is not built on them:
 
 ### 0.2 The planning fact that changes how M-01 must be proven
 
-`tests/integration/test_restore.py:301::test_durable_backup_without_key_omits_sensitive_legs` asserts
+`test_durable_backup_without_key_omits_sensitive_legs` (`tests/integration/test_restore.py`, line 301)
+asserts
 `encrypted is False`, `archive.endswith(".tar")`, `legs["realm_export"] == "absent"`,
 `legs["config_snapshot"] == "absent"` — and still treats the archive as a success.
 **The suite pins M-01's fail-open behaviour as intended.** (Precisely: the test pins the *successful
@@ -191,6 +192,7 @@ Legend — **Status:** `C` confirmed · `P` partial · `R` refuted-as-phrased ·
 | **L-02** | The share-link download counter is an unlocked ORM read-modify-write, incremented before byte fetch. | P | Low | — | none | Lost update is real; escalation paths closed | — | `S-download-accountability` |
 | **L-09** | Two independent full-file materialisations (`hash.ts:5`, `upload.ts:8`); no client size guard. | P | Low | — | none | The proposed Blob assertion passes over the broken code — must be rewritten | — | `S-web-transfer` |
 | **M-27** | CI does not build/scan the exact web image, run install/air-gap smoke, exercise the m-profile, lint shell scripts, or run browser E2E/a11y. **Single owner** (was duplicated). | C | Med | — | 9 jobs / 12 checks | — | — | `S-ci-gaps` |
+| **NEW-09** | `.gitattributes:11-12` sets `uv.lock -diff` and `package-lock.json -diff`, so the two files carrying the entire dependency surface produce **no reviewable diff** — in `git diff`, `git show`, or any PR UI honouring gitattributes. A transitive change, intended or not, is invisible at review time. Compounds H-07: advisories do not block *and* the change is unreadable. Found while verifying the `cryptography`/`starlette` bump — the claim "only two packages moved" required `-c core.attributesfile=/dev/null` to prove. **The right tool is already used three lines above in the same file:** `linguist-generated=true` collapses a diff in GitHub's UI but keeps it expandable and keeps `git diff` working; `-diff` removes it entirely. | C | Med | — | none | — | — | `S-security-ratchet` (fold in — same supply-chain review surface) |
 
 **Count check:** C-01, H-01…H-12, M-01…M-33, L-01…L-11 = 57 primary rows, each appearing once.
 Sub-IDs (C-01b/c, NEW-01a–e, NEW-03a–c, NEW-04a, NEW-05a, NEW-06a, NEW-07a) and `K-lock`, `COV-TABLE`
