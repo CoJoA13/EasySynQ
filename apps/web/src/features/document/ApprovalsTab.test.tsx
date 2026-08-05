@@ -114,6 +114,42 @@ test("#3: Release confirms first — the bare click never releases; confirming P
   await waitFor(() => expect(released).toBe(true));
 });
 
+test("first release confirmation does not claim it supersedes a current version", async () => {
+  const u = userEvent.setup();
+  const { findByRole, findByText, queryByText } = renderWithProviders(
+    <ApprovalsTab doc={doc(RELEASABLE)} />,
+  );
+
+  await u.click(await findByRole("button", { name: "Release" }));
+
+  expect(
+    await findByText(
+      "Releases the Approved version to Effective as this document's first governing version.",
+    ),
+  ).toBeInTheDocument();
+  expect(queryByText(/supersedes the current Effective version/i)).toBeNull();
+});
+
+test("revision release confirmation warns that it supersedes the current Effective version", async () => {
+  const u = userEvent.setup();
+  const { findByRole, findByText } = renderWithProviders(
+    <ApprovalsTab
+      doc={doc({
+        ...RELEASABLE,
+        current_effective_version_id: "dddd1111-1111-1111-1111-111111111111",
+      })}
+    />,
+  );
+
+  await u.click(await findByRole("button", { name: "Release" }));
+
+  expect(
+    await findByText(
+      "Releases the Approved version to Effective and supersedes the current Effective version.",
+    ),
+  ).toBeInTheDocument();
+});
+
 test("S-leadership-1: suppresses Release + shows the gate when authorization is required & unauthorized", async () => {
   server.use(
     http.get("/api/v1/documents/:id/leadership-authorization", () =>

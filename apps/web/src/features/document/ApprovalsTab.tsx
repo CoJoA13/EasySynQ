@@ -83,7 +83,11 @@ export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
           setConfirming(false);
         }}
         title="Release this document?"
-        consequence="Releases the Approved version to Effective and supersedes the current Effective version."
+        consequence={
+          doc.current_effective_version_id
+            ? "Releases the Approved version to Effective and supersedes the current Effective version."
+            : "Releases the Approved version to Effective as this document's first governing version."
+        }
         confirmLabel="Release document"
         confirmColor="teal"
         mapError={(e) => (e instanceof ApiError ? e.message : "Release failed. Please retry.")}

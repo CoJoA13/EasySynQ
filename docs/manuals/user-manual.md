@@ -104,8 +104,8 @@ The canonical lifecycle is:
 
 `Draft → InReview → Approved → Effective → UnderRevision → Superseded → Obsolete`
 
-Only an Effective version governs. Releasing a newly Approved revision makes it Effective and
-supersedes the prior Effective version atomically.
+Only an Effective version governs. Releasing a newly Approved revision makes it Effective and, when
+one exists, supersedes the prior Effective version atomically.
 
 Authoring, approval, and release are distinct acts:
 
@@ -182,8 +182,9 @@ The current signature is a single-factor logged confirmation and produces an app
 
 An authorized releaser opens the document's **Approvals** tab and selects **Release**, then confirms
 **Release document**. Leadership artifacts may first show a Top Management authorization gate. A
-successful release moves the Approved revision to Effective and supersedes the old governing
-revision.
+successful first release moves the Approved revision to Effective as the document's first governing
+revision. A later release moves the Approved revision to Effective and supersedes the prior governing
+revision atomically.
 
 ### Read and acknowledge
 
