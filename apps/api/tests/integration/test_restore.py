@@ -257,10 +257,13 @@ async def test_restore_fails_on_unresolvable_stored_blob_locator(
                 "SELECT 1 FROM pg_database WHERE datname = %s", (restored_handle.scratch_db,)
             )
             assert cur.fetchone() is None, "failed restore target database was not dropped"
+        listing = client.list_objects_v2(  # type: ignore[attr-defined]
+            Bucket=restored_handle.scratch_bucket, Prefix=restored_handle.object_prefix
+        )
+        assert listing.get("KeyCount", 0) == 0, listing.get("Contents")
     finally:
-        # The unfixed baseline incorrectly PASSes; always remove its captured target too. The safe
-        # helper is idempotent, so it also prevents a leak if production teardown regresses.
-        drill._drop_scratch_db(restored_handle.owner_dsn, restored_handle.scratch_db)
+        # The unfixed baseline incorrectly PASSes; always remove both captured target legs too.
+        await _drop_target(restored_handle.scratch_db)
 
 
 async def test_restore_fails_on_corrupted_chain(
