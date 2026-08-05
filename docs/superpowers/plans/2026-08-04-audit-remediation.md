@@ -1,7 +1,10 @@
 # Audit remediation programme — validating the 2026-08-03 Codex audit and fixing what it found
 
-> **Status:** proposal, awaiting owner approval. Nothing here has been implemented.
-> **Source audit:** `audit-results/2026-08-03/AUDIT.md` (revision `376ec1e`, disposition "not release-ready").
+> **Historical status at creation:** proposal, awaiting owner approval; nothing had been implemented.
+> **Source audit provenance:** local-only `audit-results/2026-08-03/AUDIT.md` at revision `376ec1e`
+> (disposition "not release-ready"). Raw authenticated/machine evidence is intentionally ignored and
+> absent from Git under R61; this committed document is the sanitized synthesis, not a repository link
+> to that private evidence.
 > **Validation method:** 42 agents — 16 cluster verifiers reading the actual source for every cited
 > `file:line`, then an adversarial challenger per finding tasked with *overturning* the verifier's
 > verdict, then a completeness critic hunting what the audit never looked at.

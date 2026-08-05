@@ -5,6 +5,10 @@
 >
 > **Reviewed revision:** `376ec1e1a01ccc3f8a8faf27172f2c9a994bd4b2`
 >
+> **Evidence boundary:** `audit-results/2026-08-03/AUDIT.md` is local-only provenance containing raw
+> authenticated/machine evidence. R61 requires it to stay ignored and absent from Git; references below
+> identify the private source used during review, not a link available from this commit.
+>
 > **Preserve:** keep the original audit, Claude proposal, and current untracked evidence unchanged so
 > the validation trail remains inspectable. Produce a separate
 > `docs/superpowers/plans/2026-08-04-audit-remediation-v2.md`.

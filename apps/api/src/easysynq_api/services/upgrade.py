@@ -4,7 +4,8 @@
 rollback posture:
 
 * **Pre-backup** — a durable archive is written FIRST (``build_durable_backup``); a pre-backup
-  failure ABORTS the upgrade (never migrate without a safety net).
+  failure ABORTS the upgrade. This is a required recovery artifact, but it is not advertised as a
+  self-contained safety net until the full recovery-generation slice ships.
 * **Migrate** — ``alembic upgrade head`` runs as the OWNER role (the env.py DSN = ``sync_dsn``). A
   single Alembic migration runs in one transaction that auto-rolls-back on error — that is the
   honest meaning of "rollback" for a failed migration step.
@@ -119,8 +120,8 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
     ``stage`` is one of ``pre_backup`` | ``migrate`` | ``health_gate`` | ``orchestration``; the last
     covers a failure outside the three guarded stages (see the outer handler). A ``pre_backup``
     failure includes an archive that was written but did NOT pass its own checksum verification —
-    an unusable safety net is not a safety net. Ordinary operational exceptions become a structured
-    ``FAILED`` result; cancellation and process-exit signals still propagate.
+    an unusable recovery artifact cannot authorize migration. Ordinary operational exceptions become
+    a structured ``FAILED`` result; cancellation and process-exit signals still propagate.
     """
     # ⚠ Setup lives INSIDE the protected boundary. `get_settings()` (a malformed DSN or a missing
     # required field), `create_async_engine()` (an unparseable URL / bad driver) and the
@@ -130,6 +131,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
     # structured FAILED dict is the whole of the honest answer.
     engine: AsyncEngine | None = None
     sessionmaker: async_sessionmaker[AsyncSession] | None = None
+    pre_backup_archive: str | None = None
     try:
         settings = get_settings()
         engine = create_async_engine(settings.database_url)
@@ -147,7 +149,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
             )
             await session.commit()
 
-            # 1. pre-backup (the disaster safety net) — abort the upgrade if it fails
+            # 1. required pre-backup recovery artifact — abort the upgrade if it fails
             #
             # ⚠ The catch is deliberately BROAD. It was `except BackupError` and that is far too
             # narrow: the canonical pre-backup failures do not raise BackupError at all —
@@ -201,6 +203,8 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                 await session.commit()
                 return {"result": "FAILED", "stage": "pre_backup", "reason": detail[:300]}
 
+            pre_backup_archive = str(backup["archive"])
+
             # 2. migrate (a failed migration auto-rolls-back its own txn)
             try:
                 await asyncio.to_thread(_run_alembic_upgrade)
@@ -214,7 +218,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                     after={
                         "stage": "migrate",
                         "error": f"{type(exc).__name__}: {exc}"[:300],
-                        "pre_backup_archive": backup["archive"],
+                        "pre_backup_archive": pre_backup_archive,
                     },
                 )
                 await session.commit()
@@ -224,7 +228,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                     "result": "FAILED",
                     "stage": "migrate",
                     "reason": f"{type(exc).__name__}: {exc}"[:300],
-                    "pre_backup_archive": backup["archive"],
+                    "pre_backup_archive": pre_backup_archive,
                 }
 
             # 3. readiness health-gate
@@ -239,7 +243,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                     after={
                         "stage": "health_gate",
                         "unhealthy": unhealthy,
-                        "pre_backup_archive": backup["archive"],
+                        "pre_backup_archive": pre_backup_archive,
                     },
                 )
                 await session.commit()
@@ -247,7 +251,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                     "result": "FAILED",
                     "stage": "health_gate",
                     "unhealthy": unhealthy,
-                    "pre_backup_archive": backup["archive"],
+                    "pre_backup_archive": pre_backup_archive,
                 }
 
             _emit(
@@ -255,13 +259,13 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                 org_id=org_id,
                 actor_id=actor_id,
                 event_type="UPGRADE_COMPLETED",
-                after={"head": target_head, "pre_backup_archive": backup["archive"]},
+                after={"head": target_head, "pre_backup_archive": pre_backup_archive},
             )
             await session.commit()
             return {
                 "result": "OK",
                 "head": target_head,
-                "pre_backup_archive": backup["archive"],
+                "pre_backup_archive": pre_backup_archive,
             }
         finally:
             # SQLAlchemy's context-manager __aexit__ delegates to close(), whose exception would
@@ -278,9 +282,16 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
         reason = f"{type(exc).__name__}: {exc}"[:300]
         if sessionmaker is not None:
             await _try_emit_orchestration_failure(
-                sessionmaker, org_id=org_id, actor_id=actor_id, reason=reason
+                sessionmaker,
+                org_id=org_id,
+                actor_id=actor_id,
+                reason=reason,
+                pre_backup_archive=pre_backup_archive,
             )
-        return {"result": "FAILED", "stage": "orchestration", "reason": reason}
+        out: dict[str, Any] = {"result": "FAILED", "stage": "orchestration", "reason": reason}
+        if pre_backup_archive is not None:
+            out["pre_backup_archive"] = pre_backup_archive
+        return out
     finally:
         # ⚠ Cleanup must not become the result. A bare `await engine.dispose()` here raises straight
         # out of the function and REPLACES an already-computed OK/FAILED return — so a pool-teardown
@@ -300,6 +311,7 @@ async def _try_emit_orchestration_failure(
     org_id: uuid.UUID,
     actor_id: uuid.UUID | None,
     reason: str,
+    pre_backup_archive: str | None,
 ) -> None:
     """Best-effort terminal audit row for a failure outside the guarded stages.
 
@@ -313,12 +325,15 @@ async def _try_emit_orchestration_failure(
     session: AsyncSession | None = None
     try:
         session = sessionmaker()
+        after: dict[str, Any] = {"stage": "orchestration", "error": reason}
+        if pre_backup_archive is not None:
+            after["pre_backup_archive"] = pre_backup_archive
         _emit(
             session,
             org_id=org_id,
             actor_id=actor_id,
             event_type="UPGRADE_FAILED",
-            after={"stage": "orchestration", "error": reason},
+            after=after,
         )
         await session.commit()
     except Exception:

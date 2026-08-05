@@ -1,9 +1,13 @@
 # Audit remediation programme v2 — evidence-corrected, implementation-ready
 
-> **Status:** planning pass complete, awaiting owner review. **No production change has been made.**
-> **Supersedes:** `2026-08-04-audit-remediation.md` (v1, preserved unchanged as the validation trail).
+> **Status:** planning pass complete; the decision-independent implementation batch is recorded in §9.
+> The remaining programme still requires its named decisions and later implementation slices.
+> **Supersedes:** `2026-08-04-audit-remediation.md` (v1, preserved as the historical validation trail;
+> only its raw-evidence boundary note was clarified for publication).
 > **Revision brief:** `2026-08-04-audit-remediation-codex-handoff.md`.
-> **Source audit:** `audit-results/2026-08-03/AUDIT.md` (revision `376ec1e`).
+> **Source audit provenance:** local-only `audit-results/2026-08-03/AUDIT.md` (revision `376ec1e`). Raw
+> authenticated/machine evidence is intentionally ignored and absent from Git under R61; the three
+> committed documents are the sanitized synthesis and review trail, not a replacement for that evidence.
 >
 > v1 validated the audit correctly and then sequenced it badly. This revision accepts every
 > non-negotiable correction in the handoff, and adds the corrections that the evidence work turned up
@@ -81,6 +85,9 @@ once as a primary owner. Umbrella rows (NEW-01, NEW-03) are marked *superseded* 
 
 Legend — **Status:** `C` confirmed · `P` partial · `R` refuted-as-phrased · `K` known residual.
 **RB** = release-blocking.
+
+Ledger claims describe the audited `376ec1e` baseline. Sections 8–9 record the subset implemented on
+this branch; in particular, NEW-09's hidden-lockfile condition no longer exists in the publication diff.
 
 ### 1.1 Integrity and recovery
 
@@ -192,7 +199,7 @@ Legend — **Status:** `C` confirmed · `P` partial · `R` refuted-as-phrased ·
 | **L-02** | The share-link download counter is an unlocked ORM read-modify-write, incremented before byte fetch. | P | Low | — | none | Lost update is real; escalation paths closed | — | `S-download-accountability` |
 | **L-09** | Two independent full-file materialisations (`hash.ts:5`, `upload.ts:8`); no client size guard. | P | Low | — | none | The proposed Blob assertion passes over the broken code — must be rewritten | — | `S-web-transfer` |
 | **M-27** | CI does not build/scan the exact web image, run install/air-gap smoke, exercise the m-profile, lint shell scripts, or run browser E2E/a11y. **Single owner** (was duplicated). | C | Med | — | 9 jobs / 12 checks | — | — | `S-ci-gaps` |
-| **NEW-09** | `.gitattributes:9-10` sets `uv.lock -diff` and `package-lock.json -diff`, so the two files carrying the entire dependency surface produce **no reviewable diff** — in `git diff`, `git show`, or any PR UI honouring gitattributes. A transitive change, intended or not, is invisible at review time. Compounds H-07: advisories do not block *and* the change is unreadable. Found while verifying the `cryptography`/`starlette` bump — the claim "only two packages moved" required `git diff --text` to prove; overriding `core.attributesfile` does not disable the repository's `.gitattributes`. **The right tool is already used three lines above in the same file:** `linguist-generated=true` collapses a diff in GitHub's UI but keeps it expandable and keeps `git diff` working; `-diff` removes it entirely. | C | Med | — | none | — | — | `S-security-ratchet` (fold in — same supply-chain review surface) |
+| **NEW-09** | `.gitattributes:9-10` sets `uv.lock -diff` and `package-lock.json -diff`, so the two files carrying the entire dependency surface produce **no reviewable diff** — in `git diff`, `git show`, or any PR UI honouring gitattributes. A transitive change, intended or not, is invisible at review time. Compounds H-07: advisories do not block *and* the change is unreadable. Found while verifying the `cryptography`/`starlette` bump — the claim "only two packages moved" required `git diff --text` to prove; overriding `core.attributesfile` does not disable the repository's `.gitattributes`. **The right tool is already used three lines above in the same file:** `linguist-generated=true` collapses a diff in GitHub's UI but keeps it expandable and keeps `git diff` working; `-diff` removes it entirely. | C | Med | — | none | — | — | `S-image-ratchet` (same supply-chain review surface) |
 
 **Count check:** C-01, H-01…H-12, M-01…M-33, L-01…L-11 = 57 primary rows, each appearing once.
 Sub-IDs (C-01b/c, NEW-01a–e, NEW-03a–c, NEW-04a, NEW-05a, NEW-06a, NEW-07a) and `K-lock`, `COV-TABLE`
@@ -268,10 +275,12 @@ is M-01's fix stated as a property.
   self-contained generation** for off-site carriage. Self-contained-per-generation is ×7 at
   `retention_daily=7` and unaffordable; content addressing makes the CAS near-free. Pruning becomes
   reference-counted GC, reusing the last-owner check `disposition.py` already implements.
-- **D-B2 — R27 interaction.** Recommend **invalidate + delete affected generations, then force an
-  immediate fresh one**. This is not novel: R27's derivative-copy addendum already extends erasure to
-  sealed Evidence Packs, and a backup generation is the same class of derivative. Two consequences to
-  state plainly: generation retention is bounded below by the erasure cadence, and pruning stops being
+- **D-B2 — R27 interaction.** Recommend **build and verify a replacement generation that excludes the
+  erased material, then complete invalidation/deletion of the affected generations**. If replacement
+  fails, the destructive invalidation does not complete and the operation reports that the legal action
+  is still pending; this fail-safe ordering is the B-6 correction below. R27's derivative-copy addendum
+  already extends erasure to sealed Evidence Packs, and a backup generation is the same class of
+  derivative. Generation retention is bounded below by the erasure cadence, and pruning stops being
   v1.x and becomes mandatory.
 - **Key rotation:** key ID = `sha256(derive_key(secret))[:16]`, recorded in the envelope and manifest;
   `BACKUP_ENCRYPTION_KEY_PREVIOUS` for decrypt-only history; an unknown key ID reports *"encrypted under
@@ -515,9 +524,11 @@ reversible** — the preflight must record prior ownership so a rollback can res
 first-boot steps change. *Gate:* release-blocking.
 *Residual:* a root-equivalent host operator is unaffected by any of this — D1 assumes a trusted admin.
 
-**`S-image-ratchet`** *(H-07)* — take `cryptography 50.0.0` + `starlette 1.3.1` now; then make scans blocking
-with an expiring baseline. *Deps:* **D-G**. *Proof:* mechanical (`uv lock --check`, existing gates —
-they already exercise Ed25519, AES-GCM, JWT and the share/verify token paths).
+**`S-image-ratchet`** *(H-07, NEW-09)* — take `cryptography 50.0.0` + `starlette 1.3.1` now; replace
+lockfile `-diff` attributes with `linguist-generated=true` so dependency changes remain reviewable; then
+make scans blocking with an expiring baseline. *Deps:* **D-G** applies to the blocking-scan policy, not
+the reviewability fix. *Proof:* `uv lock --check`, a normal `git diff` that exposes lockfile text without
+`--text`, and existing gates that exercise Ed25519, AES-GCM, JWT and the share/verify token paths.
 
 **`S-doc-truth`** *(H-05, M-33)* — narrow every overclaim; add the link check to the `contracts` job.
 *Deps:* **D-F2**, **D-H**. *Proof:* mechanical — a link checker that is RED on the 59 broken links today.
@@ -888,8 +899,6 @@ Remaining open: D-C, D-D, D-E, D-E2, D-F, D-F2, D-G, D-H, D-I, D-J, D-K, D-L, D-
 
 | # | Decision | Blocks |
 | --- | --- | --- |
-| **D-A** | GOVERNANCE-only vs a coherent COMPLIANCE opt-in; the retention anchor; and whether to accept the storage-admin residual in the register | `S-worm-retention` |
-| **D-B** | Recovery-set shape: shared CAS + monthly sealed generation (recommended) vs self-contained per generation; and R27 → generation invalidation | `S-recovery-generation`, `S-backup-legs` |
 | **D-C** | Digest enforcement: object-store `ChecksumSHA256` on the presigned PUT (needs the browser to send the header, may need a MinIO bump) vs server-side verify-before-promote | `S-upload-identity` |
 | **D-D** | Approval: raw download vs preview; explicit reviewer acknowledgement; fail-closed while loading/forbidden/changed. *(Digest binding is already implemented — no longer a question.)* | `S-approval-content` |
 | **D-E** | Does the digest reach the **running stack**? A manifest-only digest is not an owner-selectable alternative — either the running stack is verified or the claim is narrowed | Stage 3 |
@@ -961,11 +970,11 @@ for one is a signal the fix has drifted (R38).
 | Every original finding accounted for exactly once | ✅ 57 primary rows, duplicates removed, M-01 restored |
 | NEW-03…NEW-08 use corrected claims and evidence | ✅ 03 split 3 ways; 04–07 refuted-as-phrased with narrowed deltas; 08 re-premised |
 | M-01 explicit | ✅ own row, own slice, own inverted-test proof |
-| Four risky-boundary designs decision-complete | ✅ DR-1…DR-4 with options, recommendations, acceptance, residual risk |
+| Four risky-boundary designs decision-ready | ✅ DR-1…DR-4 with options, recommendations, acceptance, residual risk; D-A1/D-B1/D-B2 settled and the remaining owner decisions listed in §5.1 |
 | Every slice has executable acceptance, dependency, rollback, documentation criteria | ✅ — *was falsely green in the first draft; six Stage-4 slices and all twelve Stage-6 slices were labels only. Filled in after Codex checkpoint A blocker E-2.* |
 | Wave 4 replaced by real slices | ✅ 12 Stage-6 slices, each with boundary, files, falsifying proof, commands, cases, migration/rollback, doc truth, residual |
 | Severity and release-blocking agree with sequencing | ✅ — *corrected after A/D-1 (M-15's "immediate release fix" wording contradicted its non-RB flag) and A/D-2 (the NEW-01a ⟷ H-01 pair spanned two stages).* |
-| Codex checkpoints A–C return no unresolved blockers | ✅ **all three run, every blocker reconciled.** **A:** 5 blockers (B-1, D-1, D-2, E-1, E-2). **B:** 1 design claim factually wrong (DR-2's immutability premise) + 14 surviving scenarios, all promoted to acceptance criteria (§2.5). **C:** 4 blocker classes — four proposed RED proofs that would have **passed**, six label-slices, migration accounting, dependency mismatches. See §7.1. |
+| Codex checkpoints A–C returned no unresolved planning blockers | ✅ **all three run, every blocker reconciled at the end of that planning pass.** **A:** 5 blockers (B-1, D-1, D-2, E-1, E-2). **B:** 1 design claim factually wrong (DR-2's immutability premise) + 14 surviving scenarios, all promoted to acceptance criteria (§2.5). **C:** 4 blocker classes — four proposed RED proofs that would have **passed**, six label-slices, migration accounting, dependency mismatches. See §7.1. Checkpoint D implementation findings and fixes are recorded separately in §9. |
 | During checkpoints A–C, no production source, audit evidence, operator data, or live state modified | ✅ |
 
 ---
@@ -1000,39 +1009,49 @@ The generalisable lesson, and the reason it is recorded here rather than quietly
 asserts its own completeness is exactly as trustworthy as a green test suite that was never mutation-
 verified.** The v1 plan claimed to account for every finding and had dropped M-01 entirely.
 
-## 8. Immediate, decision-independent
+## 8. Immediate, decision-independent batch
 
-Unchanged from v1 and still correct — each is shippable without any decision above:
+The branch implements these changes without requiring any of the open decisions above:
 
-1. **`.gitignore` the audit output.** It is untracked, not ignored; `git add -A` would stage 89 files
-   including screenshots of a live authenticated instance. `check-no-site-data.sh` cannot read a PNG.
+1. **`.gitignore` the audit output.** Before this batch it was untracked but not ignored, so
+   `git add -A` could stage screenshots of a live authenticated instance. It is now ignored; the
+   `check-no-site-data.sh` backstop remains necessary because it cannot inspect PNG contents.
 2. **`S-upgrade-safety`'s two edits** — copying a guard that already exists one module over, in the
    operator's most destructive command. (The `lock_timeout` half needs a decision; the two edits do not.)
-3. **`S-image-ratchet` part (a)** — `cryptography 50.0.0` + `starlette 1.3.1`.
-4. **M-15's CSP token** — but only once `S-edge-headers` defines the real Caddy/browser acceptance test.
+3. **`S-image-ratchet`'s decision-independent parts** — `cryptography 50.0.0` + `starlette 1.3.1`,
+   plus reviewable lockfile attributes. Blocking advisory policy still requires D-G.
+4. **M-15's CSP token** — with a running-edge blob/external-origin browser probe; the full authenticated
+   VisualDiffViewer route remains part of `S-edge-headers` rather than being claimed here.
 
 ## 9. Checkpoint D implementation closure
 
-The decision-independent batch received two adversarial implementation reviews. The first found that
+The decision-independent batch received three adversarial implementation reviews. The first found that
 setup and engine disposal still sat outside the claimed operational-failure boundary; the follow-up
 moved setup under the guard and made engine disposal best-effort. The second found the same defect one
 scope inward: SQLAlchemy's session context manager can raise from `AsyncSession.close()` after a return
 or while another exception is pending. That could turn a committed `UPGRADE_COMPLETED` result into a
-contradictory `UPGRADE_FAILED`, or replace `CancelledError` with an ordinary orchestration failure.
+contradictory `UPGRADE_FAILED`, or replace `CancelledError` with an ordinary orchestration failure. The
+third found that the first cleanup tests did not prove close was attempted, and that an orchestration
+failure after Alembic succeeded dropped the verified archive path the CLI needs for recovery guidance.
 
 The closure explicitly manages and best-effort closes both the primary upgrade session and the fallback
 failure-audit session. Ordinary close failures are logged without replacing the primary return or
-pending exception; cancellation and process-exit signals still propagate. Three integration regressions
-in `tests/integration/test_restore.py` were observed failing before the fix and passing afterward:
+pending exception; cancellation and process-exit signals still propagate. Three integration regression
+families in `tests/integration/test_restore.py` cover five cleanup cases and assert exactly one close:
 
 - `test_upgrade_session_close_failure_preserves_committed_success`
-- `test_upgrade_session_close_failure_does_not_replace_cancellation`
-- `test_upgrade_failure_audit_close_failure_does_not_swallow_cancellation`
+- `test_upgrade_session_close_failure_does_not_replace_base_exception` (`CancelledError`, `SystemExit`)
+- `test_upgrade_failure_audit_close_failure_does_not_swallow_base_exception` (both signals)
+
+The original three cleanup/cancellation cases were observed failing before the fix. Deleting either
+explicit close call afterward makes the owning close-count assertion fail. A separate regression,
+`test_upgrade_failure_after_migration_keeps_exact_recovery_pointer`, was observed failing before the
+post-migration archive pointer was carried into both the structured result and terminal audit row.
 
 The same pass also made the earlier proofs more exact: sessionmaker construction joins the setup-failure
 matrix, the engine-disposal double proves disposal actually ran and disposes its real inner engine, each
-run-scoped audit assertion requires exactly one matching terminal row, and the three new failure tests no
-longer rewrite the shared backup-policy destination.
+run-scoped audit assertion retains every terminal failure before requiring exactly one, and the three
+original failure tests no longer rewrite the shared backup-policy destination.
 
 This closes the review blockers for the immediate batch; it does **not** mark the full
 `S-upgrade-safety` slice complete. Single-flight execution, operation identity, orphaned-`STARTED`
@@ -1040,18 +1059,25 @@ reconciliation, migration lock/statement timeouts, the shared typed backup-resul
 self-contained recovery eligibility, and the CLI's preliminary organization lookup remain owned by that
 slice. A structured `audit_recorded: false` signal is also still absent when the best-effort terminal
 audit cannot be written; the current contract deliberately returns the primary failure and logs the
-audit under-claim.
+audit under-claim. Cancellation while `build_durable_backup` or Alembic is already running in
+`asyncio.to_thread` also remains unsafe: cancelling the awaiting task does not stop the side-effecting
+thread. Operation identity, single-flight execution, and reconciliation must define that boundary.
 
 Fresh integrated evidence on 2026-08-05:
 
-- the three cleanup/cancellation regressions passed together after each had been observed failing on
-  the pre-fix tree;
-- the complete restore/upgrade integration module passed 19 tests using PostgreSQL client 16.14;
-- the full integration suite passed 1,012 tests with zero failures; its two shared-DB management-review
+- the cleanup/cancellation/exit regression families passed, their close-attempt assertions were
+  mutation-checked, and the post-migration recovery-pointer regression was observed RED then GREEN;
+- the complete restore/upgrade integration module passed 22 tests using PostgreSQL client 16.14;
+- the full integration suite passed 1,015 tests with zero failures; its two shared-DB management-review
   skips remain the open M-29 test-isolation finding rather than being counted as coverage;
 - the API unit gate passed 1,282 tests with one release-ceremony skip, Ruff and format checks were clean,
   and strict mypy reported no issues in 435 source files;
-- `uv lock --check` passed, and a forced text diff confirmed that only `cryptography` 48.0.0→50.0.0
-  and `starlette` 1.2.1→1.3.1 moved in `uv.lock`;
+- `uv lock --check` passed; replacing lockfile `-diff` attributes with `linguist-generated=true` made
+  the normal text diff reviewable and confirmed that only `cryptography` 48.0.0→50.0.0 and `starlette`
+  1.2.1→1.3.1 moved in `uv.lock`;
+- the exact committed Caddy configuration validated in `caddy:2`; Chrome loaded a faithful
+  fetch→Blob→object-URL image at 2×3 natural pixels, while a hostname-distinct external image produced
+  an enforced `img-src` violation and no upstream request. The full authenticated VisualDiffViewer
+  route remains part of the broader `S-edge-headers` acceptance;
 - `scripts/check-no-site-data.sh` passed. Raw authenticated screenshots and machine evidence remain
   ignored under `audit-results/` and are intentionally excluded from version control.
