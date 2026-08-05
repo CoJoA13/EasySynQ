@@ -263,18 +263,41 @@ describe("S-ack-2 acknowledgements", () => {
       { route: `/documents/${ID}`, queryClient },
     );
 
-    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
-    await user.click(await screen.findByRole("button", { name: "Release" }));
-    await user.click(await screen.findByRole("button", { name: "Release document" }));
-    await screen.findByLabelText("State: Effective");
+    await screen.findByLabelText("State: Approved");
+    expect((await screen.findAllByText("Not yet effective")).length).toBeGreaterThan(0);
+
+    let observedContradiction = false;
+    const recordVisibleState = () => {
+      if (
+        document.body.querySelector('[aria-label="State: Effective"]') &&
+        document.body.textContent?.includes("Not yet effective")
+      ) {
+        observedContradiction = true;
+      }
+    };
+    const transitionObserver = new MutationObserver(recordVisibleState);
+    transitionObserver.observe(document.body, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
 
     try {
-      expect(screen.queryByText("Not yet effective")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("tab", { name: /approvals/i }));
+      await user.click(await screen.findByRole("button", { name: "Release" }));
+      await user.click(await screen.findByRole("button", { name: "Release document" }));
       await heldDistributionRequested;
+
+      expect(await screen.findByLabelText("State: Effective")).toBeInTheDocument();
+      expect(screen.getByText("Refreshing acknowledgement coverage")).toBeInTheDocument();
+      expect(screen.queryByText("Not yet effective")).not.toBeInTheDocument();
+      expect(observedContradiction).toBe(false);
       expect(queryClient.getQueryState(["acknowledgements", ID])?.isInvalidated).toBe(true);
       releaseHeldDistribution?.();
       expect(await screen.findByText("41 / 47")).toBeInTheDocument();
     } finally {
+      transitionObserver.disconnect();
       releaseHeldDistribution?.();
     }
   });
