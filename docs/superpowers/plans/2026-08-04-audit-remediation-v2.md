@@ -435,9 +435,13 @@ state this in the register entry.
 
 **`S-backup-legs`** *(M-01)* — mandatory legs, fail-closed on no key, exact key IDs + bounded history.
 *Boundary:* a snapshot-bound, org-scoped backup generation is complete only when every mandatory leg and
-every consumer verdict agrees. Snapshot-bound checkpoint capture is performed within
+every consumer verdict agrees. Snapshot-bound, org-scoped checkpoint capture **must occur** within
 `apps/api/src/easysynq_api/services/backup/drill.py`'s existing exported-snapshot capture, not by an
-unspecified provider choice. *Files:* `apps/api/src/easysynq_api/services/backup/{drill,crypto,archive,
+unspecified provider choice. An org-filtered checkpoint read **MUST BE MOVED/ADDED** inside
+`drill.py::_capture_and_dump`'s exported-snapshot transaction before rollback/close. The current defect is
+that `_latest_checkpoint_bundle` opens a separate, unscoped connection only after `_capture_and_dump`
+returns, so its checkpoint is not bound to the dumped DB snapshot. *Files:*
+`apps/api/src/easysynq_api/services/backup/{drill,crypto,archive,
 restore,service,realm_export,config_snapshot}.py`; `apps/api/src/easysynq_api/config.py`;
 `apps/api/src/easysynq_api/services/upgrade.py`; `apps/api/src/easysynq_api/services/setup/service.py`;
 `apps/api/src/easysynq_api/api/setup.py`; `packages/contracts/openapi.yaml`; and exact test paths
@@ -449,8 +453,9 @@ restore,service,realm_export,config_snapshot}.py`; `apps/api/src/easysynq_api/co
 The setup API/service/OpenAPI surface currently exposes user-controlled but ineffective
 `encryption_key_ref`: leave its existing nullable policy reference wire-compatible but inert/deprecated
 without a migration unless a later slice explicitly migrates it. Update `.env.example`,
-`docs/08-setup-and-onboarding.md`, `docs/12-security-and-audit.md`,
-`docs/runbooks/backup-restore.md`, and `docs/runbooks/key-rotation.md`.
+`docs/08-setup-and-onboarding.md`, `docs/12-security-and-audit.md`, `docs/dev-workflow.md`,
+`docs/manuals/administrator-it-manual.md`, `docs/runbooks/backup-restore.md`, and
+`docs/runbooks/key-rotation.md`.
 *Deps:* **D-B4**; this slice must precede `S-recovery-generation`.
 *Required behaviour:* no configured key refuses **before publication**; realm, config, and checkpoint each
 fail closed; a checkpoint cannot be newer than the dumped DB; new artifacts record deterministic
