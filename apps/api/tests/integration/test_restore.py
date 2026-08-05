@@ -211,10 +211,13 @@ async def test_restore_fails_on_unresolvable_stored_blob_locator(
     await _insert_backup_policy(org_id, str(tmp_path))
     archive_path = await _durable_archive(org_id)
     client = _s3_client()
+    restored_handle: backup_service.ScratchHandle | None = None
 
     def _make_locator_unresolvable(handle: backup_service.ScratchHandle) -> None:
         import psycopg
 
+        nonlocal restored_handle
+        restored_handle = handle
         with (
             psycopg.connect(
                 **conn_kwargs(handle.owner_dsn, dbname=handle.scratch_db), autocommit=True
@@ -239,13 +242,25 @@ async def test_restore_fails_on_unresolvable_stored_blob_locator(
         fetch_off_host=lambda _s, _o: 0,
         after_restore=_make_locator_unresolvable,
     )
+    assert restored_handle is not None, (
+        "expected the post-restore fault injector to capture its target"
+    )
     try:
         assert out["result"] == "FAIL", out
-        assert out["scratch_db"] is None  # a locator failure must tear the target down
+        import psycopg
+
+        with (
+            psycopg.connect(**conn_kwargs(restored_handle.owner_dsn)) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (restored_handle.scratch_db,)
+            )
+            assert cur.fetchone() is None, "failed restore target database was not dropped"
     finally:
-        # The unfixed baseline incorrectly PASSes; keep this RED proof non-leaking while recording
-        # it.
-        await _drop_target(out.get("scratch_db"))
+        # The unfixed baseline incorrectly PASSes; always remove its captured target too. The safe
+        # helper is idempotent, so it also prevents a leak if production teardown regresses.
+        drill._drop_scratch_db(restored_handle.owner_dsn, restored_handle.scratch_db)
 
 
 async def test_restore_fails_on_corrupted_chain(
