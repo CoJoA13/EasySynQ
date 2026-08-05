@@ -435,12 +435,23 @@ state this in the register entry.
 
 **`S-backup-legs`** *(M-01)* — mandatory legs, fail-closed on no key, exact key IDs + bounded history.
 *Boundary:* a snapshot-bound, org-scoped backup generation is complete only when every mandatory leg and
-every consumer verdict agrees. *Files:* core `services/backup/{drill,crypto,archive,restore,service}.py`
-and `config.py`; the realm/config/checkpoint providers or orchestration that bind those legs to the dumped
-database snapshot; direct upgrade and setup/G-C callers; the setup API/service/OpenAPI surface that today
-exposes user-controlled but ineffective `encryption_key_ref`; unit/integration tests; and affected
-environment, operator, security, and key-rotation documentation. Deprecate or make that setup control
-inert without a migration unless a later slice explicitly migrates it.
+every consumer verdict agrees. Snapshot-bound checkpoint capture is performed within
+`apps/api/src/easysynq_api/services/backup/drill.py`'s existing exported-snapshot capture, not by an
+unspecified provider choice. *Files:* `apps/api/src/easysynq_api/services/backup/{drill,crypto,archive,
+restore,service,realm_export,config_snapshot}.py`; `apps/api/src/easysynq_api/config.py`;
+`apps/api/src/easysynq_api/services/upgrade.py`; `apps/api/src/easysynq_api/services/setup/service.py`;
+`apps/api/src/easysynq_api/api/setup.py`; `packages/contracts/openapi.yaml`; and exact test paths
+`apps/api/tests/unit/test_backup.py`, `apps/api/tests/unit/test_backup_crypto.py`,
+`apps/api/tests/unit/test_restore_test_task_registration.py`, `apps/api/tests/unit/test_setup.py`,
+`apps/api/tests/integration/test_backup.py`, `apps/api/tests/integration/test_restore.py`, and
+`apps/api/tests/integration/test_setup.py`. The direct upgrade and setup/G-C callers are the named
+`upgrade.py`, `setup/service.py`, and `api/setup.py` surfaces.
+The setup API/service/OpenAPI surface currently exposes user-controlled but ineffective
+`encryption_key_ref`: leave its existing nullable policy reference wire-compatible but inert/deprecated
+without a migration unless a later slice explicitly migrates it. Update `.env.example`,
+`docs/08-setup-and-onboarding.md`, `docs/12-security-and-audit.md`,
+`docs/runbooks/backup-restore.md`, and `docs/runbooks/key-rotation.md`.
+*Deps:* **D-B4**; this slice must precede `S-recovery-generation`.
 *Required behaviour:* no configured key refuses **before publication**; realm, config, and checkpoint each
 fail closed; a checkpoint cannot be newer than the dumped DB; new artifacts record deterministic
 `sha256(derive_key(secret))[:16]` IDs; current and previous configured keys map by exact ID; an unknown ID
@@ -455,8 +466,14 @@ make G-C exercise the durable path.
 partial/legacy archive rejected before scratch creation; and each nightly/CLI/upgrade/setup consumer.
 *Decision:* D-B4 remains open for the legacy static `BACKUP_ENCRYPTION_KEY:sha256-v1` envelope; it must
 never be treated as “current”. *Doc truth:* the runbook stops describing a partial archive as a backup.
-*Gate:* release-blocking. *Residual:* this slice does not close self-contained generation, object-byte,
-version, or R27 concerns; those remain in `S-recovery-generation`.
+*Commands:* `/check-api`; targeted `tests/integration/test_backup.py`, `tests/integration/test_restore.py`,
+and `tests/integration/test_setup.py`; `bash scripts/gen-contracts.sh` + `/check-contracts`; and
+`bash scripts/check-no-site-data.sh` + `git diff --check` for the R61/docs check. *Migration:* none — the
+nullable policy reference remains inert/deprecated. *Rollback:* the wire-compatible no-op field remains;
+preserve both keys and reseal previous-key-only artifacts before rollback. Rollback reopens M-01 and is not
+production-safe without explicit acknowledgement. *Gate:* release-blocking. *Residual:* this slice does
+not close self-contained generation, object-byte, version, or R27 concerns; those remain in
+`S-recovery-generation`.
 
 **`S-restore-target`** *(C-01b)* — the remaining restore-target cutover contract after C-01c.
 *Boundary:* a recovered stack can resolve every stored locator without source-vault reads. *Files:*
@@ -681,7 +698,8 @@ release-blocking. *Residual:* none.
 **`S-url-selection`** *(M-12)* — derive drawer selection from the URL. *Boundary:* SPA routing state.
 *Files:* `features/{capa,dcr,improvement}` register pages, following `RisksRegisterPage.tsx:108-118`.
 *Proof (RED against HEAD):* use controlled history, not an ordinary local drawer open (which creates no
-history entry): `/capa?capa=id` → no-parameter entry → Back closes the drawer → Forward reopens it.
+history entry): construct no-parameter → `/capa?capa=id` with the parameterized entry current; Back
+returns to the no-parameter entry and closes the drawer; Forward reopens it.
 *Commands:* `/check-web`. *Cases:* that Back/Forward sequence, deep link, and replace. *Owner product
 choice:* decide whether row/card opens push the URL; the proof must reflect the chosen navigation contract.
 *Migration:* none. *Rollback:* pure UI. *Doc truth:* none. *Gate:* no. *Residual:* none.
@@ -715,10 +733,17 @@ retained filename, revision label and content digest are on screen — today the
 of them. *Commands:* `/check-web`. *Migration:* none. *Doc truth:* the operator manual's check-in step.
 *Gate:* no. *Residual:* none.
 
-**`S-lifecycle-copy`** *(L-10, remainder)* — **likely already closed at current HEAD** by the shared
-`documentStateLabel` mapping. Do not invent a new helper or a false RED task. First run a renderer
-inventory for raw lifecycle renderers; if it finds one, create a focused correction and proof for that
-surface, otherwise record this remainder closed. *Migration:* none. *Doc truth:* none. *Gate:* no.
+**`S-lifecycle-copy`** *(L-10, remainder)* — **OPEN.**
+`apps/web/src/features/document/StateBadge.tsx::documentStateLabel` is a reusable partial, but raw
+current/version enum renderers remain in `ControlMetadata`, `HistoryTab`, `VersionCompare`,
+`PeriodicReviewContext`, and `DocAckContext`. *Boundary:* every user-facing lifecycle state uses the one
+shared label mapping. *Files:* that helper plus the five named renderers and their focused tests.
+*Proof (RED against HEAD):* inventory raw state rendering first, then render each named surface with an
+`InReview` fixture and assert the user-visible label is `In review`, never raw `InReview`; the current raw
+renderers make the proof fail. Correct every inventory hit to use `documentStateLabel`, and retain a
+source inventory plus focused DOM assertions so a later raw renderer is detected. *Commands:* `/check-web`.
+*Migration:* none. *Doc truth:* none. *Gate:* no. *Dependency:* keep this out of the
+`S-approval-content` prerequisite chain unless the inventory finds a real approval dependency.
 
 **`S-release-copy`** *(L-10, remainder)* — *Boundary:* release-confirmation wording. *Files:* the release
 confirmation component. *Proof (RED against HEAD):* for a document with **no** prior Effective version,
