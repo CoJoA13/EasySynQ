@@ -43,6 +43,15 @@ def test_strict_static_csp_present_with_required_directives() -> None:
     for directive in (
         "default-src 'self'",
         "script-src 'self'",
+        # blob: is REQUIRED, not decoration. VisualDiffViewer fetches the authed page PNG with a
+        # bearer token and renders it via URL.createObjectURL — a blob: URL. Under `img-src 'self'
+        # data:` the browser blocks it and the visual diff renders nothing, which is how it shipped.
+        # The widening is narrow: a blob: URL is same-origin-scoped by construction and only the
+        # document that minted it can reference one.
+        # ⚠ This static scan proves the directive is COMMITTED, not that the edge SERVES it, and no
+        # jsdom test can see CSP at all. The behavioural proof is the naturalWidth check against a
+        # running edge in S-edge-headers.
+        "img-src 'self' data: blob:",
         "object-src 'none'",
         "base-uri 'self'",
         "frame-ancestors 'none'",

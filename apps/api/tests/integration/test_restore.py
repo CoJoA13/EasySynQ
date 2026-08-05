@@ -270,6 +270,130 @@ async def test_upgrade_pre_backup_and_health_gate(
     assert completed is not None
 
 
+async def _upgrade_failed_reasons(fragment: str) -> list[str]:
+    """Run-scoped lookup: UPGRADE_FAILED reasons whose error mentions ``fragment``.
+
+    Deliberately NOT a count of all UPGRADE_FAILED rows — the integration suite shares one session
+    DB and shard composition moves under us, so an absolute count is not a stable assertion.
+    """
+    async with get_sessionmaker()() as s:
+        rows = list(
+            await s.scalars(
+                select(AuditEvent.after).where(AuditEvent.event_type == EventType.UPGRADE_FAILED)
+            )
+        )
+    return [str(r) for r in rows if r and fragment in str(r.get("error", ""))]
+
+
+async def test_upgrade_aborts_when_pre_backup_raises_a_non_backup_error(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-backup guard must catch EVERY failure, not just ``BackupError``.
+
+    ⚠ Mutation note: a stub raising ``BackupError`` is the obvious test and it PASSES against the
+    pre-fix code, because that was the one exception already handled. The canonical pre-backup
+    failure is a full or read-only backup mount, which surfaces as ``OSError`` from ``mkdir`` /
+    ``write_bytes`` — that escaped ``run_upgrade`` entirely and broke its "never raises" contract.
+    So this test raises ``OSError`` on purpose; it is RED against HEAD.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    dest = tempfile.mkdtemp(prefix="easysynq-upgrade-oserr-")
+    await _insert_backup_policy(org_id, dest)
+    marker = "no-space-left-fixture"
+    ran_alembic = False
+
+    def _boom(*_a: object, **_k: object) -> dict[str, object]:
+        raise OSError(marker)
+
+    def _spy() -> None:
+        nonlocal ran_alembic
+        ran_alembic = True
+
+    monkeypatch.setattr(upgrade_service, "build_durable_backup", _boom)
+    monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", _spy)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "pre_backup", out
+    assert marker in str(out["reason"])
+    assert ran_alembic is False, "the migration must NOT run once the pre-backup has failed"
+    assert await _upgrade_failed_reasons(marker), "expected a terminal UPGRADE_FAILED audit row"
+
+
+async def test_upgrade_aborts_when_pre_backup_archive_fails_verification(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An archive that failed its own checksum is not a safety net.
+
+    ``build_durable_backup`` reports a mismatch by RETURNING ``verified=False``, never by raising,
+    so no exception handler can see it. Against HEAD this returns OK and migrates the live database
+    against a known-unusable archive — then names that archive as the recovery pointer.
+    ``services/backup/service.py:197-209`` already fails closed here for the nightly path.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    dest = tempfile.mkdtemp(prefix="easysynq-upgrade-unverified-")
+    await _insert_backup_policy(org_id, dest)
+    archive = f"{dest}/easysynq-backup-fixture.tar.enc"
+    ran_alembic = False
+
+    def _unverified(*_a: object, **_k: object) -> dict[str, object]:
+        return {"archive": archive, "verified": False, "encrypted": True, "legs": {}}
+
+    def _spy() -> None:
+        nonlocal ran_alembic
+        ran_alembic = True
+
+    monkeypatch.setattr(upgrade_service, "build_durable_backup", _unverified)
+    monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", _spy)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "pre_backup", out
+    assert ran_alembic is False, "must not migrate against an archive that failed verification"
+    assert await _upgrade_failed_reasons(archive), "the failure must name the unusable archive"
+
+
+async def test_upgrade_never_raises_when_orchestration_fails_outside_a_stage(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The three guarded stages are not the whole function.
+
+    ``_alembic_head()`` runs before any stage guard and its failure escaped the function outright.
+    ``cli/upgrade.py`` does not wrap ``run_upgrade``, so that reached the operator as a traceback
+    instead of a stage plus a recovery pointer. RED against HEAD: the call itself raises.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    dest = tempfile.mkdtemp(prefix="easysynq-upgrade-orch-")
+    await _insert_backup_policy(org_id, dest)
+    marker = "alembic-head-unreadable-fixture"
+
+    def _boom() -> str:
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(upgrade_service, "_alembic_head", _boom)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "orchestration", out
+    assert marker in str(out["reason"])
+    assert await _upgrade_failed_reasons(marker), "expected a terminal UPGRADE_FAILED audit row"
+
+
 async def test_restore_discard_cleans_scratch_bucket(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

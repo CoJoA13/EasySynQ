@@ -48,3 +48,10 @@ backups/
 
 # --- brainstorming visual-companion artifacts ---
 .superpowers/
+
+# --- external audit evidence (R61) ---
+# Audit runs capture screenshots and JSON from a LIVE authenticated instance: real hostnames, account
+# names, org identifiers and network detail. scripts/check-no-site-data.sh is a mechanical text scan and
+# CANNOT read a PNG, so it will report clean over a directory full of reconnaissance material. R61 says
+# sanitize at write time because removal cannot undo publication. Keep audit output out of the repo.
+audit-results/

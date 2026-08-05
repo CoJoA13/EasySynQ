@@ -35,7 +35,6 @@ from ..db.models.backup_policy import BackupPolicy
 from ..logging import request_id_var
 from ..readiness import MIGRATIONS_DIR, check_all
 from .backup import build_durable_backup
-from .backup.archive import BackupError
 
 logger = logging.getLogger("easysynq.upgrade")
 
@@ -102,7 +101,13 @@ async def _backup_destination(session: AsyncSession, org_id: uuid.UUID) -> str:
 
 
 async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> dict[str, Any]:
-    """Pre-backup → migrate → health-gate. Never raises — returns ``{result: OK|FAILED, ...}``."""
+    """Pre-backup → migrate → health-gate. Never raises — returns ``{result: OK|FAILED, ...}``.
+
+    ``stage`` is one of ``pre_backup`` | ``migrate`` | ``health_gate`` | ``orchestration``; the last
+    covers a failure outside the three guarded stages (see the outer handler). A ``pre_backup``
+    failure includes an archive that was written but did NOT pass its own checksum verification —
+    an unusable safety net is not a safety net.
+    """
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
     sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
@@ -122,20 +127,58 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
             await session.commit()
 
             # 1. pre-backup (the disaster safety net) — abort the upgrade if it fails
+            #
+            # ⚠ The catch is deliberately BROAD. It was `except BackupError` and that is far too
+            # narrow: the canonical pre-backup failures do not raise BackupError at all —
+            # `dest_dir.mkdir()` (drill.py) and `dest_enc.write_bytes()` (crypto.py) raise OSError /
+            # PermissionError on a full or read-only backup mount, `psycopg.connect()` raises
+            # OperationalError, and BackupCryptoError is a SIBLING of BackupError, not a subclass.
+            # Each of those escaped `run_upgrade` entirely, breaking its "never raises" contract and
+            # leaving the UPGRADE_STARTED row above with no terminal event in an append-only chain.
+            # `services/backup/service.py:212` already made this exact call for the nightly path.
             try:
                 backup = await asyncio.to_thread(
                     build_durable_backup, settings, destination=destination
                 )
-            except BackupError as exc:
+            except Exception as exc:
+                logger.exception("upgrade: pre-backup failed")
+                reason = f"{type(exc).__name__}: {exc}"[:300]
                 _emit(
                     session,
                     org_id=org_id,
                     actor_id=actor_id,
                     event_type="UPGRADE_FAILED",
-                    after={"stage": "pre_backup", "error": str(exc)[:300]},
+                    after={"stage": "pre_backup", "error": reason},
                 )
                 await session.commit()
-                return {"result": "FAILED", "stage": "pre_backup", "reason": str(exc)[:300]}
+                return {"result": "FAILED", "stage": "pre_backup", "reason": reason}
+
+            # 1b. the archive must have PASSED its own checksum verification.
+            #
+            # ⚠ `build_durable_backup` reports a checksum mismatch by RETURNING verified=False,
+            # never by raising — so the handler above cannot see it, and without this check the
+            # upgrade migrates the live database against an archive already known to be unusable,
+            # then points UPGRADE_FAILED.pre_backup_archive (the operator's only recovery pointer)
+            # at that same dead file. Fail CLOSED on a missing key: an unreportable check is not
+            # a pass. This mirrors `services/backup/service.py:197-209`, which hardened the nightly
+            # path against precisely this scenario; the guard was never propagated here.
+            # (Folding both into one shared typed validator is deferred to the full S-upgrade-safety
+            # slice — see docs/superpowers/plans/2026-08-04-audit-remediation-v2.md.)
+            if not backup.get("verified", False):
+                detail = (
+                    "pre-backup archive written but FAILED checksum verification: "
+                    f"{backup.get('archive')}"
+                )
+                logger.error("upgrade.pre_backup.unverified", extra={"extra_fields": backup})
+                _emit(
+                    session,
+                    org_id=org_id,
+                    actor_id=actor_id,
+                    event_type="UPGRADE_FAILED",
+                    after={"stage": "pre_backup", "error": detail[:300]},
+                )
+                await session.commit()
+                return {"result": "FAILED", "stage": "pre_backup", "reason": detail[:300]}
 
             # 2. migrate (a failed migration auto-rolls-back its own txn)
             try:
@@ -197,5 +240,47 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                 "head": target_head,
                 "pre_backup_archive": backup["archive"],
             }
+    except Exception as exc:
+        # ⚠ The three guarded stages above are not the whole function. `_alembic_head()`, the
+        # destination lookup, every `_emit`/`commit`, and `check_all()` all sit OUTSIDE them, and
+        # this outer block previously carried only a `finally:` — so any of them escaped and the
+        # docstring's "Never raises" was simply untrue. That matters concretely: `cli/upgrade.py`
+        # does not wrap this call, so an escape hands the operator a traceback instead of a stage
+        # and a recovery pointer, and strands UPGRADE_STARTED with no terminal event.
+        logger.exception("upgrade: unexpected failure outside a guarded stage")
+        reason = f"{type(exc).__name__}: {exc}"[:300]
+        await _try_emit_orchestration_failure(
+            sessionmaker, org_id=org_id, actor_id=actor_id, reason=reason
+        )
+        return {"result": "FAILED", "stage": "orchestration", "reason": reason}
     finally:
         await engine.dispose()
+
+
+async def _try_emit_orchestration_failure(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    org_id: uuid.UUID,
+    actor_id: uuid.UUID | None,
+    reason: str,
+) -> None:
+    """Best-effort terminal audit row for a failure outside the guarded stages.
+
+    Opens its OWN session: the caller's may be mid-transaction or bound to a dead connection, and a
+    session reused across a failure is the repo's documented ``MissingGreenlet``-at-pool-teardown
+    trap. Swallows its own errors deliberately — if the database is the thing that broke, the caller
+    must still receive an honest ``FAILED`` dict rather than a second exception. An audit
+    UNDER-claim is the safe direction for an append-only chain (the R64 precedent).
+    """
+    try:
+        async with sessionmaker() as session:
+            _emit(
+                session,
+                org_id=org_id,
+                actor_id=actor_id,
+                event_type="UPGRADE_FAILED",
+                after={"stage": "orchestration", "error": reason},
+            )
+            await session.commit()
+    except Exception:
+        logger.exception("upgrade: could not record the orchestration-failure audit row")
