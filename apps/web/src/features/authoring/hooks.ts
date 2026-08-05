@@ -29,6 +29,18 @@ function useInvalidateDocument(): (documentId: string) => void {
   };
 }
 
+// Release changes which revision is effective, so its acknowledgement distribution and matrix must
+// move with the document. Other document mutations intentionally retain the narrower shared set.
+function useInvalidateReleasedDocument(): (documentId: string) => void {
+  const invalidateDocument = useInvalidateDocument();
+  const qc = useQueryClient();
+  return (documentId: string) => {
+    invalidateDocument(documentId);
+    void qc.invalidateQueries({ queryKey: ["distribution", documentId] });
+    void qc.invalidateQueries({ queryKey: ["acknowledgements", documentId] });
+  };
+}
+
 export function useCreateDocument() {
   const api = useApi();
   const qc = useQueryClient();
@@ -145,7 +157,7 @@ export function useSubmitReview() {
 // button when capabilities.release is true, which already reflects the SoD-2 author/approver block).
 export function useReleaseDocument() {
   const api = useApi();
-  const invalidate = useInvalidateDocument();
+  const invalidate = useInvalidateReleasedDocument();
   return useMutation({
     mutationFn: (documentId: string) =>
       api.send<DocumentSummary>("POST", `/api/v1/documents/${documentId}/release`, {}),

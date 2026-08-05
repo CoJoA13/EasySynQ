@@ -3,10 +3,18 @@ import { axe } from "jest-axe";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 import { screen, waitFor } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
+import type { DistributionPayload } from "../../lib/types";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
-import { detailCapabilities, docFixture } from "../../test/msw/handlers";
+import {
+  ackMatrixFixture,
+  detailCapabilities,
+  distributionFixture,
+  distributionNoEffectiveFixture,
+  docFixture,
+} from "../../test/msw/handlers";
 import { DocumentDetailPage } from "./DocumentDetailPage";
 
 const ID = "11111111-1111-1111-1111-111111111111";
@@ -205,5 +213,110 @@ describe("S-ack-2 acknowledgements", () => {
     await screen.findByText("Acknowledged"); // page loaded
     await userEvent.click(screen.getByRole("tab", { name: /acknowledgements/i }));
     expect(await screen.findByText(/Read-and-understood coverage/)).toBeInTheDocument();
+  });
+
+  test("release never shows an Effective document with stale not-yet-effective acknowledgement coverage", async () => {
+    // This fails if release does not invalidate the distribution query, or if the tile renders
+    // stale null coverage as "Not yet effective" while that invalidated query is refetching.
+    let documentReads = 0;
+    let distributionReads = 0;
+    let releaseHeldDistribution: (() => void) | undefined;
+    let markHeldDistributionRequested!: () => void;
+    const heldDistributionRequested = new Promise<void>((resolve) => {
+      markHeldDistributionRequested = resolve;
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const releaseFixture = docFixture[0]!;
+    queryClient.setQueryData(["acknowledgements", ID], ackMatrixFixture);
+
+    server.use(
+      http.get("/api/v1/documents/:id", ({ params }) => {
+        documentReads += 1;
+        return HttpResponse.json({
+          ...releaseFixture,
+          id: String(params.id),
+          current_state: documentReads === 1 ? "Approved" : "Effective",
+          current_effective_version_id:
+            documentReads === 1 ? null : releaseFixture.current_effective_version_id,
+          effective_from: documentReads === 1 ? null : releaseFixture.effective_from,
+          capabilities: { ...detailCapabilities, release: documentReads === 1 },
+        });
+      }),
+      http.post("/api/v1/documents/:id/release", ({ params }) =>
+        HttpResponse.json({ ...releaseFixture, id: String(params.id), current_state: "Effective" }),
+      ),
+      http.get("/api/v1/documents/:id/distribution", () => {
+        distributionReads += 1;
+        if (distributionReads === 1) return HttpResponse.json(distributionNoEffectiveFixture);
+        markHeldDistributionRequested();
+        return new Promise<HttpResponse<DistributionPayload>>((resolve) => {
+          releaseHeldDistribution = () => resolve(HttpResponse.json(distributionFixture));
+        });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route path="documents/:id" element={<DocumentDetailPage />} />
+      </Routes>,
+      { route: `/documents/${ID}`, queryClient },
+    );
+
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+    await user.click(await screen.findByRole("button", { name: "Release" }));
+    await user.click(await screen.findByRole("button", { name: "Release document" }));
+    await screen.findByLabelText("State: Effective");
+
+    try {
+      expect(screen.queryByText("Not yet effective")).not.toBeInTheDocument();
+      await heldDistributionRequested;
+      expect(queryClient.getQueryState(["acknowledgements", ID])?.isInvalidated).toBe(true);
+      releaseHeldDistribution?.();
+      expect(await screen.findByText("41 / 47")).toBeInTheDocument();
+    } finally {
+      releaseHeldDistribution?.();
+    }
+  });
+
+  test("release shows unavailable acknowledgement coverage when its post-release refresh fails", async () => {
+    // This fails if an Effective document maps a failed refresh's stale null coverage back to the
+    // pre-release "Not yet effective" meaning.
+    let documentReads = 0;
+    let distributionReads = 0;
+    const releaseFixture = docFixture[0]!;
+    server.use(
+      http.get("/api/v1/documents/:id", ({ params }) => {
+        documentReads += 1;
+        return HttpResponse.json({
+          ...releaseFixture,
+          id: String(params.id),
+          current_state: documentReads === 1 ? "Approved" : "Effective",
+          current_effective_version_id:
+            documentReads === 1 ? null : releaseFixture.current_effective_version_id,
+          effective_from: documentReads === 1 ? null : releaseFixture.effective_from,
+          capabilities: { ...detailCapabilities, release: documentReads === 1 },
+        });
+      }),
+      http.post("/api/v1/documents/:id/release", ({ params }) =>
+        HttpResponse.json({ ...releaseFixture, id: String(params.id), current_state: "Effective" }),
+      ),
+      http.get("/api/v1/documents/:id/distribution", () => {
+        distributionReads += 1;
+        return distributionReads === 1
+          ? HttpResponse.json(distributionNoEffectiveFixture)
+          : HttpResponse.json({ code: "unavailable", title: "Unavailable" }, { status: 503 });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+    await user.click(await screen.findByRole("button", { name: "Release" }));
+    await user.click(await screen.findByRole("button", { name: "Release document" }));
+
+    await screen.findByLabelText("State: Effective");
+    expect(await screen.findByText("Acknowledgement coverage unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Not yet effective")).not.toBeInTheDocument();
   });
 });
