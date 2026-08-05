@@ -15,6 +15,7 @@ import asyncio
 import tempfile
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
@@ -197,6 +198,54 @@ async def test_restore_fails_on_corrupted_blob(
     )
     assert out["result"] == "FAIL", out
     assert out["scratch_db"] is None  # torn down on FAIL
+
+
+async def test_restore_fails_on_unresolvable_stored_blob_locator(
+    app_client: AsyncClient, token_factory: Callable[..., str], tmp_path: Path
+) -> None:
+    """A restored ``blob.object_key`` must resolve in its stored bucket, not merely have a copied
+    scratch object at its SHA-derived key. Mutating only that DB locator leaves the copied bytes
+    intact, so this fails if the triad ignores the restored database locator."""
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"unresolvable-locator-source-v1")
+    await _insert_backup_policy(org_id, str(tmp_path))
+    archive_path = await _durable_archive(org_id)
+    client = _s3_client()
+
+    def _make_locator_unresolvable(handle: backup_service.ScratchHandle) -> None:
+        import psycopg
+
+        with (
+            psycopg.connect(
+                **conn_kwargs(handle.owner_dsn, dbname=handle.scratch_db), autocommit=True
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("SELECT sha256 FROM blob ORDER BY sha256 LIMIT 1")
+            row = cur.fetchone()
+            assert row is not None, "expected a restored blob locator to mutate"
+            sha = str(row[0])
+            client.head_object(  # type: ignore[attr-defined]
+                Bucket=handle.scratch_bucket, Key=f"{handle.object_prefix}{sha}"
+            )
+            cur.execute(
+                "UPDATE blob SET object_key = %s WHERE sha256 = %s",
+                (f"c01c-unresolvable-locator/{sha}", sha),
+            )
+
+    out = await backup_service.run_restore(
+        org_id,
+        archive_path=archive_path,
+        fetch_off_host=lambda _s, _o: 0,
+        after_restore=_make_locator_unresolvable,
+    )
+    try:
+        assert out["result"] == "FAIL", out
+        assert out["scratch_db"] is None  # a locator failure must tear the target down
+    finally:
+        # The unfixed baseline incorrectly PASSes; keep this RED proof non-leaking while recording
+        # it.
+        await _drop_target(out.get("scratch_db"))
 
 
 async def test_restore_fails_on_corrupted_chain(

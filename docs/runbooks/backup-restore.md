@@ -70,18 +70,22 @@ The same channel carries **`integrity.alarm`** from the nightly chain verificati
 
 `./scripts/easysynq backup restore-test` runs a real backup → restore into a throwaway scratch DATABASE →
 copies the manifested blobs into the non-WORM `restore-scratch` bucket → runs the integrity triad
-(blob SHA-256 re-hash · per-table row-count parity · `document_version→blob` FK check) and tears the
-scratch namespace down. Only a **PASS** satisfies the setup gate. "Configured but unverified" does
-not count.
+(copied-blob SHA-256 re-hash · stored-locator SHA-256 re-hash against the currently configured object
+store · per-table row-count parity · `document_version→blob` FK check) and tears the scratch namespace
+down. Only a **PASS** satisfies the setup gate. "Configured but unverified" does not count.
 
 ## Live restore (WORM-aware, to a VERIFIED TARGET)
 
 `./scripts/easysynq restore <archive.tar.enc> --confirm` decrypts + verifies the archive, restores PG into a
 fresh scratch DATABASE, copies blobs into the fresh non-WORM bucket (the locked vault is **read**,
 never written), runs the triad, the **checkpoint-not-ahead** tamper check, and a **restored-chain
-re-verify** — then **leaves the verified target standing** for you to cut over to. It exits:
+re-verify**. The triad verifies that restored database blob locators resolve against the currently
+configured object store; it does **not** independently prove the copied scratch namespace is ready
+for cutover. It then leaves the verified target standing for the documented manual cutover. It exits:
 
-* **0 (PASS)** — a verified, ready-to-cutover target (`db=restore_easysynq_… bucket=restore-scratch`).
+* **0 (PASS)** — a verified target (`db=restore_easysynq_… bucket=restore-scratch`) whose restored
+  database locators resolve against the configured object store. The copied scratch namespace is
+  **not** independently certified ready for cutover.
 * **3 (FLAGGED)** — the audit checkpoint is **ahead** of the restored head (the backup is older than
   the last anchored checkpoint, a deliberate point-in-time target, **or** a truncated/tampered tail).
   Re-run with `--audit-checkpoint-ack` to proceed; the acknowledgement is **audited**

@@ -4,8 +4,10 @@
 restores PostgreSQL into a FRESH scratch DATABASE, copies the manifested blobs into the FRESH,
 non-WORM ``restore-scratch`` bucket (the blob bytes are READ from their content-addressed source —
 the live object-locked vault is never mutated), then runs the integrity triad, a
-**checkpoint-not-ahead** tamper check, and a **restored-chain re-verify** — then LEAVES THE TARGET
-STANDING for the operator to cut over to. It NEVER mutates the live vault, NEVER auto-cuts-over.
+**checkpoint-not-ahead** tamper check, and a **restored-chain re-verify**. The triad proves the
+restored database's stored blob locators resolve against the currently configured object store; it
+does not independently certify the copied scratch namespace as cutover-ready. It NEVER mutates the
+live vault, NEVER auto-cuts-over.
 
     HARDENING TODO (S11+): automated in-place LIVE cutover (repoint DATABASE_URL + the MinIO bucket,
     re-import the Keycloak realm + config, then reindex + mirror-sync) is a tracked hardening-stage
@@ -49,7 +51,9 @@ FetchOffHost = Callable[[Settings, uuid.UUID], "int | None"]
 class RestoreResult:
     """The outcome of a restore-to-verified-target.
 
-    ``PASS`` — a verified, ready-to-cutover target is left standing (scratch_db/bucket/prefix set).
+    ``PASS`` — a verified target is left standing (scratch_db/bucket/prefix set); its restored DB
+    locators resolve against the configured object store, but the copied scratch namespace is not
+    independently certified as cutover-ready.
     ``FLAGGED`` — checkpoint-not-ahead tamper-suspicion; the target is torn down; re-run with
     ``audit_checkpoint_ack=True`` to proceed (the acknowledgement is audited). ``FAIL`` — archive /
     restore / triad / chain failure; the target is torn down. Never raises."""
@@ -460,7 +464,8 @@ def run_restore(
             keep_standing = True
             return RestoreResult(
                 "PASS",
-                "restore verified — target ready for operator cutover",
+                "restore verified — restored database locators resolve against the configured "
+                "object store; copied scratch namespace is not independently cutover-ready",
                 scratch_db=scratch_db,
                 scratch_bucket=handle.scratch_bucket,
                 object_prefix=handle.object_prefix,

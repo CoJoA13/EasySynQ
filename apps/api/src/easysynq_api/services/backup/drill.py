@@ -222,6 +222,13 @@ def _scratch_blob_shas(handle: ScratchHandle) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
+def _scratch_blob_locators(handle: ScratchHandle) -> list[tuple[str, str, str]]:
+    """The blob locators stored in the restored database, not derived scratch-copy paths."""
+    with _autocommit(handle.owner_dsn, dbname=handle.scratch_db) as conn, conn.cursor() as cur:
+        cur.execute("SELECT sha256, bucket, object_key FROM blob")
+        return [(r[0], r[1], r[2]) for r in cur.fetchall()]
+
+
 # --- blob copy + re-hash -----------------------------------------------------------------------
 
 
@@ -253,6 +260,27 @@ def _rehash_scratch_blobs(settings: Settings, handle: ScratchHandle) -> list[str
     return bad
 
 
+def _rehash_stored_blob_locators(settings: Settings, handle: ScratchHandle) -> list[str]:
+    """Fetch every restored row's exact stored locator and re-hash its bytes.
+
+    This is deliberately separate from the scratch-copy re-hash above: a copied object can still be
+    intact while the restored database points at an object key that does not resolve in the
+    currently configured object store. Return only SHA-256 identifiers so failure details expose no
+    keys or object bytes.
+    """
+    client = _s3(settings)
+    bad: list[str] = []
+    for sha, bucket, object_key in _scratch_blob_locators(handle):
+        try:
+            body = client.get_object(Bucket=bucket, Key=object_key)["Body"].read()
+        except Exception:  # noqa: BLE001 — missing/unreadable stored locator fails closed
+            bad.append(sha)
+            continue
+        if hashlib.sha256(body).hexdigest() != sha:
+            bad.append(sha)
+    return bad
+
+
 def _delete_scratch_objects(settings: Settings, bucket: str, prefix: str) -> None:
     # Single-object deletes: the S3 multi-delete (DeleteObjects) requires a Content-MD5 header that
     # MinIO enforces and recent botocore no longer auto-adds. A per-drill prefix holds few objects,
@@ -268,7 +296,7 @@ def _delete_scratch_objects(settings: Settings, bucket: str, prefix: str) -> Non
 
 
 def run_triad(settings: Settings, handle: ScratchHandle) -> DrillResult:
-    """All three legs on the RESTORED copy; any failure → FAIL (doc 08 §8.2)."""
+    """All integrity legs on the RESTORED copy; any failure → FAIL (doc 08 §8.2)."""
     actual = _scratch_counts(handle)
     mismatches = {
         t: {"expected": exp, "actual": actual.get(t)}
@@ -285,6 +313,14 @@ def run_triad(settings: Settings, handle: ScratchHandle) -> DrillResult:
     bad = _rehash_scratch_blobs(settings, handle)
     if bad:
         return DrillResult("FAIL", "blob SHA-256 re-hash failed", {"bad_blobs": bad[:20]})
+
+    bad_locators = _rehash_stored_blob_locators(settings, handle)
+    if bad_locators:
+        return DrillResult(
+            "FAIL",
+            "stored blob locator SHA-256 re-hash failed",
+            {"bad_blobs": bad_locators[:20]},
+        )
 
     return DrillResult(
         "PASS",
