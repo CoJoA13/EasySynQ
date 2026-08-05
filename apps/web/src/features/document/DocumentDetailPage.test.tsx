@@ -2,7 +2,7 @@ import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { QueryClient } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import type { DistributionPayload } from "../../lib/types";
@@ -264,13 +264,18 @@ describe("S-ack-2 acknowledgements", () => {
     );
 
     await screen.findByLabelText("State: Approved");
-    expect((await screen.findAllByText("Not yet effective")).length).toBeGreaterThan(0);
+    const acknowledgedTile = (await screen.findByText("Acknowledged")).parentElement;
+    expect(acknowledgedTile).toBeInstanceOf(HTMLElement);
+    if (!(acknowledgedTile instanceof HTMLElement)) {
+      throw new Error("Acknowledged tile has no containing element");
+    }
+    expect(within(acknowledgedTile).getByText("Not yet effective")).toBeInTheDocument();
 
     let observedContradiction = false;
     const recordVisibleState = () => {
       if (
         document.body.querySelector('[aria-label="State: Effective"]') &&
-        document.body.textContent?.includes("Not yet effective")
+        acknowledgedTile.textContent?.includes("Not yet effective")
       ) {
         observedContradiction = true;
       }
@@ -287,11 +292,20 @@ describe("S-ack-2 acknowledgements", () => {
       await user.click(screen.getByRole("tab", { name: /approvals/i }));
       await user.click(await screen.findByRole("button", { name: "Release" }));
       await user.click(await screen.findByRole("button", { name: "Release document" }));
-      await heldDistributionRequested;
 
       expect(await screen.findByLabelText("State: Effective")).toBeInTheDocument();
-      expect(screen.getByText("Refreshing acknowledgement coverage")).toBeInTheDocument();
-      expect(screen.queryByText("Not yet effective")).not.toBeInTheDocument();
+      expect(within(acknowledgedTile).queryByText("Not yet effective")).not.toBeInTheDocument();
+      expect(
+        within(acknowledgedTile).getByText("Refreshing acknowledgement coverage"),
+      ).toBeInTheDocument();
+      expect(observedContradiction).toBe(false);
+
+      await heldDistributionRequested;
+
+      expect(within(acknowledgedTile).queryByText("Not yet effective")).not.toBeInTheDocument();
+      expect(
+        within(acknowledgedTile).getByText("Refreshing acknowledgement coverage"),
+      ).toBeInTheDocument();
       expect(observedContradiction).toBe(false);
       expect(queryClient.getQueryState(["acknowledgements", ID])?.isInvalidated).toBe(true);
       releaseHeldDistribution?.();
