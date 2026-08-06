@@ -4030,8 +4030,8 @@ img, svg { display: block; max-width: 100%; }
           <div class="es-grid es-grid--2">
             <div class="es-field">
               <label class="es-label">Backup destination</label>
-              <input class="es-input es-mono" value="s3://offsite-easysynq/acme-mfg/backups" placeholder="Local path / NFS mount / S3-compatible bucket">
-              <div class="es-hint es-row es-items-center es-gap-2"><span class="es-text-success">●</span> Reachable · writable · 412 GB free</div>
+              <input class="es-input es-mono" value="/var/lib/easysynq/backups" placeholder="Mounted local/NFS filesystem path">
+              <div class="es-hint es-row es-items-center es-gap-2"><span class="es-text-success">●</span> Filesystem path reachable · writable · source-store-dependent archives</div>
             </div>
             <div class="es-field">
               <label class="es-label">Schedule <span class="es-label__opt">cron · org tz Europe/Oslo</span></label>
@@ -4043,17 +4043,18 @@ img, svg { display: block; max-width: 100%; }
           <div class="es-grid es-grid--3 es-mt-4">
             <div class="es-field">
               <label class="es-label">Keep daily</label>
-              <input class="es-input es-num" value="7">
+              <input class="es-input es-num" value="7" disabled>
             </div>
             <div class="es-field">
               <label class="es-label">Keep weekly</label>
-              <input class="es-input es-num" value="4">
+              <input class="es-input es-num" value="4" disabled>
             </div>
             <div class="es-field">
               <label class="es-label">Keep monthly</label>
-              <input class="es-input es-num" value="6">
+              <input class="es-input es-num" value="6" disabled>
             </div>
           </div>
+          <div class="es-hint es-mt-2">Retention counts are recorded only; automatic pruning is not shipped.</div>
 
           <div class="es-grid es-grid--2 es-mt-4">
             <div class="es-field">
@@ -4079,13 +4080,13 @@ img, svg { display: block; max-width: 100%; }
             <div class="es-stack" style="gap:14px">
               <div class="es-row es-justify-between es-items-center es-wrap" style="gap:12px">
                 <div class="es-row es-items-center es-gap-3">
-                  <span class="es-switch is-on"><span class="es-switch__track"></span></span>
+                  <span class="es-switch"><span class="es-switch__track"></span></span>
                   <div>
-                    <div class="es-body" style="font-weight:600">WAL / point-in-time recovery (PITR)</div>
-                    <div class="es-small es-text-muted">Streams write-ahead logs for sub-day recovery. Requires reachable WAL archive.</div>
+                    <div class="es-body" style="font-weight:600">WAL / point-in-time recovery (PITR) · not shipped</div>
+                    <div class="es-small es-text-muted">Unavailable in the current release; nightly filesystem archives only.</div>
                   </div>
                 </div>
-                <span class="es-badge es-badge--success">Archive reachable</span>
+                <span class="es-badge es-badge--neutral">Unavailable</span>
               </div>
               <div class="es-divider"></div>
               <div class="es-row es-justify-between es-items-center es-wrap" style="gap:12px">
@@ -4165,7 +4166,7 @@ img, svg { display: block; max-width: 100%; }
             <div class="es-metric">
               <div class="es-metric__top"><span class="es-metric__label">Est. RPO</span><span class="es-metric__icon">↺</span></div>
               <div class="es-metric__value">~ 24h</div>
-              <div class="es-metric__sub">nightly full · PITR narrows to minutes</div>
+              <div class="es-metric__sub">nightly filesystem archive · no current WAL/PITR benefit</div>
             </div>
             <div class="es-metric">
               <div class="es-metric__top"><span class="es-metric__label">Est. RTO</span><span class="es-metric__icon">◷</span></div>
