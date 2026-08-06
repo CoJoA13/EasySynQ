@@ -7,10 +7,11 @@ build precedent."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 import sqlalchemy as sa
@@ -19,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easysynq_api.config import get_settings
-from easysynq_api.db.models._audit_enums import EventType
+from easysynq_api.db.models._audit_enums import ActorType, EventType
 from easysynq_api.db.models._ingestion_enums import (
     ImportCommitResultStatus,
     ImportDecisionAction,
@@ -44,6 +45,7 @@ from easysynq_api.domain.ingestion.extractor import ExtractInput, ExtractResult
 from easysynq_api.services.ingestion import commit as commit_svc
 from easysynq_api.services.ingestion import repository as ingestion_repo
 from easysynq_api.services.ingestion import review as review_svc
+from easysynq_api.services.ingestion import storage as ingestion_storage
 from easysynq_api.services.ingestion.classify import run_classify
 from easysynq_api.services.ingestion.commit import run_commit
 from easysynq_api.services.ingestion.dedup import run_dedup
@@ -2336,6 +2338,471 @@ async def test_commit_partial_then_resume_keeps_committed_item(
             )
         ).scalar_one()
         assert n == 1  # the committed SOP is not duplicated across the resume
+
+
+async def test_upload_identity_partial_resume_audits_then_deletes_only_rejected_version(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One rejected exact import version cannot taint its honest peer or resume evidence."""
+    import boto3
+    from botocore.exceptions import ClientError
+
+    admin = _subject("avery-import-identity")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(
+        app_client,
+        headers,
+        _stub_tika,
+        content_suffix=f" identity-{uuid.uuid4().hex}",
+    )
+    run_uuid = uuid.UUID(run_id)
+    bad = by_name["SOP-PUR-002 Purchasing.docx"]
+    peer = by_name["Internal Audit Report Q2 2023.pdf"]
+    bad_id = uuid.UUID(bad["id"])
+    sha = bad["sha256"]
+    assert isinstance(sha, str)
+    identifier = f"SOP-{uuid.uuid4().hex[:6].upper()}-001"
+    await _confirm_for_commit(
+        app_client,
+        headers,
+        run_id,
+        bad["id"],
+        peer["id"],
+        doc_identifier=identifier,
+    )
+
+    before_bad = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{bad['id']}", headers=headers)
+    ).json()
+    settings = get_settings()
+    source_path = Path(settings.import_source_root) / bad["rel_path"]
+    honest_bytes = source_path.read_bytes()
+    false_bytes = b"X" * len(honest_bytes)
+    assert false_bytes != honest_bytes
+    client = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint,
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key,
+        region_name=settings.s3_region,
+    )
+    refused_put = client.put_object(
+        Bucket=settings.s3_bucket_import_staging,
+        Key=sha,
+        Body=false_bytes,
+        ContentType=bad["mime_type"],
+    )
+    refused_version = refused_put["VersionId"]
+    newer_put = client.put_object(
+        Bucket=settings.s3_bucket_import_staging,
+        Key=sha,
+        Body=honest_bytes,
+        ContentType=bad["mime_type"],
+    )
+    newer_version = newer_put["VersionId"]
+    refused_uri = (
+        f"s3://{settings.s3_bucket_import_staging}/{sha}"
+        f"?versionId={quote(refused_version, safe='')}"
+    )
+    source_path.write_bytes(false_bytes)
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            sa.text("UPDATE import_file SET staged_blob_uri = :uri WHERE id = :file"),
+            {"uri": refused_uri, "file": bad_id},
+        )
+        await session.commit()
+
+    original_delete = commit_svc.storage.delete_staged_version
+    delete_observed_committed_audit = False
+
+    async def observe_then_delete(locator: object) -> None:
+        nonlocal delete_observed_committed_audit
+        assert locator.version_id == refused_version  # type: ignore[union-attr]
+        async with get_sessionmaker()() as observer:
+            events = (
+                (
+                    await observer.execute(
+                        select(AuditEvent).where(
+                            AuditEvent.object_id == run_uuid,
+                            AuditEvent.event_type == EventType.IMPORT_ITEM_FAILED,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            delete_observed_committed_audit = any(
+                (event.after or {}).get("file_id") == str(bad_id) for event in events
+            )
+        await original_delete(locator)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(commit_svc.storage, "delete_staged_version", observe_then_delete)
+    started = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    assert started.status_code == 202, started.text
+    await _drive_commit(run_uuid)
+
+    partial = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=headers)).json()
+    assert partial["status"] == "PartiallyCommitted"
+    assert partial["counts"]["commit"] == {"committed": 1, "failed": 1}
+    bad_partial = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{bad['id']}", headers=headers)
+    ).json()
+    peer_partial = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{peer['id']}", headers=headers)
+    ).json()
+    assert bad_partial["commit"]["result"] == "failed"
+    assert bad_partial["commit"]["error"] == "upload_identity_digest_mismatch"
+    assert bad_partial["commit"]["vault_document_id"] is None
+    assert bad_partial["commit"]["vault_version_id"] is None
+    assert peer_partial["commit"]["result"] == "success"
+    assert delete_observed_committed_audit is True
+    with pytest.raises(ClientError) as deleted:
+        client.get_object(
+            Bucket=settings.s3_bucket_import_staging,
+            Key=sha,
+            VersionId=refused_version,
+        )
+    assert deleted.value.response["Error"]["Code"] in {"NoSuchKey", "NoSuchVersion"}
+    newer = client.get_object(
+        Bucket=settings.s3_bucket_import_staging,
+        Key=sha,
+        VersionId=newer_version,
+    )
+    assert newer["Body"].read() == honest_bytes
+
+    async with get_sessionmaker()() as session:
+        failure_events = (
+            (
+                await session.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == run_uuid,
+                        AuditEvent.event_type == EventType.IMPORT_ITEM_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        item_failure_events = [
+            event for event in failure_events if (event.after or {}).get("file_id") == str(bad_id)
+        ]
+        assert len(item_failure_events) == 1
+        failure_event = item_failure_events[0]
+        assert failure_event.actor_type is ActorType.system and failure_event.actor_id is None
+        assert failure_event.after == {
+            "file_id": str(bad_id),
+            "error": "upload_identity_digest_mismatch",
+            "operation": "import_commit",
+            "classification": "digest_mismatch",
+            "source": {
+                "bucket": "import-staging",
+                "object_key": sha,
+                "version_id": refused_version,
+                "etag": failure_event.after["source"]["etag"],
+            },
+            "expected": {"sha256": sha, "size_bytes": len(honest_bytes)},
+            "observed": {
+                "sha256": hashlib.sha256(false_bytes).hexdigest(),
+                "size_bytes": len(false_bytes),
+            },
+            "cleanup": {"policy": "delete_exact_version_after_audit"},
+        }
+        generic_integrity = (
+            await session.execute(
+                select(sa.func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED)
+            )
+        ).scalar_one()
+        assert generic_integrity == 0
+        assert await session.get(Blob, sha) is None
+        assert (
+            await session.execute(
+                select(sa.func.count())
+                .select_from(DocumentedInformation)
+                .where(DocumentedInformation.identifier == identifier)
+            )
+        ).scalar_one() == 0
+        peer_success_events = (
+            await session.execute(
+                select(sa.func.count())
+                .select_from(AuditEvent)
+                .where(
+                    AuditEvent.event_type == EventType.IMPORT_ITEM_COMMITTED,
+                    AuditEvent.object_id == uuid.UUID(peer_partial["commit"]["vault_document_id"]),
+                )
+            )
+        ).scalar_one()
+        assert peer_success_events == 1
+
+    assert bad_partial["classification"] == before_bad["classification"]
+    assert bad_partial["review"] == before_bad["review"]
+    source_path.write_bytes(honest_bytes)
+    resumed = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    assert resumed.status_code == 202, resumed.text
+    await _drive_commit(run_uuid)
+
+    complete = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=headers)).json()
+    assert complete["status"] == "Completed"
+    assert complete["counts"]["commit"] == {"committed": 2, "failed": 0}
+    bad_complete = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{bad['id']}", headers=headers)
+    ).json()
+    peer_complete = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{peer['id']}", headers=headers)
+    ).json()
+    assert bad_complete["commit"]["result"] == "success"
+    assert bad_complete["staged_blob_uri"] != refused_uri
+    assert parse_qs(urlsplit(bad_complete["staged_blob_uri"]).query)["versionId"] == [newer_version]
+    assert bad_complete["classification"] == before_bad["classification"]
+    assert bad_complete["review"] == before_bad["review"]
+    assert peer_complete["commit"] == peer_partial["commit"]
+    async with get_sessionmaker()() as session:
+        assert (
+            await session.execute(
+                select(sa.func.count())
+                .select_from(DocumentedInformation)
+                .where(DocumentedInformation.identifier == identifier)
+            )
+        ).scalar_one() == 1
+        assert (
+            await session.execute(
+                select(sa.func.count())
+                .select_from(AuditEvent)
+                .where(
+                    AuditEvent.event_type == EventType.IMPORT_ITEM_COMMITTED,
+                    AuditEvent.object_id == uuid.UUID(peer_partial["commit"]["vault_document_id"]),
+                )
+            )
+        ).scalar_one() == 1
+        assert (
+            await session.execute(
+                select(sa.func.count())
+                .select_from(AuditEvent)
+                .where(
+                    AuditEvent.event_type == EventType.IMPORT_ITEM_FAILED,
+                    AuditEvent.object_id == run_uuid,
+                )
+            )
+        ).scalar_one() == 1
+
+
+async def test_upload_identity_legacy_locator_requires_restart_and_never_restages(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+) -> None:
+    admin = _subject("avery-import-legacy")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(
+        app_client,
+        headers,
+        _stub_tika,
+        content_suffix=f" legacy-{uuid.uuid4().hex}",
+    )
+    run_uuid = uuid.UUID(run_id)
+    legacy = by_name["SOP-PUR-002 Purchasing.docx"]
+    peer = by_name["Internal Audit Report Q2 2023.pdf"]
+    identifier = f"SOP-{uuid.uuid4().hex[:6].upper()}-001"
+    await _confirm_for_commit(
+        app_client,
+        headers,
+        run_id,
+        legacy["id"],
+        peer["id"],
+        doc_identifier=identifier,
+    )
+    before = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files/{legacy['id']}", headers=headers
+        )
+    ).json()
+    legacy_uri = f"s3://{get_settings().s3_bucket_import_staging}/{legacy['sha256']}"
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            sa.text("UPDATE import_file SET staged_blob_uri = :uri WHERE id = :file"),
+            {"uri": legacy_uri, "file": uuid.UUID(legacy["id"])},
+        )
+        await session.commit()
+
+    assert (
+        await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    ).status_code == 202
+    await _drive_commit(run_uuid)
+    first = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files/{legacy['id']}", headers=headers
+        )
+    ).json()
+    assert first["commit"]["error"] == "staging_version_required"
+    assert first["staged_blob_uri"] == legacy_uri
+    assert first["classification"] == before["classification"]
+    assert first["review"] == before["review"]
+
+    assert (
+        await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    ).status_code == 202
+    await _drive_commit(run_uuid)
+    second = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files/{legacy['id']}", headers=headers
+        )
+    ).json()
+    assert second["commit"]["error"] == "staging_version_required"
+    assert second["staged_blob_uri"] == legacy_uri
+    assert second["classification"] == before["classification"]
+    assert second["review"] == before["review"]
+
+
+async def test_upload_identity_legacy_locator_deduplicates_correct_domain_worm_blob(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+) -> None:
+    admin = _subject("avery-import-legacy-dedup")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(
+        app_client,
+        headers,
+        _stub_tika,
+        content_suffix=f" legacy-dedup-{uuid.uuid4().hex}",
+    )
+    document = by_name["SOP-PUR-002 Purchasing.docx"]
+    peer = by_name["Internal Audit Report Q2 2023.pdf"]
+    sha = document["sha256"]
+    assert isinstance(sha, str)
+    identifier = f"SOP-{uuid.uuid4().hex[:6].upper()}-001"
+    await _confirm_for_commit(
+        app_client,
+        headers,
+        run_id,
+        document["id"],
+        peer["id"],
+        doc_identifier=identifier,
+    )
+    settings = get_settings()
+    source = ingestion_storage.parse_staged_uri(
+        document["staged_blob_uri"],
+        expected_sha256=sha,
+        content_type=document["mime_type"],
+        expected_size=document["size_bytes"],
+    )
+    promoted = await commit_svc.storage.promote_worm(
+        source, target_bucket=settings.s3_bucket_documents
+    )
+    async with get_sessionmaker()() as session:
+        actor = (
+            await session.execute(select(AppUser).where(AppUser.keycloak_subject == admin))
+        ).scalar_one()
+        session.add(
+            Blob(
+                sha256=sha,
+                org_id=actor.org_id,
+                size_bytes=promoted.size,
+                mime_type=promoted.content_type or document["mime_type"],
+                bucket=promoted.target_bucket,
+                object_key=promoted.target_key,
+                worm_locked=True,
+                worm_retain_until=promoted.retain_until,
+            )
+        )
+        await session.execute(
+            sa.text("UPDATE import_file SET staged_blob_uri = :uri WHERE id = :file"),
+            {
+                "uri": f"s3://{settings.s3_bucket_import_staging}/{sha}",
+                "file": uuid.UUID(document["id"]),
+            },
+        )
+        await session.commit()
+
+    assert (
+        await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    ).status_code == 202
+    await _drive_commit(uuid.UUID(run_id))
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=headers)).json()
+    detail = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files/{document['id']}", headers=headers
+        )
+    ).json()
+    assert run["status"] == "Completed"
+    assert detail["commit"]["result"] == "success"
+    assert detail["staged_blob_uri"] == f"s3://{settings.s3_bucket_import_staging}/{sha}"
+
+
+async def test_upload_identity_legacy_locator_keeps_foreign_domain_blob_failure(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+) -> None:
+    admin = _subject("avery-import-legacy-foreign")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(
+        app_client,
+        headers,
+        _stub_tika,
+        content_suffix=f" legacy-foreign-{uuid.uuid4().hex}",
+    )
+    document = by_name["SOP-PUR-002 Purchasing.docx"]
+    peer = by_name["Internal Audit Report Q2 2023.pdf"]
+    sha = document["sha256"]
+    assert isinstance(sha, str)
+    await _confirm_for_commit(
+        app_client,
+        headers,
+        run_id,
+        document["id"],
+        peer["id"],
+        doc_identifier=f"SOP-{uuid.uuid4().hex[:6].upper()}-001",
+    )
+    settings = get_settings()
+    legacy_uri = f"s3://{settings.s3_bucket_import_staging}/{sha}"
+    async with get_sessionmaker()() as session:
+        actor = (
+            await session.execute(select(AppUser).where(AppUser.keycloak_subject == admin))
+        ).scalar_one()
+        session.add(
+            Blob(
+                sha256=sha,
+                org_id=actor.org_id,
+                size_bytes=document["size_bytes"],
+                mime_type=document["mime_type"],
+                bucket=settings.s3_bucket_records,
+                object_key=sha,
+                worm_locked=True,
+            )
+        )
+        await session.execute(
+            sa.text("UPDATE import_file SET staged_blob_uri = :uri WHERE id = :file"),
+            {"uri": legacy_uri, "file": uuid.UUID(document["id"])},
+        )
+        await session.commit()
+
+    try:
+        assert (
+            await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+        ).status_code == 202
+        await _drive_commit(uuid.UUID(run_id))
+        run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=headers)).json()
+        detail = (
+            await app_client.get(
+                f"/api/v1/admin/imports/{run_id}/files/{document['id']}", headers=headers
+            )
+        ).json()
+        assert run["status"] == "PartiallyCommitted"
+        assert detail["commit"]["error"] == "source_bytes_in_foreign_bucket"
+        assert detail["staged_blob_uri"] == legacy_uri
+    finally:
+        async with get_sessionmaker()() as session:
+            await session.execute(sa.delete(Blob).where(Blob.sha256 == sha))
+            await session.commit()
 
 
 async def test_commit_concurrent_run_commit_is_single_flight(

@@ -160,28 +160,28 @@ def emit_import_event_system(
     object_type: AuditObjectType = AuditObjectType.import_run,
     object_id: uuid.UUID | None = None,
     scope_ref: str | None = None,
-) -> None:
+) -> AuditEvent:
     """A *system*-actor import-run event (actor_id NULL) — the detached scan/commit worker / the
     reaper have no HTTP caller (the records ``emit_record_event_system`` precedent). Defaults key
     the row to the run (object_type=import_run, object_id=run_id); the S-ing-5 per-item event keys
     to the created vault row instead (object_type=document|record, object_id=the new id,
     scope_ref=identifier) so ``GET /documents/{id}/audit-events`` surfaces the import as the doc's
     creation event (AC#6 per-doc history)."""
-    session.add(
-        AuditEvent(
-            org_id=org_id,
-            occurred_at=_now(),
-            actor_id=None,
-            actor_type=ActorType.system,
-            event_type=event_type,
-            object_type=object_type,
-            object_id=object_id if object_id is not None else run_id,
-            scope_ref=scope_ref,
-            before=before,
-            after=after,
-            request_id=_rid(),
-        )
+    row = AuditEvent(
+        org_id=org_id,
+        occurred_at=_now(),
+        actor_id=None,
+        actor_type=ActorType.system,
+        event_type=event_type,
+        object_type=object_type,
+        object_id=object_id if object_id is not None else run_id,
+        scope_ref=scope_ref,
+        before=before,
+        after=after,
+        request_id=_rid(),
     )
+    session.add(row)
+    return row
 
 
 # --------------------------------------------------------------------------- API path
