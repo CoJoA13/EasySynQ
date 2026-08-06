@@ -107,7 +107,7 @@ def parse_staged_uri(
     version_id = query["versionId"][0]
     if quote(version_id, safe="") != raw_parts[0].removeprefix("versionId="):
         raise StagingVersionRequired
-    return StagedObjectRef(
+    source = StagedObjectRef(
         locator=StagedVersionLocator(
             domain=StagingDomain.IMPORT_STAGING,
             object_key=expected_sha256,
@@ -117,6 +117,9 @@ def parse_staged_uri(
         content_type=content_type,
         expected_size=expected_size,
     )
+    if uri != format_staged_uri(source):
+        raise StagingVersionRequired
+    return source
 
 
 class _HashingReader:

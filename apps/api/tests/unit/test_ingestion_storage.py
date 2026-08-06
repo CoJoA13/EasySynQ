@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,6 +14,7 @@ from botocore.exceptions import ClientError
 from easysynq_api.services.ingestion import extract, storage
 from easysynq_api.services.vault.staged_identity import (
     StagedObjectRef,
+    StagedSourceUnavailable,
     StagedVersionLocator,
     StagingDomain,
     StagingVersionRequired,
@@ -67,15 +69,38 @@ def test_staged_uri_round_trips_url_significant_version_without_inventing_metada
     )
 
 
+def test_parse_staged_uri_uses_deliberately_different_caller_owned_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source(version_id="v1")
+    monkeypatch.setattr(storage, "_import_staging_bucket", lambda: "import-staging")
+    uri = storage.format_staged_uri(source)
+
+    parsed = storage.parse_staged_uri(
+        uri,
+        expected_sha256=source.expected_sha256,
+        content_type="application/vnd.review-evidence",
+        expected_size=987_654,
+    )
+
+    assert parsed.locator == source.locator
+    assert parsed.expected_sha256 == source.expected_sha256
+    assert parsed.content_type == "application/vnd.review-evidence"
+    assert parsed.expected_size == 987_654
+
+
 @pytest.mark.parametrize(
     "uri",
     [
         "https://import-staging/{sha}?versionId=v1",
+        "S3://import-staging/{sha}?versionId=v1",
+        "\ts3://import-staging/{sha}?versionId=v1",
         "//import-staging/{sha}?versionId=v1",
         "s3://foreign/{sha}?versionId=v1",
         "s3://user@import-staging/{sha}?versionId=v1",
         "s3://import-staging:9000/{sha}?versionId=v1",
         "s3://import-staging/{sha}?versionId=v1#fragment",
+        "s3://import-staging/{sha}?versionId=v1#",
         "s3://import-staging/{other}?versionId=v1",
         "s3://import-staging/{sha}?versionId=v1&versionId=v2",
         "s3://import-staging/{sha}?versionId=v1&extra=x",
@@ -116,6 +141,9 @@ class _Body:
         self.closed = True
 
 
+_MISSING = object()
+
+
 class _FakeS3:
     def __init__(
         self,
@@ -127,6 +155,11 @@ class _FakeS3:
         canonical_bytes: bytes | None = None,
         canonical_head_error: BaseException | None = None,
         canonical_get_error: BaseException | None = None,
+        upload_error: BaseException | None = None,
+        temp_head_error: BaseException | None = None,
+        temp_etag: object = '"temp-etag/opaque"',
+        copy_error: BaseException | None = None,
+        cleanup_error: BaseException | None = None,
     ) -> None:
         self.versioning = versioning
         self.temp_version = temp_version
@@ -135,7 +168,13 @@ class _FakeS3:
         self.canonical_bytes = canonical_bytes
         self.canonical_head_error = canonical_head_error
         self.canonical_get_error = canonical_get_error
+        self.upload_error = upload_error
+        self.temp_head_error = temp_head_error
+        self.temp_etag = temp_etag
+        self.copy_error = copy_error
+        self.cleanup_error = cleanup_error
         self.temp_bytes = b""
+        self.versioning_calls: list[dict[str, Any]] = []
         self.upload_calls: list[dict[str, Any]] = []
         self.head_calls: list[dict[str, Any]] = []
         self.get_calls: list[dict[str, Any]] = []
@@ -143,10 +182,13 @@ class _FakeS3:
         self.delete_calls: list[dict[str, Any]] = []
 
     def get_bucket_versioning(self, **kwargs: Any) -> dict[str, str]:
+        self.versioning_calls.append(kwargs)
         return {"Status": self.versioning} if self.versioning is not None else {}
 
     def upload_fileobj(self, fileobj: Any, bucket: str, key: str, **kwargs: Any) -> None:
         self.upload_calls.append({"Bucket": bucket, "Key": key, **kwargs})
+        if self.upload_error is not None:
+            raise self.upload_error
         chunks: list[bytes] = []
         while chunk := fileobj.read(8192):
             chunks.append(chunk)
@@ -155,7 +197,12 @@ class _FakeS3:
     def head_object(self, **kwargs: Any) -> dict[str, Any]:
         self.head_calls.append(kwargs)
         if str(kwargs["Key"]).startswith("_tmp/"):
-            return {"VersionId": self.temp_version, "ETag": '"temp-etag/opaque"'}
+            if self.temp_head_error is not None:
+                raise self.temp_head_error
+            response: dict[str, Any] = {"VersionId": self.temp_version}
+            if self.temp_etag is not _MISSING:
+                response["ETag"] = self.temp_etag
+            return response
         if self.canonical_head_error is not None:
             raise self.canonical_head_error
         if self.canonical_version is None:
@@ -176,11 +223,15 @@ class _FakeS3:
 
     def copy_object(self, **kwargs: Any) -> dict[str, Any]:
         self.copy_calls.append(kwargs)
+        if self.copy_error is not None:
+            raise self.copy_error
         self.canonical_bytes = self.temp_bytes
         return {"VersionId": self.final_version}
 
     def delete_object(self, **kwargs: Any) -> None:
         self.delete_calls.append(kwargs)
+        if self.cleanup_error is not None:
+            raise self.cleanup_error
 
 
 def _stage(monkeypatch: pytest.MonkeyPatch, client: _FakeS3, data: bytes = b"approved") -> Any:
@@ -202,6 +253,123 @@ def test_stage_requires_enabled_versioning_before_upload_or_object_access(
     assert client.upload_calls == []
     assert client.head_calls == []
     assert client.copy_calls == []
+
+
+def test_stage_versioning_guard_targets_exact_import_staging_bucket_and_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeS3()
+
+    _stage(monkeypatch, client)
+
+    assert client.versioning_calls == [{"Bucket": "import-staging"}, {"Bucket": "import-staging"}]
+
+
+def test_upload_failure_is_wrapped_before_temp_identity_or_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("upload transport failed")
+    client = _FakeS3(upload_error=failure)
+
+    with pytest.raises(StorageUnavailable) as caught:
+        _stage(monkeypatch, client)
+
+    assert caught.value.stage is StorageStage.STAGING_PUT
+    assert caught.value.__cause__ is failure
+    assert client.head_calls == []
+    assert client.copy_calls == []
+    assert client.delete_calls == []
+
+
+def test_temp_head_failure_is_wrapped_without_unversioned_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("temp head transport failed")
+    client = _FakeS3(temp_head_error=failure)
+
+    with pytest.raises(StorageUnavailable) as caught:
+        _stage(monkeypatch, client)
+
+    assert caught.value.stage is StorageStage.STAGING_PUT
+    assert caught.value.__cause__ is failure
+    assert client.copy_calls == []
+    assert client.delete_calls == []
+
+
+@pytest.mark.parametrize("etag", [_MISSING, None, "", "   "])
+def test_missing_or_blank_temp_etag_refuses_copy_and_cleans_exact_temp_version(
+    monkeypatch: pytest.MonkeyPatch, etag: object
+) -> None:
+    client = _FakeS3(temp_etag=etag)
+
+    with pytest.raises(StorageUnavailable) as caught:
+        _stage(monkeypatch, client)
+
+    assert caught.value.stage is StorageStage.STAGING_PUT
+    assert caught.value.__cause__ is None
+    assert client.copy_calls == []
+    assert client.delete_calls == [
+        {
+            "Bucket": "import-staging",
+            "Key": client.upload_calls[0]["Key"],
+            "VersionId": "tmp/v+1",
+        }
+    ]
+
+
+def test_copy_failure_is_wrapped_and_still_cleans_exact_temp_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("copy transport failed")
+    client = _FakeS3(copy_error=failure)
+
+    with pytest.raises(StorageUnavailable) as caught:
+        _stage(monkeypatch, client)
+
+    assert caught.value.stage is StorageStage.COPY
+    assert caught.value.__cause__ is failure
+    assert len(client.copy_calls) == 1
+    assert client.delete_calls == [
+        {
+            "Bucket": "import-staging",
+            "Key": client.upload_calls[0]["Key"],
+            "VersionId": "tmp/v+1",
+        }
+    ]
+
+
+def test_cleanup_failure_is_wrapped_and_takes_precedence_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("cleanup transport failed")
+    client = _FakeS3(cleanup_error=failure)
+
+    with pytest.raises(StorageUnavailable) as caught:
+        _stage(monkeypatch, client)
+
+    assert caught.value.stage is StorageStage.CLEANUP
+    assert caught.value.__cause__ is failure
+    assert len(client.copy_calls) == 1
+    assert len(client.delete_calls) == 1
+
+
+def test_cleanup_failure_takes_precedence_over_copy_failure_and_retains_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    copy_failure = RuntimeError("copy transport failed")
+    cleanup_failure = RuntimeError("cleanup transport failed")
+    client = _FakeS3(copy_error=copy_failure, cleanup_error=cleanup_failure)
+
+    with pytest.raises(StorageUnavailable) as caught:
+        _stage(monkeypatch, client)
+
+    assert caught.value.stage is StorageStage.CLEANUP
+    assert caught.value.__cause__ is cleanup_failure
+    assert isinstance(cleanup_failure.__context__, StorageUnavailable)
+    assert cleanup_failure.__context__.stage is StorageStage.COPY
+    assert cleanup_failure.__context__.__cause__ is copy_failure
+    assert len(client.copy_calls) == 1
+    assert len(client.delete_calls) == 1
 
 
 def test_true_canonical_404_copies_and_pins_every_temp_and_final_operation(
@@ -408,3 +576,63 @@ async def test_extract_rejects_legacy_locator_with_stable_failure_token(
 
     assert result.failed is True
     assert result.error == "staging_version_required"
+
+
+def _identity_mismatch(source: StagedObjectRef) -> UploadIdentityMismatch:
+    return UploadIdentityMismatch(
+        source=source,
+        expected_sha256=source.expected_sha256,
+        observed_sha256="b" * 64,
+        expected_size=source.expected_size,
+        observed_size=source.expected_size or 0,
+        etag='"opaque-etag"',
+        classification="digest_mismatch",
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure_factory", "expected_token"),
+    [
+        (lambda _source: StagingVersionRequired(), "staging_version_required"),
+        (lambda source: StagedSourceUnavailable(source), "staged_source_unavailable"),
+        (_identity_mismatch, "upload_identity_mismatch"),
+        (
+            lambda _source: StorageUnavailable(
+                StorageStage.SOURCE_GET, RuntimeError("secret-storage-detail")
+            ),
+            "storage_unavailable",
+        ),
+        (lambda _source: RuntimeError("secret-unexpected-detail"), "staging_fetch_failed"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_extract_maps_fetch_failures_to_stable_nonleaking_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_factory: Callable[[StagedObjectRef], BaseException],
+    expected_token: str,
+) -> None:
+    source = _source(version_id="canonical-v1")
+    monkeypatch.setattr(storage, "_import_staging_bucket", lambda: "import-staging")
+
+    async def fail_fetch(requested: StagedObjectRef) -> bytes:
+        assert requested == source
+        raise failure_factory(requested)
+
+    monkeypatch.setattr(storage, "fetch_staged_bytes", fail_fetch)
+    file_row = SimpleNamespace(
+        sha256=source.expected_sha256,
+        staged_blob_uri=storage.format_staged_uri(source),
+        mime_type=source.content_type,
+        size_bytes=source.expected_size,
+        rel_path="failed.pdf",
+        filename="failed.pdf",
+        ext="pdf",
+    )
+
+    result = await extract._extract_one(
+        SimpleNamespace(), file_row, ocr_enabled=False, ocr_language="eng"
+    )
+
+    assert result.failed is True
+    assert result.error == expected_token
+    assert "secret" not in (result.error or "")
