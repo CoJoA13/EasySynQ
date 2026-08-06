@@ -444,12 +444,17 @@ flowchart TD
 
 **Principle (inherited from architecture):** only **PostgreSQL + MinIO** are backup-critical; OpenSearch and the filesystem mirror are always rebuildable. A backup is *valid* only if the DB snapshot and the blob snapshot **correspond** (consistency point).
 
+> **Current implementation limit:** the archive contains `pg_dump` plus blob locator/hash metadata,
+> not MinIO object bytes. The matrix's MinIO mirror/replication leg is a required target design, not a
+> shipped archive leg. Current restore PASS depends on the configured source object store and cannot
+> authorize cutover or a disaster-recovery claim.
+
 ### 8.1 Backup matrix
 
 | Component | Method | Default cadence (admin-tunable) | Restore |
 | --- | --- | --- | --- |
-| PostgreSQL | `pg_dump` logical + optional continuous **WAL archiving (PITR)** | Nightly full + WAL stream | `pg_restore` / PITR to timestamp |
-| MinIO blobs | `mc mirror` / bucket replication (WORM ⇒ immutable ⇒ safe incremental) | Nightly incremental | `mc mirror` back / repoint |
+| PostgreSQL | Current: `pg_dump` logical. Target: continuous **WAL archiving (PITR)** | Current: nightly full. WAL stream unshipped | Current: scratch `pg_restore` verification. PITR unshipped |
+| MinIO blobs | Target: `mc mirror` / role-preserving bucket replication | Unshipped | Source-independent recovery unshipped |
 | Keycloak realm | Realm export JSON (encrypted) | On config change + nightly | Realm import |
 | Config / secrets | `.env` + Compose snapshot (encrypted) | On change | Redeploy |
 | **Audit checkpoints** | Latest signed chain checkpoints bundled into every backup | Each backup | Verifies chain integrity post-restore |
@@ -458,19 +463,29 @@ flowchart TD
 
 ### 8.2 Backup/restore flow & consistency
 
-- `easysynq backup` briefly **quiesces** (short consistency lock) to align the DB dump with the blob manifest, then produces a **single timestamped, checksummed, encrypted archive** (DB dump + MinIO manifest + Keycloak realm + config + audit checkpoint) written to the admin-configured target. Backup success/failure is an audited event and alertable.
-- `easysynq restore` **verifies checksums and decrypts**, restores PG + MinIO, re-imports the realm,
-  and **re-walks and verifies the audit hash chain against the bundled checkpoint** (a restore that
-  fails chain verification is flagged, not silently accepted). After cutover, the operator runs
-  `easysynq mirror rebuild`; a future derived search index would also be rebuilt if deployed.
+- `easysynq backup` produces a timestamped, checksummed archive containing the database dump, blob
+  manifest, and available Keycloak/config/checkpoint legs. The blob manifest is metadata; object
+  bytes are absent, so the archive is non-self-contained.
+- `easysynq restore` **verifies checksums and decrypts**, restores PostgreSQL into a scratch database,
+  copies bytes from the configured source object store into a flattened scratch layout, and verifies
+  the audit chain plus both blob-verification views. PASS is integrity evidence only. The scratch
+  target is not role-preserving or cutover-ready.
 - A documented **restore drill** is part of the admin runbook and is itself an auditable, recommended-periodic activity (the only way to trust a backup is to have restored one).
 
 ### 8.2.1 WORM-aware restore, PITR ↔ blob alignment & quiesce bound (reconciled per Decisions Register R37)
 
-Because document/record blobs live under MinIO **object-lock / WORM** (§5) and Postgres supports point-in-time recovery (PITR), a naive restore can either fail against immutable objects or reconstruct an internally inconsistent system. The restore procedure therefore makes the following explicit and binding:
+Because document/record blobs live under MinIO **object-lock / WORM** (§5), a naive restore can either
+fail against immutable objects or reconstruct an internally inconsistent system. These are binding
+requirements for a **future supported recovery procedure**, not instructions implemented by today's
+scratch verification CLI:
 
-- **WORM-aware restore target.** Restoring blobs over an existing object-locked bucket is **not** permitted by the storage layer (that is the whole point of WORM). A restore that must rewrite blobs MUST target a **fresh / cleared bucket or a versioned restore target** — never an attempt to overwrite locked objects in place. The runbook specifies provisioning a clean bucket (or a new object-lock-enabled bucket version) and repointing the app at it.
-- **PITR ↔ blob alignment.** A Postgres point-in-time restore MUST be **paired with the matching blob set** for that point in time — **not merely the latest mirror or the latest blob snapshot**. The blob manifest captured at backup (and the content-addressed SHA-256 digests) is used to select the blob set whose digests the restored metadata references, so the restored DB and the restored blobs **correspond** (the consistency-point principle of §8). Restoring the DB to time *T* with the newest blobs (or vice-versa) is explicitly disallowed.
+- **WORM-aware restore target.** A recovery MUST use fresh role-preserving document/record targets
+  with object lock plus a fresh plain rendition target, preserve object keys, map bucket roles after
+  complete copies, and atomically switch the restored database and matching storage configuration.
+  The current flattened scratch layout must not be cut over.
+- **PITR ↔ blob alignment.** A Postgres point-in-time restore MUST be paired with the matching,
+  source-independent blob set — not merely a manifest or the latest mirror. The generation/WAL
+  binding needed to implement this is not currently shipped.
 - **Checkpoint not ahead of the PITR target.** When restoring to a **mid-chain PITR target**, the verifier MUST **confirm the audit hash-chain checkpoint is not ahead of that target**: a bundled/off-host checkpoint whose `latest_id` exceeds the highest restored `audit_event.id` would falsely report a "missing tail" as tampering. The restore selects (or recomputes against) the checkpoint at-or-before the PITR target and verifies the chain only up to the restored point; a checkpoint ahead of the target is flagged and the matching earlier checkpoint is used.
 - **Bounded consistency-quiesce window.** The backup consistency lock (§8.2) and any restore-time quiesce are **explicitly bounded** (short, sub-minute target) and are **reconciled with the R14 availability target** (99.0% per month for the single-host profile, including the Keycloak and Beat dependencies): the quiesce window is counted against — and must fit within — that monthly budget, so backup/restore quiescing does not silently breach the stated availability target.
 
@@ -482,6 +497,9 @@ Because document/record blobs live under MinIO **object-lock / WORM** (§5) and 
 | **RTO** | ≤ 2 h for a full restore on the M profile |
 | **Availability** | **99.0% per month for the single-host profile**, excluding planned maintenance — **including** the auth (**Keycloak**) and scheduler (**Beat**) dependencies, which are **single points of failure** on this profile. **99.5%+ is achievable only via the documented HA/K8s path**; do **not** claim 99.5% on a single host running six single-instance stateful services (reconciled per Decisions Register R14) |
 | **Integrity after DR** | Audit chain verified, blob sample re-hashed, before declaring the system trustworthy post-restore |
+
+These DR values are targets, not current host-loss guarantees. They remain unproven until the
+self-contained recovery generation and role-preserving, source-independent cutover acceptance pass.
 
 > **Availability posture & SPOFs (reconciled per Decisions Register R14).** On the single-host profile, **Keycloak (auth)** and **Beat (scheduler)** are explicit **single points of failure**: if Keycloak is down, no one can authenticate (the auth subsystem fails closed, P9); if Beat is down, scheduled jobs (chain-linking, chain-verify, re-hash sweeps, retention sweeps, checkpoint anchoring, mirror-sync) stall. The single-host availability target is therefore stated as **99.0% per month, inclusive of these dependencies** — not 99.5%. A **fast-restart runbook** for both Keycloak and Beat is part of the admin runbook (detect → restart → verify), and the consistency-quiesce windows of §8.2.1 are counted within this same budget. Reaching **99.5%+** requires the **documented HA/K8s path** (redundant Keycloak, redundant scheduler, replicated stores); it is not a property of the six-single-instance-stateful-service single host.
 
@@ -637,7 +655,9 @@ flowchart LR
 3. **The audit trail** is append-only, transactional with the action, before/after-capturing, reason-bearing, and **hash-chained with signed checkpoints** — tamper-evident by design and ready to carry Part 11 signing evidence.
 4. **Binary integrity** is guaranteed by SHA-256 content addressing, WORM object-lock immutability, and scheduled re-hash verification, with the filesystem mirror as a read-only, regenerable export (vault→mirror authority only).
 5. **Encryption** protects data in transit (TLS 1.2+/1.3, LDAPS/STARTTLS) and at rest (LUKS, SSE-S3, envelope-encrypted DB secrets, encrypted backups), under a clear key hierarchy with rotatable, never-committed secrets.
-6. **Backup/restore/DR** treat only PG+MinIO as critical, enforce DB↔blob consistency, verify the audit chain on restore, and meet RPO ≤ 24 h (minutes with WAL) / RTO ≤ 2 h.
+6. **Backup/restore/DR** treat only PG+MinIO as critical. Current tooling verifies DB↔blob integrity
+   and the restored audit chain against the configured source store; the RPO ≤ 24 h (minutes with
+   WAL) / RTO ≤ 2 h values remain unproven targets pending self-contained recovery generation.
 7. **Retention & GDPR** are reconciled by separating immutable QMS content/audit from mutable user PII: erasure anonymizes the profile while the stable `actor_id` keeps the hash chain — and ISO traceability — intact.
 8. **The threat model** maps OWASP Top 10 to concrete mitigations and states honestly that privileged-insider history rewrites are *detectable* (not preventable) via signed audit checkpoints.
 9. **E-signature hooks** are reserved (signature meaning, re-auth at signing, signature manifest) so 21 CFR Part 11 is an additive change, not a rewrite — fulfilling the foundational extensibility mandate.

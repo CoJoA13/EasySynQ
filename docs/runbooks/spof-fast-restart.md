@@ -18,9 +18,10 @@ client edits therefore survive a Keycloak restart, image bump, container recreat
 `compose down`; the authoritative state is in the durable `pgdata` volume. The committed realm file
 is imported only when the realm does not yet exist.
 
-Deleting named volumes (`compose down -v`) is a destructive full-stack reset. Recover identity state
-with the PostgreSQL backup/cutover procedure in [backup-restore.md](backup-restore.md); the encrypted
-realm export remains an additional recovery leg, not the live store.
+Deleting named volumes (`compose down -v`) is a destructive full-stack reset. Current archives are
+not self-contained and the current restore scratch target is not cutover-ready. Preserve PostgreSQL
+and the source object store; [backup-restore.md](backup-restore.md) records the recovery constraints.
+The encrypted realm export remains an additional recovery leg, not the live store.
 
 ## Beat is down
 **Symptom:** scheduled jobs stall — effectivity-cutover sweep, chain-linker, chain-verify, blob

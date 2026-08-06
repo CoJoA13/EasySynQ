@@ -62,7 +62,9 @@ The interface flows the way ISO 9001 itself flows — the clause spine, the proc
 - **Self-hosted** on a single Linux host via Docker Compose (S/M sizing profiles) — air-gap friendly, no phone-home
 - Guided **first-run setup** with blocking trust gates (activate → organization → WORM verify →
   backup/restore drill → authentication → finalize); users and roles continue in Administration
-- Encrypted backups (AES-256-GCM), **WORM-aware restore-to-verified-target**, health-gated upgrades
+- Encrypted database/manifest archives (no object bytes), source-store-dependent **restore integrity
+  verification** (not cutover-ready), and health-gated upgrade mechanics whose production eligibility
+  still requires a self-contained recovery proof
 - **Ingestion engine** to import an existing QMS file tree (scan → classify → dedup → review → commit)
 - Optional **1-click Hyper-V appliance** (VHDX + seed ISO + installer)
 

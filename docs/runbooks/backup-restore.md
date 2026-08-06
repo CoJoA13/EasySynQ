@@ -3,8 +3,10 @@
 Only **PostgreSQL + MinIO** are backup-critical; the filesystem mirror is regenerable
 (D-6 / R11). OpenSearch is also designed as a derived store, but is not deployed by the shipped
 S/M profiles. The backup/restore/upgrade CLIs run on the **worker** (it carries `postgresql-client`
-+ the OWNER `DATABASE_URL_SYNC`). MVP scope = nightly `pg_dump` + WORM-aware restore-to-verified-
-target; **continuous WAL/PITR, retention pruning, and S3 destinations are v1.x** (D-6).
++ the OWNER `DATABASE_URL_SYNC`). Current scope = nightly `pg_dump` + blob-manifest archives and a
+source-store-dependent integrity-verification target. **The current CLI does not produce a
+self-contained recovery generation or a cutover-ready target.** Continuous WAL/PITR, retention
+pruning, and S3 destinations are also unshipped (D-6).
 
 ## The durable backup archive
 
@@ -12,11 +14,17 @@ target; **continuous WAL/PITR, retention pruning, and S3 destinations are v1.x**
 checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy's destination):
 
 * `db.dump` (`pg_dump -Fc`, including Keycloak's durable `keycloak` schema) + `manifest.json` (the
-  **blob snapshot**: sha256/size/bucket per position, + per-table row counts) + the additional
+  **blob inventory**: sha256/size/bucket/object-key metadata, + per-table row counts) + the additional
   **Keycloak realm export** + a **config snapshot** + the latest signed audit checkpoint;
 * the whole archive is **AES-256-GCM encrypted** to `…tar.enc` with `BACKUP_ENCRYPTION_KEY` (a
   stolen archive is useless without the key). If a Keycloak outage prevents the realm export, the
   backup still succeeds with `legs.realm_export = "absent"` (logged) — it never blocks.
+
+> ⚠ **Not a self-contained recovery set:** the archive records blob locators and hashes, but contains
+> **no MinIO object bytes**. Restore verification reads those bytes from the currently configured
+> source object store. Preserve that store. Until a source-independent recovery generation and the
+> role-preserving restore-target work are implemented and proven, do not treat any durable or
+> pre-upgrade archive as a disaster safety net.
 
 > **Key custody (critical):** `BACKUP_ENCRYPTION_KEY` lives ONLY in the `0600` `.env` / a Docker
 > secret — never in the archive. **Lose it and every `.tar.enc` is unrecoverable.** Back it up
@@ -74,64 +82,68 @@ copies the manifested blobs into the non-WORM `restore-scratch` bucket → runs 
 store · per-table row-count parity · `document_version→blob` FK check) and tears the scratch namespace
 down. Only a **PASS** satisfies the setup gate. "Configured but unverified" does not count.
 
-## Live restore (WORM-aware, to a VERIFIED TARGET)
+## Restore integrity verification (not a cutover procedure)
 
-`./scripts/easysynq restore <archive.tar.enc> --confirm` decrypts + verifies the archive, restores PG into a
-fresh scratch DATABASE, copies blobs into the fresh non-WORM bucket (the locked vault is **read**,
-never written), runs the triad, the **checkpoint-not-ahead** tamper check, and a **restored-chain
-re-verify**. The triad verifies that restored database blob locators resolve against the currently
-configured object store; it does **not** independently prove the copied scratch namespace is ready
-for cutover. It then leaves the verified target standing for the documented manual cutover. It exits:
+`./scripts/easysynq restore <archive.tar.enc> --confirm` decrypts + verifies the archive, restores PG
+into a fresh scratch DATABASE, and copies source-store blobs into a fresh non-WORM scratch bucket
+(the locked vault is **read**, never written). It then runs the triad, the **checkpoint-not-ahead**
+tamper check, and a **restored-chain re-verify**. The target remains standing only for inspection or
+explicit discard. It exits:
 
-* **0 (PASS)** — a verified target (`db=restore_easysynq_… bucket=restore-scratch`) whose restored
-  database locators resolve against the configured object store. The copied scratch namespace is
-  **not** independently certified ready for cutover.
+* **0 (PASS)** — integrity verification passed. The copied scratch bytes re-hash correctly, and the
+  restored database's stored locators resolve against the **currently configured source object
+  store**. This is source-store-dependent and **not cutover-ready**.
 * **3 (FLAGGED)** — the audit checkpoint is **ahead** of the restored head (the backup is older than
   the last anchored checkpoint, a deliberate point-in-time target, **or** a truncated/tampered tail).
   Re-run with `--audit-checkpoint-ack` to proceed; the acknowledgement is **audited**
   (`RESTORE_CHECKPOINT_ACK`). Never auto-proceeds.
 * **1 (FAIL)** — archive/restore/triad/chain failure; the scratch target is torn down.
 
-### Cut over (manual operator step)
-The MVP produces a verified target; **cutover is a documented operator action, not automated**
-(automated in-place live cutover is a tracked hardening item). To cut over:
+### Production recovery/cutover is not currently supported
 
-1. Stop `api`, `worker`, `beat`, and `keycloak`.
-2. Repoint `DATABASE_URL`, `DATABASE_URL_SYNC`, and `AUDIT_LINKER_DATABASE_URL` at the restored
-   database (or `pg_dump`/`createdb` it into the production name). Set `KEYCLOAK_DB_NAME` to that
-   same database name so the restored identity/client state moves with the application.
-3. **Choose the Keycloak recovery path before starting anything:**
+**Do not cut over to today's CLI scratch target.** Scratch copies are flattened under a verification
+prefix, while restored `blob` rows retain their original object keys and role-bucket locators. The
+CLI neither maps those locators to fresh role buckets nor switches the matching database and object
+store configuration. A PASS can therefore coexist with a scratch target that cannot serve the
+restored application's reads.
 
-   - A Batch-13-or-newer target contains the `keycloak` PostgreSQL schema. No realm re-import is
-     needed; `KEYCLOAK_DB_NAME` selects that durable identity state.
-   - A pre-Batch-13 target has no `keycloak` schema because its identities lived in H2. For this
-     case, `KEYCLOAK_DB_NAME` alone does **not** recover identities. Confirm the archive manifest
-     records `legs.realm_export = "present"`, decrypt/extract its `realm.json` leg into a controlled
-     `0600` temporary file, and stage it as `easysynq-realm.json` in this installation's
-     project-scoped `<compose-project>_keycloakimport` volume **before the first Keycloak start**.
-     This is the same offline import path used by `scripts/migrate-keycloak-h2.sh`; do not let
-     `keycloak-init` substitute the committed stock seed. If the realm leg is absent, stop: that
-     archive cannot recover the legacy Keycloak users/credentials, so use the separately retained
-     identity backup instead.
+A future supported cutover must satisfy all of these requirements before any operator procedure is
+published:
 
-4. Repoint MinIO at (or copy the blobs into) a fresh **object-lock-enabled** vault bucket — **never
-   the old locked one**.
-5. Start the stack. For a PostgreSQL-backed archive, the `keycloak-init` one-shot transfers
-   restored `keycloak` schema objects from the `pg_restore --no-owner` role back to
-   `easysynq_keycloak`. For a legacy archive, it creates the empty schema while preserving the
-   staged realm for Keycloak's offline import. Verify a restored account and the `easysynq-web`
-   client before reopening access.
-6. Run `./scripts/easysynq mirror rebuild`. Shipped S/M search uses PostgreSQL FTS and needs no separate
-   reindex operation.
+* restore from a self-contained generation whose object bytes remain available when source-store
+  reads are denied;
+* create fresh object-lock-enabled document and record roles plus a fresh plain rendition role;
+* preserve each stored object key, reject unknown legacy bucket roles, and map restored bucket
+  fields to their matching fresh roles only after every copy succeeds;
+* atomically switch the restored database and all matching object-store settings, including the
+  application DSNs and `KEYCLOAK_DB_NAME`, so application and identity state move together;
+* recover the matching identity/config state. A PostgreSQL-backed generation must repair ownership
+  of restored `keycloak` schema objects. A legacy generation must prove
+  `legs.realm_export = "present"`, stage it through `<compose-project>_keycloakimport`, and complete
+  that import before the first Keycloak start. A future recovery tool must automate and validate
+  these branches; they are not manual instructions for today's archive;
+* boot with external access still closed and prove document, record, sealed-pack, and rendition
+  reads from the fresh target; and
+* rebuild the filesystem mirror only after that closed-service verification passes.
 
-Discard an unused target with `./scripts/easysynq restore --discard <scratch_db>`.
+This is a requirements list, **not executable recovery instructions**. No current command performs
+those steps. Preserve the source object store and keep the service closed during a recovery event.
+Discard an unused verification target with
+`./scripts/easysynq restore --discard <scratch_db>`.
 
 ## Upgrade
 
 `./scripts/easysynq upgrade --confirm` enforces **pre-backup → `alembic upgrade head` → readiness health-gate**
-and audits `UPGRADE_STARTED`/`UPGRADE_COMPLETED`/`UPGRADE_FAILED`. The pre-backup archive is the
-disaster safety net (named in `UPGRADE_FAILED.after`): a failed migration auto-rolls-back its own
-transaction; if the health-gate fails, recover with `./scripts/easysynq restore <pre-backup>` + cutover.
+and audits `UPGRADE_STARTED`/`UPGRADE_COMPLETED`/`UPGRADE_FAILED`. A failed migration auto-rolls back
+its own transaction. The exact pre-upgrade archive pointer is retained in the failure result/audit
+row, but that archive is **non-self-contained**: it has the database dump and blob manifest, not
+object bytes. It is not a disaster safety net and must not be followed by an archive-only
+restore/cutover attempt.
+
+If migration or readiness fails, keep the service closed and preserve the source object store while
+the failure is investigated. Production upgrade eligibility remains blocked until a self-contained
+recovery generation and source-independent, role-preserving restore/cutover proof pass. The command's
+current mechanics do not establish that eligibility.
 
 ### ⚠ Stop the writers first when a revision builds an index on `audit_event`
 

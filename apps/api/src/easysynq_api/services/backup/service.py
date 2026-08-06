@@ -391,13 +391,14 @@ async def run_restore(
     fetch_off_host: restore.FetchOffHost | None = None,
     after_restore: Callable[[ScratchHandle], None] | None = None,
 ) -> dict[str, Any]:
-    """Operator-grade live WORM-aware restore-to-verified-target (S11, R37). Serialized on
+    """Operator restore integrity verification (S11, R37). Serialized on
     ``LOCK_RESTORE_LIVE`` (distinct from the drill lock). Emits RESTORE_STARTED then one of
     RESTORE_VERIFIED / RESTORE_CHECKPOINT_AHEAD / RESTORE_FAILED (+ an audited
     RESTORE_CHECKPOINT_ACK when a flagged restore proceeds under operator ack). The pg/blob work
     runs as the
     OWNER role inside ``restore.run_restore``; this session only audits + commits. Returns
-    ``{result, reason, scratch_db, ...}`` — only PASS leaves a standing, ready-to-cutover target."""
+    ``{result, reason, scratch_db, ...}`` — only PASS leaves a standing verification target. PASS
+    still depends on the configured source object store and never authorizes cutover."""
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
     sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(

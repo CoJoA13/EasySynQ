@@ -1,20 +1,23 @@
 """Operator-grade WORM-aware restore (slice S11, doc 12 §8.2 / R37, doc 18 §7/§9).
 
-``easysynq restore <archive>`` restores TO A VERIFIED TARGET: it decrypts + verifies the archive,
-restores PostgreSQL into a FRESH scratch DATABASE, copies the manifested blobs into the FRESH,
-non-WORM ``restore-scratch`` bucket (the blob bytes are READ from their content-addressed source —
-the live object-locked vault is never mutated), then runs the integrity triad, a
+``easysynq restore <archive>`` restores to an integrity-verification target: it decrypts + verifies
+the archive, restores PostgreSQL into a FRESH scratch DATABASE, and copies manifested blobs into a
+FRESH, non-WORM ``restore-scratch`` bucket (the blob bytes are READ from their content-addressed
+source — the live object-locked vault is never mutated), then runs the integrity triad, a
 **checkpoint-not-ahead** tamper check, and a **restored-chain re-verify**. The triad proves the
 restored database's stored blob locators resolve against the currently configured object store; it
 does not independently certify the copied scratch namespace as cutover-ready. It NEVER mutates the
 live vault, NEVER auto-cuts-over.
 
-    HARDENING TODO (S11+): automated in-place LIVE cutover (repoint DATABASE_URL + the MinIO bucket,
-    re-import the Keycloak realm + config, then reindex + mirror-sync) is a tracked hardening-stage
-    item. The owner decision (S11) is restore-to-VERIFIED-TARGET: the production cutover stays a
-    DOCUMENTED OPERATOR STEP (docs/runbooks/backup-restore.md, "Cut over"), never automated here.
-    reindex + mirror-sync therefore run POST-cutover (they would corrupt the live index/mirror with
-    not-yet-cut-over data if run now); the realm + config legs are recorded for that step.
+    CURRENT LIMIT: PASS is integrity verification only. The copied objects are flattened under a
+    scratch prefix while the restored database keeps its original role-bucket locators, and the
+    archive contains no object bytes. The target therefore depends on the configured source object
+    store and MUST NOT be used for cutover.
+
+    FUTURE RECOVERY REQUIREMENTS (not an executable procedure): a source-independent object-byte
+    generation; fresh role-preserving object-store targets; preserved object keys with restored
+    bucket-role mapping; an atomic database + object-store configuration switch; identity/config
+    recovery; and closed-service read verification before access reopens.
 
 Reuses the S8b2 drill primitives wholesale (scratch-DB create/teardown, blob copy, the triad). Runs
 as the OWNER role (``settings.sync_dsn``) like the drill, off the event loop, and NEVER raises — a
@@ -49,11 +52,11 @@ FetchOffHost = Callable[[Settings, uuid.UUID], "int | None"]
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RestoreResult:
-    """The outcome of a restore-to-verified-target.
+    """The outcome of restore integrity verification.
 
-    ``PASS`` — a verified target is left standing (scratch_db/bucket/prefix set); its restored DB
-    locators resolve against the configured object store, but the copied scratch namespace is not
-    independently certified as cutover-ready.
+    ``PASS`` — a verification target is left standing (scratch_db/bucket/prefix set); its restored
+    DB locators resolve against the configured object store, but the copied scratch namespace is
+    not independently certified as cutover-ready.
     ``FLAGGED`` — checkpoint-not-ahead tamper-suspicion; the target is torn down; re-run with
     ``audit_checkpoint_ack=True`` to proceed (the acknowledgement is audited). ``FAIL`` — archive /
     restore / triad / chain failure; the target is torn down. Never raises."""
@@ -305,9 +308,9 @@ def _reverify_chain(owner_dsn: str, scratch_db: str, version: int) -> dict[str, 
 
 
 def _sweep_stale_restore(owner_dsn: str) -> None:
-    """Best-effort: drop leftover ``restore_easysynq_*`` targets from a prior restore (a new restore
-    supersedes an un-cut-over one). Distinct from the drill's ``scratch_easysynq_*`` sweep, so the
-    nightly drill never destroys a standing verified target (and vice-versa)."""
+    """Best-effort: drop leftover ``restore_easysynq_*`` targets from a prior verification run.
+    Distinct from the drill's ``scratch_easysynq_*`` sweep, so the nightly drill never destroys a
+    standing verification target (and vice-versa)."""
     import psycopg
     from psycopg import sql
 
@@ -335,9 +338,11 @@ def run_restore(
     fetch_off_host: FetchOffHost | None = None,
     after_restore: Callable[[ScratchHandle], None] | None = None,
 ) -> RestoreResult:
-    """Restore ``archive_path`` to a verified target. Never raises. ``after_restore`` is a TEST-ONLY
-    fault injector (run after restore + blob copy, before the triad); ``fetch_off_host`` overrides
-    the off-host checkpoint fetch (tests inject a deterministic value)."""
+    """Restore ``archive_path`` to an integrity-verification target. Never raises.
+
+    ``after_restore`` is a TEST-ONLY fault injector (run after restore + blob copy, before the
+    triad); ``fetch_off_host`` overrides the off-host checkpoint fetch (tests inject a deterministic
+    value)."""
     owner_dsn = settings.sync_dsn
     fetch = fetch_off_host or _default_fetch_off_host
     src = Path(archive_path)
@@ -460,7 +465,8 @@ def run_restore(
                     triad=triad_detail,
                 )
 
-            # 8. PASS → leave the verified target standing for the documented operator cutover
+            # 8. PASS → leave the integrity-verification target standing for inspection/discard.
+            # It is deliberately not a cutover target; see the module-level CURRENT LIMIT.
             keep_standing = True
             return RestoreResult(
                 "PASS",
@@ -476,7 +482,13 @@ def run_restore(
                 details={
                     "blobs": len(blobs),
                     "legs": legs,
-                    "post_cutover_actions": ["reindex", "mirror-sync", "realm/config re-import"],
+                    "future_recovery_requirements": [
+                        "source-independent object-byte generation",
+                        "role-preserving object-store targets",
+                        "atomic database and object-store configuration switch",
+                        "identity and config recovery",
+                        "closed-service locator reads before access reopens",
+                    ],
                 },
             )
     except BackupCryptoError as exc:
@@ -499,8 +511,8 @@ def run_restore(
 
 
 def discard_target(settings: Settings, scratch_db: str) -> None:
-    """Tear down a left-standing verified target (operator ``--discard``) — BOTH legs: the scratch
-    DB AND the copied blobs under its prefix in the non-WORM restore-scratch bucket (else a
+    """Tear down a left-standing verification target (operator ``--discard``) — BOTH legs: the
+    scratch DB AND the copied blobs under its prefix in the non-WORM restore-scratch bucket (else a
     discarded restore orphans a copy of the org's Effective blob set). The prefix is derived from
     the DB name (scratch_db = _RESTORE_PREFIX + restore_id; object prefix = restore_id/)."""
     drill._drop_scratch_db(settings.sync_dsn, scratch_db)

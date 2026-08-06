@@ -3,9 +3,10 @@
 
     python -m easysynq_api.cli.upgrade --confirm
 
-Enforces pre-backup → ``alembic upgrade head`` → readiness health-gate. The pre-backup archive is
-the disaster safety net (a failed migration auto-rolls-back its own txn; full auto-restore is a
-documented operator step / hardening TODO). Exit 0 = UPGRADE_COMPLETED, 1 = UPGRADE_FAILED.
+Enforces pre-upgrade archive → ``alembic upgrade head`` → readiness health-gate. The archive has a
+database dump + blob manifest but no object bytes, so it is not a self-contained disaster-recovery
+set. A failed migration auto-rolls back its own transaction. Exit 0 = UPGRADE_COMPLETED,
+1 = UPGRADE_FAILED.
 """
 
 from __future__ import annotations
@@ -56,13 +57,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     out = asyncio.run(run_upgrade(org_id))
     if out.get("result") == "OK":
         print(
-            f"upgrade: OK — at head {out.get('head')} (pre-backup {out.get('pre_backup_archive')})"
+            f"upgrade: OK — at head {out.get('head')} "
+            f"(non-self-contained pre-upgrade archive {out.get('pre_backup_archive')})"
+        )
+        print(
+            "  WARNING: command completion is not production eligibility; that remains blocked "
+            "pending a self-contained recovery proof"
         )
         return 0
     print(f"upgrade: FAILED at '{out.get('stage')}' — {out.get('reason') or out.get('unhealthy')}")
     if out.get("pre_backup_archive"):
-        print(f"  pre-backup safety net: {out.get('pre_backup_archive')}")
-        print("  to recover: easysynq restore <pre-backup> then cut over (runbook)")
+        print(f"  pre-upgrade archive (non-self-contained): {out.get('pre_backup_archive')}")
+        print("  contains a database dump + blob manifest; it does not contain object bytes")
+        print("  keep the service closed and preserve the source object store")
+        print(
+            "  do not restore or cut over from this archive alone; follow the constraints in "
+            "docs/runbooks/backup-restore.md"
+        )
     return 1
 
 

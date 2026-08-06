@@ -93,8 +93,8 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_USER: ${POSTGRES_USER:-easysynq}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-easysynq}
-      # The app and Keycloak normally share POSTGRES_DB. Restore cutover can select the verified
-      # database explicitly without changing the postgres container's initialization setting.
+      # The app and Keycloak normally share POSTGRES_DB. A future supported recovery cutover can
+      # select its proven database explicitly; the current scratch verification target must not.
       POSTGRES_DB: ${KEYCLOAK_DB_NAME:-${POSTGRES_DB:-easysynq}}
       # Production entrypoints backfill this on pre-Batch-13 installs. Never expose the PostgreSQL
       # owner credential to the web-facing identity service as a compatibility fallback.

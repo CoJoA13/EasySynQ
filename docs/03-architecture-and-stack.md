@@ -326,28 +326,44 @@ The append-only audit trail (§8.3) is tamper-**evident**, but an attacker with 
 
 **Principle:** only PostgreSQL + MinIO are backup-critical (everything else is rebuildable). A backup is *consistent* only if the DB snapshot and blob snapshot correspond.
 
+> **Current implementation limit:** the shipped archive contains `pg_dump` plus a blob
+> locator/hash manifest, not MinIO object bytes. The MinIO replication/mirror row below is the target
+> recovery-generation method, not a current archive leg. Current restore PASS is integrity
+> verification against the configured source object store and is not cutover-ready.
+
 | Component | Method | Cadence (default, admin-tunable) | Restore |
 | --- | --- | --- | --- |
-| PostgreSQL | `pg_dump` logical dump **and** optional continuous WAL archiving (PITR) | Nightly full + WAL stream | `pg_restore` / PITR to timestamp |
-| MinIO blobs | `mc mirror` to backup target, or MinIO bucket replication; WORM means objects are immutable so incremental mirror is safe | Nightly incremental | `mc mirror` back / repoint |
+| PostgreSQL | Current: `pg_dump` logical. Target: continuous WAL archiving (PITR) | Current: nightly full. WAL stream unshipped | Current: scratch `pg_restore` verification. PITR unshipped |
+| MinIO blobs | Target: role-preserving `mc mirror` / bucket replication | Unshipped | Source-independent recovery unshipped |
 | Keycloak realm | realm export JSON | On config change + nightly | realm import |
 | Config / secrets | `.env` + Compose files snapshot (encrypted) | On change | redeploy |
 | OpenSearch (reserved) | Not applicable to shipped S/M; any future index remains derived | n/a | rebuild from authoritative stores |
 | Filesystem mirror | **Not backed up** — regenerated from vault | n/a | run mirror-sync task |
 
-- A bundled `easysynq backup` command produces a single timestamped, checksummed, optionally-encrypted archive (DB dump + MinIO manifest + Keycloak realm + config) and writes it to the admin-configured target. Quiescing/locking briefly ensures DB↔blob consistency.
-- `easysynq restore` validates checksums, restores PG + MinIO, re-imports the realm, and verifies the
-  restored audit chain. The operator then runs `easysynq mirror rebuild` after cutover. A future
-  derived search index would also be rebuilt if that extension is deployed. A documented **restore
-  drill** is part of the admin runbook (RPO/RTO below).
-- **RPO** ≤ 24 h with nightly (≤ minutes with WAL archiving enabled); **RTO** target ≤ 2 h on the M profile for a full restore.
+- The current `easysynq backup` command writes a timestamped, checksummed archive containing the
+  database dump, blob manifest, and available identity/config/checkpoint legs. It does **not** copy
+  the manifested object bytes, so it is not a self-contained disaster-recovery set.
+- The current `easysynq restore` command validates/decrypts the archive, restores PostgreSQL into a
+  scratch database, copies bytes from the configured source object store into a flattened scratch
+  layout, and verifies both that copy and the restored database's original locators. The target is
+  for integrity verification/inspection only; no current operator cutover procedure is supported.
+- **RPO** ≤ 24 h and **RTO** ≤ 2 h remain recovery targets. They are not currently demonstrated for
+  loss of the host/source object store; WAL archiving and self-contained recovery generation are
+  unshipped.
 
 ### 9.1 WORM-aware restore, PITR↔blob alignment & quiesce window (reconciled per Decisions Register R37)
 
 Because the document/record buckets are under **object-lock / WORM** (§8.2), and because PostgreSQL holds the authoritative pointers (including the audit hash-chain checkpoint) while MinIO holds the blobs, restore is **not** a naïve "load the DB dump and re-point at whatever blobs are on disk." The following constraints are binding:
 
-- **WORM-aware restore target.** You cannot overwrite object-locked blobs in place. Restoring blobs MUST target a **fresh/cleared bucket or a versioned restore target** — never an attempt to mutate retained objects in the existing locked bucket. The restore procedure provisions (or repoints to) a clean bucket, writes the restored blob set there, then cuts MinIO over to it. The original locked bucket is left untouched as evidence.
-- **PITR ↔ blob alignment.** A Postgres **point-in-time restore MUST be paired with the matching blob set** — the blob snapshot whose contents correspond to the chosen recovery timestamp — **not merely the latest mirror**. Restoring DB-to-T while pairing the newest blobs (or vice versa) yields version rows that point at blobs that did not yet exist (or that have moved on), violating the DB↔blob consistency invariant. The backup manifest records the blob-snapshot identifier alongside each WAL/PITR position so `easysynq restore` can select the aligned pair.
+- **WORM-aware restore target (required future contract).** You cannot overwrite object-locked blobs
+  in place. A supported recovery MUST create fresh role-preserving object-store targets, preserve
+  stored object keys, map restored bucket roles only after every copy succeeds, and atomically switch
+  the database plus matching object-store configuration. The current flattened scratch verification
+  copy satisfies none of those cutover requirements.
+- **PITR ↔ blob alignment.** A Postgres **point-in-time restore MUST be paired with the matching,
+  source-independent blob set** — not merely the latest mirror or a locator manifest. Restoring
+  DB-to-T while pairing different object bytes violates the DB↔blob consistency invariant. The
+  generation/WAL binding needed to make this executable is not currently shipped.
 - **Audit hash-chain checkpoint check.** Before completing a mid-chain PITR, the restore MUST **verify the audit hash-chain checkpoint is not ahead of the PITR target** — i.e., the chained-state recorded off-host/at the checkpoint sink (the `audit_checkpoint_sink`, see §8.5) must not reference `audit_event` rows beyond the recovery point. If the checkpoint is ahead, the restore is flagged: rolling back below an already-anchored checkpoint is a tamper-evidence event and requires explicit, audited operator acknowledgement.
 - **Bounded consistency-quiesce window.** Producing a consistent DB↔blob pair requires a brief **quiesce** (pause new writes / hold a consistency point). This window is **bounded and short** — targeted at the **single-digit-minutes** range on the M profile — and is **explicitly reconciled with the R14 availability target**: the quiesce counts as planned maintenance and is sized to stay within the **99.0% single-host** budget (and is shorter still, or eliminated via snapshot/clone, on the HA path).
 
@@ -411,7 +427,10 @@ The single-host profile is honest about its limits: every stateful service runs 
 - **First-run:** Admin completes the six-screen browser wizard (Activate, Organization, Storage,
   Backup, Authentication, Finalize), then provisions users/process owners and starts imports in the
   post-finalize application surfaces.
-- **Upgrades:** `easysynq upgrade` enforces a pre-upgrade backup, runs Alembic migrations, performs a health gate, and supports rollback to the prior image set + DB snapshot.
+- **Upgrades:** `easysynq upgrade` writes a non-self-contained pre-upgrade archive, runs Alembic
+  migrations, and performs a health gate. A failed migration rolls back its own transaction; there
+  is no supported archive-to-cutover rollback path. Production eligibility awaits the self-contained
+  recovery-generation proof.
 
 ```mermaid
 graph LR

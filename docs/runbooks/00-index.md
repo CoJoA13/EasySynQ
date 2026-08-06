@@ -15,7 +15,7 @@ For an end-to-end entry point, start with the
 | [install-online.md](install-online.md) | First install on a host with internet. |
 | [install-airgapped.md](install-airgapped.md) | Install on a network with no outbound internet. |
 | [appliance-install.md](appliance-install.md) | Install the Hyper-V appliance on Windows Server. |
-| [backup-restore.md](backup-restore.md) | Configure backups; run the restore-test drill; restore from a backup (WORM-aware, to a verified target) + cut over; `./scripts/easysynq upgrade`. |
+| [backup-restore.md](backup-restore.md) | Configure backups; run restore integrity verification; understand why current archives/targets are not self-contained or cutover-ready; `./scripts/easysynq upgrade` constraints. |
 | [spof-fast-restart.md](spof-fast-restart.md) | Keycloak or Beat is down (the two single-host SPOFs, R14). |
 | [key-rotation.md](key-rotation.md) | Rotate the KEK / backup key / signing keys / Keycloak secret. |
 | [minio-object-lock-prereq.md](minio-object-lock-prereq.md) | Provision the WORM (object-lock) vault bucket — a hard prereq. |

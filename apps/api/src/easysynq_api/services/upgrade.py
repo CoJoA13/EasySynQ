@@ -1,20 +1,20 @@
 """Operator-grade in-place upgrade (slice S11, doc 18 §7 / §2 line 128).
 
-``easysynq upgrade`` enforces **pre-backup → migrate → readiness health-gate**, with an honest
-rollback posture:
+``easysynq upgrade`` enforces **pre-upgrade archive → migrate → readiness health-gate**, with an
+honest rollback posture:
 
-* **Pre-backup** — a durable archive is written FIRST (``build_durable_backup``); a pre-backup
-  failure ABORTS the upgrade. This is a required recovery artifact, but it is not advertised as a
-  self-contained safety net until the full recovery-generation slice ships.
+* **Pre-upgrade archive** — a durable archive is written FIRST (``build_durable_backup``); failure
+  ABORTS the upgrade. It carries a database dump + blob manifest but no object bytes, so it is not a
+  self-contained recovery set and cannot authorize production upgrade eligibility.
 * **Migrate** — ``alembic upgrade head`` runs as the OWNER role (the env.py DSN = ``sync_dsn``). A
   single Alembic migration runs in one transaction that auto-rolls-back on error — that is the
   honest meaning of "rollback" for a failed migration step.
 * **Health-gate** — ``readiness.check_all()`` must be green (esp. the alembic-at-head probe).
 
-    HARDENING TODO (S11+): full automated rollback = restore-and-cut-over from the pre-upgrade
-    archive. The MVP does NOT auto-restore: a failed migration auto-rolls-back its own txn, and the
-    operator runs ``easysynq restore <pre-backup>`` (restore-to-verified-target) + the documented
-    cutover if needed. ``UPGRADE_FAILED.after`` names the pre-backup archive.
+    RECOVERY LIMIT: a failed migration auto-rolls back its own transaction, but a readiness failure
+    has no supported archive-to-cutover path. ``UPGRADE_FAILED.after`` preserves the exact archive
+    pointer for investigation. Keep the service closed and preserve the source object store; do not
+    treat that non-self-contained archive as a disaster safety net.
 
 Runs on the worker (OWNER DSN + pg client). Audits via the app session like the backup service.
 """
@@ -115,7 +115,7 @@ async def _close_session_best_effort(session: AsyncSession, *, context: str) -> 
 
 
 async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> dict[str, Any]:
-    """Pre-backup → migrate → health-gate. Returns ``{result: OK|FAILED, ...}``.
+    """Pre-upgrade archive → migrate → health-gate. Returns ``{result: OK|FAILED, ...}``.
 
     ``stage`` is one of ``pre_backup`` | ``migrate`` | ``health_gate`` | ``orchestration``; the last
     covers a failure outside the three guarded stages (see the outer handler). A ``pre_backup``
@@ -149,10 +149,11 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
             )
             await session.commit()
 
-            # 1. required pre-backup recovery artifact — abort the upgrade if it fails
+            # 1. required pre-upgrade archive check — abort the upgrade if it fails. This archive is
+            # non-self-contained (no object bytes) and does not establish recovery eligibility.
             #
             # ⚠ The catch is deliberately BROAD. It was `except BackupError` and that is far too
-            # narrow: the canonical pre-backup failures do not raise BackupError at all —
+            # narrow: the canonical pre-upgrade archive failures do not raise BackupError at all —
             # `dest_dir.mkdir()` (drill.py) and `dest_enc.write_bytes()` (crypto.py) raise OSError /
             # PermissionError on a full or read-only backup mount, `psycopg.connect()` raises
             # OperationalError, and BackupCryptoError is a SIBLING of BackupError, not a subclass.
@@ -164,7 +165,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
                     build_durable_backup, settings, destination=destination
                 )
             except Exception as exc:
-                logger.exception("upgrade: pre-backup failed")
+                logger.exception("upgrade: pre-upgrade archive failed")
                 reason = f"{type(exc).__name__}: {exc}"[:300]
                 _emit(
                     session,
@@ -189,7 +190,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
             # slice — see docs/superpowers/plans/2026-08-04-audit-remediation-v2.md.)
             if not backup.get("verified", False):
                 detail = (
-                    "pre-backup archive written but FAILED checksum verification: "
+                    "pre-upgrade archive written but FAILED checksum verification: "
                     f"{backup.get('archive')}"
                 )
                 logger.error("upgrade.pre_backup.unverified", extra={"extra_fields": backup})

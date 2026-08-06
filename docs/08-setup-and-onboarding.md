@@ -245,7 +245,9 @@ The screen states plainly: **the mirror is regenerable and is NOT backed up** (A
 
 ## 8. Step 4 — Backup & Restore-Test (blocking, G-C)
 
-**Purpose.** Configure admin-controlled backups **and prove a restore actually works** before trusting the instance with real QMS data. A configured-but-unverified backup is treated as *no backup*.
+**Purpose.** Configure admin-controlled archives and prove that their database dump, manifest, and
+source-store object references survive the scratch verification path before trusting the instance
+with real QMS data. This gate does not prove source-independent host-loss recovery or cutover.
 
 ### 8.1 Captured configuration
 
@@ -260,7 +262,11 @@ The screen states plainly: **the mirror is regenerable and is NOT backed up** (A
 
 ### 8.2 The mandatory restore-test
 
-The gate is not "a backup ran" but "a backup **was restored and verified**." The wizard runs an end-to-end drill into an **isolated scratch namespace** (a temporary scratch **PostgreSQL database** + a scratch MinIO bucket), never touching live data:
+The gate is not "an archive was written" but "the archive and source-store references were
+**restored and verified in scratch**." The wizard runs a drill in an **isolated scratch namespace**
+(a temporary scratch **PostgreSQL database** + a scratch MinIO bucket), never touching live data.
+The archive has no object bytes; the drill reads them from the configured source object store and
+therefore does not establish disaster-recovery eligibility:
 
 > **Reconciliation (S8b2).** The scratch namespace is implemented as a **temporary database**, not a schema — it is `pg_restore`'s natural unit (a whole-DB custom-format `pg_dump` does not restore cleanly into a renamed schema), gives the strongest isolation, and tears down with one `DROP DATABASE`. "Schema" above is illustrative of "an isolated namespace."
 
@@ -275,7 +281,7 @@ sequenceDiagram
     Wiz->>W: enqueue BACKUP_TEST job (progress streamed)
     W->>Dest: write checksummed, encrypted test archive
     W->>W: verify archive checksum + manifest
-    W->>Scratch: restore PG dump + MinIO objects into scratch
+    W->>Scratch: restore PG dump; copy source-store objects into flattened scratch layout
     W->>Scratch: run integrity assertions (row counts, blob SHA-256 re-hash, FK checks)
     W-->>Wiz: PASS/FAIL + report (timings -> RPO/RTO estimate)
     Wiz->>Scratch: tear down scratch namespace
@@ -285,10 +291,14 @@ sequenceDiagram
 | Captures from the drill | Validation |
 |---|---|
 | Test archive written, checksum verified | Checksum match; archive decryptable with provided key |
-| Restore into scratch succeeded | PG restore exit 0; all expected MinIO objects present; SHA-256 re-hash matches; FK/constraint checks pass |
+| Scratch integrity verification succeeded | PG restore exit 0; referenced source-store objects copied; SHA-256 re-hash matches; FK/constraint checks pass |
 | Measured backup & restore timings | Surfaced as estimated **RPO/RTO**; warn if RTO exceeds the M-profile target (≤2h) |
 
-**On completion:** a `BackupPolicy` row + Celery Beat schedule are created; gate **G-C** green only on a **PASS**. Audit: `BACKUP_CONFIGURED`, `RESTORE_TEST_PASSED` (or `…_FAILED` with reason). The ongoing **Health & Backup dashboard** (§11) inherits this config and shows the last restore-test age, nudging periodic re-drills.
+**On completion:** a `BackupPolicy` row + Celery Beat schedule are created; gate **G-C** green only on
+a **PASS**. That PASS is an archive/source-store integrity gate, not a DR or production-upgrade
+authorization. Audit: `BACKUP_CONFIGURED`, `RESTORE_TEST_PASSED` (or `…_FAILED` with reason). The
+ongoing **Health & Backup dashboard** (§11) inherits this config and shows the last restore-test age,
+nudging periodic re-drills.
 
 ### 8.3 Off-host audit-checkpoint anchor (soft gate; reconciled per Decisions Register R13)
 
@@ -717,7 +727,7 @@ stateDiagram-v2
 |---|---|
 | Edition / license | Target design: offline signed license key (if applicable), named-user cap, S/M/L profile metadata, and reserved multi-standard/e-signature flags |
 | User-count enforcement | Warn at 90% of named-user cap; soft-block new active users at 100% (existing users unaffected) |
-| Version & upgrades | Show running version/digest; `easysynq upgrade` enforces pre-upgrade backup + Alembic migration gate + health gate + rollback path (Architecture §12) |
+| Version & upgrades | Show running version/digest; `easysynq upgrade` writes a non-self-contained pre-upgrade archive, then runs Alembic + health gates. A failed migration rolls back its transaction; production eligibility and archive-to-cutover recovery remain blocked pending the self-contained recovery proof (Architecture §12). |
 | Air-gap mode | Indicates offline image bundle; suppresses all outbound checks |
 | Feature flags (reserved) | Part-11 e-signature module and multi-standard packs appear as **disabled, not-yet-available** toggles — visible to show the extension path, non-functional in v1 |
 

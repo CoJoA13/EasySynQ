@@ -10,24 +10,25 @@ usage() {
   cat <<'EOF'
 usage: easysynq <command>
 
-  backup run        Write a durable checksummed archive (pg_dump + MinIO blob
-                    manifest) to each configured destination.            [S8b2]
+  backup run        Write a checksummed, non-self-contained archive (pg_dump +
+                    MinIO blob manifest; no object bytes).                 [S8b2]
   backup restore-test
                     Run the backup->restore-into-scratch drill + integrity triad
                     (gate G-C); persists PASS/FAIL.                      [S8b2]
   restore <file> --confirm [--audit-checkpoint-ack]
-                    WORM-aware live restore to a VERIFIED TARGET (fresh bucket;
-                    blob-snapshot aligned; checkpoint-not-ahead check; chain
-                    re-verify). Leaves a standing target; cut over per runbook. [S11]
+                    Restore integrity verification in a fresh scratch target;
+                    depends on the source object store and is NOT cutover-ready.
+                    Leaves an integrity verification target for inspection. [S11]
   restore --discard <scratch-db>
-                    Tear down a previously left-standing verified restore target.
+                    Tear down a previously left-standing verification target.
   mirror rebuild    Regenerate the read-only filesystem mirror from the vault. [S7]
   blob verify [--full] [--sample-size N]
                     D1 integrity re-hash of vault blobs against blob.sha256
                     (rolling sample by default; --full = the complete pass;
                     re-run after a restore to clear the alarm).        [S-drift-3]
-  upgrade --confirm Pre-backup -> migrate -> health-gate (pre-backup is the
-                    disaster safety net on a failed migration).             [S11]
+  upgrade --confirm Non-self-contained pre-upgrade archive -> migrate ->
+                    health-gate; not a DR safety net. Production eligibility
+                    remains blocked pending recovery proof.                [S11]
   migrate           Run 'alembic upgrade head' inside the api image.
   grant-role <sub> ["Role"] [--org CODE] [--bound-scope JSON]
                     Break-glass: assign a seeded role (default "System
@@ -78,15 +79,15 @@ case "$cmd" in
     "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.backup "$@"
     ;;
   restore)
-    # S11 (R37): WORM-aware *live* restore to a VERIFIED TARGET (fresh bucket; blob-snapshot
-    # alignment; checkpoint-not-ahead tamper check; restored-chain re-verify). Leaves a standing,
-    # ready-to-cutover target — the production cutover is a documented operator step (runbook).
+    # S11 (R37): restore integrity verification in a scratch target (checkpoint-not-ahead +
+    # restored-chain re-verify). PASS still depends on the configured source object store; the
+    # flattened scratch copy is not cutover-ready and is retained only for inspection/discard.
     # Runs on the WORKER (OWNER DATABASE_URL_SYNC + postgresql-client).
     "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.restore "$@"
     ;;
   upgrade)
-    # S11: pre-backup -> alembic upgrade head -> readiness health-gate (the pre-backup is the
-    # disaster safety net; a failed migration auto-rolls-back its txn). Runs on the WORKER.
+    # S11: non-self-contained pre-upgrade archive -> Alembic -> readiness health-gate. The archive
+    # has no object bytes and is not a disaster-recovery set. Runs on the WORKER.
     "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.upgrade "$@"
     ;;
   mirror)

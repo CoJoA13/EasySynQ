@@ -298,7 +298,9 @@ confirmed delivered.
 
 The backup-critical stores are PostgreSQL and MinIO. Keycloak's durable schema lives in PostgreSQL;
 the archive also attempts a realm export. The encrypted archive includes the DB dump, blob manifest,
-config snapshot, realm leg when available, and latest signed audit checkpoint.
+config snapshot, realm leg when available, and latest signed audit checkpoint. It contains **no
+MinIO object bytes**: the manifest is locator/hash metadata, so the archive is not a self-contained
+disaster-recovery set and verification still depends on the source object store.
 
 ### Commands
 
@@ -324,24 +326,23 @@ setup.
 key unrecoverable. Retain old backup keys for as long as their archives must remain restorable.
 Store keys independently from both the host and its backup destination.
 
-### Live restore
+### Restore integrity verification
 
 ```bash
 ./scripts/easysynq restore <archive.tar.enc> --confirm
 ```
 
-The command leaves a verified target standing; production cutover is manual. A checkpoint-ahead
-result exits flagged and requires an explicit `--audit-checkpoint-ack`, which must be investigated
-and documented. Follow the complete
-[backup/restore runbook](../runbooks/backup-restore.md); never overwrite the existing WORM bucket.
+The command leaves an integrity-verification target standing for inspection/discard. PASS proves
+the flattened scratch copy re-hashes and the restored database's locators resolve against the
+currently configured source object store. It is **not cutover-ready**. Do not repoint a service at
+the scratch database or bucket. A checkpoint-ahead result exits flagged and requires an explicit
+`--audit-checkpoint-ack`, which must be investigated and documented. Follow the complete
+[backup/restore runbook](../runbooks/backup-restore.md) for the current constraints.
 
-After cutover:
-
-```bash
-./scripts/easysynq mirror rebuild
-```
-
-No separate search reindex is needed in shipped S/M.
+A future supported recovery must use a self-contained object-byte generation, fresh role-preserving
+object-store targets, atomic database/object-store configuration switching, and closed-service read
+verification. Mirror rebuild is a post-recovery requirement only after that proof exists; this is
+not a current CLI procedure.
 
 ## 10. Upgrades
 
@@ -355,7 +356,10 @@ Normal helper:
 ```
 
 It performs a pre-backup, Alembic upgrade, and readiness gate. It does not make an unsafe migration
-lock disappear.
+lock disappear. The pre-upgrade archive has a database dump and blob manifest but no object bytes;
+it is not a disaster safety net. Production upgrade eligibility remains blocked until
+source-independent recovery generation and role-preserving restore/cutover are implemented and
+proven. The command's existence is not production authorization.
 
 For any release whose migration builds an index on `audit_event`, stop writers first because the
 current migration environment has no `lock_timeout`:
@@ -463,7 +467,7 @@ At least quarterly:
 | Weekly | Review failed jobs/notifications, mirror/blob findings, backup archive arrival, and capacity trend. |
 | Monthly | Run/confirm a restore test, verify off-host witness read-back, review admin/guest access, patch host. |
 | Quarterly | Full blob verify, key/access review, recovery tabletop, certificate/retention review. |
-| Before upgrade | Reviewed release, full backup, recent restore PASS, migration review, maintenance plan. |
+| Before upgrade | Reviewed release, migration review, maintenance plan, and a proven self-contained recovery path. Current restore PASS alone is insufficient; production eligibility remains blocked. |
 | After upgrade | Readiness, login, upload/download on 9443, task worker, backup, and critical QMS smoke checks. |
 
 Adjust cadence to the organization's risk and retention policy.
@@ -481,7 +485,7 @@ Adjust cadence to the organization's risk and retention policy.
 | Mirror drift | Quarantine/record the mismatch and run the controlled scan/rebuild procedure. |
 | Audit-chain/witness alarm | Preserve host, DB, checkpoint, and logs; restrict privileged access; verify independently before repair. |
 | Certificate expiry/trust | Restore valid certificate/CA trust without changing issuer hostname unless intentionally reconfigured. |
-| Failed migration/readiness | Keep service closed, inspect the migration/pre-backup reference, and recover from the verified target if needed. |
+| Failed migration/readiness | Keep service closed; preserve the source object store; retain the exact non-self-contained archive pointer; do not cut over from the scratch verification target. |
 
 ## 15. Known limitations and residuals
 
@@ -489,7 +493,10 @@ Operational planning must account for:
 
 - no L profile, OpenSearch service, or bundled observability stack;
 - no in-app custom-role editor;
-- no automated live restore cutover;
+- no supported live restore cutover; the current scratch target is verification-only and
+  source-store-dependent;
+- no self-contained object-byte backup generation, so durable/pre-upgrade archives are not disaster
+  safety nets;
 - no migration `lock_timeout`;
 - no mounted T5 approval-rescind/reschedule or T8 revision-draft discard transition; monitor Beat
   because scheduled effectivity is applied by the five-minute release sweep, not by reads;
@@ -512,5 +519,7 @@ These are materially destructive and require an approved recovery/retention deci
 - reusing an old database with mismatched blob storage; or
 - force-removing audit/identity rows.
 
-Prefer verified, fresh-target recovery. Record every production restore, key rotation, hostname
-change, and break-glass grant in the organization's change-control system.
+Do not improvise recovery from the current scratch verification target. A future supported
+fresh-target recovery must satisfy the role-preserving, source-independent requirements in the
+backup/restore runbook. Record every production restore, key rotation, hostname change, and
+break-glass grant in the organization's change-control system.

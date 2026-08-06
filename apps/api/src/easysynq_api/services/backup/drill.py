@@ -43,8 +43,9 @@ logger = logging.getLogger("easysynq.backup.drill")
 
 _SCRATCH_PREFIX = "scratch_easysynq_"
 # The scheduled retained-backup verify (Phase-1 I-7) restores into its OWN namespace, DISTINCT from
-# the drill's ``scratch_easysynq_`` and the live restore's ``restore_easysynq_`` — so verifying a
-# retained archive never sweeps/clobbers a drill's scratch or an operator's standing target.
+# the drill's ``scratch_easysynq_`` and the operator verification run's ``restore_easysynq_`` — so
+# verifying a retained archive never sweeps/clobbers a drill's scratch or a standing verification
+# target.
 _VERIFY_PREFIX = "verify_easysynq_"
 
 
@@ -150,7 +151,7 @@ def _sweep_stale_scratch(owner_dsn: str) -> None:
 def _sweep_stale_verify(owner_dsn: str) -> None:
     """Best-effort: drop leftover ``verify_easysynq_*`` DBs from a crashed prior retained-verify.
     Distinct from the drill's ``scratch_easysynq_*`` sweep + the restore's ``restore_easysynq_*``
-    sweep, so a retained-backup verify never destroys a drill's scratch or a standing verified
+    sweep, so a retained-backup verify never destroys a drill's scratch or a standing verification
     target (and vice-versa). FORCE terminates any straggler connection."""
     from psycopg import sql
 
@@ -603,9 +604,10 @@ def verify_retained_archive(
     blob-copy → triad), but VERIFY-ONLY: it skips the live-restore checkpoint-not-ahead + chain
     re-verify (those are tamper guards whose FLAGGED-on-unreachable semantics would muddy a clean
     weekly PASS/FAIL — the integrity triad is the rot signal), and it ALWAYS tears the scratch
-    namespace down (never a standing cutover target). Restores into a dedicated ``verify_easysynq_``
-    namespace, DISTINCT from the drill's ``scratch_easysynq_`` and the restore's
-    ``restore_easysynq_``. Never raises — a crash / wrong key / missing binary is an honest FAIL.
+    namespace down (never a standing verification target). Restores into a dedicated
+    ``verify_easysynq_`` namespace, DISTINCT from the drill's ``scratch_easysynq_`` and
+    the restore's ``restore_easysynq_``. Never raises — a crash / wrong key / missing binary is an
+    honest FAIL.
 
     ``None`` archive (fresh install, nightly hasn't run yet) → ``SKIPPED``, NOT a FAIL (it must not
     flap red). ``after_restore`` is the TEST-ONLY fault injector (same contract as the drill), run
@@ -691,9 +693,9 @@ def verify_retained_archive(
             "FAIL", f"verify error: {type(exc).__name__}: {exc}"[:300], {"archive": src.name}
         )
     finally:
-        # ALWAYS tear down — a verify is never a standing cutover target (unlike
-        # restore.run_restore, which leaves a PASS target standing). The on-disk archive is
-        # untouched.
+        # ALWAYS tear down — retained verification never leaves a standing target (unlike
+        # restore.run_restore, whose PASS target remains for inspection/discard). The on-disk
+        # archive is untouched.
         if handle is not None:
             try:
                 _drop_scratch_db(owner_dsn, scratch_db)
