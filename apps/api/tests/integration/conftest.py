@@ -85,7 +85,11 @@ def _minio() -> Iterator[dict[str, str]]:
     import boto3
     from testcontainers.minio import MinioContainer
 
-    with MinioContainer() as mc:
+    container = MinioContainer("minio/minio:RELEASE.2024-09-13T20-26-02Z")
+    # Community MinIO's CORS control is global browser response access only. IAM/presigned request
+    # authorization remains the access boundary, and the exact shipped image is exercised here.
+    container.with_env("MINIO_API_CORS_ALLOW_ORIGIN", "http://test")
+    with container as mc:
         cfg = mc.get_config()
         endpoint = f"http://{cfg['endpoint']}"
         client = boto3.client(
@@ -114,6 +118,9 @@ def _minio() -> Iterator[dict[str, str]]:
             },
         )
         client.create_bucket(Bucket="staging")  # plain bucket for presigned uploads
+        client.put_bucket_versioning(
+            Bucket="staging", VersioningConfiguration={"Status": "Enabled"}
+        )
         client.create_bucket(Bucket="renditions")  # S7b derived watermarked PDFs (non-WORM)
         # S8b2 restore-test drill: a plain (NON-WORM) scratch bucket the drill copies blobs into +
         # tears the per-drill prefix down (R37 — never restore into the object-locked documents).
@@ -121,6 +128,9 @@ def _minio() -> Iterator[dict[str, str]]:
         # S6 off-host audit-checkpoint anchor bucket (object-lock, R13).
         client.create_bucket(Bucket="audit-checkpoints", ObjectLockEnabledForBucket=True)
         client.create_bucket(Bucket="import-staging")  # S-ing-1 plain (non-WORM) import staging
+        client.put_bucket_versioning(
+            Bucket="import-staging", VersioningConfiguration={"Status": "Enabled"}
+        )
         yield {
             "endpoint": endpoint,
             "access_key": cfg["access_key"],

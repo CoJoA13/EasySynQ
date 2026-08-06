@@ -13,6 +13,7 @@ import asyncio
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 from sqlalchemy import text
@@ -67,21 +68,31 @@ async def _check_redis(settings: Settings) -> DependencyStatus:
         return DependencyStatus("redis", False, str(exc))
 
 
+def _minio_client(settings: Settings) -> Any:
+    import boto3
+
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint,
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key,
+        region_name=settings.s3_region,
+    )
+
+
 async def _check_minio(settings: Settings) -> DependencyStatus:
     if not (settings.s3_access_key and settings.s3_secret_key):
         return DependencyStatus("minio", True, "unconfigured (S0 dev)")
 
     def _probe() -> None:
-        import boto3
-
-        client = boto3.client(
-            "s3",
-            endpoint_url=settings.s3_endpoint,
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
-            region_name=settings.s3_region,
-        )
+        client = _minio_client(settings)
         client.list_buckets()
+        for bucket in (settings.s3_bucket_staging, settings.s3_bucket_import_staging):
+            status = client.get_bucket_versioning(Bucket=bucket).get("Status")
+            if status != "Enabled":
+                raise RuntimeError(
+                    f"bucket {bucket!r} versioning is {status!r}, expected 'Enabled'"
+                )
 
     try:
         await asyncio.to_thread(_probe)
