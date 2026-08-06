@@ -307,9 +307,12 @@ def _target_retention_sync(
             Key=target_key,
             VersionId=target_version_id,
         )
+        retention = response.get("Retention", {})
+        if not isinstance(retention, dict):
+            raise TypeError("malformed retention response")
+        retain_until = retention.get("RetainUntilDate")
     except Exception as exc:
         raise StorageUnavailable(StorageStage.RETENTION, exc) from exc
-    retain_until = response.get("Retention", {}).get("RetainUntilDate")
     now = datetime.datetime.now(datetime.UTC)
     if (
         not isinstance(retain_until, datetime.datetime)

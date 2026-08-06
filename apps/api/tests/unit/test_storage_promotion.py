@@ -242,6 +242,11 @@ def test_finalize_sync_copies_exact_version_with_opaque_etag(
             "CopySourceIfMatch": '"opaque-etag"',
         }
     ]
+    assert client.head_calls == [
+        {"Bucket": "documents", "Key": sha},
+        {"Bucket": "documents", "Key": sha, "VersionId": "target-v1"},
+    ]
+    assert client.retention_calls == [{"Bucket": "documents", "Key": sha, "VersionId": "target-v1"}]
     assert result.source_etag == '"opaque-etag"'
     assert result.target_version_id == "target-v1"
     assert client.source_body.closed is True
@@ -723,6 +728,20 @@ def test_retention_probe_failure_is_infrastructure_after_bodies_close(
     assert target_body.closed is True
 
 
+def test_malformed_retention_response_is_infrastructure(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = b"approved"
+    sha = hashlib.sha256(data).hexdigest()
+    client = FakeS3(source_bytes=data, source_version="v1")
+    client.get_object_retention = lambda **kwargs: {"Retention": None}  # type: ignore[method-assign]
+    monkeypatch.setattr(storage, "_staging_bucket", lambda: "staging")
+
+    with pytest.raises(StorageUnavailable) as caught:
+        storage._finalize_sync(staged_ref(sha=sha, version_id="v1"), "documents", client=client)
+
+    assert caught.value.stage is StorageStage.RETENTION
+    assert client.source_body.closed is True
+
+
 def test_copy_requires_valid_target_version_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     data = b"approved"
     sha = hashlib.sha256(data).hexdigest()
@@ -842,6 +861,49 @@ async def test_put_staging_bytes_requires_versioning_and_returns_exact_ref(
     assert client.put_calls == [
         {"Bucket": "staging", "Key": sha, "Body": data, "ContentType": "application/json"}
     ]
+
+
+@pytest.mark.parametrize(
+    ("status", "failure"),
+    [
+        (None, None),
+        ("Suspended", None),
+        (None, EndpointConnectionError(endpoint_url="http://minio:9000")),
+    ],
+)
+async def test_put_staging_bytes_refuses_before_put_unless_versioning_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str | None,
+    failure: Exception | None,
+) -> None:
+    data = b"generated"
+    sha = hashlib.sha256(data).hexdigest()
+
+    class PutClient:
+        def __init__(self) -> None:
+            self.versioning_calls = 0
+            self.put_calls: list[dict[str, Any]] = []
+
+        def get_bucket_versioning(self, **kwargs: Any) -> dict[str, str]:
+            self.versioning_calls += 1
+            if failure is not None:
+                raise failure
+            return {"Status": status} if status is not None else {}
+
+        def put_object(self, **kwargs: Any) -> dict[str, str]:
+            self.put_calls.append(kwargs)
+            return {"VersionId": "must-not-be-created"}
+
+    client = PutClient()
+    monkeypatch.setattr(storage, "_client", lambda: client)
+    monkeypatch.setattr(storage, "_staging_bucket", lambda: "staging")
+
+    with pytest.raises(StorageUnavailable) as caught:
+        await storage.put_staging_bytes(data, sha, content_type="application/json")
+
+    assert caught.value.stage is StorageStage.VERSIONING
+    assert client.versioning_calls == 1
+    assert client.put_calls == []
 
 
 @pytest.mark.parametrize("version_id", [None, "", "null", "v" * 1025])
