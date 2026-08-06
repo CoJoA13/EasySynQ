@@ -47,9 +47,10 @@ from easysynq_api.domain.records.content_hash import CONTENT_HASH_VERSION_V1, re
 from easysynq_api.services.packs import build
 from easysynq_api.services.packs import repository as packs_repo
 from easysynq_api.services.records.repository import SEALED_PACK_POLICY_NAME
+from easysynq_api.services.vault import storage
 
 from ._owner_db import owner_delete_disposition_events
-from .test_records import _capture, _grant, _subject, _upload_evidence
+from .test_records import _capture, _evidence_json, _grant, _subject, _upload_evidence
 from .test_vault import _auth
 
 pytestmark = pytest.mark.integration
@@ -181,7 +182,9 @@ async def _teardown(
 
 
 async def test_pack_build_seal_r28_matrix_and_download(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     subject = _subject("pack")
     user_id = await _grant(subject, _PACK_PERMS)
@@ -190,14 +193,15 @@ async def test_pack_build_seal_r28_matrix_and_download(
 
     # INCLUDED (evidence) + INCLUDED (form-only) + EXCLUDED_PERMISSION + EXCLUDED_ABSENCE.
     content = f"evidence-{uuid.uuid4().hex}".encode()
-    sha = await _upload_evidence(app_client, h, content)
+    upload = await _upload_evidence(app_client, h, content)
+    sha = upload.sha256
     r_inc = (
         await _capture(
             app_client,
             h,
             record_type="EVIDENCE",
             title="included",
-            evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+            evidence=[_evidence_json(upload)],
         )
     ).json()["id"]
     r_form = (
@@ -258,7 +262,28 @@ async def test_pack_build_seal_r28_matrix_and_download(
         assert statuses[r_perm] == "EXCLUDED_PERMISSION"
         assert statuses[r_absent] == "EXCLUDED_ABSENCE"
 
-        # Build/seal, then poll.
+        # Build/seal, proving the generated ZIP promotes the exact version returned by staging.
+        original_put = storage.put_staging_bytes
+        original_promote = storage.promote_worm
+        staged_zip: object | None = None
+        zip_promotions = 0
+
+        async def capture_zip_source(data: bytes, sha256: str, *, content_type: str) -> object:
+            nonlocal staged_zip
+            source = await original_put(data, sha256, content_type=content_type)
+            if content_type == "application/zip":
+                staged_zip = source
+            return source
+
+        async def require_exact_zip_source(source: object, *, target_bucket: str) -> object:
+            nonlocal zip_promotions
+            if getattr(source, "content_type", None) == "application/zip":
+                assert source is staged_zip
+                zip_promotions += 1
+            return await original_promote(source, target_bucket=target_bucket)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(storage, "put_staging_bytes", capture_zip_source)
+        monkeypatch.setattr(storage, "promote_worm", require_exact_zip_source)
         await _seal(pack_uuid)
         got = await app_client.get(f"/api/v1/evidence-packs/{pack_uuid}", headers=h)
         assert got.status_code == 200, got.text
@@ -267,6 +292,7 @@ async def test_pack_build_seal_r28_matrix_and_download(
         assert sealed["content_hash"].startswith("sha256:")
         assert sealed["pack_record_id"] is not None
         assert sealed["item_count"] == 2  # 2 included records, no pinned versions (ad-hoc EVIDENCE)
+        assert zip_promotions == 1
         # R28: the gap report (clause coverage) is DISTINCT from the exclusion report.
         assert sealed["exclusion_summary"]["permission_count"] == 1
         assert sealed["exclusion_summary"]["absence_count"] == 1
@@ -491,27 +517,29 @@ async def test_process_pack_includes_source_less_correction(
     record_ids: list[str] = []
     pack_uuid: uuid.UUID | None = None
     try:
-        sha = await _upload_evidence(app_client, h, f"ev-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, h, f"ev-{uuid.uuid4().hex}".encode())
         orig = await _capture(
             app_client,
             h,
             record_type="EVIDENCE",
             title="orig",
-            evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+            evidence=[_evidence_json(upload)],
         )
         assert orig.status_code == 201, orig.text
         original = orig.json()["id"]
         await _link_process(app_client, h, original, process_id)  # leg A → the process
         # A source-less correction copies no evidence link → it inherits the process only via the
         # correction chain (not its own binding).
-        csha = await _upload_evidence(app_client, h, f"corr-{uuid.uuid4().hex}".encode())
+        correction_upload = await _upload_evidence(
+            app_client, h, f"corr-{uuid.uuid4().hex}".encode()
+        )
         corr = await app_client.post(
             f"/api/v1/records/{original}/correction",
             headers=h,
             json={
                 "record_type": "EVIDENCE",
                 "title": "corrected",
-                "evidence": [{"sha256": csha, "content_type": "application/pdf"}],
+                "evidence": [_evidence_json(correction_upload)],
             },
         )
         assert corr.status_code == 201, corr.text

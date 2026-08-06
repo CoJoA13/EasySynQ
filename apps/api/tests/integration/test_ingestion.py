@@ -54,6 +54,9 @@ from easysynq_api.services.ingestion.extract import run_extract
 from easysynq_api.services.ingestion.propose import run_propose
 from easysynq_api.services.ingestion.service import run_scan
 from easysynq_api.services.vault.staged_identity import (
+    StagedObjectRef,
+    StagedSourceUnavailable,
+    StagedVersionLocator,
     StorageStage,
     StorageUnavailable,
     UploadIdentityMismatch,
@@ -1686,8 +1689,11 @@ async def test_commit_document_revalidates_blob_after_insert_conflict(
             await s.commit()
 
 
-async def test_commit_writes_documents_and_records_to_vault(
-    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+async def test_commit_writes_documents_records_and_generated_report_to_vault(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     admin = _subject("avery")
     await _assign_role(admin, "System Administrator")
@@ -1715,6 +1721,27 @@ async def test_commit_writes_documents_and_records_to_vault(
     chk = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
     assert chk["ready"] is True, chk["blocking"]
 
+    original_put = commit_svc.storage.put_staging_bytes
+    original_promote = commit_svc.storage.promote_worm
+    report_source: object | None = None
+    report_promotions = 0
+
+    async def capture_report_source(data: bytes, sha256: str, *, content_type: str) -> object:
+        nonlocal report_source
+        source = await original_put(data, sha256, content_type=content_type)
+        if content_type == "text/markdown":
+            report_source = source
+        return source
+
+    async def require_exact_report_source(source: object, *, target_bucket: str) -> object:
+        nonlocal report_promotions
+        if getattr(source, "content_type", None) == "text/markdown":
+            assert source is report_source
+            report_promotions += 1
+        return await original_promote(source, target_bucket=target_bucket)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(commit_svc.storage, "put_staging_bytes", capture_report_source)
+    monkeypatch.setattr(commit_svc.storage, "promote_worm", require_exact_report_source)
     commit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
     assert commit.status_code == 202, commit.text
     assert commit.json()["status"] == "Committing"
@@ -1724,6 +1751,7 @@ async def test_commit_writes_documents_and_records_to_vault(
     assert run["status"] == "Completed"
     assert run["counts"]["commit"] == {"committed": 2, "failed": 0}
     assert run["report_record_id"]
+    assert report_promotions == 1
 
     async with get_sessionmaker()() as s:
         doc = (
@@ -1839,6 +1867,106 @@ async def test_commit_writes_documents_and_records_to_vault(
         assert n == 1  # still exactly one — no duplicate document
     recommit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
     assert recommit.status_code == 409  # already completed
+
+
+async def test_generated_report_source_mismatch_preserves_terminal_commit_and_audits_once(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin = _subject("generated-report-refusal")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(
+        app_client,
+        headers,
+        _stub_tika,
+        content_suffix=f" generated-report-{uuid.uuid4().hex}",
+    )
+    await _confirm_for_commit(
+        app_client,
+        headers,
+        run_id,
+        by_name["SOP-PUR-002 Purchasing.docx"]["id"],
+        by_name["Internal Audit Report Q2 2023.pdf"]["id"],
+        doc_identifier=f"SOP-{uuid.uuid4().hex[:6].upper()}-001",
+    )
+
+    original_put = commit_svc.storage.put_staging_bytes
+    original_promote = commit_svc.storage.promote_worm
+    original_delete = commit_svc.storage.delete_staged_version
+    report_source: StagedObjectRef | None = None
+    deleted: list[StagedVersionLocator] = []
+
+    async def capture_report_source(
+        data: bytes, sha256: str, *, content_type: str
+    ) -> StagedObjectRef:
+        nonlocal report_source
+        source = await original_put(data, sha256, content_type=content_type)
+        if content_type == "text/markdown":
+            report_source = source
+        return source
+
+    async def refuse_report(source: StagedObjectRef, *, target_bucket: str) -> object:
+        if source.content_type == "text/markdown":
+            assert source is report_source
+            raise UploadIdentityMismatch(
+                source=source,
+                expected_sha256=source.expected_sha256,
+                observed_sha256="f" * 64,
+                expected_size=source.expected_size,
+                observed_size=source.expected_size,
+                etag='"etag"',
+                classification="digest_mismatch",
+            )
+        return await original_promote(source, target_bucket=target_bucket)
+
+    async def capture_exact_delete(locator: StagedVersionLocator) -> None:
+        assert report_source is not None
+        assert locator is report_source.locator
+        deleted.append(locator)
+        await original_delete(locator)
+
+    monkeypatch.setattr(commit_svc.storage, "put_staging_bytes", capture_report_source)
+    monkeypatch.setattr(commit_svc.storage, "promote_worm", refuse_report)
+    monkeypatch.setattr(commit_svc.storage, "delete_staged_version", capture_exact_delete)
+
+    started = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    assert started.status_code == 202, started.text
+    await _drive_commit(uuid.UUID(run_id))
+
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=headers)).json()
+    assert run["status"] == "Completed"
+    assert run["counts"]["commit"] == {"committed": 2, "failed": 0}
+    assert run["report_record_id"] is None
+    assert report_source is not None
+    assert deleted == [report_source.locator]
+    with pytest.raises(StagedSourceUnavailable):
+        await commit_svc.storage.verify_staged(report_source)
+
+    async with get_sessionmaker()() as session:
+        report_owner_count = await session.scalar(
+            select(sa.func.count())
+            .select_from(DocumentedInformation)
+            .where(DocumentedInformation.title.contains(run_id))
+        )
+        integrity_events = (
+            (
+                await session.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED,
+                        AuditEvent.scope_ref == run_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert report_owner_count == 0
+        assert len(integrity_events) == 1
+        assert integrity_events[0].actor_type is ActorType.system
+        assert integrity_events[0].actor_id is None
 
 
 async def test_precommit_blocks_legacy_role_label_owner_until_corrected(
@@ -2532,7 +2660,10 @@ async def test_upload_identity_partial_resume_audits_then_deletes_only_rejected_
             await session.execute(
                 select(sa.func.count())
                 .select_from(AuditEvent)
-                .where(AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED)
+                .where(
+                    AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED,
+                    AuditEvent.scope_ref == str(run_uuid),
+                )
             )
         ).scalar_one()
         assert generic_integrity == 0

@@ -36,19 +36,20 @@ import uuid
 import zipfile
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...config import get_settings
-from ...db.models._audit_enums import EventType
+from ...db.models._audit_enums import ActorType, EventType
 from ...db.models._pack_enums import PackInclusionStatus, PackScopeKind, PackStatus
 from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.document_version import DocumentVersion
 from ...db.models.evidence_pack import EvidencePack
 from ...domain.packs.content_hash import pack_content_hash
 from ..authz import AuthzAuditSink, get_authz_audit_sink
-from ..records import capture_record
+from ..records import EvidenceInput, capture_record
 from ..records import repository as records_repo
 from ..vault import storage
+from ..vault.upload_rejection import RejectionContext
 from . import repository as repo
 from . import service
 from .dossier import DossierBuild, build_dossier
@@ -247,6 +248,7 @@ async def build(
     pack_id: uuid.UUID,
     *,
     authz_sink: AuthzAuditSink | None = None,
+    rejection_sessionmaker: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     """Assemble + seal a pack. Single transaction; idempotent on retry; fail-closed."""
     org_id = await repo.get_pack_org_id(session, pack_id)
@@ -408,8 +410,10 @@ async def build(
 
         # Write the ZIP to staging, then register it as a RETAIN_PERMANENT EVIDENCE Record (the
         # capture path promotes staging→records WORM + inserts the blob row atomically).
-        await storage.put_bytes(
-            zip_bytes, zip_sha, bucket=storage._staging_bucket(), content_type="application/zip"
+        source = await storage.put_staging_bytes(
+            zip_bytes,
+            zip_sha,
+            content_type="application/zip",
         )
         permanent = await records_repo.ensure_sealed_pack_policy(session, pack.org_id)
         record = await capture_record(
@@ -417,9 +421,18 @@ async def build(
             generator,
             record_type="EVIDENCE",
             title=f"Evidence Pack: {pack.title}",
-            evidence=[(zip_sha, "application/zip")],
+            evidence=[EvidenceInput(zip_sha, "application/zip", source)],
             retention_policy_id=permanent.id,
             _commit=False,
+            rejection_context=RejectionContext(
+                operation="server_generated",
+                org_id=pack.org_id,
+                actor_id=None,
+                actor_type=ActorType.system,
+                scope_ref=str(pack.id),
+                user_correctable=False,
+            ),
+            rejection_sessionmaker=rejection_sessionmaker,
         )
 
         pack.status = PackStatus.SEALED

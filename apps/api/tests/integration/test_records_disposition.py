@@ -41,7 +41,13 @@ from easysynq_api.db.models.worm_destroy_request import WormDestroyRequest
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.records import disposition, sweep_due_records
 from easysynq_api.services.records import service as records_service
+from easysynq_api.services.records.service import EvidenceInput
 from easysynq_api.services.vault import storage
+from easysynq_api.services.vault.staged_identity import (
+    StagedObjectRef,
+    StagedVersionLocator,
+    StagingDomain,
+)
 
 from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _grant, _subject, _upload_evidence
@@ -1581,7 +1587,8 @@ async def test_recapture_serializes_with_check_then_purge_window(
     purge_task: asyncio.Task[object] | None = None
     try:
         content = f"purge-lock-{purge_mode}-{uuid.uuid4().hex}".encode()
-        sha = await _upload_evidence(app_client, h, content)
+        original_upload = await _upload_evidence(app_client, h, content)
+        sha = original_upload.sha256
         original_id = (
             await _capture(
                 app_client,
@@ -1589,7 +1596,13 @@ async def test_recapture_serializes_with_check_then_purge_window(
                 record_type="CALIBRATION",
                 title=f"original-{purge_mode}",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[
+                    {
+                        "sha256": sha,
+                        "content_type": "application/pdf",
+                        "staging_version_id": original_upload.version_id,
+                    }
+                ],
             )
         ).json()["id"]
         async with get_sessionmaker()() as s:
@@ -1605,7 +1618,19 @@ async def test_recapture_serializes_with_check_then_purge_window(
 
         # The recapture has fresh staging bytes, while the stranded records object still has no
         # live Blob owner.
-        assert await _upload_evidence(app_client, h, content) == sha
+        recapture_upload = await _upload_evidence(app_client, h, content)
+        assert recapture_upload.sha256 == sha
+        assert recapture_upload.version_id is not None
+        recapture_source = StagedObjectRef(
+            locator=StagedVersionLocator(
+                domain=StagingDomain.STAGING,
+                object_key=sha,
+                version_id=recapture_upload.version_id,
+            ),
+            expected_sha256=sha,
+            content_type="application/pdf",
+            expected_size=len(content),
+        )
         async with get_sessionmaker()() as s:
             assert await s.get(Blob, sha) is None
 
@@ -1644,7 +1669,7 @@ async def test_recapture_serializes_with_check_then_purge_window(
                     record_type="CALIBRATION",
                     title=f"recaptured-{purge_mode}",
                     retention_policy_id=pol,
-                    evidence=[(sha, "application/pdf")],
+                    evidence=[EvidenceInput(sha, "application/pdf", recapture_source)],
                 )
             )
 

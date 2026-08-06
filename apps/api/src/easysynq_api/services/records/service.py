@@ -25,7 +25,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
@@ -89,17 +89,6 @@ class EvidenceInput:
                 raise ValueError("evidence source sha256 does not match the evidence claim")
             if self.source.content_type != self.content_type:
                 raise ValueError("evidence source content type does not match the evidence claim")
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class _LegacyEvidenceInput:
-    """Task-8-only marker for tuple callers that still need the legacy promotion adapter."""
-
-    sha256: str
-    content_type: str
-
-
-type _NormalizedEvidenceInput = EvidenceInput | _LegacyEvidenceInput
 
 
 def _now() -> datetime.datetime:
@@ -374,24 +363,11 @@ async def record_init_upload(
     return {"dedup": False, "object_key": sha256, "upload_url": url}
 
 
-def _staging_identity(item: _NormalizedEvidenceInput) -> object:
-    if isinstance(item, _LegacyEvidenceInput):
-        return _LegacyEvidenceInput
-    return item.source.locator if item.source is not None else None
-
-
-def _normalize_evidence(
-    evidence: Sequence[EvidenceInput | tuple[str, str]],
-) -> list[_NormalizedEvidenceInput]:
-    normalized: list[_NormalizedEvidenceInput] = []
+def _normalize_evidence(evidence: Sequence[EvidenceInput]) -> list[EvidenceInput]:
+    normalized: list[EvidenceInput] = []
     identities_by_sha: dict[str, object] = {}
-    for raw in evidence:
-        if isinstance(raw, EvidenceInput):
-            item: _NormalizedEvidenceInput = raw
-        else:
-            raw_sha, content_type = raw
-            item = _LegacyEvidenceInput(raw_sha.lower(), content_type)
-        identity = _staging_identity(item)
+    for item in evidence:
+        identity = item.source.locator if item.source is not None else None
         previous = identities_by_sha.get(item.sha256, _MISSING_IDENTITY)
         if previous is not _MISSING_IDENTITY:
             if previous != identity:
@@ -418,17 +394,12 @@ async def _attach_evidence(
     session: AsyncSession,
     actor: AppUser,
     record_id: uuid.UUID,
-    evidence: Sequence[EvidenceInput | tuple[str, str]],
+    evidence: Sequence[EvidenceInput],
     *,
-    source_bucket: str | None = None,
     rejection_context: RejectionContext | None = None,
+    rejection_sessionmaker: async_sessionmaker[AsyncSession] | None = None,
 ) -> list[str]:
-    """WORM-seal each unique evidence blob into the records bucket and attach it idempotently.
-
-    New callers carry an exact staged source per item. The private tuple marker remains only for
-    Task 8's not-yet-migrated generated/import-report callers; ``source_bucket`` belongs solely to
-    that adapter and a typed ``EvidenceInput(source=None)`` can never enter it.
-    """
+    """WORM-seal each unique exact-version evidence blob and attach it idempotently."""
     settings = get_settings()
     normalized_evidence = _normalize_evidence(evidence)
 
@@ -447,67 +418,41 @@ async def _attach_evidence(
         content_type = item.content_type
         blob = await vault_repo.get_blob(session, sha256)
         if blob is None:
-            if isinstance(item, _LegacyEvidenceInput):
-                legacy_promoted = await storage.finalize_worm(
-                    sha256, bucket=storage._records_bucket(), source_bucket=source_bucket
-                )
-                if not legacy_promoted.exists:
-                    raise _validation_error(
-                        "evidence",
-                        "not_found",
-                        "Evidence object not found — upload via :init-upload",
-                    )
-                if legacy_promoted.retain_until is None:
-                    raise ProblemException(
-                        status=423,
-                        code="worm_required",
-                        title="Evidence object is not WORM-locked",
-                    )
-                promoted_size = legacy_promoted.size or 0
-                promoted_content_type = legacy_promoted.content_type
-                promoted_bucket = settings.s3_bucket_records
-                promoted_key = sha256
-                promoted_retain_until = legacy_promoted.retain_until
-            else:
-                source = item.source
-                if source is None:
-                    if rejection_context is not None:
-                        require_staging_ref(
-                            domain=StagingDomain.STAGING,
-                            sha256=sha256,
-                            version_id=None,
-                            content_type=content_type,
-                            operation="record_capture",
-                        )
-                        raise AssertionError("require_staging_ref must reject a missing version")
-                    raise StagingVersionRequired
+            source = item.source
+            if source is None:
                 if rejection_context is not None:
-                    promoted = await promote_for_owner(
-                        session,
-                        source,
-                        target_bucket=settings.s3_bucket_records,
-                        context=rejection_context,
+                    require_staging_ref(
+                        domain=StagingDomain.STAGING,
+                        sha256=sha256,
+                        version_id=None,
+                        content_type=content_type,
+                        operation="record_capture",
                     )
-                else:
-                    promoted = await storage.promote_worm(
-                        source, target_bucket=settings.s3_bucket_records
-                    )
-                promoted_size = promoted.size
-                promoted_content_type = promoted.content_type
-                promoted_bucket = promoted.target_bucket
-                promoted_key = promoted.target_key
-                promoted_retain_until = promoted.retain_until
+                    raise AssertionError("require_staging_ref must reject a missing version")
+                raise StagingVersionRequired
+            if rejection_context is not None:
+                promoted = await promote_for_owner(
+                    session,
+                    source,
+                    target_bucket=settings.s3_bucket_records,
+                    context=rejection_context,
+                    rejection_sessionmaker=rejection_sessionmaker,
+                )
+            else:
+                promoted = await storage.promote_worm(
+                    source, target_bucket=settings.s3_bucket_records
+                )
             await session.execute(
                 pg_insert(Blob)
                 .values(
                     sha256=sha256,
                     org_id=actor.org_id,
-                    size_bytes=promoted_size,
-                    mime_type=promoted_content_type or content_type,
-                    bucket=promoted_bucket,
-                    object_key=promoted_key,
+                    size_bytes=promoted.size,
+                    mime_type=promoted.content_type or content_type,
+                    bucket=promoted.target_bucket,
+                    object_key=promoted.target_key,
                     worm_locked=True,
-                    worm_retain_until=promoted_retain_until,
+                    worm_retain_until=promoted.retain_until,
                 )
                 .on_conflict_do_nothing(index_elements=["sha256"])
             )
@@ -559,14 +504,14 @@ async def capture_record(
     area_code: str | None = None,
     source_document_id: uuid.UUID | None = None,
     source_version_id: uuid.UUID | None = None,
-    evidence: Sequence[EvidenceInput | tuple[str, str]] = (),
+    evidence: Sequence[EvidenceInput] = (),
     form_field_values: dict[str, Any] | None = None,
     retention_policy_id: uuid.UUID | None = None,
     _correction_of: uuid.UUID | None = None,
     _pin_version: uuid.UUID | None = None,
     _commit: bool = True,
-    _evidence_source_bucket: str | None = None,
     rejection_context: RejectionContext | None = None,
+    rejection_sessionmaker: async_sessionmaker[AsyncSession] | None = None,
 ) -> Record:
     """Capture an immutable record: base + subtype + WORM evidence + content_hash seal + audit, one
     commit. When ``source_document_id`` is a Form/Template, this is **Mode-B** capture: the server
@@ -664,8 +609,8 @@ async def capture_record(
         actor,
         record.id,
         evidence,
-        source_bucket=_evidence_source_bucket,
         rejection_context=rejection_context,
+        rejection_sessionmaker=rejection_sessionmaker,
     )
     record.content_hash = record_content_hash(
         record_type=rtype.value,
@@ -713,7 +658,7 @@ async def capture_correction(
     area_code: str | None = None,
     source_document_id: uuid.UUID | None = None,
     source_version_id: uuid.UUID | None = None,
-    evidence: Sequence[EvidenceInput | tuple[str, str]] = (),
+    evidence: Sequence[EvidenceInput] = (),
     form_field_values: dict[str, Any] | None = None,
     retention_policy_id: uuid.UUID | None = None,
     rejection_context: RejectionContext | None = None,

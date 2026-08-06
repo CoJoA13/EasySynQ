@@ -68,6 +68,7 @@ from ...domain.ingestion.import_report import (
     render_import_report,
 )
 from ...domain.vault.identifier import format_identifier, parse_identifier, revision_label
+from ...problems import ProblemException
 from ..records import repository as records_repo
 from ..records import service as records_svc
 from ..records.service import EvidenceInput
@@ -982,10 +983,36 @@ async def _finalize(
         # commits — the report is regenerable evidence, never blocking).
         report_record_id: uuid.UUID | None = None
         try:
-            async with session.begin_nested():
+            async with session.begin_nested() as _report_savepoint:
                 report_record_id = await _capture_report(
                     session, run, committer, results, committed, failed
                 )
+        except (IdentityRefusal, TargetIdentityConflict) as failure:
+            # The savepoint context has finished rolling back the half-built Record/audit rows.
+            # Only now may the fresh audit transaction record the generated-object refusal.
+            try:
+                await upload_rejection.reject_after_owner_rollback(
+                    failure,
+                    context=upload_rejection.RejectionContext(
+                        operation="server_generated",
+                        org_id=org_id,
+                        actor_id=None,
+                        actor_type=ActorType.system,
+                        scope_ref=str(run_id),
+                        user_correctable=False,
+                    ),
+                    rejection_sessionmaker=sm,
+                )
+            except ProblemException as rejection_problem:
+                if (rejection_problem.status, rejection_problem.code) != (
+                    503,
+                    "storage_unavailable",
+                ):
+                    raise
+            report_record_id = None
+            logger.warning(
+                "ingestion.commit.report_failed", extra={"extra_fields": {"run_id": str(run_id)}}
+            )
         except Exception:  # noqa: BLE001 — savepoint rolled back; the outer txn stays usable
             report_record_id = None
             logger.warning(
@@ -1117,14 +1144,18 @@ async def _capture_report(
     )
     md_bytes = md.encode("utf-8")
     md_sha = hashlib.sha256(md_bytes).hexdigest()
-    await storage.put_staging_bytes(md_bytes, md_sha, content_type="text/markdown")
+    report_source = await storage.put_staging_bytes(
+        md_bytes,
+        md_sha,
+        content_type="text/markdown",
+    )
     permanent = await records_repo.ensure_default_policy(session, org_id)
     rec = await records_svc.capture_record(
         session,
         committer,
         record_type=RecordType.EVIDENCE.value,
         title=f"Import Report — {run.source_root} — {run.id}",
-        evidence=[(md_sha, "text/markdown")],
+        evidence=[EvidenceInput(md_sha, "text/markdown", report_source)],
         retention_policy_id=permanent.id,
         _commit=False,
     )

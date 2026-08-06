@@ -21,7 +21,7 @@ from typing import Any, Literal
 import rfc8785
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...config import get_settings
 from ...db.models._audit_enums import ActorType
@@ -476,6 +476,69 @@ async def _assert_documents_worm_blob(
         )
 
 
+async def _ensure_generated_documents_blob(
+    session: AsyncSession,
+    actor: AppUser,
+    *,
+    payload: bytes,
+    content_type: str,
+    scope_ref: str,
+    rejection_sessionmaker: async_sessionmaker[AsyncSession] | None = None,
+) -> Blob:
+    """Stage and seal one in-memory generated payload with its exact returned source identity."""
+    sha256 = hashlib.sha256(payload).hexdigest()
+    settings = get_settings()
+    blob = await repository.get_blob(session, sha256)
+    if blob is None:
+        source = await storage.put_staging_bytes(
+            payload,
+            sha256,
+            content_type=content_type,
+        )
+        promoted = await promote_for_owner(
+            session,
+            source,
+            target_bucket=settings.s3_bucket_documents,
+            context=RejectionContext(
+                operation="server_generated",
+                org_id=actor.org_id,
+                actor_id=None,
+                actor_type=ActorType.system,
+                scope_ref=scope_ref,
+                user_correctable=False,
+            ),
+            rejection_sessionmaker=rejection_sessionmaker,
+        )
+        await session.execute(
+            pg_insert(Blob)
+            .values(
+                sha256=sha256,
+                org_id=actor.org_id,
+                size_bytes=promoted.size,
+                mime_type=promoted.content_type or content_type,
+                bucket=promoted.target_bucket,
+                object_key=promoted.target_key,
+                worm_locked=True,
+                worm_retain_until=promoted.retain_until,
+            )
+            .on_conflict_do_nothing(index_elements=["sha256"])
+        )
+        await session.flush()
+        blob = await repository.get_blob(session, sha256)
+
+    if blob is None or blob.bucket != settings.s3_bucket_documents or not blob.worm_locked:
+        raise ProblemException(
+            status=423,
+            code="source_bytes_in_foreign_bucket",
+            title="Source object bytes are already vaulted outside the WORM documents bucket",
+            detail=(
+                "These exact bytes exist in another storage domain and cannot back a controlled "
+                "document version; upload fresh content, or reference the existing document."
+            ),
+        )
+    return blob
+
+
 async def init_upload(
     session: AsyncSession,
     actor: AppUser,
@@ -871,37 +934,13 @@ async def checkin_form_schema(
 
     payload = rfc8785.dumps(schema)  # JCS — deterministic; identical schema → identical source blob
     sha = hashlib.sha256(payload).hexdigest()
-    if await repository.get_blob(session, sha) is None:
-        await storage.put_staging_bytes(payload, sha, content_type="application/json")
-        promoted = await storage.finalize_worm(sha)
-        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
-            raise ProblemException(
-                status=500, code="internal_error", title="Schema object upload failed"
-            )
-        if promoted.retain_until is None:
-            raise ProblemException(
-                status=423, code="worm_required", title="Schema object is not WORM-locked"
-            )
-        await session.execute(
-            pg_insert(Blob)
-            .values(
-                sha256=sha,
-                org_id=actor.org_id,
-                size_bytes=promoted.size or len(payload),
-                mime_type="application/json",
-                bucket=get_settings().s3_bucket_documents,
-                object_key=sha,
-                worm_locked=True,
-                worm_retain_until=promoted.retain_until,
-            )
-            .on_conflict_do_nothing(index_elements=["sha256"])
-        )
-        await session.flush()
-
-    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
-    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
-    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
-    await _assert_documents_worm_blob(session, sha, object_label="Source object")
+    await _ensure_generated_documents_blob(
+        session,
+        actor,
+        payload=payload,
+        content_type="application/json",
+        scope_ref=doc.identifier,
+    )
 
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
@@ -974,37 +1013,13 @@ async def checkin_objective_commitment(
 
     payload = rfc8785.dumps(commitment)  # JCS — identical commitment → identical source blob
     sha = hashlib.sha256(payload).hexdigest()
-    if await repository.get_blob(session, sha) is None:
-        await storage.put_staging_bytes(payload, sha, content_type="application/json")
-        promoted = await storage.finalize_worm(sha)
-        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
-            raise ProblemException(
-                status=500, code="internal_error", title="Commitment object upload failed"
-            )
-        if promoted.retain_until is None:
-            raise ProblemException(
-                status=423, code="worm_required", title="Commitment object is not WORM-locked"
-            )
-        await session.execute(
-            pg_insert(Blob)
-            .values(
-                sha256=sha,
-                org_id=actor.org_id,
-                size_bytes=promoted.size or len(payload),
-                mime_type="application/json",
-                bucket=get_settings().s3_bucket_documents,
-                object_key=sha,
-                worm_locked=True,
-                worm_retain_until=promoted.retain_until,
-            )
-            .on_conflict_do_nothing(index_elements=["sha256"])
-        )
-        await session.flush()
-
-    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
-    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
-    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
-    await _assert_documents_worm_blob(session, sha, object_label="Source object")
+    await _ensure_generated_documents_blob(
+        session,
+        actor,
+        payload=payload,
+        content_type="application/json",
+        scope_ref=doc.identifier,
+    )
 
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
@@ -1078,37 +1093,13 @@ async def checkin_risk_register(
 
     payload = rfc8785.dumps(register)  # JCS — identical register → identical source blob
     sha = hashlib.sha256(payload).hexdigest()
-    if await repository.get_blob(session, sha) is None:
-        await storage.put_staging_bytes(payload, sha, content_type="application/json")
-        promoted = await storage.finalize_worm(sha)
-        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
-            raise ProblemException(
-                status=500, code="internal_error", title="Register object upload failed"
-            )
-        if promoted.retain_until is None:
-            raise ProblemException(
-                status=423, code="worm_required", title="Register object is not WORM-locked"
-            )
-        await session.execute(
-            pg_insert(Blob)
-            .values(
-                sha256=sha,
-                org_id=actor.org_id,
-                size_bytes=promoted.size or len(payload),
-                mime_type="application/json",
-                bucket=get_settings().s3_bucket_documents,
-                object_key=sha,
-                worm_locked=True,
-                worm_retain_until=promoted.retain_until,
-            )
-            .on_conflict_do_nothing(index_elements=["sha256"])
-        )
-        await session.flush()
-
-    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
-    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
-    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
-    await _assert_documents_worm_blob(session, sha, object_label="Source object")
+    await _ensure_generated_documents_blob(
+        session,
+        actor,
+        payload=payload,
+        content_type="application/json",
+        scope_ref=doc.identifier,
+    )
 
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
@@ -1182,37 +1173,13 @@ async def checkin_context_register(
 
     payload = rfc8785.dumps(register)  # JCS — identical register → identical source blob
     sha = hashlib.sha256(payload).hexdigest()
-    if await repository.get_blob(session, sha) is None:
-        await storage.put_staging_bytes(payload, sha, content_type="application/json")
-        promoted = await storage.finalize_worm(sha)
-        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
-            raise ProblemException(
-                status=500, code="internal_error", title="Register object upload failed"
-            )
-        if promoted.retain_until is None:
-            raise ProblemException(
-                status=423, code="worm_required", title="Register object is not WORM-locked"
-            )
-        await session.execute(
-            pg_insert(Blob)
-            .values(
-                sha256=sha,
-                org_id=actor.org_id,
-                size_bytes=promoted.size or len(payload),
-                mime_type="application/json",
-                bucket=get_settings().s3_bucket_documents,
-                object_key=sha,
-                worm_locked=True,
-                worm_retain_until=promoted.retain_until,
-            )
-            .on_conflict_do_nothing(index_elements=["sha256"])
-        )
-        await session.flush()
-
-    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
-    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
-    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
-    await _assert_documents_worm_blob(session, sha, object_label="Source object")
+    await _ensure_generated_documents_blob(
+        session,
+        actor,
+        payload=payload,
+        content_type="application/json",
+        scope_ref=doc.identifier,
+    )
 
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
@@ -1287,37 +1254,13 @@ async def checkin_interested_party_register(
 
     payload = rfc8785.dumps(register)  # JCS — identical register → identical source blob
     sha = hashlib.sha256(payload).hexdigest()
-    if await repository.get_blob(session, sha) is None:
-        await storage.put_staging_bytes(payload, sha, content_type="application/json")
-        promoted = await storage.finalize_worm(sha)
-        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
-            raise ProblemException(
-                status=500, code="internal_error", title="Register object upload failed"
-            )
-        if promoted.retain_until is None:
-            raise ProblemException(
-                status=423, code="worm_required", title="Register object is not WORM-locked"
-            )
-        await session.execute(
-            pg_insert(Blob)
-            .values(
-                sha256=sha,
-                org_id=actor.org_id,
-                size_bytes=promoted.size or len(payload),
-                mime_type="application/json",
-                bucket=get_settings().s3_bucket_documents,
-                object_key=sha,
-                worm_locked=True,
-                worm_retain_until=promoted.retain_until,
-            )
-            .on_conflict_do_nothing(index_elements=["sha256"])
-        )
-        await session.flush()
-
-    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
-    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
-    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
-    await _assert_documents_worm_blob(session, sha, object_label="Source object")
+    await _ensure_generated_documents_blob(
+        session,
+        actor,
+        payload=payload,
+        content_type="application/json",
+        scope_ref=doc.identifier,
+    )
 
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
@@ -1393,37 +1336,13 @@ async def checkin_management_review_minutes(
 
     payload = rfc8785.dumps(minutes)  # JCS, hashed BARE — NO preamble (a version source blob)
     sha = hashlib.sha256(payload).hexdigest()
-    if await repository.get_blob(session, sha) is None:
-        await storage.put_staging_bytes(payload, sha, content_type="application/json")
-        promoted = await storage.finalize_worm(sha)
-        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
-            raise ProblemException(
-                status=500, code="internal_error", title="Minutes object upload failed"
-            )
-        if promoted.retain_until is None:
-            raise ProblemException(
-                status=423, code="worm_required", title="Minutes object is not WORM-locked"
-            )
-        await session.execute(
-            pg_insert(Blob)
-            .values(
-                sha256=sha,
-                org_id=actor.org_id,
-                size_bytes=promoted.size or len(payload),
-                mime_type="application/json",
-                bucket=get_settings().s3_bucket_documents,
-                object_key=sha,
-                worm_locked=True,
-                worm_retain_until=promoted.retain_until,
-            )
-            .on_conflict_do_nothing(index_elements=["sha256"])
-        )
-        await session.flush()
-
-    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
-    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
-    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
-    await _assert_documents_worm_blob(session, sha, object_label="Source object")
+    await _ensure_generated_documents_blob(
+        session,
+        actor,
+        payload=payload,
+        content_type="application/json",
+        scope_ref=doc.identifier,
+    )
 
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
