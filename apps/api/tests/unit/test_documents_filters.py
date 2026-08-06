@@ -3,7 +3,7 @@
 The two new opt-in boolean filters (`has_effective_version`, `managed_subtype`) added for the DCR
 CREATE-implement picker. These exercise the pure grammar helpers directly (mirroring the integration
 suite's HTTP-level grammar tests in tests/integration/test_documents_list.py) — they need no DB or
-app fixture, so they run natively on this Windows box.
+app fixture and therefore run in any supported development environment.
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ existing gates: task membership for the decision, `document.manage_metadata` for
 
 **Branch:** `feat/s-drift-1-scheduled-re-review` (already created; spec committed).
 
-**⚠ This box (native Windows):** the FULL `-m unit` and `-m integration` suites are Linux-CI-only.
+**⚠ The then-current development environment (native Windows):** the FULL `-m unit` and `-m integration` suites are Linux-CI-only.
 Locally run: targeted unit files (fine — the access violation is only in
 `test_ingestion_helpers.py`), `ruff check` + `ruff format --check` + `mypy` (strict), and the
 `/check-migrations` + `/check-contracts` skills. Integration tests are WRITTEN here, EXECUTED in CI.
@@ -41,7 +41,7 @@ All `uv run …` commands run from `apps/api/`.
   vault's object type.
 - ⚠ The 0043 seed recipe's org lookup (`WHERE short_code = 'DEFAULT'` + `scalar_one()`) **must NOT
   be copied**: the setup G-E gate RENAMES the single org's short_code in place and forbids
-  `'DEFAULT'` (`services/setup/service.py:363,380`); the live install's only org is `AHT`
+  `'DEFAULT'` (`services/setup/service.py:363,380`); the live install's only org is `ORG_EXAMPLE`
   (renamed 2026-06-07 — AFTER 0043/0044 ran, which is the only reason they "ran clean"). A verbatim
   copy makes 0045 abort the live upgrade with `NoResultFound` (the 0018/0021 migrations document
   this exact trap). Use the resilient single-org lookup in Task 1 Step 3 — and never the
@@ -178,7 +178,7 @@ def upgrade() -> None:
 
     # 3. The periodic_review definition (the 0043 stage/seed shape, but NOT its org lookup:
     # an OPERATIONAL install renames short_code away from 'DEFAULT' at setup G-E — the 0018/0021
-    # trap; this live install's org is 'AHT'. D1 = single-org, so fall back to the only row.
+    # trap; an operational install may use a non-DEFAULT org. D1 = single-org, so fall back to the only row.
     # NEVER skip-if-absent: a missing seed makes the daily sweep raise 500 forever.
     org_id = bind.execute(
         sa.text("SELECT id FROM organization WHERE short_code = 'DEFAULT'")
@@ -676,7 +676,7 @@ today; a future ORM/server default would silently schedule every imported legacy
 - [ ] **Step 2: Verify the new tests are collected (cannot execute here)**
 
 Run: `uv run pytest tests/integration/test_periodic_review.py --collect-only -q`
-Expected: 4 tests collected, no import errors. (Execution is Linux-CI-only on this box.)
+Expected: 4 tests collected, no import errors. (Execution is Linux-CI-only in that development environment.)
 
 - [ ] **Step 3: Implement the write paths**
 
@@ -1525,7 +1525,7 @@ git commit -m "docs(s-drift-1): slice history + section-doc updates (mig head 00
 2. **Pre-merge live smoke** (it caught real bugs on 7c AND 7d): `just up s`; rebuild
    `api` + worker/beat images (`docker compose --env-file .env -f infra/compose/compose.yml -f
    infra/compose/compose.s.yml up -d --build api`); `curl http://localhost/readyz` → head `0045`.
-   Grant `document.*` SYSTEM overrides to the LIVE login's app_user row (org AHT — re-created
+   Grant `document.*` SYSTEM overrides to the LIVE login's app_user row (org ORG_EXAMPLE — re-created
    Keycloak users mint new JIT rows). Author+release a doc → PATCH `review_period_months: 1` →
    `UPDATE documented_information SET next_review_due = CURRENT_DATE` (or PATCH a 1-month period on
    an old-effective doc) → force one sweep (`docker compose … exec api python -c` invoking the task,

@@ -134,8 +134,9 @@ async def setup_configure_backup_endpoint(
     caller: AppUser = Depends(_backup_configure),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Record the backup policy (Step 4 config; doc 08 §8.1) + a live destination check. Needs
-    ``backup.configure``. Does NOT satisfy G-C — the restore-test drill must PASS."""
+    """Record an absolute non-root POSIX backup path after a preliminary API-context filesystem
+    probe. Needs ``backup.configure``. This does not certify the worker mount or persistent backing
+    and does NOT satisfy G-C — the worker restore-test drill must PASS."""
     return await configure_backup(
         session,
         caller,

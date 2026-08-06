@@ -7,7 +7,8 @@ Run the `-m integration` suite, which `/check-api` deliberately does **not** cov
 
 ## Run it
 
-Docker is reachable on this box through the `docker` group. Two things bite, both verified:
+First verify `docker info`. On a Linux host whose current shell predates membership in the `docker`
+group, use the conditional `sg docker -c "…"` wrapper below. Two things commonly bite:
 
 - `sg docker -c "…"` **inherits the current working directory**, so set the directory *outside* the
   `sg` call and do not `cd` again inside it. Chaining `cd apps/api` inside `sg` when you are already
@@ -15,11 +16,11 @@ Docker is reachable on this box through the `docker` group. Two things bite, bot
 - `uv` **is** on PATH inside `sg docker` (`~/.local/bin/uv`) — but pass the absolute path if you see a
   `Failed to spawn: pytest`, which means the cwd was wrong, not the PATH.
 
-Scoped run (what you want almost always — the full serial suite has known false-fails on this box; the
-CI shards are authoritative):
+Scoped run (the fastest iteration loop; the four CI-shaped isolated shards remain the publication
+gate):
 
 ```bash
-cd /home/cojoa13/Desktop/EasySynQ/apps/api && sg docker -c "~/.local/bin/uv run pytest -m integration tests/integration/<file>.py -q"
+cd <repo>/apps/api && sg docker -c "~/.local/bin/uv run pytest -m integration tests/integration/<file>.py -q"
 ```
 
 The first run pulls PostgreSQL / MinIO / Redis images and is slow. That is not a hang — wait it out.
@@ -31,7 +32,7 @@ database, so a test that passes alone can fail — or pass for the wrong reason 
 run first. Re-run with a document-creating file ahead of yours:
 
 ```bash
-cd /home/cojoa13/Desktop/EasySynQ/apps/api && sg docker -c "~/.local/bin/uv run pytest -m integration tests/integration/test_vault.py tests/integration/<file>.py -q"
+cd <repo>/apps/api && sg docker -c "~/.local/bin/uv run pytest -m integration tests/integration/test_vault.py tests/integration/<file>.py -q"
 ```
 
 If the second run disagrees with the first, the test is the defect, not the ordering.

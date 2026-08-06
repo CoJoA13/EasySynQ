@@ -335,14 +335,18 @@ The append-only audit trail (§8.3) is tamper-**evident**, but an attacker with 
 | --- | --- | --- | --- |
 | PostgreSQL | Current: `pg_dump` logical. Target: continuous WAL archiving (PITR) | Current: nightly full. WAL stream unshipped | Current: scratch `pg_restore` verification. PITR unshipped |
 | MinIO blobs | Target: role-preserving `mc mirror` / bucket replication | Unshipped | Source-independent recovery unshipped |
-| Keycloak realm | realm export JSON | On config change + nightly | realm import |
-| Config / secrets | `.env` + Compose files snapshot (encrypted) | On change | redeploy |
+| Keycloak realm | Best-effort realm-export leg, attempted only for encrypted archives | Nightly archive attempt when a backup key is configured; no on-change trigger | No current import/cutover procedure; future recovery must validate a present leg |
+| Config / secrets | Best-effort redacted config snapshot, attempted only for encrypted archives | Nightly archive attempt when a backup key is configured; no on-change trigger | No current redeploy procedure; future recovery must validate a present leg |
 | OpenSearch (reserved) | Not applicable to shipped S/M; any future index remains derived | n/a | rebuild from authoritative stores |
 | Filesystem mirror | **Not backed up** — regenerated from vault | n/a | run mirror-sync task |
 
 - The current `easysynq backup` command writes a timestamped, checksummed archive containing the
   database dump, blob manifest, and available identity/config/checkpoint legs. It does **not** copy
   the manifested object bytes, so it is not a self-contained disaster-recovery set.
+- Encryption and the three optional legs are not guaranteed: an unset/placeholder backup key yields
+  a plaintext archive and omits realm/config; checkpoint capture is also best-effort. Inspect a new
+  manifest's `encrypted` and `legs` values (legacy v2 can omit `encrypted`). Gate G-C exercises
+  neither durable encryption nor key viability.
 - The current `easysynq restore` command validates/decrypts the archive, restores PostgreSQL into a
   scratch database, copies bytes from the configured source object store into a flattened scratch
   layout, and verifies both that copy and the restored database's original locators. The target is

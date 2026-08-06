@@ -13,9 +13,9 @@ mc mb --with-lock myminio/records
 mc retention set --default GOVERNANCE 30d myminio/documents   # tune the retention to your policy
 mc retention set --default GOVERNANCE 30d myminio/records     # same default for the records bucket
 ```
-* **GOVERNANCE** (default, D-7) keeps the R37 fresh-bucket restore and the R27 dual-control
+* **GOVERNANCE** (default, D-7) keeps future role-preserving recovery design and the R27 dual-control
   destroy-under-legal-order escape hatch buildable.
-* **COMPLIANCE** is a hardened opt-in that is **irreversible** — it forecloses fresh-bucket restore
+* **COMPLIANCE** is a hardened opt-in that is **irreversible** — it constrains future recovery-target
   AND GDPR destroy-under-legal-order (immutable even to root). The setup wizard records the mode and
   warns; use GOVERNANCE unless a regulation mandates COMPLIANCE.
 

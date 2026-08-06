@@ -467,7 +467,7 @@ Expected: FAIL — `assert len(doc_entries) == 3` finds 0 (no `document_id` keys
 """The resilient runtime single-org lookup (the 0038/0043/0045 lesson, at runtime).
 
 An OPERATIONAL install renames ``short_code`` away from ``'DEFAULT'`` at setup G-E (this live
-install: ``AHT``), so a bare ``short_code='DEFAULT'`` lookup aborts. D1 = single-org: fall back to
+install: ``ORG_EXAMPLE``), so a bare ``short_code='DEFAULT'`` lookup aborts. D1 = single-org: fall back to
 the only row. Returns ``None`` pre-setup (zero orgs) — callers skip persistence rather than crash
 (the mirror sync/scan must work on an empty install).
 """
@@ -1320,7 +1320,7 @@ directly.
 - [ ] **Step 4: Run the tests — expect PASS**
 
 Run: `uv run pytest tests/unit/test_mirror_scan.py -v`
-Expected: all PASS (on this box, symlink tests may need Developer Mode — if they error on
+Expected: all PASS (in that development environment, symlink tests may need Developer Mode — if they error on
 `os.symlink` privileges, note it and rely on Linux CI; do NOT skip-decorate them).
 
 - [ ] **Step 5: Static checks**
@@ -2289,7 +2289,7 @@ git commit -m "feat(s-drift-2): hourly mirror-scan Beat task (R11 knob), scan-fi
 **Files:**
 - Create: `apps/api/tests/integration/test_mirror_scan.py`
 
-These run in Linux CI only on this box — write them, run the static checks locally, and lean on
+These run in Linux CI only in that development environment — write them, run the static checks locally, and lean on
 the `integration` CI job. Model every convention on `tests/integration/test_mirror.py` (it is the
 canonical reference: `app_client`/`token_factory`/`tmp_path` fixtures, the s5 helpers, the
 approver-releases SoD posture).
@@ -2875,7 +2875,7 @@ instead.
 
 Run: `uv run ruff check . ; uv run ruff format --check . ; uv run mypy`
 Expected: clean. (`uv run pytest -m integration` needs Docker + Linux — it runs in CI; do NOT
-attempt it on this box.)
+attempt it in that development environment.)
 
 - [ ] **Step 3: Commit**
 

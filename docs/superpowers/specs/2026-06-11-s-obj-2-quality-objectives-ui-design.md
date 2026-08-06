@@ -198,7 +198,7 @@ Permission keys (already seeded; PROCESS finest-scope + SYSTEM fallback in v1):
   `drift.read` precedent), slotted after Drift in the PLAN region of `LeftRail`.
 - **Live-smoke note**: `demo` (System Administrator) holds **none** of `objective.*`/`kpi.*` →
   every surface is a calm no-access panel until SYSTEM overrides are granted on the **live login's
-  app_user row** (org `AHT`), Chrome-MCP-driven.
+  app_user row** (org `ORG_EXAMPLE`), Chrome-MCP-driven.
 
 ## 5. UX design (owner-approved 2026-06-11)
 
@@ -343,7 +343,7 @@ per-task spec + quality review:
    `RecordMeasurementModal` (locked unit) + `useRecordMeasurement`; `AddPlanModal` +
    `useAddPlan`/`useRemovePlan`.
 5. **Wire + close** — `App.tsx` routes, `LeftRail` gated entry; full `/check-web`; `diff-critic`
-   on the branch diff; Chrome-MCP live smoke (SYSTEM overrides on the live `demo` row, org AHT);
+   on the branch diff; Chrome-MCP live smoke (SYSTEM overrides on the live `demo` row, org ORG_EXAMPLE);
    `docs/slice-history.md` entry + a `CLAUDE.md` Recent-learnings line + the web-test delta;
    PR → Codex triage (disregard the multi-tenant nitpicks — moot under D1) → squash-merge on green.
 

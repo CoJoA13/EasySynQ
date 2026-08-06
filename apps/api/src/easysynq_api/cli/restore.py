@@ -6,7 +6,8 @@ Runs in the worker image (postgresql-client + the OWNER ``DATABASE_URL_SYNC``).
     python -m easysynq_api.cli.restore <archive> --confirm --audit-checkpoint-ack
     python -m easysynq_api.cli.restore --discard <scratch_db>
 
-Runs restore integrity verification in a fresh scratch DB + non-WORM bucket and leaves that
+Runs restore integrity verification in a fresh scratch DB + a unique prefix in the configured
+shared non-WORM scratch bucket and leaves that
 verification target standing for inspection or discard. PASS depends on the currently configured
 object store and is NOT cutover authorization: the scratch object layout does not match the restored
 database's role-bucket locators. Exit 0 = integrity checks passed, 3 = FLAGGED (checkpoint ahead —

@@ -151,7 +151,7 @@ old shared-key path the second insert deduped → only one notification. (Pin `_
 fixed Wednesday in a seeded `audit_event` partition; assertions are run-scoped to this task's ids per
 the shared-DB discipline.)
 
-**Live-smoke** (populated dev org, Docker-less box → CI is authoritative for the `migrations`/
+**Live-smoke** (populated dev org, Docker-less environment → CI is authoritative for the `migrations`/
 `integration` legs): apply 0067→0068 on the populated DB, confirm `sla_policy.remind_2_before` is now
 `1 day` for the real org, and a real `sweep_task_timers()` over a suitably-dated task emits a distinct
 `task.due_final` in-app row (+ email queued) alongside `task.due_soon`.

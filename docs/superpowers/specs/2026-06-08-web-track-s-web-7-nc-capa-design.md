@@ -121,7 +121,7 @@ import case. Holders: `capa.read` → QMS-Owner + Process-Owner + Internal-Audit
 Process-Owner (create/update/rca/plan/implement); `capa.verify`/`capa.close` → QMS-Owner. So:
 
 - **The board 403s for `demo`** → a calm no-access panel. Live smoke: grant `demo` SYSTEM overrides of
-  the relevant keys (the integration-test pattern; org short_code `AHT`), or use a persona.
+  the relevant keys (the integration-test pattern; org short_code `ORG_EXAMPLE`), or use a persona.
 - A **full Critical/Major close** needs **≥2 distinct users** (SoD-4 verifier ≠ implementer is
   non-overridable). A Minor CAPA with `allow_capa_self_verify` on can be driven by one user. (Smoke detail
   for 7b, not a build blocker; MSW tests simulate responses.)
@@ -176,7 +176,7 @@ to the `Capa` schema in `openapi.yaml` (`/check-contracts` gates it). No new per
 ### 6.1 Backend
 The §4 enrichment (`title` + `created_at` on the list + detail `_capa`; `raised_by` on detail only) + the
 `Capa` schema field-add in `openapi.yaml`. Gated locally by `/check-api` (ruff/format/mypy — the api
-**test** suites are Linux-CI-only on this box) + `/check-contracts`.
+**test** suites are Linux-CI-only in that development environment) + `/check-contracts`.
 
 ### 6.2 Front-end
 - **Nav + route** — a "Nonconformity & CAPA" entry (ACT / Improvement group); page reachable; **calm

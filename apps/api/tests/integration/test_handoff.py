@@ -42,7 +42,7 @@ async def test_avery_invites_mara_then_mara_operates(
     invite = await app_client.post(
         "/api/v1/users",
         headers=h_avery,
-        json={"keycloak_subject": mara_sub, "display_name": "Mara", "email": "mara@example.io"},
+        json={"keycloak_subject": mara_sub, "display_name": "Mara", "email": "mara@example.com"},
     )
     assert invite.status_code == 201, invite.text
     assert invite.json()["status"] == "INVITED"

@@ -227,7 +227,7 @@ records" list on the stage. Net-new evidence **capture** (upload) stays out of s
 ## 4. Components / files
 
 **Backend (one commit; gated locally by `/check-api` static + `/check-contracts`; the api **test** suites are
-Linux-CI-only on this box):**
+Linux-CI-only in that development environment):**
 - `api/workflow.py` — `_task` gains optional `subject_type`/`subject_id`; `get_task_endpoint` loads the
   instance and passes them.
 - `api/capa.py` — new `GET /capas/{id}/approval` (gated `_capa_read`); `_stage` gains `evidence_links`;
@@ -290,7 +290,7 @@ agent on the branch diff.
 
 ## 8. Smoke (live stack)
 `demo` (System Administrator) holds **no `capa.*`** → grant **SYSTEM overrides** of the capa keys (org
-short_code **AHT**) for a board+drawer smoke. A full **Critical/Major** create→…→close needs **≥2 distinct
+short_code **ORG_EXAMPLE**) for a board+drawer smoke. A full **Critical/Major** create→…→close needs **≥2 distinct
 users** (SoD-4) — use `priya`/`ken`/`mara` (`just seed-personas`); **or** a **Minor** CAPA with
 `allow_capa_self_verify` for a 1-user smoke. The Critical two-tier approval needs a Top-Management user in
 addition to a QMS-Owner. (Smoke is verification, not a build blocker — the MSW tests simulate every response.)

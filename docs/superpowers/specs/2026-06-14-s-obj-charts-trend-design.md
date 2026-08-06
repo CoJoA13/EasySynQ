@@ -257,7 +257,7 @@ Pass the direction (additive, no other change):
     `at_risk_threshold=None` + value<target → `red` (no amber).
   - LOWER_IS_BETTER: value≤target → `green`; target<value≤threshold → `amber`; value>threshold → `red`.
   - Confirm the other fields are byte-unchanged (regression).
-- **Integration (CI-only on this Windows box — write failing-first by reasoning, CI verifies):**
+- **Integration (CI-only in that Windows development environment — write failing-first by reasoning, CI verifies):**
   - `GET …/measurements` returns `rag` per reading; a multi-reading objective spanning green/amber/red.
   - `POST …/measurements` response carries `rag`.
   - **Governing-commitment resolution:** an Effective objective whose target was revised (S-obj-4) → an old
@@ -294,7 +294,7 @@ Pass the direction (additive, no other change):
    migration-reviewer.
 3. **Live smoke** (owner does the Keycloak login): on `/objectives/:id` for an objective with ≥2 readings,
    the chart renders with RAG-coloured points + the target line; record a new measurement → the chart updates
-   (the list invalidates). Grant `objective.read`/`kpi.read`/`kpi.record` SYSTEM overrides to org-AHT users via
+   (the list invalidates). Grant `objective.read`/`kpi.read`/`kpi.record` SYSTEM overrides to org-ORG_EXAMPLE users via
    `scripts/grant-overrides.py` (edit KEYS, **revert before the PR**). The `/objectives` register + the full
    `/objectives/:id` route drive fine via Chrome MCP (no drawer wall here — this is a full route, not a `/dcrs`
    drawer).

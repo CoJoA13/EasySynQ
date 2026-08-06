@@ -187,7 +187,7 @@ The drift family (D1–D5) is backend-complete (S-drift-1…3, head `0047`); thi
    `GET /admin/drift/status`; open the Superseded-copies tab = the authed-200 leg of
    `GET /admin/drift/superseded-copies`. If the D4 set is empty, mint one via the worker heredoc
    (create→release→`render_dynamic_copy` export→revise+release) and re-load.
-3. **D5 loop:** grant demo the SYSTEM document overrides (LIVE login's app_user row, org AHT) + make
+3. **D5 loop:** grant demo the SYSTEM document overrides (LIVE login's app_user row, org ORG_EXAMPLE) + make
    demo's app_user the owner of a test doc; set the review period via the modal (PATCH leg); backdate
    `next_review_due` via heredoc; run the sweep; `/tasks` shows the periodic task; checklist (granted
    `report.compliance_checklist.read` override) shows the overdue rollup + row badge; decide

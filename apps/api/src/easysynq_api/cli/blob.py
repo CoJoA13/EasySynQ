@@ -5,10 +5,10 @@
     python -m easysynq_api.cli.blob verify --sample-size N  # override the sample size
 
 Acquires the same ``LOCK_BLOB_VERIFY`` the Beat task uses, so a manual run and the scheduler
-cannot race (skips if held). After restoring a corrupted object from backup, re-run ``verify``
-to clear the alarm (a finding is pinned via ``blob.verify_failed_at`` and re-alarms every run
-until the re-hash passes, which clears the pin). Exit 1 on a FAILED (infrastructure) scan OR an
-unpersisted pass (nothing was recorded — the operator must know).
+cannot race (skips if held). On a finding, preserve and investigate the exact source bytes; current
+restore cannot repair the live vault. Re-run only after a separately validated direct repair or a
+future supported recovery (a passing re-hash clears ``blob.verify_failed_at``). Exit 1 on a FAILED
+(infrastructure) scan OR an unpersisted pass (nothing was recorded — the operator must know).
 """
 
 from __future__ import annotations

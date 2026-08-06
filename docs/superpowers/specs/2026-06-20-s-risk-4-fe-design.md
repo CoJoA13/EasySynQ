@@ -109,7 +109,7 @@ GET /api/v1/risks/summary        (register.read, org-level / SYSTEM)
 - **No migration, no new key, no model change.** Pure read; reuses `governing_register` +
   `summarize_register`. Contract: a new `GET /risks/summary` path + a `RiskRegisterSummary` schema
   component (`additionalProperties: false`), `tags: [risk]`, in-PR (redocly-lint only).
-- **Tests (api integration, CI-authoritative on this Windows box).** Mirror `test_risk_lifecycle.py` /
+- **Tests (api integration, CI-authoritative in that Windows development environment).** Mirror `test_risk_lifecycle.py` /
   `test_risk_capa.py` scaffolding (`_drive_to_editable` → `_create_risk` → publish → `_approve_and_release`):
   1. **pre-first-release → `published:false` + all-zeros** (no published register; the `None` governing
      branch). Use the `restore_register_head` teardown + normalize-at-start discipline (the shared

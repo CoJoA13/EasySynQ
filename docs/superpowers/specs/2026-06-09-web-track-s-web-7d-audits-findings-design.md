@@ -129,7 +129,7 @@ only.
 Consequences:
 - **`demo` calm-403s everywhere** (the board precedent). Live smoke: grant `demo` SYSTEM overrides of
   `audit.read audit.plan audit.create audit.conduct audit.close finding.create finding.read capa.read`
-  (org `AHT`) — one admin drives the whole loop (no SoD on the audit FSM).
+  (org `ORG_EXAMPLE`) — one admin drives the whole loop (no SoD on the audit FSM).
 - The Internal-Auditor PROCESS keys use the `:assigned_process` placeholder — concrete bindings land
   with owner-assignment, so **in v1 practice the FSM writes ride SYSTEM overrides** (the epic §5.2 /
   7b posture). The UI still queries `usePermissions` at the resource's true scope (PROCESS when the
@@ -159,7 +159,7 @@ Consequences:
 3. **`openapi.yaml`**: field-adds to the `Audit` + `Finding` schemas (`/check-contracts` gates it).
 
 No migration. No new key. No new endpoint. Gated locally by `/check-api` static (ruff/format/mypy
-— the api test suites are Linux-CI-only on this box) + `/check-contracts`; ~2 CI integration tests
+— the api test suites are Linux-CI-only in that development environment) + `/check-contracts`; ~2 CI integration tests
 assert the new fields on the live serializers (the 7b precedent).
 
 > Rationale (same as 7a): without it the audits table reads `3f2a… · InProgress` — no human label —
@@ -355,7 +355,7 @@ Estimated **~14 TDD tasks / +60–80 web tests** (suite currently 429).
   per finding (the S-web-6/7b duplicate-`aria-label` trap).
 - **Enrichment is list+detail-consistent** → both `GET /audits` and `GET /audits/{id}` must carry the
   new fields (the 7a precedent enriched both; a detail-only enrichment makes the list a UUID table).
-- **Live smoke** (pre-merge, the 7c lesson): grant `demo` the §3.4 SYSTEM overrides (org `AHT`) →
+- **Live smoke** (pre-merge, the 7c lesson): grant `demo` the §3.4 SYSTEM overrides (org `ORG_EXAMPLE`) →
   programme → plan → audit → walk to FindingsDraft → log a Major NC (auto-CAPA → View CAPA deep-link
   → 7c drawer) → Reported → Closing → **Close blocked (409, calm)** → correct NC→OFI (declassify) →
   **Close succeeds**. One user, exercises every flow incl. the gate + correction.

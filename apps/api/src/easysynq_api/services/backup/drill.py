@@ -2,8 +2,9 @@
 
 ``run_drill`` writes a ``pg_dump`` archive and object manifest at the configured destination,
 restores the database into a fresh scratch DATABASE, and copies the referenced bytes from the
-configured source object store into a non-WORM scratch bucket. It runs the integrity triad on the
-scratch copy and tears the scratch namespace down — returning a PASS/FAIL verdict (never raising; a
+configured source object store under a unique prefix in the configured shared scratch bucket. It
+runs the integrity triad on the scratch copy and tears the scratch namespace down —
+returning a PASS/FAIL verdict (never raising; a
 crash is an honest FAIL, not a 500). This checks archive and current-source integrity; it does not
 prove recovery when the source object store is unavailable. The steps are composable so the
 negative test can inject a post-restore fault via ``after_restore`` without any production hook.
@@ -336,8 +337,8 @@ def run_triad(settings: Settings, handle: ScratchHandle) -> DrillResult:
 
 
 def _latest_checkpoint_bundle(owner_dsn: str) -> bytes | None:
-    """Serialize the newest signed ``audit_checkpoint`` row to JSON (doc 12 §8.1 'audit checkpoint
-    in every backup'). Best-effort → ``None`` if the table is empty/unreadable; never fails the
+    """Serialize the newest signed ``audit_checkpoint`` row to JSON. Best-effort → ``None`` if the
+    table is empty/unreadable; never fails the
     backup. A forward-seam — the restore checkpoint-not-ahead check reads the restored DB + the
     off-host sink, not this bundle."""
     import psycopg
@@ -433,6 +434,7 @@ def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, A
             config_snapshot=legs["config_snapshot"],
             audit_checkpoint=legs["audit_checkpoint"],
             encryption_key_ref=crypto.ENCRYPTION_KEY_REF if encrypt else None,
+            encrypted=encrypt,
         )
 
         if encrypt:

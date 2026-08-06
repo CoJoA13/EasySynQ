@@ -1,8 +1,9 @@
-"""Guard known recovery overclaims on explicitly named, current operator surfaces.
+"""Guard known recovery overclaims on explicitly named publication surfaces.
 
-Historical evidence (`docs/slice-history.md` and doc 18), tests, generated contract output, and
-stable internal identifiers are excluded by construction. The rules below target affirmative claim
-shapes that previously shipped; they deliberately do not reject honest negative limitations.
+Tests, generated contract output, and stable internal identifiers are excluded by construction.
+Authoritative shipped-history summaries are included because an explicit historical capability
+claim must still be factually true. The rules target affirmative shapes that previously shipped;
+they deliberately do not reject honest negative limitations.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ ACTIVE_SURFACES = (
     "README.md",
     "scripts/easysynq",
     "apps/api/src/easysynq_api/cli/backup.py",
+    "apps/api/src/easysynq_api/cli/blob.py",
     "apps/api/src/easysynq_api/cli/restore.py",
     "apps/api/src/easysynq_api/cli/upgrade.py",
     "apps/api/src/easysynq_api/services/backup/__init__.py",
@@ -43,6 +45,7 @@ ACTIVE_SURFACES = (
     "docs/11-ui-ux-design-system.md",
     "docs/12-security-and-audit.md",
     "docs/16-roadmap.md",
+    "docs/18-mvp-implementation-plan.md",
     "docs/dev-workflow.md",
     "docs/manuals/administrator-it-manual.md",
     "docs/runbooks/00-index.md",
@@ -52,6 +55,7 @@ ACTIVE_SURFACES = (
     "docs/runbooks/key-rotation.md",
     "docs/runbooks/minio-object-lock-prereq.md",
     "docs/runbooks/spof-fast-restart.md",
+    "docs/slice-history.md",
     "infra/compose/compose.yml",
     "mockup/easysynq-mockup.html",
     "mockup/screens/setup.html",
@@ -63,6 +67,7 @@ ACTIVE_SURFACES = (
 REQUIRED_ACTIVE_SURFACES = frozenset(
     {
         ".env.example",
+        "apps/api/src/easysynq_api/cli/blob.py",
         "apps/api/src/easysynq_api/cli/restore.py",
         "apps/api/src/easysynq_api/cli/upgrade.py",
         "docs/runbooks/install-ubuntu-server.md",
@@ -175,8 +180,17 @@ FORBIDDEN_CLAIMS = (
     ),
     _rule(
         "operator_prose_calls_scratch_restore_live",
-        r"operator-grade worm-aware \*?live\*? restore|operator-grade live restore "
-        r"\(restore-to-verified-target\)",
+        r"(?:operator-grade worm-aware \*?live\*? restore|operator-grade live restore "
+        r"\(restore-to-verified-target\)|worm-aware restore-to-verified-target|"
+        r"worm-aware restore proven|"
+        r"worm-aware cutover(?: targets a distinct non-WORM recovery namespace)?|"
+        r"documented manual cutover ships|restore blobs into a "
+        r"\*\*fresh/cleared/versioned bucket\*\* then cut MinIO over)",
+    ),
+    _rule(
+        "restore_prose_asserts_scratch_non_worm",
+        r"configured shared non-WORM\s+"
+        r"(?:(?:`{1,2})?restore-scratch(?:`{1,2})?\s+|scratch\s+)?bucket",
     ),
     _rule(
         "upgrade_prose_calls_archive_only_recovery_pointer",
@@ -190,6 +204,58 @@ FORBIDDEN_CLAIMS = (
     _rule(
         "blob_task_claims_restore_from_backup_runbook_action",
         r"blobs\s*[—-]\s*restore-from-backup is the runbook action",
+    ),
+    _rule(
+        "setup_claims_encrypted_test_archive",
+        r"checksummed,\s*encrypted test archive",
+    ),
+    _rule(
+        "setup_claims_archive_decryptable",
+        r"archive decryptable(?: with (?:the )?provided key)?",
+    ),
+    _rule(
+        "setup_claims_gate_gc_decrypts",
+        r"(?:gate G-C|the current gate) decrypts",
+    ),
+    _rule(
+        "backup_destination_claims_worker_mount_proof",
+        r"(?:a mounted local/NFS path the worker can write|"
+        r"mounted local/NFS filesystem path|"
+        r"filesystem path reachable\s*[·+]\s*writable|"
+        r"reachability\s*\+\s*writability live check)",
+    ),
+    _rule(
+        "blob_help_claims_current_restore_clears_alarm",
+        r"(?:re-run after a restore to clear the alarm|"
+        r"after restoring a corrupted object from backup,\s*re-run\s*``?verify``?)",
+    ),
+    _rule(
+        "restore_prose_calls_shared_prefix_fresh_bucket",
+        r"(?:copies?[^.\n]{0,100}\binto|target) a fresh (?:non-WORM )?(?:scratch )?bucket",
+    ),
+    _rule(
+        "setup_mockup_claims_gc_encrypts_or_decrypts",
+        r"(?:test archive written\s*(?:&|&amp;)\s*encrypted|"
+        r"checksum verified\s*·\s*decryptable with provided key)",
+    ),
+    _rule(
+        "backup_prose_claims_unconditional_archive_encryption",
+        r"(?:the whole archive is\s*\*\*AES-256-GCM encrypted\*\*|"
+        r"\|\s*\*\*Backups\*\*\s*\|\s*Archive encrypted with a dedicated backup key)",
+    ),
+    _rule(
+        "backup_prose_claims_unconditional_optional_legs",
+        r"(?:\*\*Keycloak realm export\*\*\s*\+\s*a\s*\*\*config snapshot\*\*\s*\+\s*"
+        r"the latest signed audit checkpoint|"
+        r"latest signed chain checkpoints bundled into every backup|"
+        r"realm export JSON(?: \(encrypted\))?\s*\|\s*on config change \+ nightly\s*\|\s*"
+        r"realm import|"
+        r"\.env \+ Compose(?: files)? snapshot \(encrypted\)\s*\|\s*on change\s*\|\s*"
+        r"(?:re)?deploy|"
+        r"PG dump \+ MinIO manifest/mirror \+ Keycloak realm export \+ encrypted config|"
+        r"backup\s*=\s*PG dump \+ MinIO manifest \+ Keycloak realm \+ encrypted config|"
+        r"Keycloak realm/identity-provider config is written and exported"
+        r".{0,100}captured by backups)",
     ),
 )
 
@@ -353,6 +419,11 @@ CLAIM_ORACLES = (
         "S11 is not an operator-grade live restore (restore-to-verified-target).",
     ),
     (
+        "restore_prose_asserts_scratch_non_worm",
+        "The drill uses the configured shared non-WORM scratch bucket.",
+        "It is not true that the configured shared non-WORM scratch bucket is used.",
+    ),
+    (
         "upgrade_prose_calls_archive_only_recovery_pointer",
         "The operator's only recovery pointer is the pre-backup archive.",
         "This is not the operator's only recovery pointer.",
@@ -366,6 +437,51 @@ CLAIM_ORACLES = (
         "blob_task_claims_restore_from_backup_runbook_action",
         "blobs — restore-from-backup is the runbook action",
         "For blobs — restore-from-backup is the runbook action — not true.",
+    ),
+    (
+        "setup_claims_encrypted_test_archive",
+        "The worker writes a checksummed, encrypted test archive.",
+        "No checksummed, encrypted test archive is written.",
+    ),
+    (
+        "setup_claims_archive_decryptable",
+        "The acceptance test requires the archive decryptable with the provided key.",
+        "The archive decryptable with the provided key is not supported.",
+    ),
+    (
+        "setup_claims_gate_gc_decrypts",
+        "Gate G-C decrypts and restores the database into scratch.",
+        "Gate G-C does not decrypt and restore the database into scratch.",
+    ),
+    (
+        "backup_destination_claims_worker_mount_proof",
+        "A mounted local/NFS path the worker can write",
+        "This is not a mounted local/NFS path the worker can write.",
+    ),
+    (
+        "blob_help_claims_current_restore_clears_alarm",
+        "Re-run after a restore to clear the alarm.",
+        "Do not re-run after a restore to clear the alarm.",
+    ),
+    (
+        "restore_prose_calls_shared_prefix_fresh_bucket",
+        "The command copies source bytes into a fresh scratch bucket.",
+        "The command copies source bytes into a fresh scratch bucket — not supported.",
+    ),
+    (
+        "setup_mockup_claims_gc_encrypts_or_decrypts",
+        "Test archive written &amp; encrypted",
+        "Test archive written &amp; encrypted — not supported.",
+    ),
+    (
+        "backup_prose_claims_unconditional_archive_encryption",
+        "The whole archive is **AES-256-GCM encrypted**.",
+        "The whole archive is **AES-256-GCM encrypted** — not true.",
+    ),
+    (
+        "backup_prose_claims_unconditional_optional_legs",
+        "Latest signed chain checkpoints bundled into every backup",
+        "Latest signed chain checkpoints bundled into every backup — not true.",
     ),
 )
 
@@ -383,6 +499,49 @@ def test_guard_accepts_direct_negation_of_each_guarded_claim(
     _expected_claim: str, _former_claim: str, direct_negative: str
 ) -> None:
     assert _violations("direct-negative.txt", direct_negative) == set()
+
+
+@pytest.mark.parametrize(
+    ("expected_claim", "former_claim"),
+    (
+        (
+            "setup_claims_gate_gc_decrypts",
+            "The current gate decrypts and restores the database into scratch.",
+        ),
+        (
+            "backup_prose_claims_unconditional_optional_legs",
+            "Keycloak realm/identity-provider config is written and exported, so it is captured "
+            "by backups.",
+        ),
+        (
+            "backup_prose_claims_unconditional_optional_legs",
+            "backup = PG dump + MinIO manifest + Keycloak realm + encrypted config",
+        ),
+        (
+            "operator_prose_calls_scratch_restore_live",
+            "WORM-aware restore-to-verified-target",
+        ),
+        (
+            "operator_prose_calls_scratch_restore_live",
+            "A documented manual cutover ships.",
+        ),
+        (
+            "operator_prose_calls_scratch_restore_live",
+            "MVP backup = nightly dump + WORM-aware cutover.",
+        ),
+        (
+            "operator_prose_calls_scratch_restore_live",
+            "R37 WORM-aware restore proven (S11)",
+        ),
+        (
+            "restore_prose_asserts_scratch_non_worm",
+            "The drill uses a configured shared non-WORM scratch bucket.",
+        ),
+    ),
+)
+def test_final_review_claim_shapes_are_guarded(expected_claim: str, former_claim: str) -> None:
+    claims = {item.claim for item in _violations("final-review-claim.txt", former_claim)}
+    assert expected_claim in claims
 
 
 @pytest.mark.parametrize(
@@ -486,12 +645,25 @@ def test_historical_blob_runbook_claim_reports_starting_line() -> None:
     }
 
 
+def test_host_help_does_not_claim_current_restore_repairs_blob_findings() -> None:
+    host_help = (ROOT / "scripts/easysynq").read_text()
+    blob_help = (ROOT / "apps/api/src/easysynq_api/cli/blob.py").read_text()
+
+    for text in (host_help, blob_help):
+        lowered = text.lower()
+        assert "re-run after a restore to clear the alarm" not in lowered
+        assert "after restoring a corrupted object from backup" not in lowered
+        assert "preserve and investigate the exact source bytes" in lowered
+
+
 @pytest.mark.parametrize("relative_path", MOCKUP_SETUP_SURFACES)
 def test_mockup_backup_destination_is_filesystem_only(relative_path: str) -> None:
     text = (ROOT / relative_path).read_text()
 
     assert 'value="/var/lib/easysynq/backups"' in text
-    assert "Mounted local/NFS filesystem path" in text
+    assert "Absolute non-root POSIX filesystem path" in text
+    assert "Preliminary API-context probe only" in text
+    assert "Mounted local/NFS filesystem path" not in text
     active_s3_field = re.search(
         r'<input\b[^>]*(?:value|placeholder)="[^"]*(?:s3://|s3-compatible bucket)',
         text,

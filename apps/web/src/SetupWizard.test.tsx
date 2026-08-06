@@ -41,6 +41,11 @@ test("the active backup gate describes integrity verification without claiming r
   renderWithProviders(<SetupWizard token="test-token" login={() => {}} onFinalized={() => {}} />);
 
   expect(await screen.findByLabelText("Backup destination")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      /Absolute non-root POSIX path\. Save checks only the API context; the worker drill checks current worker access, not persistent mount backing\./i,
+    ),
+  ).toBeInTheDocument();
   expect(screen.getByText(/currently configured source object store/i)).toBeInTheDocument();
   expect(
     screen.getByText(

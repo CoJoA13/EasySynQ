@@ -1,8 +1,8 @@
-# Running EasySynQ on native Windows 11 (Git Bash) — read when developing on the owner's Windows box
+# Running EasySynQ on native Windows 11 (Git Bash) — conditional platform guidance
 
-The repo lives on the **native Windows filesystem** (e.g. `C:\dev\EasySynQ`), cloned fresh so
-`.gitattributes` (`* text=auto eol=lf`) keeps `*.sh`/Dockerfiles LF. **No WSL distro** is used for dev
-(the owner moved off WSL — Aug 2026). The Docker stack runs on **Docker Desktop** (Linux containers; its
+When using this path, keep the repo on the **native Windows filesystem** (for example
+`C:\dev\EasySynQ`) so `.gitattributes` (`* text=auto eol=lf`) keeps `*.sh`/Dockerfiles LF. Do not use
+a WSL distro for this workflow. The Docker stack runs on **Docker Desktop** (Linux containers; its
 WSL2 *engine* is internal — you never open a WSL shell). Toolchain is native Windows: `uv` (manages
 Python 3.12), Node 22, `just`, `gh`, and **Git for Windows** — whose **Git Bash supplies the `bash`
 that `just`, the `.sh` glue, and Claude Code's `.claude/hooks/*.sh` all require** (the `justfile` is
@@ -13,14 +13,12 @@ that `just`, the `.sh` glue, and Claude Code's `.claude/hooks/*.sh` all require*
 - `just up s` / `just down` / `just logs` — the stack. App at **http://localhost**. `just` spawns Git
   Bash's `bash` for recipes, so run it from **PowerShell or Git Bash** — either works as long as
   `bash.exe` is on PATH.
-- The app is **OPERATIONAL**: log in `demo` / `Demo-Password-1` (System Administrator).
+- After completing setup, create the documented disposable `demo` fixture before a UI smoke; do not
+  assume any particular live instance is already operational.
 - `just check` runs ruff + ruff-format + mypy-strict + the **full `pytest -m unit`** (api) + the web
-  loop (eslint/tsc/build/test); no Docker. ⚠ On this native-Windows box the **`-m unit` leg is RED by
-  a known 17-failure baseline** (ProactorEventLoop / `O_NOFOLLOW` native issues — mirror symlinks ×12,
-  ingestion `O_NOFOLLOW` ×5, in 3 files), and `pytest -m integration` can't run locally either → treat
-  the **full unit + integration suites as CI-authoritative**, NOT a clean local gate. For a clean LOCAL
-  signal run the fast sub-checks (ruff + mypy-strict + the web loop) + **targeted** unit files
-  (`cd apps/api && uv run pytest tests/unit/test_<x>.py`); anything failing outside the 17-baseline is a real regression.
+  loop (eslint/tsc/build/test); no Docker. Native Windows cannot faithfully exercise every POSIX
+  `O_NOFOLLOW`/symlink path, so run targeted unit files locally and require the Linux CI/full-suite
+  result rather than accepting a machine-specific failure baseline.
 - `just demo-user` — (re)create the `demo` login (see Keycloak note). `just seed-personas` — the SoD
   `priya`/`ken`/`mara` fixture. Both now live in `scripts/demo-user.sh` / `scripts/seed-personas.sh`
   (plain scripts, not justfile shebang recipes) so they run identically on Windows + Git Bash.
@@ -43,12 +41,13 @@ Lives at **`<repo>\.env`** (beside `justfile`/`.env.example`); gitignored (`.env
 clone has none — provide one: **reuse your prior `.env`** (copy it in — preserves secrets + the
 localhost tuning), or `bash scripts/install.sh` (generates secrets from `.env.example`; ⚠ mints a NEW
 `BACKUP_ENCRYPTION_KEY` — old encrypted backups become unrecoverable — and leaves OIDC blank to set),
-or `cp .env.example .env` + edit. ⚠ This install's org short_code is **`AHT`** → `grant-role` needs `--org AHT`.
+or `cp .env.example .env` + edit. If setup changes the org short code, supply the actual value to
+`grant-role --org ORG_EXAMPLE` locally; never write it into tracked guidance.
 
-## Keycloak is ephemeral (no volume)
-After `just down` / any keycloak recreate, the `demo` user is wiped → run **`just demo-user`** (and
-`just seed-personas` if you need the SoD trio). The realm re-imports from `realm-export.json` (incl. the
-audience mapper + redirect URIs). Postgres/MinIO data persists across `just down` (only `just down -v` wipes).
+## Keycloak container vs. durable identity state
+The Keycloak container itself has no dedicated volume, but its schema lives in durable PostgreSQL.
+Ordinary `just down`/recreation preserves accounts and subjects; `just down -v` is destructive. Run
+**`just demo-user`** / **`just seed-personas`** when the fixture is absent or an explicit reset is wanted.
 
 ## Native-Windows gotchas (the ones that bite)
 - **`bash.exe` MUST be on PATH** (Git for Windows installer → "Git from the command line and also from
@@ -69,7 +68,7 @@ audience mapper + redirect URIs). Postgres/MinIO data persists across `just down
   image is the same: `vite preview` serves a baked build with no source mount → rebuild after a code
   change (`… up -d --build web`) + hard-refresh / Incognito to drop the cached bundle.
 
-## Claude Code on this machine
+## Claude Code on native Windows
 Run Claude Code **natively on Windows** (PowerShell) — it drives the shell directly; **no WSL base64
 bridge** (the old `wsl bash -lc "echo <b64> | base64 -d | bash"` dance is gone). Git Bash's `bash` on
 PATH is what lets Claude's `.claude/hooks/*.sh` format hooks fire. Don't weaken Keycloak auth (ROPC etc.).

@@ -541,7 +541,7 @@ First-Run Setup        ◉╴●─●─●─●─○─○─○─○─○
    object store and verifies integrity; it does not prove source-independent
    recovery or authorize cutover.                                      [ ? ]
    ┌──────────────────────────────────────────────────────────────┐
-   │ Backup destination               [ /mounted/backup/path      ] │
+   │ Backup destination               [ /absolute/backup/path     ] │
    │ Archive contents                 [ pg_dump + blob manifest   ] │
    │ Object-byte source               [ configured source store   ] │
    │ Scratch layout                   [ flattened; verification   ] │

@@ -16,7 +16,7 @@
 - **Full register, no pagination** — the candidate scan covers ALL matching org DOCUMENT rows (no `_LIST_SCAN_CAP`); enrichment is batched (no N+1).
 - **Content hash covers row DATA only**, rows sorted by `identifier`, canonical JSON (`sort_keys=True, separators=(",",":"), default=str`); the provenance block (with a wall-clock `generated_at`) is EXCLUDED from the hash input.
 - **Contracts in-PR** — document the new path in `packages/contracts/openapi.yaml` (redocly-lint only, no codegen).
-- **Verification** — `/check-api` (ruff + mypy-strict + pytest unit), `/check-web` (eslint + tsc + build + test), `/check-contracts` (redocly). Integration tests are CI-authoritative (4 shards); locally run scoped via `cd apps/api && uv run pytest tests/integration/test_report_document_control.py -v` (Docker available on this box).
+- **Verification** — `/check-api` (ruff + mypy-strict + pytest unit), `/check-web` (eslint + tsc + build + test), `/check-contracts` (redocly). Integration tests are CI-authoritative (4 shards); locally run scoped via `cd apps/api && uv run pytest tests/integration/test_report_document_control.py -v` (Docker available in that development environment).
 - **Integration test discipline** — run-scoped / delta assertions only (shared session DB); do not assume a clean OR dirty DB; self-provide every precondition. Any `audit_event` write pins `occurred_at` to a seeded month (2026-06/07/08) — this endpoint writes none, but tests that seed docs via other services must respect it.
 - **Web false-PASS discipline** — MSW fixtures pinned via `satisfies` to the real serializer shape; jest-dom tests `import { expect, it } from "vitest"`; distinct `aria-label`s; no `dangerouslySetInnerHTML`; RAG carried by shape/icon/label, never colour alone.
 

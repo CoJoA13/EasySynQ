@@ -17,10 +17,12 @@ import asyncio
 import dataclasses
 import datetime
 import logging
+import posixpath
 import re
 import uuid
 import zoneinfo
 from collections.abc import Awaitable, Callable
+from pathlib import PurePosixPath
 from typing import Any
 
 from sqlalchemy import select, update
@@ -468,13 +470,24 @@ async def configure_backup(
     alert_sink: str | None = None,
     wal_pitr_enabled: bool = False,
 ) -> dict[str, Any]:
-    """Record the admin-controlled backup policy (doc 08 §8.1) + a live destination writability
-    check. Does NOT satisfy G-C on its own — the restore-test drill must PASS (configured ≠
-    verified)."""
+    """Record the admin-controlled backup policy (doc 08 §8.1) after a preliminary API-context
+    path probe. Does NOT certify the worker mount or persistent backing and does NOT satisfy G-C on
+    its own — the worker restore-test drill must PASS (configured ≠ verified)."""
     destination = destination.strip()
     if not destination:
         raise ProblemException(
             status=422, code="validation_error", title="backup destination must not be empty"
+        )
+    if (
+        destination.strip("/") == ""
+        or posixpath.normpath(destination) == "/"
+        or "://" in destination
+        or not PurePosixPath(destination).is_absolute()
+    ):
+        raise ProblemException(
+            status=422,
+            code="backup_destination_invalid",
+            title="backup destination must be an absolute non-root POSIX filesystem path",
         )
     if not _CRON_RE.match(cron.strip()):
         raise ProblemException(
@@ -499,7 +512,7 @@ async def configure_backup(
         raise ProblemException(
             status=422,
             code="backup_destination_unreachable",
-            title="The backup destination is not reachable/writable",
+            title="The backup destination failed the preliminary API-context probe",
             detail=detail,
         )
 

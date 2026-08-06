@@ -285,11 +285,11 @@ spine's `forbidden` flag.
 
 ## 8. Verification & live smoke
 
-- Local gate: `/check-web` (the FE runs fully natively on this Windows box).
+- Local gate: `/check-web` (the FE runs fully natively in that Windows development environment).
 - diff-critic on the branch diff pre-PR.
 - **Live smoke (Chrome MCP):** rebuild the web image (`up -d --build web`); grant `changeRequest.create` +
   `.assess` + `.close` (+ the existing `changeRequest.read`/`document.read`) **SYSTEM overrides** on the
-  live demo `app_user` (org **AHT**, the grant-all-org-users heredoc); pre-create a target Document (or
+  live demo `app_user` (org **ORG_EXAMPLE**, the grant-all-org-users heredoc); pre-create a target Document (or
   reuse one) so the REVISE target picker has an option; exercise all three raise seams + edit + cancel; the
   owner does the Keycloak login. *(implement/approval smoke is a ui-2b concern — it needs a second SoD
   principal + a live candidate-pool approver.)*

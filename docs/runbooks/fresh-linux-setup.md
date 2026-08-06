@@ -3,11 +3,10 @@
 > **Developer-facing**, not an operator/production runbook (for production see
 > [install-online.md](install-online.md) / [install-airgapped.md](install-airgapped.md)). These are the
 > hands-on steps to stand up the EasySynQ dev stack + test gates on a clean Linux workstation — e.g.
-> after a distro reinstall, when **no data carries over** (fresh DB / MinIO / Keycloak). Verified on
-> Kubuntu / Ubuntu 26.04 (x86_64; Debian/Ubuntu derivatives are similar) **and Bazzite-DX (Fedora 44
-> atomic, x86_64)** — the rpm-ostree/atomic + Homebrew differences are flagged inline (§1, §8). The repo
-> itself (code + all `docs/`) is restored by `git clone`; only the gitignored `.env` and the Docker
-> volumes are lost.
+> after a distro reinstall, when **no data carries over** (fresh DB / MinIO / Keycloak). Debian/Ubuntu
+> and rpm-ostree/Fedora-derived atomic environments need different package-management steps; those
+> differences are flagged inline (§1, §8). The repository is restored by `git clone`; only the
+> gitignored `.env` and Docker volumes are local state.
 
 ## 1. Toolchain (native Linux — no WSL)
 
@@ -24,16 +23,15 @@ sudo usermod -aG docker "$USER"        # log out/in so `docker` works without su
 
 Confirm: `docker --version` (need **v29.x**), `node -v` (22), `uv --version`, `just --version`.
 
-### 1a. Fedora atomic / Bazzite-DX (immutable — no `apt`)
+### 1a. rpm-ostree/Fedora-derived atomic Linux (no `apt`)
 
-On an rpm-ostree/atomic distro (e.g. **Bazzite-DX**, Fedora 44) the `apt` line above does not apply. The
-toolchain comes from **Homebrew** (pre-installed on Bazzite-DX): `brew install uv node@22 just gh`
-(`docker-ce` is already layered into the image; Node can also come from nvm as above). `pg_dump` →
-`brew install postgresql@16` (see §8 — the version matters). Two gotchas bite here:
+On an rpm-ostree/atomic distribution the `apt` line above does not apply. If Homebrew is available,
+use `brew install uv node@22 just gh` and `brew install postgresql@16` (see §8 — the client version
+matters); otherwise use the distribution's documented toolbox/layering mechanism. Two common
+gotchas apply:
 
-- **Docker has no usable group out of the box.** The image ships `docker-ce` but creates **no `docker`
-  group**, and `ujust dx-group` is **broken** for this — it only `usermod -aG docker`s a group that
-  doesn't exist, and that missing group also makes `systemctl enable docker.socket` fail (the unit's
+- **Some images ship Docker without a usable group.** If `docker-ce` exists but the `docker` group
+  does not, adding the user alone cannot work and `systemctl enable docker.socket` can fail (the unit's
   `SocketGroup=docker` can't resolve → socket stays `root:root`/failed). Create the group yourself:
   ```bash
   sudo groupadd -f docker && sudo usermod -aG docker "$USER"
@@ -127,7 +125,7 @@ revision id (not a filename) and stays correct if the tree ever branches.
 ## 6. First-run wizard → OPERATIONAL
 
 A fresh DB boots `setup_state = UNINITIALIZED` — the whole `/api/v1/*` returns `423 setup_incomplete`
-until the wizard completes. The old box's OPERATIONAL state lived in the (now-gone) `pgdata` volume.
+until the wizard completes. A fresh volume intentionally carries no prior `OPERATIONAL` state.
 
 ```bash
 # create the identity used to activate this fresh instance
@@ -140,7 +138,7 @@ docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/com
 ```
 
 Then drive `http://localhost/setup` in the browser: demo Keycloak login → **org profile (short_code
-`AHT`**, legal "EasySynQ", tz America/Chicago) → WORM-governance verify → backup + **restore-drill PASS**
+`ORG_EXAMPLE`**, legal "Example Organization", tz UTC) → WORM-governance verify → backup + **restore-drill PASS**
 → local-accounts auth verify → **Finalize**. The "Not yet tamper-evident" finalize warning is **expected
 and non-blocking in dev** (the audit-checkpoint anchor is same-host MinIO, not off-host).
 
@@ -157,12 +155,13 @@ Deleting named volumes (`docker compose down -v`) remains a destructive full dev
 
 ⚠ `demo` is a System Administrator and holds **no `document.*`/`capa.*`/content keys** (admin sits
 outside the QMS, by design) — Home PLAN/CHECK cards showing "No access to this section's data" is
-expected. To author/view content: grant SYSTEM overrides (edit `scripts/grant-overrides.py`'s `KEYS` +
-`ORG=AHT`, then pipe it into the worker container) **or** use the `priya`/`ken`/`mara` personas.
+expected. To author/view content: grant SYSTEM overrides (edit `scripts/grant-overrides.py`'s
+`KEYS`, export `EASYSYNQ_SMOKE_ORG='ORG_EXAMPLE'`, then pipe it into the worker container with
+`docker compose exec -e EASYSYNQ_SMOKE_ORG`) **or** use the `priya`/`ken`/`mara` personas.
 
 ## 8. Test gates
 
-Docker is native, so the integration suite now runs locally (it was CI-only on the old Windows box).
+With a native Docker engine, the integration suite can run locally.
 
 | Gate | Command |
 |---|---|
@@ -195,8 +194,8 @@ config file at all:
 sudo usermod -aG docker "$USER"
 ```
 
-⚠ Requires a **full logout/restart** to take effect — group membership is fixed at login, and this
-box has no `sg`/`newgrp` shortcut. Once it is active, delete any `~/.testcontainers.properties`
+⚠ A **full logout/restart** may be required because group membership is fixed at login. If
+`sg`/`newgrp` is unavailable, restart the session. Once it is active, delete any `~/.testcontainers.properties`
 override so testcontainers just uses its `/var/run/docker.sock` default. Verify with `id -nG | grep docker`.
 
 **Fallback (no sudo, no restart)** — point testcontainers at the Docker Desktop socket instead. Works
@@ -213,7 +212,7 @@ Verify with `docker context ls` (which endpoint is starred) and
 any comment you add must not contain an equals sign or it is silently read as a setting. It also takes
 **precedence over `DOCKER_HOST`**, so a stale `tc.host` silently wins over a correct env var.
 
-⚠ **Known LOCAL-env test artifacts (not real failures — all pass in CI):**
+⚠ **Host-environment test traps (not product regressions when the clean CI gate passes):**
 - **Run the integration suite sharded, the way CI does.** CI runs it as **4 parallel shards**
   (`--splits 4 --group {1..4}`, each its own process + testcontainers). A single full
   `pytest -m integration` process reuses one shared DB + mirror filesystem across all ~760 tests and
@@ -236,7 +235,7 @@ any comment you add must not contain an equals sign or it is silently read as a 
   sudo apt update && sudo apt install -y postgresql-client-16
   ```
   Installing **only** `postgresql-client-16` (not the unversioned metapackage) keeps `pg_wrapper` from
-  picking a newer client, so a bare `pg_dump` resolves to 16. The **live stack is unaffected** (the api/worker images
+  picking a newer client, so a bare `pg_dump` resolves to 16. The **containerized stack is unaffected** (the api/worker images
   carry pg_dump 16.14, so the wizard restore-drill always uses the matching version). With **no** `pg_dump`
   at all, the suite errors `pg_dump not found`.
 - `test_notification_settings.py::test_smtp_defaults_are_safe` asserts an empty `smtp_host` default, but a
@@ -253,5 +252,5 @@ any comment you add must not contain an equals sign or it is silently read as a 
   `apps/api`) / `/tmp`-copied env file.
 - `.claude/rules/windows-dev.md` is **historical** — its gotchas (`MSYS_NO_PATHCONV`, "bash.exe on PATH",
   Docker Desktop path mangling) are Windows-only and do not apply on native Linux.
-- The "17-failure local unit baseline" in older docs was Windows-native (ProactorEventLoop / `O_NOFOLLOW`)
-  and disappears on Linux → `pytest -m unit` is a real clean gate here.
+- Older Windows-native baselines involving ProactorEventLoop / `O_NOFOLLOW` do not apply on Linux;
+  `pytest -m unit` is expected to be a clean gate.

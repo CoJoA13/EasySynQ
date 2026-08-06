@@ -29,7 +29,7 @@ pytestmark = pytest.mark.integration
 
 
 async def _default_org_id() -> uuid.UUID:
-    """The seeded org that owns the is_default working_calendar (AHT in dev; the 0002 org in CI)."""
+    """The seeded org that owns the default working calendar (renamed in dev; 0002 org in CI)."""
     async with get_sessionmaker()() as s:
         row = (
             (await s.execute(select(WorkingCalendar).where(WorkingCalendar.is_default.is_(True))))
@@ -314,8 +314,10 @@ async def test_update_audit_before_uses_raw_stored_row(app_under_test: Any) -> N
 async def test_http_put_updates_existing_default_and_audits(
     app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
 ) -> None:
-    """PUT updates AHT's existing default row (UPDATE branch) + writes one CONFIG_UPDATED; GET
-    round-trips. Restores the original calendar in finally (app role can't DELETE the row)."""
+    """PUT updates ORG_EXAMPLE's existing default row and writes one CONFIG_UPDATED.
+
+    GET round-trips. Restores the original calendar in finally (app role can't DELETE the row).
+    """
     subject = f"wc-admin-{uuid.uuid4().hex[:8]}"
     await _grant(subject, ("config.update",))
     h = _auth(token_factory, subject)

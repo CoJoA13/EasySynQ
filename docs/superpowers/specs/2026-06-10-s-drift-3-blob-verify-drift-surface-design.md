@@ -70,7 +70,7 @@ writes, not GETs); `services/common/org.get_single_org_id` (the resilient single
 `pg_advisory_lock` + the `pg_locks` constants; the `tasks/mirror.py` worker shape (own disposed
 engine, skip-if-held, never raises); the `api/config.py` admin-endpoint shape (`require()` on a
 SYSTEM key); the 0028 additive-key seed shape (⚠ with the #107 resilient org lookup, NOT 0028's
-DEFAULT-only `scalar_one_or_none` — this install is `AHT`).
+DEFAULT-only `scalar_one_or_none` — an operational install may use a non-`DEFAULT` short code).
 
 ## 2. Schema — migration `0047` (no new tables)
 
@@ -242,7 +242,7 @@ All-static paths (no `/{id}` shadow concern). Router mounted with the other admi
   failure→False+nothing-stamped; the task in `app.tasks` + the Beat entry + both settings knobs +
   `LOCK_BLOB_VERIFY` distinctness; the two new enum members; D4 SQL fragments where unit-testable
   (the row-shape projection). Scan-never-raises (hasher that explodes → FAILED report, task returns).
-- **Integration (Linux CI; this box runs api static checks only):** synthetic tamper via planted
+- **Integration (Linux CI; the then-current development environment runs api static checks only):** synthetic tamper via planted
   blob **rows** (never fight WORM): a row whose `sha256` ≠ the real bytes it points at →
   HASH_MISMATCH; a row pointing at a nonexistent key → OBJECT_MISSING; assert the
   `BLOB_INTEGRITY_FAILED` events (payload incl. classification + sha256), the `drift_scan
@@ -256,7 +256,7 @@ All-static paths (no `/{id}` shadow concern). Router mounted with the other admi
   session DB + data-driven shard composition — never assume clean OR dirty). If the new tests are
   heavy: re-run `bash scripts/refresh-test-durations.sh <green-run-id>` against the PR's own first
   green run and commit the diff in-PR (the #109 contract).
-- **Local gates (this box):** `/check-api` static legs + `/check-migrations` + `/check-contracts`
+- **Local gates (the then-current development environment):** `/check-api` static legs + `/check-migrations` + `/check-contracts`
   (no `/check-web` — web untouched).
 - **Pre-PR:** diff-critic on the branch diff. **Pre-merge live smoke** (rebuild
   migrate/api/worker/beat first): plant a bad blob row via the worker heredoc, run

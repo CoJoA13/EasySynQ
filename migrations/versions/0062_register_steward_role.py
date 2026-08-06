@@ -13,7 +13,7 @@ NO new permission key (every key already exists, seeded in 0004) → the catalog
 ``alembic check`` is unaffected and no ORM model changes.
 
 Idempotent + multi-org by NAME (not the ``DEFAULT`` org 0004 targets, so it reaches a renamed
-install such as ``AHT``): inserts the role for EVERY org via ``on_conflict_do_nothing`` on
+install such as ``ORG_EXAMPLE``): inserts the role for EVERY org via ``on_conflict_do_nothing`` on
 ``(org_id, name)``, then the 5 grants via a CROSS JOIN of the role rows with the permission rows
 (``on_conflict_do_nothing`` on ``(org_id, role_id, permission_id)``). Returns early on an
 uninitialized DB (no org).
@@ -76,7 +76,7 @@ def upgrade() -> None:
     )
 
     # 1. Seed the reserved role for EVERY org (single-org D1; by-org keeps the 0057 multi-org shape
-    #    and is name-agnostic, so it reaches a renamed install such as AHT).
+    #    and is name-agnostic, so it reaches a renamed install such as ORG_EXAMPLE).
     org_ids = [row.id for row in bind.execute(sa.text("SELECT id FROM organization")).all()]
     if not org_ids:
         return  # uninitialized DB — no org yet

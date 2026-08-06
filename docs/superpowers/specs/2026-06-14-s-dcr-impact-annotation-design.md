@@ -53,7 +53,7 @@
 - Estimated delta: ~+8–12 web tests (842 → ~850–854).
 
 ## s5 · Live smoke (Chrome MCP, pre-merge; owner does the login)
-- Reuse the S-dcr-ui-3 data (an Assessed/Implemented REVISE DCR exists with impact rows; `changeRequest.assess` granted to org-AHT). Open the DCR drawer → edit an Annotation cell → Save → confirm the value persists (re-open the drawer / the refetch shows it) and that only the changed dimension was PUT (`read_network_requests` on `/impact`). Confirm a terminal-state DCR shows the read-only column (no textareas).
+- Reuse the S-dcr-ui-3 data (an Assessed/Implemented REVISE DCR exists with impact rows; `changeRequest.assess` granted to org-ORG_EXAMPLE). Open the DCR drawer → edit an Annotation cell → Save → confirm the value persists (re-open the drawer / the refetch shows it) and that only the changed dimension was PUT (`read_network_requests` on `/impact`). Confirm a terminal-state DCR shows the read-only column (no textareas).
 
 ## s6 · Out of scope (named, not faked)
 - CREATE deep-link/implement (residual C — needs a backend `resulting_document_id` enrichment).

@@ -20,7 +20,8 @@
 - **`ufw allow OpenSSH` must execute before `ufw --force enable`.** Reversed, this severs a remote install session.
 - **The Docker suite is probed, never guessed** — `curl -fsI .../dists/<codename>/Release` must succeed before adding the repo.
 - **Do not modify** `infra/appliance/build-appliance.sh` or the 24.04 references in `docs/runbooks/appliance-install.md` — an explicit spec non-goal (boot-proven pin for a path this deployment does not use).
-- **`--dry-run` must be runnable on a non-Ubuntu dev box.** In dry-run, preflight *reports* rather than exits, so the test harness runs anywhere (this repo's dev box is Fedora 44).
+- **`--dry-run` must be runnable on a non-Ubuntu development host.** In dry-run, preflight
+  *reports* rather than exits, so the test harness is platform-independent.
 - Shell style follows `scripts/install.sh`: `set -euo pipefail`, a `usage()` heredoc, `echo`-prefixed step output.
 
 ## File Structure
@@ -34,9 +35,11 @@
 | `docs/manuals/installation-guide.md` (modify) | §2 path table + §3 host prereqs: same pointer. |
 | `docs/runbooks/00-index.md` (modify) | Index row for the new runbook. |
 
-## Deploy-day fallback
+## Implementation sequencing
 
-The deploy is 2026-07-31 morning. Tasks 1–4 build the script; **Task 5 (the runbook) is the critical-path deliverable** — with it, the deploy can be done by hand even if the script is unfinished. If the clock forces a cut, execute Task 5 first, then re-verify its §2 against the final script before marking the plan done.
+Tasks 1–4 build the script; **Task 5 (the runbook) is the critical-path deliverable** because it
+preserves a manual procedure if automation is unfinished. If delivery must be split, complete Task 5
+first, then re-verify its §2 against the final script before marking the plan done.
 
 ---
 
@@ -57,7 +60,7 @@ Create `scripts/tests/test-bootstrap-ubuntu.sh`:
 ```bash
 #!/usr/bin/env bash
 # Assertion harness for scripts/bootstrap-ubuntu.sh, driven entirely through --dry-run so it runs
-# on any host (this repo's dev box is Fedora; the script targets Ubuntu).
+# on any development host; the script itself targets Ubuntu.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

@@ -1,11 +1,12 @@
 """Config snapshot for the backup archive (slice S11, doc 08 §8.1).
 
-A portability / disaster-recovery reference JSON of the install's config rows, so an operator
-restoring onto a fresh host can re-establish configuration. No plaintext secrets are duplicated:
-federation secrets live in Keycloak (captured by the realm export), the off-host sink credential is
-a SEPARATE Docker secret (D-8) and ``audit_checkpoint_sink.connection`` holds non-secret config,
-and the bootstrap secret is stored salted-hashed. The snapshot can still carry sensitive config, so
-it rides INSIDE the encrypted archive.
+A best-effort reference JSON of the install's config rows for a future recovery implementation; no
+current command consumes it to redeploy configuration. No plaintext secrets are duplicated:
+federation secrets live in Keycloak and are captured only when the independent best-effort realm
+export leg is present, the off-host sink credential is a SEPARATE Docker secret (D-8),
+``audit_checkpoint_sink.connection`` holds non-secret config, and the bootstrap secret is stored
+salted-hashed. The snapshot can still carry sensitive config, so it is attempted only for an
+encrypted archive and may itself be absent.
 
 Runs as the OWNER role (a sync psycopg read inside ``asyncio.to_thread``, like the rest of the
 drill). Never raises into the caller's hot path — ``build_durable_backup`` wraps it best-effort.

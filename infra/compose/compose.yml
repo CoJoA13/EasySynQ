@@ -290,6 +290,6 @@ volumes:
   keycloakimport:
   mirror:
   secrets:
-  backup:   # S8b2: durable backup destination (default backup_policy.destination; a mounted path)
+  backup:   # S8b2 worker path; approved persistence/recreate proof remains operator-owned
   caddydata:
   caddyconfig:

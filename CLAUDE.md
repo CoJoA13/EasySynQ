@@ -14,7 +14,7 @@
 - **D4 — Stack is fixed** (see below) — do not substitute components.
 - **Deny-by-default; deny-always-wins.** Hybrid RBAC + ABAC; ADMIN sits *outside* the QMS (System Administrator holds **no `document.*`**). System permissions (user/storage/backup/restore/config/import) stay admin-only.
 - **⚠ Append-only / WORM invariants are load-bearing** (`audit_event` hash chain, `signature_event`, `capa_stage`/`dcr_stage_event` REVOKE UPDATE,DELETE, MinIO WORM). Any path that deletes object bytes must keep the `blob`-row-iff-bytes invariant — see `engineering-patterns`.
-- **⚠ R61 — NEVER commit site-specific operational records.** Real account names, display names, hostnames, FQDNs, IPs/subnets/MACs, customer/org names, security-product or RMM vendors **and versions**, share/bucket names, per-install certificate or key fingerprints, and any "risks accepted" list naming a real site's weaknesses **must not enter this repo** — **regardless of repository visibility** (private repos get shared, forked, cloned and flipped public; visibility is a setting, not a control). A deployment record written honestly *is* a reconnaissance profile. **Sanitize at write time, not after** — removal cannot undo publication (git history, forks, review-tool comments quoting the diff). Commit only the generalized lesson, using placeholders (`<ORG>`, `example.local`, `DC01`, `10.0.0.0/24`, `<edge firewall>`); the concrete worksheet lives in the org's own operational documentation. See `docs/decisions-register.md` **R61**. Enforced by `bash scripts/check-no-site-data.sh` (it runs in the **`contracts`** CI job, deliberately — `security` is warn-only, so a match there would not block a merge). ⚠ It is mechanical: it flags **4-segment clause literals** as IPv4-shaped (a `9.2.2.x`-shaped leaf) — write such examples with a non-numeric final segment, or this very sentence trips the gate. *This failed silently once — nothing broke, no gate objected, the doc just read as unusually thorough.*
+- **⚠ R61 — NEVER commit site-specific operational records.** Real account names, display names, hostnames, FQDNs, IPs/subnets/MACs, customer/org names, security-product or RMM vendors **and versions**, share/bucket names, per-install certificate or key fingerprints, and any "risks accepted" list naming a real site's weaknesses **must not enter this repo** — **regardless of repository visibility** (private repos get shared, forked, cloned and flipped public; visibility is a setting, not a control). A deployment record written honestly *is* a reconnaissance profile. **Sanitize at write time, not after** — removal cannot undo publication (git history, forks, review-tool comments quoting the diff). Commit only the generalized lesson, using placeholders (`ORG_EXAMPLE`, `example.local`, `DC01`, `10.0.0.0/24`, `<edge firewall>`); the concrete worksheet lives in the org's own operational documentation. See `docs/decisions-register.md` **R61**. Enforced by `bash scripts/check-no-site-data.sh` (it runs in the **`contracts`** CI job, deliberately — `security` is warn-only, so a match there would not block a merge). ⚠ It is mechanical: it flags **4-segment clause literals** as IPv4-shaped (a `9.2.2.x`-shaped leaf) — write such examples with a non-numeric final segment, or this very sentence trips the gate. *This failed silently once — nothing broke, no gate objected, the doc just read as unusually thorough.*
 - **Spec/plan before code.** Get approval on a plan before implementing. When a strategic decision is the owner's, **ask** rather than silently pick.
 
 ## What this is
@@ -51,13 +51,16 @@ Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no sh
 
 - `main` has **no enforced protection** (branch protection is unavailable on this free-plan private repo — verified 2026-08-02 via API, `protected: false`; rulesets are paywalled). The five required checks and no-direct-push are **convention/discipline, not enforcement**: slice work on a `feat/sN-*` branch → PR → green CI → squash-merge.
 - CI = **9 jobs / 12 checks** (`.github/workflows/ci.yml`): `contracts` (redocly lint **+ the R61 backstop**) · `contract-responses` (schemathesis over every mounted operation) · `api` (ruff/mypy-strict/unit) · `migrations` (alembic up↔down + `alembic check`) · `integration-shards` (×4, `.test_durations`-balanced) · `integration` · `web` (eslint/tsc/build/test) · `security` (**warn-only** until its ratchet) · `compose-images-lock`. The five "core" ones are convention, not the whole gate — green ≠ done unless all 12 are.
-- Toolchain: `uv` + managed **Python 3.12** at `~/.local/bin/uv` (system `python3` is 3.14). Node 22. Docker v29.
+- Toolchain: `uv` + managed **Python 3.12** (do not depend on system Python), Node 22, and a current
+  supported Docker/Compose.
 - Run the stack: `just up s` → http://localhost; stop `just down`. ⚠ Point the app at the **non-owner** DB role for S6+ — see `docs/dev-workflow.md`.
 - Apply recurring patterns by default — see `.claude/rules/engineering-patterns.md` before touching migrations, Celery workers, the workflow engine, or authz.
 
 ## Verification (run after changes)
 
-- API: `/check-api` (ruff check + format-check + mypy-strict + pytest unit; `-m integration` needs Docker — available locally on this box via `sg docker -c "…"`, see `docs/dev-workflow.md`).
+- API: `/check-api` (ruff check + format-check + mypy-strict + pytest unit; `-m integration` needs a
+  verified Docker daemon and may use the conditional `sg docker -c "…"` wrapper on Linux — see
+  `docs/dev-workflow.md`).
 - Migrations: `/check-migrations` (round-trip alembic up↔down↔`alembic check` on a throwaway PG16).
 - Web: `/check-web` (eslint + tsc + build + test).
 - Contracts: `/check-contracts` (redocly lint on `packages/contracts/openapi.yaml`).
@@ -74,7 +77,8 @@ Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no sh
 - **`docs/18-mvp-implementation-plan.md`** — MVP slice plan + §1 canon corrections (current head in Current status).
 - Section docs `00`–`17` + operator runbooks in `docs/runbooks/`. Web-UI design specs/plans in `docs/superpowers/{specs,plans}/`.
 - **`.claude/rules/engineering-patterns.md`** — recurring-patterns catalog (migrations · blob/WORM · workers · workflow engine · authz · testing). Read before touching those.
-- **`.claude/rules/windows-dev.md`** — this owner's native Windows 11 + Git Bash box (Docker Desktop, localhost-only auth, `just up s`/`demo-user`; no WSL). Read when on this machine.
+- **`.claude/rules/windows-dev.md`** — conditional native Windows 11 + Git Bash guidance (Docker
+  Desktop, localhost-only auth, `just up s`/`demo-user`; no WSL).
 - **`docs/slice-history.md`** — the shipped-slice changelog (MVP S0–S11 + the v1 families + the web track). **Its FIRST section is `⚠ OPEN RESIDUALS`** — named, owner-acknowledged work that is deliberately deferred (unimplemented R10 reconstruction, the audit checkpoint-lineage gap, the CAPA reject-quorum wedge, …). **Read it before planning new work, and clear an entry only when the work actually ships.**
 - **`docs/dev-workflow.md`** — operator/`.env` detail + the per-feature API quick-reference.
 
@@ -138,8 +142,8 @@ Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no sh
 > `PATCH /capas/{id}` editor, a server-computed `overdue` serializer field, a backfill CLI, and the CAPA-drawer
 > FE) — **S-capa-overdue**, PR #302 squash `bdd4fd5`; migration `0070`. ✅ The **1-click Hyper-V appliance**
 > (VHDX + seed ISO + PS installer, boot-proven under QEMU/KVM; fresh installs now get real **S6 DB role
-> separation** via the fixed `install.sh`) landed as **S-appliance** — the on-prem install path for the AHT
-> dogfood import (PR #313 squash `2f4be28`; no migration). Also merged 2026-07-02: **React 19** (#310) ·
+> separation** via the fixed `install.sh`) landed as **S-appliance** — the generic on-prem appliance
+> path (PR #313 squash `2f4be28`; no migration). Also merged 2026-07-02: **React 19** (#310) ·
 > **ESLint 10** (#311) · **brand assets + nav-rail cleanup** (#312) — all web-only, no migration. Then the
 > **systemic-issue backlog** was opened: **#333 → S-scope-tuple** completed the document `ResourceContext`
 > scope tuple (framework + kind + a satellite-aware `process_ids_for_docs` unioning `quality_objective.process_id`)
@@ -151,7 +155,7 @@ Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no sh
 > DOC_CLASS `concrete_type` from exact `DocumentType.code` across canonical, batched, projected,
 > and pre-create document gates. These authorization hardenings require no new permission key;
 > #333/#335/#345 require no migration.
-> ✅ **S-clause7-ia** — the first product slice after the ops arc (the LAB handoff §2B queue): clause 7
+> ✅ **S-clause7-ia** — the first product slice after the ops arc (the product handoff §2B queue): clause 7
 > (Support) is wholly DO (**R62**, migration `0084`), the nav-rail clause dropdowns are gone (every
 > exact-match top-level filter returned zero documents), the Library ClauseTree auto-grows wrapped
 > rows with a hanging indent + collapses sub-clauses to the selected top-level clause, and the Home
@@ -161,8 +165,8 @@ Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no sh
 > — PR #427 squash `958f00d`. ✅ **S-star-rollup** — ★ checklist coverage is subtree-inclusive
 > (**R63**): a descendant-covered ★ clause stops reading GAP, with the checklist, the import
 > projection, the §7.3 obsoletion gate, and pack gap summaries converged onto ONE shared
-> `clause_subtree.py` predicate — PR #428 squash `98f10f8`. **The LAB-handoff §2 product queue is
-> COMPLETE**; the remaining §2A item (the QMS-tree import) needs the owner at the site.
+> `clause_subtree.py` predicate — PR #428 squash `98f10f8`. **The product handoff §2 queue is
+> COMPLETE**; the remaining §2A item (the QMS-tree import) needs a separate owner-approved slice.
 > ✅ **S-user-create** — the first §4 backlog item (§4.1): creating a user is ONE form in the Admin
 > SPA. `POST /users/provision` creates the Keycloak account over the admin REST API **and** the
 > `app_user` row and returns a show-once temporary password; `POST /users/{id}/temporary-password`

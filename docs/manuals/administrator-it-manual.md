@@ -296,11 +296,14 @@ confirmed delivered.
 
 ## 9. Backups and restore drills
 
-The backup-critical stores are PostgreSQL and MinIO. Keycloak's durable schema lives in PostgreSQL;
-the archive also attempts a realm export. The encrypted archive includes the DB dump, blob manifest,
-config snapshot, realm leg when available, and latest signed audit checkpoint. It contains **no
-MinIO object bytes**: the manifest is locator/hash metadata, so the archive is not a self-contained
-disaster-recovery set and verification still depends on the source object store.
+The backup-critical stores are PostgreSQL and MinIO. Keycloak's durable schema lives in PostgreSQL.
+Every durable archive includes the DB dump and blob locator/hash manifest; it contains **no MinIO
+object bytes**. Realm export, config snapshot, and latest signed audit checkpoint are best-effort
+legs and may be absent. With a configured backup key the archive is encrypted; with an
+unset/placeholder key it is plaintext and omits the secret-bearing realm/config legs. Inspect the
+command result and a newly written manifest's `encrypted`/`legs` fields before relying on an
+artifact; older manifest-v2 artifacts can omit `encrypted` and require envelope inspection. G-C
+does not prove durable encryption, key viability, or optional-leg presence.
 
 ### Commands
 
@@ -390,8 +393,10 @@ Before the first upgrade from a legacy H2-backed Keycloak install, run:
 ./scripts/easysynq blob verify --full
 ```
 
-The rolling scan is routine; use full verification after a restore or suspected storage event.
-Follow [Blob integrity verification](../runbooks/blob-integrity-verify.md) on any mismatch.
+The rolling scan is routine; use full verification after a separately validated direct repair, a
+future supported recovery that restores the live source, or a suspected storage event. Current
+source-dependent restore does not repair the live vault. Follow
+[Blob integrity verification](../runbooks/blob-integrity-verify.md) on any mismatch.
 
 ### Mirror
 
@@ -444,8 +449,9 @@ endpoint. Use the appliance's `easysynq-reconfigure` helper where applicable.
 ### WORM
 
 `GOVERNANCE` supports controlled privileged retention handling; `COMPLIANCE` cannot be bypassed even
-by root before expiry. Confirm policy/legal requirements before choosing COMPLIANCE. All restores
-target a fresh bucket.
+by root before expiry. Confirm policy/legal requirements before choosing COMPLIANCE. Current
+restores use the configured shared scratch bucket with a unique per-run prefix; they do not
+provision a new bucket or establish a production recovery target.
 
 ### Access review
 

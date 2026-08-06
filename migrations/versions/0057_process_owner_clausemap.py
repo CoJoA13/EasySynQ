@@ -10,7 +10,7 @@ bound owner's PROCESS ``bound_scope`` (a SYSTEM template has no placeholder to c
 grant is reachable.
 
 Idempotent + multi-org: inserts the grant for EVERY org's ``Process Owner`` role (by role NAME, not
-the ``DEFAULT`` org 0004 targets, so it reaches a renamed install such as ``AHT``) via
+the ``DEFAULT`` org 0004 targets, so it reaches a renamed install such as ``ORG_EXAMPLE``) via
 ``on_conflict_do_nothing`` on ``(org_id, role_id, permission_id)``. Data-only — no schema change, so
 ``alembic check`` is unaffected and no ORM model changes.
 

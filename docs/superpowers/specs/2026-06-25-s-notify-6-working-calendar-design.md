@@ -218,14 +218,14 @@ class ThresholdDirection(enum.Enum):
 > The app role has broad INSERT (org/user/workflow/task **and `working_calendar`**) but is **SELECT-only
 > on `sla_policy`** (0065 REVOKE) and **DELETE-revoked on `working_calendar`** (0067 REVOKE). Three
 > consequences drive the test design: **(a)** a freshly-created in-test org has **no `SlaPolicy`** and
-> the app role can't insert one → **sweep tests MUST reuse the seeded org (AHT)** + the established
+> the app role can't insert one → **sweep tests MUST reuse the seeded org (ORG_EXAMPLE)** + the established
 > **pre-stamp-other-steps** workaround (`_seed_workflow_objects` already supports this); **(b)** the
-> resolver picks the org's **`is_default`** calendar, and a 2nd `is_default` for AHT violates
-> `uq_working_calendar_one_default` → to drive a holiday/tz scenario, **UPDATE AHT's seeded default row
+> resolver picks the org's **`is_default`** calendar, and a 2nd `is_default` for ORG_EXAMPLE violates
+> `uq_working_calendar_one_default` → to drive a holiday/tz scenario, **UPDATE ORG_EXAMPLE's seeded default row
 > in place and restore in `finally`** (UPDATE is allowed); **(c)** a test must **never INSERT a
 > standalone `working_calendar`** it then needs to clean up — it can't be DELETEd by the app role, and
 > its RESTRICT FK then blocks deleting the org (cleanup deadlock → `test_restore` `MultipleResultsFound`
-> pollution). So: UPDATE-AHT-and-restore, or a calendar-less isolated org for the fallback path.
+> pollution). So: UPDATE-ORG_EXAMPLE-and-restore, or a calendar-less isolated org for the fallback path.
 
 **Unit** (`tests/unit/test_notification_timer.py`, extending the existing pure-math suite) — **ALL
 business-day correctness concentrates here, where the harness cannot false-PASS:**
@@ -243,7 +243,7 @@ business-day correctness concentrates here, where the harness cannot false-PASS:
 
 **Integration** (`tests/integration/test_notification_timer_sweep.py` + `test_notification_escalation.py`)
 — **proves the wiring** (DB calendar → sweep), not the math:
-- **Anti-tautology (the load-bearing wiring test) — weekend skip, NO mutation, NO holiday:** on AHT
+- **Anti-tautology (the load-bearing wiring test) — weekend skip, NO mutation, NO holiday:** on ORG_EXAMPLE
   (seeded `escalate_1_after=1d`), resolve the org's default calendar and build `due_at`/`now` **in that
   calendar's own tz** (the weekday of a calendar date is tz-independent, so this is correct for any
   seeded tz): `due_at` = a **Friday** local; pre-stamp remind+overdue. **Test A:** `now` = **Saturday**
@@ -251,13 +251,13 @@ business-day correctness concentrates here, where the harness cannot false-PASS:
   **NOT** fire (`escalated_1_at` stays NULL, no `task.escalated`). **Test B:** `now` = **Monday** local →
   assert escalation fires (stamp set, `task.escalated`→manager). **Mutation-verify:** Test A must FAIL
   against unmodified `timer.py` (old raw code escalates on Saturday) and PASS against the business code.
-- **DB calendar resolution:** UPDATE AHT's default row (e.g. set a `holidays` date + assert a custom
-  `timezone` round-trips) → `resolve_working_calendar(s, AHT)` returns the matching `Calendar`; **restore
+- **DB calendar resolution:** UPDATE ORG_EXAMPLE's default row (e.g. set a `holidays` date + assert a custom
+  `timezone` round-trips) → `resolve_working_calendar(s, ORG_EXAMPLE)` returns the matching `Calendar`; **restore
   in `finally`**. A **calendar-less isolated org** → `resolve_working_calendar` returns `DEFAULT_CALENDAR`
   (no crash); FK-cleanup the org in `finally` (no calendar references it → app-role DELETE works).
 - **Idempotent re-sweep** (2nd sweep fires 0 steps) + **2-session `asyncio.gather` concurrency** still
-  escalates **exactly once** with a calendar in play (reuse the S-notify-4 pattern, on AHT).
-- All assertions **delta/run-scoped**; any AHT mutation is restored in `finally` (the S-risk-1b
+  escalates **exactly once** with a calendar in play (reuse the S-notify-4 pattern, on ORG_EXAMPLE).
+- All assertions **delta/run-scoped**; any ORG_EXAMPLE mutation is restored in `finally` (the S-risk-1b
   normalize-at-start + restore-on-teardown precedent for a shared singleton).
 
 ## 8 · Named residuals (honest — not faked)
@@ -300,8 +300,8 @@ spec:
   `due_at` is raw wall-clock). Corrected to the truth + owner-ratified (keep OVERDUE raw, name R39).
 - **L5 (2 × MAJOR) → §7 + the harness box:** "create-own-org + own SlaPolicy" is unworkable (app role
   SELECT-only on `sla_policy`; the `is_default` resolver + the per-org default-unique index + the
-  DELETE-revoked `working_calendar` cleanup deadlock). Rewritten to reuse-AHT + pre-stamp + the
-  build-dates-in-the-calendar-tz weekend test + UPDATE-AHT-and-restore for holiday/tz.
+  DELETE-revoked `working_calendar` cleanup deadlock). Rewritten to reuse-ORG_EXAMPLE + pre-stamp + the
+  build-dates-in-the-calendar-tz weekend test + UPDATE-ORG_EXAMPLE-and-restore for holiday/tz.
 - **Nits folded:** explicit `drop_index` before `drop_table` (§2); resolve the calendar once after the
   `task is None` short-circuit + granular fail-safe fallback (§5); a DST-transition unit test + a
   mutation-verify of the anti-tautology test + an explicit stamp-gating-unchanged unit assertion (§7);

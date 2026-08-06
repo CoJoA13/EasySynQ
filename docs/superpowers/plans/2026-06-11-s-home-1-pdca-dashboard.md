@@ -1470,7 +1470,7 @@ passes (find-then-click in separate batches, text-first verification, client-sid
 1. **Bare demo** (`demo` / `Demo-Password-1`, System Administrator): load `/`. Expect the DO quadrant
    populated (drift.read held) + the My-Tasks rail; PLAN/CHECK/ACT show "No access to this section's data";
    the header shows "Coverage scoped to your access".
-2. **Full wheel:** grant SYSTEM overrides on the **live demo `app_user` row** (org short_code **AHT**) for
+2. **Full wheel:** grant SYSTEM overrides on the **live demo `app_user` row** (org short_code **ORG_EXAMPLE**) for
    `objective.read`, `report.compliance_checklist.read`, `audit.read`, `capa.read`, `ncr.read`,
    `record.read` (the established override mechanic — NOT `grant-role`). Reload `/`: expect all four
    quadrants + the header coverage to populate with live counts. Click each `Open ▸` and the header band;
@@ -1493,7 +1493,7 @@ git add docs/slice-history.md CLAUDE.md
 git commit -m "docs(s-home-1): slice-history + learnings for the PDCA Home dashboard"
 ```
 
-Then open the PR against `main` (use a `--body-file`, never an inline `@'…'@` body on this box — the
+Then open the PR against `main` (use a `--body-file`, never an inline `@'…'@` body in that development environment — the
 PS 5.1 de-tokenization trap). Title: `feat(s-home-1): PDCA Home dashboard (QMS Health) — the v1 web-track finale (#NNN)`.
 
 - [ ] **Step 7: Triage Codex's PR review**

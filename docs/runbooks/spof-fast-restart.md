@@ -21,7 +21,8 @@ is imported only when the realm does not yet exist.
 Deleting named volumes (`compose down -v`) is a destructive full-stack reset. Current archives are
 not self-contained and the current restore scratch target is not cutover-ready. Preserve PostgreSQL
 and the source object store; [backup-restore.md](backup-restore.md) records the recovery constraints.
-The encrypted realm export remains an additional recovery leg, not the live store.
+A realm export can be a best-effort leg of an encrypted archive; it may be absent and no current
+recovery command imports it.
 
 ## Beat is down
 **Symptom:** scheduled jobs stall — effectivity-cutover sweep, chain-linker, chain-verify, blob

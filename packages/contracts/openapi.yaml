@@ -355,9 +355,13 @@ paths:
       tags: [setup]
       operationId: configureSetupBackup
       summary: >-
-        Record the admin-controlled backup policy + a live destination writability check (Step 4
-        config; doc 08 §8.1). Needs backup.configure. Does NOT satisfy gate G-C — the restore-test
-        drill must PASS. Rejects wal_pitr_enabled=true (reserved for a later release, D-6).
+        Record the admin-controlled backup policy after a preliminary filesystem probe performed in
+        the API process (Step 4 config; doc 08 §8.1). The destination must be an absolute, non-root
+        POSIX path; blank, root/root-equivalent, relative, and URI-looking values are rejected. A
+        successful probe does not certify that the worker sees the same mount or that
+        persistent/off-host storage backs it. Needs
+        backup.configure. Does NOT satisfy gate G-C — the worker restore-test drill must PASS.
+        Rejects wal_pitr_enabled=true (reserved for a later release, D-6).
       requestBody:
         required: true
         content:
@@ -366,7 +370,13 @@ paths:
               type: object
               required: [destination]
               properties:
-                destination: { type: string }
+                destination:
+                  type: string
+                  minLength: 1
+                  pattern: '^/(?!.*://).+$'
+                  description: >-
+                    Absolute non-root POSIX filesystem path. Root/root-equivalent and URI
+                    destinations are not supported; application validation is authoritative.
                 cron: { type: string, default: "0 2 * * *" }
                 retention_daily: { type: integer, default: 7 }
                 retention_weekly: { type: integer, default: 4 }
@@ -388,7 +398,15 @@ paths:
                   cron: { type: string }
                   detail: { type: string }
         "403": { $ref: "#/components/responses/ProblemResponse" }
-        "422": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: >-
+            Invalid/non-absolute/root-equivalent/URI-looking destination
+            (backup_destination_invalid), failed preliminary API-context probe
+            (backup_destination_unreachable), invalid schedule or retention, or
+            wal_pitr_enabled=true (wal_pitr_unavailable).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /setup/run-restore-test:
     post:
@@ -8198,7 +8216,7 @@ components:
         generated_by: { type: string, description: The caller's display name / email / id. }
         generated_at: { type: string, format: date-time }
         as_of: { type: string, format: date-time, description: Mirrors generated_at — the instant the register was materialized. }
-        scope: { type: string, example: "org:AHT", description: "org:<short_code>." }
+        scope: { type: string, example: "org:ORG_EXAMPLE", description: "org:<short_code>." }
         app_version: { type: string }
         filters:
           type: object

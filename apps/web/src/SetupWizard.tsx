@@ -285,7 +285,8 @@ export function SetupWizard({
                 data={["GOVERNANCE", "COMPLIANCE"]}
               />
               <Text size="xs" c="dimmed">
-                GOVERNANCE (recommended) keeps fresh-bucket restore + lawful-erasure possible.
+                GOVERNANCE (recommended) keeps privileged retention handling and future
+                role-preserving recovery design possible.
                 COMPLIANCE is immutable even to root.
               </Text>
               <Group>
@@ -314,7 +315,7 @@ export function SetupWizard({
               </Text>
               <TextInput
                 label="Backup destination"
-                description="A mounted local/NFS path the worker can write"
+                description="Absolute non-root POSIX path. Save checks only the API context; the worker drill checks current worker access, not persistent mount backing."
                 value={backupDest}
                 onChange={(e) => setBackupDest(e.currentTarget.value)}
               />

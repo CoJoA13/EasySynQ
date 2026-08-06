@@ -24,8 +24,10 @@ usage: easysynq <command>
   mirror rebuild    Regenerate the read-only filesystem mirror from the vault. [S7]
   blob verify [--full] [--sample-size N]
                     D1 integrity re-hash of vault blobs against blob.sha256
-                    (rolling sample by default; --full = the complete pass;
-                    re-run after a restore to clear the alarm).        [S-drift-3]
+                    (rolling sample by default; --full = the complete pass).
+                    Preserve and investigate the exact source bytes; re-run
+                    only after separately validated direct repair or a future
+                    supported recovery.                                [S-drift-3]
   upgrade --confirm Non-self-contained pre-upgrade archive -> migrate ->
                     health-gate; not a DR safety net. Production eligibility
                     remains blocked pending recovery proof.                [S11]

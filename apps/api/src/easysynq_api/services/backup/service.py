@@ -14,8 +14,10 @@ import asyncio
 import datetime
 import logging
 import os
+import posixpath
 import uuid
 from collections.abc import Callable
+from pathlib import PurePosixPath
 from typing import Any
 
 from sqlalchemy import select
@@ -76,17 +78,28 @@ def _emit(
 
 
 def configure_backup_destination_check(destination: str) -> tuple[bool, str]:
-    """Sync reachability/writability probe for a filesystem backup destination (doc 08 §8.1).
-    Creates the directory if absent, writes + removes a probe file. Returns (ok, detail)."""
+    """Preliminary API-process probe for an absolute non-root POSIX filesystem destination.
+
+    This rejects relative and URI-looking values before any filesystem call. A success proves only
+    that the API process can create/write/remove at this path; it does not prove that the worker
+    sees the same mount or that the path is backed by persistent/off-host storage.
+    """
+    if (
+        destination.strip("/") == ""
+        or posixpath.normpath(destination) == "/"
+        or "://" in destination
+        or not PurePosixPath(destination).is_absolute()
+    ):
+        return False, "destination must be an absolute non-root POSIX filesystem path"
     try:
         os.makedirs(destination, exist_ok=True)
         probe = os.path.join(destination, f".easysynq-write-probe-{uuid.uuid4().hex}")
         with open(probe, "wb") as f:
             f.write(b"easysynq")
         os.remove(probe)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return False, f"destination not writable: {exc}"[:200]
-    return True, "destination reachable and writable"
+    return True, "preliminary API-context create/write/remove probe passed"
 
 
 async def _report_backup_failure(

@@ -169,7 +169,7 @@ row rather than an empty table.
 
 ## 7. Testing
 
-**API unit** (`tests/unit/`, run natively on this Windows box):
+**API unit** (`tests/unit/`, run natively in that Windows development environment):
 - `build_minutes_pdf` produces a non-empty `%PDF` byte string from a synthetic released MR (a
   `DocumentVersion` with a hand-built `metadata_snapshot["mgmt_review_minutes"]` + a couple of
   `signature_event`s). Assert it contains expected text (via `pypdf` extract) — identifier, an
@@ -178,7 +178,7 @@ row rather than an empty table.
 - Defensive: a snapshot missing the `mgmt_review_minutes` key raises the 409-mapped error; an
   unexpected `source_ref` shape renders without raising; a null signer → "system".
 
-**API integration** (`tests/integration/`, **CI-only on this Windows box** — write failing-first by
+**API integration** (`tests/integration/`, **CI-only in that Windows development environment** — write failing-first by
 reasoning, let CI verify):
 - Build a real MR through the services to **Effective** (create → compile-inputs → add outputs →
   submit → approve → release; author ≠ approver ≠ releaser SoD-2; approvers from each task's

@@ -5,16 +5,22 @@
 
 ## Branch + PR flow
 
-`main` is protected. Do slice work on a `feat/sN-*` branch → open a PR → green CI → squash-merge.
-CI jobs (all five required): `contracts` (redocly), `api` (ruff/mypy-strict/unit), `migrations` (alembic up↔down + `alembic check`), `web` (eslint/tsc/build/test), `integration` (pytest -m integration via testcontainers).
-admin-bypass on for the solo owner.
+`main` is not technically protected on the current hosting plan; no-direct-push and review are
+project conventions. Do slice work on a `feat/sN-*` branch → open a PR → all 12 CI checks green →
+squash-merge. See `CLAUDE.md` for the current 9-job/12-check matrix.
 
 ## Toolchain (Linux CI / a Linux dev host)
 
-> ⚠ The owner's primary box is **native Windows 11 + Git Bash** (Docker Desktop, no WSL) — see `.claude/rules/windows-dev.md` for that machine (the Linux-only notes below — `~/.local/bin/uv`, `chmod docker.sock` — don't apply there).
+> Native Windows development uses Git Bash + Docker Desktop and no WSL; see
+> `.claude/rules/windows-dev.md`. Linux examples below are conditional on that host's installed
+> tools and group membership.
 
-`uv` + a managed **Python 3.12** at `~/.local/bin/uv` (system `python3` is 3.14; `pip` needs `--break-system-packages`). Node 22 + npm. Docker v29.x. Lockfiles committed (`uv.lock`, `package-lock.json`); CI uses `uv sync --frozen` / `npm ci`.
-- **Docker socket (Linux host):** the user is in the `docker` group, so a fresh login session should use Docker directly. If a shell still gets "permission denied", re-run `sudo chmod 666 /var/run/docker.sock` (personal, non-shared device).
+Use `uv` with managed **Python 3.12**, Node 22 + npm, and a current supported Docker/Compose. Do not
+depend on the system Python. Lockfiles are committed (`uv.lock`, `package-lock.json`); CI uses
+`uv sync --frozen` / `npm ci`.
+- **Docker socket (Linux host):** verify `docker info` first. Use normal group membership and a fresh
+  login; do not weaken socket permissions. If the current shell predates a group change, a reviewed
+  `sg docker -c "…"` wrapper can refresh group membership for that command.
 - **Fresh-clone contract generation:** `just setup` → `just contracts` creates the gitignored server
   and web `_generated/` directories, lints/bundles `openapi.yaml`, and generates Pydantic models plus
   TypeScript schema types. The required CI/pre-commit contract gate remains Redocly lint; the
@@ -24,15 +30,21 @@ admin-bypass on for the solo owner.
 
 - API: `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest` (unit always; `-m integration` needs Docker for testcontainers).
 - Web: `cd apps/web && npm run lint && npm run typecheck && npm run build && npm test` (or the `/check-web` skill).
-- **Docker (this Linux box) — IS available; use `sg docker -c "…"`.** Docker (`29.x`) + compose are installed and the EasySynQ stack runs here. The agent's shell user (`cojoa13`) is in the `docker` group (`usermod -aG docker cojoa13`), but a login shell that started **before** the group was added doesn't pick it up (`id -nG` won't list `docker`) → wrap any docker-touching command in **`sg docker -c "…"`** (it re-reads `/etc/group`, granting the group to the whole process tree incl. testcontainers' python client; a fresh login shell works directly). This runs the stack-dependent proofs **locally**: `sg docker -c "cd apps/api && uv run pytest -m integration"` (testcontainers), `/check-migrations` (throwaway PG16 round-trip), and a real-stack **migration live-smoke** against the running `easysynq-postgres-1` (owner role `easysynq`, db `easysynq`) — e.g. `docker cp` the new migration into `easysynq-api-1:/migrations/versions/` then `docker exec -w /app easysynq-api-1 .venv/bin/alembic upgrade head` / `downgrade -1` (DB-only; do **NOT** run a live `sweep_task_timers` on the real stack — it fires real reminders/emails to actual users). ⚠ The session-start env note that called this a "Docker-less box" was wrong (unverified) — verify `docker` on turn one, don't parrot it. Even without docker access, every slice stays buildable + unit-testable on the uv/3.12 loop and CI runs the stack-dependent proofs.
-- **⚠ The FULL `-m integration` suite is NOT a clean LOCAL gate on this box — run it SCOPED.** Running the whole suite in one process against one shared testcontainer DB (`sg docker -c "… pytest -m integration"`) yields ~54 FALSE failures, **zero in the slice's own domain**, from two branch-independent causes: (a) the backup/restore drills shell out to `pg_dump`, which ships only in the **worker image** — NOT on the host — so they fail `pg_dump: not found` (`test_backup`/`test_restore`); (b) the documented single-DB cross-file pollution — many files create orgs/docs in the one shared DB, so `test_setup`/`test_restore`/`test_mirror_scan`/`test_verify` trip `Organization.scalar_one() MultipleResultsFound` + stale mirror state. CI shards integration into **4 ISOLATED DBs**, so these pass there. The valid LOCAL integration proof for a slice = the SCOPED file/`-k` run (e.g. `tests/integration/test_notification_timer_sweep.py`) + any targeted cross-file ordering proof; the 4 CI integration shards are authoritative for the full suite — don't misread the 54 reds as a regression. (Confirmed 2026-06-26, S-escalate2 PR #300: 743 passed / 54 env+pollution fails locally, all 4 CI shards green.)
+- **Docker-backed checks:** when `docker info` succeeds, run integration tests via testcontainers and
+  migrations against a disposable PostgreSQL 16 instance. Backup/restore tests also require a
+  version-matched PostgreSQL client (`pg_dump`/`pg_restore`). If group membership requires it, wrap
+  the command with `sg docker -c "cd apps/api && uv run pytest -m integration …"`.
+- **Integration isolation:** the suite shares a database within each process, and shard composition
+  moves. Prefer a focused file plus an order-check during iteration; before publication, run the
+  same four isolated shards as CI with a version-matched client. Treat a failure as evidence to
+  diagnose, not as a permanent machine-specific baseline.
 
 ## Run the stack
 
 `just up s` (or `docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml -f infra/compose/compose.dev.yml up -d --build`). Open **http://localhost**. Stop with `just down`. A gitignored `.env` holds dev secrets + `OIDC_ISSUER=http://localhost/realms/easysynq`. gotenberg (`renderer`) runs (S7b rendering is live); shipped S and M profiles use **PostgreSQL FTS** and do not deploy OpenSearch (R34).
 
 - **Dev login:** `demo` / `Demo-Password-1` (created at runtime in Keycloak, **not committed**; realm policy requires ≥12-char passwords). Run **`just demo-user`** (or `bash scripts/demo-user.sh` outside `just`) to create/reset it. Keycloak's live state is in the durable PostgreSQL `keycloak` schema, so container recreation preserves its subject.
-- **Authz break-glass (`grant-role`):** assigns a seeded role directly, bypassing the wizard + PEP — `./scripts/easysynq grant-role <keycloak-subject> ["Role Name"] [--org CODE]` (default role "System Administrator"; default org `DEFAULT`; idempotent; JIT-creates the `app_user`; runs as the DB owner). Use it to recover a botched bootstrap or to seed the first admin before the UI is reachable. ⚠ This dev install's org short_code is `AHT` after setup → pass `--org AHT`.
+- **Authz break-glass (`grant-role`):** assigns a seeded role directly, bypassing the wizard + PEP — `./scripts/easysynq grant-role <keycloak-subject> ["Role Name"] [--org CODE]` (default role "System Administrator"; default org `DEFAULT`; idempotent; JIT-creates the `app_user`; runs as the DB owner). Use it to recover a botched bootstrap or to seed the first admin before the UI is reachable. If setup renamed the org, pass its actual short code explicitly with `--org ORG_EXAMPLE`; never record the real value here.
 - **Dev persona fixture (`seed-personas`):** `just seed-personas` creates the SoD-correct `priya`(author)/`ken`(approver)/`mara`(releaser) Keycloak logins **+** their grants (all `Demo-Password-1`) — the reproducible **S-web-5** fixture (the author's-half S-web-3 needs only one). Re-running is idempotent; ordinary `just down` preserves their stable subjects in PostgreSQL. The full create→approve→release loop needs **3 DISTINCT** users (SoD-1/2 are non-overridable). NB `demo` (System Administrator) holds **no `document.*`** — to author as `demo`, grant **SYSTEM overrides** of the authoring keys (the integration-test pattern); `grant-role "QMS Owner"` is **reads-only**. No api restart needed (grants resolve per-request).
 - **Browser upload/download (`S3_PUBLIC_ENDPOINT`):** the in-app authoring upload (presigned PUT) + controlled-copy download (presigned GET) need MinIO reachable from the **browser**. `compose.dev.yml` supplies `http://localhost:9000` and publishes MinIO on **loopback only**; the S/M sizing files expose no object-store port. Presigning **signs against** this host (SigV4) — never rewrite the host afterward (→ `SignatureDoesNotMatch`); server-side/worker fetches keep using the internal `s3_endpoint`. ⚠ A `storage.py`/Dockerfile change or a new CLI module needs `docker compose … build api` (CI runs from source, not the running image).
 
@@ -53,7 +65,7 @@ A fresh install boots `UNINITIALIZED`, so the **whole `/api/v1/*` QMS surface is
 
 ## ⚠ S8b2 backup/restore drill (operator)
 
-The drill + `pg_dump` run as the **OWNER** role, so the **worker** must see `DATABASE_URL_SYNC` (the owner `easysynq` DSN — the same one Alembic uses; already set for S6) in addition to the non-owner `DATABASE_URL`. New `.env`/compose: `BACKUP_PATH` (default destination, a mounted `backup` volume) + `S3_BUCKET_RESTORE_SCRATCH=restore-scratch` (a plain non-WORM scratch bucket). The worker image carries `postgresql-client-16`. Operator CLI (host-side): `./scripts/easysynq backup run` and `./scripts/easysynq backup restore-test` (exits non-zero on FAIL) — both dispatch to the worker container. The nightly `easysynq.backup.run` Beat job writes durable archives.
+The drill + `pg_dump` run as the **OWNER** role, so the **worker** must see `DATABASE_URL_SYNC` (the owner `easysynq` DSN — the same one Alembic uses; already set for S6) in addition to the non-owner `DATABASE_URL`. New `.env`/compose: `BACKUP_PATH` (the worker's default absolute path) + `S3_BUCKET_RESTORE_SCRATCH=restore-scratch` (a shared plain non-WORM scratch bucket; each run uses a unique prefix). The setup save performs only an API-context probe; the worker drill proves current worker access, and neither proves that a custom path has approved persistent/off-host backing or survives recreation. The worker image carries `postgresql-client-16`. Operator CLI (host-side): `./scripts/easysynq backup run` and `./scripts/easysynq backup restore-test` (exits non-zero on FAIL) — both dispatch to the worker container. The nightly `easysynq.backup.run` Beat job writes archives whose actual persistence and manifest `encrypted`/`legs` state must be verified by the operator.
 
 ## ⚠ S11 restore + upgrade + encrypted backup (operator)
 

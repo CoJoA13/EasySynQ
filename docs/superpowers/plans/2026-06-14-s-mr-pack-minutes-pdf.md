@@ -708,7 +708,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 5: API integration test (CI-only on this box)
+## Task 5: API integration test (CI-only in that development environment)
 
 **Files:**
 - Create: `apps/api/tests/integration/test_mgmt_review_pack.py`

@@ -2,7 +2,8 @@
 
 The restore-test **drill** is the heart of setup gate G-C: it writes a ``pg_dump`` custom-format
 archive plus a MinIO blob manifest, restores the database into an isolated **scratch DATABASE**,
-copies the manifested bytes from the configured source object store into a non-WORM scratch bucket,
+copies the manifested bytes from the configured source object store under a unique prefix in the
+configured shared scratch bucket,
 and runs an integrity triad on the scratch copy — per-table row-count parity, the
 ``document_version → blob`` FK check, and a blob SHA-256 re-hash. Only a PASS (persisted to
 ``backup_policy.last_restore_test_result``) satisfies G-C; finalize reads the persisted result and

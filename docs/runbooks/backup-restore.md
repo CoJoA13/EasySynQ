@@ -13,12 +13,25 @@ pruning, and S3 destinations are also unshipped (D-6).
 `./scripts/easysynq backup run` (and the nightly Beat job `easysynq.backup.run`) writes one timestamped,
 checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy's destination):
 
+> A configured path is not a certified mount. Setup rejects blank, relative, and URI-looking values
+> and performs a preliminary probe in the API process. The mandatory drill proves current worker
+> access, but neither check proves approved persistent/off-host backing or survival across
+> restart/recreation. Verify those properties independently before relying on the destination.
+
 * `db.dump` (`pg_dump -Fc`, including Keycloak's durable `keycloak` schema) + `manifest.json` (the
-  **blob inventory**: sha256/size/bucket/object-key metadata, + per-table row counts) + the additional
-  **Keycloak realm export** + a **config snapshot** + the latest signed audit checkpoint;
-* the whole archive is **AES-256-GCM encrypted** to `…tar.enc` with `BACKUP_ENCRYPTION_KEY` (a
-  stolen archive is useless without the key). If a Keycloak outage prevents the realm export, the
-  backup still succeeds with `legs.realm_export = "absent"` (logged) — it never blocks.
+  **blob inventory**: sha256/size/bucket/object-key metadata, + per-table row counts) are the only
+  mandatory contents;
+* the Keycloak realm export, config snapshot, and latest signed audit checkpoint are independent
+  best-effort legs. Any can be `"absent"`; their failure does not fail the DB/manifest archive;
+* with a real `BACKUP_ENCRYPTION_KEY`, the archive is AES-256-GCM encrypted to `…tar.enc` and the
+  secret-bearing realm/config legs are attempted. With the key unset or still a placeholder, the
+  archive is a **plaintext** `.tar` and those secret-bearing legs are deliberately omitted.
+
+Read the `backup run` result and `manifest.json` before relying on an artifact: newly written
+manifests record `encrypted`; inspect it and every `legs` value (`realm_export`, `config_snapshot`,
+`audit_checkpoint`). Older manifest-v2 artifacts can omit `encrypted`, so identify their envelope
+from the artifact format/magic and do not infer encryption from field absence. Gate G-C establishes
+none of these properties; it uses a separate transient plaintext tar.
 
 > ⚠ **Not a self-contained recovery set:** the archive records blob locators and hashes, but contains
 > **no MinIO object bytes**. Restore verification reads those bytes from the currently configured
@@ -78,7 +91,9 @@ The same channel carries **`integrity.alarm`** from the nightly chain verificati
 
 `./scripts/easysynq backup restore-test` writes a `pg_dump`/manifest test archive, restores the
 database into a throwaway scratch DATABASE, and copies referenced bytes from the configured source
-object store into the non-WORM `restore-scratch` bucket. It then runs the integrity triad
+object store into the configured `restore-scratch` bucket. Operators must provision that bucket as
+distinct and non-WORM; current runtime rejects the documents WORM bucket but does not yet reject
+every WORM bucket role. It then runs the integrity triad
 (copied-blob SHA-256 re-hash · stored-locator SHA-256 re-hash against the currently configured object
 store · per-table row-count parity · `document_version→blob` FK check) and tears the scratch namespace
 down. Only a **PASS** satisfies the setup gate. This is a source-dependent integrity check, not proof
@@ -86,8 +101,9 @@ of recovery after source-store loss. "Configured but unverified" does not count.
 
 ## Restore integrity verification (not a cutover procedure)
 
-`./scripts/easysynq restore <archive.tar.enc> --confirm` decrypts + verifies the archive, restores PG
-into a fresh scratch DATABASE, and copies source-store blobs into a fresh non-WORM scratch bucket
+`./scripts/easysynq restore <archive.tar.enc> --confirm` decrypts when needed and verifies the archive,
+restores PG into a fresh scratch DATABASE, and copies source-store blobs into a unique prefix in the
+configured shared scratch bucket
 (the locked vault is **read**, never written). It then runs the triad, the **checkpoint-not-ahead**
 tamper check, and a **restored-chain re-verify**. The target remains standing only for inspection or
 explicit discard. It exits:

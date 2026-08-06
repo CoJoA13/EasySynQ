@@ -3,7 +3,7 @@
 # (`ruff format` + `ruff check --fix`) so every edit lands CI-clean.
 # Non-fatal: any problem exits 0 so editing is never blocked.
 #
-# NB: the file path is parsed via _lib.sh (sed), NOT jq — jq isn't installed on this box,
+# NB: the file path is parsed via _lib.sh (sed), with no jq dependency.
 # which silently no-op'd the earlier jq-based version of this hook.
 set -uo pipefail
 

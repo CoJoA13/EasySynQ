@@ -73,7 +73,7 @@ flowchart TB
     subgraph Ext["Admin-designated egress only"]
         LDAP["LDAP/AD / OIDC/SAML IdP"]
         SMTP["SMTP relay (STARTTLS)"]
-        BKP["Backup target (encrypted)"]
+        BKP["Backup target (encryption conditional)"]
     end
 
     U -->|HTTPS only| CADDY
@@ -319,14 +319,14 @@ flowchart LR
     R2 --> R3["row 3<br/>prev_hash=H2<br/>row_hash=H3"]
     R3 --> DOTS["..."]
     DOTS --> RN["row n<br/>prev_hash=H(n-1)<br/>row_hash=Hn"]
-    RN --> ANCHOR["periodic anchor:<br/>(Hn, n, ts) signed by app key,<br/>copied into backup + MANDATORY<br/>off-host/append-only checkpoint sink<br/>(audit_checkpoint_sink) for any<br/>tamper-evidence claim"]
+    RN --> ANCHOR["periodic anchor:<br/>(Hn, n, ts) signed by app key,<br/>best-effort backup leg + MANDATORY<br/>off-host/append-only checkpoint sink<br/>(audit_checkpoint_sink) for any<br/>tamper-evidence claim"]
 ```
 
 **Properties:**
 - **Mutation detection:** altering any field of row *k* changes `row_hash[k]`, breaking every link from *k* onward — a single fast verification pass localizes the break.
 - **Deletion/reordering detection:** removing or reordering rows breaks the chain and creates an `id` gap.
 - **Insertion detection:** a back-dated insert cannot reproduce the downstream chain without rewriting all later `row_hash` values (and the periodic signed anchors, below).
-- **Anchoring:** `beat` periodically (default hourly + on shutdown) writes a **signed checkpoint** `(latest_id, latest_row_hash, timestamp)` signed with an app private key. Checkpoints are included in every backup, so even a full-history rewrite by a privileged DBA is exposed by a checkpoint that no longer matches. This is the honest "tamper-evident, not tamper-proof" guarantee (P5).
+- **Anchoring:** `beat` periodically (default hourly + on shutdown) writes a **signed checkpoint** `(latest_id, latest_row_hash, timestamp)` signed with an app private key. The newest checkpoint is attempted as a best-effort backup leg and may be absent; the mandatory off-host/append-only sink, not backup-leg presence, carries the tamper-evidence claim. This is the honest "tamper-evident, not tamper-proof" guarantee (P5).
 - **Off-host anchor (MANDATORY for tamper-evidence claims) (reconciled per Decisions Register R13):** An off-host / append-only audit-checkpoint anchor is **MANDATORY for any install claiming tamper-evidence / Part-11 readiness** (stakeholder decision c). Backup-bundled checkpoints alone are **not** sufficient, because a privileged operator who controls both the database and the backups could rewrite both. The system therefore **requires** at least one **off-host or append-only checkpoint sink** — e.g., a separate **WORM bucket**, an external object store, or **append-only syslog** — to which signed checkpoints are continuously written. This sink is modeled as the **`audit_checkpoint_sink`** config entity (see §4.6 and Data Model doc / R13) and is **configured during setup as a soft gate**: setup is not blocked, but if no `audit_checkpoint_sink` is configured the system surfaces a **clear, persistent UI warning** that **tamper-evidence cannot be honestly claimed** until an off-host anchor exists. An install with no off-host anchor MUST NOT present itself (in UI, exports, or evidence packs) as tamper-evident.
 
 ### 4.4 Write path & integrity guarantees
@@ -388,7 +388,7 @@ Integrity of the *bytes* (not just the metadata) is what makes EasySynQ's eviden
 | api ↔ Keycloak | HTTPS; OIDC/SAML strictly over TLS |
 | Keycloak ↔ LDAP/AD | **LDAPS or STARTTLS** (plaintext LDAP refused) |
 | worker ↔ SMTP | **STARTTLS** required (or implicit TLS) |
-| Backups → target | TLS for transport; archive itself encrypted (§6.2) |
+| Backups → target | Transport protection is deployment-specific; archive encryption applies only when a real backup key is configured (§6.2) |
 
 Security response headers set at Caddy: strict **`Content-Security-Policy`** (nonce-based, `default-src 'self'`, no inline script except nonce, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` (deny camera/mic/geolocation), and `Strict-Transport-Security`.
 
@@ -408,9 +408,9 @@ Security response headers set at Caddy: strict **`Content-Security-Policy`** (no
 | **PostgreSQL volume** | Host-level **LUKS/dm-crypt full-volume encryption** (install-guide recommended/required) | Protects DB files, WAL, temp |
 | **Sensitive DB columns** | App-layer envelope encryption (AES-256-GCM) of secrets stored in DB (federation client secrets, SMTP creds): data key sealed by a master key | Defense in depth even if volume key is compromised |
 | **MinIO** | **SSE-S3** server-side encryption on all buckets; object-lock for WORM | Keys managed by MinIO KES or env-provided master, rotatable |
-| **Backups** | Archive encrypted with a dedicated backup key (AES-256), separate from the app master key | A stolen backup is useless without the backup key |
+| **Backups** | AES-256-GCM archive encryption only when a dedicated backup key is configured; otherwise current code writes plaintext | An unset/placeholder key is an open M-01 risk and also omits secret-bearing optional legs |
 | **Redis** | Holds only ephemeral locks/cache/short-lived tokens; volume on encrypted host disk; no long-term secrets persisted | Treated as ephemeral (rebuildable) |
-| **Keycloak realm/DB** | Same volume encryption; realm export (a backup artifact) encrypted | Contains user/identity data — high sensitivity |
+| **Keycloak realm/DB** | Same volume encryption; a captured realm-export leg is included only inside an encrypted archive | The best-effort leg can be absent |
 
 ### 6.3 Key hierarchy
 
@@ -419,7 +419,7 @@ flowchart TD
     MASTER["Master Key (KEK)<br/>from Docker secret / env file (0600),<br/>rotatable, never in image or VCS"]
     MASTER --> DBDK["DB column data key (DEK)<br/>AES-256-GCM, sealed by master"]
     MASTER --> APPSIGN["Audit-checkpoint signing key<br/>(asymmetric; private signs anchors)"]
-    BACKUPKEY["Backup encryption key<br/>(separate custody from master)"] --> BKP["Encrypted backup archives"]
+    BACKUPKEY["Backup encryption key<br/>(separate custody from master)"] --> BKP["Encrypted archives<br/>(only when configured)"]
     MINIOKEY["MinIO SSE master / KES"] --> OBJ["Encrypted object storage"]
     HOSTKEY["Host LUKS key"] --> VOL["Encrypted volumes (PG, Redis, Keycloak)"]
 ```
@@ -455,9 +455,9 @@ flowchart TD
 | --- | --- | --- | --- |
 | PostgreSQL | Current: `pg_dump` logical. Target: continuous **WAL archiving (PITR)** | Current: nightly full. WAL stream unshipped | Current: scratch `pg_restore` verification. PITR unshipped |
 | MinIO blobs | Target: `mc mirror` / role-preserving bucket replication | Unshipped | Source-independent recovery unshipped |
-| Keycloak realm | Realm export JSON (encrypted) | On config change + nightly | Realm import |
-| Config / secrets | `.env` + Compose snapshot (encrypted) | On change | Redeploy |
-| **Audit checkpoints** | Latest signed chain checkpoints bundled into every backup | Each backup | Verifies chain integrity post-restore |
+| Keycloak realm | Best-effort realm-export leg, attempted only for encrypted archives | Nightly archive attempt when a backup key is configured; no on-change trigger | No current realm-import/cutover procedure; future recovery must require `legs.realm_export = "present"` |
+| Config / secrets | Best-effort redacted config snapshot, attempted only for encrypted archives | Nightly archive attempt when a backup key is configured; no on-change trigger | No current redeploy procedure; future recovery must require `legs.config_snapshot = "present"` |
+| **Audit checkpoints** | Best-effort latest signed checkpoint leg | Each nightly archive attempt; can be absent | Current restore reports/checks what is present; off-host lineage work remains open |
 | OpenSearch (reserved) | **Not deployed or backed up in shipped S/M** | — | Rebuild from authoritative stores if a future extension is deployed |
 | Filesystem mirror | **Not backed up** | — | Regenerate from vault |
 
@@ -466,7 +466,7 @@ flowchart TD
 - `easysynq backup` produces a timestamped, checksummed archive containing the database dump, blob
   manifest, and available Keycloak/config/checkpoint legs. The blob manifest is metadata; object
   bytes are absent, so the archive is non-self-contained.
-- `easysynq restore` **verifies checksums and decrypts**, restores PostgreSQL into a scratch database,
+- `easysynq restore` verifies checksums and decrypts only when the archive is encrypted, restores PostgreSQL into a scratch database,
   copies bytes from the configured source object store into a flattened scratch layout, and verifies
   the audit chain plus both blob-verification views. PASS is integrity evidence only. The scratch
   target is not role-preserving or cutover-ready.
@@ -578,7 +578,7 @@ This makes WORM the rule and destruction the audited, dual-controlled exception 
 | OWASP category | EasySynQ mitigations |
 | --- | --- |
 | **A01 Broken Access Control** | Deny-by-default PDP, per-object PEP at the use-case layer (not just routes), per-user override precedence, `org_id` scoping, 404-for-unknown, every denied attempt audited. Auditor independence + admin/QMS separation enforced as grants. |
-| **A02 Cryptographic Failures** | TLS 1.2+/1.3 everywhere, HSTS, LUKS + SSE-S3 at rest, envelope-encrypted DB secrets, encrypted backups, strong randoms for secrets, SHA-256 content addressing. |
+| **A02 Cryptographic Failures** | TLS 1.2+/1.3 everywhere, HSTS, LUKS + SSE-S3 at rest, envelope-encrypted DB secrets, backup encryption when a real key is configured (plaintext fallback remains open M-01), strong randoms for secrets, SHA-256 content addressing. |
 | **A03 Injection** | SQLAlchemy 2 parameterized queries (no string SQL), strict input validation via Pydantic/FastAPI schemas, OpenSearch queries built via the client (no query injection), strict output encoding in the SPA, nonce-based CSP to blunt XSS. |
 | **A04 Insecure Design** | Threat-modeled here; immutable/append-only/WORM by design; separation of duties; fail-closed authz; tamper-evident over tamper-proof acknowledged honestly. |
 | **A05 Security Misconfiguration** | Hardened defaults, secrets generated at install, no debug in prod, security headers, private network for stores, healthchecks gate readiness, pinned image digests, air-gapped bundle option. |
@@ -656,7 +656,7 @@ flowchart LR
 2. **AuthZ** is deny-by-default, hybrid RBAC+ABAC, decided centrally (PDP) and enforced per-object (PEP) server-side, with override precedence and complete auditing of allows *and* denies.
 3. **The audit trail** is append-only, transactional with the action, before/after-capturing, reason-bearing, and **hash-chained with signed checkpoints** — tamper-evident by design and ready to carry Part 11 signing evidence.
 4. **Binary integrity** is guaranteed by SHA-256 content addressing, WORM object-lock immutability, and scheduled re-hash verification, with the filesystem mirror as a read-only, regenerable export (vault→mirror authority only).
-5. **Encryption** protects data in transit (TLS 1.2+/1.3, LDAPS/STARTTLS) and at rest (LUKS, SSE-S3, envelope-encrypted DB secrets, encrypted backups), under a clear key hierarchy with rotatable, never-committed secrets.
+5. **Encryption** protects data in transit (TLS 1.2+/1.3, LDAPS/STARTTLS) and most data at rest (LUKS, SSE-S3, envelope-encrypted DB secrets). Durable backup encryption is conditional on a real configured key; plaintext fallback remains open M-01.
 6. **Backup/restore/DR** treat only PG+MinIO as critical. Current tooling verifies DB↔blob integrity
    and the restored audit chain against the configured source store; the RPO ≤ 24 h (minutes with
    WAL) / RTO ≤ 2 h values remain unproven targets pending self-contained recovery generation.

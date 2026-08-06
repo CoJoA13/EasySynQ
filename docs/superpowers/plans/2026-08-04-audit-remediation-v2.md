@@ -1216,12 +1216,14 @@ bound to rule-owned match containment).
 
 The final observable contract is that a current restore `PASS` is source-object-store-dependent integrity
 verification. Durable/pre-upgrade archives do not contain MinIO object bytes and are neither
-self-contained nor cutover-ready recovery generations. Shipped backup destinations are mounted
-filesystem paths; S3 destinations, WAL/PITR, automatic pruning, independent cutover, and
-recovery-generation eligibility remain unshipped. The guard is an explicit current-surface allowlist with
-18 narrow affirmative claim rules and direct-negative support; it makes no linguistic-exhaustiveness
-claim. Owner-approved mockups now show filesystem-only/source-dependent boundaries and inactive or
-unavailable S3/PITR/pruning capabilities.
+self-contained nor cutover-ready recovery generations. Backup destinations must be absolute non-root POSIX
+filesystem paths; S3/URI destinations, WAL/PITR, automatic pruning, independent cutover, and
+recovery-generation eligibility remain unshipped. Setup's API-process probe is preliminary, and a
+worker-drill PASS does not prove that approved persistent/off-host storage backs the path. At
+`c9c36ce`, Task 5's guard was an explicit current-surface allowlist with 18 narrow affirmative
+claim rules and direct-negative support; it made no linguistic-exhaustiveness claim. Owner-approved
+mockups now show filesystem-only/source-dependent boundaries and inactive or unavailable
+S3/PITR/pruning capabilities.
 
 Round 4 against `6ed4d55` found 18 direct-negative failures and six active S3/PITR mockup failures; its
 historical blob runbook-action phrase was missed. The final Round 4 selection passed 61 focused checks;
@@ -1235,3 +1237,67 @@ new Critical/Important breakage.
 
 This task does **not** close C-01, C-01b, `S-restore-target`, `S-backup-legs`,
 `S-recovery-generation`, or the full `S-upgrade-safety`; it does not make production upgrades eligible.
+
+### 10.5 Final publication review — additive findings and truth boundary
+
+The final whole-branch review found one new runtime subfinding and four current operator-truth gaps.
+This section is additive: it does not change the approved 57-primary baseline or convert a subfinding
+into a 58th primary row.
+
+The current claim guard expands Task 5's 18-rule baseline to **28** narrow rules, each with one
+affirmative and one direct-negative oracle. It remains an allowlisted regression guard, not an
+exhaustive natural-language proof.
+
+**NEW-10 / `S-backup-destination` (open, release-significant subfinding).** The setup endpoint used to
+pass any non-empty destination to `os.makedirs`/`open` in the API process. The shipped backup volume
+is attached to the worker, not the API, so a relative value, `s3://…` text, or an API-container-local
+path could pass while proving nothing about the worker's destination. This branch now rejects
+blank, root/root-equivalent, relative, and URI-looking destinations at the service boundary,
+accepts only absolute non-root POSIX paths, and labels the API create/write/remove probe as
+preliminary. The mandatory G-C drill supplies current worker-access evidence only. **The defect
+remains open:** neither check proves that the path is backed by an approved persistent mount rather
+than container overlay storage, or that it survives recreation.
+
+`S-backup-destination` closes only when a worker-owned probe and deployment evidence falsify all of
+these cases:
+
+- API and worker have different mount namespaces and only the API can reach the submitted path;
+- blank, root/root-equivalent, relative, and URI-looking values are rejected without creating
+  container-local directories;
+- the shipped named volume and supported custom NFS/bind/named-volume configurations are identified
+  as approved persistent mounts rather than writable overlay paths;
+- a probe artifact written by the worker remains readable after worker restart **and recreation**;
+- an unmounted absolute path fails rather than being created in the container layer; and
+- UI, OpenAPI, runbooks, and audit detail distinguish syntax validation, API preliminary probing,
+  worker accessibility, and persistent/off-host backing.
+
+The same review corrected G-C and backup-leg claims without closing M-01 or `S-backup-legs`. G-C
+packs, checksums, unpacks, and restores a transient **plaintext** tar; it does not decrypt a durable
+archive or test the backup key. Durable archives can be plaintext when the key is unset/placeholder.
+Realm export, config snapshot, and audit checkpoint are independent best-effort legs and may be
+absent; operators must inspect new-manifest `encrypted` and `legs` values (legacy v2 can omit the
+additive `encrypted` marker). No current on-change capture,
+realm-import, or config-redeploy procedure is implied. Current restore uses a shared scratch bucket
+with a unique prefix, not a newly provisioned bucket.
+
+The blob-integrity CLI/help now preserves the live-repair boundary: investigate and preserve exact
+source bytes, and rerun verification only after a separately validated direct repair or future
+supported recovery. Today's source-dependent restore does not clear live blob alarms.
+
+**R61 incident disposition.** Confirmed local identities, home paths, personal email, and the known
+organization code were removed from the tracked tree. The two dedicated installation dossiers were
+replaced by generically named R61 redaction notices, and the former live-install handoff was renamed
+and reduced to generalized lessons and product backlog. Live-smoke helpers require an
+environment-provided example org code. The
+mechanical guard detects personal home paths, non-example email, known site-dossier narrative
+markers, and personal use of the public repository-owner token (derived from Git metadata). It does
+not store low-entropy incident-token hashes and does not claim semantic exhaustiveness; manual
+review remains the control for new prose shapes. No history rewrite was attempted. Already-published
+history and downstream clones/caches require an explicit owner-led incident decision; this
+repository change can only limit further publication.
+
+Still open and not implemented here: cancellation or a post-core audit failure can strand a restore
+target/object prefix, and the defensive restore guard rejects the documents WORM bucket but not the
+records WORM bucket. Those remain within `S-restore-target`/cancellation and WORM-misconfiguration
+hardening. C-01, C-01b, M-01, `S-backup-legs`, `S-recovery-generation`, and full
+`S-upgrade-safety` remain open; production recovery and upgrade eligibility remain unproven.

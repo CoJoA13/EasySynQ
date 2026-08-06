@@ -172,7 +172,7 @@ v1.x). The objectives' own `by_rag` is **read verbatim** — never recomputed.
 - No write affordances on this surface (read-only dashboard) — nothing to hide/disable.
 - **Live-smoke note:** the bare `demo` (System Administrator) login holds **only `drift.read`** among
   these — so out of the box only **DO + My-Tasks** populate. For a full-wheel live smoke, grant SYSTEM
-  overrides on the **live login's `app_user` row** (org short_code **AHT**) for: `objective.read`,
+  overrides on the **live login's `app_user` row** (org short_code **ORG_EXAMPLE**) for: `objective.read`,
   `report.compliance_checklist.read`, `audit.read`, `capa.read`, `ncr.read`, `record.read`. (Acks +
   tasks are self-scoped — no grant needed.)
 
@@ -306,7 +306,7 @@ Each task is the 5-step TDD cell: *write failing test → run (expect FAIL) → 
   degrade tests; the demo-login (DO+rail-only) shape test.
 - **Phase 4 — My-Tasks rail:** `MyTasksRail` + wire into `HomePage`; ordering/empty/self-scoped tests.
 - **Phase 5 — Wire + close:** full `/check-web` → `diff-critic` on the branch diff → Chrome-MCP live
-  smoke (SYSTEM overrides on the live demo `app_user` row, org AHT; verify DO+rail with bare demo, then
+  smoke (SYSTEM overrides on the live demo `app_user` row, org ORG_EXAMPLE; verify DO+rail with bare demo, then
   the full wheel with overrides) → `slice-history.md` entry + a `CLAUDE.md` Recent-learnings line +
   web-test delta → PR → Codex triage (disregard multi-tenant nitpicks — moot under D1; **fix** any real
   error-state bug) → squash-merge on green CI + owner OK.

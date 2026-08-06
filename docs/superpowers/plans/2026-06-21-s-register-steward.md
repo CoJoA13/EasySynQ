@@ -4,7 +4,7 @@
 
 **Goal:** Seed a reserved `Register Steward` role so the three register-steward consoles (Risk 6.1 / Context 4.1 / Interested Parties 4.2) are exercisable without a SYSTEM override, closing the F-1 deferral (R49/R50/R51) — recorded as the binding decision R52.
 
-**Architecture:** A data-only Alembic migration (`0062`) inserts one reserved role per org (idempotent, by-org, name-agnostic so it reaches a renamed `AHT` install) plus five `role_grant` rows at SYSTEM scope (`register.read · register.manage · document.release · document.read · document.read_draft`) — no new permission key, no schema change, no ORM change. The frontend is untouched: the steward consoles already gate on the **server-computed** `register_capabilities` (`can_manage`/`can_release`), so the role's grants light up the affordances automatically and the role auto-appears in `GET /roles` for an admin to assign.
+**Architecture:** A data-only Alembic migration (`0062`) inserts one reserved role per org (idempotent, by-org, name-agnostic so it reaches a renamed `ORG_EXAMPLE` install) plus five `role_grant` rows at SYSTEM scope (`register.read · register.manage · document.release · document.read · document.read_draft`) — no new permission key, no schema change, no ORM change. The frontend is untouched: the steward consoles already gate on the **server-computed** `register_capabilities` (`can_manage`/`can_release`), so the role's grants light up the affordances automatically and the role auto-appears in `GET /roles` for an admin to assign.
 
 **Tech Stack:** Python 3.12, Alembic, SQLAlchemy 2.x (sync psycopg2 in migrations), FastAPI, PostgreSQL 16, pytest + testcontainers (`-m integration`). Toolchain `uv` at `~/.local/bin/uv`.
 
@@ -14,7 +14,7 @@
 - **NO new permission key** — every key already exists (seeded `0004`); catalog count **stays 102** (R38: "additive" covers a new role + new grants on existing keys).
 - **NO contract change** (`openapi.yaml` untouched — adding a role is data, not schema; `GET /roles` schema unchanged) and **NO frontend change**.
 - **Data-only migration** — no DDL, no `Base.metadata`/ORM change, so `alembic check` stays clean.
-- **Resilient/multi-org seed by NAME** (the `0057` precedent): seed for every org via `SELECT id FROM organization`, never a bare `WHERE short_code='DEFAULT'` (an operational install renames it to `AHT`; `services/common/org.py`). Return early if no org exists.
+- **Resilient/multi-org seed by NAME** (the `0057` precedent): seed for every org via `SELECT id FROM organization`, never a bare `WHERE short_code='DEFAULT'` (an operational install renames it to `ORG_EXAMPLE`; `services/common/org.py`). Return early if no org exists.
 - **The key set excludes `document.approve`** (SoD: the approver stays a separate Approver/QMS-Owner). `is_reserved=True`.
 - **Downgrade** deletes the steward's `role_assignment` rows → its `role_grant` rows → the `role` row (both FKs to `role.id` are `ondelete=RESTRICT`).
 - Integration assertions are **run-scoped / delta-based**, never absolute counts on the shared session DB (except the seed-catalog test, which is the canonical exact-set assertion).
@@ -59,7 +59,7 @@ NO new permission key (every key already exists, seeded in 0004) → the catalog
 ``alembic check`` is unaffected and no ORM model changes.
 
 Idempotent + multi-org by NAME (not the ``DEFAULT`` org 0004 targets, so it reaches a renamed
-install such as ``AHT``): inserts the role for EVERY org via ``on_conflict_do_nothing`` on
+install such as ``ORG_EXAMPLE``): inserts the role for EVERY org via ``on_conflict_do_nothing`` on
 ``(org_id, name)``, then the 5 grants via a CROSS JOIN of the role rows with the permission rows
 (``on_conflict_do_nothing`` on ``(org_id, role_id, permission_id)``). Returns early on an
 uninitialized DB (no org).
@@ -122,7 +122,7 @@ def upgrade() -> None:
     )
 
     # 1. Seed the reserved role for EVERY org (single-org D1; by-org keeps the 0057 multi-org shape
-    #    and is name-agnostic, so it reaches a renamed install such as AHT).
+    #    and is name-agnostic, so it reaches a renamed install such as ORG_EXAMPLE).
     org_ids = [row.id for row in bind.execute(sa.text("SELECT id FROM organization")).all()]
     if not org_ids:
         return  # uninitialized DB — no org yet

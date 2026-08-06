@@ -114,5 +114,8 @@ def test_host_cli_help_does_not_advertise_unsupported_recovery() -> None:
     assert "non-self-contained" in result.stdout.lower()
     assert "production eligibility" in result.stdout.lower()
     assert "remains blocked pending recovery proof" in result.stdout.lower()
+    assert "preserve and investigate the exact source bytes" in result.stdout.lower()
+    assert "separately validated direct repair" in result.stdout.lower()
+    assert "re-run after a restore to clear the alarm" not in result.stdout.lower()
     assert "cut over per runbook" not in result.stdout.lower()
     assert "disaster safety net" not in result.stdout.lower()

@@ -1362,7 +1362,7 @@ Each reuses `_install_kc` and `_admin` exactly as above — no new scaffolding:
 - [ ] **Step 2: Run them**
 
 ```bash
-cd /home/cojoa13/Desktop/EasySynQ && sg docker -c "cd apps/api && uv run pytest -m integration tests/integration/test_users_provision.py -v"
+cd <repo> && sg docker -c "cd apps/api && uv run pytest -m integration tests/integration/test_users_provision.py -v"
 ```
 
 Expected: all pass. Then confirm no cross-file pollution by running a document-creating file first:

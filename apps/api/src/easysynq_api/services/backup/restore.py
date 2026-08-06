@@ -1,9 +1,10 @@
 """WORM-aware restore integrity verification (slice S11, doc 12 §8.2 / R37, doc 18 §7/§9).
 
 ``easysynq restore <archive>`` restores to an integrity-verification target: it decrypts + verifies
-the archive, restores PostgreSQL into a FRESH scratch DATABASE, and copies manifested blobs into a
-FRESH, non-WORM ``restore-scratch`` bucket (the blob bytes are READ from their content-addressed
-source — the live object-locked vault is never mutated), then runs the integrity triad, a
+the archive, restores PostgreSQL into a fresh scratch DATABASE, and copies manifested blobs under a
+unique prefix in the configured shared ``restore-scratch`` bucket (the blob bytes are READ
+from their content-addressed source — the live object-locked vault is never mutated), then runs the
+integrity triad, a
 **checkpoint-not-ahead** tamper check, and a **restored-chain re-verify**. The triad proves the
 restored database's stored blob locators resolve against the currently configured object store; it
 does not independently certify the copied scratch namespace as cutover-ready. It NEVER mutates the
@@ -393,8 +394,9 @@ def run_restore(
             )
             archive.restore_database(owner_dsn, scratch_db, restore_dump)
 
-            # 4. copy blobs into the FRESH non-WORM bucket (source = a READ; the locked vault is
-            #    never written). Destination is asserted non-vault for defence-in-depth.
+            # 4. copy blobs under this run's unique prefix in the configured shared scratch bucket
+            #    (source = a READ; the locked vault is never written). The documents bucket is
+            #    rejected below; rejecting every WORM bucket role remains open hardening work.
             if handle.scratch_bucket == settings.s3_bucket_documents:  # pragma: no cover - guard
                 return RestoreResult("FAIL", "refusing to restore into the WORM documents bucket")
             drill._copy_blobs(settings, blobs, handle.scratch_bucket, handle.object_prefix)

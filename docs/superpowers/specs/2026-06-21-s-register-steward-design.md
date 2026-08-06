@@ -48,7 +48,7 @@ This is the FIRST seeded role to hold `document.release`, so v1 release authorit
 - WORM / append-only invariants untouched (no schema change).
 - The migration uses the **resilient org lookup** (`DEFAULT` → else the sole org → else skip), per
   `services/common/org.py` + the 0053/0054 precedent — an operational install renames `short_code`
-  away from `DEFAULT` (this install: `AHT`), so `0004`'s bare `scalar_one('DEFAULT')` would abort.
+  away from `DEFAULT` (this install: `ORG_EXAMPLE`), so `0004`'s bare `scalar_one('DEFAULT')` would abort.
 
 ## As-built
 

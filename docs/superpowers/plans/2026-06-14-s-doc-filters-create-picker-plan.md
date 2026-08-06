@@ -17,7 +17,7 @@
   - `tests/integration/test_documents_list.py` (CI-only here): the four-doc narrowing matrix
     (Effective-initial, Approved-new, Approved-revision-of-Effective, OBJ) — run-scoped/delta assertions.
 - Agent verifies natively: `uv run ruff check`, `uv run ruff format --check`, `uv run mypy`, and the
-  **targeted** new unit test (NOT the full suite — it crashes on this box; integration is CI-only).
+  **targeted** new unit test (NOT the full suite — it crashes in that development environment; integration is CI-only).
 
 ### T2 — Contract (`packages/contracts/openapi.yaml`)
 - Add `filter[has_effective_version][eq]` + `filter[managed_subtype][eq]` query params under

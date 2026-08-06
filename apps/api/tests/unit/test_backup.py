@@ -12,13 +12,65 @@ from __future__ import annotations
 
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from easysynq_api.db.models._audit_enums import EVENT_TYPE_VALUES, EventType
-from easysynq_api.services.backup import archive
+from easysynq_api.problems import ProblemException
+from easysynq_api.services.backup import archive, configure_backup_destination_check
 from easysynq_api.services.backup.archive import BlobRef
 from easysynq_api.services.backup.dsn import conn_kwargs, database_name, libpq_env
+from easysynq_api.services.setup import configure_backup
 
 _DSN = "postgresql+psycopg://easysynq:s3cr3t@postgres:5432/easysynq"
+
+
+@pytest.mark.parametrize(
+    "destination",
+    ("relative/backups", "s3://offsite/bucket", "/", "//", "/backup/.."),
+)
+def test_destination_probe_rejects_unsafe_filesystem_destinations(
+    destination: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The API-context probe must not turn relative/URI text into container-local directories."""
+    monkeypatch.chdir(tmp_path)
+
+    ok, detail = configure_backup_destination_check(destination)
+
+    assert ok is False
+    assert detail == "destination must be an absolute non-root POSIX filesystem path"
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "destination",
+    ("relative/backups", "s3://offsite/bucket", "/", "//", "/backup/.."),
+)
+async def test_configure_backup_rejects_unsafe_destination_at_service_boundary(
+    destination: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_probe(_destination: str) -> tuple[bool, str]:
+        raise AssertionError("invalid destination reached the filesystem probe")
+
+    monkeypatch.setattr(
+        "easysynq_api.services.setup.service.configure_backup_destination_check",
+        unexpected_probe,
+    )
+
+    with pytest.raises(ProblemException) as exc_info:
+        await configure_backup(
+            object(),  # type: ignore[arg-type] - validation must run before session access
+            SimpleNamespace(),  # type: ignore[arg-type] - actor is unused before validation
+            destination=destination,
+            cron="0 2 * * *",
+            retention_daily=7,
+            retention_weekly=4,
+            retention_monthly=6,
+        )
+
+    assert exc_info.value.status == 422
+    assert exc_info.value.code == "backup_destination_invalid"
 
 
 def test_libpq_env_translates_sqlalchemy_url() -> None:
@@ -64,6 +116,7 @@ def test_build_manifest_lists_blob_snapshot() -> None:
         "config_snapshot": "absent",
         "audit_checkpoint": "absent",
     }
+    assert m["encrypted"] is False
     assert m["encryption_key_ref"] is None
 
 
@@ -75,8 +128,10 @@ def test_build_manifest_records_legs_and_key_ref() -> None:
         config_snapshot="present",
         audit_checkpoint="present",
         encryption_key_ref="BACKUP_ENCRYPTION_KEY:sha256-v1",
+        encrypted=True,
     )
     assert m["legs"]["realm_export"] == "present"
+    assert m["encrypted"] is True
     assert m["config"]["table_counts"]["organization"] == 1
     assert m["encryption_key_ref"] == "BACKUP_ENCRYPTION_KEY:sha256-v1"
 
@@ -99,6 +154,29 @@ def test_pack_verify_unpack_roundtrip(tmp_path: Path) -> None:
     # the manifest rides in the archive too
     with tarfile.open(arc) as tar:
         assert "manifest.json" in tar.getnames()
+
+
+def test_manifest_encrypted_marker_is_additive_for_legacy_v2_archives(tmp_path: Path) -> None:
+    """Pre-marker manifest v2 remains readable; envelope bytes still determine encryption."""
+    dump = tmp_path / "db.dump"
+    dump.write_bytes(b"PGDMP-legacy")
+    legacy_manifest = {
+        "manifest_version": 2,
+        "config": {},
+        "blobs": [],
+        "legs": {
+            "realm_export": "absent",
+            "config_snapshot": "absent",
+            "audit_checkpoint": "absent",
+        },
+        "encryption_key_ref": None,
+    }
+
+    packed = archive.pack_archive(dump, legacy_manifest, tmp_path / "legacy", stamp="legacy")
+
+    restored = archive.read_manifest(packed)
+    assert "encrypted" not in restored
+    assert restored == legacy_manifest
 
 
 def test_verify_archive_detects_corruption(tmp_path: Path) -> None:

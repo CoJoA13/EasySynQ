@@ -1,38 +1,43 @@
-"""Dev live-smoke seed for S-notify-fe: grant document.read to all org-AHT users (so a
+"""Dev live-smoke seed for S-notify-fe: grant document.read to all users in an explicitly selected
+organization (so a
 notification's /documents/{id} deep-link lands on a viewable page) and seed a few in-app
 notification rows per user (operational, NOT vault/WORM). Idempotent via a context.smoke
 guard (the app role has no DELETE on `notification`, so we never delete — we skip if seeded).
 
 Pipe into the worker container:
 
+    export EASYSYNQ_SMOKE_ORG='ORG_EXAMPLE'
     MSYS_NO_PATHCONV=1 docker compose --env-file .env \
       -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
-      exec -T worker sh -c "cd /app; uv run python -" < scripts/seed-notify-smoke.py
+      exec -T -e EASYSYNQ_SMOKE_ORG worker sh -c "cd /app; uv run python -" \
+      < scripts/seed-notify-smoke.py
 """
 
 from __future__ import annotations
 
 import datetime as dt
-
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+import os
 
 from easysynq_api.cli.seed_personas import _ensure_system_overrides, _resolve_org
 from easysynq_api.config import get_settings
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.notification import Notification
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 
-ORG = "AHT"
 KEYS = ("document.read",)  # so a /documents/{id} deep-link lands on a real page
 
 
 def main() -> None:
+    org_code = os.environ.get("EASYSYNQ_SMOKE_ORG", "").strip()
+    if not org_code:
+        raise SystemExit("EASYSYNQ_SMOKE_ORG is required (the target org short_code)")
     engine = create_engine(get_settings().sync_dsn)
     now = dt.datetime.now(dt.UTC)
     try:
         with Session(engine) as s:
-            org = _resolve_org(s, ORG)
+            org = _resolve_org(s, org_code)
             print(f"ORG {org.short_code} {org.id}")
 
             # Effective DOCUMENT rows → real deep-link targets.
@@ -113,7 +118,9 @@ def main() -> None:
                     ),
                 ]
                 s.add_all(rows)
-                print(f"SEED {u.display_name} +3 (2 unread, 1 read) [override {added or 'present'}]")
+                print(
+                    f"SEED {u.display_name} +3 (2 unread, 1 read) [override {added or 'present'}]"
+                )
             s.commit()
             print("DONE")
     finally:

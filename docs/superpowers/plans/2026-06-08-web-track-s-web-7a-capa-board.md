@@ -22,7 +22,7 @@ OpenAPI contract — no migration, no key, no endpoint.
 **Spec:** `docs/superpowers/specs/2026-06-08-web-track-s-web-7-nc-capa-design.md` (esp. §3 verified shapes,
 §4 the enrichment, §5 cross-cutting, §6 the 7a detail).
 
-**Local gates (this native-Windows box):** web = `/check-web` (eslint + strict tsc + build + the full
+**Local gates (the then-current native-Windows development environment):** web = `/check-web` (eslint + strict tsc + build + the full
 vitest suite) runs locally and is the reliable front-end gate. The **api test suites are Linux-CI-only**
 here — for Task 1, the local gate is `/check-api` (ruff/format/mypy-strict) + `/check-contracts`; the
 integration test you write runs red→green in **CI**, not locally. Don't try to run `pytest` locally.
@@ -100,7 +100,7 @@ async def test_capa_list_and_detail_carry_title_created_at_raised_by(
 
 - [ ] **Step 2: (CI-only) note expected failure**
 
-The api suites can't run on this Windows box. In CI the `integration` job runs it red: `KeyError: 'title'`
+The api suites can't run in that Windows development environment. In CI the `integration` job runs it red: `KeyError: 'title'`
 (the serializer doesn't emit it yet). Locally, proceed — Steps 5–6 are the local gate.
 
 - [ ] **Step 3: Enrich the repository query + add a header accessor**
