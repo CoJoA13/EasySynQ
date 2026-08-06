@@ -240,7 +240,8 @@ FORBIDDEN_CLAIMS = (
     ),
     _rule(
         "backup_prose_claims_unconditional_archive_encryption",
-        r"(?:the whole archive is\s*\*\*AES-256-GCM encrypted\*\*|"
+        r"(?:^[ \t]*[-*][ \t]+(?:\*\*)?Encrypted database/manifest archives\b|"
+        r"the whole archive is\s*\*\*AES-256-GCM encrypted\*\*|"
         r"\|\s*\*\*Backups\*\*\s*\|\s*Archive encrypted with a dedicated backup key)",
     ),
     _rule(
@@ -537,6 +538,10 @@ def test_guard_accepts_direct_negation_of_each_guarded_claim(
             "restore_prose_asserts_scratch_non_worm",
             "The drill uses a configured shared non-WORM scratch bucket.",
         ),
+        (
+            "backup_prose_claims_unconditional_archive_encryption",
+            "- Encrypted database/manifest archives (no object bytes).",
+        ),
     ),
 )
 def test_final_review_claim_shapes_are_guarded(expected_claim: str, former_claim: str) -> None:
@@ -597,6 +602,15 @@ def test_unrelated_nearby_negation_does_not_hide_affirmative_claim(
     claims = {item.claim for item in _violations("nearby-negation.txt", text)}
 
     assert "backup_prose_calls_archive_real" in claims
+
+
+def test_guard_accepts_archive_encryption_claim_that_names_the_plaintext_fallback() -> None:
+    truthful_claim = (
+        "Database/manifest archives (AES-256-GCM when a backup key is configured; otherwise "
+        "plaintext with secret-bearing legs omitted; no object bytes)."
+    )
+
+    assert _violations("conditional-archive-encryption.txt", truthful_claim) == set()
 
 
 @pytest.mark.parametrize(

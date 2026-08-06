@@ -41,7 +41,7 @@ hits="$(grep -nHoIE '(^|[^A-Za-z0-9._-])/(var/)?home/[A-Za-z0-9._-]+' "${FILES[@
   | grep -vE '/home/easysynq($|/)' || true)"
 [ -z "$hits" ] || report "Personal Linux home path (R61) — use a repo-relative path or <repo>:" $hits
 
-hits="$(grep -nHoIE '[A-Za-z]:\\Users\\[A-Za-z0-9._-]+' "${FILES[@]}" 2>/dev/null || true)"
+hits="$(grep -nHoIE '([A-Za-z]:[/\\]|/[A-Za-z]/)Users[/\\][A-Za-z0-9._-]+' "${FILES[@]}" 2>/dev/null || true)"
 [ -z "$hits" ] || report "Personal Windows profile path (R61) — use <repo> or C:\\dev\\EasySynQ:" $hits
 
 # Development-host observations age badly and can disclose an operator's platform, installed tools,
@@ -67,35 +67,21 @@ hits="$(grep -nHoIE '\bthis is a site-specific deployment (design|plan|record)\b
 # The repository owner is public GitHub metadata, but the same token used as a shell account or
 # workstation identity is not. Derive it from the remote rather than committing an incident-token
 # hash: low-entropy org/user identifiers are dictionary-recoverable from an unsalted digest.
-repo_owner="$(git remote get-url origin 2>/dev/null \
-  | sed -nE 's#^(https://github\.com/|git@github\.com:)([^/]+)/EasySynQ(\.git)?$#\2#p' \
-  | head -n 1)"
+repo_owner=""
+if origin_url="$(git remote get-url origin 2>/dev/null)"; then
+  repo_owner="$(printf '%s\n' "$origin_url" \
+    | sed -nE 's#^(https://github\.com/|git@github\.com:)([A-Za-z0-9-]+)/EasySynQ(\.git)?$#\2#p' \
+    | head -n 1)"
+fi
 if [ -n "$repo_owner" ]; then
-  hits="$(python3 - "$repo_owner" "${FILES[@]}" <<'PY'
-import re
-import sys
-
-owner = sys.argv[1].casefold()
-for path in sys.argv[2:]:
-    try:
-        lines = open(path, encoding="utf-8").read().splitlines()
-    except (OSError, UnicodeDecodeError):
-        continue
-    for line_number, line in enumerate(lines, 1):
-        # Repository-owner identity is legitimate only as GitHub repository metadata. Strip those
-        # shapes before checking for a shell/account use, and never print the matched token.
-        identity_scan = re.sub(
-            r"(?:https://github\.com/|git@github\.com:)[^/\s]+/EasySynQ[^\s)>]*",
-            "",
-            line,
-        )
-        identity_scan = re.sub(r"`?[^/\s`]+/EasySynQ`?", "", identity_scan)
-        identity_scan = re.sub(r"\bOwner:\*{0,2}\s*[A-Za-z0-9_-]+\b", "", identity_scan)
-        for token in re.findall(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9_-]{1,31}(?![A-Za-z0-9])", identity_scan):
-            if token.casefold() == owner:
-                print(f"{path}:{line_number}:<redacted-personal-identifier>")
-PY
-)"
+  # Keep this scan inside the shell toolchain already required by the gate. In particular, the
+  # contracts job runs before language setup and Git Bash does not guarantee a global `python3`.
+  # First remove legitimate repository-metadata shapes, then match the owner as a complete token;
+  # report only file + line so the diagnostic cannot republish the identity it rejected.
+  hits="$(grep -nHIiF -- "$repo_owner" "${FILES[@]}" 2>/dev/null \
+    | sed -E 's#(https://github\.com/|git@github\.com:)[^/[:space:]]+/EasySynQ[^[:space:])>]*##g; s#`?[^/[:space:]`]+/EasySynQ`?##g; s#(^|[^A-Za-z0-9_-])Owner:\*{0,2}[[:space:]]*[A-Za-z0-9_-]+#\1#g' \
+    | grep -iE "(^|[^A-Za-z0-9_-])${repo_owner}([^A-Za-z0-9_-]|$)" \
+    | sed -E 's#^([^:]+:[0-9]+):.*#\1:<redacted-personal-identifier>#' || true)"
   [ -z "$hits" ] || report "Repository-owner token used as a personal identifier (R61):" $hits
 fi
 
