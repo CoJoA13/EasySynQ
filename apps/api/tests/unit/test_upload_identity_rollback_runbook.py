@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import re
 import shutil
 import subprocess
 import textwrap
+from collections.abc import Mapping
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 RUNBOOK = ROOT / "docs" / "runbooks" / "upload-identity-rollback.md"
@@ -26,9 +28,100 @@ def _bash_block(marker: str) -> str:
     return match.group("body")
 
 
+def _write_executable(path: pathlib.Path, source: str) -> None:
+    path.write_text(textwrap.dedent(source), encoding="utf-8")
+    path.chmod(0o700)
+
+
+def _run_library(
+    tmp_path: pathlib.Path,
+    body: str,
+    *,
+    library: str | None = None,
+    env: Mapping[str, str] | None = None,
+    stdin: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    bash = shutil.which("bash")
+    assert bash is not None
+    script = f"set -euo pipefail\n{library or _bash_block('rollback-helper-library')}\n{body}"
+    merged_env = dict(env or {})
+    merged_env.setdefault("PATH", "/usr/bin:/bin")
+    return subprocess.run(  # noqa: S603 - executes the reviewed runbook helper
+        [bash, "-c", script],
+        cwd=tmp_path,
+        env=merged_env,
+        input=stdin,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _container_id(char: str) -> str:
+    return char * 12
+
+
+def _image_id(char: str) -> str:
+    return f"sha256:{char * 64}"
+
+
+def _install_compose_docker_fakes(
+    tmp_path: pathlib.Path,
+    *,
+    running: list[str],
+    all_containers: list[str],
+    refs: Mapping[str, str],
+    ids: Mapping[str, str],
+) -> tuple[pathlib.Path, pathlib.Path]:
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "running").write_text("\n".join(running) + "\n", encoding="utf-8")
+    (state / "all").write_text("\n".join(all_containers) + "\n", encoding="utf-8")
+    for container in all_containers:
+        (state / f"ref-{container}").write_text(refs[container] + "\n", encoding="utf-8")
+        (state / f"id-{container}").write_text(ids[container] + "\n", encoding="utf-8")
+    compose = tmp_path / "fake-compose"
+    docker = tmp_path / "fake-docker"
+    _write_executable(
+        compose,
+        """
+        #!/bin/bash
+        set -euo pipefail
+        case "$*" in
+          'ps -q --status running api') cat "$ESQ_FAKE_STATE/running" ;;
+          'ps -aq api') cat "$ESQ_FAKE_STATE/all" ;;
+          *) exit 90 ;;
+        esac
+        """,
+    )
+    _write_executable(
+        docker,
+        """
+        #!/bin/bash
+        set -euo pipefail
+        test "$1" = container
+        test "$2" = inspect
+        test "$3" = --format
+        format="$4"
+        container="$5"
+        case "$format" in
+          '{{.Config.Image}}') cat "$ESQ_FAKE_STATE/ref-$container" ;;
+          '{{.Image}}') cat "$ESQ_FAKE_STATE/id-$container" ;;
+          *) exit 91 ;;
+        esac
+        """,
+    )
+    return compose, docker
+
+
 def test_env_setter_is_mode_specific_privileged_and_atomic() -> None:
+    text = _text()
     library = _bash_block("rollback-helper-library")
 
+    assert "ESQ_MODE=appliance" in text
+    assert "ESQ_EXPECTED_API_REPLICAS=1" in text
+    assert "m) ESQ_PROFILE_FILE='infra/compose/compose.m.yml'; " \
+        "ESQ_EXPECTED_API_REPLICAS=2" in text
     assert "esq_set_env_appliance" in library
     assert "esq_set_env_repository" in library
     assert "sudo bash -c" in library
@@ -40,11 +133,11 @@ def test_env_setter_is_mode_specific_privileged_and_atomic() -> None:
     )
     assert 'esq_atomic_set_env_file "$ESQ_ENV_FILE" "$owner" "$group" "$mode"' in library
     assert "EASYSYNQ_COMPATIBILITY_READ_ONLY" in library
-    assert "0|1" in library
-    assert "test ! -L" in library
-    assert "mktemp" in library
-    assert "mv -T" in library
-    assert "trap" in library
+    assert 'value not in {"0", "1"}' in library
+    assert "O_NOFOLLOW" in library
+    assert "fcntl.flock" in library
+    assert "renameat2" in library
+    assert "os.fsync" in library
 
 
 def test_atomic_setter_shell_harness_preserves_owner_mode_and_content(
@@ -64,32 +157,14 @@ def test_atomic_setter_shell_harness_preserves_owner_mode_and_content(
         set -euo pipefail
         {function_match.group(0)}
         env_file="$1"
-        appliance_uid=0
-        appliance_gid=65534
-        chown_called=0
-        stat() {{
-          local format="$2" target="$3"
-          case "$format" in
-            %u) printf '%s\n' "$appliance_uid" ;;
-            %g) printf '%s\n' "$appliance_gid" ;;
-            %a|%d:%i) command stat -c "$format" "$target" ;;
-            %u:%g:%a)
-              printf '%s:%s:%s\n' "$appliance_uid" "$appliance_gid" \
-                "$(command stat -c %a "$target")"
-              ;;
-            *) return 1 ;;
-          esac
-        }}
-        chown() {{
-          test "$1" = "$appliance_uid:$appliance_gid"
-          chown_called=1
-        }}
+        appliance_uid="$(id -u)"
+        appliance_gid="$(id -g)"
         printf '%s\n' 'SECRET_SENTINEL=not-printed' 'EASYSYNQ_PROFILE=s' >"$env_file"
         chmod 0640 "$env_file"
         esq_atomic_set_env_file "$env_file" "$appliance_uid" "$appliance_gid" 640 \
           EASYSYNQ_COMPATIBILITY_READ_ONLY 1
-        test "$chown_called" = 1
-        test "$(stat -c '%u:%g:%a' "$env_file")" = '0:65534:640'
+        test "$(stat -c '%u:%g:%a' "$env_file")" = \
+          "$appliance_uid:$appliance_gid:640"
         test "$(command stat -c %a "$env_file")" = 640
         test "$(grep -c '^EASYSYNQ_COMPATIBILITY_READ_ONLY=1$' "$env_file")" = 1
         test "$(grep -c '^SECRET_SENTINEL=not-printed$' "$env_file")" = 1
@@ -130,7 +205,7 @@ def test_each_api_cutover_selects_retags_recreates_and_verifies_exact_image() ->
     assert "git rev-parse --verify" in library
     assert 'worktree add --detach "$build_source" "$resolved_commit"' in library
     assert "docker build" in library
-    assert "docker container inspect" in library
+    assert "container inspect" in library
     assert "{{.Image}}" in library
     assert 'image tag "$SELECTED_API_IMAGE_ID" "$ESQ_API_SERVICE_IMAGE"' in library
     assert (
@@ -143,7 +218,7 @@ def test_every_http_probe_uses_mode_specific_curl_array() -> None:
     text = _text()
     library = _bash_block("rollback-helper-library")
 
-    assert "ESQ_CURL=(curl --silent --show-error)" in library
+    assert "ESQ_CURL=(curl --disable --silent --show-error --noproxy '*')" in library
     assert "easysynq-status --ca" in library
     assert "openssl x509" in library
     assert '--cacert "$ESQ_CADDY_CA"' in library
@@ -155,3 +230,468 @@ def test_every_http_probe_uses_mode_specific_curl_array() -> None:
     executable_probes = [line for line in probe_lines if "ESQ_BASE_URL" in line]
     assert executable_probes
     assert all('"${ESQ_CURL[@]}"' in line for line in executable_probes)
+
+
+def test_s_and_m_replica_sets_are_verified_as_immutable_sets(tmp_path: pathlib.Path) -> None:
+    cases = [
+        ("s-ok", 1, [_container_id("a")], [_container_id("a")], True),
+        (
+            "m-ok",
+            2,
+            [_container_id("a"), _container_id("b")],
+            [_container_id("a"), _container_id("b")],
+            True,
+        ),
+        ("missing", 2, [_container_id("a")], [_container_id("a")], False),
+        (
+            "stopped-extra",
+            2,
+            [_container_id("a"), _container_id("b")],
+            [_container_id("a"), _container_id("b"), _container_id("c")],
+            False,
+        ),
+        (
+            "running-extra",
+            2,
+            [_container_id("a"), _container_id("b"), _container_id("c")],
+            [_container_id("a"), _container_id("b"), _container_id("c")],
+            False,
+        ),
+    ]
+    for name, replicas, running, all_containers, should_pass in cases:
+        case_dir = tmp_path / name
+        case_dir.mkdir()
+        refs = {container: "easysynq-api:latest" for container in all_containers}
+        ids = {container: _image_id("1") for container in all_containers}
+        compose, docker = _install_compose_docker_fakes(
+            case_dir,
+            running=running,
+            all_containers=all_containers,
+            refs=refs,
+            ids=ids,
+        )
+        body = textwrap.dedent(
+            f"""
+            ESQ_COMPOSE=({compose})
+            ESQ_DOCKER=({docker})
+            ESQ_EXPECTED_API_REPLICAS={replicas}
+            esq_resolve_api_service_image
+            esq_require_running_api_image '{_image_id("1")}'
+            """
+        )
+        result = _run_library(
+            case_dir,
+            body,
+            env={"ESQ_FAKE_STATE": str(case_dir / "state")},
+        )
+        assert (result.returncode == 0) is should_pass, (
+            name,
+            result.stdout,
+            result.stderr,
+        )
+
+
+def test_replica_verifier_rejects_mixed_refs_and_ids(tmp_path: pathlib.Path) -> None:
+    containers = [_container_id("a"), _container_id("b")]
+    scenarios = {
+        "mixed-ref": (
+            {containers[0]: "easysynq-api:latest", containers[1]: "foreign-api:latest"},
+            {container: _image_id("1") for container in containers},
+            "esq_resolve_api_service_image",
+        ),
+        "mixed-allowed-ref": (
+            {containers[0]: "easysynq-api", containers[1]: "easysynq-api:latest"},
+            {container: _image_id("1") for container in containers},
+            "esq_resolve_api_service_image",
+        ),
+        "mixed-current-id": (
+            {container: "easysynq-api:latest" for container in containers},
+            {containers[0]: _image_id("1"), containers[1]: _image_id("2")},
+            "esq_resolve_api_service_image",
+        ),
+        "selected-id-mismatch": (
+            {container: "easysynq-api:latest" for container in containers},
+            {containers[0]: _image_id("1"), containers[1]: _image_id("2")},
+            f"esq_require_running_api_image '{_image_id('1')}'",
+        ),
+    }
+    for name, (refs, ids, invocation) in scenarios.items():
+        case_dir = tmp_path / name
+        case_dir.mkdir()
+        compose, docker = _install_compose_docker_fakes(
+            case_dir,
+            running=containers,
+            all_containers=containers,
+            refs=refs,
+            ids=ids,
+        )
+        result = _run_library(
+            case_dir,
+            f"ESQ_COMPOSE=({compose})\nESQ_DOCKER=({docker})\n"
+            f"ESQ_EXPECTED_API_REPLICAS=2\n{invocation}\n",
+            env={"ESQ_FAKE_STATE": str(case_dir / "state")},
+        )
+        assert result.returncode != 0, name
+
+
+def test_env_exchange_restores_a_final_boundary_replacement(tmp_path: pathlib.Path) -> None:
+    library = _bash_block("rollback-helper-library")
+    marker = "# final-exchange-boundary"
+    assert marker in library
+    injected = library.replace(
+        marker,
+        "os.rename('racer', name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)\n    "
+        + marker,
+        1,
+    )
+    env_file = tmp_path / ".env"
+    racer = tmp_path / "racer"
+    env_file.write_text("SECRET_SENTINEL=old\n", encoding="utf-8")
+    racer.write_text("CONCURRENT_SENTINEL=preserve\n", encoding="utf-8")
+    env_file.chmod(0o640)
+    racer.chmod(0o640)
+    result = _run_library(
+        tmp_path,
+        f"esq_atomic_set_env_file '{env_file}' {env_file.stat().st_uid} "
+        f"{env_file.stat().st_gid} 640 EASYSYNQ_COMPATIBILITY_READ_ONLY 1",
+        library=injected,
+    )
+    assert result.returncode != 0
+    assert env_file.read_text(encoding="utf-8") == "CONCURRENT_SENTINEL=preserve\n"
+    assert not list(tmp_path.glob(".env.upload-identity.*"))
+
+
+def test_curl_array_ignores_hostile_config_and_proxy(tmp_path: pathlib.Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    curl_log = tmp_path / "curl-args"
+    _write_executable(
+        fake_bin / "curl",
+        """
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$@" >"$ESQ_CURL_LOG"
+        test "$1" = --disable
+        shift
+        found_noproxy=0
+        while [ "$#" -gt 0 ]; do
+          if [ "$1" = --noproxy ] && [ "${2:-}" = '*' ]; then found_noproxy=1; fi
+          shift
+        done
+        test "$found_noproxy" = 1
+        """,
+    )
+    hostile_home = tmp_path / "home"
+    hostile_home.mkdir()
+    (hostile_home / ".curlrc").write_text(
+        "insecure\nlocation-trusted\nproxy http://attacker.invalid:8080\n",
+        encoding="utf-8",
+    )
+    result = _run_library(
+        tmp_path,
+        'ESQ_MODE=repository\nESQ_CURL_LOG="$PWD/curl-args"\nexport ESQ_CURL_LOG\n'
+        'ESQ_BASE_URL=https://app.example\nesq_configure_curl\n'
+        '"${ESQ_CURL[@]}" "$ESQ_BASE_URL/healthz"',
+        env={
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "HOME": str(hostile_home),
+            "HTTPS_PROXY": "http://attacker.invalid:8080",
+            "ALL_PROXY": "http://attacker.invalid:8080",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    args = curl_log.read_text(encoding="utf-8").splitlines()
+    assert args[0] == "--disable"
+    assert args[args.index("--noproxy") + 1] == "*"
+
+
+def test_appliance_curl_executes_with_exported_ca_and_loopback_pin(
+    tmp_path: pathlib.Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    curl_log = tmp_path / "curl-args"
+    openssl_log = tmp_path / "openssl-args"
+    _write_executable(
+        fake_bin / "sudo",
+        """
+        #!/bin/bash
+        set -euo pipefail
+        test "$1" = easysynq-status
+        test "$2" = --ca
+        printf '%s\n' '-----BEGIN CERTIFICATE-----' 'FAKE' '-----END CERTIFICATE-----'
+        """,
+    )
+    _write_executable(
+        fake_bin / "openssl",
+        """
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$@" >"$ESQ_OPENSSL_LOG"
+        test "$1" = x509
+        test "$2" = -in
+        grep -q 'BEGIN CERTIFICATE' "$3"
+        test "$4" = -noout
+        test "$5" = -checkend
+        test "$6" = 0
+        """,
+    )
+    _write_executable(
+        fake_bin / "curl",
+        """
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$@" >"$ESQ_CURL_LOG"
+        """,
+    )
+    result = _run_library(
+        tmp_path,
+        "ESQ_MODE=appliance\nESQ_BASE_URL=https://appliance.example\n"
+        'ESQ_CURL_LOG="$PWD/curl-args"\nESQ_OPENSSL_LOG="$PWD/openssl-args"\n'
+        "export ESQ_CURL_LOG ESQ_OPENSSL_LOG\n"
+        'esq_configure_curl\n"${ESQ_CURL[@]}" "$ESQ_BASE_URL/healthz"',
+        env={"PATH": f"{fake_bin}:/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr
+    args = curl_log.read_text(encoding="utf-8").splitlines()
+    assert args[0] == "--disable"
+    assert args[args.index("--noproxy") + 1] == "*"
+    assert args[args.index("--resolve") + 1] == "appliance.example:443:127.0.0.1"
+    assert "--cacert" in args
+    assert openssl_log.read_text(encoding="utf-8").splitlines()[-2:] == [
+        "-checkend",
+        "0",
+    ]
+
+
+def test_appliance_artifact_digest_load_ref_and_tag_oracles(tmp_path: pathlib.Path) -> None:
+    fake_docker = tmp_path / "fake-docker"
+    log = tmp_path / "docker-log"
+    tag_state = tmp_path / "tag-state"
+    _write_executable(
+        fake_docker,
+        """
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$*" >>"$ESQ_DOCKER_LOG"
+        case "$1 $2" in
+          'load --input')
+            case "$ESQ_LOAD_MODE" in
+              good) printf '%s\n' 'Loaded image: approved-api:round2' ;;
+              fail) exit 44 ;;
+              bad-ref) printf '%s\n' 'Loaded image: invalid ref' ;;
+              *) exit 45 ;;
+            esac
+            ;;
+          'image inspect')
+            reference="$5"
+            if [ "$reference" = approved-api:round2 ]; then
+              printf '%s\n' "$ESQ_SELECTED_ID"
+            else
+              cat "$ESQ_TAG_STATE"
+            fi
+            ;;
+          'image tag') printf '%s\n' "$3" >"$ESQ_TAG_STATE" ;;
+          *) exit 46 ;;
+        esac
+        """,
+    )
+    selected_id = _image_id("3")
+    for name, digest_ok, load_mode, should_pass in [
+        ("success", True, "good", True),
+        ("digest", False, "good", False),
+        ("load", True, "fail", False),
+        ("ref", True, "bad-ref", False),
+    ]:
+        archive = tmp_path / f"{name}.tar"
+        sidecar = tmp_path / f"{name}.sha256"
+        archive.write_bytes(f"archive-{name}".encode())
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        sidecar.write_text(
+            f"{digest if digest_ok else '0' * 64}  {archive.name}\n",
+            encoding="utf-8",
+        )
+        log.write_text("", encoding="utf-8")
+        tag_state.write_text("", encoding="utf-8")
+        result = _run_library(
+            tmp_path,
+            f"ESQ_MODE=appliance\nESQ_DOCKER=({fake_docker})\n"
+            "ESQ_API_SERVICE_IMAGE=easysynq-api:latest\n"
+            "esq_select_api_artifact rollback\n"
+            f'test "$SELECTED_API_IMAGE_ID" = "{selected_id}"',
+            env={
+                "ESQ_DOCKER_LOG": str(log),
+                "ESQ_TAG_STATE": str(tag_state),
+                "ESQ_LOAD_MODE": load_mode,
+                "ESQ_SELECTED_ID": selected_id,
+            },
+            stdin=f"{archive}\n{sidecar}\n",
+        )
+        assert (result.returncode == 0) is should_pass, name
+        calls = log.read_text(encoding="utf-8")
+        if not digest_ok:
+            assert "load --input" not in calls
+        if should_pass:
+            assert tag_state.read_text(encoding="utf-8").strip() == selected_id
+
+
+def test_repository_build_and_cleanup_failures_are_safe(tmp_path: pathlib.Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    git_log = tmp_path / "git-log"
+    docker_log = tmp_path / "docker-log"
+    commit = "a" * 40
+    _write_executable(
+        fake_bin / "git",
+        """
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$*" >>"$ESQ_GIT_LOG"
+        if [ "$1" = rev-parse ] && [ "$2" = --verify ]; then
+          printf '%s\n' "$ESQ_COMMIT"
+        elif [ "$1" = rev-parse ] && [ "$2" = --show-toplevel ]; then
+          printf '%s\n' "$ESQ_REPOSITORY_ROOT"
+        elif [ "$1" = -C ] && [ "$3" = worktree ] && [ "$4" = add ]; then
+          mkdir "$6"
+          printf '%s\n' "$6" >"$ESQ_WORKTREE_PATH"
+        elif [ "$1" = -C ] && [ "$3" = worktree ] && [ "$4" = remove ]; then
+          rmdir "$6"
+          [ "${ESQ_REMOVE_FAIL:-0}" = 0 ] || exit 63
+        else
+          exit 61
+        fi
+        """,
+    )
+    _write_executable(
+        fake_bin / "docker",
+        """
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$*" >>"$ESQ_DOCKER_LOG"
+        if [ "$1" = build ]; then
+          [ "${ESQ_BUILD_FAIL:-0}" = 0 ] || exit 62
+        elif [ "$1" = image ] && [ "$2" = inspect ]; then
+          printf '%s\n' "$ESQ_SELECTED_ID"
+        else
+          exit 64
+        fi
+        """,
+    )
+    worktree_path = tmp_path / "worktree-path"
+    result = _run_library(
+        tmp_path,
+        "ESQ_MODE=repository\nESQ_DOCKER=(docker)\n"
+        "ESQ_API_SERVICE_IMAGE=easysynq-api:latest\n"
+        "esq_select_api_artifact rollback",
+        env={
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "ESQ_GIT_LOG": str(git_log),
+            "ESQ_DOCKER_LOG": str(docker_log),
+            "ESQ_COMMIT": commit,
+            "ESQ_REPOSITORY_ROOT": str(tmp_path),
+            "ESQ_WORKTREE_PATH": str(worktree_path),
+            "ESQ_BUILD_FAIL": "1",
+            "ESQ_REMOVE_FAIL": "0",
+            "ESQ_SELECTED_ID": _image_id("5"),
+        },
+        stdin=f"{commit}\n",
+    )
+    assert result.returncode != 0
+    built_source = pathlib.Path(worktree_path.read_text(encoding="utf-8").strip())
+    assert not built_source.exists()
+    assert not built_source.parent.exists()
+    assert "worktree remove --force" in git_log.read_text(encoding="utf-8")
+
+    git_log.write_text("", encoding="utf-8")
+    result = _run_library(
+        tmp_path,
+        "ESQ_MODE=repository\nESQ_DOCKER=(docker)\n"
+        "ESQ_API_SERVICE_IMAGE=easysynq-api:latest\n"
+        "esq_select_api_artifact rollback",
+        env={
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "ESQ_GIT_LOG": str(git_log),
+            "ESQ_DOCKER_LOG": str(docker_log),
+            "ESQ_COMMIT": commit,
+            "ESQ_REPOSITORY_ROOT": str(tmp_path),
+            "ESQ_WORKTREE_PATH": str(worktree_path),
+            "ESQ_BUILD_FAIL": "0",
+            "ESQ_REMOVE_FAIL": "1",
+            "ESQ_SELECTED_ID": _image_id("5"),
+        },
+        stdin=f"{commit}\n",
+    )
+    assert result.returncode != 0
+    failed_cleanup_source = pathlib.Path(
+        worktree_path.read_text(encoding="utf-8").strip()
+    )
+    assert not failed_cleanup_source.exists()
+    assert failed_cleanup_source.parent.exists()
+    assert git_log.read_text(encoding="utf-8").count("worktree remove --force") >= 1
+    failed_cleanup_source.parent.rmdir()
+
+
+def test_recovery_block_rejects_the_rollback_image_before_compose(
+    tmp_path: pathlib.Path,
+) -> None:
+    block = _bash_block("recovery-artifact-selection")
+    compose_marker = tmp_path / "compose-called"
+    body = textwrap.dedent(
+        f"""
+        ESQ_ROLLBACK_API_IMAGE_ID='{_image_id("4")}'
+        SELECTED_API_IMAGE_ID=''
+        esq_select_api_artifact() {{ SELECTED_API_IMAGE_ID='{_image_id("4")}'; }}
+        fake_compose() {{ touch '{compose_marker}'; }}
+        ESQ_COMPOSE=(fake_compose)
+        esq_require_running_api_image() {{ return 0; }}
+        {block}
+        """
+    )
+    result = _run_library(tmp_path, body)
+    assert result.returncode != 0
+    assert not compose_marker.exists()
+
+
+def test_setter_rejects_invalid_duplicate_symlink_and_metadata_drift(
+    tmp_path: pathlib.Path,
+) -> None:
+    uid = tmp_path.stat().st_uid
+    gid = tmp_path.stat().st_gid
+    cases = [
+        ("bad-key", "OTHER_KEY", "1", "SECRET=old\n", 0o640),
+        ("bad-value", "EASYSYNQ_COMPATIBILITY_READ_ONLY", "yes", "SECRET=old\n", 0o640),
+        (
+            "duplicate",
+            "EASYSYNQ_COMPATIBILITY_READ_ONLY",
+            "1",
+            "EASYSYNQ_COMPATIBILITY_READ_ONLY=0\nEASYSYNQ_COMPATIBILITY_READ_ONLY=1\n",
+            0o640,
+        ),
+        ("metadata", "EASYSYNQ_COMPATIBILITY_READ_ONLY", "1", "SECRET=old\n", 0o600),
+    ]
+    for name, key, value, content, mode in cases:
+        case_dir = tmp_path / name
+        case_dir.mkdir()
+        env_file = case_dir / ".env"
+        env_file.write_text(content, encoding="utf-8")
+        env_file.chmod(mode)
+        result = _run_library(
+            case_dir,
+            f"esq_atomic_set_env_file '{env_file}' {uid} {gid} 640 {key} {value}",
+        )
+        assert result.returncode != 0, name
+        assert env_file.read_text(encoding="utf-8") == content
+        assert not list(case_dir.glob(".env.upload-identity.*"))
+
+    target = tmp_path / "symlink-target"
+    target.write_text("SECRET=old\n", encoding="utf-8")
+    target.chmod(0o640)
+    link = tmp_path / "symlink-env"
+    link.symlink_to(target)
+    result = _run_library(
+        tmp_path,
+        f"esq_atomic_set_env_file '{link}' {uid} {gid} 640 "
+        "EASYSYNQ_COMPATIBILITY_READ_ONLY 1",
+    )
+    assert result.returncode != 0
+    assert target.read_text(encoding="utf-8") == "SECRET=old\n"

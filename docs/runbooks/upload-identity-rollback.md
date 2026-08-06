@@ -19,13 +19,17 @@ ESQ_MODE=appliance
 ESQ_ENV_FILE=/opt/easysynq/.env
 ESQ_COMPOSE=(sudo easysynq-compose)
 ESQ_DOCKER=(sudo docker)
+ESQ_EXPECTED_API_REPLICAS=1
 "${ESQ_COMPOSE[@]}" config --quiet
 sudo bash scripts/validate-browser-origins.sh --env-file "$ESQ_ENV_FILE"
 ```
 
+The appliance is the single-replica S layout, so its expected API replica count is one.
+
 For a repository/online install, change to the repository root containing `.env`, then run this strict
 profile selection. The profile filename is selected by a literal `case` arm; unvalidated text is never
-interpolated into a path.
+interpolated into a path. The literal profile also fixes the expected API replica count: one for `s`
+and two for `m`.
 
 ```bash
 set -euo pipefail
@@ -38,8 +42,8 @@ if [ "${#ESQ_PROFILE_LINES[@]}" -ne 1 ]; then
 fi
 ESQ_PROFILE="${ESQ_PROFILE_LINES[0]#EASYSYNQ_PROFILE=}"
 case "$ESQ_PROFILE" in
-  s) ESQ_PROFILE_FILE='infra/compose/compose.s.yml' ;;
-  m) ESQ_PROFILE_FILE='infra/compose/compose.m.yml' ;;
+  s) ESQ_PROFILE_FILE='infra/compose/compose.s.yml'; ESQ_EXPECTED_API_REPLICAS=1 ;;
+  m) ESQ_PROFILE_FILE='infra/compose/compose.m.yml'; ESQ_EXPECTED_API_REPLICAS=2 ;;
   *) echo 'rollback: EASYSYNQ_PROFILE must be exactly s or m' >&2; exit 1 ;;
 esac
 ESQ_COMPOSE=(
@@ -59,55 +63,150 @@ Do not roll back any Compose file, either Caddyfile, or `infra/compose/minio/min
 Define this helper library once. The appliance setter performs the same-directory atomic replacement
 under privilege and preserves the provisioner's `root:easysynq` ownership and `0640` mode. The
 repository setter stays unprivileged and preserves its safe existing ownership and mode. Both reject
-symlinks, duplicates, concurrent replacement, arbitrary keys, and arbitrary values.
+symlinks, duplicates, metadata drift, arbitrary keys, and arbitrary values. A persistent
+same-directory lock serializes every writer using this helper. Linux `RENAME_EXCHANGE` then proves
+that the exact inode opened under the lock was swapped; if one noncooperating replacement is present
+at that boundary, the helper atomically restores it and aborts. This cannot prevent an arbitrary
+noncooperating writer from racing repeatedly; in that case it aborts without unlinking an entry whose
+identity it cannot prove and requires manual inspection.
 
 ```bash
 # rollback-helper-library
 esq_atomic_set_env_file() {
-  local file="$1" expected_uid="$2" expected_gid="$3" expected_mode="$4"
-  local key="$5" value="$6" count tmp='' before_identity current_identity
-  [ "$key" = EASYSYNQ_COMPATIBILITY_READ_ONLY ] || {
-    echo 'rollback: refusing to update an unapproved environment key' >&2
-    return 1
-  }
-  case "$value" in 0|1) ;; *) echo 'rollback: guard value must be 0 or 1' >&2; return 1 ;; esac
-  test -f "$file"
-  test ! -L "$file"
-  [ "$(stat -c %u "$file")" = "$expected_uid" ]
-  [ "$(stat -c %g "$file")" = "$expected_gid" ]
-  [ "$(stat -c %a "$file")" = "$expected_mode" ]
-  before_identity="$(stat -c '%d:%i' "$file")"
-  count="$(grep -Fxc "${key}=${value}" "$file" || true)"
-  [ "$count" -le 1 ]
-  count="$(grep -c "^${key}=" "$file" || true)"
-  if [ "$count" -gt 1 ]; then
-    echo "rollback: duplicate ${key} assignments in the environment file" >&2
-    return 1
-  fi
-  umask 077
-  tmp="$(mktemp "${file}.upload-identity.XXXXXX")"
-  trap 'if [ -n "${tmp:-}" ]; then rm -f -- "$tmp"; fi' RETURN
-  awk -v key="$key" -v value="$value" '
-    BEGIN { found = 0 }
-    index($0, key "=") == 1 { print key "=" value; found = 1; next }
-    { print }
-    END { if (!found) print key "=" value }
-  ' "$file" >"$tmp"
-  chown "$expected_uid:$expected_gid" "$tmp"
-  chmod "$expected_mode" "$tmp"
-  test -f "$file"
-  test ! -L "$file"
-  current_identity="$(stat -c '%d:%i' "$file")"
-  [ "$current_identity" = "$before_identity" ] || {
-    echo 'rollback: environment file changed during guarded update' >&2
-    return 1
-  }
-  mv -T -- "$tmp" "$file"
-  tmp=''
-  trap - RETURN
-  test ! -L "$file"
-  [ "$(stat -c '%u:%g:%a' "$file")" = "${expected_uid}:${expected_gid}:${expected_mode}" ]
-  [ "$(grep -c "^${key}=${value}$" "$file")" = 1 ]
+  python3 -I - "$@" <<'PY'
+import ctypes
+import fcntl
+import os
+import secrets
+import stat
+import sys
+
+if len(sys.argv) != 7:
+    raise SystemExit("rollback: guarded setter requires exactly six arguments")
+path, uid_text, gid_text, mode_text, key, value = sys.argv[1:]
+if key != "EASYSYNQ_COMPATIBILITY_READ_ONLY":
+    raise SystemExit("rollback: refusing to update an unapproved environment key")
+if value not in {"0", "1"}:
+    raise SystemExit("rollback: guard value must be 0 or 1")
+expected_uid = int(uid_text, 10)
+expected_gid = int(gid_text, 10)
+expected_mode = int(mode_text, 8)
+parent = os.path.abspath(os.path.dirname(path) or ".")
+if parent != os.path.realpath(parent):
+    raise SystemExit("rollback: environment parent must not traverse a symlink")
+name = os.path.basename(path)
+if not name or name in {".", ".."}:
+    raise SystemExit("rollback: invalid environment filename")
+
+dir_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+lock_name = f"{name}.rollback.lock"
+lock_fd = os.open(
+    lock_name,
+    os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+    0o600,
+    dir_fd=dir_fd,
+)
+lock_stat = os.fstat(lock_fd)
+if not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_nlink != 1:
+    raise SystemExit("rollback: unsafe environment lock file")
+if lock_stat.st_uid != expected_uid or stat.S_IMODE(lock_stat.st_mode) != 0o600:
+    raise SystemExit("rollback: environment lock metadata mismatch")
+fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+source_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+source_stat = os.fstat(source_fd)
+if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_nlink != 1:
+    raise SystemExit("rollback: environment source is not one regular file")
+if (
+    source_stat.st_uid != expected_uid
+    or source_stat.st_gid != expected_gid
+    or stat.S_IMODE(source_stat.st_mode) != expected_mode
+):
+    raise SystemExit("rollback: environment metadata mismatch")
+with os.fdopen(os.dup(source_fd), "rb") as source:
+    content = source.read()
+prefix = key.encode("ascii") + b"="
+lines = content.splitlines(keepends=True)
+matches = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+if len(matches) > 1:
+    raise SystemExit("rollback: duplicate guarded environment assignments")
+replacement = prefix + value.encode("ascii") + b"\n"
+if matches:
+    lines[matches[0]] = replacement
+    updated = b"".join(lines)
+else:
+    updated = content + (b"" if not content or content.endswith(b"\n") else b"\n") + replacement
+
+temp_name = f"{name}.upload-identity.{secrets.token_hex(8)}"
+temp_fd = None
+temp_identity = None
+try:
+    temp_fd = os.open(
+        temp_name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=dir_fd,
+    )
+    view = memoryview(updated)
+    while view:
+        view = view[os.write(temp_fd, view):]
+    os.fchown(temp_fd, expected_uid, expected_gid)
+    os.fchmod(temp_fd, expected_mode)
+    os.fsync(temp_fd)
+    temp_stat = os.fstat(temp_fd)
+    temp_identity = (temp_stat.st_dev, temp_stat.st_ino)
+    os.close(temp_fd)
+    temp_fd = None
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = libc.renameat2
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+
+    def exchange(left: str, right: str) -> None:
+        if renameat2(dir_fd, os.fsencode(left), dir_fd, os.fsencode(right), 2) != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+
+    # final-exchange-boundary
+    exchange(temp_name, name)
+    parked = os.stat(temp_name, dir_fd=dir_fd, follow_symlinks=False)
+    installed = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    source_identity = (source_stat.st_dev, source_stat.st_ino)
+    if (parked.st_dev, parked.st_ino) != source_identity:
+        concurrent_identity = (parked.st_dev, parked.st_ino)
+        exchange(temp_name, name)
+        restored = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        returned = os.stat(temp_name, dir_fd=dir_fd, follow_symlinks=False)
+        if (restored.st_dev, restored.st_ino) != concurrent_identity:
+            raise SystemExit("rollback: repeated noncooperating race; no file was removed")
+        if (returned.st_dev, returned.st_ino) != temp_identity:
+            raise SystemExit("rollback: exchange rollback could not prove its temporary file")
+        os.unlink(temp_name, dir_fd=dir_fd)
+        temp_identity = None
+        os.fsync(dir_fd)
+        raise SystemExit("rollback: concurrent environment replacement restored; update aborted")
+    if (installed.st_dev, installed.st_ino) != temp_identity:
+        raise SystemExit("rollback: noncooperating replacement after exchange; no file was removed")
+    os.unlink(temp_name, dir_fd=dir_fd)
+    temp_identity = None
+    os.fsync(dir_fd)
+finally:
+    if temp_fd is not None:
+        os.close(temp_fd)
+    if temp_identity is not None:
+        try:
+            candidate = os.stat(temp_name, dir_fd=dir_fd, follow_symlinks=False)
+            if (candidate.st_dev, candidate.st_ino) == temp_identity:
+                os.unlink(temp_name, dir_fd=dir_fd)
+                os.fsync(dir_fd)
+        except FileNotFoundError:
+            pass
+    os.close(source_fd)
+    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    os.close(lock_fd)
+    os.close(dir_fd)
+PY
 }
 
 esq_set_env_appliance() {
@@ -207,29 +306,51 @@ esq_configure_curl() {
     chmod 0600 "$ESQ_CADDY_CA"
     openssl x509 -in "$ESQ_CADDY_CA" -noout -checkend 0
     ESQ_CURL=(
-      curl --silent --show-error
+      curl --disable --silent --show-error --noproxy '*'
       --cacert "$ESQ_CADDY_CA"
       --resolve "${ESQ_HTTPS_HOST}:443:127.0.0.1"
     )
   else
-    ESQ_CURL=(curl --silent --show-error)
+    ESQ_CURL=(curl --disable --silent --show-error --noproxy '*')
   fi
 }
 
 esq_resolve_api_service_image() {
-  local api_container configured_image
-  api_container="$("${ESQ_COMPOSE[@]}" ps -q api)"
-  [[ "$api_container" =~ ^[0-9a-f]{12,64}$ ]] || {
-    echo 'rollback: expected exactly one running Compose API container' >&2
+  local api_container configured_image current_id first_configured_image=''
+  local -a api_containers
+  [[ "$ESQ_EXPECTED_API_REPLICAS" =~ ^[12]$ ]]
+  mapfile -t api_containers < <("${ESQ_COMPOSE[@]}" ps -q --status running api)
+  [ "${#api_containers[@]}" -eq "$ESQ_EXPECTED_API_REPLICAS" ] || {
+    echo 'rollback: running API replica count does not match the selected profile' >&2
     return 1
   }
-  configured_image="$("${ESQ_DOCKER[@]}" container inspect --format '{{.Config.Image}}' "$api_container")"
-  case "$configured_image" in
-    easysynq-api|easysynq-api:latest) ESQ_API_SERVICE_IMAGE=easysynq-api:latest ;;
-    *) echo 'rollback: Compose API image name is not the expected easysynq-api service image' >&2; return 1 ;;
-  esac
-  ESQ_ORIGINAL_API_IMAGE_ID="$("${ESQ_DOCKER[@]}" container inspect --format '{{.Image}}' "$api_container")"
-  [[ "$ESQ_ORIGINAL_API_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+  ESQ_ORIGINAL_API_IMAGE_ID=''
+  for api_container in "${api_containers[@]}"; do
+    [[ "$api_container" =~ ^[0-9a-f]{12,64}$ ]]
+    configured_image="$("${ESQ_DOCKER[@]}" container inspect --format '{{.Config.Image}}' "$api_container")"
+    case "$configured_image" in
+      easysynq-api|easysynq-api:latest) ESQ_API_SERVICE_IMAGE=easysynq-api:latest ;;
+      *) echo 'rollback: an API replica uses an unexpected Compose image reference' >&2; return 1 ;;
+    esac
+    if [ -z "$first_configured_image" ]; then
+      first_configured_image="$configured_image"
+    else
+      [ "$configured_image" = "$first_configured_image" ] || {
+        echo 'rollback: API replicas do not share one configured image reference' >&2
+        return 1
+      }
+    fi
+    current_id="$("${ESQ_DOCKER[@]}" container inspect --format '{{.Image}}' "$api_container")"
+    [[ "$current_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+    if [ -z "$ESQ_ORIGINAL_API_IMAGE_ID" ]; then
+      ESQ_ORIGINAL_API_IMAGE_ID="$current_id"
+    else
+      [ "$current_id" = "$ESQ_ORIGINAL_API_IMAGE_ID" ] || {
+        echo 'rollback: API replicas do not share one immutable current image' >&2
+        return 1
+      }
+    fi
+  done
 }
 
 esq_select_api_artifact() {
@@ -297,9 +418,22 @@ esq_select_api_artifact() {
       git -C "$repository_root" worktree add --detach "$build_source" "$resolved_commit" >&2
       worktree_added=1
       # docker build: build only the approved detached source tree.
+      build_status=0
+      set +e
       "${ESQ_DOCKER[@]}" build --file "$build_source/apps/api/Dockerfile" \
         --tag "$build_tag" "$build_source" >&2
-      "${ESQ_DOCKER[@]}" image inspect --format '{{.Id}}' "$build_tag"
+      build_status=$?
+      if [ "$build_status" -eq 0 ]; then
+        built_id="$("${ESQ_DOCKER[@]}" image inspect --format '{{.Id}}' "$build_tag")"
+        build_status=$?
+      fi
+      set -e
+      cleanup_repo_build
+      worktree_added=0
+      build_root=''
+      trap - EXIT
+      [ "$build_status" -eq 0 ] || exit "$build_status"
+      printf '%s\n' "$built_id"
     )"
   fi
   [[ "$selected_id" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -310,15 +444,29 @@ esq_select_api_artifact() {
 
 esq_require_running_api_image() {
   local expected_id="$1" api_container running_id
+  local -a running_containers all_containers
+  local -A running_set=()
   [[ "$expected_id" =~ ^sha256:[0-9a-f]{64}$ ]]
-  api_container="$("${ESQ_COMPOSE[@]}" ps -q api)"
-  [[ "$api_container" =~ ^[0-9a-f]{12,64}$ ]]
-  # docker container inspect: compare the immutable image ID, not a mutable tag.
-  running_id="$("${ESQ_DOCKER[@]}" container inspect --format '{{.Image}}' "$api_container")"
-  [ "$running_id" = "$expected_id" ] || {
-    echo 'rollback: running API image ID does not match the selected artifact' >&2
+  mapfile -t running_containers < <("${ESQ_COMPOSE[@]}" ps -q --status running api)
+  mapfile -t all_containers < <("${ESQ_COMPOSE[@]}" ps -aq api)
+  [ "${#running_containers[@]}" -eq "$ESQ_EXPECTED_API_REPLICAS" ]
+  [ "${#all_containers[@]}" -eq "$ESQ_EXPECTED_API_REPLICAS" ] || {
+    echo 'rollback: stopped or extra API containers remain after cutover' >&2
     return 1
   }
+  for api_container in "${running_containers[@]}"; do
+    [[ "$api_container" =~ ^[0-9a-f]{12,64}$ ]]
+    [ -z "${running_set[$api_container]+present}" ]
+    running_set["$api_container"]=1
+  done
+  for api_container in "${all_containers[@]}"; do
+    [ -n "${running_set[$api_container]+present}" ]
+    running_id="$("${ESQ_DOCKER[@]}" container inspect --format '{{.Image}}' "$api_container")"
+    [ "$running_id" = "$expected_id" ] || {
+      echo 'rollback: an API replica image ID does not match the selected artifact' >&2
+      return 1
+    }
+  done
 }
 ```
 
@@ -358,7 +506,8 @@ esac
 Before changing application images, prove the edge guard, liveness, and an authenticated committed
 read. The guard body comparison is exact. Abort rollback if any command fails. Resolve the API service
 image from the live Compose container now; the build-only `api` service must use Compose's generated
-`easysynq-api:latest` tag, and the original immutable image ID is recorded.
+`easysynq-api:latest` tag. Exactly the profile's expected number of replicas must be running; every
+replica must share the same allowed configured reference and original immutable image ID.
 
 ```bash
 esq_make_temp ESQ_PROBE_BODY
@@ -388,6 +537,8 @@ sidecar. The helper verifies the archive before loading it and accepts exactly o
 repository install, select an approved full commit that already exists locally; the helper builds it
 from a separate detached temporary worktree. In both modes, the selected immutable ID is retagged to
 the actual Compose API service image, only `api` is recreated, and the running container ID must match.
+The post-cutover check also requires exactly the expected running replica set, rejects any extra
+stopped/exited API container, and compares every replica's immutable `.Image` value.
 
 ```bash
 # rollback-artifact-selection
