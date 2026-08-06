@@ -1207,15 +1207,31 @@ suite passed 8/8, and the full web gate passed 1,462 tests. Independent review a
 
 ### 10.4 Task 5 — current recovery/upgrade operator truth aligned
 
-`12fdf8f` closes two whole-branch review blockers by aligning current operator surfaces with implemented
-recovery limits. Restore PASS is now described as source-store-dependent integrity verification, its
-flattened scratch copy is not called cutover-ready, and durable/pre-upgrade archives are described as
-non-self-contained database/manifest/config artifacts without MinIO object bytes. Host and Python CLIs,
-service/module descriptions and result metadata, README, environment/Compose comments,
-architecture/security/setup/developer documentation, the administrator manual, and active runbooks now
-carry that contract.
+The independently accepted sequence is `12fdf8f` (initial recovery/upgrade operator-limit alignment),
+`818467f` (Setup Wizard, Drift Status, docstring, and compatibility truth gaps), `bc1735a` (remaining
+active recovery overclaims), `6ed4d55` (current-surface guard and first mockup/doc closure), `a6acffe`
+(per-rule affirmative/direct-negative oracle expansion, historical blob claim, and filesystem-only/
+S3-PITR-pruning mockup correction), and `c9c36ce` (the exact original contextual-negative sentences
+bound to rule-owned match containment).
 
-The focused operator-recovery proof was genuine RED with 3 failures; the final focused selection passed
-5 tests. The API unit gate passed 1,286 tests with 1 skip, with Ruff, format, strict mypy, shell syntax,
-R61, and diff checks also clean. This operator-truth closure does **not** close C-01, C-01b,
-`S-recovery-generation`, or `S-upgrade-safety`, and it does not make production upgrades eligible.
+The final observable contract is that a current restore `PASS` is source-object-store-dependent integrity
+verification. Durable/pre-upgrade archives do not contain MinIO object bytes and are neither
+self-contained nor cutover-ready recovery generations. Shipped backup destinations are mounted
+filesystem paths; S3 destinations, WAL/PITR, automatic pruning, independent cutover, and
+recovery-generation eligibility remain unshipped. The guard is an explicit current-surface allowlist with
+18 narrow affirmative claim rules and direct-negative support; it makes no linguistic-exhaustiveness
+claim. Owner-approved mockups now show filesystem-only/source-dependent boundaries and inactive or
+unavailable S3/PITR/pruning capabilities.
+
+Round 4 against `6ed4d55` found 18 direct-negative failures and six active S3/PITR mockup failures; its
+historical blob runbook-action phrase was missed. The final Round 4 selection passed 61 focused checks;
+the API unit gate passed 1,348 tests with 1 expected skip, while the unchanged HTML validator debt was
+285 findings in both base and current. Independent review rejected that round because three original
+negative sentences had been substituted and still falsely rejected. Round 5 against `a6acffe` then proved
+the three original sentences failed 3/3 through `_violations` for their intended rules. Final `c9c36ce`
+evidence was 65 focused checks; API unit 1,352 passed with 1 expected skip; Ruff, format, strict mypy,
+R61, and diff checks were green; and scoped independent re-review approved the remaining finding with no
+new Critical/Important breakage.
+
+This task does **not** close C-01, C-01b, `S-restore-target`, `S-backup-legs`,
+`S-recovery-generation`, or the full `S-upgrade-safety`; it does not make production upgrades eligible.
