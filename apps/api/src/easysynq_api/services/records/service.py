@@ -14,8 +14,10 @@ pattern), ``object_type=record``, hashes NULL for the S6 linker.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import logging
+import re
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -55,12 +57,49 @@ from ...logging import request_id_var
 from ...problems import ProblemException
 from ..vault import repository as vault_repo
 from ..vault import resolve_template_version, schema_from_version, storage
+from ..vault.staged_identity import StagedObjectRef, StagingDomain, StagingVersionRequired
+from ..vault.upload_rejection import (
+    RejectionContext,
+    promote_for_owner,
+    require_staging_ref,
+)
 from . import repository as repo
 
 logger = logging.getLogger("easysynq.records")
 
 _RECORD_TYPE_PREFIX = "REC"  # identifier {REC}-{AREA}-{SEQ}; record_type is the row discriminator
 _FRM_CODE = "FRM"  # the Form/Template document_type code (Mode-B capture trigger; doc 06 §4.2)
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_MISSING_IDENTITY = object()
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class EvidenceInput:
+    sha256: str
+    content_type: str
+    source: StagedObjectRef | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.sha256, str) or _SHA256_RE.fullmatch(self.sha256) is None:
+            raise ValueError("evidence sha256 must be canonical lowercase hex")
+        if not isinstance(self.content_type, str) or not self.content_type:
+            raise ValueError("evidence content type must be non-empty")
+        if self.source is not None:
+            if self.source.expected_sha256 != self.sha256:
+                raise ValueError("evidence source sha256 does not match the evidence claim")
+            if self.source.content_type != self.content_type:
+                raise ValueError("evidence source content type does not match the evidence claim")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _LegacyEvidenceInput:
+    """Task-8-only marker for tuple callers that still need the legacy promotion adapter."""
+
+    sha256: str
+    content_type: str
+
+
+type _NormalizedEvidenceInput = EvidenceInput | _LegacyEvidenceInput
 
 
 def _now() -> datetime.datetime:
@@ -335,28 +374,63 @@ async def record_init_upload(
     return {"dedup": False, "object_key": sha256, "upload_url": url}
 
 
+def _staging_identity(item: _NormalizedEvidenceInput) -> object:
+    if isinstance(item, _LegacyEvidenceInput):
+        return _LegacyEvidenceInput
+    return item.source.locator if item.source is not None else None
+
+
+def _normalize_evidence(
+    evidence: Sequence[EvidenceInput | tuple[str, str]],
+) -> list[_NormalizedEvidenceInput]:
+    normalized: list[_NormalizedEvidenceInput] = []
+    identities_by_sha: dict[str, object] = {}
+    for raw in evidence:
+        if isinstance(raw, EvidenceInput):
+            item: _NormalizedEvidenceInput = raw
+        else:
+            raw_sha, content_type = raw
+            item = _LegacyEvidenceInput(raw_sha.lower(), content_type)
+        identity = _staging_identity(item)
+        previous = identities_by_sha.get(item.sha256, _MISSING_IDENTITY)
+        if previous is not _MISSING_IDENTITY:
+            if previous != identity:
+                message = "the same evidence sha256 names different staging versions"
+                raise ProblemException(
+                    status=422,
+                    code="validation_error",
+                    title="Evidence staging versions are ambiguous",
+                    errors=[
+                        {
+                            "field": "evidence",
+                            "code": "ambiguous_staging_version",
+                            "message": message,
+                        }
+                    ],
+                )
+            continue
+        identities_by_sha[item.sha256] = identity
+        normalized.append(item)
+    return normalized
+
+
 async def _attach_evidence(
     session: AsyncSession,
     actor: AppUser,
     record_id: uuid.UUID,
-    evidence: Sequence[tuple[str, str]],
+    evidence: Sequence[EvidenceInput | tuple[str, str]],
     *,
     source_bucket: str | None = None,
+    rejection_context: RejectionContext | None = None,
 ) -> list[str]:
-    """WORM-seal each unique evidence blob into the records bucket + attach it (idempotent). Returns
-    the de-duplicated, lowercased sha list (the content_hash manifest). ``source_bucket`` defaults
-    to the plain ``staging`` bucket; the S-ing-5 import commit passes the ingestion
-    ``import-staging`` bucket so a confirmed RECORD's evidence promotes directly from the import
-    staging layer (one server-side copy, no plain-staging hop)."""
+    """WORM-seal each unique evidence blob into the records bucket and attach it idempotently.
+
+    New callers carry an exact staged source per item. The private tuple marker remains only for
+    Task 8's not-yet-migrated generated/import-report callers; ``source_bucket`` belongs solely to
+    that adapter and a typed ``EvidenceInput(source=None)`` can never enter it.
+    """
     settings = get_settings()
-    seen: set[str] = set()
-    normalized_evidence: list[tuple[str, str]] = []
-    for raw_sha, content_type in evidence:
-        sha256 = raw_sha.lower()
-        if sha256 in seen:
-            continue
-        seen.add(sha256)
-        normalized_evidence.append((sha256, content_type))
+    normalized_evidence = _normalize_evidence(evidence)
 
     # Capture can attach more than one object. Resolve, de-duplicate, and sort the ACTUAL PostgreSQL
     # advisory keys before acquiring any lock, so even a hash collision cannot invert lock order.
@@ -364,35 +438,76 @@ async def _attach_evidence(
     # commit.
     await repo.lock_physical_objects(
         session,
-        ((settings.s3_bucket_records, sha256) for sha256, _content_type in normalized_evidence),
+        ((settings.s3_bucket_records, item.sha256) for item in normalized_evidence),
     )
 
     shas: list[str] = []
-    for sha256, content_type in normalized_evidence:
+    for item in normalized_evidence:
+        sha256 = item.sha256
+        content_type = item.content_type
         blob = await vault_repo.get_blob(session, sha256)
         if blob is None:
-            promoted = await storage.finalize_worm(
-                sha256, bucket=storage._records_bucket(), source_bucket=source_bucket
-            )
-            if not promoted.exists:
-                raise _validation_error(
-                    "evidence", "not_found", "Evidence object not found — upload via :init-upload"
+            if isinstance(item, _LegacyEvidenceInput):
+                legacy_promoted = await storage.finalize_worm(
+                    sha256, bucket=storage._records_bucket(), source_bucket=source_bucket
                 )
-            if promoted.retain_until is None:
-                raise ProblemException(
-                    status=423, code="worm_required", title="Evidence object is not WORM-locked"
-                )
+                if not legacy_promoted.exists:
+                    raise _validation_error(
+                        "evidence",
+                        "not_found",
+                        "Evidence object not found — upload via :init-upload",
+                    )
+                if legacy_promoted.retain_until is None:
+                    raise ProblemException(
+                        status=423,
+                        code="worm_required",
+                        title="Evidence object is not WORM-locked",
+                    )
+                promoted_size = legacy_promoted.size or 0
+                promoted_content_type = legacy_promoted.content_type
+                promoted_bucket = settings.s3_bucket_records
+                promoted_key = sha256
+                promoted_retain_until = legacy_promoted.retain_until
+            else:
+                source = item.source
+                if source is None:
+                    if rejection_context is not None:
+                        require_staging_ref(
+                            domain=StagingDomain.STAGING,
+                            sha256=sha256,
+                            version_id=None,
+                            content_type=content_type,
+                            operation="record_capture",
+                        )
+                        raise AssertionError("require_staging_ref must reject a missing version")
+                    raise StagingVersionRequired
+                if rejection_context is not None:
+                    promoted = await promote_for_owner(
+                        session,
+                        source,
+                        target_bucket=settings.s3_bucket_records,
+                        context=rejection_context,
+                    )
+                else:
+                    promoted = await storage.promote_worm(
+                        source, target_bucket=settings.s3_bucket_records
+                    )
+                promoted_size = promoted.size
+                promoted_content_type = promoted.content_type
+                promoted_bucket = promoted.target_bucket
+                promoted_key = promoted.target_key
+                promoted_retain_until = promoted.retain_until
             await session.execute(
                 pg_insert(Blob)
                 .values(
                     sha256=sha256,
                     org_id=actor.org_id,
-                    size_bytes=promoted.size or 0,
-                    mime_type=promoted.content_type or content_type,
-                    bucket=settings.s3_bucket_records,
-                    object_key=sha256,
+                    size_bytes=promoted_size,
+                    mime_type=promoted_content_type or content_type,
+                    bucket=promoted_bucket,
+                    object_key=promoted_key,
                     worm_locked=True,
-                    worm_retain_until=promoted.retain_until,
+                    worm_retain_until=promoted_retain_until,
                 )
                 .on_conflict_do_nothing(index_elements=["sha256"])
             )
@@ -444,13 +559,14 @@ async def capture_record(
     area_code: str | None = None,
     source_document_id: uuid.UUID | None = None,
     source_version_id: uuid.UUID | None = None,
-    evidence: Sequence[tuple[str, str]] = (),
+    evidence: Sequence[EvidenceInput | tuple[str, str]] = (),
     form_field_values: dict[str, Any] | None = None,
     retention_policy_id: uuid.UUID | None = None,
     _correction_of: uuid.UUID | None = None,
     _pin_version: uuid.UUID | None = None,
     _commit: bool = True,
     _evidence_source_bucket: str | None = None,
+    rejection_context: RejectionContext | None = None,
 ) -> Record:
     """Capture an immutable record: base + subtype + WORM evidence + content_hash seal + audit, one
     commit. When ``source_document_id`` is a Form/Template, this is **Mode-B** capture: the server
@@ -544,7 +660,12 @@ async def capture_record(
     await session.flush()
 
     shas = await _attach_evidence(
-        session, actor, record.id, evidence, source_bucket=_evidence_source_bucket
+        session,
+        actor,
+        record.id,
+        evidence,
+        source_bucket=_evidence_source_bucket,
+        rejection_context=rejection_context,
     )
     record.content_hash = record_content_hash(
         record_type=rtype.value,
@@ -592,9 +713,10 @@ async def capture_correction(
     area_code: str | None = None,
     source_document_id: uuid.UUID | None = None,
     source_version_id: uuid.UUID | None = None,
-    evidence: Sequence[tuple[str, str]] = (),
+    evidence: Sequence[EvidenceInput | tuple[str, str]] = (),
     form_field_values: dict[str, Any] | None = None,
     retention_policy_id: uuid.UUID | None = None,
+    rejection_context: RejectionContext | None = None,
 ) -> Record:
     """Correct a record by capturing a NEW successor (correct, don't change — doc 06 §1.3). The
     original is flagged ``superseded_by_correction`` (the audited pointer write — never a content
@@ -628,6 +750,7 @@ async def capture_correction(
         _correction_of=original.id,
         _pin_version=pin_version,
         _commit=False,
+        rejection_context=rejection_context,
     )
     original.superseded_by_correction = new_record.id
     emit_record_event(
