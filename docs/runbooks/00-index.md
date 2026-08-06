@@ -19,6 +19,7 @@ For an end-to-end entry point, start with the
 | [spof-fast-restart.md](spof-fast-restart.md) | Keycloak or Beat is down (the two single-host SPOFs, R14). |
 | [key-rotation.md](key-rotation.md) | Rotate the KEK / backup key / signing keys / Keycloak secret. |
 | [minio-object-lock-prereq.md](minio-object-lock-prereq.md) | Provision the WORM (object-lock) vault bucket — a hard prereq. |
+| [upload-identity-rollback.md](upload-identity-rollback.md) | Fail-closed rollback and recovery when an older API cannot promote exact staged versions. |
 | [nfs-root-squash-mirror-caveat.md](nfs-root-squash-mirror-caveat.md) | The read-only mirror is on an NFS/SMB share. |
 | [mirror-drift-scan.md](mirror-drift-scan.md) | The D2+D3 mirror tamper/staleness scan — cadence knob, the quarantine area + cleanup, the `scan`/`sync`/`rebuild` CLI. |
 | [blob-integrity-verify.md](blob-integrity-verify.md) | D1 blob re-hash alarms: classifications, evidence-preservation/investigation response, and the D4 recall list. Current archives do not provide object-byte repair. |

@@ -6,7 +6,9 @@ EasySynQ is a self-hosted, multi-user web Quality Management System (QMS) built 
 > well as shipped behavior. The production packaging currently provides **S and M** Compose overlays;
 > both use **PostgreSQL full-text search**. The L overlay, OpenSearch service, and
 > Prometheus/Grafana/Loki observability overlay remain designed extension points and are **not
-> shipped**. `/readyz` currently checks PostgreSQL, Redis, MinIO, Keycloak, and the Alembic head.
+> shipped**. `/readyz` currently checks PostgreSQL, Redis, MinIO (including `Enabled` versioning on
+> both `staging` and `import-staging`), Keycloak, and the Alembic head. A missing, inaccessible, or
+> versioning-suspended temporary bucket blocks promotion rather than falling back to key-latest.
 > Use the [Installation Guide](manuals/installation-guide.md) and
 > [Administrator & IT Manual](manuals/administrator-it-manual.md) for current procedures.
 
@@ -209,8 +211,11 @@ sequenceDiagram
     API->>PG: append AUDIT event (CHECKOUT)
     API-->>Author: editable working copy token
 
-    Author->>API: POST /documents/{id}/checkin (new blob)
-    API->>MinIO: PUT blob (content-addressed SHA-256)
+    Author->>MinIO: presigned PUT to versioned staging key (claimed SHA-256)
+    MinIO-->>Author: x-amz-version-id (CORS-exposed)
+    Author->>API: POST /documents/{id}/checkin (SHA-256 + exact staging VersionId)
+    API->>MinIO: GET exact staged version; stream-hash bytes
+    API->>MinIO: conditional server-side COPY of that exact version into WORM
     API->>PG: create immutable Version (Rev n+1, draft)
     API->>PG: append AUDIT event (CHECKIN)
     API->>Redis: release lock(doc:{id})
@@ -300,6 +305,12 @@ audit-log search are future behavior; the current UI does not claim a "degraded 
 ### 8.2 Data at rest
 - **PostgreSQL**: full-volume encryption via host-level LUKS / dm-crypt (recommended in install guide); sensitive columns (federation secrets, SMTP creds) encrypted with an app-managed data key sealed by a master key from `.env`/secret file.
 - **MinIO**: server-side encryption (SSE-S3) enabled; **object-lock / WORM** retention on the document/record buckets to enforce immutability (versions and retained records cannot be deleted or overwritten before retention expiry).
+- **Temporary upload identity**: `staging` and `import-staging` are versioned but deliberately
+  non-WORM. They have no blanket current/noncurrent-version expiry: abandoned valid scratch and long
+  import reviews remain recoverable until a reference-aware lifecycle policy exists. The browser
+  pins the PUT response's `x-amz-version-id`; the server GETs and SHA-256-hashes that exact version
+  before a conditional exact-version COPY. ETag is only the copy precondition, never content proof.
+  Correct-domain WORM dedup may bypass staging; no other missing-version path may promote.
 - **Blob integrity**: every blob stored under its SHA-256; a scheduled `verify` job re-hashes a rolling sample and the full set periodically, raising an audit alarm on mismatch (tamper/bit-rot detection). *(✅ S-drift-3: `easysynq.blob.verify` — daily rolling sample, default 500/day, rotation = full coverage; `BLOB_INTEGRITY_FAILED` on mismatch.)*
 - **Secrets**: never baked into images; injected via Docker secrets / `.env` with restricted file perms; Keycloak client secrets and the app master key are rotatable.
 
@@ -380,7 +391,8 @@ Because the document/record buckets are under **object-lock / WORM** (§8.2), an
 | **Application logs** | Structured logs to stdout; use `docker compose logs` or forward them to the organization's log collector. |
 | **Audit log** (compliance) | **Distinct from operational logs** — lives in PostgreSQL as an append-only, partitioned chain. There is no generic in-app audit-log search page in the shipped SPA. |
 | **Metrics / tracing** | OpenTelemetry, Prometheus, Grafana, and Loki remain target architecture; no observability overlay ships today. |
-| **Health** | `/healthz` is API liveness. `/readyz` checks PostgreSQL, Redis, MinIO, Keycloak, and the Alembic migration head. |
+| **Health** | `/healthz` is API liveness. `/readyz` checks PostgreSQL, Redis, MinIO (including `Enabled` versioning on both temporary buckets), Keycloak, and the Alembic migration head. |
+| **Upload identity signals** | `upload_identity.metric` is a fixed-schema structured-log event (no `/metrics` backend): bounded enum labels only for metric, operation, classification, logical domain, stage, and outcome, plus count. Never label a digest, object key, VersionId, filename, user, or organization. Alert on sustained identity-mismatch rates and every terminal cleanup failure through the operator's log/alert pipeline. |
 | **Alerting** | Backup and integrity jobs can alert in-app and through configured out-of-band syslog/SMTP/webhook channels; see the administrator manual. |
 
 An organization may add its own log/metrics collection with a local Compose override. A bundled

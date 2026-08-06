@@ -1568,12 +1568,27 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
-          description: Caller does not hold the check-out (lock_conflict).
+          description: >-
+            Caller does not hold the check-out (lock_conflict), or the named exact staged source is
+            missing or changed before its conditional copy (staged_source_unavailable).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "422":
-          description: "INV-3 — missing change_reason or change_significance. On a Quality Objective id: objective_managed_via_objectives (S-obj-4 — OBJ rows are managed via the /objectives lifecycle)."
+          description: >-
+            INV-3 — missing change_reason or change_significance; the non-dedup upload omitted
+            staging_version_id (staging_version_required); or the exact staged bytes do not match
+            the claimed SHA-256 (upload_identity_mismatch). On a Quality Objective id:
+            objective_managed_via_objectives (S-obj-4 — OBJ rows are managed via the /objectives
+            lifecycle).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: >-
+            Exact-version storage, rejection-audit persistence, owner rollback, or WORM-retention
+            verification failed closed (storage_unavailable); the staged source is retained whenever
+            the rejection audit cannot be committed.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2383,16 +2398,33 @@ paths:
               schema: { $ref: "#/components/schemas/Record" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: >-
+            A named exact staged evidence source is missing or changed before its conditional copy
+            (staged_source_unavailable).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "422":
           description: >-
             Validation error — bad record_type/classification, unknown source document/version, or a
             record-under-document missing source_version_id (errors[].code=source_version_required) or
-            a framework mismatch (errors[].code=framework_mismatch).
+            a framework mismatch (errors[].code=framework_mismatch). A non-dedup evidence item that
+            omits staging_version_id returns staging_version_required; exact staged bytes that do not
+            match their claimed SHA-256 return upload_identity_mismatch.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "423":
           description: An evidence object is not WORM-locked (code=worm_required).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: >-
+            Exact-version storage, rejection-audit persistence, owner rollback, or WORM-retention
+            verification failed closed (storage_unavailable); the staged source is retained whenever
+            the rejection audit cannot be committed.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2479,12 +2511,26 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
-          description: The record is already superseded by a correction (conflict).
+          description: >-
+            The record is already superseded by a correction (conflict), or a named exact staged
+            evidence source is missing or changed before its conditional copy
+            (staged_source_unavailable).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "422":
-          description: Validation error (see captureRecord).
+          description: >-
+            Validation error (see captureRecord), including staging_version_required when a
+            non-dedup evidence item omits staging_version_id and upload_identity_mismatch when exact
+            staged bytes do not match their claimed SHA-256.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: >-
+            Exact-version storage, rejection-audit persistence, owner rollback, or WORM-retention
+            verification failed closed (storage_unavailable); the staged source is retained whenever
+            the rejection audit cannot be committed.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -7695,6 +7741,14 @@ components:
       required: [sha256]
       properties:
         sha256: { $ref: "#/components/schemas/Sha256Hex" }
+        staging_version_id:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 1024
+          description: >-
+            Exact VersionId returned by the browser's staged PUT. May be null only when the claimed
+            SHA-256 already exists as a WORM-sealed blob in the documents domain (correct-domain
+            dedup); otherwise check-in returns staging_version_required.
         change_reason: { type: string, description: "Mandatory, non-empty (INV-3)." }
         change_significance: { type: string, enum: [MAJOR, MINOR], description: Mandatory (INV-3). }
         mime_type: { type: string, default: application/octet-stream }
@@ -8464,6 +8518,14 @@ components:
       properties:
         sha256: { $ref: "#/components/schemas/Sha256Hex" }
         content_type: { type: string, default: application/octet-stream }
+        staging_version_id:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 1024
+          description: >-
+            Exact VersionId returned by this evidence item's staged PUT. May be null only when the
+            claimed SHA-256 already exists as a WORM-sealed blob in the records domain
+            (correct-domain dedup); otherwise capture returns staging_version_required.
 
     EvidenceBlob:
       type: object
@@ -10387,7 +10449,12 @@ components:
         size_bytes: { type: integer }
         mime_type: { type: [string, "null"] }
         sha256: { type: [string, "null"], description: "Content address; null for quarantined/excluded files (never hashed)." }
-        staged_blob_uri: { type: [string, "null"], description: "s3://import-staging/{sha256}; null when not staged." }
+        staged_blob_uri:
+          type: [string, "null"]
+          description: >-
+            Exact versioned locator
+            s3://import-staging/{sha256}?versionId={URL-encoded opaque VersionId}; null when not
+            staged. Legacy key-only locators cannot be promoted and require restart/rescan.
         scan_flags: { type: object, additionalProperties: true, description: "{disposition: included|excluded|quarantine, reason, detail}." }
         included_candidate: { type: boolean }
         mtime: { type: [string, "null"], format: date-time }

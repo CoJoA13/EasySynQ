@@ -153,6 +153,16 @@ Used for externally-produced evidence: signed PDFs, calibration certificates, sc
 - **Single, drag-drop, scanner, and bulk** upload supported. Bulk upload pairs files with a CSV/sidecar of metadata (record_type, clause/process links, retention class) for migrations and batch capture (supports UJ-2 import of legacy records).
 - On receipt: size/type guard, malware scan (worker), text extraction for search, optional Office→PDF normalization rendition (Gotenberg) so every record has a previewable PDF (Architecture §6.1 pipeline reused).
 - The uploaded bytes are the **canonical blob** (content-addressed); any generated PDF is an *additional* rendition, never a replacement — the original is never mutated.
+- Each non-dedup attachment uses the two-step upload contract and carries its own
+  `staging_version_id` in `evidence[]`. Capture/correction may mix null entries that already exist as
+  WORM-sealed blobs in the **records** domain with newly uploaded exact versions; null outside that
+  correct-domain dedup returns `422 staging_version_required`. The server GETs and stream-hashes each
+  exact version before exact server-side COPY to records WORM. ETag is only a copy precondition.
+  Duplicate entries naming one SHA-256 with different versions are rejected as ambiguous.
+- An identity/source refusal rolls back capture, durably records `BLOB_INTEGRITY_FAILED`, then deletes
+  only the rejected exact staged version. Cleanup failures retry from that audit reference; an audit
+  failure retains the source and fails closed. No `Record`, evidence link, or success event survives
+  a rejected promotion.
 
 ### 4.2 Mode B — Structured Form Submission (from a controlled Template)
 

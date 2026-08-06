@@ -32,6 +32,11 @@ _SHA_BODY_OPERATIONS = (
     "/records",
     "/records/{record_id}/correction",
 )
+_VERSION_BOUND_PROMOTION_OPERATIONS = (
+    "/documents/{document_id}/checkin",
+    "/records",
+    "/records/{record_id}/correction",
+)
 
 
 @pytest.mark.parametrize("model", [InitUpload, CheckIn, RecordInitUpload, EvidenceRef])
@@ -86,6 +91,40 @@ def test_evidence_ref_carries_nullable_staging_version_for_conditional_service_v
         "content_type": "application/octet-stream",
         "staging_version_id": None,
     }
+
+
+@pytest.mark.parametrize("schema_name", ["CheckIn", "EvidenceRef"])
+def test_openapi_publishes_nullable_bounded_staging_version_id(schema_name: str) -> None:
+    contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))
+    property_schema = contract["components"]["schemas"][schema_name]["properties"][
+        "staging_version_id"
+    ]
+
+    assert property_schema["type"] == ["string", "null"]
+    assert property_schema["minLength"] == 1
+    assert property_schema["maxLength"] == 1024
+    assert "dedup" in property_schema["description"].lower()
+
+
+def test_init_upload_contract_does_not_accept_a_staging_version_id() -> None:
+    contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))
+
+    assert contract["components"]["schemas"]["InitUpload"]["properties"] == {
+        "sha256": {"$ref": "#/components/schemas/Sha256Hex"},
+        "content_type": {"type": "string", "default": "application/octet-stream"},
+    }
+
+
+@pytest.mark.parametrize("path", _VERSION_BOUND_PROMOTION_OPERATIONS)
+def test_upload_response_matrix_publishes_stable_version_bound_failures(path: str) -> None:
+    contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))
+    responses = contract["paths"][path]["post"]["responses"]
+
+    assert {"409", "422", "503"} <= responses.keys()
+    for status in ("409", "422", "503"):
+        assert responses[status]["content"]["application/problem+json"]["schema"] == {
+            "$ref": "#/components/schemas/Problem"
+        }
 
 
 def test_evidence_ref_rejects_empty_content_type_before_service_mapping() -> None:

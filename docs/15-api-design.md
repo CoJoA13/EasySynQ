@@ -431,7 +431,9 @@ stateDiagram-v2
 
 ### 8.6 Versions (`/documents/{id}/versions`)
 
-Immutable snapshots (`14 §5.3`). Two-step presigned upload keeps large blobs off the API tier; blobs are **content-addressed by SHA-256** and WORM-locked in MinIO (`14 §5.4`).
+Immutable snapshots (`14 §5.3`). Two-step presigned upload keeps large blobs off the API tier. The
+browser PUTs to versioned, non-WORM staging and returns the CORS-exposed VersionId to check-in; the
+server hashes that exact version before exact-version WORM promotion (`14 §5.4`).
 
 All version-history reads first require `document.read` against the live Document. The immutable
 row then selects its additional key: `Effective` needs none; `Draft`, `InReview`, and `Approved`
@@ -442,8 +444,8 @@ text or visual diff authorizes both versions before content or cached bytes are 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
 | GET | `/documents/{id}/versions` | `document.read` + per-row state key | — | Authorized subset, newest first: `version_seq`, `revision_label`, `change_significance`, `version_state`, `change_reason`. |
-| POST | `/documents/{id}/versions:init-upload` | `document.checkout` | ✓ | Returns a **MinIO presigned PUT URL** + required headers + intended `object_key`. Client uploads bytes directly. |
-| POST | `/documents/{id}/checkin` | `document.edit` | ✓ | Finalize (see §8.5): server verifies the uploaded object's `sha256` + `size_bytes`, dedups against existing `blob`, creates the immutable `document_version`, bumps `version_seq`. |
+| POST | `/documents/{id}/versions:init-upload` | `document.checkout` | ✓ | Unchanged request `{sha256, content_type?}`; returns `{dedup, object_key, upload_url}`. A non-dedup client PUTs directly to versioned staging and captures response `x-amz-version-id`. |
+| POST | `/documents/{id}/checkin` | `document.edit` | ✓ | `{sha256, staging_version_id?, change_reason, change_significance, mime_type?}`. VersionId is nullable only for existing documents-domain WORM dedup. Otherwise GET/hash and conditional COPY use the exact version; 422 mismatch/version-required, 409 exact-source-unavailable, 503 storage/audit/WORM failure. |
 | GET | `/documents/{id}/versions/{vid}` | `document.read` + selected row's state key | — | Includes `metadata_snapshot` (title/type/owner/clause map **as they were**). |
 | GET | `/documents/{id}/versions/{vid}/download` | `document.read` + selected row's state key | — | Presigned GET to the immutable source or PDF rendition. |
 | GET | `/documents/{id}/versions/{vid}/diff?from={vid2}` | `document.read` + both rows' state keys | — | Metadata/text redline between two versions (S-dcr-3a); both sides authorize before extraction. |
@@ -454,16 +456,16 @@ text or visual diff authorizes both versions before content or cached bytes are 
 **`versions:init-upload` 200:**
 ```json
 {
-  "object_key": "documents/018f.../v/018f9b2c-...",
-  "upload": {
-    "method": "PUT",
-    "url": "https://minio.internal/easysynq-documents/...&X-Amz-Expires=900",
-    "headers": { "Content-Type": "application/pdf" },
-    "expires_at": "2026-05-31T14:18:00Z"
-  },
-  "finalize_with": { "sha256": "<client-computed>", "change_reason": null, "change_significance": null }
+  "dedup": false,
+  "object_key": "8f8d9a7c4f6e2d1b0a9c8e7d6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a",
+  "upload_url": "https://minio.example.test/staging/8f8d9a7c4f6e2d1b0a9c8e7d6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a"
 }
 ```
+
+The PUT response must expose `x-amz-version-id`; the client supplies that opaque value unchanged as
+`staging_version_id`. The check-in SHA is a claim, not proof: server-side exact GET/hash precedes COPY,
+and ETag is only a precondition. Rejection audit commits before exact-version cleanup, with retry from
+that durable locator. No key-latest promotion or key-only delete is permitted.
 
 ### 8.7 Change Requests — DCR (`/dcrs`)
 
@@ -549,12 +551,12 @@ Documented evidence to be **retained** (`14 §5.5`, ISO 7.5.3). Records are **im
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
 | GET | `/records` | `record.read` | — | Filter `record_type`, `source_document_id`, `captured_by`, `captured_at` range, `disposition_state`, `legal_hold`. |
-| POST | `/records:init-upload` | `record.create` | ✓ | Presigned PUT for evidence blob(s) (content-addressed, WORM). |
-| POST | `/records` | `record.create` | ✓ | Finalize: `{ record_type, source_document_id?, source_version_id?, title, evidence:[{sha256}], captured_at, form_field_values?, retention_basis_date? }`. Server snapshots the `retention_policy` (one-way ratchet); when `source_document_id` resolves to an **`FRM` form template** (Mode-B, S-rec-3) it resolves + pins the Effective (or pre-release) version and validates `form_field_values` against **that version's pinned schema** (422 `errors[].field`). The capture `record.create` scope is built from the source template's framework + process-links (the R28 full-context rule). |
+| POST | `/records:init-upload` | `record.create` | ✓ | Unchanged init-upload request/response; a non-dedup PUT goes to versioned staging and the client captures `x-amz-version-id`. |
+| POST | `/records` | `record.create` | ✓ | Finalize evidence as `[{sha256, content_type?, staging_version_id?}]`, one exact version per non-dedup attachment; null is allowed only for records-domain WORM dedup. Server snapshots retention and validates a pinned FRM schema as before. Returns 422 mismatch/version-required, 409 exact-source-unavailable, or 503 storage/audit/WORM failure without partial capture. |
 | GET | `/records/{id}` | `record.read` | — | Metadata + `_links.download` + `content_hash` + `has_structured_pdf`. |
 | GET | `/records/{id}/evidence/{sha256}/download` | `record.read` | — | Presigned GET for one immutable evidence blob attached to the record. A record may carry multiple evidence blobs, addressed individually by SHA-256. |
 | GET | `/records/{id}/rendition` | `record.read` | — | **S-rec-3:** presigned GET to the structured-record PDF rendition (a derived, regenerable view of the fielded data). `409 rendition_pending` until the best-effort Stage-2 build lands (or the record is not structured). |
-| POST | `/records/{id}/correction` | `record.create` | ✓ | Create a successor record correcting this one (sets `correction_of`/`superseded_by_correction`). The original is never mutated. |
+| POST | `/records/{id}/correction` | `record.create` | ✓ | Create a successor with the same exact-version evidence contract and 409/422/503 promotion failures as capture. The original is never mutated. |
 | PATCH | `/records/{id}/disposition` | `record.dispose` | — | Advance `disposition_state` only (`ACTIVE→DUE_FOR_REVIEW→…→DISPOSED`); a `disposition_event` tombstone is written. **Blocked (`409`)** while `worm_lock_period` is unexpired or `legal_hold=true` (the refusal is audited `RECORD_ERASURE_REFUSED`, R27) (`14 §10`). |
 | POST | `/records/{id}/legal-hold` | `record.dispose` | — | Place/release a legal hold (`{action, reason}`, reason mandatory) — overrides retention expiry (`06 §5.2`). |
 | GET / POST | `/records/{id}/worm-destroy-requests` | `record.read` / `record.dispose` | ✓ | The R27 dual-control destroy-under-legal-order — step 1 (`{legal_basis}`). One open request per record. |
@@ -1035,7 +1037,7 @@ SSE topics: `actions` (My-Actions/`task` changes affecting the caller), `notific
 | Filter/Sort/Shape | Allow-listed bracketed operators; `sort=-field`; `fields=`, `view=summary\|full`, `expand=` (depth 1, permission-checked). |
 | Errors | RFC 9457 `application/problem+json`; stable `code`; per-field `errors[]`; `request_id` always. |
 | Async | Shipped long-running flows expose status on their domain resource (for example, poll `GET /admin/imports/{id}` after a `202`). There is no generic `/admin/jobs/{id}` or `jobs` SSE topic; `/notifications/stream` carries the shipped in-app notification feed. |
-| Blobs | Never proxied; two-step presigned PUT (content-addressed SHA-256, WORM) → finalize; presigned GET for download; integrity by `sha256`. |
+| Blobs | Never proxied; two-step browser PUT to versioned non-WORM staging → exact VersionId GET/server hash → conditional exact COPY into WORM. ETag is only a precondition; correct-domain WORM dedup is the sole missing-version exception. |
 | Time / IDs | ISO 8601 UTC; UUID v7 string IDs (`audit_event` is the lone `bigint` exception, R7); full UTF-8. |
 | Audit | Every mutation writes an `audit_event` in the **same transaction**; content-changing events require `reason`; exposed read-only at `/audit-events`; append-only, hash-chained, no write verbs. |
 | Versioning | URI `/api/v1`; additive evolution; RFC 8594 `Deprecation`/`Sunset`; OpenAPI 3.1 at `/api/v1/openapi.json`. |
