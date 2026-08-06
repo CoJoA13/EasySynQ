@@ -5,8 +5,10 @@
 > **Authority:** the finding ledger, slice contracts, and historical evidence remain in
 > [`2026-08-04-audit-remediation-v2.md`](../plans/2026-08-04-audit-remediation-v2.md).
 > This document chooses an execution path through that programme; it does not rewrite the audit. On
-> merge, §2 supersedes v2 §5's open status and §5.1 rows for D-C, D-F, D-B3, and D-B4; §§4 and 4.2
-> supersede v2's sequencing diagram and migration-reservation table.
+> merge, §2 supersedes only v2 §5's open-status entry and §5.1 rows for D-C, D-F, D-B3, and D-B4.
+> Sections 4 and 4.2 supersede only v2 §4's Stage-2 integrity/recovery ordering and v2 §6 rule 1's
+> migration-reservation table; v2's later-stage ordering, hard dependencies, release gates, finding
+> ledger, and slice contracts remain authoritative.
 
 ---
 
