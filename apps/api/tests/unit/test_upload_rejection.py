@@ -492,6 +492,39 @@ def test_require_staging_ref_rejects_missing_or_legacy_version_with_stable_probl
     assert (caught.value.status, caught.value.code) == (422, "staging_version_required")
 
 
+@pytest.mark.parametrize(
+    ("sha256", "content_type", "expected_size"),
+    [
+        ("not-a-sha", "application/pdf", 12),
+        (_SHA, "", 12),
+        (_SHA, "application/pdf", -1),
+    ],
+)
+def test_valid_version_does_not_misclassify_other_invalid_source_fields_as_missing_version(
+    caplog: pytest.LogCaptureFixture,
+    sha256: str,
+    content_type: str,
+    expected_size: int,
+) -> None:
+    caplog.set_level(logging.INFO, logger="easysynq.upload_identity")
+
+    with pytest.raises(ValueError) as caught:
+        upload_rejection.require_staging_ref(
+            domain=StagingDomain.STAGING,
+            sha256=sha256,
+            version_id="valid-opaque-version",
+            content_type=content_type,
+            expected_size=expected_size,
+            operation="record_capture",
+        )
+
+    assert not isinstance(caught.value, ProblemException)
+    assert all(
+        getattr(record, "extra_fields", {}).get("metric") != "missing_version"
+        for record in caplog.records
+    )
+
+
 def test_metric_signal_has_only_bounded_dimensions(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO, logger="easysynq.upload_identity")
 

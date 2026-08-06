@@ -42,6 +42,7 @@ logger = logging.getLogger("easysynq.upload_identity")
 type UploadOperation = Literal[
     "document_checkin", "record_capture", "import_commit", "server_generated"
 ]
+type MetricOperation = UploadOperation | Literal["unknown"]
 type RejectionClassification = Literal[
     "digest_mismatch",
     "size_mismatch",
@@ -101,7 +102,9 @@ _METRICS = frozenset(
         "cleanup_final_failure",
     }
 )
-_OPERATIONS = frozenset({"document_checkin", "record_capture", "import_commit", "server_generated"})
+_OPERATIONS = frozenset(
+    {"document_checkin", "record_capture", "import_commit", "server_generated", "unknown"}
+)
 _CLASSIFICATIONS = frozenset(
     {
         "digest_mismatch",
@@ -142,7 +145,7 @@ def _utc_now() -> datetime.datetime:
 def emit_upload_identity_metric(
     *,
     metric: MetricName,
-    operation: UploadOperation,
+    operation: MetricOperation,
     classification: MetricClassification,
     domain: MetricDomain,
     stage: MetricStage,
@@ -489,13 +492,7 @@ def require_staging_ref(
         )
     try:
         locator = StagedVersionLocator(domain=domain, object_key=sha256, version_id=version_id)
-        return StagedObjectRef(
-            locator=locator,
-            expected_sha256=sha256,
-            content_type=content_type,
-            expected_size=expected_size,
-        )
-    except (StagingVersionRequired, ValueError, TypeError):
+    except StagingVersionRequired:
         emit_upload_identity_metric(
             metric="missing_version",
             operation=operation,
@@ -509,3 +506,9 @@ def require_staging_ref(
             code="staging_version_required",
             title="A staging version is required",
         ) from None
+    return StagedObjectRef(
+        locator=locator,
+        expected_sha256=sha256,
+        content_type=content_type,
+        expected_size=expected_size,
+    )

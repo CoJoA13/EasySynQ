@@ -10,7 +10,11 @@ from sqlalchemy.dialects import postgresql
 
 from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.services.vault import storage
-from easysynq_api.services.vault.staged_identity import StorageStage, StorageUnavailable
+from easysynq_api.services.vault.staged_identity import (
+    StagedVersionLocator,
+    StorageStage,
+    StorageUnavailable,
+)
 from easysynq_api.tasks import upload_identity
 from easysynq_api.tasks.app import app
 
@@ -58,8 +62,9 @@ class _ScalarResult:
 
 
 class _Session:
-    def __init__(self, row: object | None) -> None:
+    def __init__(self, row: object | None, *, query_error: BaseException | None = None) -> None:
         self.row = row
+        self.query_error = query_error
         self.queries: list[Any] = []
 
     async def __aenter__(self) -> _Session:
@@ -70,6 +75,8 @@ class _Session:
 
     async def execute(self, statement: Any) -> _ScalarResult:
         self.queries.append(statement)
+        if self.query_error is not None:
+            raise self.query_error
         return _ScalarResult(self.row)
 
 
@@ -79,6 +86,39 @@ class _Sessionmaker:
 
     def __call__(self) -> _Session:
         return self.session
+
+
+class _Engine:
+    def __init__(self, *, dispose_failure: BaseException | None = None) -> None:
+        self.disposed = False
+        self.dispose_failure = dispose_failure
+
+    async def dispose(self) -> None:
+        self.disposed = True
+        if self.dispose_failure is not None:
+            raise self.dispose_failure
+
+
+def _install_task_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    session: _Session,
+) -> _Engine:
+    engine = _Engine()
+    sessionmaker = _Sessionmaker(session)
+
+    def create_engine(database_url: str) -> _Engine:
+        assert database_url
+        return engine
+
+    def create_sessionmaker(created_engine: object, *, expire_on_commit: bool) -> _Sessionmaker:
+        assert created_engine is engine
+        assert expire_on_commit is False
+        return sessionmaker
+
+    monkeypatch.setattr(upload_identity, "create_async_engine", create_engine)
+    monkeypatch.setattr(upload_identity, "async_sessionmaker", create_sessionmaker)
+    return engine
 
 
 def test_cleanup_task_is_registered_without_beat_schedule() -> None:
@@ -229,8 +269,8 @@ async def test_exact_object_version_absence_is_cleanup_success(
 
     monkeypatch.setattr(storage, "_client", AbsentVersionClient)
 
-    async def delete_through_real_absence_mapper(locator: object) -> None:
-        storage._delete_staged_version_sync(locator)  # type: ignore[arg-type]
+    async def delete_through_real_absence_mapper(locator: StagedVersionLocator) -> None:
+        storage._delete_staged_version_sync(locator)
 
     monkeypatch.setattr(storage, "delete_staged_version", delete_through_real_absence_mapper)
 
@@ -246,30 +286,13 @@ async def test_exact_object_version_absence_is_cleanup_success(
 async def test_task_local_engine_is_disposed_on_success_and_validation_failure(
     monkeypatch: pytest.MonkeyPatch, valid_evidence: bool
 ) -> None:
-    class Engine:
-        def __init__(self) -> None:
-            self.disposed = False
-
-        async def dispose(self) -> None:
-            self.disposed = True
-
-    engine = Engine()
-    sessionmaker = _Sessionmaker(_Session(_row() if valid_evidence else None))
-
-    def create_engine(database_url: str) -> Engine:
-        assert database_url
-        return engine
-
-    def create_sessionmaker(created_engine: object, *, expire_on_commit: bool) -> _Sessionmaker:
-        assert created_engine is engine
-        assert expire_on_commit is False
-        return sessionmaker
+    engine = _install_task_runtime(
+        monkeypatch, session=_Session(_row() if valid_evidence else None)
+    )
 
     async def delete(_locator: object) -> None:
         return None
 
-    monkeypatch.setattr(upload_identity, "create_async_engine", create_engine)
-    monkeypatch.setattr(upload_identity, "async_sessionmaker", create_sessionmaker)
     monkeypatch.setattr(storage, "delete_staged_version", delete)
 
     if valid_evidence:
@@ -285,16 +308,238 @@ async def test_task_local_engine_is_disposed_on_success_and_validation_failure(
 async def test_bucket_absence_remains_retryable_infrastructure_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def bucket_absent(_locator: object) -> None:
-        raise StorageUnavailable(StorageStage.CLEANUP)
+    class AbsentBucketClient:
+        def delete_object(self, *, Bucket: str, Key: str, VersionId: str) -> None:
+            assert (Bucket, Key, VersionId) == ("staging", _SHA, "opaque-v1")
+            raise ClientError(
+                {
+                    "Error": {"Code": "NoSuchBucket"},
+                    "ResponseMetadata": {"HTTPStatusCode": 404},
+                },
+                "DeleteObject",
+            )
 
-    monkeypatch.setattr(storage, "delete_staged_version", bucket_absent)
+    monkeypatch.setattr(storage, "_client", AbsentBucketClient)
+
+    async def delete_through_real_absence_mapper(locator: object) -> None:
+        storage._delete_staged_version_sync(locator)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(storage, "delete_staged_version", delete_through_real_absence_mapper)
 
     result = await upload_identity._cleanup_rejected_once(
         _Sessionmaker(_Session(_row())), 41, _OCCURRED_TEXT, 1
     )
 
     assert result.deleted is False
+
+
+@pytest.mark.parametrize("failure", [ValueError("invalid engine URL"), RuntimeError("driver")])
+@pytest.mark.parametrize("attempt", [1, 5])
+def test_engine_creation_failure_uses_bounded_task_retry_or_terminal_signal(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: BaseException,
+    attempt: int,
+) -> None:
+    scheduled: list[dict[str, object]] = []
+
+    def fail_engine(_database_url: str) -> None:
+        raise failure
+
+    def apply_async(*, args: tuple[object, ...], countdown: int) -> None:
+        scheduled.append({"args": args, "countdown": countdown})
+
+    monkeypatch.setattr(upload_identity, "create_async_engine", fail_engine)
+    monkeypatch.setattr(upload_identity.cleanup_rejected, "apply_async", apply_async)
+    caplog.set_level("INFO", logger="easysynq.upload_identity")
+
+    upload_identity.cleanup_rejected(41, _OCCURRED_TEXT, attempt)
+
+    if attempt == 1:
+        assert scheduled == [{"args": (41, _OCCURRED_TEXT, 2), "countdown": 60}]
+        assert caplog.records[-1].extra_fields["metric"] == "cleanup_retry"
+    else:
+        assert scheduled == []
+        assert caplog.records[-1].extra_fields["metric"] == "cleanup_final_failure"
+    assert caplog.records[-1].extra_fields == {
+        "metric": "cleanup_retry" if attempt == 1 else "cleanup_final_failure",
+        "operation": "unknown",
+        "classification": "none",
+        "domain": "none",
+        "stage": "audit",
+        "outcome": "retry_scheduled" if attempt == 1 else "terminal",
+        "count": 1,
+    }
+
+
+def test_sessionmaker_creation_failure_disposes_engine_and_retries_same_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _Engine()
+    scheduled: list[dict[str, object]] = []
+
+    def create_engine(_database_url: str) -> _Engine:
+        return engine
+
+    def fail_sessionmaker(_engine: object, *, expire_on_commit: bool) -> None:
+        assert expire_on_commit is False
+        raise ValueError("session configuration unavailable")
+
+    def apply_async(*, args: tuple[object, ...], countdown: int) -> None:
+        scheduled.append({"args": args, "countdown": countdown})
+
+    monkeypatch.setattr(upload_identity, "create_async_engine", create_engine)
+    monkeypatch.setattr(upload_identity, "async_sessionmaker", fail_sessionmaker)
+    monkeypatch.setattr(upload_identity.cleanup_rejected, "apply_async", apply_async)
+
+    upload_identity.cleanup_rejected(41, _OCCURRED_TEXT, 1)
+
+    assert engine.disposed is True
+    assert scheduled == [{"args": (41, _OCCURRED_TEXT, 2), "countdown": 60}]
+
+
+@pytest.mark.parametrize("failure", [ValueError("db url conversion"), RuntimeError("db down")])
+def test_audit_query_failure_reschedules_same_reference_through_task_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: BaseException,
+) -> None:
+    scheduled: list[dict[str, object]] = []
+    engine = _install_task_runtime(monkeypatch, session=_Session(_row(), query_error=failure))
+
+    def apply_async(*, args: tuple[object, ...], countdown: int) -> None:
+        scheduled.append({"args": args, "countdown": countdown})
+
+    monkeypatch.setattr(upload_identity.cleanup_rejected, "apply_async", apply_async)
+    caplog.set_level("INFO", logger="easysynq.upload_identity")
+
+    upload_identity.cleanup_rejected(41, _OCCURRED_TEXT, 2)
+
+    assert scheduled == [{"args": (41, _OCCURRED_TEXT, 3), "countdown": 120}]
+    assert engine.disposed is True
+    assert caplog.records[-1].extra_fields == {
+        "metric": "cleanup_retry",
+        "operation": "unknown",
+        "classification": "none",
+        "domain": "none",
+        "stage": "audit",
+        "outcome": "retry_scheduled",
+        "count": 1,
+    }
+
+
+def test_exact_delete_failure_reschedules_from_validated_evidence_at_task_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduled: list[dict[str, object]] = []
+    engine = _install_task_runtime(monkeypatch, session=_Session(_row()))
+
+    async def fail_delete(locator: StagedVersionLocator) -> None:
+        assert locator.version_id == "opaque-v1"
+        raise StorageUnavailable(StorageStage.CLEANUP)
+
+    def apply_async(*, args: tuple[object, ...], countdown: int) -> None:
+        scheduled.append({"args": args, "countdown": countdown})
+
+    monkeypatch.setattr(storage, "delete_staged_version", fail_delete)
+    monkeypatch.setattr(upload_identity.cleanup_rejected, "apply_async", apply_async)
+
+    upload_identity.cleanup_rejected(41, _OCCURRED_TEXT, 3)
+
+    assert scheduled == [{"args": (41, _OCCURRED_TEXT, 4), "countdown": 240}]
+    assert engine.disposed is True
+
+
+def test_retry_publication_failure_is_terminally_signalled_without_escaping(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    result = upload_identity.CleanupAttemptResult(
+        operation="document_checkin",
+        classification="digest_mismatch",
+        domain="staging",
+        deleted=False,
+    )
+
+    def run(coroutine: Any) -> upload_identity.CleanupAttemptResult:
+        coroutine.close()
+        return result
+
+    def fail_publish(*, args: tuple[object, ...], countdown: int) -> None:
+        assert args == (41, _OCCURRED_TEXT, 2)
+        assert countdown == 60
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(upload_identity.asyncio, "run", run)
+    monkeypatch.setattr(upload_identity.cleanup_rejected, "apply_async", fail_publish)
+    caplog.set_level("INFO", logger="easysynq.upload_identity")
+
+    upload_identity.cleanup_rejected(41, _OCCURRED_TEXT, 1)
+
+    assert caplog.records[-1].extra_fields == {
+        "metric": "cleanup_final_failure",
+        "operation": "document_checkin",
+        "classification": "digest_mismatch",
+        "domain": "staging",
+        "stage": "cleanup",
+        "outcome": "publish_failed",
+        "count": 1,
+    }
+
+
+def test_invalid_evidence_is_terminal_at_task_boundary_without_delete_or_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deleted: list[object] = []
+    scheduled: list[object] = []
+    engine = _install_task_runtime(monkeypatch, session=_Session(None))
+
+    async def delete(locator: object) -> None:
+        deleted.append(locator)
+
+    monkeypatch.setattr(storage, "delete_staged_version", delete)
+    monkeypatch.setattr(
+        upload_identity.cleanup_rejected,
+        "apply_async",
+        lambda **kwargs: scheduled.append(kwargs),
+    )
+
+    upload_identity.cleanup_rejected(41, _OCCURRED_TEXT, 1)
+
+    assert deleted == []
+    assert scheduled == []
+    assert engine.disposed is True
+
+
+def test_invalid_evidence_remains_terminal_when_engine_disposal_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _Engine(dispose_failure=RuntimeError("dispose unavailable"))
+    sessionmaker = _Sessionmaker(_Session(None))
+    deleted: list[object] = []
+    scheduled: list[object] = []
+
+    monkeypatch.setattr(upload_identity, "create_async_engine", lambda _url: engine)
+    monkeypatch.setattr(
+        upload_identity,
+        "async_sessionmaker",
+        lambda _engine, *, expire_on_commit: sessionmaker,
+    )
+
+    async def delete(locator: object) -> None:
+        deleted.append(locator)
+
+    monkeypatch.setattr(storage, "delete_staged_version", delete)
+    monkeypatch.setattr(
+        upload_identity.cleanup_rejected,
+        "apply_async",
+        lambda **kwargs: scheduled.append(kwargs),
+    )
+
+    upload_identity.cleanup_rejected(41, _OCCURRED_TEXT, 1)
+
+    assert engine.disposed is True
+    assert deleted == []
+    assert scheduled == []
 
 
 def test_transient_failure_reschedules_same_audit_reference_with_bounded_delay(
