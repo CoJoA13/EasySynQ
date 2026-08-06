@@ -36,7 +36,7 @@ from ...db.models.improvement_initiative_stage_event import ImprovementInitiativ
 from ...db.models.workflow import Task, WorkflowInstance
 from ...domain.improvement import transition_allowed
 from ...logging import request_id_var
-from ...problems import ProblemException
+from ...problems import ProblemCode, ProblemException
 from ..vault.signature import SignatureEvent, SignatureEventSink
 from ..workflow import engine
 from ..workflow import repository as wf_repo
@@ -82,7 +82,7 @@ def _not_found(what: str) -> ProblemException:
     return ProblemException(status=404, code="not_found", title=f"{what} not found")
 
 
-def _conflict(code: str, title: str) -> ProblemException:
+def _conflict(code: ProblemCode, title: str) -> ProblemException:
     return ProblemException(status=409, code=code, title=title)
 
 

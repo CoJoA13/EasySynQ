@@ -16,7 +16,7 @@ test("HistoryTab renders the version timeline (newest first)", async () => {
 test("HistoryTab shows quiet no-access on a base document.read 403 (DP-6)", async () => {
   server.use(
     http.get("/api/v1/documents/:id/versions", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<HistoryTab documentId={ID} active={true} />);

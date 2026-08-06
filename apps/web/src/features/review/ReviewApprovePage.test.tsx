@@ -177,7 +177,7 @@ describe("ReviewApprovePage — PERIODIC_REVIEW", () => {
   test("a document-read 403 degrades calmly — the decision card still renders", async () => {
     server.use(
       http.get("/api/v1/documents/:id", () =>
-        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+        HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
       ),
     );
     renderAtTask(periodicReviewTask.id);

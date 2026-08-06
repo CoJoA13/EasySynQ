@@ -31,7 +31,7 @@ it("useObjectiveApproval returns the instance + APPROVE task", async () => {
 it("useObjectiveApproval sets forbidden on a 403", async () => {
   server.use(
     http.get("/api/v1/objectives/:id/approval", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { result } = renderHook(

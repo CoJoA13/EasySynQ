@@ -123,7 +123,7 @@ it("renders no-access when the actionable reads are forbidden, even though the i
   // auth-only / filter-not-403 (it returns a filtered/empty 200, never a 403), so it must NOT keep the
   // tile out of TileNoAccess (Codex P2 regression guard). Even with initiatives data present, all three
   // actionable reads forbidden → no access, and the initiatives line is suppressed.
-  const forbid = () => HttpResponse.json({ code: "forbidden" }, { status: 403 });
+  const forbid = () => HttpResponse.json({ code: "permission_denied" }, { status: 403 });
   server.use(
     http.get("/api/v1/capas", forbid),
     http.get("/api/v1/ncrs", forbid),
@@ -182,7 +182,7 @@ it("shows the initiatives line alongside a partially-accessible tile (one action
   // A user with SOME ACT access (CAPAs readable) but the others forbidden: the tile is NOT no-access,
   // and the initiatives line renders beside the available CAPA line. Guards the additive-line behaviour
   // without conflating the initiatives read with tile access.
-  const forbid = () => HttpResponse.json({ code: "forbidden" }, { status: 403 });
+  const forbid = () => HttpResponse.json({ code: "permission_denied" }, { status: 403 });
   server.use(
     http.get("/api/v1/capas", () => HttpResponse.json({ data: [] })),
     http.get("/api/v1/ncrs", forbid),
@@ -211,7 +211,7 @@ it("degrades calmly when the initiatives read is forbidden (line absent, no cras
     http.get("/api/v1/ncrs", () => HttpResponse.json({ data: [] })),
     http.get("/api/v1/complaints", () => HttpResponse.json({ data: [] })),
     http.get("/api/v1/improvement-initiatives", () =>
-      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
     ),
   );
   renderWithProviders(<ActCard />);

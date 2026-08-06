@@ -125,7 +125,7 @@ test("shows a no-match message when filters exclude everything", async () => {
 test("renders a calm no-access panel on a 403", async () => {
   server.use(
     http.get("/api/v1/improvement-initiatives", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<ImprovementRegisterPage />, { route: "/improvement" });

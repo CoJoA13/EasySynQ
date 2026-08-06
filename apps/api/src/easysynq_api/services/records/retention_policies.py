@@ -33,7 +33,7 @@ from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.retention_policy import RetentionPolicy
 from ...domain.records.retention import action_preservation_rank, duration_ge, retention_until
-from ...problems import ProblemException
+from ...problems import ProblemCode, ProblemException
 from . import repository as repo
 from .repository import SEALED_PACK_POLICY_NAME, SYSTEM_DEFAULT_POLICY_NAME
 from .service import _now, _rid
@@ -73,7 +73,7 @@ def _invalid(field: str, code: str, message: str) -> ProblemException:
     )
 
 
-def _conflict(code: str, title: str) -> ProblemException:
+def _conflict(code: ProblemCode, title: str) -> ProblemException:
     return ProblemException(status=409, code=code, title=title)
 
 

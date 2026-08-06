@@ -33,7 +33,7 @@ describe("drift hooks", () => {
   test("useDriftStatus flags a 403 as forbidden", async () => {
     server.use(
       http.get("/api/v1/admin/drift/status", () =>
-        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+        HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
       ),
     );
     const { result } = renderHook(() => useDriftStatus(), { wrapper });

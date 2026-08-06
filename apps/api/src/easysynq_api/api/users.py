@@ -36,7 +36,7 @@ from ..db.session import get_session
 from ..domain.authz.types import ResourceContext
 from ..domain.identity.temp_password import generate_temporary_password
 from ..logging import request_id_var
-from ..problems import ProblemException
+from ..problems import ProblemCode, ProblemException
 from ..services.authz import (
     AuthzAuditSink,
     assert_can_assign_role,
@@ -318,7 +318,7 @@ async def provision_user(
                 # — reuse the precheck's own linked/unlinked classification, don't reduce this to
                 # a bare `user_exists` and throw away the "link the existing account" path.
                 await _raise_username_conflict(session, exc.keycloak_subject)
-            code = "keycloak_email_exists" if exc.field == "email" else "user_exists"
+            code: ProblemCode = "keycloak_email_exists" if exc.field == "email" else "user_exists"
             title = (
                 "That email is already used by another sign-in account"
                 if exc.field == "email"

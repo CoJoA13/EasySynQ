@@ -94,7 +94,7 @@ test("useVisualDiff treats Unavailable (non-renderable version) as a terminal st
 test("useVisualDiff surfaces a state-aware authorization 403 as an ApiError", async () => {
   server.use(
     http.post(VD, () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });

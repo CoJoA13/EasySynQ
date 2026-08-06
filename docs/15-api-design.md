@@ -31,7 +31,10 @@ This section specifies the **external HTTP API surface** of EasySynQ: the contra
 - **Media type:** `application/json; charset=utf-8` for bodies; full UTF-8 end-to-end (`03 §11` i18n). Errors use `application/problem+json` (§4).
 - **Required on authenticated calls:** `Authorization: Bearer <keycloak_access_jwt>`, `Accept: application/json`.
 - **Idempotent mutations:** endpoints marked **Idem ✓** accept `Idempotency-Key: <client-uuid>`; clients SHOULD reuse the same value when retrying one logical request (deduped in Redis; replays return the original result — `03 §5` Redis). Unmarked mutations do not promise replay semantics.
-- **Optimistic concurrency:** detail GETs return a strong `ETag`; unsafe updates SHOULD send `If-Match`. A stale `If-Match` → `412` (prevents lost updates when two authors touch one document's metadata). Document *content* edits are additionally guarded by the Redis check-out lock (§8.5), surfaced as `423 locked`.
+- **Optimistic concurrency (design target, not shipped):** detail GETs will return a strong `ETag`
+  and unsafe updates will use `If-Match`. The implementation must add its stable 412 problem code
+  before clients branch on that result. Current document-content edits are guarded by the Redis
+  check-out lock (§8.5), surfaced as `409 lock_conflict`.
 - **Correlation:** every request carries / is assigned `X-Request-Id`; it is propagated API→worker (`03 §10`) and stored on the resulting `audit_event.request_id` for end-to-end traceability.
 
 ### 1.3 Design principles specific to this surface
@@ -105,7 +108,7 @@ UUID v7 is time-ordered (`14 §1.1`), so keyset paging over `(created_at DESC, i
 | Param | Default | Notes |
 |---|---|---|
 | `limit` | 25 | Max 100; over-max is clamped with a `Warning` header. |
-| `cursor` | — | Opaque base64url of `{last_sort_value, id}`; tampered → `400 invalid_cursor`. |
+| `cursor` | — | Design target: opaque base64url of `{last_sort_value, id}`. No stable cursor-specific problem code ships yet. |
 
 ### 3.2 Filtering — typed, allow-listed per resource
 
@@ -141,7 +144,10 @@ straddle an organization-timezone configuration change.
 
 ### 3.3 Sorting
 
-`sort=field` (asc) or `sort=-field` (desc); comma-separated multi-key: `sort=-severity,created_at`. Allow-listed sortable fields only (`400 unknown_sort` otherwise). The effective sort always appends `,id` internally to keep the keyset cursor totally ordered.
+`sort=field` (asc) or `sort=-field` (desc); comma-separated multi-key:
+`sort=-severity,created_at`. This is a design target: shipped endpoints and accepted sort fields are
+defined by OpenAPI, and no stable sort-specific problem code ships yet. The target effective sort
+appends `,id` internally to keep the keyset cursor totally ordered.
 
 ### 3.4 Shaping (progressive disclosure)
 
@@ -153,14 +159,21 @@ straddle an organization-timezone configuration change.
 
 ## 4. Error Model — RFC 9457 `application/problem+json`
 
-One envelope for every non-2xx. HTTP status is authoritative; `code` is the stable machine string clients branch on; `type` is a documentation URL.
+Application-defined and registered HTTP error paths use one envelope. Unhandled application defects
+still fall through Starlette's generic 500 response; a catch-all RFC 9457 conversion remains an open
+hardening gap. HTTP status is authoritative; `code` is the stable machine string clients branch on;
+`type` is a documentation URL. The complete shipped top-level vocabulary is the typed `ProblemCode`
+in `apps/api/src/easysynq_api/problems.py` and the exactly equal
+`components.schemas.Problem.properties.code.enum` in OpenAPI. The table below is representative,
+not a second enum. Nested `errors[].code` values are field/reason details and are intentionally not
+part of that top-level vocabulary.
 
 ```json
 {
-  "type": "https://errors.easysynq.local/validation_failed",
+  "type": "https://errors.easysynq.local/validation_error",
   "title": "Request body failed validation",
   "status": 422,
-  "code": "validation_failed",
+  "code": "validation_error",
   "detail": "1 field is invalid.",
   "instance": "/api/v1/documents/018f.../versions",
   "request_id": "01J8X3...",
@@ -170,19 +183,20 @@ One envelope for every non-2xx. HTTP status is authoritative; `code` is the stab
 }
 ```
 
-| HTTP | `code` (examples) | When |
+| HTTP | Representative shipped `code` values | When |
 |---|---|---|
-| 400 | `invalid_cursor`, `unknown_filter`, `unknown_sort`, `malformed_request` | Bad query/path/syntax. |
+| 400 | `unknown_filter` | Unsupported filter or other route-specific bad syntax. |
 | 401 | `unauthenticated`, `token_expired`, `token_invalid` | Missing/expired/invalid Keycloak JWT, including a signing key unknown after a successful JWKS refresh. |
-| 403 | `permission_denied`, `out_of_scope`, `sod_violation`, `step_up_required`, `setup_incomplete` | Authenticated but policy engine denies: ABAC scope miss, Separation-of-Duties block (`14 §3`), MFA/re-auth required, or QMS locked because `system_config.setup_state ≠ OPERATIONAL`. |
+| 403 | `permission_denied`, `sod_violation`, `step_up_required` | Authenticated but policy engine denies: ABAC scope miss, Separation-of-Duties block (`14 §3`), or MFA/re-auth required. |
 | 404 | `not_found` | Absent, **or** hidden by row-level visibility (§9.5). |
-| 409 | `conflict`, `duplicate_identifier`, `invalid_state_transition`, `document_checked_out`, `singleton_exists` | Unique violation, illegal transition, doc locked by another user, or a 2nd Quality-Policy/Scope singleton. |
-| 412 | `precondition_failed` | `If-Match` ETag mismatch (optimistic lock). |
-| 415 | `unsupported_media_type` | Wrong `Content-Type`. |
-| 422 | `validation_failed` | Well-formed JSON, semantically invalid; per-field `errors[]` (e.g. missing `change_reason`, no `clause_mapping` before `Draft→InReview`). |
-| 423 | `locked` | Acting on a checked-out document without holding the lock (`14 §5.4`). |
+| 409 | `conflict`, `invalid_state_transition`, `lock_conflict`, domain-specific lifecycle codes | Unique/conflicting state, illegal transition, or a document lock held by another user. |
+| 422 | `validation_error`, `commit_blocked`, `target_kind_deferred`, `auth_unavailable`, `backup_destination_unreachable` | Well-formed input or setup configuration that is semantically invalid/unreachable; field details use `errors[]`. |
+| 423 | `setup_incomplete`, `worm_required` | QMS setup latch or required WORM enforcement blocks the operation. |
 | 429 | `rate_limited` | Redis token bucket exhausted; `Retry-After` set. |
-| 5xx | `internal_error`, `dependency_unavailable` | Server / MinIO / OpenSearch / DB / Keycloak JWKS fault. `request_id` always present. Public errors and `/readyz` never expose dependency connection diagnostics. When OpenSearch is down, search degrades to Postgres FTS rather than 5xx-ing (`03 §11` graceful degradation). |
+| 5xx | `internal_error`, `dependency_unavailable`, `keycloak_unavailable` | Server or runtime dependency fault. `request_id` is present; public errors and `/readyz` do not expose connection diagnostics. |
+
+ETag-specific 412 and media-type-specific 415 problems remain design targets. They have no shipped
+stable code and clients must not branch on the former placeholder names.
 
 `invalid_state_transition` and `sod_violation` responses include `"allowed_transitions": [...]` / `"conflicting_duty": {...}` so the client corrects without guessing.
 
@@ -364,10 +378,10 @@ surface is the `working_draft` between check-out and check-in (`14 §1.2/§5.4`)
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
 | GET | `/documents` | `document.read` | — | `q`, `limit`/`offset`, and allow-listed filters for `current_state`, `document_type`, `owner_user_id`, `clause_refs[has]`, `classification`, effective-date bounds, `has_effective_version`, `managed_subtype`, and `process_id`. **Row-filtered by scope** before pagination (§9.3). `document.read` remains the metadata-row key for every lifecycle state (R57); draft/obsolete version-read keys are not alternatives. |
-| POST | `/documents` | `document.create` | ✓ | Creates the logical doc in `Draft` with no version yet. Identifier is **vault-allocated** through the org's atomic `numbering_counter` and `{TYPE}[-{AREA}]-{SEQ}` service formatter (`14 §2`) unless `legacy_identifier` is supplied on import. `singleton_exists`→`409` for a 2nd Quality Policy/Scope. |
+| POST | `/documents` | `document.create` | ✓ | Creates the logical doc in `Draft` with no version yet. Identifier is **vault-allocated** through the org's atomic `numbering_counter` and `{TYPE}[-{AREA}]-{SEQ}` service formatter (`14 §2`) unless `legacy_identifier` is supplied on import. System-managed register types are rejected with `422 validation_error`; the governing OpenAPI response is authoritative. |
 | GET | `/documents/{id}` | `document.read` | — | Live metadata plus `clause_refs`, governing `effective_from`, and the caller's per-document `capabilities` affordance block. The gate is lifecycle-independent (R57); `document.read_draft` / `document.read_obsolete` alone do not admit this surface. `capabilities.read_draft` is the authz-only answer for whether the specialized key admits at least one immutable Draft/InReview/Approved state under the live request context; it never evaluates against the mutable headline or implies that a matching row exists. |
 | PATCH | `/documents/{id}` | `document.manage_metadata` | — | **Metadata only:** `title`, `folder_path`, `classification`, and `review_period_months` (`null` opts out). **Never** sets state — see actions. _(Gate corrected to the as-built metadata permission; `document.edit` governs content revision/check-in, while clause/process links have their own sub-resources.)_ |
-| POST | `/documents/{id}/checkout` | `document.checkout` | ✓ | Acquires the **Redis** exclusive edit lock (authority is Redis; `document.checkout_*` columns are a display/recovery mirror — `14 §5.4`/R8). `409 document_checked_out` if held by another; returns a `working_draft` token. |
+| POST | `/documents/{id}/checkout` | `document.checkout` | ✓ | Acquires the **Redis** exclusive edit lock (authority is Redis; `document.checkout_*` columns are a display/recovery mirror — `14 §5.4`/R8). `409 lock_conflict` if held by another; returns a `working_draft` token. |
 | POST | `/documents/{id}/checkin` | `document.edit` | ✓ | Two-step blob upload then finalize → a new **immutable** `document_version` (`Draft`). Releases the lock; enqueues the Celery render→index→mirror pipeline. Requires non-empty `change_reason` + `change_significance` (INV-3) → else `422`. |
 | POST | `/documents/{id}/submit-review` | `document.submit` | ✓ | `Draft→InReview`; **requires ≥1 `clause_mapping`** (`14 §4`) → else `422`. Instantiates the approval `workflow_instance` (§8.7). _(Key corrected from `document.edit` per the S4 build — the closed doc-07 catalog has a dedicated `document.submit`, which doc-04 T2/T9 uses.)_ |
 | POST | `/documents/{id}/release` | `document.release` | ✓ | On an `Approved` version: makes it the single `Effective` version (partial-unique-index enforced, SERIALIZABLE supersession), writes a `signature_event(meaning=release)`, enqueues the **read-only FS mirror** rewrite. Only released versions ever hit the mirror. |
@@ -914,7 +928,7 @@ A **FastAPI dependency** on every authenticated route. The route declares the re
 ```mermaid
 flowchart TD
     A["Authenticated request:\nuser, permission_key, resolved scope"] --> S{system_config.setup_state\nOPERATIONAL?\n(non-admin routes)}
-    S -- no --> SI["403 setup_incomplete"]
+    S -- no --> SI["423 setup_incomplete"]
     S -- yes --> ADM{is_system_admin AND /admin route?}
     ADM -- yes --> ALLOW["ALLOW + audit_event"]
     ADM -- no --> SOD{SoD constraint hard-blocks\nthis duty vs history?}
@@ -927,7 +941,7 @@ flowchart TD
     RG -- yes --> PRED
     RG -- no --> DENY
     PRED -- yes --> ALLOW
-    PRED -- no --> DENYP["403 out_of_scope / step_up_required"]
+    PRED -- no --> DENYP["403 permission_denied / step_up_required"]
 ```
 
 - **Deny-wins absolutely**; default is deny.

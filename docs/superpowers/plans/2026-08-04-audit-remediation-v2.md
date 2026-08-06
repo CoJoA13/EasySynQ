@@ -1296,6 +1296,55 @@ review remains the control for new prose shapes. No history rewrite was attempte
 history and downstream clones/caches require an explicit owner-led incident decision; this
 repository change can only limit further publication.
 
+**Final-gate follow-ups (closed).** The authenticated contract-response sweep exposed three shipped
+backup/setup codes that were absent from the published `Problem.code` enum. A broader review then
+showed that the old contract listed only a fraction of the stable top-level codes, while a direct-call
+AST check missed codes forwarded through service helpers and cross-module imports. `ProblemCode` is
+now a typed 125-value runtime vocabulary; `ProblemException`, `problem_response`, and every forwarding
+helper boundary use it, strict mypy checks their call sites, and a unit guard requires exact equality
+with OpenAPI. The anomalous `forbidden` response was normalized to the canonical
+`permission_denied`; the implementation-free `etag_mismatch` and `idempotency_replay` enum members
+were removed. Nested `errors[].code` remains intentionally unconstrained because it carries field and
+Pydantic validation reasons rather than top-level client routing keys. Doc 15 §4 now defers to that
+authority, uses shipped examples, and labels the ETag/cursor/sort placeholders and generic unhandled
+500 envelope as design/hardening work rather than current client contracts. Sixty-eight web test
+responses were also normalized from the impossible top-level `forbidden` fixture to
+`permission_denied`, so direct consumers and shared UI mocks exercise the published vocabulary.
+
+The final shared-order run also found a pre-existing fixture violation in
+`test_checkin_refuses_foreign_bucket_source_blob`: it committed a `Blob` locator in the session-scoped
+database without creating the corresponding records-bucket bytes. Later backup/restore tests enumerate
+all persisted blobs, so six restore cases failed with `NoSuchKey` only when that vault test ran first.
+The fixture now creates and retains a real records-bucket object before inserting its row, preserving
+the foreign-bucket rejection under test while restoring the blob-row-if-and-only-if-bytes invariant.
+The exact vault-then-restore reproducer changed from RED to two passing tests, and the combined vault
+and restore modules passed 38 tests.
+
+Exact locally built image scans further quantify the already-open H-07/M-27 boundary. Trivy reported
+31 HIGH and 18 CRITICAL findings in the API image, and 35 HIGH and 6 CRITICAL findings in the exact web
+image, with zero embedded secrets in either. Most are Debian 12 package findings; the web image also
+ships development/transitive Node packages because its single-stage Dockerfile runs Vite preview.
+Counts are scanner findings, not unique or reachability-proven vulnerabilities. They nevertheless
+confirm that a successful build is not a security pass: exact web-image scanning, base-image refresh,
+production-stage minimization, an expiring exception baseline, and a blocking policy remain open under
+`S-ci-gaps`/`S-image-ratchet` and decision D-G.
+
+Fresh final-gate evidence on 2026-08-05:
+
+- API unit: 1,393 passed with one expected release-ceremony skip; authenticated contract responses:
+  283 passed; four integration shards: 1,016 passed with two existing management-review skips;
+- the final combined vault/restore shared-order run passed 38 tests, and all five report-denial code
+  cases passed after the vocabulary normalization;
+- the lock-faithful web gate (`npm ci` first) passed lint, typecheck, production build, and 1,463 tests;
+- Ruff, format, migration lint, strict mypy (436 source files), contract regeneration/check, lock check,
+  Compose validation, images-lock coverage, shell syntax, R61, and diff checks passed;
+- PostgreSQL 16 upgrade→downgrade→upgrade, populated migration coherence, and Alembic model-drift
+  checks passed; both exact application Dockerfiles built successfully; and
+- `pip-audit` reported zero vulnerable Python dependencies. `npm audit` reported four HIGH findings;
+  Trivy's filesystem scan reported one HIGH dependency finding and three HIGH Dockerfile
+  misconfigurations. These and the exact-image findings above remain warn-only residuals, not green
+  security assertions.
+
 Still open and not implemented here: cancellation or a post-core audit failure can strand a restore
 target/object prefix, and the defensive restore guard rejects the documents WORM bucket but not the
 records WORM bucket. Those remain within `S-restore-target`/cancellation and WORM-misconfiguration

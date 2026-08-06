@@ -529,6 +529,7 @@ async def test_endpoint_403s_without_report_read(
     await _grant(subj.a, ("document.read",))
     resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
     assert resp.status_code == 403, resp.text
+    assert resp.json()["code"] == "permission_denied"
 
 
 async def test_endpoint_returns_register_with_provenance(
@@ -1234,7 +1235,7 @@ async def test_surface_rejects_a_scope_unsatisfiable_process_read_allow(
 
     resp = await app_client.get(_ROUTE, headers=ha)
     assert resp.status_code == 403, resp.text
-    assert resp.json()["code"] == "forbidden"
+    assert resp.json()["code"] == "permission_denied"
 
 
 async def test_surface_admits_an_existing_process_even_when_it_has_no_documents(
@@ -1313,7 +1314,7 @@ async def test_surface_rejects_a_cross_org_only_process_read_allow(
         await _grant(subj.a, ("document.read",))
         resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
         assert resp.status_code == 403, resp.text
-        assert resp.json()["code"] == "forbidden"
+        assert resp.json()["code"] == "permission_denied"
     finally:
         async with get_sessionmaker()() as s:
             await s.execute(delete(Process).where(Process.id == foreign_process_id))

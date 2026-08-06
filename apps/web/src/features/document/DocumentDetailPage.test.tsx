@@ -93,7 +93,7 @@ test("DocumentDetailPage shows a not-found state for a missing document (404)", 
 test("DocumentDetailPage shows a no-access state on a 403", async () => {
   server.use(
     http.get("/api/v1/documents/:id", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderPage();

@@ -309,7 +309,7 @@ test("IngestionRunPage shows a calm not-found panel on a 404", async () => {
 test("IngestionRunPage shows a calm no-access panel on a 403", async () => {
   server.use(
     http.get("/api/v1/admin/imports/:id", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderPage();

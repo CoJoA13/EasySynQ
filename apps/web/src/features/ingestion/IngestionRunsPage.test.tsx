@@ -65,7 +65,7 @@ test("an empty run list shows the calm empty state", async () => {
 test("a 403 renders the calm no-access panel (no red error)", async () => {
   server.use(
     http.get("/api/v1/admin/imports", () =>
-      HttpResponse.json({ code: "forbidden", detail: "no access" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", detail: "no access" }, { status: 403 }),
     ),
   );
   renderPage();
@@ -86,7 +86,7 @@ test("has no axe violations (list, empty, and no-access)", async () => {
 
   server.use(
     http.get("/api/v1/admin/imports", () =>
-      HttpResponse.json({ code: "forbidden", detail: "no access" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", detail: "no access" }, { status: 403 }),
     ),
   );
   const denied = renderPage();

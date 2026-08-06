@@ -21,7 +21,7 @@ it("shows the mandatory-coverage status with the N9 microcopy, linking to /compl
 });
 
 it("degrades calmly when coverage is forbidden", async () => {
-  server.use(http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json({ code: "forbidden" }, { status: 403 })));
+  server.use(http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json({ code: "permission_denied" }, { status: 403 })));
   renderWithProviders(<HealthSummary />);
   await waitFor(() => expect(screen.getByText(/coverage scoped to your access/i)).toBeInTheDocument());
 });

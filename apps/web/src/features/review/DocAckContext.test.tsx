@@ -16,7 +16,7 @@ describe("DocAckContext", () => {
 
   test("a 403 degrades calmly (the card still renders elsewhere)", async () => {
     server.use(
-      http.get("/api/v1/documents/:id", () => HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 })),
+      http.get("/api/v1/documents/:id", () => HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 })),
     );
     renderWithProviders(<DocAckContext documentId={DOC} />);
     expect(await screen.findByText(/Document details aren't visible to you/i)).toBeInTheDocument();

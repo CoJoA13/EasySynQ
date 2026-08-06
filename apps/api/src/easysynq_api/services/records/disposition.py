@@ -53,7 +53,7 @@ from ...db.models.worm_destroy_request import WormDestroyRequest
 from ...db.session import get_sessionmaker
 from ...domain.records.disposition import legal_disposition_transition, self_disposition_blocked
 from ...domain.records.retention import retention_until
-from ...problems import ProblemException
+from ...problems import ProblemCode, ProblemException
 from ..vault import storage
 from . import repository as repo
 from .service import _load_record, _now, emit_record_event, emit_record_event_system
@@ -66,7 +66,7 @@ _COMPLIANCE = "COMPLIANCE"
 # --- shared helpers ----------------------------------------------------------------------
 
 
-def _conflict(code: str, title: str) -> ProblemException:
+def _conflict(code: ProblemCode, title: str) -> ProblemException:
     return ProblemException(status=409, code=code, title=title)
 
 
@@ -562,7 +562,7 @@ async def _guard_or_refuse_destroy(
     """Pre-purge fail-closed guard for a DESTROY. On a deliberate refusal (legal hold, unexpired
     WORM without bypass, or COMPLIANCE mode with bypass) logs ``RECORD_ERASURE_REFUSED`` (committed)
     then raises 409 — the GDPR refused-with-reason (R27). Returns when destruction may proceed."""
-    refusal: tuple[str, str] | None = None  # (code, reason)
+    refusal: tuple[ProblemCode, str] | None = None  # (code, reason)
     if record.legal_hold:
         refusal = ("legal_hold_active", "legal_hold")
     elif not bypass:

@@ -108,7 +108,7 @@ it("calm-degrades to a no-access note when version authorization denies the view
   serveDcr(reviseImplemented);
   server.use(
     http.get("/api/v1/documents/:id/versions", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderAt(DCR_DIFF_ID);

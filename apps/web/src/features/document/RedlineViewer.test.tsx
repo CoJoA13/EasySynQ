@@ -77,7 +77,7 @@ test("RedlineViewer degrades to a source-download fallback when text is unavaila
 test("RedlineViewer shows quiet no-access on a state-aware authorization 403", async () => {
   server.use(
     http.get("/api/v1/documents/:id/versions/:vid/diff", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<RedlineViewer documentId={DOC} fromVid={FROM} toVid={TO} />);

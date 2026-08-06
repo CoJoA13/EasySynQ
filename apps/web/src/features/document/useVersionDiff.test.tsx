@@ -43,7 +43,7 @@ test("useVersionDiff is disabled when the pair is incomplete or identical", () =
 test("useVersionDiff surfaces a state-aware authorization 403 as an ApiError", async () => {
   server.use(
     http.get("/api/v1/documents/:id/versions/:vid/diff", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { result } = renderHook(() => useVersionDiff(DOC, TO, FROM), { wrapper });

@@ -128,7 +128,7 @@ test("removes an owner — DELETEs /processes/{id}/owner/{user_id}", async () =>
 test("a 403 on the process list degrades to a calm No access panel", async () => {
   server.use(
     http.get("/api/v1/processes", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<ProcessesAdmin token="test-token" />);

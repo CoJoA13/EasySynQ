@@ -28,7 +28,7 @@ test("returns the checklist rollup + rows on success", async () => {
 test("flags forbidden on a 403 (caller lacks report.compliance_checklist.read)", async () => {
   server.use(
     http.get("/api/v1/reports/compliance-checklist", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { result } = renderHook(() => useComplianceChecklist(), { wrapper });

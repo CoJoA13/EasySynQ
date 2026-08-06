@@ -84,7 +84,7 @@ describe("NewObjectiveModal", () => {
   it("renders neutral copy on an errored policy read — never the positive no-policy claim", async () => {
     server.use(
       http.get("/api/v1/objectives/policy", () =>
-        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+        HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
       ),
     );
     renderWithProviders(<NewObjectiveModal opened onClose={() => {}} onCreated={() => {}} />);

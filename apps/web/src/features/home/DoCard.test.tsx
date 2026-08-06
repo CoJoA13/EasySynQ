@@ -37,7 +37,7 @@ it("shows clean integrity, superseded copies and the ack count", async () => {
 it("stays visible via the self-scoped ack count even when drift is forbidden", async () => {
   server.use(
     http.get("/api/v1/admin/drift/status", () =>
-      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
     ),
     http.get("/api/v1/tasks", () => HttpResponse.json([{ id: "a1" }])),
   );
@@ -70,7 +70,7 @@ it("shows couldn't-load (NOT no-access) when drift is forbidden AND the ack coun
   // discriminator (not the silent count===0) governs the no-access decision (Codex P2 #205).
   server.use(
     http.get("/api/v1/admin/drift/status", () =>
-      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
     ),
     http.get("/api/v1/tasks", () => new HttpResponse(null, { status: 500 })),
   );

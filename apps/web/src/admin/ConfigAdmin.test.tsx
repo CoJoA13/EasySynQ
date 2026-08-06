@@ -58,7 +58,7 @@ describe("ConfigAdmin", () => {
   it("shows a no-access panel when the config read is forbidden (no permissions probe)", async () => {
     server.use(
       http.get("/api/v1/admin/config", () =>
-        HttpResponse.json({ code: "forbidden", title: "no" }, { status: 403 }),
+        HttpResponse.json({ code: "permission_denied", title: "no" }, { status: 403 }),
       ),
     );
     renderWithProviders(<ConfigAdmin />);

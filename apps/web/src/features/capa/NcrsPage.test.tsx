@@ -162,7 +162,7 @@ test("a 409 race refetches the list so the row flips to its disposed read-only s
 test("renders a calm no-access panel on a 403", async () => {
   server.use(
     http.get("/api/v1/ncrs", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<NcrsPage />, { route: "/capa/ncrs" });

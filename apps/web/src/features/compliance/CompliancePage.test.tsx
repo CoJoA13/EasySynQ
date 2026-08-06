@@ -20,7 +20,7 @@ test("renders the rollup + ★ rows with a clause drill-through link", async () 
 test("renders a calm no-access panel on a 403 (not a crash)", async () => {
   server.use(
     http.get("/api/v1/reports/compliance-checklist", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<CompliancePage />, { route: "/compliance" });
@@ -35,7 +35,7 @@ test("has no axe violations (rows + 403)", async () => {
 
   server.use(
     http.get("/api/v1/reports/compliance-checklist", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const forbidden = renderWithProviders(<CompliancePage />, { route: "/compliance" });

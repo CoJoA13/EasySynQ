@@ -65,7 +65,7 @@ from ...domain.capa import (
 )
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
-from ...problems import ProblemException
+from ...problems import ProblemCode, ProblemException
 from ..common.org_clock import resolve_org_tz
 from ..dcr import raise_dcr
 from ..records.service import capture_record, emit_record_event
@@ -150,7 +150,7 @@ def _not_found(what: str) -> ProblemException:
     return ProblemException(status=404, code="not_found", title=f"{what} not found")
 
 
-def _conflict(code: str, title: str) -> ProblemException:
+def _conflict(code: ProblemCode, title: str) -> ProblemException:
     return ProblemException(status=409, code=code, title=title)
 
 

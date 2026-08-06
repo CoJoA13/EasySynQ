@@ -27,7 +27,7 @@ test("useCapas returns the {data} rows", async () => {
 test("useCapas surfaces a 403 as forbidden (not an error throw)", async () => {
   server.use(
     http.get("/api/v1/capas", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { result } = renderHook(() => useCapas(), { wrapper });
@@ -55,7 +55,7 @@ test("useComplaints returns the {data} rows", async () => {
 test("useComplaints surfaces a 403 as forbidden", async () => {
   server.use(
     http.get("/api/v1/complaints", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { result } = renderHook(() => useComplaints(), { wrapper });
@@ -72,7 +72,7 @@ test("useNcrs returns the {data} rows", async () => {
 test("useNcrs surfaces a 403 as forbidden", async () => {
   server.use(
     http.get("/api/v1/ncrs", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { result } = renderHook(() => useNcrs(), { wrapper });
