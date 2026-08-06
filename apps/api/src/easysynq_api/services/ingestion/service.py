@@ -640,7 +640,7 @@ async def _process_file(
             ):  # mime-unsupported / needs_password — recorded, not staged
                 return post, None, None, mime_type
             handle.seek(0)
-            staged = await storage.stage_stream(handle)
+            staged = await storage.stage_stream(handle, content_type=mime_type)
             return post, staged.sha256, staged.staged_blob_uri, mime_type
     except (
         OSError

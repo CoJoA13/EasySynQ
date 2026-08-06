@@ -22,6 +22,12 @@ from ...db.models._audit_enums import EventType
 from ...db.models._ingestion_enums import ImportExtractStatus, ImportRunStatus
 from ...db.models.import_file import ImportFile
 from ...domain.ingestion.extractor import ExtractInput, ExtractResult
+from ..vault.staged_identity import (
+    StagedSourceUnavailable,
+    StagingVersionRequired,
+    StorageUnavailable,
+    UploadIdentityMismatch,
+)
 from . import locks, storage
 from . import repository as repo
 from .extractor_tika import TikaExtractorProvider
@@ -59,10 +65,26 @@ async def _extract_one(
 ) -> ExtractResult:
     if f.sha256 is None:  # an included candidate with no staged bytes (defensive) — nothing to read
         return ExtractResult(failed=True, error="no_staged_bytes")
+    if f.staged_blob_uri is None:
+        return ExtractResult(failed=True, error="staging_version_required")
     try:
-        data = await storage.fetch_staged_bytes(f.sha256)
-    except Exception as exc:  # noqa: BLE001 — a missing/unreadable staged object never fails the run
-        return ExtractResult(failed=True, error=f"fetch_failed: {repr(exc)[:300]}")
+        source = storage.parse_staged_uri(
+            f.staged_blob_uri,
+            expected_sha256=f.sha256,
+            content_type=f.mime_type or "application/octet-stream",
+            expected_size=f.size_bytes,
+        )
+        data = await storage.fetch_staged_bytes(source)
+    except (StagingVersionRequired, ValueError):
+        return ExtractResult(failed=True, error="staging_version_required")
+    except StagedSourceUnavailable:
+        return ExtractResult(failed=True, error="staged_source_unavailable")
+    except UploadIdentityMismatch:
+        return ExtractResult(failed=True, error="upload_identity_mismatch")
+    except StorageUnavailable:
+        return ExtractResult(failed=True, error="storage_unavailable")
+    except Exception:  # noqa: BLE001 — per-file failures never fail the run
+        return ExtractResult(failed=True, error="staging_fetch_failed")
     meta = ExtractInput(
         rel_path=f.rel_path,
         filename=f.filename,

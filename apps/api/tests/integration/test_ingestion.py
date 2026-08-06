@@ -10,6 +10,7 @@ import asyncio
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import sqlalchemy as sa
@@ -287,6 +288,121 @@ async def test_pipeline_extract_classify(
         "SOP-PUR-002 Purchasing.docx",
         "Internal Audit Report Q2 2023.pdf",
     }
+
+
+async def test_extract_pinned_versioned_locator_survives_canonical_overwrite(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+) -> None:
+    """Extraction reads the scan-pinned version, not a later latest-version overwrite."""
+    import boto3
+
+    admin = _subject("avery-version-pin")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    subdir = f"version-pin-{uuid.uuid4().hex[:8]}"
+    source = Path(get_settings().import_source_root) / subdir
+    source.mkdir(parents=True)
+    original = "the scan-pinned approved procedure"
+    (source / "Pinned Procedure.txt").write_text(original)
+    run_id = (
+        await app_client.post(
+            "/api/v1/admin/imports", headers=headers, json={"source_root": subdir}
+        )
+    ).json()["id"]
+    rid = uuid.UUID(run_id)
+
+    async with get_sessionmaker()() as session:
+        await run_scan(session, rid)
+    files = (await app_client.get(f"/api/v1/admin/imports/{run_id}/files", headers=headers)).json()[
+        "files"
+    ]
+    scanned = files[0]
+    uri = scanned["staged_blob_uri"]
+    parsed = urlsplit(uri)
+    assert parsed.scheme == "s3"
+    query = parse_qs(parsed.query, strict_parsing=True)
+    assert set(query) == {"versionId"}
+    assert len(query["versionId"]) == 1
+    assert query["versionId"][0] not in {"", "null"}
+
+    settings = get_settings()
+    client = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint,
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key,
+        region_name=settings.s3_region,
+    )
+    client.put_object(
+        Bucket=settings.s3_bucket_import_staging,
+        Key=scanned["sha256"],
+        Body=b"later malicious overwrite",
+        ContentType="text/plain",
+    )
+
+    async with get_sessionmaker()() as session:
+        await run_extract(session, rid)
+    detail = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files/{scanned['id']}", headers=headers
+        )
+    ).json()
+    assert detail["extract"]["full_text"] == original
+
+
+async def test_prechange_staged_blob_uri_fails_closed_and_preserves_review_state(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+) -> None:
+    """A legacy unversioned locator becomes a per-file failure without losing reviewability."""
+    admin = _subject("avery-legacy-locator")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    subdir = f"legacy-locator-{uuid.uuid4().hex[:8]}"
+    source = Path(get_settings().import_source_root) / subdir
+    source.mkdir(parents=True)
+    (source / "Legacy Procedure.txt").write_text("legacy approved procedure content")
+    run_id = (
+        await app_client.post(
+            "/api/v1/admin/imports", headers=headers, json={"source_root": subdir}
+        )
+    ).json()["id"]
+    rid = uuid.UUID(run_id)
+
+    async with get_sessionmaker()() as session:
+        await run_scan(session, rid)
+    async with get_sessionmaker()() as session:
+        row = (
+            await session.execute(
+                sa.text("SELECT id, sha256 FROM import_file WHERE run_id = :run"), {"run": rid}
+            )
+        ).one()
+        file_id, sha = row
+        await session.execute(
+            sa.text("UPDATE import_file SET staged_blob_uri = :uri WHERE id = :file"),
+            {
+                "file": file_id,
+                "uri": f"s3://{get_settings().s3_bucket_import_staging}/{sha}",
+            },
+        )
+        await session.commit()
+
+    for stage in (run_extract, run_classify, run_dedup, run_propose):
+        async with get_sessionmaker()() as session:
+            await stage(session, rid)
+
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=headers)).json()
+    detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{file_id}", headers=headers)
+    ).json()
+    assert run["status"] == "Proposed"
+    assert detail["extract"]["status"] == "failed"
+    assert detail["extract"]["error"] == "staging_version_required"
+    assert detail["review"]["effective"]["disposition"] == "undecided"
+    assert detail["review"]["effective"]["kind"] == "UNCONFIRMED"
 
 
 class _FailingTika:
