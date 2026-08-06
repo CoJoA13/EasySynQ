@@ -1,17 +1,11 @@
-"""Object-store access for the vault (boto3 / MinIO) — presigned I/O only, never proxied.
+"""Object-store access for the vault (boto3 / MinIO).
 
 The ``api`` tier issues **presigned PUT/GET URLs** so bytes flow client↔MinIO directly (D1,
-doc 15 §12); it only ever does metadata ops (``head_object``, ``get_object_retention``,
-server-side ``copy_object``). The client uploads to the plain ``staging`` bucket at
-``key = sha256``; check-in server-side-copies into the ``documents`` bucket, whose GOVERNANCE
-default retention auto-WORM-locks the object on creation (so check-in can confirm WORM before the
-version row commits). Sync boto3 runs in a worker thread to stay off the event loop, mirroring
-``readiness._check_minio``. Presigned URLs are SIGNED AGAINST ``s3_public_endpoint`` (when set) so
-the browser-facing host matches the SigV4 signature; server-side metadata ops use ``s3_endpoint``.
-
-S3 trusts the client-computed ``sha256`` as the content-addressed key (existence + size are
-verified via ``head_object``; bytes are never re-hashed by the api). Cryptographic server-side
-hash verification (S3 ChecksumSHA256 or a worker re-hash) is a later hardening.
+doc 15 §12). Promotion is the deliberate exception: the server pins the returned staging
+``VersionId``, streams that exact source through SHA-256, then copies that version with its opaque
+ETag as a precondition into a WORM bucket. Sync boto3 runs in worker threads to stay off the event
+loop. Presigned URLs are signed against ``s3_public_endpoint`` (when set) so the browser-facing host
+matches the SigV4 signature; server-side operations use ``s3_endpoint``.
 """
 
 from __future__ import annotations
@@ -20,11 +14,27 @@ import asyncio
 import dataclasses
 import datetime
 import hashlib
+import hmac
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from ...config import get_settings
+from .staged_identity import (
+    PromotionOutcome,
+    PromotionResult,
+    StagedObjectRef,
+    StagedSourceChanged,
+    StagedSourceUnavailable,
+    StagedVersionLocator,
+    StagingDomain,
+    StorageStage,
+    StorageUnavailable,
+    TargetIdentityConflict,
+    UploadIdentityMismatch,
+    VerifiedStagedObject,
+    WormNotApplied,
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -54,6 +64,12 @@ def _import_staging_bucket() -> str:
     S-ing-5 commit promotes directly from here into the documents/records WORM bucket via
     ``finalize_worm(source_bucket=...)`` — a single server-side copy, no plain-staging hop."""
     return get_settings().s3_bucket_import_staging
+
+
+def _bucket_for_domain(domain: StagingDomain) -> str:
+    if domain is StagingDomain.STAGING:
+        return _staging_bucket()
+    return _import_staging_bucket()
 
 
 def _client(*, config: Any = None) -> Any:
@@ -137,7 +153,7 @@ async def head(object_key: str, *, bucket: str | None = None) -> ObjectHead:
     return await asyncio.to_thread(_head_sync, object_key, bucket or _doc_bucket())
 
 
-def _finalize_sync(sha256: str, bucket: str, source_bucket: str) -> ObjectHead:
+def _legacy_finalize_sync(sha256: str, bucket: str, source_bucket: str) -> ObjectHead:
     from botocore.exceptions import ClientError
 
     client = _client()
@@ -155,17 +171,331 @@ def _finalize_sync(sha256: str, bucket: str, source_bucket: str) -> ObjectHead:
     return _head_sync(sha256, bucket)
 
 
+def _error_code(exc: BaseException) -> str | None:
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return None
+    error = response.get("Error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("Code")
+    return code if isinstance(code, str) else None
+
+
+def _http_status(exc: BaseException) -> int | None:
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return None
+    metadata = response.get("ResponseMetadata")
+    if not isinstance(metadata, dict):
+        return None
+    status = metadata.get("HTTPStatusCode")
+    return status if isinstance(status, int) else None
+
+
+def _is_object_absence(exc: BaseException, *, object_level_404: bool) -> bool:
+    code = _error_code(exc)
+    if code in {"NoSuchKey", "NoSuchVersion"}:
+        return True
+    return object_level_404 and code == "404"
+
+
+def _require_staging_versioning_sync(domain: StagingDomain, client: Any) -> None:
+    try:
+        result = client.get_bucket_versioning(Bucket=_bucket_for_domain(domain))
+    except Exception as exc:
+        raise StorageUnavailable(StorageStage.VERSIONING, exc) from exc
+    if result.get("Status") != "Enabled":
+        raise StorageUnavailable(StorageStage.VERSIONING)
+
+
+def _verify_staged_sync(
+    source: StagedObjectRef, *, client: Any | None = None
+) -> VerifiedStagedObject:
+    storage_client = client or _client()
+    _require_staging_versioning_sync(source.locator.domain, storage_client)
+    try:
+        response = storage_client.get_object(
+            Bucket=_bucket_for_domain(source.locator.domain),
+            Key=source.locator.object_key,
+            VersionId=source.locator.version_id,
+        )
+    except Exception as exc:
+        if _is_object_absence(exc, object_level_404=True):
+            raise StagedSourceUnavailable(source) from exc
+        raise StorageUnavailable(StorageStage.SOURCE_GET, exc) from exc
+
+    body = response.get("Body")
+    if body is None:
+        raise StorageUnavailable(StorageStage.SOURCE_GET)
+    try:
+        if response.get("VersionId") != source.locator.version_id:
+            raise StorageUnavailable(StorageStage.SOURCE_GET)
+        etag = response.get("ETag")
+        if not isinstance(etag, str) or not etag.strip():
+            raise StorageUnavailable(StorageStage.SOURCE_GET)
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            while True:
+                chunk = body.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                size += len(chunk)
+        except Exception as exc:
+            raise StorageUnavailable(StorageStage.SOURCE_READ, exc) from exc
+    finally:
+        body.close()
+
+    observed_sha256 = digest.hexdigest()
+    if not hmac.compare_digest(observed_sha256, source.expected_sha256):
+        raise UploadIdentityMismatch(
+            source=source,
+            expected_sha256=source.expected_sha256,
+            observed_sha256=observed_sha256,
+            expected_size=source.expected_size,
+            observed_size=size,
+            etag=etag,
+            classification="digest_mismatch",
+        )
+    if source.expected_size is not None and size != source.expected_size:
+        raise UploadIdentityMismatch(
+            source=source,
+            expected_sha256=source.expected_sha256,
+            observed_sha256=observed_sha256,
+            expected_size=source.expected_size,
+            observed_size=size,
+            etag=etag,
+            classification="size_mismatch",
+        )
+    return VerifiedStagedObject(
+        source=source,
+        verified_sha256=observed_sha256,
+        size=size,
+        content_type=response.get("ContentType"),
+        etag=etag,
+    )
+
+
+async def verify_staged(source: StagedObjectRef) -> VerifiedStagedObject:
+    return await asyncio.to_thread(_verify_staged_sync, source)
+
+
+def _target_head_sync(client: Any, target_bucket: str, target_key: str) -> dict[str, Any] | None:
+    try:
+        response: dict[str, Any] = client.head_object(Bucket=target_bucket, Key=target_key)
+        return response
+    except Exception as exc:
+        if _is_object_absence(exc, object_level_404=True):
+            return None
+        raise StorageUnavailable(StorageStage.TARGET_HEAD, exc) from exc
+
+
+def _require_store_version_id(value: Any, stage: StorageStage) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= 1024 or value == "null":
+        raise StorageUnavailable(stage)
+    return value
+
+
+def _target_retention_sync(
+    client: Any, *, target_bucket: str, target_key: str, target_version_id: str
+) -> datetime.datetime:
+    try:
+        response = client.get_object_retention(
+            Bucket=target_bucket,
+            Key=target_key,
+            VersionId=target_version_id,
+        )
+    except Exception as exc:
+        raise StorageUnavailable(StorageStage.RETENTION, exc) from exc
+    retain_until = response.get("Retention", {}).get("RetainUntilDate")
+    now = datetime.datetime.now(datetime.UTC)
+    if (
+        not isinstance(retain_until, datetime.datetime)
+        or retain_until.tzinfo is None
+        or retain_until <= now
+    ):
+        raise WormNotApplied(
+            target_bucket=target_bucket,
+            target_key=target_key,
+            target_version_id=target_version_id,
+        )
+    return retain_until
+
+
+def _adopt_target_sync(
+    verified: VerifiedStagedObject,
+    target_bucket: str,
+    target_version_id: str,
+    client: Any,
+) -> PromotionResult:
+    target_key = verified.source.locator.object_key
+    try:
+        response = client.get_object(
+            Bucket=target_bucket,
+            Key=target_key,
+            VersionId=target_version_id,
+        )
+    except Exception as exc:
+        raise StorageUnavailable(StorageStage.TARGET_GET, exc) from exc
+    body = response.get("Body")
+    if body is None:
+        raise StorageUnavailable(StorageStage.TARGET_GET)
+    try:
+        if response.get("VersionId") != target_version_id:
+            raise StorageUnavailable(StorageStage.TARGET_GET)
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            while True:
+                chunk = body.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                size += len(chunk)
+        except Exception as exc:
+            raise StorageUnavailable(StorageStage.TARGET_READ, exc) from exc
+    finally:
+        body.close()
+    observed_sha256 = digest.hexdigest()
+    if not hmac.compare_digest(observed_sha256, verified.verified_sha256) or size != verified.size:
+        raise TargetIdentityConflict(
+            source=verified.source,
+            target_bucket=target_bucket,
+            target_key=target_key,
+            target_version_id=target_version_id,
+            observed_sha256=observed_sha256,
+            observed_size=size,
+        )
+    retain_until = _target_retention_sync(
+        client,
+        target_bucket=target_bucket,
+        target_key=target_key,
+        target_version_id=target_version_id,
+    )
+    return PromotionResult(
+        outcome=PromotionOutcome.ADOPTED_EXISTING,
+        verified_sha256=verified.verified_sha256,
+        size=verified.size,
+        content_type=response.get("ContentType"),
+        retain_until=retain_until,
+        source=verified.source,
+        source_etag=verified.etag,
+        target_bucket=target_bucket,
+        target_key=target_key,
+        target_version_id=target_version_id,
+    )
+
+
+def _verify_copied_target_sync(
+    verified: VerifiedStagedObject,
+    target_bucket: str,
+    target_version_id: str,
+    client: Any,
+) -> PromotionResult:
+    target_key = verified.source.locator.object_key
+    try:
+        meta = client.head_object(
+            Bucket=target_bucket,
+            Key=target_key,
+            VersionId=target_version_id,
+        )
+    except Exception as exc:
+        raise StorageUnavailable(StorageStage.TARGET_HEAD, exc) from exc
+    if meta.get("VersionId") != target_version_id:
+        raise StorageUnavailable(StorageStage.TARGET_HEAD)
+    try:
+        size = int(meta["ContentLength"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StorageUnavailable(StorageStage.TARGET_HEAD, exc) from exc
+    if size != verified.size:
+        raise TargetIdentityConflict(
+            source=verified.source,
+            target_bucket=target_bucket,
+            target_key=target_key,
+            target_version_id=target_version_id,
+            observed_sha256=None,
+            observed_size=size,
+        )
+    retain_until = _target_retention_sync(
+        client,
+        target_bucket=target_bucket,
+        target_key=target_key,
+        target_version_id=target_version_id,
+    )
+    return PromotionResult(
+        outcome=PromotionOutcome.COPIED,
+        verified_sha256=verified.verified_sha256,
+        size=size,
+        content_type=meta.get("ContentType") or verified.content_type,
+        retain_until=retain_until,
+        source=verified.source,
+        source_etag=verified.etag,
+        target_bucket=target_bucket,
+        target_key=target_key,
+        target_version_id=target_version_id,
+    )
+
+
+def _finalize_sync(
+    source: StagedObjectRef,
+    target_bucket: str,
+    *,
+    client: Any | None = None,
+    before_copy: Callable[[], None] | None = None,
+) -> PromotionResult:
+    storage_client = client or _client()
+    verified = _verify_staged_sync(source, client=storage_client)
+    target_key = source.locator.object_key
+    existing = _target_head_sync(storage_client, target_bucket, target_key)
+    if existing is not None:
+        target_version_id = _require_store_version_id(
+            existing.get("VersionId"), StorageStage.TARGET_HEAD
+        )
+        return _adopt_target_sync(verified, target_bucket, target_version_id, storage_client)
+
+    if before_copy is not None:
+        before_copy()
+    try:
+        copied = storage_client.copy_object(
+            Bucket=target_bucket,
+            Key=target_key,
+            CopySource={
+                "Bucket": _bucket_for_domain(source.locator.domain),
+                "Key": source.locator.object_key,
+                "VersionId": source.locator.version_id,
+            },
+            CopySourceIfMatch=verified.etag,
+        )
+    except Exception as exc:
+        code = _error_code(exc)
+        if code in {"PreconditionFailed", "412"} or _http_status(exc) == 412:
+            raise StagedSourceChanged(source) from exc
+        if code in {"NoSuchKey", "NoSuchVersion"}:
+            raise StagedSourceUnavailable(source) from exc
+        raise StorageUnavailable(StorageStage.COPY, exc) from exc
+    target_version_id = _require_store_version_id(copied.get("VersionId"), StorageStage.COPY)
+    return _verify_copied_target_sync(verified, target_bucket, target_version_id, storage_client)
+
+
+async def promote_worm(source: StagedObjectRef, *, target_bucket: str) -> PromotionResult:
+    return await asyncio.to_thread(_finalize_sync, source, target_bucket)
+
+
 async def finalize_worm(
     sha256: str, *, bucket: str | None = None, source_bucket: str | None = None
 ) -> ObjectHead:
-    """Promote a staged object to a WORM bucket (server-side copy) and return its head — existence
+    """Task-8 migration adapter for callers not yet converted to exact-version promotion.
+
+    Promote a staged object to a WORM bucket (server-side copy) and return its head — existence
     + size + the now-applied retain-until. The blob is WORM-locked here, before the owning row is
     committed. ``bucket`` defaults to the documents vault (records evidence passes
     ``_records_bucket()``); ``source_bucket`` defaults to the plain ``staging`` bucket — S-ing-5
     commit passes ``_import_staging_bucket()`` to promote import-staged bytes directly (one
     server-side copy, no plain-staging hop). Both the head probe and the CopySource use it."""
     return await asyncio.to_thread(
-        _finalize_sync, sha256, bucket or _doc_bucket(), source_bucket or _staging_bucket()
+        _legacy_finalize_sync, sha256, bucket or _doc_bucket(), source_bucket or _staging_bucket()
     )
 
 
@@ -229,8 +559,11 @@ async def hash_object(object_key: str, *, bucket: str | None = None) -> str:
     return await asyncio.to_thread(_hash_object_sync, object_key, bucket or _doc_bucket())
 
 
-def _put_bytes_sync(data: bytes, object_key: str, bucket: str, content_type: str) -> None:
-    _client().put_object(Bucket=bucket, Key=object_key, Body=data, ContentType=content_type)
+def _put_bytes_sync(data: bytes, object_key: str, bucket: str, content_type: str) -> dict[str, Any]:
+    response: dict[str, Any] = _client().put_object(
+        Bucket=bucket, Key=object_key, Body=data, ContentType=content_type
+    )
+    return response
 
 
 async def put_bytes(
@@ -245,12 +578,55 @@ async def put_bytes(
 
 async def put_staging_bytes(
     data: bytes, sha256: str, *, content_type: str = "application/octet-stream"
-) -> None:
+) -> StagedObjectRef:
     """Write server-generated bytes into the plain **staging** bucket at ``key = sha256``, so a
     subsequent :func:`finalize_worm` can promote them into a WORM bucket (the S-rec-3 form-template
     check-in: the controlled content of a Form/Template *is* its canonical-serialized field schema,
     written server-side rather than client-uploaded). Off the event loop."""
-    await asyncio.to_thread(_put_bytes_sync, data, sha256, _staging_bucket(), content_type)
+
+    def _put() -> StagedObjectRef:
+        client = _client()
+        _require_staging_versioning_sync(StagingDomain.STAGING, client)
+        try:
+            response = client.put_object(
+                Bucket=_staging_bucket(),
+                Key=sha256,
+                Body=data,
+                ContentType=content_type,
+            )
+        except Exception as exc:
+            raise StorageUnavailable(StorageStage.STAGING_PUT, exc) from exc
+        version_id = _require_store_version_id(response.get("VersionId"), StorageStage.STAGING_PUT)
+        return StagedObjectRef(
+            locator=StagedVersionLocator(
+                domain=StagingDomain.STAGING,
+                object_key=sha256,
+                version_id=version_id,
+            ),
+            expected_sha256=sha256,
+            content_type=content_type,
+            expected_size=len(data),
+        )
+
+    return await asyncio.to_thread(_put)
+
+
+def _delete_staged_version_sync(locator: StagedVersionLocator) -> None:
+    try:
+        _client().delete_object(
+            Bucket=_bucket_for_domain(locator.domain),
+            Key=locator.object_key,
+            VersionId=locator.version_id,
+        )
+    except Exception as exc:
+        if _is_object_absence(exc, object_level_404=True):
+            return
+        raise StorageUnavailable(StorageStage.CLEANUP, exc) from exc
+
+
+async def delete_staged_version(locator: StagedVersionLocator) -> None:
+    """Delete exactly one staged version; exact absence is an idempotent success."""
+    await asyncio.to_thread(_delete_staged_version_sync, locator)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
