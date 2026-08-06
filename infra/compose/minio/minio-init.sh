@@ -18,26 +18,67 @@ mc version enable local/staging
 # Community MinIO supports one cluster-wide browser origin, not per-bucket CORS. This controls only
 # browser response access; S3 IAM and presigned-request authorization remain the access boundary.
 : "${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}"
+
+reject_public_base_url() {
+	echo "minio-init: PUBLIC_BASE_URL must be one exact HTTP(S) origin" >&2
+	exit 1
+}
+
 case "$PUBLIC_BASE_URL" in
 	http://?*|https://?*) ;;
-	*)
-		echo "minio-init: PUBLIC_BASE_URL must be one exact HTTP(S) origin" >&2
-		exit 1
-		;;
+	*) reject_public_base_url ;;
 esac
 ORIGIN_AUTHORITY="${PUBLIC_BASE_URL#*://}"
 case "$ORIGIN_AUTHORITY" in
-	""|*'/'*|*'?'*|*'#'*|*'@'*)
-		echo "minio-init: PUBLIC_BASE_URL must be one exact HTTP(S) origin" >&2
-		exit 1
-		;;
+	""|*'/'*|*'?'*|*'#'*|*'@'*) reject_public_base_url ;;
 esac
 case "$PUBLIC_BASE_URL" in
-	*[[:space:]]*|*','*|*'*'*|*'<'*|*'>'*|*'&'*|*'"'*|*"'"*)
-		echo "minio-init: PUBLIC_BASE_URL must be one exact HTTP(S) origin" >&2
-		exit 1
+	*[[:space:]]*|*','*|*'*'*|*'<'*|*'>'*|*'&'*|*'"'*|*"'"*) reject_public_base_url ;;
+esac
+
+ORIGIN_HOST="$ORIGIN_AUTHORITY"
+ORIGIN_HAS_PORT=0
+ORIGIN_PORT=""
+case "$ORIGIN_AUTHORITY" in
+	*:*)
+		ORIGIN_HAS_PORT=1
+		ORIGIN_HOST="${ORIGIN_AUTHORITY%:*}"
+		ORIGIN_PORT="${ORIGIN_AUTHORITY##*:}"
 		;;
 esac
+
+case "$ORIGIN_HOST" in
+	""|.*|*.|*[!A-Za-z0-9.-]*) reject_public_base_url ;;
+esac
+[ "${#ORIGIN_HOST}" -le 253 ] || reject_public_base_url
+
+HOST_REMAINDER="$ORIGIN_HOST"
+while [ -n "$HOST_REMAINDER" ]; do
+	case "$HOST_REMAINDER" in
+		*.*)
+			HOST_LABEL="${HOST_REMAINDER%%.*}"
+			HOST_REMAINDER="${HOST_REMAINDER#*.}"
+			;;
+		*)
+			HOST_LABEL="$HOST_REMAINDER"
+			HOST_REMAINDER=""
+			;;
+	esac
+	case "$HOST_LABEL" in
+		""|-*|*-) reject_public_base_url ;;
+	esac
+	[ "${#HOST_LABEL}" -le 63 ] || reject_public_base_url
+done
+
+if [ "$ORIGIN_HAS_PORT" -eq 1 ]; then
+	case "$ORIGIN_PORT" in
+		""|*[!0-9]*) reject_public_base_url ;;
+	esac
+	[ "${#ORIGIN_PORT}" -le 5 ] || reject_public_base_url
+	if [ "$ORIGIN_PORT" -lt 1 ] || [ "$ORIGIN_PORT" -gt 65535 ]; then
+		reject_public_base_url
+	fi
+fi
 # S8b2: the restore-test drill copies blobs INTO this plain (NON-WORM) scratch bucket and tears the
 # per-drill prefix down — object-lock can't be retro-added (R37), so the drill never restores into a
 # locked bucket. Deliberately NOT --with-lock.

@@ -72,6 +72,26 @@ def test_minio_init_versions_staging_without_unsupported_bucket_cors() -> None:
     assert "lifecycle" not in init.lower()
 
 
+def _run_minio_init(tmp_path: Path, origin: str) -> subprocess.CompletedProcess[str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_mc = fake_bin / "mc"
+    fake_mc.write_text("#!/bin/sh\nexit 0\n")
+    fake_mc.chmod(0o755)
+    return subprocess.run(  # noqa: S603 - fixed script with an isolated fake mc
+        ["/bin/sh", str(ROOT / "infra/compose/minio/minio-init.sh")],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PUBLIC_BASE_URL": origin,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 @pytest.mark.parametrize(
     "origin",
     [
@@ -85,29 +105,42 @@ def test_minio_init_versions_staging_without_unsupported_bucket_cors() -> None:
         "ftp://test",
         "http:///path",
         "http://test/path",
+        "http://:",
+        "http://host:",
+        "https://host:not-a-port",
+        "http://host:0",
+        "http://host:65536",
+        "http://host:999999999999999999999",
+        "http://bad_host",
+        "http://-host.test",
+        "http://host-.test",
+        "http://host..test",
+        "http://.host",
+        "http://host.",
+        f"http://{'a' * 64}.test",
+        "http://" + ".".join(["aa"] * 85),
     ],
 )
 def test_minio_init_rejects_non_exact_browser_origins(tmp_path: Path, origin: str) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_mc = fake_bin / "mc"
-    fake_mc.write_text("#!/bin/sh\nexit 0\n")
-    fake_mc.chmod(0o755)
-    result = subprocess.run(  # noqa: S603 - fixed script with an isolated fake mc
-        ["/bin/sh", str(ROOT / "infra/compose/minio/minio-init.sh")],
-        cwd=ROOT,
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "PUBLIC_BASE_URL": origin,
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_minio_init(tmp_path, origin)
 
     assert result.returncode != 0
     assert "one exact HTTP(S) origin" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost",
+        "http://localhost:9000",
+        "https://qms.example.com",
+        "https://QMS.example.com:9443",
+    ],
+)
+def test_minio_init_accepts_valid_browser_origins(tmp_path: Path, origin: str) -> None:
+    result = _run_minio_init(tmp_path, origin)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_staging_initializer_gates_every_promotion_capable_service() -> None:
