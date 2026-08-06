@@ -29,6 +29,7 @@ promote.
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import hashlib
 import logging
 import uuid
@@ -156,6 +157,14 @@ class _LostRace(Exception):
 class _FailedRecordResult:
     won: bool
     audit_ref: upload_rejection.AuditEventRef | None = None
+
+
+@dataclasses.dataclass(slots=True)
+class _CommitAttempt:
+    """Failure ownership generation plus any exact restage verified during this attempt."""
+
+    expected_committed_at: datetime.datetime | None = None
+    restaged_blob_uri: str | None = None
 
 
 def _failure_reason(exc: BaseException) -> str:
@@ -364,6 +373,7 @@ async def _commit_items(
             decisions_by_file.setdefault(d.file_id, []).append(d)
 
     for node in nodes:
+        attempt = _CommitAttempt()
         try:
             # The whole per-node body (the pure preamble + the commit) is inside the try so a single
             # poison node is isolated as result=failed (per-item isolation) and the loop always
@@ -379,6 +389,9 @@ async def _commit_items(
             # Each item is its OWN session+transaction → no cross-item state, no reuse-after-error.
             async with sm() as s:
                 existing = await repo.get_commit_result(s, run_id, node.file_id)
+                attempt.expected_committed_at = (
+                    existing.committed_at if existing is not None else None
+                )
                 if existing is not None and existing.result in (
                     ImportCommitResultStatus.SUCCESS,
                     ImportCommitResultStatus.NOOP,
@@ -412,6 +425,7 @@ async def _commit_items(
                         classifier_version,
                         source_root=source_root,
                         restage=restage,
+                        attempt=attempt,
                     )
                 else:  # RECORD
                     await _commit_record(
@@ -427,6 +441,7 @@ async def _commit_items(
                         classifier_version,
                         source_root=source_root,
                         restage=restage,
+                        attempt=attempt,
                     )
                 await s.commit()
         except _LostRace:
@@ -441,6 +456,7 @@ async def _commit_items(
                     org_id,
                     node.file_id,
                     reason,
+                    expected_committed_at=attempt.expected_committed_at,
                     rejection=(exc, context),
                 )
             if recorded.won and recorded.audit_ref is not None:
@@ -456,6 +472,8 @@ async def _commit_items(
                     org_id,
                     node.file_id,
                     reason,
+                    expected_committed_at=attempt.expected_committed_at,
+                    retained_staged_blob_uri=attempt.restaged_blob_uri,
                     rejection=(exc, context),
                 )
             if recorded.won:
@@ -481,7 +499,15 @@ async def _commit_items(
                     },
                 )
             async with sm() as fs:  # a FRESH session for the failed-ledger write
-                recorded = await _record_failed(fs, run_id, org_id, node.file_id, reason)
+                recorded = await _record_failed(
+                    fs,
+                    run_id,
+                    org_id,
+                    node.file_id,
+                    reason,
+                    expected_committed_at=attempt.expected_committed_at,
+                    retained_staged_blob_uri=attempt.restaged_blob_uri,
+                )
             if recorded.won:
                 _log_item_failure(run_id, node.file_id, reason)
 
@@ -505,6 +531,7 @@ async def _commit_document(
     *,
     source_root: str,
     restage: bool,
+    attempt: _CommitAttempt,
 ) -> None:
     settings = get_settings()
     sha = file.sha256
@@ -571,6 +598,7 @@ async def _commit_document(
     if blob is None:
         source = await _restage_source(file, source_root) if restage else _parse_import_source(file)
         if restage:
+            attempt.restaged_blob_uri = file.staged_blob_uri
             await session.execute(
                 update(ImportFile)
                 .where(ImportFile.id == file.id)
@@ -728,6 +756,7 @@ async def _commit_record(
     *,
     source_root: str,
     restage: bool,
+    attempt: _CommitAttempt,
 ) -> None:
     settings = get_settings()
     sha = file.sha256
@@ -746,6 +775,7 @@ async def _commit_record(
     if blob is None:
         source = await _restage_source(file, source_root) if restage else _parse_import_source(file)
         if restage:
+            attempt.restaged_blob_uri = file.staged_blob_uri
             await session.execute(
                 update(ImportFile)
                 .where(ImportFile.id == file.id)
@@ -888,16 +918,29 @@ async def _record_failed(
     file_id: uuid.UUID,
     reason: str,
     *,
+    expected_committed_at: datetime.datetime | None,
+    retained_staged_blob_uri: str | None = None,
     rejection: tuple[IdentityRefusal | TargetIdentityConflict, upload_rejection.RejectionContext]
     | None = None,
 ) -> _FailedRecordResult:
     """Atomically record + audit an isolated failure after the item transaction rolled back."""
     won = await repo.record_failed_result(
-        session, org_id=org_id, run_id=run_id, file_id=file_id, error=reason
+        session,
+        org_id=org_id,
+        run_id=run_id,
+        file_id=file_id,
+        error=reason,
+        expected_committed_at=expected_committed_at,
     )
     if not won:
         await session.rollback()
         return _FailedRecordResult(won=False)
+    if retained_staged_blob_uri is not None:
+        await session.execute(
+            update(ImportFile)
+            .where(ImportFile.id == file_id)
+            .values(staged_blob_uri=retained_staged_blob_uri)
+        )
     after: dict[str, Any] = {"file_id": str(file_id), "error": reason}
     if rejection is not None:
         failure, context = rejection

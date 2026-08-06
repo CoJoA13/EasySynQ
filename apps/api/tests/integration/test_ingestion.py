@@ -35,6 +35,7 @@ from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.clause_mapping import ClauseMapping
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
+from easysynq_api.db.models.import_file import ImportFile
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.scope import Scope
@@ -52,6 +53,11 @@ from easysynq_api.services.ingestion.dedup import run_dedup
 from easysynq_api.services.ingestion.extract import run_extract
 from easysynq_api.services.ingestion.propose import run_propose
 from easysynq_api.services.ingestion.service import run_scan
+from easysynq_api.services.vault.staged_identity import (
+    StorageStage,
+    StorageUnavailable,
+    UploadIdentityMismatch,
+)
 
 from .test_authz import _assign_role, _auth
 from .test_records import _grant, _subject
@@ -2232,6 +2238,7 @@ async def test_record_failed_does_not_audit_after_peer_success(
         run_id: uuid.UUID,
         file_id: uuid.UUID,
         error: str,
+        expected_committed_at: object,
     ) -> bool:
         nonlocal peer_inserted
         if not peer_inserted:
@@ -2248,7 +2255,12 @@ async def test_record_failed_does_not_audit_after_peer_success(
                 await peer.commit()
             peer_inserted = True
         return await original_record_failed(
-            session, org_id=org_id, run_id=run_id, file_id=file_id, error=error
+            session,
+            org_id=org_id,
+            run_id=run_id,
+            file_id=file_id,
+            error=error,
+            expected_committed_at=expected_committed_at,  # type: ignore[arg-type]
         )
 
     monkeypatch.setattr(commit_svc.repo, "record_failed_result", _peer_wins_before_failed_upsert)
@@ -2257,7 +2269,12 @@ async def test_record_failed_does_not_audit_after_peer_success(
         run = await ingestion_repo.get_run(session, run_uuid)
         assert run is not None
         await commit_svc._record_failed(
-            session, run_uuid, run.org_id, file_id, "simulated_worker_failure"
+            session,
+            run_uuid,
+            run.org_id,
+            file_id,
+            "simulated_worker_failure",
+            expected_committed_at=None,
         )
 
     async with get_sessionmaker()() as session:
@@ -2874,3 +2891,240 @@ async def test_commit_blocked_by_conflict_and_gated_on_import_commit(
     hr = _auth(token_factory, reviewer)
     denied = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=hr)
     assert denied.status_code == 403
+
+
+async def test_concurrent_failure_writers_share_one_audit_and_cleanup_authorization(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Removing the observed-generation CAS lets both stale failure writers audit and clean."""
+    admin = _subject("failure-generation-race")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, headers, _stub_tika)
+    run_uuid = uuid.UUID(run_id)
+    file_id = uuid.UUID(by_name["SOP-PUR-002 Purchasing.docx"]["id"])
+
+    async with get_sessionmaker()() as setup:
+        run = await ingestion_repo.get_run(setup, run_uuid)
+        file = await setup.get(ImportFile, file_id)
+        assert run is not None and file is not None
+        assert file.sha256 is not None and file.staged_blob_uri is not None
+        source = ingestion_storage.parse_staged_uri(
+            file.staged_blob_uri,
+            expected_sha256=file.sha256,
+            content_type=file.mime_type or "application/octet-stream",
+            expected_size=file.size_bytes,
+        )
+        org_id = run.org_id
+        context = commit_svc._import_rejection_context(org_id, file)
+
+    failure = UploadIdentityMismatch(
+        source=source,
+        expected_sha256=source.expected_sha256,
+        observed_sha256="f" * 64,
+        expected_size=source.expected_size,
+        observed_size=source.expected_size or 0,
+        etag="controlled-overlap",
+        classification="digest_mismatch",
+    )
+    arrived = 0
+    arrived_lock = asyncio.Lock()
+    both_observed = asyncio.Event()
+    cleanup_calls: list[str] = []
+
+    async def _delete_once(locator: object) -> None:
+        cleanup_calls.append(locator.version_id)  # type: ignore[union-attr]
+
+    monkeypatch.setattr(commit_svc.storage, "delete_staged_version", _delete_once)
+
+    async def _worker() -> bool:
+        nonlocal arrived
+        async with get_sessionmaker()() as session:
+            observed = await ingestion_repo.get_commit_result(session, run_uuid, file_id)
+            assert observed is None
+            async with arrived_lock:
+                arrived += 1
+                if arrived == 2:
+                    both_observed.set()
+            await both_observed.wait()
+            recorded = await commit_svc._record_failed(
+                session,
+                run_uuid,
+                org_id,
+                file_id,
+                "upload_identity_digest_mismatch",
+                expected_committed_at=None,
+                rejection=(failure, context),
+            )
+        if recorded.won and recorded.audit_ref is not None:
+            await commit_svc._cleanup_rejected_import_source(failure, recorded.audit_ref)
+        return recorded.won
+
+    winners = await asyncio.gather(_worker(), _worker())
+
+    assert sorted(winners) == [False, True]
+    assert cleanup_calls == [source.locator.version_id]
+    async with get_sessionmaker()() as check:
+        result = await ingestion_repo.get_commit_result(check, run_uuid, file_id)
+        assert result is not None
+        assert result.result is ImportCommitResultStatus.FAILED
+        events = (
+            (
+                await check.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == run_uuid,
+                        AuditEvent.event_type == EventType.IMPORT_ITEM_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        item_events = [e for e in events if (e.after or {}).get("file_id") == str(file_id)]
+        assert len(item_events) == 1
+
+
+async def test_restaged_locator_survives_retained_storage_failure_and_resumes_exactly(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dropping the retained-locator write strands a non-restageable failed resume on v1."""
+    import boto3
+
+    admin = _subject("retained-restage-storage-failure")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(
+        app_client,
+        headers,
+        _stub_tika,
+        content_suffix=f" retained-restage-{uuid.uuid4().hex}",
+    )
+    run_uuid = uuid.UUID(run_id)
+    document = by_name["SOP-PUR-002 Purchasing.docx"]
+    peer = by_name["Internal Audit Report Q2 2023.pdf"]
+    file_id = uuid.UUID(document["id"])
+    sha = document["sha256"]
+    assert isinstance(sha, str)
+    await _confirm_for_commit(
+        app_client,
+        headers,
+        run_id,
+        document["id"],
+        peer["id"],
+        doc_identifier=f"SOP-{uuid.uuid4().hex[:6].upper()}-001",
+    )
+
+    settings = get_settings()
+    source_path = Path(settings.import_source_root) / document["rel_path"]
+    honest_bytes = source_path.read_bytes()
+    false_bytes = b"!" * len(honest_bytes)
+    assert false_bytes != honest_bytes
+    client = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint,
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key,
+        region_name=settings.s3_region,
+    )
+    refused = client.put_object(
+        Bucket=settings.s3_bucket_import_staging,
+        Key=sha,
+        Body=false_bytes,
+        ContentType=document["mime_type"],
+    )
+    refused_uri = (
+        f"s3://{settings.s3_bucket_import_staging}/{sha}"
+        f"?versionId={quote(refused['VersionId'], safe='')}"
+    )
+    source_path.write_bytes(false_bytes)
+    try:
+        async with get_sessionmaker()() as session:
+            await session.execute(
+                sa.text("UPDATE import_file SET staged_blob_uri = :uri WHERE id = :file"),
+                {"uri": refused_uri, "file": file_id},
+            )
+            await session.commit()
+
+        assert (
+            await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+        ).status_code == 202
+        await _drive_commit(run_uuid)
+        refused_detail = (
+            await app_client.get(
+                f"/api/v1/admin/imports/{run_id}/files/{document['id']}", headers=headers
+            )
+        ).json()
+        assert refused_detail["commit"]["error"] == "upload_identity_digest_mismatch"
+
+        source_path.write_bytes(honest_bytes)
+        original_stage = commit_svc.ingestion_storage.stage_stream
+        original_promote = commit_svc.storage.promote_worm
+        restaged_uri: str | None = None
+
+        async def _capture_restage(handle: object, *, content_type: str) -> object:
+            nonlocal restaged_uri
+            staged = await original_stage(handle, content_type=content_type)  # type: ignore[arg-type]
+            restaged_uri = staged.staged_blob_uri
+            return staged
+
+        async def _fail_after_restage(source: object, *, target_bucket: str) -> object:
+            if source.locator.object_key == sha:  # type: ignore[union-attr]
+                raise StorageUnavailable(StorageStage.COPY)
+            return await original_promote(source, target_bucket=target_bucket)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(commit_svc.ingestion_storage, "stage_stream", _capture_restage)
+        monkeypatch.setattr(commit_svc.storage, "promote_worm", _fail_after_restage)
+        assert (
+            await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+        ).status_code == 202
+        await _drive_commit(run_uuid)
+
+        retained = (
+            await app_client.get(
+                f"/api/v1/admin/imports/{run_id}/files/{document['id']}", headers=headers
+            )
+        ).json()
+        assert restaged_uri is not None and restaged_uri != refused_uri
+        assert retained["commit"]["error"] == "storage_unavailable_copy"
+        assert retained["staged_blob_uri"] == restaged_uri
+        retained_source = ingestion_storage.parse_staged_uri(
+            restaged_uri,
+            expected_sha256=sha,
+            content_type=document["mime_type"],
+            expected_size=document["size_bytes"],
+        )
+        retained_object = client.get_object(
+            Bucket=settings.s3_bucket_import_staging,
+            Key=sha,
+            VersionId=retained_source.locator.version_id,
+        )
+        assert retained_object["Body"].read() == honest_bytes
+
+        async def _forbid_restage(_handle: object, *, content_type: str) -> object:
+            raise AssertionError(f"unexpected restage with {content_type}")
+
+        monkeypatch.setattr(commit_svc.ingestion_storage, "stage_stream", _forbid_restage)
+        monkeypatch.setattr(commit_svc.storage, "promote_worm", original_promote)
+        assert (
+            await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+        ).status_code == 202
+        await _drive_commit(run_uuid)
+        completed = (
+            await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=headers)
+        ).json()
+        final_detail = (
+            await app_client.get(
+                f"/api/v1/admin/imports/{run_id}/files/{document['id']}", headers=headers
+            )
+        ).json()
+        assert completed["status"] == "Completed"
+        assert final_detail["commit"]["result"] == "success"
+        assert final_detail["staged_blob_uri"] == restaged_uri
+    finally:
+        source_path.write_bytes(honest_bytes)

@@ -6,11 +6,12 @@ SQL only — no orchestration, no audit (the service owns those). The inventory 
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Text, and_, cast, delete, func, or_, select
+from sqlalchemy import Text, and_, cast, delete, false, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1137,12 +1138,23 @@ async def record_failed_result(
     run_id: uuid.UUID,
     file_id: uuid.UUID,
     error: str,
+    expected_committed_at: datetime.datetime | None,
 ) -> bool:
-    """Atomically record an isolated per-item FAILURE iff no terminal result won first.
+    """Record FAILURE only from the ledger generation this attempt observed before doing work.
 
-    Returns whether this writer inserted/updated the ledger row. A concurrent SUCCESS/NOOP makes
-    the conditional UPSERT return no row, so the caller can avoid appending a false failure audit.
+    ``None`` means the attempt observed no row, so it may insert but may not update a peer's
+    conflict winner. A timestamp means the attempt observed exactly that failed generation; only
+    that generation may be replaced. Advancing by at least one microsecond keeps even an immediate
+    serial resume distinguishable. SUCCESS/NOOP remains terminal against failure writers.
     """
+    failed_generation = (
+        and_(
+            ImportCommitResult.result == ImportCommitResultStatus.FAILED,
+            ImportCommitResult.committed_at == expected_committed_at,
+        )
+        if expected_committed_at is not None
+        else false()
+    )
     stmt = (
         pg_insert(ImportCommitResult)
         .values(
@@ -1157,9 +1169,12 @@ async def record_failed_result(
             set_={
                 "result": ImportCommitResultStatus.FAILED,
                 "error": error,
-                "committed_at": func.now(),
+                "committed_at": func.greatest(
+                    func.clock_timestamp(),
+                    ImportCommitResult.committed_at + text("interval '1 microsecond'"),
+                ),
             },
-            where=ImportCommitResult.result == ImportCommitResultStatus.FAILED,
+            where=failed_generation,
         )
         .returning(ImportCommitResult.id)
     )
