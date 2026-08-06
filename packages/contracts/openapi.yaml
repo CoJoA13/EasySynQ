@@ -4327,7 +4327,8 @@ paths:
                         type: integer
                         description: >-
                           Unresolved-finding pins (blob.verify_failed_at set) — the rows
-                          re-alarming every scan until restored; 0 once every alarm is resolved.
+                          re-alarming every scan until the exact object reads cleanly again;
+                          0 once every alarm is resolved.
                       oldest_verified_at: { type: [string, "null"], format: date-time }
                   superseded_copies:
                     type: object

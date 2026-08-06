@@ -29,9 +29,10 @@ LOCK_MIRROR_SYNC = 7710003
 # S8b2: serialize the backup/restore-test drill — one scratch DB + scratch-bucket prefix at a time
 # (a second concurrent drill skips this tick). The advisory lock also auto-releases on a crash.
 LOCK_RESTORE_DRILL = 7710004
-# S11: serialize the operator-grade LIVE restore (restore-to-verified-target). DISTINCT from the
-# drill lock so a standing verified target is never swept by a concurrent nightly drill, and so two
-# operator restores cannot collide on the restore_easysynq_* scratch namespace.
+# S11: serialize operator-initiated restore integrity verification. DISTINCT from the drill lock so
+# a standing verification target is never swept by a concurrent nightly drill, and so two operator
+# checks cannot collide on the restore_easysynq_* scratch namespace. The stable constant name is a
+# compatibility identifier; the operation is not a supported production cutover.
 LOCK_RESTORE_LIVE = 7710005
 # S-drift-1: serialize the daily D5 periodic re-review sweep (one open-instance pass + the
 # once-per-cycle overdue-audit pass) so two overlapping Beat fires cannot double-open instances.

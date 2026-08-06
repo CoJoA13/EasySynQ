@@ -76,11 +76,13 @@ The same channel carries **`integrity.alarm`** from the nightly chain verificati
 
 ## The restore-test drill (gate G-C / AC#5)
 
-`./scripts/easysynq backup restore-test` runs a real backup → restore into a throwaway scratch DATABASE →
-copies the manifested blobs into the non-WORM `restore-scratch` bucket → runs the integrity triad
+`./scripts/easysynq backup restore-test` writes a `pg_dump`/manifest test archive, restores the
+database into a throwaway scratch DATABASE, and copies referenced bytes from the configured source
+object store into the non-WORM `restore-scratch` bucket. It then runs the integrity triad
 (copied-blob SHA-256 re-hash · stored-locator SHA-256 re-hash against the currently configured object
 store · per-table row-count parity · `document_version→blob` FK check) and tears the scratch namespace
-down. Only a **PASS** satisfies the setup gate. "Configured but unverified" does not count.
+down. Only a **PASS** satisfies the setup gate. This is a source-dependent integrity check, not proof
+of recovery after source-store loss. "Configured but unverified" does not count.
 
 ## Restore integrity verification (not a cutover procedure)
 

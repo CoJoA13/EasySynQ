@@ -40,9 +40,12 @@ def backup_restore_test(org_id: str, actor_id: str | None = None) -> dict[str, A
 
 @task(name="easysynq.backup.scheduled_restore_test")
 def backup_scheduled_restore_test() -> dict[str, Any]:
-    """Scheduled (Beat) retained-backup verify for EVERY backup_policy — decrypts + restores the
-    NEWEST RETAINED durable archive into scratch + runs the integrity triad, catching a
-    silently-rotting REAL backup between the manual G-C drills (Phase-1 I-7). System-initiated,
-    best-effort + logged; each org's PASS/FAIL is persisted + RESTORE_TEST_* audited by
-    ``verify_latest_retained_backup`` (the task name stays stable for the registration pin)."""
+    """Scheduled (Beat) retained-archive verify for EVERY backup_policy.
+
+    Decrypts and restores the database into scratch, then checks manifested locators and hashes
+    against the configured source object store. It catches archive and current-source corruption,
+    but does not prove source-independent recovery. System-initiated, best-effort + logged; each
+    org's PASS/FAIL is persisted + RESTORE_TEST_* audited by ``verify_latest_retained_backup`` (the
+    task name stays stable for the registration pin).
+    """
     return asyncio.run(run_scheduled_restore_tests())

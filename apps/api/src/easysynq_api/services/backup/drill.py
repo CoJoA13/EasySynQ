@@ -1,10 +1,12 @@
 """The restore-into-scratch drill + integrity triad (slice S8b2, doc 08 §8.2 / AC#5).
 
-``run_drill`` produces a real backup archive at the configured destination, restores it into a fresh
-scratch DATABASE, copies the manifested blobs into a non-WORM scratch bucket, runs the integrity
-triad on the RESTORED copy, and tears the scratch namespace down — returning a PASS/FAIL verdict
-(never raising; a crash is an honest FAIL, not a 500). The steps are composable so the negative test
-can inject a post-restore fault via ``after_restore`` without any production hook.
+``run_drill`` writes a ``pg_dump`` archive and object manifest at the configured destination,
+restores the database into a fresh scratch DATABASE, and copies the referenced bytes from the
+configured source object store into a non-WORM scratch bucket. It runs the integrity triad on the
+scratch copy and tears the scratch namespace down — returning a PASS/FAIL verdict (never raising; a
+crash is an honest FAIL, not a 500). This checks archive and current-source integrity; it does not
+prove recovery when the source object store is unavailable. The steps are composable so the
+negative test can inject a post-restore fault via ``after_restore`` without any production hook.
 
 Runs as the OWNER DB role (``settings.sync_dsn``) — the runtime ``easysynq_app`` role can neither
 ``pg_dump`` the whole DB nor ``CREATE DATABASE``. Row-count parity is race-free: counts are captured
@@ -366,8 +368,8 @@ def _latest_checkpoint_bundle(owner_dsn: str) -> bytes | None:
 
 
 def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, Any]:
-    """Write a real, timestamped, checksum-verified backup archive to ``destination`` — the durable
-    artifact the nightly Beat job + ``easysynq backup run`` produce. The archive (v2) carries the
+    """Write a timestamped, checksum-verified archive to ``destination`` — the durable artifact the
+    nightly Beat job + ``easysynq backup run`` produce. The archive (v2) carries the
     pg_dump + blob manifest (per-table counts) + the latest audit checkpoint, and — ONLY when
     ``BACKUP_ENCRYPTION_KEY`` is set — the Keycloak realm export + a config snapshot, AES-256-GCM
     encrypted to ``.tar.enc``. With NO key it falls back to a PLAINTEXT ``.tar`` and OMITS the
@@ -485,10 +487,14 @@ def run_drill(
     destination: str,
     after_restore: Callable[[ScratchHandle], None] | None = None,
 ) -> DrillResult:
-    """Backup → restore-into-scratch → integrity triad → teardown. Writes a real, checksum-verified
-    archive to ``destination`` and restores FROM it (proving the destination round-trips, doc 08
-    §8.2). Never raises — returns PASS/FAIL. ``after_restore`` is a TEST-ONLY fault injector run
-    after the restore + blob copy, before the triad (the negative AC#5 proof)."""
+    """Backup → restore-into-scratch → integrity triad → teardown.
+
+    Writes a checksum-verified archive to ``destination`` and restores the database from it while
+    copying referenced bytes from the configured source object store (proving those current-source
+    integrity operations round-trip, doc 08 §8.2). Never raises — returns PASS/FAIL.
+    ``after_restore`` is a TEST-ONLY fault injector run after the restore + blob copy, before the
+    triad (the negative AC#5 proof).
+    """
     owner_dsn = settings.sync_dsn
     drill_id = uuid.uuid4().hex
     scratch_db = f"{_SCRATCH_PREFIX}{drill_id}"

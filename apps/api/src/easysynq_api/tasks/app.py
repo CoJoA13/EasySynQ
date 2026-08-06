@@ -59,12 +59,12 @@ app.conf.update(
             "task": "easysynq.backup.run",
             "schedule": 86400.0,  # daily
         },
-        # Phase-1 (I-7): scheduled retained-backup verify — decrypt + restore-into-scratch +
-        # integrity triad over the NEWEST RETAINED durable archive for every backup_policy, so a
-        # silently-rotting REAL backup is caught between the manual G-C drills (the nightly job
-        # above only WRITES archives; this proves the stored, encrypted ones still restore). Weekly
-        # default (RESTORE_TEST_INTERVAL_SECONDS); heavy (scratch DB + full pg_restore + blob
-        # re-hash), runs as the OWNER role, never raises (an honest FAIL is persisted + audited).
+        # Phase-1 (I-7): scheduled retained-archive verify — decrypt/checksum + DB restore into
+        # scratch, then validate manifested locators and hashes against the configured source object
+        # store for every backup_policy. It catches archive/current-source corruption between manual
+        # G-C drills, but does not prove recovery without that source store. Weekly default
+        # (RESTORE_TEST_INTERVAL_SECONDS); heavy (scratch DB + full pg_restore + blob re-hash), runs
+        # as the OWNER role, never raises (an honest FAIL is persisted + audited).
         "backup-restore-test-weekly": {
             "task": "easysynq.backup.scheduled_restore_test",
             "schedule": float(_settings.restore_test_interval_seconds),

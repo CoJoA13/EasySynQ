@@ -349,10 +349,11 @@ async def verify_latest_retained_backup(
 
 
 async def run_scheduled_restore_tests() -> dict[str, Any]:
-    """Verify the NEWEST RETAINED durable backup for every configured ``backup_policy`` (one per
-    org; single-org in MVP, D1) on the Beat cadence — so a silently-rotting REAL backup is caught
-    between the manual G-C drills (Phase-1 I-7; the nightly job only WRITES archives, this proves
-    the stored ones still restore). Delegates per org to ``verify_latest_retained_backup`` (its
+    """Verify the newest retained archive for every configured ``backup_policy`` (one per org;
+    single-org in MVP, D1) on the Beat cadence. The check decrypts and restores the database into
+    scratch, then validates manifested locators and hashes against the configured source object
+    store. It catches archive and current-source corruption between manual G-C drills, but does not
+    prove source-independent recovery. Delegates per org to ``verify_latest_retained_backup`` (its
     ``LOCK_RESTORE_DRILL`` serialization + persisted ``last_restore_test_result`` +
     RESTORE_TEST_PASSED/_FAILED audit + never-raise contract) with a SYSTEM actor. Best-effort: one
     org's failure never aborts the others, and the verify itself never raises (an honest FAIL is
