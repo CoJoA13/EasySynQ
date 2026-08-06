@@ -82,7 +82,7 @@ authz keys, migration `0052`, register R46. Spawn-seam columns/enums ship here s
 
 ### Step 8 — verify
 - `/check-migrations` (round-trip up↔down↔`alembic check` on PG16) · `/check-api` (ruff + mypy-strict +
-  **targeted** unit tests; integration + full-unit are **CI-only** on this Windows box) · `/check-contracts`.
+  **targeted** unit tests; integration + full-unit are **CI-only** in that Windows development environment) · `/check-contracts`.
 - Targeted unit tests: the pure FSM (all edges + terminals + illegal-edge 409); a service-level happy path.
 - Run `migration-reviewer` on 0052, then `diff-critic` on the branch diff. PR → green CI (all 5 jobs).
 

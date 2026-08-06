@@ -15,13 +15,13 @@ For an end-to-end entry point, start with the
 | [install-online.md](install-online.md) | First install on a host with internet. |
 | [install-airgapped.md](install-airgapped.md) | Install on a network with no outbound internet. |
 | [appliance-install.md](appliance-install.md) | Install the Hyper-V appliance on Windows Server. |
-| [backup-restore.md](backup-restore.md) | Configure backups; run the restore-test drill; restore from a backup (WORM-aware, to a verified target) + cut over; `./scripts/easysynq upgrade`. |
+| [backup-restore.md](backup-restore.md) | Configure backups; run restore integrity verification; understand why current archives/targets are not self-contained or cutover-ready; `./scripts/easysynq upgrade` constraints. |
 | [spof-fast-restart.md](spof-fast-restart.md) | Keycloak or Beat is down (the two single-host SPOFs, R14). |
 | [key-rotation.md](key-rotation.md) | Rotate the KEK / backup key / signing keys / Keycloak secret. |
 | [minio-object-lock-prereq.md](minio-object-lock-prereq.md) | Provision the WORM (object-lock) vault bucket — a hard prereq. |
 | [nfs-root-squash-mirror-caveat.md](nfs-root-squash-mirror-caveat.md) | The read-only mirror is on an NFS/SMB share. |
 | [mirror-drift-scan.md](mirror-drift-scan.md) | The D2+D3 mirror tamper/staleness scan — cadence knob, the quarantine area + cleanup, the `scan`/`sync`/`rebuild` CLI. |
-| [blob-integrity-verify.md](blob-integrity-verify.md) | D1 blob re-hash alarms: classifications, restore-from-backup response, the D4 recall list. |
+| [blob-integrity-verify.md](blob-integrity-verify.md) | D1 blob re-hash alarms: classifications, evidence-preservation/investigation response, and the D4 recall list. Current archives do not provide object-byte repair. |
 | [nfr-budgets.md](nfr-budgets.md) | Validate the performance budgets (incl. the render budgets CI can't measure). |
 
 **Conventions:** the admin CLI is `scripts/easysynq <command>` (dispatches into the Compose stack).

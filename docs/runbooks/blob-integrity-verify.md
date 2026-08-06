@@ -18,12 +18,13 @@ live count of pinned, unresolved findings.
   `READ_ERROR` — an object-scoped read failure (e.g. ACL damage); transient ones self-clear on the
   next run.
 - **Do NOT touch the mirror or the bucket in place.** Blobs are WORM-locked; there is no
-  auto-correction. Restore the affected object(s) from a verified backup to a fresh/verified
-  target per the backup-restore runbook (R37 — never mutate the locked bucket in place).
-- After the restore, run `MSYS_NO_PATHCONV=1 docker compose --env-file .env -f
-  infra/compose/compose.yml exec worker python -m easysynq_api.cli.blob verify --full` and
-  confirm the re-hash passes (the alarm clears: the pin is removed, the blob is stamped, and
-  `blob_coverage.failing` drops).
+  auto-correction. Preserve the affected object, logs, database, and source object store. Current
+  archives contain no object bytes, and the restore CLI produces only a source-dependent scratch
+  verification target, so it cannot repair or cut over the affected vault.
+- After a future supported, role-preserving recovery has been completed and independently verified,
+  run `MSYS_NO_PATHCONV=1 docker compose --env-file .env -f infra/compose/compose.yml exec worker
+  python -m easysynq_api.cli.blob verify --full` before reopening access. This is a post-recovery
+  verification requirement, not a current archive-recovery instruction.
 - A record legally disposed (R27/retention) mid-scan is NOT an alarm: a vanished object whose blob
   ROW is also gone is pruned at persist time (info-logged) — only bytes-gone-row-present alarms.
 - A `FAILED` scan status (not a finding) means infrastructure trouble (MinIO/PG unreachable) — the

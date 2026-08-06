@@ -1,14 +1,17 @@
-"""Operator CLI for the WORM-aware live restore (slice S11, R37) — runs inside the worker image
-(postgresql-client + the OWNER ``DATABASE_URL_SYNC``).
+"""Operator CLI for WORM-aware restore integrity verification (slice S11, R37).
+
+Runs in the worker image (postgresql-client + the OWNER ``DATABASE_URL_SYNC``).
 
     python -m easysynq_api.cli.restore <archive> --confirm
     python -m easysynq_api.cli.restore <archive> --confirm --audit-checkpoint-ack
     python -m easysynq_api.cli.restore --discard <scratch_db>
 
-Restores to a VERIFIED TARGET (a fresh scratch DB + fresh non-WORM bucket) and LEAVES IT STANDING
-for the documented operator cutover — it never mutates the live locked vault, never auto-cuts-over
-(see docs/runbooks/backup-restore.md). Exit 0 = verified target ready, 3 = FLAGGED
-(checkpoint ahead — re-run with --audit-checkpoint-ack), 1 = FAIL.
+Runs restore integrity verification in a fresh scratch DB + a unique prefix in the configured
+shared non-WORM scratch bucket and leaves that
+verification target standing for inspection or discard. PASS depends on the currently configured
+object store and is NOT cutover authorization: the scratch object layout does not match the restored
+database's role-bucket locators. Exit 0 = integrity checks passed, 3 = FLAGGED (checkpoint ahead —
+re-run with --audit-checkpoint-ack), 1 = FAIL.
 """
 
 from __future__ import annotations
@@ -42,7 +45,8 @@ async def _resolve_org_id() -> uuid.UUID | None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="easysynq-restore", description="WORM-aware live restore to a verified target (R37)."
+        prog="easysynq-restore",
+        description="WORM-aware restore integrity verification (not a cutover procedure).",
     )
     parser.add_argument("archive", nargs="?", help="path to the backup archive (.tar.enc or .tar)")
     parser.add_argument(
@@ -56,13 +60,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--discard",
         metavar="SCRATCH_DB",
-        help="tear down a previously left-standing verified target",
+        help="tear down a previously left-standing verification target",
     )
     args = parser.parse_args(argv)
 
     if args.discard:
         discard_target(get_settings(), args.discard)
-        print(f"restore: discarded verified target {args.discard}")
+        print(f"restore: discarded verification target {args.discard}")
         return 0
 
     if not args.archive:
@@ -87,8 +91,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(f"restore: {out.get('result')} — {out.get('reason')}")
     if out.get("result") == "PASS":
-        print(f"  verified target: db={out.get('scratch_db')} bucket={out.get('scratch_bucket')}")
-        print('  next: cut over per docs/runbooks/backup-restore.md ("Cut over")')
+        print(
+            f"  verification target: db={out.get('scratch_db')} bucket={out.get('scratch_bucket')}"
+        )
+        print("  WARNING: INTEGRITY VERIFICATION ONLY — NOT CUTOVER-READY")
+        print(
+            "  source-store dependency: stored locators were checked against the currently "
+            "configured object store"
+        )
+        print(
+            "  do not cut over to this scratch target; its copied objects use a flattened "
+            "verification layout"
+        )
+        print(
+            "  keep the source object store available; discard this verification target when "
+            "finished"
+        )
         return 0
     if out.get("result") == "FLAGGED":
         print("  re-run with --audit-checkpoint-ack to proceed (the acknowledgement is audited)")

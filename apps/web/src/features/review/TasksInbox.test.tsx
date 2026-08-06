@@ -75,7 +75,7 @@ test("shows a calm empty state", async () => {
 test("surfaces a 403 quietly", async () => {
   server.use(
     http.get("/api/v1/tasks", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { findByText } = renderWithProviders(<TasksInbox />, { route: "/tasks" });

@@ -84,12 +84,18 @@ describe("DriftStatusPage", () => {
     expect(await screen.findAllByText("Never run yet.")).toHaveLength(2);
   });
 
-  test("failing > 0 surfaces the unresolved-findings alarm with the live count", async () => {
+  test("failing > 0 gives preservation guidance without claiming archive repair", async () => {
     renderWithProviders(<DriftStatusPage />);
     // Structural: the alarm is a real alert element carrying the fixture's live failing count.
     const alarm = await screen.findByRole("alert");
-    expect(alarm).toHaveTextContent(/unresolved integrity findings — re-alarming until restored/);
+    expect(alarm).toHaveTextContent(/re-alarming until the object reads cleanly/);
     expect(alarm).toHaveTextContent(String(driftStatusFixture.blob_coverage.failing));
+    expect(alarm).toHaveTextContent(
+      /preserve evidence, quarantine affected access, and investigate/i,
+    );
+    expect(alarm).toHaveTextContent(/current archives contain no object bytes/i);
+    expect(alarm).toHaveTextContent(/no supported repair or cutover path exists/i);
+    expect(alarm).not.toHaveTextContent(/restore from backup/i);
   });
 
   test("failing = 0 shows no alarm", async () => {
@@ -158,7 +164,7 @@ describe("DriftStatusPage", () => {
   test("403 renders the calm no-access panel", async () => {
     server.use(
       http.get("/api/v1/admin/drift/status", () =>
-        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+        HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
       ),
     );
     renderWithProviders(<DriftStatusPage />);

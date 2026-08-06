@@ -5,8 +5,9 @@
     python -m easysynq_api.cli.backup restore-test   # the backup→restore-into-scratch drill (G-C)
 
 ``restore-test`` persists PASS/FAIL to ``backup_policy.last_restore_test_result`` (the signal the
-G-C setup gate reads) and exits non-zero on FAIL. The operator-grade WORM-aware *live* restore
-(R37) + ``easysynq restore``/``upgrade`` stay S11 (see ``scripts/easysynq``).
+G-C setup gate reads) and exits non-zero on FAIL. The separate WORM-aware restore integrity
+verification (R37) and ``easysynq upgrade`` stay S11 (see ``scripts/easysynq``); neither the drill
+nor the restore CLI is a supported recovery/cutover procedure.
 """
 
 from __future__ import annotations

@@ -34,7 +34,7 @@ describe("PeriodicReviewContext under production query defaults", () => {
     server.use(
       http.get("/api/v1/documents/:id", () => {
         hits += 1;
-        return HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 });
+        return HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 });
       }),
     );
     render(<PeriodicReviewContext documentId="11111111-1111-1111-1111-111111111111" />, {

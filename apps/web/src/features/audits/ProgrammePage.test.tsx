@@ -82,7 +82,7 @@ test("editing pre-fills and PATCHes; the archive toggle rides the same form", as
 test("renders a calm no-access panel on a 403 (audit.read)", async () => {
   server.use(
     http.get("/api/v1/audit-programs", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
@@ -165,7 +165,7 @@ test("the process picker is omitted when GET /processes 403s (degrade)", async (
   grant(["audit.plan"]);
   server.use(
     http.get("/api/v1/processes", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const u = userEvent.setup();

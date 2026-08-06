@@ -69,7 +69,7 @@ def upgrade() -> None:
 
     # 3. The periodic_review definition (the 0043 stage/seed shape, but NOT its org lookup:
     # an OPERATIONAL install renames short_code away from 'DEFAULT' at setup G-E — the 0018/0021
-    # trap; this live install's org is 'AHT'. D1 = single-org, so fall back to the only row.
+    # trap; an operational install may use a non-DEFAULT org. D1 = single-org, so fall back to the only row.
     # NEVER skip-if-absent: a missing seed makes the daily sweep raise 500 forever.
     org_id = bind.execute(
         sa.text("SELECT id FROM organization WHERE short_code = 'DEFAULT'")

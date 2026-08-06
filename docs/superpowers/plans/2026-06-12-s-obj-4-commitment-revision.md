@@ -314,7 +314,7 @@ async def test_generic_byte_path_rejected_on_objective(
     assert vs.status_code == 200, vs.text
 ```
 
-- [ ] **Step 2: Verify the test collects (integration runs in Linux CI, not on this box)**
+- [ ] **Step 2: Verify the test collects (integration runs in Linux CI, not in that development environment)**
 
 Run: `uv run pytest tests/integration/test_objective_revision.py --collect-only -q`
 Expected: 1 test collected, no import errors.
@@ -2527,6 +2527,6 @@ docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/com
 
 then drive the full revision loop service-side via the worker heredoc (the S-obj-3 smoke pattern — `MSYS_NO_PATHCONV=1 docker compose ... exec -T worker sh -c "cd /app; uv run python -"` with a script that: creates an OBJ via the service, drives submit→approve→release with three seeded personas, records a `%` measurement, start-revision → PATCH (target+unit change) → re-submit → approve → re-release, then asserts: v1 `Superseded` + v2 `Effective` + `effective_count==1`; the 6.2 checklist row reads COVERED at EVERY step (start-revision included — R43); detail RAG/target read the NEW frozen commitment; `current_value` is None after the unit change; a new `count` reading 201s and re-rolls).
 
-- [ ] **Step 3: FE live smoke** (Chrome MCP; the owner does the Keycloak login) — ⚠ **rebuild the web image too** (`docker compose ... up -d --build web` + hard refresh — api-only rebuilds leave the old bundle); grants = the s6 SYSTEM overrides on the LIVE `demo` `app_user` row (org **AHT**). Walk: `/objectives` register chips → detail Start revision → Edit commitment (BandPreview + save) → Proposed revision card + governing hero unchanged → Submit → `/tasks` approver card shows was→now → approve → Release → detail shows the new target, register re-grades.
+- [ ] **Step 3: FE live smoke** (Chrome MCP; the owner does the Keycloak login) — ⚠ **rebuild the web image too** (`docker compose ... up -d --build web` + hard refresh — api-only rebuilds leave the old bundle); grants = the s6 SYSTEM overrides on the LIVE `demo` `app_user` row (org **ORG_EXAMPLE**). Walk: `/objectives` register chips → detail Start revision → Edit commitment (BandPreview + save) → Proposed revision card + governing hero unchanged → Submit → `/tasks` approver card shows was→now → approve → Release → detail shows the new target, register re-grades.
 
 - [ ] **Step 4: PR** — `/pr` on owner OK (squash-merge after green CI + Codex triage: disregard D1-moot multi-tenant framing; verify each claim against code before fixing).

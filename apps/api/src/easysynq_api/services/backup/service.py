@@ -14,8 +14,10 @@ import asyncio
 import datetime
 import logging
 import os
+import posixpath
 import uuid
 from collections.abc import Callable
+from pathlib import PurePosixPath
 from typing import Any
 
 from sqlalchemy import select
@@ -76,17 +78,28 @@ def _emit(
 
 
 def configure_backup_destination_check(destination: str) -> tuple[bool, str]:
-    """Sync reachability/writability probe for a filesystem backup destination (doc 08 §8.1).
-    Creates the directory if absent, writes + removes a probe file. Returns (ok, detail)."""
+    """Preliminary API-process probe for an absolute non-root POSIX filesystem destination.
+
+    This rejects relative and URI-looking values before any filesystem call. A success proves only
+    that the API process can create/write/remove at this path; it does not prove that the worker
+    sees the same mount or that the path is backed by persistent/off-host storage.
+    """
+    if (
+        destination.strip("/") == ""
+        or posixpath.normpath(destination) == "/"
+        or "://" in destination
+        or not PurePosixPath(destination).is_absolute()
+    ):
+        return False, "destination must be an absolute non-root POSIX filesystem path"
     try:
         os.makedirs(destination, exist_ok=True)
         probe = os.path.join(destination, f".easysynq-write-probe-{uuid.uuid4().hex}")
         with open(probe, "wb") as f:
             f.write(b"easysynq")
         os.remove(probe)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return False, f"destination not writable: {exc}"[:200]
-    return True, "destination reachable and writable"
+    return True, "preliminary API-context create/write/remove probe passed"
 
 
 async def _report_backup_failure(
@@ -281,11 +294,11 @@ async def verify_latest_retained_backup(
     *,
     after_restore: Callable[[ScratchHandle], None] | None = None,
 ) -> dict[str, Any]:
-    """Verify the NEWEST RETAINED durable backup archive for ``org_id`` is restorable + intact, and
-    persist the result. This is the scheduled (Phase-1 I-7) check: unlike the on-demand G-C drill
-    (``run_restore_test``, which builds + restores a FRESH transient archive), it opens the actual
-    stored ``easysynq-backup-*.tar[.enc]`` an operator would restore from — so silent rot in the
-    real, encrypted backups is caught (Codex P2, #155).
+    """Verify the NEWEST RETAINED archive for ``org_id`` is scratch-verifiable and intact relative
+    to the configured source object store, then persist the result. This scheduled (Phase-1 I-7)
+    check opens the actual stored ``easysynq-backup-*.tar[.enc]`` instead of the fresh transient
+    archive built by the on-demand G-C drill, so silent archive rot is caught. It does not prove
+    source-independent recovery (Codex P2, #155).
 
     Serialized on ``LOCK_RESTORE_DRILL`` (shared with the on-demand drill — they contend for the
     same pg_restore/scratch resource family, so a concurrent drill or verify SKIPs). No policy →
@@ -349,10 +362,11 @@ async def verify_latest_retained_backup(
 
 
 async def run_scheduled_restore_tests() -> dict[str, Any]:
-    """Verify the NEWEST RETAINED durable backup for every configured ``backup_policy`` (one per
-    org; single-org in MVP, D1) on the Beat cadence — so a silently-rotting REAL backup is caught
-    between the manual G-C drills (Phase-1 I-7; the nightly job only WRITES archives, this proves
-    the stored ones still restore). Delegates per org to ``verify_latest_retained_backup`` (its
+    """Verify the newest retained archive for every configured ``backup_policy`` (one per org;
+    single-org in MVP, D1) on the Beat cadence. The check decrypts and restores the database into
+    scratch, then validates manifested locators and hashes against the configured source object
+    store. It catches archive and current-source corruption between manual G-C drills, but does not
+    prove source-independent recovery. Delegates per org to ``verify_latest_retained_backup`` (its
     ``LOCK_RESTORE_DRILL`` serialization + persisted ``last_restore_test_result`` +
     RESTORE_TEST_PASSED/_FAILED audit + never-raise contract) with a SYSTEM actor. Best-effort: one
     org's failure never aborts the others, and the verify itself never raises (an honest FAIL is
@@ -391,13 +405,14 @@ async def run_restore(
     fetch_off_host: restore.FetchOffHost | None = None,
     after_restore: Callable[[ScratchHandle], None] | None = None,
 ) -> dict[str, Any]:
-    """Operator-grade live WORM-aware restore-to-verified-target (S11, R37). Serialized on
+    """Operator restore integrity verification (S11, R37). Serialized on
     ``LOCK_RESTORE_LIVE`` (distinct from the drill lock). Emits RESTORE_STARTED then one of
     RESTORE_VERIFIED / RESTORE_CHECKPOINT_AHEAD / RESTORE_FAILED (+ an audited
     RESTORE_CHECKPOINT_ACK when a flagged restore proceeds under operator ack). The pg/blob work
     runs as the
     OWNER role inside ``restore.run_restore``; this session only audits + commits. Returns
-    ``{result, reason, scratch_db, ...}`` — only PASS leaves a standing, ready-to-cutover target."""
+    ``{result, reason, scratch_db, ...}`` — only PASS leaves a standing verification target. PASS
+    still depends on the configured source object store and never authorizes cutover."""
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
     sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(

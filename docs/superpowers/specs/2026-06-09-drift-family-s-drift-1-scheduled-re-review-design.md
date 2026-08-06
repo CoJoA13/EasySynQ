@@ -81,7 +81,7 @@ On `documented_information`:
   at instantiate to the document owner via a new additive `context_users` assignee-spec key.
   Downgrade deletes the seed guarded `NOT EXISTS(<child instance>)` (the 0023 lesson).
   ⚠ The org lookup must NOT copy 0043's `WHERE short_code='DEFAULT'` `scalar_one()` — an
-  operational install renames the short_code at setup G-E (this live box: `AHT`), so 0045 falls
+  operational install renames the short_code at setup G-E (an operational install may use a non-`DEFAULT` short code), so 0045 falls
   back to the D1 single-org row (never skip-if-absent: a missing seed = the sweep 500s daily).
 - **API representation:** **`review_period_months` (int, 1–120, or null)** in all payloads — the
   column and the API field are the same unit, no conversion layer.
@@ -211,17 +211,17 @@ Other outcome kinds (`approve`, `reject`, `verify`, `acknowledge`) → 422 for t
 - **Unit:** the recompute rule (max-anchor, org-tz non-identity, null anchors, `add_months`
   day-clamping) + the `review_state` projection boundaries; sweep task registered in `app.tasks`.
   (The T2 leg is the auto-default — integration-tested; periods are plain ints, no conversion.)
-- **Integration (Linux-CI-only on this box):** migration round-trip via `/check-migrations` locally;
+- **Integration (Linux-CI-only in that development environment):** migration round-trip via `/check-migrations` locally;
   sweep creates exactly one instance/task per due doc and is idempotent on re-run; escalation writes
   `REVIEW_OVERDUE` once; `complete` writes the `review_confirmed` signature bound to the Effective version's digest +
   resets the clock; `changes_requested` leaves the clock + re-nag behavior; checklist overdue leg.
   ⚠ **Run-scoped/delta assertions only** — the `-m integration` suite shares one session DB
   (engineering-patterns); a sweep test MUST scope to this run's docs (other files leave Effective docs
   behind; a global "created N tasks" assertion is a false-PASS/flake).
-- **Local gates (this box):** api static checks (ruff/format/mypy-strict) + `/check-migrations` +
+- **Local gates (the then-current development environment):** api static checks (ruff/format/mypy-strict) + `/check-migrations` +
   `/check-contracts`; both api test suites run in Linux CI.
 - **Pre-PR:** diff-critic on the branch diff; **pre-merge live smoke** (rebuild api+worker+beat
   images first — compose changes aren't live until `up -d --build`): set a short `review_period` on a
-  doc via PATCH (demo needs `document.*` SYSTEM overrides on the LIVE login's app_user row, org AHT),
+  doc via PATCH (demo needs `document.*` SYSTEM overrides on the LIVE login's app_user row, org ORG_EXAMPLE),
   force one sweep run, see the task in `/tasks`, decide `complete`, verify the signature row + the
   reset `next_review_due` + the checklist flag.

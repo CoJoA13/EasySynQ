@@ -196,7 +196,7 @@ until `/readyz` is green.
 
 > ⚠️ **Escrow the backup key now.** `BACKUP_ENCRYPTION_KEY` exists **only** in that `0600` `.env`.
 > Copy it into your password manager or key custody process **before** the first backup runs. If it
-> is lost, every encrypted backup is permanently unrecoverable. Keep custody of the key separate
+> is lost, every encrypted archive is permanently undecryptable and unusable. Keep custody of the key separate
 > from custody of the backups themselves.
 
 ## 4. Distribute the certificate authority

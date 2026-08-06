@@ -28,7 +28,7 @@ The F-numbers are the brainstorm's decision frame; each was preceded by a source
 4. **Carry — fold the `compute_scorecard` extraction in** (s4): the MR compiler reproduces `api/objectives.py`'s scorecard inline; extract a shared service fn so the two can't desync. (Behaviourally identical today, so this is pure dedup, not a latent-bug fix.)
 5. **F3 — detail UX:** a commitment-hero-style header + the 9.3.2 inputs as calm RAG tables + the 9.3.3 outputs grouped by type + a reused Lifecycle card (`ApprovalStepper` + the objectives lifecycle shape). The input tables use a **generic `source_ref` renderer with per-type labels** (RAG where the server provides it; gap rows as "not available — <reason>"); the plan pins each type's exact summary columns by reading `compile.py`'s per-type builders.
 6. **F4 — create flow:** a small modal (title + period_label) → the Draft detail with an inline re-runnable "Compile inputs" + a Draft-only outputs editor.
-7. **F6 — gating/smoke:** per-key calm-403; the demo System Administrator holds none of the `mgmtReview.*`/`document.release` content keys → SYSTEM overrides on the **live** demo `app_user` row (org AHT) for the smoke.
+7. **F6 — gating/smoke:** per-key calm-403; the demo System Administrator holds none of the `mgmtReview.*`/`document.release` content keys → SYSTEM overrides on the **live** demo `app_user` row (org ORG_EXAMPLE) for the smoke.
 
 **Accepted reconciliations (in-PR doc fix, code is authoritative):** build against `/management-reviews` and surface the as-built close-gate codes `review_close_blocked` / `review_not_open_to_close`. The only stale references are in the **archived S-mr-1 design spec** (it drafted `/mgmt-reviews` + `mgmt_review_close_blocked`); the decisions-register **R45** + `docs/15-api-design.md` already use the as-built names — so the fix is a one-line as-built banner on the S-mr-1 spec, not a register change.
 
@@ -199,7 +199,7 @@ The widget contributes RAG to the CHECK tile only when it carries a RAG-bearing 
 ## s8 · Gating · smoke · nav
 
 - Per-key calm-403 via `usePermissions().can(...)` (SYSTEM scope, v1). Write affordances gate on `mgmtReview.create` / `mgmtReview.record_outputs` / `document.release`; reads degrade via the `forbidden` flag, never crash.
-- **Demo smoke:** the System Administrator (`demo`) holds **none** of the `mgmtReview.*`/`document.release` content keys → grant SYSTEM overrides for `mgmtReview.read`, `mgmtReview.create`, `mgmtReview.record_outputs`, `document.release` on the **live** demo `app_user` row (org **AHT**) — the override must land on the row matching the LIVE Keycloak login's subject (re-created Keycloak users mint new JIT rows). The `MgmtReviewContext` read 403s without `mgmtReview.read` but degrades calmly; an MR_ACTION `complete` (self-scoped) still works.
+- **Demo smoke:** the System Administrator (`demo`) holds **none** of the `mgmtReview.*`/`document.release` content keys → grant SYSTEM overrides for `mgmtReview.read`, `mgmtReview.create`, `mgmtReview.record_outputs`, `document.release` on the **live** demo `app_user` row (org **ORG_EXAMPLE**) — the override must land on the row matching the LIVE Keycloak login's subject (re-created Keycloak users mint new JIT rows). The `MgmtReviewContext` read 403s without `mgmtReview.read` but degrades calmly; an MR_ACTION `complete` (self-scoped) still works.
 - **Rebuild the web image before the smoke** (`docker compose … up -d --build web`) + hard-refresh/Incognito — `vite preview` serves a baked build.
 
 ---

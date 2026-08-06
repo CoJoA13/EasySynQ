@@ -144,7 +144,7 @@ test("shows 'View CAPA' (not Raise) for an already-spawned complaint", async () 
 test("renders a calm no-access panel on a 403", async () => {
   server.use(
     http.get("/api/v1/complaints", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<ComplaintsPage />, { route: "/capa/complaints" });

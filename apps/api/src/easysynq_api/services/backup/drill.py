@@ -1,10 +1,13 @@
 """The restore-into-scratch drill + integrity triad (slice S8b2, doc 08 §8.2 / AC#5).
 
-``run_drill`` produces a real backup archive at the configured destination, restores it into a fresh
-scratch DATABASE, copies the manifested blobs into a non-WORM scratch bucket, runs the integrity
-triad on the RESTORED copy, and tears the scratch namespace down — returning a PASS/FAIL verdict
-(never raising; a crash is an honest FAIL, not a 500). The steps are composable so the negative test
-can inject a post-restore fault via ``after_restore`` without any production hook.
+``run_drill`` writes a ``pg_dump`` archive and object manifest at the configured destination,
+restores the database into a fresh scratch DATABASE, and copies the referenced bytes from the
+configured source object store under a unique prefix in the configured shared scratch bucket. It
+runs the integrity triad on the scratch copy and tears the scratch namespace down —
+returning a PASS/FAIL verdict (never raising; a
+crash is an honest FAIL, not a 500). This checks archive and current-source integrity; it does not
+prove recovery when the source object store is unavailable. The steps are composable so the
+negative test can inject a post-restore fault via ``after_restore`` without any production hook.
 
 Runs as the OWNER DB role (``settings.sync_dsn``) — the runtime ``easysynq_app`` role can neither
 ``pg_dump`` the whole DB nor ``CREATE DATABASE``. Row-count parity is race-free: counts are captured
@@ -43,8 +46,9 @@ logger = logging.getLogger("easysynq.backup.drill")
 
 _SCRATCH_PREFIX = "scratch_easysynq_"
 # The scheduled retained-backup verify (Phase-1 I-7) restores into its OWN namespace, DISTINCT from
-# the drill's ``scratch_easysynq_`` and the live restore's ``restore_easysynq_`` — so verifying a
-# retained archive never sweeps/clobbers a drill's scratch or an operator's standing target.
+# the drill's ``scratch_easysynq_`` and the operator verification run's ``restore_easysynq_`` — so
+# verifying a retained archive never sweeps/clobbers a drill's scratch or a standing verification
+# target.
 _VERIFY_PREFIX = "verify_easysynq_"
 
 
@@ -150,7 +154,7 @@ def _sweep_stale_scratch(owner_dsn: str) -> None:
 def _sweep_stale_verify(owner_dsn: str) -> None:
     """Best-effort: drop leftover ``verify_easysynq_*`` DBs from a crashed prior retained-verify.
     Distinct from the drill's ``scratch_easysynq_*`` sweep + the restore's ``restore_easysynq_*``
-    sweep, so a retained-backup verify never destroys a drill's scratch or a standing verified
+    sweep, so a retained-backup verify never destroys a drill's scratch or a standing verification
     target (and vice-versa). FORCE terminates any straggler connection."""
     from psycopg import sql
 
@@ -222,6 +226,13 @@ def _scratch_blob_shas(handle: ScratchHandle) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
+def _scratch_blob_locators(handle: ScratchHandle) -> list[tuple[str, str, str]]:
+    """The blob locators stored in the restored database, not derived scratch-copy paths."""
+    with _autocommit(handle.owner_dsn, dbname=handle.scratch_db) as conn, conn.cursor() as cur:
+        cur.execute("SELECT sha256, bucket, object_key FROM blob")
+        return [(r[0], r[1], r[2]) for r in cur.fetchall()]
+
+
 # --- blob copy + re-hash -----------------------------------------------------------------------
 
 
@@ -253,6 +264,27 @@ def _rehash_scratch_blobs(settings: Settings, handle: ScratchHandle) -> list[str
     return bad
 
 
+def _rehash_stored_blob_locators(settings: Settings, handle: ScratchHandle) -> list[str]:
+    """Fetch every restored row's exact stored locator and re-hash its bytes.
+
+    This is deliberately separate from the scratch-copy re-hash above: a copied object can still be
+    intact while the restored database points at an object key that does not resolve in the
+    currently configured object store. Return only SHA-256 identifiers so failure details expose no
+    keys or object bytes.
+    """
+    client = _s3(settings)
+    bad: list[str] = []
+    for sha, bucket, object_key in _scratch_blob_locators(handle):
+        try:
+            body = client.get_object(Bucket=bucket, Key=object_key)["Body"].read()
+        except Exception:  # noqa: BLE001 — missing/unreadable stored locator fails closed
+            bad.append(sha)
+            continue
+        if hashlib.sha256(body).hexdigest() != sha:
+            bad.append(sha)
+    return bad
+
+
 def _delete_scratch_objects(settings: Settings, bucket: str, prefix: str) -> None:
     # Single-object deletes: the S3 multi-delete (DeleteObjects) requires a Content-MD5 header that
     # MinIO enforces and recent botocore no longer auto-adds. A per-drill prefix holds few objects,
@@ -268,7 +300,7 @@ def _delete_scratch_objects(settings: Settings, bucket: str, prefix: str) -> Non
 
 
 def run_triad(settings: Settings, handle: ScratchHandle) -> DrillResult:
-    """All three legs on the RESTORED copy; any failure → FAIL (doc 08 §8.2)."""
+    """All integrity legs on the RESTORED copy; any failure → FAIL (doc 08 §8.2)."""
     actual = _scratch_counts(handle)
     mismatches = {
         t: {"expected": exp, "actual": actual.get(t)}
@@ -286,6 +318,14 @@ def run_triad(settings: Settings, handle: ScratchHandle) -> DrillResult:
     if bad:
         return DrillResult("FAIL", "blob SHA-256 re-hash failed", {"bad_blobs": bad[:20]})
 
+    bad_locators = _rehash_stored_blob_locators(settings, handle)
+    if bad_locators:
+        return DrillResult(
+            "FAIL",
+            "stored blob locator SHA-256 re-hash failed",
+            {"bad_blobs": bad_locators[:20]},
+        )
+
     return DrillResult(
         "PASS",
         "restore verified",
@@ -297,8 +337,8 @@ def run_triad(settings: Settings, handle: ScratchHandle) -> DrillResult:
 
 
 def _latest_checkpoint_bundle(owner_dsn: str) -> bytes | None:
-    """Serialize the newest signed ``audit_checkpoint`` row to JSON (doc 12 §8.1 'audit checkpoint
-    in every backup'). Best-effort → ``None`` if the table is empty/unreadable; never fails the
+    """Serialize the newest signed ``audit_checkpoint`` row to JSON. Best-effort → ``None`` if the
+    table is empty/unreadable; never fails the
     backup. A forward-seam — the restore checkpoint-not-ahead check reads the restored DB + the
     off-host sink, not this bundle."""
     import psycopg
@@ -329,8 +369,8 @@ def _latest_checkpoint_bundle(owner_dsn: str) -> bytes | None:
 
 
 def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, Any]:
-    """Write a real, timestamped, checksum-verified backup archive to ``destination`` — the durable
-    artifact the nightly Beat job + ``easysynq backup run`` produce. The archive (v2) carries the
+    """Write a timestamped, checksum-verified archive to ``destination`` — the durable artifact the
+    nightly Beat job + ``easysynq backup run`` produce. The archive (v2) carries the
     pg_dump + blob manifest (per-table counts) + the latest audit checkpoint, and — ONLY when
     ``BACKUP_ENCRYPTION_KEY`` is set — the Keycloak realm export + a config snapshot, AES-256-GCM
     encrypted to ``.tar.enc``. With NO key it falls back to a PLAINTEXT ``.tar`` and OMITS the
@@ -394,6 +434,7 @@ def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, A
             config_snapshot=legs["config_snapshot"],
             audit_checkpoint=legs["audit_checkpoint"],
             encryption_key_ref=crypto.ENCRYPTION_KEY_REF if encrypt else None,
+            encrypted=encrypt,
         )
 
         if encrypt:
@@ -448,10 +489,14 @@ def run_drill(
     destination: str,
     after_restore: Callable[[ScratchHandle], None] | None = None,
 ) -> DrillResult:
-    """Backup → restore-into-scratch → integrity triad → teardown. Writes a real, checksum-verified
-    archive to ``destination`` and restores FROM it (proving the destination round-trips, doc 08
-    §8.2). Never raises — returns PASS/FAIL. ``after_restore`` is a TEST-ONLY fault injector run
-    after the restore + blob copy, before the triad (the negative AC#5 proof)."""
+    """Backup → restore-into-scratch → integrity triad → teardown.
+
+    Writes a checksum-verified archive to ``destination`` and restores the database from it while
+    copying referenced bytes from the configured source object store (proving those current-source
+    integrity operations round-trip, doc 08 §8.2). Never raises — returns PASS/FAIL.
+    ``after_restore`` is a TEST-ONLY fault injector run after the restore + blob copy, before the
+    triad (the negative AC#5 proof).
+    """
     owner_dsn = settings.sync_dsn
     drill_id = uuid.uuid4().hex
     scratch_db = f"{_SCRATCH_PREFIX}{drill_id}"
@@ -558,18 +603,19 @@ def verify_retained_archive(
     destination: str,
     after_restore: Callable[[ScratchHandle], None] | None = None,
 ) -> DrillResult:
-    """Verify the NEWEST RETAINED durable backup archive (``build_durable_backup``'s output) is
-    restorable + intact — the gap the fresh-drill ``run_drill`` cannot catch: it proves the actual
-    stored archive (encrypted, with ``BACKUP_ENCRYPTION_KEY`` set) decrypts and round-trips, so
-    silent rot in the real backups is caught (Phase-1 I-7 / Codex P2, #155).
+    """Verify the NEWEST RETAINED archive (``build_durable_backup``'s output) decrypts and remains
+    scratch-verifiable against the configured source object store. This catches silent archive rot
+    that the fresh-drill ``run_drill`` cannot, but it does not prove source-independent recovery
+    (Phase-1 I-7 / Codex P2, #155).
 
     Modelled on ``restore.run_restore`` steps 1-5 (decrypt → manifest → restore-into-scratch →
-    blob-copy → triad), but VERIFY-ONLY: it skips the live-restore checkpoint-not-ahead + chain
-    re-verify (those are tamper guards whose FLAGGED-on-unreachable semantics would muddy a clean
-    weekly PASS/FAIL — the integrity triad is the rot signal), and it ALWAYS tears the scratch
-    namespace down (never a standing cutover target). Restores into a dedicated ``verify_easysynq_``
-    namespace, DISTINCT from the drill's ``scratch_easysynq_`` and the restore's
-    ``restore_easysynq_``. Never raises — a crash / wrong key / missing binary is an honest FAIL.
+    blob-copy → triad), but VERIFY-ONLY: it skips the operator-verification checkpoint-not-ahead +
+    chain re-verify (those are tamper guards whose FLAGGED-on-unreachable semantics would muddy a
+    clean weekly PASS/FAIL — the integrity triad is the rot signal), and it ALWAYS tears the scratch
+    namespace down (never a standing verification target). Restores into a dedicated
+    ``verify_easysynq_`` namespace, DISTINCT from the drill's ``scratch_easysynq_`` and
+    the restore's ``restore_easysynq_``. Never raises — a crash / wrong key / missing binary is an
+    honest FAIL.
 
     ``None`` archive (fresh install, nightly hasn't run yet) → ``SKIPPED``, NOT a FAIL (it must not
     flap red). ``after_restore`` is the TEST-ONLY fault injector (same contract as the drill), run
@@ -655,9 +701,9 @@ def verify_retained_archive(
             "FAIL", f"verify error: {type(exc).__name__}: {exc}"[:300], {"archive": src.name}
         )
     finally:
-        # ALWAYS tear down — a verify is never a standing cutover target (unlike
-        # restore.run_restore, which leaves a PASS target standing). The on-disk archive is
-        # untouched.
+        # ALWAYS tear down — retained verification never leaves a standing target (unlike
+        # restore.run_restore, whose PASS target remains for inspection/discard). The on-disk
+        # archive is untouched.
         if handle is not None:
             try:
                 _drop_scratch_db(owner_dsn, scratch_db)

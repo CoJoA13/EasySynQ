@@ -2,7 +2,7 @@
 
 > **Status:** approved design, pending implementation plan.
 > **Date:** 2026-08-03 · **Repo commit at design time:** `98f10f8` · **Migration head:** `0084` → this slice adds `0085`
-> **Source:** LAB handoff [§4.1](../plans/2026-08-02-lab-handoff.md) — "Easier user creation", owner-selected 2026-08-03.
+> **Source:** field-evaluation handoff [§4.1](../plans/2026-08-02-product-handoff.md) — "Easier user creation", owner-selected 2026-08-03.
 > **Permission catalog:** 102 keys, unchanged by this slice (no new key).
 
 ---

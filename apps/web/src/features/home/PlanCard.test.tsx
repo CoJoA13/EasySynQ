@@ -43,7 +43,7 @@ it("omits the overdue line when the checklist read is forbidden", async () => {
       ),
     ),
     http.get("/api/v1/reports/compliance-checklist", () =>
-      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
     ),
   );
   renderWithProviders(<PlanCard />);
@@ -57,21 +57,21 @@ it("omits the overdue line when the checklist read is forbidden", async () => {
 it("renders no-access only when ALL actionable reads are forbidden (risk + context + IP incl.)", async () => {
   server.use(
     http.get("/api/v1/objectives/scorecard", () =>
-      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
     ),
     http.get("/api/v1/reports/compliance-checklist", () =>
-      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
     ),
     http.get("/api/v1/risks/summary", () =>
-      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
     ),
     http.get("/api/v1/context/summary", () =>
-      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
     ),
     // The orthogonal /interested-parties/summary read must ALSO be forbidden for the no-access panel
     // to show (it folds into allForbidden — the S-context-fe orthogonal-read trap).
     http.get("/api/v1/interested-parties/summary", () =>
-      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
     ),
   );
   renderWithProviders(<PlanCard />);

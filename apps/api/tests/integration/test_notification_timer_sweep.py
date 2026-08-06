@@ -1314,9 +1314,10 @@ async def test_r4_2_self_manager_sole_qm_via_is_qm_fallback(app_under_test: Any)
 async def test_resolve_working_calendar_reads_default_row(app_under_test: Any) -> None:
     """resolve_working_calendar reflects the org's is_default row (holidays + tz round-trip).
 
-    UPDATE AHT's seeded default in place, assert, then RESTORE in finally (working_calendar keeps
-    UPDATE for the app role; a 2nd is_default would violate uq_working_calendar_one_default, and the
-    row is DELETE-revoked, so update-and-restore is the only safe path)."""
+    UPDATE ORG_EXAMPLE's seeded default in place, assert, then RESTORE in finally
+    (working_calendar keeps UPDATE for the app role; a 2nd is_default would violate
+    uq_working_calendar_one_default, and the row is DELETE-revoked, so update-and-restore is the
+    only safe path)."""
     org_id = await _default_org_id()
     async with get_sessionmaker()() as s:
         before = (
@@ -1385,7 +1386,7 @@ async def test_resolve_working_calendar_malformed_holidays_does_not_crash(
     app_under_test: Any,
 ) -> None:
     """A non-list `holidays` JSONB scalar must not raise (fail-safe) — treated as no holidays, the
-    valid week mask + tz kept. Guards the future-editor robustness contract. UPDATE-AHT-restore."""
+    valid week mask + tz kept. Guards the future-editor robustness contract, with update/restore."""
     org_id = await _default_org_id()
     async with get_sessionmaker()() as s:
         before = (
@@ -1458,9 +1459,10 @@ async def test_resolve_working_calendar_bad_working_days_falls_back_keeping_tz(
 async def test_escalation_skips_weekend_business_day(app_under_test: Any) -> None:
     """Wiring proof: escalation fires one BUSINESS day after a Friday due_at — Monday, not Saturday.
 
-    Uses AHT's seeded Mon-Fri calendar (or the DEFAULT_CALENDAR fallback — both Mon-Fri) AS-IS,
-    no mutation, no holiday. Anti-tautology: Test A FAILS against the old raw-wall-clock timer.py
-    (which escalates on Saturday). Pre-stamp remind+overdue to isolate ESCALATE_1. Dates are built
+    Uses ORG_EXAMPLE's seeded Mon-Fri calendar (or the DEFAULT_CALENDAR fallback — both Mon-Fri)
+    AS-IS, no mutation, no holiday. Anti-tautology: Test A FAILS against the old raw-wall-clock
+    timer.py (which escalates on Saturday). Pre-stamp remind+overdue to isolate ESCALATE_1. Dates
+    are built
     in the resolved calendar's own tz so the test is correct for any seeded tz (the weekday of a
     calendar date is tz-independent)."""
     org_id = await _default_org_id()

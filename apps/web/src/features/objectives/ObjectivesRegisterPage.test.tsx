@@ -31,7 +31,7 @@ it("renders the band and a row per objective with a RAG status badge", async () 
 it("shows a calm no-access panel on a 403", async () => {
   server.use(
     http.get("/api/v1/objectives/scorecard", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });

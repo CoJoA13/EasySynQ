@@ -15,7 +15,7 @@ the `.`-anchored prefix implements the handoff's ⚠ (`'8.%'`, never `'8%'` — 
 untouched (rollup is just a wider WHERE). NOT in scope: per-clause counts (deferred,
 authz-sensitive aggregation).
 
-**Owner-approved source:** docs/superpowers/plans/2026-08-02-lab-handoff.md §2C. Runs the
+**Owner-approved source:** docs/superpowers/plans/2026-08-02-product-handoff.md §2C. Runs the
 `contracts` CI job (openapi prose changes).
 
 ## Global Constraints

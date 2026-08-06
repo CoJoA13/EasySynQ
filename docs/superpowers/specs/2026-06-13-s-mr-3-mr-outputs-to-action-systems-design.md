@@ -213,14 +213,14 @@ closes cleanly.
 
 ## 4. Testing strategy
 
-**API unit** (`apps/api/tests/unit`, run natively on this box):
+**API unit** (`apps/api/tests/unit`, run natively in that development environment):
 - `route.matches` — the two new sub-paths resolve under `/{review_id}` and don't shadow the literals.
 - `_mr_capabilities` release: the frozen-version author gets `release == false` (SoD-2); a distinct
   releaser gets `true` (mirror the objective capability unit test).
 - close-gate regression: an ACTION output with a DONE task + an OPEN CAPA still passes
   `output_blocks_close` (F3).
 
-**API integration** (`-m integration`, **CI-only on this Windows box** — ProactorEventLoop + native
+**API integration** (`-m integration`, **CI-only in that Windows development environment** — ProactorEventLoop + native
 crash; run targeted units locally, rely on CI here):
 - raise-capa: ACTION output → CAPA at `Raised`, `source == review_output`, severity carried,
   `spawned_capa_id` set, `MGMT_REVIEW_CAPA_SPAWNED` audit, **no signature_event**; one-shot 409 on
@@ -252,7 +252,7 @@ jest-dom×tsc trap + cross-file drift):
 
 **Pre-PR:** `diff-critic` on the branch diff (false-PASS hunt on the close-gate decouple, the FK
 downgrade, the one-shot latch, the SoD-2 capability). **Pre-merge:** Chrome-MCP live smoke (rebuild
-api + worker + web; SYSTEM overrides on the live `demo` `app_user` row, org **AHT**, adding `capa.*`
+api + worker + web; SYSTEM overrides on the live `demo` `app_user` row, org **ORG_EXAMPLE**, adding `capa.*`
 + `changeRequest.create` + `document.release` — pre-create the row + grant before login so the
 affordances appear first load).
 

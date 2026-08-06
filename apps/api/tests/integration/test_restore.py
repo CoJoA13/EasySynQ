@@ -15,11 +15,17 @@ import asyncio
 import tempfile
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
@@ -194,6 +200,72 @@ async def test_restore_fails_on_corrupted_blob(
     assert out["scratch_db"] is None  # torn down on FAIL
 
 
+async def test_restore_fails_on_unresolvable_stored_blob_locator(
+    app_client: AsyncClient, token_factory: Callable[..., str], tmp_path: Path
+) -> None:
+    """A restored ``blob.object_key`` must resolve in its stored bucket, not merely have a copied
+    scratch object at its SHA-derived key. Mutating only that DB locator leaves the copied bytes
+    intact, so this fails if the triad ignores the restored database locator."""
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"unresolvable-locator-source-v1")
+    await _insert_backup_policy(org_id, str(tmp_path))
+    archive_path = await _durable_archive(org_id)
+    client = _s3_client()
+    restored_handle: backup_service.ScratchHandle | None = None
+
+    def _make_locator_unresolvable(handle: backup_service.ScratchHandle) -> None:
+        import psycopg
+
+        nonlocal restored_handle
+        restored_handle = handle
+        with (
+            psycopg.connect(
+                **conn_kwargs(handle.owner_dsn, dbname=handle.scratch_db), autocommit=True
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("SELECT sha256 FROM blob ORDER BY sha256 LIMIT 1")
+            row = cur.fetchone()
+            assert row is not None, "expected a restored blob locator to mutate"
+            sha = str(row[0])
+            client.head_object(  # type: ignore[attr-defined]
+                Bucket=handle.scratch_bucket, Key=f"{handle.object_prefix}{sha}"
+            )
+            cur.execute(
+                "UPDATE blob SET object_key = %s WHERE sha256 = %s",
+                (f"c01c-unresolvable-locator/{sha}", sha),
+            )
+
+    out = await backup_service.run_restore(
+        org_id,
+        archive_path=archive_path,
+        fetch_off_host=lambda _s, _o: 0,
+        after_restore=_make_locator_unresolvable,
+    )
+    assert restored_handle is not None, (
+        "expected the post-restore fault injector to capture its target"
+    )
+    try:
+        assert out["result"] == "FAIL", out
+        import psycopg
+
+        with (
+            psycopg.connect(**conn_kwargs(restored_handle.owner_dsn)) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (restored_handle.scratch_db,)
+            )
+            assert cur.fetchone() is None, "failed restore target database was not dropped"
+        listing = client.list_objects_v2(  # type: ignore[attr-defined]
+            Bucket=restored_handle.scratch_bucket, Prefix=restored_handle.object_prefix
+        )
+        assert listing.get("KeyCount", 0) == 0, listing.get("Contents")
+    finally:
+        # The unfixed baseline incorrectly PASSes; always remove both captured target legs too.
+        await _drop_target(restored_handle.scratch_db)
+
+
 async def test_restore_fails_on_corrupted_chain(
     app_client: AsyncClient, token_factory: Callable[..., str], dsns: dict[str, str]
 ) -> None:
@@ -268,6 +340,441 @@ async def test_upgrade_pre_backup_and_health_gate(
             select(AuditEvent.id).where(AuditEvent.event_type == EventType.UPGRADE_COMPLETED)
         )
     assert completed is not None
+
+
+async def _upgrade_failures(*, org_id: uuid.UUID, after_id: int) -> list[dict[str, object]]:
+    """Every UPGRADE_FAILED row this test produced for ``org_id``, newer than ``after_id``.
+
+    Deliberately NOT a count of all UPGRADE_FAILED rows — the integration suite shares one session
+    DB and shard composition moves under us, so an absolute count is not a stable assertion.
+    Constraining org_id and an explicit before/after id boundary makes it run-scoped while retaining
+    every terminal failure, so callers can detect contradictory duplicates before checking details.
+    """
+    async with get_sessionmaker()() as s:
+        rows = list(
+            await s.execute(
+                select(AuditEvent.after).where(
+                    AuditEvent.event_type == EventType.UPGRADE_FAILED,
+                    AuditEvent.org_id == org_id,
+                    AuditEvent.id > after_id,
+                )
+            )
+        )
+    return [dict(after or {}) for (after,) in rows]
+
+
+async def _max_audit_id() -> int:
+    """The current audit high-water mark, so a test can scope assertions to rows IT wrote."""
+    async with get_sessionmaker()() as s:
+        return int(await s.scalar(select(func.coalesce(func.max(AuditEvent.id), 0))) or 0)
+
+
+async def test_upgrade_aborts_when_pre_backup_raises_a_non_backup_error(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-backup guard must catch EVERY failure, not just ``BackupError``.
+
+    ⚠ Mutation note: a stub raising ``BackupError`` is the obvious test and it PASSES against the
+    pre-fix code, because that was the one exception already handled. The canonical pre-backup
+    failure is a full or read-only backup mount, which surfaces as ``OSError`` from ``mkdir`` /
+    ``write_bytes`` — that escaped ``run_upgrade`` entirely and broke its "never raises" contract.
+    So this test raises ``OSError`` on purpose; it is RED against the pre-fix baseline.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    marker = "no-space-left-fixture"
+    ran_alembic = False
+
+    async def _fixture_destination(_session: AsyncSession, _org_id: uuid.UUID) -> str:
+        return "fixture://upgrade-pre-backup"
+
+    def _boom(*_a: object, **_k: object) -> dict[str, object]:
+        raise OSError(marker)
+
+    def _spy() -> None:
+        nonlocal ran_alembic
+        ran_alembic = True
+
+    monkeypatch.setattr(upgrade_service, "build_durable_backup", _boom)
+    monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", _spy)
+    monkeypatch.setattr(upgrade_service, "_backup_destination", _fixture_destination)
+    baseline = await _max_audit_id()
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "pre_backup", out
+    assert marker in str(out["reason"])
+    assert ran_alembic is False, "the migration must NOT run once the pre-backup has failed"
+    failures = await _upgrade_failures(org_id=org_id, after_id=baseline)
+    assert len(failures) == 1, failures
+    assert failures[0].get("stage") == "pre_backup"
+    assert marker in str(failures[0].get("error", ""))
+
+
+async def test_upgrade_aborts_when_pre_backup_archive_fails_verification(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An archive that failed its own checksum is not a usable recovery artifact.
+
+    ``build_durable_backup`` reports a mismatch by RETURNING ``verified=False``, never by raising.
+    The pre-fix baseline returns OK and migrates the live database against an archive already known
+    to be unusable — then names it as the recovery pointer.
+    ``services/backup/service.py:197-209`` already fails closed here for the nightly path.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    archive = "fixture://upgrade-unverified.tar.enc"
+    ran_alembic = False
+
+    async def _fixture_destination(_session: AsyncSession, _org_id: uuid.UUID) -> str:
+        return "fixture://upgrade-unverified"
+
+    def _unverified(*_a: object, **_k: object) -> dict[str, object]:
+        return {"archive": archive, "verified": False, "encrypted": True, "legs": {}}
+
+    def _spy() -> None:
+        nonlocal ran_alembic
+        ran_alembic = True
+
+    async def _all_green() -> list[dict[str, object]]:
+        return [{"name": "postgres", "ready": True}, {"name": "alembic", "ready": True}]
+
+    monkeypatch.setattr(upgrade_service, "build_durable_backup", _unverified)
+    monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", _spy)
+    monkeypatch.setattr(upgrade_service, "_backup_destination", _fixture_destination)
+    # Stub readiness so the BASELINE failure (pre-fix, this test reached the health gate) cannot be
+    # confused with an external-dependency failure. The proof must be about the verified flag alone.
+    monkeypatch.setattr(upgrade_service, "check_all", _all_green)
+    baseline = await _max_audit_id()
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "pre_backup", out
+    assert ran_alembic is False, "must not migrate against an archive that failed verification"
+    failures = await _upgrade_failures(org_id=org_id, after_id=baseline)
+    assert len(failures) == 1, failures
+    assert failures[0].get("stage") == "pre_backup"
+    assert archive in str(failures[0].get("error", ""))
+
+
+async def test_upgrade_never_raises_when_orchestration_fails_outside_a_stage(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The three guarded stages are not the whole function.
+
+    ``_alembic_head()`` runs before any stage guard and its failure escaped the function outright.
+    ``cli/upgrade.py`` does not wrap ``run_upgrade``, so that reached the operator as a traceback
+    instead of a stage plus a recovery pointer. RED against the pre-fix baseline: the call raises.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    marker = "alembic-head-unreadable-fixture"
+
+    def _boom() -> str:
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(upgrade_service, "_alembic_head", _boom)
+    baseline = await _max_audit_id()
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "orchestration", out
+    assert marker in str(out["reason"])
+    failures = await _upgrade_failures(org_id=org_id, after_id=baseline)
+    assert len(failures) == 1, failures
+    assert failures[0].get("stage") == "orchestration"
+    assert marker in str(failures[0].get("error", ""))
+
+
+async def test_upgrade_failure_after_migration_keeps_exact_recovery_pointer(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post-migration orchestration failure must still identify the verified pre-backup."""
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    archive = "fixture://upgrade-post-migration.tar.enc"
+    marker = "readiness-orchestration-fixture"
+    events: list[tuple[str, dict[str, object]]] = []
+    migrated = False
+
+    async def _fixture_destination(_session: AsyncSession, _org_id: uuid.UUID) -> str:
+        return "fixture://upgrade-post-migration"
+
+    def _record_emit(
+        _session: AsyncSession,
+        *,
+        event_type: str,
+        after: dict[str, object],
+        **_kwargs: object,
+    ) -> None:
+        events.append((event_type, after))
+
+    def _verified_backup(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"archive": archive, "verified": True, "encrypted": True, "legs": {}}
+
+    def _migrate() -> None:
+        nonlocal migrated
+        migrated = True
+
+    async def _health_boom() -> list[dict[str, object]]:
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(upgrade_service, "_alembic_head", lambda: "fixture-head")
+    monkeypatch.setattr(upgrade_service, "_backup_destination", _fixture_destination)
+    monkeypatch.setattr(upgrade_service, "_emit", _record_emit)
+    monkeypatch.setattr(upgrade_service, "build_durable_backup", _verified_backup)
+    monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", _migrate)
+    monkeypatch.setattr(upgrade_service, "check_all", _health_boom)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert migrated is True
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "orchestration", out
+    assert marker in str(out["reason"])
+    assert out["pre_backup_archive"] == archive
+    assert [event for event, _after in events] == ["UPGRADE_STARTED", "UPGRADE_FAILED"]
+    assert events[-1][1]["pre_backup_archive"] == archive
+
+
+@pytest.mark.parametrize("failing", ["get_settings", "create_async_engine", "async_sessionmaker"])
+async def test_upgrade_never_raises_when_setup_fails(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    failing: str,
+) -> None:
+    """Setup is part of the function, so it is part of the contract.
+
+    ``get_settings()`` (malformed DSN, missing required field), ``create_async_engine()``
+    (unparseable URL, bad driver), and the sessionmaker sat ABOVE the try: and escaped exactly like
+    the stage bodies once did — the same defect one scope out. No audit row is possible here: the
+    failure is upstream of any usable session, so the structured dict is the whole honest answer.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    marker = f"{failing}-setup-fixture"
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(upgrade_service, failing, _boom)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "orchestration", out
+    assert marker in str(out["reason"])
+
+
+async def test_upgrade_disposal_failure_does_not_replace_the_verdict(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cleanup must never become the result.
+
+    ``engine.dispose()`` runs in ``finally``, so a bare await there raises straight out and REPLACES
+    an already-computed return — reporting a concluded upgrade as an exception, the worst direction
+    for this command. Here the upgrade fails at a known stage AND disposal fails; the caller must
+    still receive the stage verdict, not the disposal error.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    stage_marker = "orchestration-fixture"
+    dispose_marker = "dispose-must-not-surface-fixture"
+    real_create = upgrade_service.create_async_engine
+    dispose_called = False
+
+    class _FailingDisposeEngine:
+        """Delegates everything to a real engine but fails on ``dispose``.
+
+        ``AsyncEngine.dispose`` is read-only, so ``monkeypatch.setattr(engine, "dispose", ...)``
+        raises ``AttributeError`` inside ``create_async_engine`` — which the orchestration guard
+        then correctly reports, proving nothing about disposal. A delegating wrapper puts the
+        failure where the test actually means it.
+        """
+
+        def __init__(self, inner: AsyncEngine) -> None:
+            self._inner = inner
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+        async def dispose(self, *_a: object, **_k: object) -> None:
+            nonlocal dispose_called
+            dispose_called = True
+            await self._inner.dispose()
+            raise RuntimeError(dispose_marker)
+
+    def _engine_with_failing_dispose(*a: object, **k: object) -> object:
+        return _FailingDisposeEngine(real_create(*a, **k))  # type: ignore[arg-type]
+
+    def _head_boom() -> str:
+        raise RuntimeError(stage_marker)
+
+    monkeypatch.setattr(upgrade_service, "create_async_engine", _engine_with_failing_dispose)
+    monkeypatch.setattr(upgrade_service, "_alembic_head", _head_boom)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "FAILED", out
+    assert out["stage"] == "orchestration", out
+    assert stage_marker in str(out["reason"]), "the STAGE failure must be what the caller sees"
+    assert dispose_marker not in str(out["reason"]), "cleanup must not overwrite the verdict"
+    assert dispose_called is True, "the test must exercise engine disposal"
+
+
+async def test_upgrade_session_close_failure_preserves_committed_success(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session cleanup cannot rewrite a committed terminal result.
+
+    SQLAlchemy runs ``AsyncSession.close()`` from the session context manager's ``__aexit__``. If
+    close raises after ``UPGRADE_COMPLETED`` commits, that cleanup error must be logged without
+    converting the already-decided OK result into a contradictory orchestration failure.
+    """
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    close_marker = "session-close-after-success-fixture"
+    events: list[str] = []
+    close_calls = 0
+
+    async def _fixture_destination(_session: AsyncSession, _org_id: uuid.UUID) -> str:
+        return "fixture://upgrade-session-close"
+
+    def _record_emit(_session: AsyncSession, *, event_type: str, **_kwargs: object) -> None:
+        events.append(event_type)
+
+    def _verified_backup(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "archive": "fixture://upgrade-session-close.tar.enc",
+            "verified": True,
+            "encrypted": True,
+            "legs": {},
+        }
+
+    async def _all_green() -> list[dict[str, object]]:
+        return [{"name": "postgres", "ready": True}, {"name": "alembic", "ready": True}]
+
+    async def _close_boom(_session: AsyncSession) -> None:
+        nonlocal close_calls
+        close_calls += 1
+        raise RuntimeError(close_marker)
+
+    monkeypatch.setattr(upgrade_service, "_alembic_head", lambda: "fixture-head")
+    monkeypatch.setattr(upgrade_service, "_backup_destination", _fixture_destination)
+    monkeypatch.setattr(upgrade_service, "_emit", _record_emit)
+    monkeypatch.setattr(upgrade_service, "build_durable_backup", _verified_backup)
+    monkeypatch.setattr(upgrade_service, "_run_alembic_upgrade", lambda: None)
+    monkeypatch.setattr(upgrade_service, "check_all", _all_green)
+    monkeypatch.setattr(AsyncSession, "close", _close_boom)
+
+    out = await upgrade_service.run_upgrade(org_id)
+
+    assert out["result"] == "OK", out
+    assert events == ["UPGRADE_STARTED", "UPGRADE_COMPLETED"]
+    assert close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("signal_type", "signal_marker"),
+    [
+        (asyncio.CancelledError, "upgrade-cancelled-fixture"),
+        (SystemExit, "upgrade-system-exit-fixture"),
+    ],
+    ids=["cancelled-error", "system-exit"],
+)
+async def test_upgrade_session_close_failure_does_not_replace_base_exception(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    signal_type: type[BaseException],
+    signal_marker: str,
+) -> None:
+    """An ordinary cleanup error must not transform cancellation/exit into a FAILED verdict."""
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    close_calls = 0
+
+    async def _interrupt_destination(_session: AsyncSession, _org_id: uuid.UUID) -> str:
+        raise signal_type(signal_marker)
+
+    async def _close_boom(_session: AsyncSession) -> None:
+        nonlocal close_calls
+        close_calls += 1
+        raise RuntimeError("session-close-during-cancellation-fixture")
+
+    monkeypatch.setattr(upgrade_service, "_alembic_head", lambda: "fixture-head")
+    monkeypatch.setattr(upgrade_service, "_backup_destination", _interrupt_destination)
+    monkeypatch.setattr(upgrade_service, "_emit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(AsyncSession, "close", _close_boom)
+
+    with pytest.raises(signal_type, match=signal_marker):
+        await upgrade_service.run_upgrade(org_id)
+    assert close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("signal_type", "signal_marker"),
+    [
+        (asyncio.CancelledError, "failure-audit-cancelled-fixture"),
+        (SystemExit, "failure-audit-system-exit-fixture"),
+    ],
+    ids=["cancelled-error", "system-exit"],
+)
+async def test_upgrade_failure_audit_close_failure_does_not_swallow_base_exception(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    signal_type: type[BaseException],
+    signal_marker: str,
+) -> None:
+    """Failure auditing propagates cancellation/exit even when its cleanup also fails."""
+    from easysynq_api.services import upgrade as upgrade_service
+
+    org_id = await _org_id()
+    close_calls = 0
+
+    def _head_boom() -> str:
+        raise RuntimeError("orchestration-before-failure-audit-fixture")
+
+    def _interrupt_emit(*_args: object, **_kwargs: object) -> None:
+        raise signal_type(signal_marker)
+
+    async def _close_boom(_session: AsyncSession) -> None:
+        nonlocal close_calls
+        close_calls += 1
+        raise RuntimeError("failure-audit-session-close-fixture")
+
+    monkeypatch.setattr(upgrade_service, "_alembic_head", _head_boom)
+    monkeypatch.setattr(upgrade_service, "_emit", _interrupt_emit)
+    monkeypatch.setattr(AsyncSession, "close", _close_boom)
+
+    with pytest.raises(signal_type, match=signal_marker):
+        await upgrade_service.run_upgrade(org_id)
+    assert close_calls == 1
 
 
 async def test_restore_discard_cleans_scratch_bucket(

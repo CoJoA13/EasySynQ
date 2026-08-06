@@ -1469,7 +1469,7 @@ git commit -m "docs(s-web-7c): slice-history + CLAUDE learnings for Complaint & 
 
 ## Post-plan (handled outside the task loop)
 
-After all tasks: run the `diff-critic` agent on the branch diff (per the project's pre-PR rhythm), address findings, then a pre-merge live smoke (rebuild api+web images; grant `demo` SYSTEM overrides of `record.read record.create capa.create ncr.read ncr.create ncr.record_correction` on org `AHT`; drive log-complaint → spawn-CAPA → board, and raise-NCR → disposition), then open the PR.
+After all tasks: run the `diff-critic` agent on the branch diff (per the project's pre-PR rhythm), address findings, then a pre-merge live smoke (rebuild api+web images; grant `demo` SYSTEM overrides of `record.read record.create capa.create ncr.read ncr.create ncr.record_correction` on org `ORG_EXAMPLE`; drive log-complaint → spawn-CAPA → board, and raise-NCR → disposition), then open the PR.
 
 ---
 

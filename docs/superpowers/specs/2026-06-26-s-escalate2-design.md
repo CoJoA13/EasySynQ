@@ -217,7 +217,7 @@ pre-stamping. **The implementer must still walk every escalation test** and conf
   `downgrade -1` then `upgrade head` against the populated `easysynq` DB (role `easysynq`) — confirm the
   two columns add/drop cleanly, the global template seeds, and all escalate-enabled `sla_policy` rows get
   `escalate_2_after = 3 days` while DOC_ACK/PERIODIC_REVIEW stay NULL. **DB-only — NO live
-  `sweep_task_timers`** (would fire real reminders/emails).
+  `sweep_task_timers`** (would emit configured reminders/emails).
 - Pre-PR: `diff-critic` + `migration-reviewer` + an opus whole-branch review; fold confirmed findings.
 
 ---

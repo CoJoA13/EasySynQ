@@ -1757,7 +1757,7 @@ git commit -m "docs(s-mr-2): reconcile route/close-code, slice-history, learning
 
 - [ ] **Step 7: Pre-merge live smoke (owner-driven)**
 
-Rebuild the web image (`docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml up -d --build web`) + the api/worker if the backend changed. Grant SYSTEM overrides for `mgmtReview.read` / `mgmtReview.create` / `mgmtReview.record_outputs` / `document.release` on the **live** demo `app_user` row (org AHT). Owner does the Keycloak login. Via Chrome MCP: create a review → compile-inputs → author a DECISION + an ACTION (owner=demo) → submit (the MR_INPUT leaves My-Tasks) → approve → release (the 9.3 ★ flips, the MR_ACTION spawns) → complete the MR_ACTION in `/tasks` → close; plus the Home CHECK next-review line and the `/management-reviews` register.
+Rebuild the web image (`docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml up -d --build web`) + the api/worker if the backend changed. Grant SYSTEM overrides for `mgmtReview.read` / `mgmtReview.create` / `mgmtReview.record_outputs` / `document.release` on the **live** demo `app_user` row (org ORG_EXAMPLE). Owner does the Keycloak login. Via Chrome MCP: create a review → compile-inputs → author a DECISION + an ACTION (owner=demo) → submit (the MR_INPUT leaves My-Tasks) → approve → release (the 9.3 ★ flips, the MR_ACTION spawns) → complete the MR_ACTION in `/tasks` → close; plus the Home CHECK next-review line and the `/management-reviews` register.
 
 ---
 

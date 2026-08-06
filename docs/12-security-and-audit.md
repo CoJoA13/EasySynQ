@@ -73,7 +73,7 @@ flowchart TB
     subgraph Ext["Admin-designated egress only"]
         LDAP["LDAP/AD / OIDC/SAML IdP"]
         SMTP["SMTP relay (STARTTLS)"]
-        BKP["Backup target (encrypted)"]
+        BKP["Backup target (encryption conditional)"]
     end
 
     U -->|HTTPS only| CADDY
@@ -319,14 +319,14 @@ flowchart LR
     R2 --> R3["row 3<br/>prev_hash=H2<br/>row_hash=H3"]
     R3 --> DOTS["..."]
     DOTS --> RN["row n<br/>prev_hash=H(n-1)<br/>row_hash=Hn"]
-    RN --> ANCHOR["periodic anchor:<br/>(Hn, n, ts) signed by app key,<br/>copied into backup + MANDATORY<br/>off-host/append-only checkpoint sink<br/>(audit_checkpoint_sink) for any<br/>tamper-evidence claim"]
+    RN --> ANCHOR["periodic anchor:<br/>(Hn, n, ts) signed by app key,<br/>best-effort backup leg + MANDATORY<br/>off-host/append-only checkpoint sink<br/>(audit_checkpoint_sink) for any<br/>tamper-evidence claim"]
 ```
 
 **Properties:**
 - **Mutation detection:** altering any field of row *k* changes `row_hash[k]`, breaking every link from *k* onward — a single fast verification pass localizes the break.
 - **Deletion/reordering detection:** removing or reordering rows breaks the chain and creates an `id` gap.
 - **Insertion detection:** a back-dated insert cannot reproduce the downstream chain without rewriting all later `row_hash` values (and the periodic signed anchors, below).
-- **Anchoring:** `beat` periodically (default hourly + on shutdown) writes a **signed checkpoint** `(latest_id, latest_row_hash, timestamp)` signed with an app private key. Checkpoints are included in every backup, so even a full-history rewrite by a privileged DBA is exposed by a checkpoint that no longer matches. This is the honest "tamper-evident, not tamper-proof" guarantee (P5).
+- **Anchoring:** `beat` periodically (default hourly + on shutdown) writes a **signed checkpoint** `(latest_id, latest_row_hash, timestamp)` signed with an app private key. The newest checkpoint is attempted as a best-effort backup leg and may be absent; the mandatory off-host/append-only sink, not backup-leg presence, carries the tamper-evidence claim. This is the honest "tamper-evident, not tamper-proof" guarantee (P5).
 - **Off-host anchor (MANDATORY for tamper-evidence claims) (reconciled per Decisions Register R13):** An off-host / append-only audit-checkpoint anchor is **MANDATORY for any install claiming tamper-evidence / Part-11 readiness** (stakeholder decision c). Backup-bundled checkpoints alone are **not** sufficient, because a privileged operator who controls both the database and the backups could rewrite both. The system therefore **requires** at least one **off-host or append-only checkpoint sink** — e.g., a separate **WORM bucket**, an external object store, or **append-only syslog** — to which signed checkpoints are continuously written. This sink is modeled as the **`audit_checkpoint_sink`** config entity (see §4.6 and Data Model doc / R13) and is **configured during setup as a soft gate**: setup is not blocked, but if no `audit_checkpoint_sink` is configured the system surfaces a **clear, persistent UI warning** that **tamper-evidence cannot be honestly claimed** until an off-host anchor exists. An install with no off-host anchor MUST NOT present itself (in UI, exports, or evidence packs) as tamper-evident.
 
 ### 4.4 Write path & integrity guarantees
@@ -388,7 +388,7 @@ Integrity of the *bytes* (not just the metadata) is what makes EasySynQ's eviden
 | api ↔ Keycloak | HTTPS; OIDC/SAML strictly over TLS |
 | Keycloak ↔ LDAP/AD | **LDAPS or STARTTLS** (plaintext LDAP refused) |
 | worker ↔ SMTP | **STARTTLS** required (or implicit TLS) |
-| Backups → target | TLS for transport; archive itself encrypted (§6.2) |
+| Backups → target | Transport protection is deployment-specific; archive encryption applies only when a real backup key is configured (§6.2) |
 
 Security response headers set at Caddy: strict **`Content-Security-Policy`** (nonce-based, `default-src 'self'`, no inline script except nonce, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` (deny camera/mic/geolocation), and `Strict-Transport-Security`.
 
@@ -408,9 +408,9 @@ Security response headers set at Caddy: strict **`Content-Security-Policy`** (no
 | **PostgreSQL volume** | Host-level **LUKS/dm-crypt full-volume encryption** (install-guide recommended/required) | Protects DB files, WAL, temp |
 | **Sensitive DB columns** | App-layer envelope encryption (AES-256-GCM) of secrets stored in DB (federation client secrets, SMTP creds): data key sealed by a master key | Defense in depth even if volume key is compromised |
 | **MinIO** | **SSE-S3** server-side encryption on all buckets; object-lock for WORM | Keys managed by MinIO KES or env-provided master, rotatable |
-| **Backups** | Archive encrypted with a dedicated backup key (AES-256), separate from the app master key | A stolen backup is useless without the backup key |
+| **Backups** | AES-256-GCM archive encryption only when a dedicated backup key is configured; otherwise current code writes plaintext | An unset/placeholder key is an open M-01 risk and also omits secret-bearing optional legs |
 | **Redis** | Holds only ephemeral locks/cache/short-lived tokens; volume on encrypted host disk; no long-term secrets persisted | Treated as ephemeral (rebuildable) |
-| **Keycloak realm/DB** | Same volume encryption; realm export (a backup artifact) encrypted | Contains user/identity data — high sensitivity |
+| **Keycloak realm/DB** | Same volume encryption; a captured realm-export leg is included only inside an encrypted archive | The best-effort leg can be absent |
 
 ### 6.3 Key hierarchy
 
@@ -419,7 +419,7 @@ flowchart TD
     MASTER["Master Key (KEK)<br/>from Docker secret / env file (0600),<br/>rotatable, never in image or VCS"]
     MASTER --> DBDK["DB column data key (DEK)<br/>AES-256-GCM, sealed by master"]
     MASTER --> APPSIGN["Audit-checkpoint signing key<br/>(asymmetric; private signs anchors)"]
-    BACKUPKEY["Backup encryption key<br/>(separate custody from master)"] --> BKP["Encrypted backup archives"]
+    BACKUPKEY["Backup encryption key<br/>(separate custody from master)"] --> BKP["Encrypted archives<br/>(only when configured)"]
     MINIOKEY["MinIO SSE master / KES"] --> OBJ["Encrypted object storage"]
     HOSTKEY["Host LUKS key"] --> VOL["Encrypted volumes (PG, Redis, Keycloak)"]
 ```
@@ -444,33 +444,50 @@ flowchart TD
 
 **Principle (inherited from architecture):** only **PostgreSQL + MinIO** are backup-critical; OpenSearch and the filesystem mirror are always rebuildable. A backup is *valid* only if the DB snapshot and the blob snapshot **correspond** (consistency point).
 
+> **Current implementation limit:** the archive contains `pg_dump` plus blob locator/hash metadata,
+> not MinIO object bytes. The matrix's MinIO mirror/replication leg is a required target design, not a
+> shipped archive leg. Current restore PASS depends on the configured source object store and cannot
+> authorize cutover or a disaster-recovery claim.
+
 ### 8.1 Backup matrix
 
 | Component | Method | Default cadence (admin-tunable) | Restore |
 | --- | --- | --- | --- |
-| PostgreSQL | `pg_dump` logical + optional continuous **WAL archiving (PITR)** | Nightly full + WAL stream | `pg_restore` / PITR to timestamp |
-| MinIO blobs | `mc mirror` / bucket replication (WORM ⇒ immutable ⇒ safe incremental) | Nightly incremental | `mc mirror` back / repoint |
-| Keycloak realm | Realm export JSON (encrypted) | On config change + nightly | Realm import |
-| Config / secrets | `.env` + Compose snapshot (encrypted) | On change | Redeploy |
-| **Audit checkpoints** | Latest signed chain checkpoints bundled into every backup | Each backup | Verifies chain integrity post-restore |
+| PostgreSQL | Current: `pg_dump` logical. Target: continuous **WAL archiving (PITR)** | Current: nightly full. WAL stream unshipped | Current: scratch `pg_restore` verification. PITR unshipped |
+| MinIO blobs | Target: `mc mirror` / role-preserving bucket replication | Unshipped | Source-independent recovery unshipped |
+| Keycloak realm | Best-effort realm-export leg, attempted only for encrypted archives | Nightly archive attempt when a backup key is configured; no on-change trigger | No current realm-import/cutover procedure; future recovery must require `legs.realm_export = "present"` |
+| Config / secrets | Best-effort redacted config snapshot, attempted only for encrypted archives | Nightly archive attempt when a backup key is configured; no on-change trigger | No current redeploy procedure; future recovery must require `legs.config_snapshot = "present"` |
+| **Audit checkpoints** | Best-effort latest signed checkpoint leg | Each nightly archive attempt; can be absent | Current restore reports/checks what is present; off-host lineage work remains open |
 | OpenSearch (reserved) | **Not deployed or backed up in shipped S/M** | — | Rebuild from authoritative stores if a future extension is deployed |
 | Filesystem mirror | **Not backed up** | — | Regenerate from vault |
 
 ### 8.2 Backup/restore flow & consistency
 
-- `easysynq backup` briefly **quiesces** (short consistency lock) to align the DB dump with the blob manifest, then produces a **single timestamped, checksummed, encrypted archive** (DB dump + MinIO manifest + Keycloak realm + config + audit checkpoint) written to the admin-configured target. Backup success/failure is an audited event and alertable.
-- `easysynq restore` **verifies checksums and decrypts**, restores PG + MinIO, re-imports the realm,
-  and **re-walks and verifies the audit hash chain against the bundled checkpoint** (a restore that
-  fails chain verification is flagged, not silently accepted). After cutover, the operator runs
-  `easysynq mirror rebuild`; a future derived search index would also be rebuilt if deployed.
-- A documented **restore drill** is part of the admin runbook and is itself an auditable, recommended-periodic activity (the only way to trust a backup is to have restored one).
+- `easysynq backup` produces a timestamped, checksummed archive containing the database dump, blob
+  manifest, and available Keycloak/config/checkpoint legs. The blob manifest is metadata; object
+  bytes are absent, so the archive is non-self-contained.
+- `easysynq restore` verifies checksums and decrypts only when the archive is encrypted, restores PostgreSQL into a scratch database,
+  copies bytes from the configured source object store into a flattened scratch layout, and verifies
+  the audit chain plus both blob-verification views. PASS is integrity evidence only. The scratch
+  target is not role-preserving or cutover-ready.
+- The documented **restore integrity drill** is an auditable, recommended-periodic check of
+  archive/database/manifest integrity against the currently configured source object store. Its PASS
+  is source-dependent evidence only, not source-independent recovery or cutover proof.
 
 ### 8.2.1 WORM-aware restore, PITR ↔ blob alignment & quiesce bound (reconciled per Decisions Register R37)
 
-Because document/record blobs live under MinIO **object-lock / WORM** (§5) and Postgres supports point-in-time recovery (PITR), a naive restore can either fail against immutable objects or reconstruct an internally inconsistent system. The restore procedure therefore makes the following explicit and binding:
+Because document/record blobs live under MinIO **object-lock / WORM** (§5), a naive restore can either
+fail against immutable objects or reconstruct an internally inconsistent system. These are binding
+requirements for a **future supported recovery procedure**, not instructions implemented by today's
+scratch verification CLI:
 
-- **WORM-aware restore target.** Restoring blobs over an existing object-locked bucket is **not** permitted by the storage layer (that is the whole point of WORM). A restore that must rewrite blobs MUST target a **fresh / cleared bucket or a versioned restore target** — never an attempt to overwrite locked objects in place. The runbook specifies provisioning a clean bucket (or a new object-lock-enabled bucket version) and repointing the app at it.
-- **PITR ↔ blob alignment.** A Postgres point-in-time restore MUST be **paired with the matching blob set** for that point in time — **not merely the latest mirror or the latest blob snapshot**. The blob manifest captured at backup (and the content-addressed SHA-256 digests) is used to select the blob set whose digests the restored metadata references, so the restored DB and the restored blobs **correspond** (the consistency-point principle of §8). Restoring the DB to time *T* with the newest blobs (or vice-versa) is explicitly disallowed.
+- **WORM-aware restore target.** A recovery MUST use fresh role-preserving document/record targets
+  with object lock plus a fresh plain rendition target, preserve object keys, map bucket roles after
+  complete copies, and atomically switch the restored database and matching storage configuration.
+  The current flattened scratch layout must not be cut over.
+- **PITR ↔ blob alignment.** A Postgres point-in-time restore MUST be paired with the matching,
+  source-independent blob set — not merely a manifest or the latest mirror. The generation/WAL
+  binding needed to implement this is not currently shipped.
 - **Checkpoint not ahead of the PITR target.** When restoring to a **mid-chain PITR target**, the verifier MUST **confirm the audit hash-chain checkpoint is not ahead of that target**: a bundled/off-host checkpoint whose `latest_id` exceeds the highest restored `audit_event.id` would falsely report a "missing tail" as tampering. The restore selects (or recomputes against) the checkpoint at-or-before the PITR target and verifies the chain only up to the restored point; a checkpoint ahead of the target is flagged and the matching earlier checkpoint is used.
 - **Bounded consistency-quiesce window.** The backup consistency lock (§8.2) and any restore-time quiesce are **explicitly bounded** (short, sub-minute target) and are **reconciled with the R14 availability target** (99.0% per month for the single-host profile, including the Keycloak and Beat dependencies): the quiesce window is counted against — and must fit within — that monthly budget, so backup/restore quiescing does not silently breach the stated availability target.
 
@@ -482,6 +499,9 @@ Because document/record blobs live under MinIO **object-lock / WORM** (§5) and 
 | **RTO** | ≤ 2 h for a full restore on the M profile |
 | **Availability** | **99.0% per month for the single-host profile**, excluding planned maintenance — **including** the auth (**Keycloak**) and scheduler (**Beat**) dependencies, which are **single points of failure** on this profile. **99.5%+ is achievable only via the documented HA/K8s path**; do **not** claim 99.5% on a single host running six single-instance stateful services (reconciled per Decisions Register R14) |
 | **Integrity after DR** | Audit chain verified, blob sample re-hashed, before declaring the system trustworthy post-restore |
+
+These DR values are targets, not current host-loss guarantees. They remain unproven until the
+self-contained recovery generation and role-preserving, source-independent cutover acceptance pass.
 
 > **Availability posture & SPOFs (reconciled per Decisions Register R14).** On the single-host profile, **Keycloak (auth)** and **Beat (scheduler)** are explicit **single points of failure**: if Keycloak is down, no one can authenticate (the auth subsystem fails closed, P9); if Beat is down, scheduled jobs (chain-linking, chain-verify, re-hash sweeps, retention sweeps, checkpoint anchoring, mirror-sync) stall. The single-host availability target is therefore stated as **99.0% per month, inclusive of these dependencies** — not 99.5%. A **fast-restart runbook** for both Keycloak and Beat is part of the admin runbook (detect → restart → verify), and the consistency-quiesce windows of §8.2.1 are counted within this same budget. Reaching **99.5%+** requires the **documented HA/K8s path** (redundant Keycloak, redundant scheduler, replicated stores); it is not a property of the six-single-instance-stateful-service single host.
 
@@ -558,7 +578,7 @@ This makes WORM the rule and destruction the audited, dual-controlled exception 
 | OWASP category | EasySynQ mitigations |
 | --- | --- |
 | **A01 Broken Access Control** | Deny-by-default PDP, per-object PEP at the use-case layer (not just routes), per-user override precedence, `org_id` scoping, 404-for-unknown, every denied attempt audited. Auditor independence + admin/QMS separation enforced as grants. |
-| **A02 Cryptographic Failures** | TLS 1.2+/1.3 everywhere, HSTS, LUKS + SSE-S3 at rest, envelope-encrypted DB secrets, encrypted backups, strong randoms for secrets, SHA-256 content addressing. |
+| **A02 Cryptographic Failures** | TLS 1.2+/1.3 everywhere, HSTS, LUKS + SSE-S3 at rest, envelope-encrypted DB secrets, backup encryption when a real key is configured (plaintext fallback remains open M-01), strong randoms for secrets, SHA-256 content addressing. |
 | **A03 Injection** | SQLAlchemy 2 parameterized queries (no string SQL), strict input validation via Pydantic/FastAPI schemas, OpenSearch queries built via the client (no query injection), strict output encoding in the SPA, nonce-based CSP to blunt XSS. |
 | **A04 Insecure Design** | Threat-modeled here; immutable/append-only/WORM by design; separation of duties; fail-closed authz; tamper-evident over tamper-proof acknowledged honestly. |
 | **A05 Security Misconfiguration** | Hardened defaults, secrets generated at install, no debug in prod, security headers, private network for stores, healthchecks gate readiness, pinned image digests, air-gapped bundle option. |
@@ -636,8 +656,10 @@ flowchart LR
 2. **AuthZ** is deny-by-default, hybrid RBAC+ABAC, decided centrally (PDP) and enforced per-object (PEP) server-side, with override precedence and complete auditing of allows *and* denies.
 3. **The audit trail** is append-only, transactional with the action, before/after-capturing, reason-bearing, and **hash-chained with signed checkpoints** — tamper-evident by design and ready to carry Part 11 signing evidence.
 4. **Binary integrity** is guaranteed by SHA-256 content addressing, WORM object-lock immutability, and scheduled re-hash verification, with the filesystem mirror as a read-only, regenerable export (vault→mirror authority only).
-5. **Encryption** protects data in transit (TLS 1.2+/1.3, LDAPS/STARTTLS) and at rest (LUKS, SSE-S3, envelope-encrypted DB secrets, encrypted backups), under a clear key hierarchy with rotatable, never-committed secrets.
-6. **Backup/restore/DR** treat only PG+MinIO as critical, enforce DB↔blob consistency, verify the audit chain on restore, and meet RPO ≤ 24 h (minutes with WAL) / RTO ≤ 2 h.
+5. **Encryption** protects data in transit (TLS 1.2+/1.3, LDAPS/STARTTLS) and most data at rest (LUKS, SSE-S3, envelope-encrypted DB secrets). Durable backup encryption is conditional on a real configured key; plaintext fallback remains open M-01.
+6. **Backup/restore/DR** treat only PG+MinIO as critical. Current tooling verifies DB↔blob integrity
+   and the restored audit chain against the configured source store; the RPO ≤ 24 h (minutes with
+   WAL) / RTO ≤ 2 h values remain unproven targets pending self-contained recovery generation.
 7. **Retention & GDPR** are reconciled by separating immutable QMS content/audit from mutable user PII: erasure anonymizes the profile while the stable `actor_id` keeps the hash chain — and ISO traceability — intact.
 8. **The threat model** maps OWASP Top 10 to concrete mitigations and states honestly that privileged-insider history rewrites are *detectable* (not preventable) via signed audit checkpoints.
 9. **E-signature hooks** are reserved (signature meaning, re-auth at signing, signature manifest) so 21 CFR Part 11 is an additive change, not a rewrite — fulfilling the foundational extensibility mandate.

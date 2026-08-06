@@ -871,7 +871,7 @@ async def test_create_and_read_management_review(app_client, ...):
 
 - [ ] **Step 4: Register the router** in `main.py` — import `from .api.mgmt_review import router as mgmt_review_router` (alphabetical block) + `app.include_router(mgmt_review_router)  # S-mr-1: clause-9.3 Management Review` in the **content-router** cluster (near `objectives_router`).
 
-- [ ] **Step 5: Run the test — passes.** Run: `cd apps/api && uv run pytest tests/integration/test_mgmt_review.py -v -m integration` (needs Docker; on this Windows box the integration run is the Linux CI — run `/check-api` for the static loop locally and rely on CI for `-m integration`, or run via testcontainers if Docker is up).
+- [ ] **Step 5: Run the test — passes.** Run: `cd apps/api && uv run pytest tests/integration/test_mgmt_review.py -v -m integration` (needs Docker; in that Windows development environment the integration run is the Linux CI — run `/check-api` for the static loop locally and rely on CI for `-m integration`, or run via testcontainers if Docker is up).
 - [ ] **Step 6: Commit**
 
 ```bash

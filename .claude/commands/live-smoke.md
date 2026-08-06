@@ -3,7 +3,9 @@ description: Pre-merge live smoke of the current branch via Chrome MCP — rebui
 allowed-tools: Bash, Read, Glob, Grep
 ---
 
-Run a **pre-merge live smoke** of the current branch against the running dev stack (Docker Desktop, app at http://localhost, org **AHT**). The owner does the Keycloak login (`demo` / `Demo-Password-1`); you drive via the **Claude-in-Chrome MCP**. This is the recurring ritual whose mechanics are non-obvious — follow them exactly.
+Run a **pre-merge live smoke** of the current branch against an operator-selected development stack
+(app at http://localhost). Set the target org explicitly; never record a real installation's code in
+this repository. The owner does the Keycloak login; you drive via the browser automation tooling.
 
 ## 1. Rebuild the changed image(s)
 The web image is a **baked `vite preview` build** with no source mount — a front-end change isn't live until rebuilt. Rebuild only what changed:
@@ -15,10 +17,13 @@ docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/com
 Add `api worker beat` to the rebuild **iff this branch touched the backend** (`apps/api/**` / a migration). Confirm the stack is up first: `docker ps --format '{{.Names}}\t{{.Status}}' | grep easysynq`. If `keycloak` was recreated, the demo user is wiped → `just demo-user` (and `just seed-personas` for the SoD trio).
 
 ## 2. Grant overrides + see the data
-The `demo` login holds NO content keys; grant SYSTEM overrides to **all org-AHT users** (dodges the re-created-JIT-row trap) and print the docs/DCRs the smoke needs. Edit `scripts/grant-overrides.py`'s `KEYS`/`ORG` for the slice under test, then:
+The `demo` login holds NO content keys; grant SYSTEM overrides to all users in the selected org
+(dodges the re-created-JIT-row trap) and print the docs/DCRs the smoke needs. Edit only
+`scripts/grant-overrides.py`'s `KEYS`, provide the org via the environment, then:
 
 ```
-MSYS_NO_PATHCONV=1 docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml exec -T worker sh -c "cd /app; uv run python -" < scripts/grant-overrides.py
+export EASYSYNQ_SMOKE_ORG='ORG_EXAMPLE'
+MSYS_NO_PATHCONV=1 docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml exec -T -e EASYSYNQ_SMOKE_ORG worker sh -c "cd /app; uv run python -" < scripts/grant-overrides.py
 ```
 
 `MSYS_NO_PATHCONV=1` shields the container-internal `/app` path from Git-Bash mangling (the `exit 127` trap). For a write/seed beyond authz overrides, pipe a service-layer snippet the same way (call the real services so WORM/SoD invariants hold — never raw SQL into the vault). ⚠ A second SoD principal is needed for any author≠releaser flow (e.g. a DCR/objective implement); a candidate-pool role-holder (not a SYSTEM override) is needed for any `/tasks` approval.

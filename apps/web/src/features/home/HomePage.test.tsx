@@ -6,7 +6,7 @@ import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { HomePage } from "./HomePage";
 
-const forbid = () => HttpResponse.json({ code: "forbidden" }, { status: 403 });
+const forbid = () => HttpResponse.json({ code: "permission_denied" }, { status: 403 });
 
 it("renders the QMS health heading and the four PDCA quadrants, accessibly", async () => {
   const { container } = renderWithProviders(<HomePage />);

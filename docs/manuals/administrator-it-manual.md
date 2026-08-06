@@ -296,9 +296,14 @@ confirmed delivered.
 
 ## 9. Backups and restore drills
 
-The backup-critical stores are PostgreSQL and MinIO. Keycloak's durable schema lives in PostgreSQL;
-the archive also attempts a realm export. The encrypted archive includes the DB dump, blob manifest,
-config snapshot, realm leg when available, and latest signed audit checkpoint.
+The backup-critical stores are PostgreSQL and MinIO. Keycloak's durable schema lives in PostgreSQL.
+Every durable archive includes the DB dump and blob locator/hash manifest; it contains **no MinIO
+object bytes**. Realm export, config snapshot, and latest signed audit checkpoint are best-effort
+legs and may be absent. With a configured backup key the archive is encrypted; with an
+unset/placeholder key it is plaintext and omits the secret-bearing realm/config legs. Inspect the
+command result and a newly written manifest's `encrypted`/`legs` fields before relying on an
+artifact; older manifest-v2 artifacts can omit `encrypted` and require envelope inspection. G-C
+does not prove durable encryption, key viability, or optional-leg presence.
 
 ### Commands
 
@@ -321,27 +326,27 @@ setup.
 ### Key custody
 
 `BACKUP_ENCRYPTION_KEY` is not stored in the archive. Losing it makes every archive sealed with that
-key unrecoverable. Retain old backup keys for as long as their archives must remain restorable.
+key undecryptable. Retain old backup keys for as long as their archives must remain decryptable and
+available for integrity verification.
 Store keys independently from both the host and its backup destination.
 
-### Live restore
+### Restore integrity verification
 
 ```bash
 ./scripts/easysynq restore <archive.tar.enc> --confirm
 ```
 
-The command leaves a verified target standing; production cutover is manual. A checkpoint-ahead
-result exits flagged and requires an explicit `--audit-checkpoint-ack`, which must be investigated
-and documented. Follow the complete
-[backup/restore runbook](../runbooks/backup-restore.md); never overwrite the existing WORM bucket.
+The command leaves an integrity-verification target standing for inspection/discard. PASS proves
+the flattened scratch copy re-hashes and the restored database's locators resolve against the
+currently configured source object store. It is **not cutover-ready**. Do not repoint a service at
+the scratch database or bucket. A checkpoint-ahead result exits flagged and requires an explicit
+`--audit-checkpoint-ack`, which must be investigated and documented. Follow the complete
+[backup/restore runbook](../runbooks/backup-restore.md) for the current constraints.
 
-After cutover:
-
-```bash
-./scripts/easysynq mirror rebuild
-```
-
-No separate search reindex is needed in shipped S/M.
+A future supported recovery must use a self-contained object-byte generation, fresh role-preserving
+object-store targets, atomic database/object-store configuration switching, and closed-service read
+verification. Mirror rebuild is a post-recovery requirement only after that proof exists; this is
+not a current CLI procedure.
 
 ## 10. Upgrades
 
@@ -355,7 +360,10 @@ Normal helper:
 ```
 
 It performs a pre-backup, Alembic upgrade, and readiness gate. It does not make an unsafe migration
-lock disappear.
+lock disappear. The pre-upgrade archive has a database dump and blob manifest but no object bytes;
+it is not a disaster safety net. Production upgrade eligibility remains blocked until
+source-independent recovery generation and role-preserving restore/cutover are implemented and
+proven. The command's existence is not production authorization.
 
 For any release whose migration builds an index on `audit_event`, stop writers first because the
 current migration environment has no `lock_timeout`:
@@ -385,8 +393,10 @@ Before the first upgrade from a legacy H2-backed Keycloak install, run:
 ./scripts/easysynq blob verify --full
 ```
 
-The rolling scan is routine; use full verification after a restore or suspected storage event.
-Follow [Blob integrity verification](../runbooks/blob-integrity-verify.md) on any mismatch.
+The rolling scan is routine; use full verification after a separately validated direct repair, a
+future supported recovery that restores the live source, or a suspected storage event. Current
+source-dependent restore does not repair the live vault. Follow
+[Blob integrity verification](../runbooks/blob-integrity-verify.md) on any mismatch.
 
 ### Mirror
 
@@ -439,8 +449,9 @@ endpoint. Use the appliance's `easysynq-reconfigure` helper where applicable.
 ### WORM
 
 `GOVERNANCE` supports controlled privileged retention handling; `COMPLIANCE` cannot be bypassed even
-by root before expiry. Confirm policy/legal requirements before choosing COMPLIANCE. All restores
-target a fresh bucket.
+by root before expiry. Confirm policy/legal requirements before choosing COMPLIANCE. Current
+restores use the configured shared scratch bucket with a unique per-run prefix; they do not
+provision a new bucket or establish a production recovery target.
 
 ### Access review
 
@@ -463,7 +474,7 @@ At least quarterly:
 | Weekly | Review failed jobs/notifications, mirror/blob findings, backup archive arrival, and capacity trend. |
 | Monthly | Run/confirm a restore test, verify off-host witness read-back, review admin/guest access, patch host. |
 | Quarterly | Full blob verify, key/access review, recovery tabletop, certificate/retention review. |
-| Before upgrade | Reviewed release, full backup, recent restore PASS, migration review, maintenance plan. |
+| Before upgrade | Reviewed release, migration review, maintenance plan, and a proven self-contained recovery path. Current restore PASS alone is insufficient; production eligibility remains blocked. |
 | After upgrade | Readiness, login, upload/download on 9443, task worker, backup, and critical QMS smoke checks. |
 
 Adjust cadence to the organization's risk and retention policy.
@@ -481,7 +492,7 @@ Adjust cadence to the organization's risk and retention policy.
 | Mirror drift | Quarantine/record the mismatch and run the controlled scan/rebuild procedure. |
 | Audit-chain/witness alarm | Preserve host, DB, checkpoint, and logs; restrict privileged access; verify independently before repair. |
 | Certificate expiry/trust | Restore valid certificate/CA trust without changing issuer hostname unless intentionally reconfigured. |
-| Failed migration/readiness | Keep service closed, inspect the migration/pre-backup reference, and recover from the verified target if needed. |
+| Failed migration/readiness | Keep service closed; preserve the source object store; retain the exact non-self-contained archive pointer; do not cut over from the scratch verification target. |
 
 ## 15. Known limitations and residuals
 
@@ -489,7 +500,10 @@ Operational planning must account for:
 
 - no L profile, OpenSearch service, or bundled observability stack;
 - no in-app custom-role editor;
-- no automated live restore cutover;
+- no supported live restore cutover; the current scratch target is verification-only and
+  source-store-dependent;
+- no self-contained object-byte backup generation, so durable/pre-upgrade archives are not disaster
+  safety nets;
 - no migration `lock_timeout`;
 - no mounted T5 approval-rescind/reschedule or T8 revision-draft discard transition; monitor Beat
   because scheduled effectivity is applied by the five-minute release sweep, not by reads;
@@ -512,5 +526,7 @@ These are materially destructive and require an approved recovery/retention deci
 - reusing an old database with mismatched blob storage; or
 - force-removing audit/identity rows.
 
-Prefer verified, fresh-target recovery. Record every production restore, key rotation, hostname
-change, and break-glass grant in the organization's change-control system.
+Do not improvise recovery from the current scratch verification target. A future supported
+fresh-target recovery must satisfy the role-preserving, source-independent requirements in the
+backup/restore runbook. Record every production restore, key rotation, hostname change, and
+break-glass grant in the organization's change-control system.

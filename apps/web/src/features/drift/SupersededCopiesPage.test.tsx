@@ -56,7 +56,7 @@ describe("SupersededCopiesPage", () => {
   test("403 renders the calm no-access panel", async () => {
     server.use(
       http.get("/api/v1/admin/drift/superseded-copies", () =>
-        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+        HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
       ),
     );
     renderWithProviders(<SupersededCopiesPage />);

@@ -12,7 +12,7 @@
 
 **Branch:** `feat/s-drift-3-blob-verify` (already created; the spec is committed on it).
 
-**⚠ This box (native Windows):** integration tests are Linux-CI-only (`-m integration` rejects the ProactorEventLoop) and the FULL `-m unit` suite hits a libmagic access violation in `test_ingestion_helpers.py` — but **targeted unit files run fine** (`uv run pytest tests/unit/test_blob_verify.py`). Local gates = targeted unit + ruff/format/mypy (`/check-api` static legs) + `/check-migrations` + `/check-contracts`. Integration tests are authored with their feature, validated by ruff/mypy locally and by Linux CI.
+**⚠ The then-current development environment (native Windows):** integration tests are Linux-CI-only (`-m integration` rejects the ProactorEventLoop) and the FULL `-m unit` suite hits a libmagic access violation in `test_ingestion_helpers.py` — but **targeted unit files run fine** (`uv run pytest tests/unit/test_blob_verify.py`). Local gates = targeted unit + ruff/format/mypy (`/check-api` static legs) + `/check-migrations` + `/check-contracts`. Integration tests are authored with their feature, validated by ruff/mypy locally and by Linux CI.
 
 ---
 
@@ -838,7 +838,7 @@ git commit -m "feat(s-drift-3): D1 scanner core — rolling re-hash, stamp-on-OK
 
 - [ ] **Step 1: Author the integration tests**
 
-Create `apps/api/tests/integration/test_blob_verify.py`. These cannot run on this box (Linux-CI-only) — validate with ruff/mypy locally; CI proves them.
+Create `apps/api/tests/integration/test_blob_verify.py`. These cannot run in that development environment (Linux-CI-only) — validate with ruff/mypy locally; CI proves them.
 
 ```python
 """S-drift-3 integration proofs — D1 blob verify end-to-end against the real vault + MinIO.
@@ -1057,7 +1057,7 @@ async def test_rolling_sample_orders_by_verified_at_nulls_first(
     assert report.counts()["scanned"] == 0
 ```
 
-- [ ] **Step 2: Validate statically (cannot run integration on this box)**
+- [ ] **Step 2: Validate statically (cannot run integration in that development environment)**
 
 Run: `cd apps/api && uv run ruff check tests/integration/test_blob_verify.py && uv run ruff format --check tests/integration/test_blob_verify.py`
 Expected: clean. (Linux CI runs the test itself.)
@@ -2223,7 +2223,7 @@ git commit -m "docs(s-drift-3): D1/D4 shipped, R41 drift.read, runbook, slice hi
 - [ ] **Step 1: Run every local gate**
 
 - `/check-api` (ruff + format-check + mypy-strict + unit; if the full `-m unit` run hits the known
-  libmagic access violation on this box, run the slice's unit files targeted:
+  libmagic access violation in that development environment, run the slice's unit files targeted:
   `cd apps/api && uv run pytest tests/unit/test_drift3_enums.py tests/unit/test_storage_hash_object.py tests/unit/test_blob_verify.py tests/unit/test_blob_verify_task_registration.py -v`
   and rely on Linux CI for the full suite).
 - `/check-migrations` (0046↔0047 round-trip + `alembic check`).

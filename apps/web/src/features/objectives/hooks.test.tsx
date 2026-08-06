@@ -28,7 +28,7 @@ it("useObjectiveScorecard returns the rollup + rows", async () => {
 it("useObjectiveScorecard sets forbidden on a 403", async () => {
   server.use(
     http.get("/api/v1/objectives/scorecard", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { result } = renderHook(() => useObjectiveScorecard(), { wrapper });

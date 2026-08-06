@@ -18,7 +18,7 @@ it("shows the DCR identity + reason for the approver", async () => {
 it("degrades calmly when the caller lacks changeRequest.read (403)", async () => {
   server.use(
     http.get(`/api/v1/dcrs/${DCR_ID}`, () =>
-      HttpResponse.json({ code: "forbidden", message: "no" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", message: "no" }, { status: 403 }),
     ),
   );
   renderWithProviders(<DcrApprovalContext dcrId={DCR_ID} />);

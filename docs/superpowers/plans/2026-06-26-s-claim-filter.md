@@ -264,7 +264,7 @@ cd apps/api && uv run ruff check src/easysynq_api/services/notifications/escalat
 ```
 Expected: ruff clean; `mypy src` reports no new errors (the predicate is a `ColumnElement[bool]`; the signature is unchanged).
 
-Note: the integration tests added in Task 1 cannot run locally (Docker-less box). They go green in CI's `integration` job. Do NOT attempt `pytest -m integration` locally.
+Note: the integration tests added in Task 1 cannot run locally (Docker-less environment). They go green in CI's `integration` job. Do NOT attempt `pytest -m integration` locally.
 
 - [ ] **Step 3: Commit**
 

@@ -61,7 +61,7 @@ it("shows open audits + coverage, RAG red on a gap", async () => {
 });
 
 it("renders no-access when all reads are forbidden", async () => {
-  const forbid = () => HttpResponse.json({ code: "forbidden" }, { status: 403 });
+  const forbid = () => HttpResponse.json({ code: "permission_denied" }, { status: 403 });
   server.use(
     http.get("/api/v1/audits", forbid),
     http.get("/api/v1/reports/compliance-checklist", forbid),

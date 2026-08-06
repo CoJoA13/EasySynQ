@@ -173,8 +173,8 @@ enums (the event_type values stay — additive pattern).
   `object_id=document_id`, **`scope_ref=identifier`** so `GET /documents/{id}/audit-events` surfaces
   the doc's own tampering (the S-ing-5 precedent). Non-attributable paths: `object_type=config`
   keyed on the org — org resolved via the **resilient single-org lookup** (`scalar_one_or_none` on
-  the default short_code + SELECT-the-only-org fallback; the 0038/0043 lesson — this install is
-  `AHT`). `after` payload:
+  the default short_code + SELECT-the-only-org fallback; the 0038/0043 lesson — an operational
+  install may use a non-`DEFAULT` short code). `after` payload:
   `{path, classification, expected_sha256, found_sha256, quarantine_path, build_name, scan_id}`.
 - **Audit-noise posture:** NO per-clean-scan audit event (hourly CLEAN events would spam the trail);
   the `drift_scan` row is the operational trace. Anomalies are ALWAYS audited.
@@ -245,7 +245,7 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
   shared session DB); ⚠ any release helper signs as the APPROVER, never the author (SoD-2 — the
   S-drift-1 CI lesson); ⚠ run the FULL integration suite for mirror/symlink work
   (engineering-patterns).
-- **Local gates (this box):** api static checks (ruff/format/mypy-strict) + `/check-migrations` +
+- **Local gates (the then-current development environment):** api static checks (ruff/format/mypy-strict) + `/check-migrations` +
   `/check-contracts` (no-change check); both api test suites run in Linux CI.
 - **Pre-PR:** diff-critic on the branch diff. **Pre-merge live smoke** (rebuild
   migrate/api/worker/beat images first): exec into the worker, tamper a mirrored file + plant an

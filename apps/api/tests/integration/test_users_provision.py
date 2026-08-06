@@ -556,7 +556,7 @@ async def test_duplicate_email_returns_keycloak_email_exists(
     resp = await app_client.post(
         "/api/v1/users/provision",
         headers=headers,
-        json={"username": f"dupemail-{uuid.uuid4().hex[:6]}", "email": "dup@example.io"},
+        json={"username": f"dupemail-{uuid.uuid4().hex[:6]}", "email": "dup@example.com"},
     )
 
     assert resp.status_code == 409, resp.text

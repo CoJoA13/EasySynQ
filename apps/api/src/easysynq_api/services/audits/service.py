@@ -40,7 +40,7 @@ from ...db.models.record import Record
 from ...domain.audits import finding_blocks_close, next_state, transition_allowed
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
-from ...problems import ProblemException
+from ...problems import ProblemCode, ProblemException
 from ..capa.service import build_capa
 from ..improvement.repository import get_spawned_initiative
 from ..improvement.service import create_initiative
@@ -100,7 +100,7 @@ def _not_found(what: str) -> ProblemException:
     return ProblemException(status=404, code="not_found", title=f"{what} not found")
 
 
-def _conflict(code: str, title: str) -> ProblemException:
+def _conflict(code: ProblemCode, title: str) -> ProblemException:
     return ProblemException(status=409, code=code, title=title)
 
 

@@ -1193,7 +1193,7 @@ map (`GET /clauses`) — the create-in-process wizard's clause step. This is the
 R38-additive change yet: it adds **no permission key** (`clauseMap.read` already exists — seeded in
 `0004`, held by QMS Owner / Internal Auditor), only a **new role grant** on an existing key, so the
 catalog count **stays 102**. The migration inserts the grant for **every** org's Process Owner role
-(by role name, idempotent `on_conflict_do_nothing`), reaching a renamed install (e.g. `AHT`), not just
+(by role name, idempotent `on_conflict_do_nothing`), reaching a renamed install (e.g. `ORG_EXAMPLE`), not just
 the `DEFAULT` org `0004` seeds.
 
 **The grant alone is insufficient — a companion resolver fix is part of this decision.** A bound
@@ -1772,7 +1772,7 @@ addresses, inventories — live wherever that organization keeps its other opera
 
 **What MAY be committed** is the generalized lesson: the *shape* of an environment where it explains
 a design decision, procedure corrections, and traps worth warning the next operator about — always
-with placeholders (`<ORG>`, `example.local`, `DC01`, `10.0.0.0/24`, `<edge firewall>`).
+with placeholders (`ORG_EXAMPLE`, `example.local`, `DC01`, `10.0.0.0/24`, `<edge firewall>`).
 
 **Specifically excluded**, in any document, commit message, code comment, test fixture or issue:
 

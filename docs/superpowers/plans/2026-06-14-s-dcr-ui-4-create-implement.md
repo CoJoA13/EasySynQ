@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-14-s-dcr-ui-4-create-implement-design.md`. **Gates:** `/check-api` + `/check-contracts` + `/check-web` (NO `/check-migrations` — migration-free; head stays `0051`).
 
-**⚠ Windows reality:** on this box, the API **integration** suite + the full unit suite are **CI-only** (ProactorEventLoop / native crash). So Task 1's integration test is RED/GREEN-verified **in CI**, not locally; locally verify Task 1 via `/check-api` (ruff + mypy-strict + the unit subset) + `/check-contracts`. Web tasks run fully locally (`/check-web`, full vitest via `--pool=forks --poolOptions.forks.singleFork=true`).
+**⚠ Windows reality:** in that development environment, the API **integration** suite + the full unit suite are **CI-only** (ProactorEventLoop / native crash). So Task 1's integration test is RED/GREEN-verified **in CI**, not locally; locally verify Task 1 via `/check-api` (ruff + mypy-strict + the unit subset) + `/check-contracts`. Web tasks run fully locally (`/check-web`, full vitest via `--pool=forks --poolOptions.forks.singleFork=true`).
 
 ---
 
@@ -550,7 +550,7 @@ git commit -m "feat(s-dcr-ui-4): wire the cockpit Approved->Implement for CREATE
 - [ ] **Carry-forward test (the parked stash):** apply `git stash@{0}` (the `DcrImpactTable.test.tsx` no-cross-DCR-leak pin from #132) onto this branch, run `npx vitest run src/features/dcr/DcrImpactTable.test.tsx` (expect PASS — the `${dcrId}` key already guarantees it), and commit as `test(dcr): carry-forward the no-cross-DCR-leak pin (from #132)`. If it no longer applies cleanly, drop it (the behavior is already covered by the keying).
 - [ ] **Full gates:** `/check-web` (eslint + strict `tsc --noEmit` + build + full vitest via `--pool=forks --poolOptions.forks.singleFork=true`) — confirm the web count delta (≈ +8–10: DcrDrawer +2, ImplementCreateDcrModal +4, DcrAdvancePanel net +0/-… the CREATE test is replaced, +0; the carry-forward +1). `/check-api` + `/check-contracts` green locally.
 - [ ] **Reviews:** run the `diff-critic` agent on the branch diff (migration-reviewer N/A — no migration). Run the `web-test-trap-reviewer` on the web diff. Fold only confirmed findings.
-- [ ] **Live smoke (Chrome MCP; owner does the Keycloak login):** per spec s5 — build a CREATE DCR to Approved + author a new doc to Approved via service heredocs (grant overrides incl. `changeRequest.*` + `document.release`/`read`/`read_draft` to ALL org-AHT users); drive the cockpit Implement picker → release → Closed; verify the drawer deep-links to the new doc; confirm a SoD-conflict picked-doc surfaces the calm submit-and-show error.
+- [ ] **Live smoke (Chrome MCP; owner does the Keycloak login):** per spec s5 — build a CREATE DCR to Approved + author a new doc to Approved via service heredocs (grant overrides incl. `changeRequest.*` + `document.release`/`read`/`read_draft` to ALL org-ORG_EXAMPLE users); drive the cockpit Implement picker → release → Closed; verify the drawer deep-links to the new doc; confirm a SoD-conflict picked-doc surfaces the calm submit-and-show error.
 - [ ] **PR → green CI → Codex triage** (poll reviews AND reactions after CI; verify each finding vs code; expect 2–5 rounds) → squash-merge on owner OK → `/finish-slice`.
 
 ## Self-review (done)

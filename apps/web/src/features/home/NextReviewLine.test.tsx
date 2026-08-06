@@ -78,7 +78,7 @@ function ForbiddenProbe() {
 
 it("renders nothing on a 403 (never drags the tile red)", async () => {
   server.use(
-    http.get(NEXT_DUE, () => HttpResponse.json({ code: "forbidden" }, { status: 403 })),
+    http.get(NEXT_DUE, () => HttpResponse.json({ code: "permission_denied" }, { status: 403 })),
   );
   const { container } = renderWithProviders(
     <>

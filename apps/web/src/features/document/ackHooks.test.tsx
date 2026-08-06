@@ -44,7 +44,7 @@ describe("ack hooks", () => {
     server.use(
       http.get("/api/v1/documents/:id/acknowledgements", () => {
         calls += 1;
-        return HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 });
+        return HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 });
       }),
     );
     const { result } = renderHook(() => useAcknowledgements(DOC, true), { wrapper: prodWrapper });

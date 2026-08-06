@@ -139,7 +139,7 @@ async def document_control_register_endpoint(
         for g in report_grants
     )
     if not has_allow or has_system_deny:
-        raise ProblemException(status=403, code="forbidden", title="report.read required")
+        raise ProblemException(status=403, code="permission_denied", title="report.read required")
 
     # FIX D: echo only the filter[...] keys the parser actually accepted (matched the bracket
     # grammar AND allow-listed) — a malformed/unknown key the parser silently ignores must never

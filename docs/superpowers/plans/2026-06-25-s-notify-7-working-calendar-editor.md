@@ -20,7 +20,7 @@
 - **N9 / R53 / R32 unchanged:** the editor only edits config; it never fires/decides/delivers.
 - Commit identity is already set repo-local to the noreply. Branch: `feat/s-notify-7-working-calendar-editor`.
 - Web tests: import `expect`/`it` from `vitest`; MSW fixtures pinned via `satisfies <Type>`; every endpoint a mounted component fetches needs a base handler (`onUnhandledRequest:"error"`).
-- Integration tests use the **app role** (REVOKE DELETE on `working_calendar`/`notification`); operate on AHT's existing default row with **UPDATE-restore** in a `finally`; never leak an org (`test_restore` does `scalar_one()` on `Organization`).
+- Integration tests use the **app role** (REVOKE DELETE on `working_calendar`/`notification`); operate on ORG_EXAMPLE's existing default row with **UPDATE-restore** in a `finally`; never leak an org (`test_restore` does `scalar_one()` on `Organization`).
 
 ---
 
@@ -264,7 +264,7 @@ pytestmark = pytest.mark.integration
 
 
 async def _default_org_id() -> uuid.UUID:
-    """The seeded org that owns the is_default working_calendar (AHT in dev; the 0002 org in CI)."""
+    """The seeded org that owns the is_default working_calendar (ORG_EXAMPLE in dev; the 0002 org in CI)."""
     async with get_sessionmaker()() as s:
         row = (
             await s.execute(
@@ -420,7 +420,7 @@ async def test_update_validation_parity_rejects_what_resolver_degrades(app_under
 
 - [ ] **Step 2: Run it — verify it fails (service missing)**
 
-Run: `cd apps/api && uv run pytest tests/integration/test_working_calendar_admin.py -q -m integration` *(needs Docker; on this box run sharded/sequential — see windows-dev/dev-workflow notes)*
+Run: `cd apps/api && uv run pytest tests/integration/test_working_calendar_admin.py -q -m integration` *(needs Docker; in that development environment run sharded/sequential — see windows-dev/dev-workflow notes)*
 Expected: FAIL — `ImportError: ...calendar_admin`.
 
 - [ ] **Step 3: Implement `calendar_admin.py`**
@@ -630,7 +630,7 @@ git commit -m "feat(s-notify-7): working-calendar editor service (validate + ato
 async def test_http_put_updates_existing_default_and_audits(
     app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
 ) -> None:
-    """PUT updates AHT's existing default row (UPDATE branch) + writes one CONFIG_UPDATED; GET
+    """PUT updates ORG_EXAMPLE's existing default row (UPDATE branch) + writes one CONFIG_UPDATED; GET
     round-trips. Restores the original calendar in finally (app role can't DELETE the row)."""
     subject = f"wc-admin-{uuid.uuid4().hex[:8]}"
     await _grant(subject, ("config.update",))
@@ -1333,7 +1333,7 @@ git commit -m "feat(s-notify-7): working-calendar editor section in the admin Co
 - [ ] **Step 2: Web gate** — `/check-web` (eslint + strict tsc + build + the full vitest suite). Expected: green (`noUncheckedIndexedAccess` + cross-file drift).
 - [ ] **Step 3: Contracts gate** — `/check-contracts` (redocly). Expected: green.
 - [ ] **Step 4: Adversarial review** — run the `diff-critic` agent + the `web-test-trap-reviewer` agent on the branch diff; triage + fix any confirmed finding. (No `migration-reviewer` — no migration.)
-- [ ] **Step 5: Live-smoke** — `/live-smoke`: rebuild web; grant `demo` a `config.update` SYSTEM override (org AHT); open `/admin/config`; edit the week mask + add a holiday + change the timezone + Save; verify the DB row; then run a `timer_sweep` against a task whose business-day reminder/escalation threshold straddles the new holiday and confirm the threshold **SHIFTS** (the end-to-end proof). (The UPDATE path is covered; the INSERT path is integration-test-only — the dev org has the seed.)
+- [ ] **Step 5: Live-smoke** — `/live-smoke`: rebuild web; grant `demo` a `config.update` SYSTEM override (org ORG_EXAMPLE); open `/admin/config`; edit the week mask + add a holiday + change the timezone + Save; verify the DB row; then run a `timer_sweep` against a task whose business-day reminder/escalation threshold straddles the new holiday and confirm the threshold **SHIFTS** (the end-to-end proof). (The UPDATE path is covered; the INSERT path is integration-test-only — the dev org has the seed.)
 - [ ] **Step 6: Open the PR** — `/pr` (full local gate, then a PR against protected `main`). Then the Codex review loop (triage → fix → reply → resolve → re-request until 👍).
 
 ---
@@ -1342,7 +1342,7 @@ git commit -m "feat(s-notify-7): working-calendar editor section in the admin Co
 
 **Spec coverage:** §4.1 shared parsers → Task 1. §4.2 service (get/update/upsert/audit/sanitize) → Task 2. §4.3 endpoints + list[Any] body + route-commits → Task 3. §4.4 openapi → Task 3 Step 5. §5 FE (Checkbox.Group, holiday input + blank guard + distinct remove labels, editable tz Select, value-equality dirty, independent Save) → Task 5. §6 testing (parser unit + parity matrix + GET split + INSERT-no-commit + dup-accept + holiday-reject + tz-reject + bounds + audit-on-diff + 403 + MSW base handlers + mutation-verify gating + fireEvent date input) → Tasks 1–5. §7 constraints → Global Constraints. §8 residuals → unchanged (finish-slice). §9 inventory → File Structure.
 
-**Concurrency/INSERT-race:** the `ON CONFLICT (org_id) WHERE is_default DO UPDATE` upsert (Task 2 Step 3) makes the statement atomic — a concurrent no-row INSERT resolves to an UPDATE, no IntegrityError/500. The INSERT correctness is covered leak-free (service test, rolled back). The operational UPDATE-side concurrency is inherently safe (single statement); a dedicated 2-session race test is OPTIONAL (would require committing on AHT + UPDATE-restore) — add it if the reviewer asks.
+**Concurrency/INSERT-race:** the `ON CONFLICT (org_id) WHERE is_default DO UPDATE` upsert (Task 2 Step 3) makes the statement atomic — a concurrent no-row INSERT resolves to an UPDATE, no IntegrityError/500. The INSERT correctness is covered leak-free (service test, rolled back). The operational UPDATE-side concurrency is inherently safe (single statement); a dedicated 2-session race test is OPTIONAL (would require committing on ORG_EXAMPLE + UPDATE-restore) — add it if the reviewer asks.
 
 **Placeholder scan:** the only intentional placeholder is the `parse_dedup_resolver_ok()` line in Task 2 Step 1, explicitly flagged to delete/replace with an inline dup-accept assertion. No other TBD/TODO.
 

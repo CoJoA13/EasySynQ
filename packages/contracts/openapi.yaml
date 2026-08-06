@@ -355,9 +355,13 @@ paths:
       tags: [setup]
       operationId: configureSetupBackup
       summary: >-
-        Record the admin-controlled backup policy + a live destination writability check (Step 4
-        config; doc 08 §8.1). Needs backup.configure. Does NOT satisfy gate G-C — the restore-test
-        drill must PASS. Rejects wal_pitr_enabled=true (reserved for a later release, D-6).
+        Record the admin-controlled backup policy after a preliminary filesystem probe performed in
+        the API process (Step 4 config; doc 08 §8.1). The destination must be an absolute, non-root
+        POSIX path; blank, root/root-equivalent, relative, and URI-looking values are rejected. A
+        successful probe does not certify that the worker sees the same mount or that
+        persistent/off-host storage backs it. Needs
+        backup.configure. Does NOT satisfy gate G-C — the worker restore-test drill must PASS.
+        Rejects wal_pitr_enabled=true (reserved for a later release, D-6).
       requestBody:
         required: true
         content:
@@ -366,7 +370,13 @@ paths:
               type: object
               required: [destination]
               properties:
-                destination: { type: string }
+                destination:
+                  type: string
+                  minLength: 1
+                  pattern: '^/(?!.*://).+$'
+                  description: >-
+                    Absolute non-root POSIX filesystem path. Root/root-equivalent and URI
+                    destinations are not supported; application validation is authoritative.
                 cron: { type: string, default: "0 2 * * *" }
                 retention_daily: { type: integer, default: 7 }
                 retention_weekly: { type: integer, default: 4 }
@@ -388,7 +398,15 @@ paths:
                   cron: { type: string }
                   detail: { type: string }
         "403": { $ref: "#/components/responses/ProblemResponse" }
-        "422": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: >-
+            Invalid/non-absolute/root-equivalent/URI-looking destination
+            (backup_destination_invalid), failed preliminary API-context probe
+            (backup_destination_unreachable), invalid schedule or retention, or
+            wal_pitr_enabled=true (wal_pitr_unavailable).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /setup/run-restore-test:
     post:
@@ -4327,7 +4345,8 @@ paths:
                         type: integer
                         description: >-
                           Unresolved-finding pins (blob.verify_failed_at set) — the rows
-                          re-alarming every scan until restored; 0 once every alarm is resolved.
+                          re-alarming every scan until the exact object reads cleanly again;
+                          0 once every alarm is resolved.
                       oldest_verified_at: { type: [string, "null"], format: date-time }
                   superseded_copies:
                     type: object
@@ -6918,42 +6937,131 @@ components:
           type: string
           description: Stable machine-readable error code clients branch on.
           enum:
-            - validation_error
-            - not_found
-            - permission_denied
-            - unauthenticated
-            - token_expired
-            - token_invalid
-            - invalid_state_transition
+            - ack_obligation_lapsed
+            - ack_superseded
+            - already_archived
+            - already_authorized
+            - already_disposed
+            - already_on_hold
+            - audit_close_blocked
+            - audit_finding_audit_closed
+            - auth_unavailable
+            - authorization_in_progress
+            - backup_destination_invalid
+            - backup_destination_unreachable
+            - backup_not_configured
+            - bootstrap_already_consumed
+            - bootstrap_expired
+            - bootstrap_invalid
+            - capa_already_spawned
+            - capa_approval_in_progress
+            - capa_close_incomplete
+            - capa_not_verified
+            - capa_terminal
+            - commit_blocked
+            - compliance_mode_denies_destroy
             - conflict
+            - create_target_managed_subtype
+            - create_target_not_new
+            - dcr_approval_in_progress
+            - dcr_approver_conflict
+            - dcr_effectivity_pending
+            - dcr_impact_not_editable
+            - dcr_no_approvers
+            - dcr_not_assessable
+            - dcr_not_cancellable
+            - dcr_not_closable
+            - dcr_not_editable
+            - dcr_not_implementable
+            - dcr_not_in_approval
+            - dcr_not_routable
+            - dependency_unavailable
+            - document_not_approved
+            - dual_control_same_actor
+            - evidence_frozen
+            - finding_already_corrected
+            - finding_not_improvable
+            - finding_superseded
+            - impact_not_assessed
+            - improvement_not_editable
+            - improvement_transition_invalid
+            - initiative_not_authorizable
+            - internal_error
+            - invalid_audit_transition
+            - invalid_capa_transition
+            - invalid_class
+            - invalid_hour
+            - invalid_mode
+            - invalid_quiet_hours
+            - invalid_state_transition
+            - invalid_time
+            - invalid_timezone
+            - invalid_transition
+            - keycloak_email_exists
+            - keycloak_not_configured
+            - keycloak_unavailable
+            - keycloak_username_exists_unlinked
+            - last_admin
+            - leadership_authorization_required
+            - legal_hold_active
             - lock_conflict
-            - etag_mismatch
-            - worm_required
-            - two_tier_violation
-            - sod_violation
-            - step_up_required
-            - setup_incomplete
-            - setup_not_initialized
+            - name_taken
+            - ncr_already_dispositioned
+            - no_approved_draft
+            - no_bootstrap_secret
+            - no_controlled_rendition
+            - not_a_leadership_artifact
+            - not_archived
+            - not_editable
+            - not_found
+            - not_on_hold
+            - not_open
+            - obsoletion_blocked
+            - on_legal_hold
+            - output_not_actionable
+            - output_not_improvable
+            - pack_evidence_destroyed
+            - pack_unavailable
+            - permission_denied
+            - program_archived
+            - rate_limited
+            - rendition_pending
+            - retain_permanent
+            - review_close_blocked
+            - review_not_open_to_close
+            - review_not_tracking
+            - revision_chain_reconstruction_unsupported
+            - role_missing
+            - role_not_seeded
             - setup_already_complete
             - setup_gates_unsatisfied
-            - backup_not_configured
-            - auth_unavailable
-            - no_bootstrap_secret
-            - bootstrap_invalid
-            - bootstrap_expired
-            - bootstrap_already_consumed
-            - worm_not_enforced
-            - rate_limited
-            - idempotency_replay
-            - internal_error
-            - dependency_unavailable
+            - setup_incomplete
+            - setup_not_initialized
+            - signing_key_unavailable
+            - sod_self_disposition
+            - sod_self_verify
+            - sod_violation
+            - source_bytes_in_foreign_bucket
+            - step_up_required
+            - system_default_protected
+            - system_policy_protected
+            - target_kind_deferred
+            - token_expired
+            - token_invalid
+            - two_tier_violation
+            - unauthenticated
+            - unknown_filter
+            - use_legal_hold_endpoint
             - user_exists
-            - keycloak_not_configured
-            - keycloak_email_exists
-            - keycloak_username_exists_unlinked
-            - keycloak_unavailable
             - user_not_linked
-            - last_admin
+            - validation_error
+            - version_already_linked
+            - version_not_approved
+            - wal_pitr_unavailable
+            - worm_destroy_request_open
+            - worm_lock_unexpired
+            - worm_not_enforced
+            - worm_required
         detail: { type: [string, "null"] }
         instance: { type: [string, "null"] }
         request_id: { type: [string, "null"] }
@@ -8197,7 +8305,7 @@ components:
         generated_by: { type: string, description: The caller's display name / email / id. }
         generated_at: { type: string, format: date-time }
         as_of: { type: string, format: date-time, description: Mirrors generated_at — the instant the register was materialized. }
-        scope: { type: string, example: "org:AHT", description: "org:<short_code>." }
+        scope: { type: string, example: "org:ORG_EXAMPLE", description: "org:<short_code>." }
         app_version: { type: string }
         filters:
           type: object

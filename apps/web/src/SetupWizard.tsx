@@ -285,7 +285,8 @@ export function SetupWizard({
                 data={["GOVERNANCE", "COMPLIANCE"]}
               />
               <Text size="xs" c="dimmed">
-                GOVERNANCE (recommended) keeps fresh-bucket restore + lawful-erasure possible.
+                GOVERNANCE (recommended) keeps privileged retention handling and future
+                role-preserving recovery design possible.
                 COMPLIANCE is immutable even to root.
               </Text>
               <Group>
@@ -304,14 +305,17 @@ export function SetupWizard({
           <Stepper.Step label="Backup" description="Restore-test">
             <Stack gap="md" mt="md">
               <Text size="sm">
-                Configure admin-controlled backups, then prove a restore actually works. The drill
-                backs up, restores into an isolated scratch namespace, and verifies integrity (row
-                counts, blob SHA-256 re-hash, FK checks). Setup cannot finalize until it passes — a
-                configured-but-unverified backup is treated as no backup.
+                Configure admin-controlled backup archives, then verify the database dump and
+                manifest against the currently configured source object store. The drill restores
+                PostgreSQL into an isolated scratch database, copies referenced object bytes into a
+                flattened scratch layout, and checks row counts, blob SHA-256 hashes, and foreign
+                keys. A PASS is source-store-dependent integrity evidence only; it does not prove
+                source-independent recovery or authorize cutover. Setup cannot finalize until it
+                passes.
               </Text>
               <TextInput
                 label="Backup destination"
-                description="A mounted local/NFS path the worker can write"
+                description="Absolute non-root POSIX path. Save checks only the API context; the worker drill checks current worker access, not persistent mount backing."
                 value={backupDest}
                 onChange={(e) => setBackupDest(e.currentTarget.value)}
               />

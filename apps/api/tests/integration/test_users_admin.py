@@ -68,7 +68,7 @@ async def test_invite_creates_invited_and_audits(
     r = await app_client.post(
         "/api/v1/users",
         headers=h_admin,
-        json={"keycloak_subject": sub, "display_name": "Invitee", "email": "inv@example.io"},
+        json={"keycloak_subject": sub, "display_name": "Invitee", "email": "inv@example.com"},
     )
     assert r.status_code == 201, r.text
     assert r.json()["status"] == "INVITED"

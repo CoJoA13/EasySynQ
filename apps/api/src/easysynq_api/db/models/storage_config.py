@@ -36,7 +36,8 @@ class StorageConfig(Base):
         DateTime(timezone=True), nullable=True
     )
     # D-7 record-choice: the bucket object-lock mode the operator selected. GOVERNANCE (default)
-    # keeps R37 fresh-bucket restore + the R27 dual-control-destroy hatch buildable; COMPLIANCE is a
+    # keeps future role-preserving recovery + the R27 dual-control-destroy hatch buildable;
+    # COMPLIANCE is a
     # hardened v1.x opt-in (no plumbing in v1 — the value is recorded, not enforced here).
     object_lock_mode: Mapped[str] = mapped_column(
         Text, server_default="GOVERNANCE", default="GOVERNANCE", nullable=False

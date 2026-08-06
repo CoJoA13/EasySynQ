@@ -561,7 +561,7 @@ git commit -m "feat(s-notify-6): migration 0067 — working_calendar table + per
 async def test_resolve_working_calendar_reads_default_row(app_under_test: Any) -> None:
     """resolve_working_calendar reflects the org's is_default row (holidays + tz round-trip).
 
-    UPDATE AHT's seeded default in place, assert, then RESTORE in finally (working_calendar keeps
+    UPDATE ORG_EXAMPLE's seeded default in place, assert, then RESTORE in finally (working_calendar keeps
     UPDATE for the app role; a 2nd is_default would violate uq_working_calendar_one_default, and the
     row is DELETE-revoked, so update-and-restore is the only safe path)."""
     org_id = await _default_org_id()
@@ -712,13 +712,13 @@ git commit -m "feat(s-notify-6): resolve_working_calendar + thread into process_
 **Interfaces:**
 - Consumes: the wired sweep (Task 5). `_BASE` (= `2032-03-10 10:00 UTC`, **already a Wednesday**) is the fixed reference.
 
-- [ ] **Step 1: Add the anti-tautology weekend wiring test** — the load-bearing proof that the sweep applies business-day skipping end-to-end (and FAILS against the old raw code). Append to `apps/api/tests/integration/test_notification_timer_sweep.py`. It anchors `due_at`/`now` in the resolved calendar's own tz so it is correct for any seeded tz, and uses AHT's seeded `escalate_1_after=1d`:
+- [ ] **Step 1: Add the anti-tautology weekend wiring test** — the load-bearing proof that the sweep applies business-day skipping end-to-end (and FAILS against the old raw code). Append to `apps/api/tests/integration/test_notification_timer_sweep.py`. It anchors `due_at`/`now` in the resolved calendar's own tz so it is correct for any seeded tz, and uses ORG_EXAMPLE's seeded `escalate_1_after=1d`:
 
 ```python
 async def test_escalation_skips_weekend_business_day(app_under_test: Any) -> None:
     """Wiring proof: escalation fires one BUSINESS day after a Friday due_at — Monday, not Saturday.
 
-    Uses AHT's seeded Mon-Fri calendar (or the DEFAULT_CALENDAR fallback — both Mon-Fri) AS-IS, no
+    Uses ORG_EXAMPLE's seeded Mon-Fri calendar (or the DEFAULT_CALENDAR fallback — both Mon-Fri) AS-IS, no
     mutation, no holiday. Anti-tautology: Test A FAILS against the old raw-wall-clock timer.py (which
     escalates on Saturday). Pre-stamp remind+overdue to isolate ESCALATE_1."""
     org_id = await _default_org_id()
@@ -784,7 +784,7 @@ Expected: PASS.
 Run (manual): edit `timer.py` ESCALATE_1 → raw; `sg docker -c "uv run pytest tests/integration/test_notification_timer_sweep.py::test_escalation_skips_weekend_business_day -q"` → expect FAIL on the "must NOT escalate on a Saturday" assertion; then `git checkout apps/api/src/easysynq_api/services/notifications/timer.py` to restore.
 Expected: FAIL under raw, PASS under business — confirms the test is not a tautology.
 
-- [ ] **Step 4: Harden the existing sweep tests against the now-active Mon-Fri calendar.** The sweep now applies AHT's Mon-Fri calendar, so any sweep test using a real `now` with `due_at = now - 2d` becomes weekday-flaky (breaks when CI runs on a Sunday: `due_at`=Friday → business escalate threshold=Monday > Sunday `now`). FIX: in `apps/api/tests/integration/test_notification_timer_sweep.py`, replace every `now = datetime.datetime.now(datetime.UTC)` with `now = _BASE` (`_BASE` = `2032-03-10 10:00 UTC`, **already a Wednesday**; `due_at = _BASE - 2d` = Monday → business escalate threshold = Tuesday ≤ Wednesday → all escalation-fires assertions hold; the assertions and pre-stamps are otherwise unchanged). The `_BASE`-anchored tests (`test_remind_fires_once`, `test_overdue_is_critical`, `test_done_task_skipped`) already pass under Mon-Fri (verified: remind→prior business day, overdue unshifted).
+- [ ] **Step 4: Harden the existing sweep tests against the now-active Mon-Fri calendar.** The sweep now applies ORG_EXAMPLE's Mon-Fri calendar, so any sweep test using a real `now` with `due_at = now - 2d` becomes weekday-flaky (breaks when CI runs on a Sunday: `due_at`=Friday → business escalate threshold=Monday > Sunday `now`). FIX: in `apps/api/tests/integration/test_notification_timer_sweep.py`, replace every `now = datetime.datetime.now(datetime.UTC)` with `now = _BASE` (`_BASE` = `2032-03-10 10:00 UTC`, **already a Wednesday**; `due_at = _BASE - 2d` = Monday → business escalate threshold = Tuesday ≤ Wednesday → all escalation-fires assertions hold; the assertions and pre-stamps are otherwise unchanged). The `_BASE`-anchored tests (`test_remind_fires_once`, `test_overdue_is_critical`, `test_done_task_skipped`) already pass under Mon-Fri (verified: remind→prior business day, overdue unshifted).
 
 ```bash
 cd ~/dev/EasySynQ && sed -i 's/now = datetime\.datetime\.now(datetime\.UTC)/now = _BASE/g' apps/api/tests/integration/test_notification_timer_sweep.py
@@ -839,7 +839,7 @@ Expected: PASS.
 - §4 business-day semantics + OVERDUE-raw (D-5) → Task 2. ✓
 - §5 resolver + wiring (resolve-once, granular fail-safe) → Task 5. ✓
 - §6 constraints (N9/R38==102/R53/R32) → Global Constraints + Task 7 review. ✓
-- §7 tests (unit math incl. DST; reuse-AHT + pre-stamp; weekend anti-tautology + mutation-verify; UPDATE-AHT-restore resolver; missing-cal→DEFAULT; idempotency/concurrency already covered by the now-pinned existing tests) → Tasks 1/2/5/6. ✓
+- §7 tests (unit math incl. DST; reuse-ORG_EXAMPLE + pre-stamp; weekend anti-tautology + mutation-verify; UPDATE-ORG_EXAMPLE-restore resolver; missing-cal→DEFAULT; idempotency/concurrency already covered by the now-pinned existing tests) → Tasks 1/2/5/6. ✓
 - §8 residuals (R39, editor, register entry) → recorded; the register entry + doc updates land in the `/finish-slice` doc pass (Task 7 Step 6). ✓
 - §9 validation folded → reflected throughout. ✓
 

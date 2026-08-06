@@ -232,7 +232,7 @@ never the coverage truth — **coverage = distribution × acknowledgements**.
   seqs); sweep set-algebra (mint/cancel/dedup across overlapping targets, flag/entry flips,
   left-audience cancel, MAJOR re-arm); 422 target kinds; audience resolution (user + org_role union,
   dedup).
-- **Integration** (Linux-CI-only on this box): the full loop (distribute → release → tasks minted →
+- **Integration** (Linux-CI-only in that development environment): the full loop (distribute → release → tasks minted →
   acknowledge → coverage moves); R15 target-entry catch-up (role grant → sweep → task); MINOR
   release = no re-mint + coverage carry-forward; MAJOR release = re-arm + stale-task cancel; decide
   authz matrix (404 non-member / 403 no-key / 422 outcome / 409 superseded); a two-session race

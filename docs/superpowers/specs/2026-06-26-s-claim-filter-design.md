@@ -134,7 +134,7 @@ regardless, so it would pass trivially and not distinguish the mutation:
    (overdue_notified_at NULL) → claimed; pending escalate (escalate-enabled type, escalated_1_at NULL)
    → claimed. Guards against the predicate over-tightening.
 
-**Live-smoke** (populated dev DB, Docker-less box so CI is authoritative for the integration leg):
+**Live-smoke** (populated dev DB, Docker-less environment so CI is authoritative for the integration leg):
 run a real `sweep_task_timers()` → clean `{tasks, steps}`; spot-check that a fully-fired open task is
 absent from `_due_task_ids` and a genuinely-pending task is present. (No EXPLAIN needed — the index is
 unchanged, so no plan-usability question.)

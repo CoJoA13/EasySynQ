@@ -1208,7 +1208,7 @@ git commit -m "docs(s-dcr-ui-1): slice-history + CLAUDE.md learnings"
 ## Post-plan (outside the task loop)
 
 1. **diff-critic** on the branch diff (`Agent`, `subagent_type: diff-critic`) — fold only confirmed findings.
-2. **Live smoke** (Chrome MCP): rebuild the `web` image (`… up -d --build web`); grant `changeRequest.read` (+ `document.read`) SYSTEM overrides on the LIVE `demo` `app_user` row (org AHT) **before login**; seed a few DCRs across states via the worker heredoc; verify nav → register → filters → drawer (incl. the target-degrade path with `document.read` removed) → timeline/impact/resulting-version link.
+2. **Live smoke** (Chrome MCP): rebuild the `web` image (`… up -d --build web`); grant `changeRequest.read` (+ `document.read`) SYSTEM overrides on the LIVE `demo` `app_user` row (org ORG_EXAMPLE) **before login**; seed a few DCRs across states via the worker heredoc; verify nav → register → filters → drawer (incl. the target-degrade path with `document.read` removed) → timeline/impact/resulting-version link.
 3. **PR** via the `/pr` skill after the full local gate is green; squash-merge after green CI on the owner's OK.
 4. **Codex triage** after CI — disregard D1-moot multi-tenant framing; verify each claim vs code (Codex repeatedly catches real gaps the diff-critic misses).
 

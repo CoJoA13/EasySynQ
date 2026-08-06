@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-13-s-mr-3-mr-outputs-to-action-systems-design.md`. **Branch:** `feat/s-mr-3-mr-outputs-to-action-systems`.
 
-**⚠ Windows verification reality:** native `uv run pytest -m integration` FAILS on this box (ProactorEventLoop) and the FULL unit suite crashes — so **integration + full-unit are CI-only**. Per backend task: verify locally with `ruff check`, `ruff format --check`, `mypy`, and the **targeted** unit tests that run fine (route/serializer/enum). The integration tests are written here and run in CI. The **FE runs fully natively** (vitest/tsc/eslint/build).
+**⚠ Windows verification reality:** native `uv run pytest -m integration` FAILS in that development environment (ProactorEventLoop) and the FULL unit suite crashes — so **integration + full-unit are CI-only**. Per backend task: verify locally with `ruff check`, `ruff format --check`, `mypy`, and the **targeted** unit tests that run fine (route/serializer/enum). The integration tests are written here and run in CI. The **FE runs fully natively** (vitest/tsc/eslint/build).
 
 ---
 
@@ -360,7 +360,7 @@ async def test_spawned_capa_does_not_block_close(
 
 (Confirm during implementation that `SignatureEvent.signed_object_id` is the right column for the no-signature assertion — grep `db/models/signature_event.py`; if the column differs, adjust. The intent: assert zero signature rows reference the spawned CAPA.)
 
-- [ ] **Step 2: Run to verify it fails (CI-only on this box)**
+- [ ] **Step 2: Run to verify it fails (CI-only in that development environment)**
 
 Run: `cd apps/api && uv run pytest -m integration tests/integration/test_mgmt_review_actions.py -v`
 Expected on Windows: the suite errors at collection/runtime (ProactorEventLoop) — **do not rely on local integration**. The real FAIL signal is in CI. Locally, proceed to implement and verify with ruff/mypy + the route/serializer unit tests; CI runs these.
@@ -853,7 +853,7 @@ async def test_raise_dcr_idempotency_key_replays(
     assert other.json()["id"] != first.json()["id"]
 ```
 
-- [ ] **Step 2: Run to verify it fails (CI-only on this box)**
+- [ ] **Step 2: Run to verify it fails (CI-only in that development environment)**
 
 Run: `cd apps/api && uv run pytest -m integration tests/integration/test_mgmt_review_actions.py -k dcr -v`
 Expected on Windows: ProactorEventLoop error — verify in CI. Implement, then rely on CI.
@@ -1779,7 +1779,7 @@ git commit -m "docs(s-mr-3): slice-history entry + CLAUDE.md learnings (head 005
 
 - [ ] **Step 7: Push + open the PR (on owner's OK)**
 
-After all gates are green and diff-critic findings are folded, push the branch and open a PR against `main` (use the `/pr` skill or `gh`). Then run the pre-merge Chrome-MCP live smoke (rebuild api+worker+web; SYSTEM overrides on the live `demo` `app_user`, org **AHT**: add `capa.create`, `capa.read`, `changeRequest.create`, `document.release`; pre-create the row + grant before login). The owner does the Keycloak login. Squash-merge after green CI on the owner's OK.
+After all gates are green and diff-critic findings are folded, push the branch and open a PR against `main` (use the `/pr` skill or `gh`). Then run the pre-merge Chrome-MCP live smoke (rebuild api+worker+web; SYSTEM overrides on the live `demo` `app_user`, org **ORG_EXAMPLE**: add `capa.create`, `capa.read`, `changeRequest.create`, `document.release`; pre-create the row + grant before login). The owner does the Keycloak login. Squash-merge after green CI on the owner's OK.
 
 ---
 

@@ -29,7 +29,7 @@ from ...db.models.management_review import ManagementReview
 from ...db.models.review_output import ReviewOutput
 from ...domain.management_review.close_gate import output_blocks_close
 from ...domain.management_review.minutes import build_minutes
-from ...problems import ProblemException
+from ...problems import ProblemCode, ProblemException
 from ..vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -51,7 +51,7 @@ def _not_found(what: str) -> ProblemException:
     return ProblemException(status=404, code="not_found", title=f"{what} not found")
 
 
-def _conflict(code: str, title: str) -> ProblemException:
+def _conflict(code: ProblemCode, title: str) -> ProblemException:
     return ProblemException(status=409, code=code, title=title)
 
 

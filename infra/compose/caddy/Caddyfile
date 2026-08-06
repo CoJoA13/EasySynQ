@@ -76,7 +76,7 @@
 	# strict style nonce needs SPA build/HTML nonce injection this static proxy can't do (a web-track
 	# v1 refinement, like a full per-request script nonce-CSP).
 	handle {
-		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' {$S3_PUBLIC_ENDPOINT}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; upgrade-insecure-requests"
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' {$S3_PUBLIC_ENDPOINT}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; upgrade-insecure-requests"
 		reverse_proxy web:5173
 	}
 }

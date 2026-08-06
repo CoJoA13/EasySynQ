@@ -34,7 +34,7 @@ it("useMyTasks reads the self-scoped pending tasks", async () => {
 });
 
 it("useMyTasks surfaces a forbidden flag on 403 without retrying", async () => {
-  server.use(http.get("/api/v1/tasks", () => HttpResponse.json({ code: "forbidden" }, { status: 403 })));
+  server.use(http.get("/api/v1/tasks", () => HttpResponse.json({ code: "permission_denied" }, { status: 403 })));
   const { result } = renderHook(() => useMyTasks(), { wrapper });
   await waitFor(() => expect(result.current.forbidden).toBe(true));
 });

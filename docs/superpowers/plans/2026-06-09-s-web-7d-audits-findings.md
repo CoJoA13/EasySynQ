@@ -48,7 +48,7 @@
 - Modify: `apps/api/src/easysynq_api/services/audits/repository.py`
 - Modify: `apps/api/src/easysynq_api/api/audits.py`
 - Modify: `packages/contracts/openapi.yaml` (Audit schema ~line 6012; Finding schema ~line 6041)
-- Test: `apps/api/tests/integration/test_audits.py` (append; CI-gated — the api test suites are Linux-CI-only on this box)
+- Test: `apps/api/tests/integration/test_audits.py` (append; CI-gated — the api test suites are Linux-CI-only in that development environment)
 
 **Context:** an audit/finding is a `kind=RECORD` shared-PK subtype; identifier/title/created_at live on the `documented_information` base row. Mirror the 7a CAPA enrichment exactly: `services/capa/repository.py:140` (`list_capas` 4-tuple join) and `:157` (`get_capa_header`), `api/capa.py:170` (`_capa_full`).
 
@@ -310,7 +310,7 @@ To the `Finding` schema properties (line ~6045):
 - [ ] **Step 6: Run the local gates**
 
 Run: `/check-api` (ruff + format + mypy-strict; unit) and `/check-contracts` (redocly).
-Expected: all clean. (`pytest -m integration` is Linux-CI-only on this box — the Step-1 tests prove it in CI.)
+Expected: all clean. (`pytest -m integration` is Linux-CI-only in that development environment — the Step-1 tests prove it in CI.)
 
 - [ ] **Step 7: Commit**
 
@@ -3765,6 +3765,6 @@ git commit -m "chore(s-web-7d): full-gate fixes (lint/tsc/build/test sweep)"
 ## Post-plan workflow (not plan tasks — the session driver runs these)
 
 1. `diff-critic` agent on the branch diff (false-PASS hunting; fixtures-vs-serializer, scope gating, XSS).
-2. Pre-merge live smoke (grant `demo` SYSTEM overrides of `audit.read audit.plan audit.create audit.conduct audit.close finding.create finding.read capa.read`, org `AHT`): programme → plan → audit → walk to FindingsDraft → log Major NC → View CAPA deep-link opens the board drawer → Reported → Closing → Close blocked (409 calm) → correct NC→OFI → Close succeeds. Rebuild images first (`docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml up -d --build api web`).
+2. Pre-merge live smoke (grant `demo` SYSTEM overrides of `audit.read audit.plan audit.create audit.conduct audit.close finding.create finding.read capa.read`, org `ORG_EXAMPLE`): programme → plan → audit → walk to FindingsDraft → log Major NC → View CAPA deep-link opens the board drawer → Reported → Closing → Close blocked (409 calm) → correct NC→OFI → Close succeeds. Rebuild images first (`docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml up -d --build api web`).
 3. PR → green CI (5 jobs) → address every Codex thread (reply + resolve via `gh api`, path WITHOUT a leading slash) → squash-merge.
 4. Update `docs/slice-history.md` + CLAUDE.md Current status in-PR.

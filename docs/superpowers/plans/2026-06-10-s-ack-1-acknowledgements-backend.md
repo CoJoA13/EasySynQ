@@ -14,7 +14,7 @@
 3. `wf_repo.users_with_roles` matches Role **names**; `distribution_entry.target_id` is a role **uuid** → the audience resolver queries `RoleAssignment.role_id` directly (no wf_repo change).
 4. There is NO engine-level terminate helper — the sweep's cancel copies the S-dcr-4 inline force-terminate (services/dcr/service.py:664-705): PENDING tasks `with_for_update()` → SKIPPED, instance → a terminal sentinel. The engine file is **not edited** (the welded-path rule).
 
-**Local verification reality (this Windows box):** unit tests run locally per-file (`uv run pytest tests/unit/<file> -v`); the `-m integration` suite is **Linux-CI-only** (psycopg-async vs ProactorEventLoop). Integration steps below therefore verify locally with `--collect-only` + static checks, and run for real in CI at PR time. All `uv run` commands run from `C:\dev\EasySynQ\apps\api`.
+**Local verification reality (the then-current Windows development environment):** unit tests run locally per-file (`uv run pytest tests/unit/<file> -v`); the `-m integration` suite is **Linux-CI-only** (psycopg-async vs ProactorEventLoop). Integration steps below therefore verify locally with `--collect-only` + static checks, and run for real in CI at PR time. All `uv run` commands run from `C:\dev\EasySynQ\apps\api`.
 
 ---
 
@@ -2015,7 +2015,7 @@ git commit -m "feat(s-ack-1): distribution CRUD + counts rollup + the R42-gated 
 **Files:**
 - Create: `apps/api/tests/integration/test_acknowledgements.py`
 
-All tests follow the `test_periodic_review.py` conventions: salted `subj` fixture, `app_under_test`/`app_client`, run-scoped assertions, self-provided preconditions. **Linux-CI-only on this box** — verify locally with `uv run pytest tests/integration/test_acknowledgements.py --collect-only -q`.
+All tests follow the `test_periodic_review.py` conventions: salted `subj` fixture, `app_under_test`/`app_client`, run-scoped assertions, self-provided preconditions. **Linux-CI-only in that development environment** — verify locally with `uv run pytest tests/integration/test_acknowledgements.py --collect-only -q`.
 
 - [ ] **Step 1: File header + helpers:**
 

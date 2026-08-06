@@ -41,7 +41,7 @@ Seed a GLOBAL `notification_template` (no `org_id`) so the seed is exercised by 
   - `audit_event` is monthly-partitioned (only `2026-06/07/08` seeded) → pin the test clock to a seeded month (`_BASE = 2026-06-24`).
   - business-calendar sweeps make `datetime.now(UTC)`-based tests **weekday-flaky** → pin to a fixed **Wednesday**, build `due_at`/`now` in the resolved calendar's own tz.
   - The shared-DB `-m integration` suite → assertions **run-scoped / delta-based**, **self-provide preconditions** (delete leaked SYSTEM-scoped role grants), reuse the default org (a 2nd `Organization` trips `scalar_one`), keep the `app_under_test` fixture.
-  - ⚠ Do NOT gate on the full local `-m integration` run (~54 env/pollution false-fails on this box) — run the SCOPED file + a cross-file ordering proof; the 4 CI shards are authoritative (`docs/dev-workflow.md`).
+  - ⚠ Do not use one shared-DB local `-m integration` run as the sole gate — run the SCOPED file + a cross-file ordering proof; the isolated CI shards are authoritative (`docs/dev-workflow.md`).
 
 ### 7. Verify + review
 - `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -m unit` (fast, clean locally).

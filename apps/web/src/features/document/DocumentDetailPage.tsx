@@ -132,6 +132,8 @@ export function DocumentDetailPage() {
   const effectiveDate = doc.effective_from ? doc.effective_from.slice(0, 10) : null;
   const reviewDays = doc.next_review_due ? daysUntil(doc.next_review_due) : null;
   const cov = dist.data?.coverage ?? null;
+  const acknowledgementPending = doc.current_state === "Effective" && dist.isFetching;
+  const acknowledgementUnavailable = doc.current_state === "Effective" && dist.isError;
 
   return (
     <Stack gap="lg">
@@ -178,14 +180,22 @@ export function DocumentDetailPage() {
         <Tile
           label="Acknowledged"
           value={
-            cov === null ? "—" : cov.required === 0 ? "—" : `${cov.acknowledged} / ${cov.required}`
+            acknowledgementPending || acknowledgementUnavailable || cov === null
+              ? "—"
+              : cov.required === 0
+                ? "—"
+                : `${cov.acknowledged} / ${cov.required}`
           }
           sub={
-            cov === null
-              ? "Not yet effective"
-              : cov.required === 0
-                ? "Not distributed"
-                : `${cov.pending} pending`
+            acknowledgementPending
+              ? "Refreshing acknowledgement coverage"
+              : acknowledgementUnavailable
+                ? "Acknowledgement coverage unavailable"
+                : cov === null
+                  ? "Not yet effective"
+                  : cov.required === 0
+                    ? "Not distributed"
+                    : `${cov.pending} pending`
           }
         />
       </SimpleGrid>

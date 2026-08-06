@@ -103,7 +103,7 @@ The load-bearing gating facts (verified against `_SYSTEM_KEYS` + the role tuples
 Consequences:
 - **`demo` sees a calm no-access panel on BOTH tabs** (it holds none of these keys — the S-web-6
   compliance/calm-403 case, like the 7a/7b board). For the live smoke, grant `demo` SYSTEM overrides of
-  `record.read record.create capa.create ncr.read ncr.create ncr.record_correction` (org `AHT`) — one
+  `record.read record.create capa.create ncr.read ncr.create ncr.record_correction` (org `ORG_EXAMPLE`) — one
   admin drives the whole loop (no SoD on complaints/NCRs/spawn).
 - `ncr.create` / `ncr.record_correction` reach no concrete object in v1 (no role binds them) — the
   "Authz for not-yet-UI'd domains: ride SYSTEM overrides" pattern.

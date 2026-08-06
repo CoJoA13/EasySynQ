@@ -134,7 +134,7 @@ def upgrade() -> None:
     )
 
     # 5. Seed the CTX document_type for EVERY org (idempotent; covers a renamed install such as
-    # AHT).
+    # ORG_EXAMPLE).
     document_type_t = sa.table(
         "document_type",
         sa.column("org_id", postgresql.UUID(as_uuid=True)),

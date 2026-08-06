@@ -1,7 +1,7 @@
 """The resilient runtime single-org lookup (the 0038/0043/0045 lesson, at runtime).
 
-An OPERATIONAL install renames ``short_code`` away from ``'DEFAULT'`` at setup G-E (this live
-install: ``AHT``), so a bare ``short_code='DEFAULT'`` lookup aborts. D1 = single-org: fall back to
+An OPERATIONAL install renames ``short_code`` away from ``'DEFAULT'`` at setup G-E (for example,
+``ORG_EXAMPLE``), so a bare ``short_code='DEFAULT'`` lookup aborts. D1 = single-org: fall back to
 the only row. Returns ``None`` when the org is unresolvable — pre-setup (zero orgs) AND the
 can't-happen-under-D1 multi-org case with no DEFAULT (deliberately fail-soft, never a guess) —
 callers skip persistence rather than crash (the mirror sync/scan must work on an empty install).

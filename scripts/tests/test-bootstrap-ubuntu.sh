@@ -36,7 +36,7 @@ line_index() {
 
 echo "== bootstrap-ubuntu.sh =="
 
-# Pin the Docker-detection inputs so results never depend on whether THIS machine has Docker.
+# Pin the Docker-detection inputs so results never depend on whether the test host has Docker.
 # Without this the skip-if-done branch fires on any host that already has dockerd + the keyring,
 # omitting the probe/install output and failing these assertions on a perfectly healthy script.
 export EASYSYNQ_DOCKERD_BIN=/nonexistent/dockerd

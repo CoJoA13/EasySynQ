@@ -45,7 +45,8 @@ validating them.
 - Accurate DNS and time synchronization. Use a stable FQDN; changing the OIDC issuer later signs
   users out.
 - Host-volume encryption is strongly recommended.
-- A backup destination visible to the worker and preferably outside the EasySynQ host.
+- An absolute non-root POSIX backup path intended to be visible to the worker and backed by approved
+  persistent/off-host storage. Setup does not certify the backing; verify it independently.
 
 Verify the platform before installing:
 
@@ -184,8 +185,11 @@ and paste the secret. That identity becomes the first **System Administrator**.
    dates and business-day scheduling.
 3. **Storage** — choose WORM mode and run the live object-lock probe. Finalization is blocked until
    the probe proves that an early delete is denied.
-4. **Backup** — provide a mounted destination, save it, and run the complete backup/restore-test
-   drill. A configured backup without a successful restore test does not pass.
+4. **Backup** — provide an absolute non-root POSIX destination. Save performs a preliminary API-context
+   check only; run the backup/restore-test worker drill, then separately prove the path's approved
+   persistent backing and survival across container restart/recreation. The drill proves current
+   worker access and source-dependent integrity only. A configured backup without a successful
+   restore test does not pass.
 5. **Authentication** — select Local or Federated, acknowledge the MFA recommendation, and verify
    the current non-bootstrap login plus issuer reachability. Federation itself is configured in
    Keycloak.

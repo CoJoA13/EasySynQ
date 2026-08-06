@@ -19,7 +19,7 @@ test("useAudits unwraps {data} and surfaces rows", async () => {
 test("useAudits surfaces a forbidden flag on 403", async () => {
   server.use(
     http.get("/api/v1/audits", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<AuditsProbe />);
@@ -59,7 +59,7 @@ test("useFindings unwraps {data}; forbidden flag on 403", async () => {
   expect(await screen.findByText(/REC-000062/)).toBeInTheDocument();
   server.use(
     http.get("/api/v1/audits/:id/findings", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<FindingsProbe />);
@@ -77,7 +77,7 @@ test("useProcesses reads the bare array; degrades on 403", async () => {
   expect(await screen.findByText(/Purchasing/)).toBeInTheDocument();
   server.use(
     http.get("/api/v1/processes", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<ProcessesProbe />);

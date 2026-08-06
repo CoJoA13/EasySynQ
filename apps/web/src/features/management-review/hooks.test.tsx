@@ -27,7 +27,7 @@ describe("useMgmtReviews", () => {
   it("surfaces a forbidden flag on 403", async () => {
     server.use(
       http.get("/api/v1/management-reviews", () =>
-        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+        HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
       ),
     );
     renderWithProviders(<MgmtReviewsProbe />);
@@ -70,7 +70,7 @@ describe("useMgmtReview", () => {
   it("surfaces a forbidden flag on 403", async () => {
     server.use(
       http.get("/api/v1/management-reviews/:id", () =>
-        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+        HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
       ),
     );
     renderWithProviders(
@@ -120,7 +120,7 @@ describe("useMgmtReviewNextDue", () => {
   it("surfaces a forbidden flag on 403", async () => {
     server.use(
       http.get("/api/v1/management-reviews/next-due", () =>
-        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+        HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
       ),
     );
     renderWithProviders(<NextDueProbe />);

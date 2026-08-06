@@ -174,7 +174,7 @@ test("VisualDiffViewer (Unavailable) offers the source-download fallback, not an
 test("VisualDiffViewer shows quiet no-access on a state-aware authorization 403", async () => {
   server.use(
     http.post(VD, () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);

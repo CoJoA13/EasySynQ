@@ -536,23 +536,27 @@ flowchart LR
 First-Run Setup        ◉╴●─●─●─●─○─○─○─○─○─○   Step 4 of 10   [ Save & exit ]
 ────────────────────────────────────────────────────────────────────────────
 4 · Backup + Restore-Test  (blocking gate G-C)
-   A backup is only trustworthy once it has been restored. We will run an
-   end-to-end restore-test into an isolated scratch namespace before you can
-   proceed — "configured but never verified" is not enough.            [ ? ]
+   The current archive contains a database dump + blob manifest, not object
+   bytes. The scratch drill reads referenced bytes from the configured source
+   object store and verifies integrity; it does not prove source-independent
+   recovery or authorize cutover.                                      [ ? ]
    ┌──────────────────────────────────────────────────────────────┐
-   │ Backup destination               [ s3://offsite/easysynq    ] │
-   │ Schedule (cron)                  [ 0 2 * * *                 ] │
-   │ ☑ WAL / point-in-time recovery enabled                       │
-   │ ☑ Include append-only audit checkpoint                       │
+   │ Backup destination               [ /absolute/backup/path     ] │
+   │ Archive contents                 [ pg_dump + blob manifest   ] │
+   │ Object-byte source               [ configured source store   ] │
+   │ Scratch layout                   [ flattened; verification   ] │
    └──────────────────────────────────────────────────────────────┘
-   [ Run backup + restore-test ]  ◔ restoring to scratch…   (G-C blocks Next)
-   ── Gate G-C turns green ONLY on a verified PASS ────── [ ◂ Back ] [ Next ▸ ]
+   [ Run backup + restore-test ]  ◔ verifying in scratch…  (G-C blocks Next)
+   ── G-C green = source-dependent integrity PASS ────── [ ◂ Back ] [ Next ▸ ]
 ```
 
 - **Ten-step canonical flow** (reconciled per Decisions Register R4): **Step 0 Bootstrap & Welcome** (consume the install secret, *before* any account) → 1 Admin account → 2 **Organization Profile** → 3 **Vault & Mirror Storage** → 4 **Backup + Restore-Test** → 5 Authentication → 6 Org Roles & Permissions → 7 Users → 8 QMS Scope & Process Map → 9 Import existing QMS? → 10 Review, Finalize & Hand-off. Org profile (Step 2) precedes storage (Step 3).
 - **Blocking vs. deferrable** (DP-3 + persona rule): Steps 1–5 are **blocking system gates** (G-A admin, G-E org profile, G-B vault, G-C backup, G-D auth) shown red on the stepper; Steps 6–9 are **deferrable QMS-shell steps** (Mara's domain) shown blue and skippable. One decision cluster per step; "Next" validates before advancing.
 - **Step 0 Bootstrap & Welcome** consumes the one-time install secret and opens the audited setup session before the first admin exists.
-- **Blocking backup + restore-test gate (G-C)** sits *before* Authentication: Step 4 does not turn green until an end-to-end backup **and** restore-test into a scratch namespace PASSES — the wizard cannot advance otherwise.
+- **Blocking backup + restore-test gate (G-C)** sits *before* Authentication: Step 4 does not turn
+  green until the archive and configured source-store references pass integrity verification in a
+  scratch namespace. The wizard cannot advance otherwise, but G-C is not source-independent
+  disaster-recovery or cutover proof.
 - **Test/verify affordances** at each integration step (storage reachable, backup target writable + restore-test pass, IdP metadata valid + proven non-bootstrap login) with inline status.
 - **Authentication step (Step 5)** exposes the three locked auth modes (local / LDAP-AD / OIDC-SAML) as a choice with mode-specific fields revealed only for the chosen mode, and proves a non-bootstrap login before the bootstrap path is disabled.
 - **Import step (Step 9)** is optional and chains into the Ingestion Review screen (§5.9) — or can be deferred ("Skip; import later").

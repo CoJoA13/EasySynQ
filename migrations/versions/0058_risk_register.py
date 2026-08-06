@@ -164,7 +164,7 @@ def upgrade() -> None:
         """
     )
 
-    # 5. Seed the RSK document_type for EVERY org (idempotent; covers a renamed install such as AHT,
+    # 5. Seed the RSK document_type for EVERY org (idempotent; covers a renamed install such as ORG_EXAMPLE,
     # mirroring the role-grant's all-orgs reach below).
     document_type_t = sa.table(
         "document_type",
@@ -191,7 +191,7 @@ def upgrade() -> None:
 
     # 6. Grant the seeded register.manage to EVERY org's Process Owner role at PROCESS scope (an
     # R38-additive role grant — NO new key). ⚠ _PROCESS_SCOPE, NOT _SYSTEM_SCOPE (see the docstring).
-    # The 0057 CROSS-JOIN-by-role-NAME form reaches a renamed install (AHT).
+    # The 0057 CROSS-JOIN-by-role-NAME form reaches a renamed install (ORG_EXAMPLE).
     role_grant_t = sa.table(
         "role_grant",
         sa.column("org_id", postgresql.UUID(as_uuid=True)),

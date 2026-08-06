@@ -45,7 +45,7 @@ rel="${file#"$ROOT"/}"
 out="$(bash scripts/check-no-site-data.sh 2>&1 | grep -F "$rel:" || true)"
 [ -z "$out" ] && exit 0
 
-# Collapse to a single line for the JSON payload (no jq on this box — see _lib.sh).
+# Collapse to a single line for the JSON payload (no jq dependency — see _lib.sh).
 detail="$(printf '%s' "$out" | tr '\n' ' ' | sed 's/"/\\"/g; s/[[:space:]]\{2,\}/ /g')"
 
 printf '%s' "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"R61 site-data backstop matched the file you just edited: ${detail} — fix it NOW, in this edit, not later: R61's whole point is that sanitizing after the fact cannot undo publication (git history, forks, review comments quoting the diff). If this is a 4-segment CLAUSE literal rather than an IP, rewrite it with a non-numeric final segment (a 9.2.2.x-shaped leaf) — the checker cannot tell them apart. Verify with: bash scripts/check-no-site-data.sh\"}}"

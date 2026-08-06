@@ -350,7 +350,7 @@ async def _reject_objective_byte_path(session, doc) -> None:
 | Generic byte path on an OBJ | — | `checkout`/`checkin`/`start-revision`/`submit-review` | **422 guard** (s5) |
 
 **Demo (live smoke):** the same SYSTEM overrides as S-obj-3 on the LIVE `demo` `app_user` row (org
-**AHT**): `objective.manage` + `objective.read` + `kpi.*` + `document.approve`/`document.release` +
+**ORG_EXAMPLE**): `objective.manage` + `objective.read` + `kpi.*` + `document.approve`/`document.release` +
 `document.read`/`document.read_draft`. The owner performs the Keycloak login.
 
 ---
@@ -434,7 +434,7 @@ offers on an OBJ anyway).
 
 ## s10 · Testing strategy
 
-**Local gates (this box):** `/check-web` (full — the tsc-only jest-dom `import {expect, it} from "vitest"`
+**Local gates (the then-current development environment):** `/check-web` (full — the tsc-only jest-dom `import {expect, it} from "vitest"`
 trap), `/check-api` (static), `/check-contracts`, `/check-migrations` (no-op confirm). Unit+integration
 pytest = Linux CI; backend behavior verified live via the worker heredoc.
 

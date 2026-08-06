@@ -76,7 +76,7 @@ test("the note is omitted pre-Reported, and when capa.read is denied (degrade)",
   expect(screen.queryByText(/closing will be blocked/)).toBeNull();
   server.use(
     http.get("/api/v1/capas", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(
@@ -89,7 +89,7 @@ test("the note is omitted pre-Reported, and when capa.read is denied (degrade)",
 test("finding.read denied → a calm no-access note inside the card", async () => {
   server.use(
     http.get("/api/v1/audits/:id/findings", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<FindingsCard audit={audit} scope={SYSTEM} {...noop} />);

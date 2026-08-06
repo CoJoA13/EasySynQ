@@ -56,7 +56,7 @@ _STAGES: tuple[dict[str, Any], ...] = (
 
 def _org_id(bind: Any) -> Any:
     # Resilient org lookup — an OPERATIONAL install renames short_code away from 'DEFAULT' at
-    # setup G-E (the 0018/0021 trap; this live install's org is 'AHT'). D1 = single-org, so fall
+    # setup G-E (the 0018/0021 trap; an operational install may use a non-DEFAULT org). D1 = single-org, so fall
     # back to the only row. NEVER bare scalar_one on 'DEFAULT'.
     org_id = bind.execute(
         sa.text("SELECT id FROM organization WHERE short_code = 'DEFAULT'")

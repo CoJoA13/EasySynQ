@@ -13,7 +13,7 @@
 ## Conventions & environment notes (read once)
 
 - **Commits:** Conventional Commits, `feat(s-obj-3): …` / `test(s-obj-3): …`; end every commit message body with the trailer `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`. Work happens on the existing branch `feat/s-obj-3-objective-lifecycle`.
-- **API test environment (this Windows box):** api **unit** tests run locally (`cd apps/api && uv run pytest tests/unit/<file> -v`); there is a known baseline of 17 expected failures in 3 unrelated files — ignore those. api **integration** tests need Docker testcontainers and are validated in CI; if Docker is available locally they run too, otherwise the local end-to-end proof is the live-stack heredoc smoke in Task 18. Write the integration tests regardless — they are the behavioral contract CI enforces.
+- **API test environment (the then-current Windows development environment):** api **unit** tests run locally (`cd apps/api && uv run pytest tests/unit/<file> -v`); there is a known baseline of 17 expected failures in 3 unrelated files — ignore those. api **integration** tests need Docker testcontainers and are validated in CI; if Docker is available locally they run too, otherwise the local end-to-end proof is the live-stack heredoc smoke in Task 18. Write the integration tests regardless — they are the behavioral contract CI enforces.
 - **Static gate:** after every backend task, run `/check-api` (ruff + format-check + mypy-strict + unit). After every web task, run `/check-web` (eslint + strict tsc + build + vitest).
 - **Path note:** all `apps/api` Python paths below are under `apps/api/src/easysynq_api/`; tests under `apps/api/tests/`. Web paths are under `apps/web/src/`.
 
@@ -2067,7 +2067,7 @@ git commit -m "feat(s-obj-3): create modal — link the Effective Quality Policy
 ### Task 18: Live-stack smoke (the local backend proof)
 
 - [ ] **Step 1:** Rebuild the changed services: `docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml up -d --build api worker beat` (note: `--build` goes on the raw compose command, NOT `just up s`).
-- [ ] **Step 2:** Grant the live `demo` `app_user` row (org **AHT**) the SYSTEM overrides: `objective.read`, `objective.manage`, `document.submit`, `document.approve`, `document.release`, `document.read`, `document.read_draft` (the content-read overrides are likely already present from prior smokes — confirm).
+- [ ] **Step 2:** Grant the live `demo` `app_user` row (org **ORG_EXAMPLE**) the SYSTEM overrides: `objective.read`, `objective.manage`, `document.submit`, `document.approve`, `document.release`, `document.read`, `document.read_draft` (the content-read overrides are likely already present from prior smokes — confirm).
 - [ ] **Step 3:** Backend heredoc smoke via the worker container: create an OBJ → `submit-review` → approve via `/tasks` decision → `release`; assert `current_state=Effective`, the version's `metadata_snapshot.objective_commitment` matches, a `signature_event(meaning=release)` exists, and `GET /reports/compliance-checklist` shows the 6.2 node `COVERED`.
 - [ ] **Step 4:** FE smoke via Chrome MCP (localhost only; the owner performs the Keycloak login): open an objective detail page → Submit for review → see the stepper → approve in `/tasks` (the commitment context card renders) → Release → the objective reads Effective and the Home CHECK quadrant's 6.2 coverage reflects it.
 

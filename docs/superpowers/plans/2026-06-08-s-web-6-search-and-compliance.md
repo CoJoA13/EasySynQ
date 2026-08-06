@@ -1512,7 +1512,7 @@ git commit -m "docs(s-web-6): slice-history + CLAUDE.md (and mark S-web-5 merged
 
 - [ ] **Step 5: Handoff for review (orchestrator, outside this plan)**
 
-This is front-end only, so the relevant local gate is **web** (the api/migration/integration jobs are unaffected and Linux-CI-only on this box). Then: run the **diff-critic** agent on the branch diff (`Agent`, `subagent_type: diff-critic`), fold any confirmed findings, and open the PR with `/pr` (5 CI jobs; only `web` is materially exercised here — the other four should be no-ops/green). After green CI + diff-critic, squash-merge.
+This is front-end only, so the relevant local gate is **web** (the api/migration/integration jobs are unaffected and Linux-CI-only in that development environment). Then: run the **diff-critic** agent on the branch diff (`Agent`, `subagent_type: diff-critic`), fold any confirmed findings, and open the PR with `/pr` (5 CI jobs; only `web` is materially exercised here — the other four should be no-ops/green). After green CI + diff-critic, squash-merge.
 
 ---
 

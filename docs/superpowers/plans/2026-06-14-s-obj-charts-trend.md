@@ -36,7 +36,7 @@ Implementers **do not commit/push** — the main loop assembles, runs the gates,
    - `record_measurement_endpoint`: after `record_measurement`, `get_objective` → resolve → `_measurement(m, …)`.
 4. Contract: add `rag` (enum `[green, amber, red, unmeasured]`, mirroring `Objective.rag`) to the `Measurement`
    schema + to `required`.
-5. **Failing-first integration tests** (CI-only on this box — write by reasoning, CI verifies): GET/POST return
+5. **Failing-first integration tests** (CI-only in that development environment — write by reasoning, CI verifies): GET/POST return
    `rag`; a multi-reading objective spans green/amber/red; **the headline frozen-verdict proof** — a revised-target
    Effective objective grades an old reading against its `target_at_capture`, not the new governing target; the
    unknown-id branch stays `200 {"data": []}`.

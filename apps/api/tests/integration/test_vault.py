@@ -34,7 +34,7 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.models.working_draft import WorkingDraft
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
-from easysynq_api.services.vault import locks
+from easysynq_api.services.vault import locks, storage
 from easysynq_api.services.vault import service as vault_service
 from easysynq_api.services.vault.audit import VaultAuditSink
 
@@ -607,6 +607,13 @@ async def test_checkin_refuses_foreign_bucket_source_blob(
     # These exact bytes were previously captured as RECORD evidence → a records-bucket WORM blob.
     content = f"cross-bucket-{subj.a}".encode()
     sha = hashlib.sha256(content).hexdigest()
+    # Keep the shared integration database's blob-row-iff-bytes invariant true. A later backup or
+    # restore test enumerates every persisted Blob row; inserting only the synthetic row here used
+    # to poison that order with a locator that could never resolve in the session-scoped MinIO.
+    await storage.put_staging_bytes(content, sha, content_type="application/pdf")
+    promoted = await storage.finalize_worm(sha, bucket="records")
+    assert promoted.exists is True
+    assert promoted.retain_until is not None
     async with get_sessionmaker()() as s:
         org_id = (
             await s.execute(select(Organization.id).order_by(Organization.created_at).limit(1))
@@ -620,6 +627,7 @@ async def test_checkin_refuses_foreign_bucket_source_blob(
                 bucket="records",  # NOT the documents bucket
                 object_key=sha,
                 worm_locked=True,
+                worm_retain_until=promoted.retain_until,
             )
         )
         await s.commit()

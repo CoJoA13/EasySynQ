@@ -5,6 +5,6 @@ packages/contracts/dist/**      linguist-generated=true
 apps/api/src/easysynq_api/_generated/**  linguist-generated=true
 apps/web/src/api/_generated/**  linguist-generated=true
 
-# Lockfiles are text but rarely hand-reviewed
-uv.lock          -diff
-package-lock.json -diff
+# Generated lockfiles stay collapsed in GitHub by default but remain expandable and diffable.
+uv.lock          linguist-generated=true
+package-lock.json linguist-generated=true

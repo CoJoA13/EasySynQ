@@ -1,9 +1,9 @@
 # Ubuntu 26.04 production host bootstrap + Windows-LAN deployment runbook
 
-> Status: **APPROVED, ready to plan.** Owner design-calls resolved (below).
+> Status: **APPROVED, ready to plan.** Design calls resolved below.
 > **Ops/docs only** — no API, web, migration, permission key, or OpenAPI change.
-> Driver: the owner is deploying EasySynQ tomorrow (2026-07-31) onto a spare workstation
-> wiped to **Ubuntu 26.04 LTS (`resolute`)**, on a LAN whose main file server is Windows.
+> Driver: provide a repeatable production-host bootstrap for **Ubuntu 26.04 LTS (`resolute`)**,
+> including the common case where an organization's file server is Windows.
 
 ## Goal
 
@@ -45,7 +45,7 @@ installs `uv`/Node/`just`, which a production host must not carry.
 Host provisioner. Takes `sudo`, runs **before** `install.sh`, and never invokes it. Two units with
 one purpose each: this provisions the **host**, `install.sh` provisions the **app**.
 
-**Why separate** (owner design-call): `install.sh` needs no root, generates the secrets, and is
+**Why separate:** `install.sh` needs no root, generates the secrets, and is
 shared by the appliance provisioner and the air-gapped installer. Folding `apt` into it would force
 `sudo` onto the secret-generating path and risk both other callers.
 
@@ -106,9 +106,9 @@ resumes by simply re-running.
 End-to-end for this topology: an Ubuntu host serving a Windows LAN. Links to `install-online.md` for
 browser-edge detail rather than duplicating it.
 
-### §0 Values worksheet (owner constraint)
+### §0 Values worksheet
 
-The owner will not have the domain, hostname, or share UNC until on-site. The runbook therefore
+An operator may not have the domain, hostname, or share UNC until deploy time. The runbook therefore
 opens with a **fill-once table** — every later command references these names, so nothing is
 retyped and no placeholder survives into a real command:
 
@@ -130,7 +130,7 @@ run the import (§6) → verification checklist (§7) → troubleshooting (§8).
 
 ## Component 3 — Windows server section (§1, §4)
 
-Prose with a verified copy-paste PowerShell block per step (owner design-call: AD writes stay
+Prose with a verified copy-paste PowerShell block per step (design decision: AD writes stay
 deliberate and reviewable, one step at a time — not one opaque script).
 
 - **DNS A record** — `Add-DnsServerResourceRecordA -CreatePtr`, then verify with `Resolve-DnsName`

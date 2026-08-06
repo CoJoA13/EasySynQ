@@ -15,7 +15,7 @@
 #
 # Sanctioned placeholders (RFC 5737 / RFC 2606 style):
 #   10.0.0.0/24 · 192.0.2.0/24 · 198.51.100.0/24 · 203.0.113.0/24
-#   example.local · example.com · <ORG> · DC01 · 00:15:5D:00:00:01
+#   example.local · example.com · ORG_EXAMPLE · DC01 · 00:15:5D:00:00:01
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -32,6 +32,58 @@ else
     | grep -vE '^scripts/check-no-site-data\.sh$|\.lock$|images\.lock')
 fi
 [ ${#FILES[@]} -gt 0 ] || exit 0
+
+# --- personal home/profile paths --------------------------------------------------------------
+# Repository instructions must be portable. A literal shell user's home path is both identity
+# data and a reliable workstation fingerprint. The appliance service account path is shipped
+# product structure, not an operator identity, so it is the one sanctioned literal.
+hits="$(grep -nHoIE '(^|[^A-Za-z0-9._-])/(var/)?home/[A-Za-z0-9._-]+' "${FILES[@]}" 2>/dev/null \
+  | grep -vE '/home/easysynq($|/)' || true)"
+[ -z "$hits" ] || report "Personal Linux home path (R61) — use a repo-relative path or <repo>:" $hits
+
+hits="$(grep -nHoIE '([A-Za-z]:[/\\]|/[A-Za-z]/)Users[/\\][A-Za-z0-9._-]+' "${FILES[@]}" 2>/dev/null || true)"
+[ -z "$hits" ] || report "Personal Windows profile path (R61) — use <repo> or C:\\dev\\EasySynQ:" $hits
+
+# Development-host observations age badly and can disclose an operator's platform, installed tools,
+# or local constraints. Historical plans should name a generic development environment instead.
+hits="$(grep -nHoIE '\b(this|current) (Linux |Windows |native-Windows )?(box|machine|workstation)\b|\bowner.?s (primary|native|development) (box|machine|workstation)\b|\bthis live (install|box)\b|ORG_EXAMPLE dogfood|populated ORG_EXAMPLE|\bactual users\b' "${FILES[@]}" 2>/dev/null || true)"
+[ -z "$hits" ] || report "Installation/workstation-specific prose (R61) — generalize the environment:" $hits
+
+# --- email addresses -------------------------------------------------------------------------
+# Email-shaped fixtures must use IANA/RFC-reserved example domains. The one external no-reply
+# address below is commit-tool metadata, not an installation identity.
+hits="$(grep -nHoIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "${FILES[@]}" 2>/dev/null \
+  | grep -viE '@(([^@]+\.)?example\.(com|net|org|local|test|invalid)|[a-z0-9.-]+\.(example|test|invalid)|easysynq\.local)$|:noreply@anthropic\.com$' || true)"
+[ -z "$hits" ] || report "Non-example email address (R61) — use an example.com address:" $hits
+
+# --- known site identifiers -----------------------------------------------------------------
+# A deployment dossier remains a site record even after its nouns are replaced with placeholders.
+# Catch the exact narrative markers from the incident so token substitution cannot make the same
+# semantic failure look clean again. This stays deliberately narrow; human review remains the
+# control for new prose shapes.
+hits="$(grep -nHoIE '\bthis is a site-specific deployment (design|plan|record)\b|\bevery fact below was verified on the machine\b|\bthe install is live; what follows is what remains\b|\bomitting the untracked site overlay\b|\bbackup chain [—-] proven with real archives\b|\bthe outstanding go-live security gates (are|remain) site state\b' "${FILES[@]}" 2>/dev/null || true)"
+[ -z "$hits" ] || report "Site-deployment dossier prose (R61) — retain only generalized lessons:" $hits
+
+# The repository owner is public GitHub metadata, but the same token used as a shell account or
+# workstation identity is not. Derive it from the remote rather than committing an incident-token
+# hash: low-entropy org/user identifiers are dictionary-recoverable from an unsalted digest.
+repo_owner=""
+if origin_url="$(git remote get-url origin 2>/dev/null)"; then
+  repo_owner="$(printf '%s\n' "$origin_url" \
+    | sed -nE 's#^(https://github\.com/|git@github\.com:)([A-Za-z0-9-]+)/EasySynQ(\.git)?$#\2#p' \
+    | head -n 1)"
+fi
+if [ -n "$repo_owner" ]; then
+  # Keep this scan inside the shell toolchain already required by the gate. In particular, the
+  # contracts job runs before language setup and Git Bash does not guarantee a global `python3`.
+  # First remove legitimate repository-metadata shapes, then match the owner as a complete token;
+  # report only file + line so the diagnostic cannot republish the identity it rejected.
+  hits="$(grep -nHIiF -- "$repo_owner" "${FILES[@]}" 2>/dev/null \
+    | sed -E 's#(https://github\.com/|git@github\.com:)[^/[:space:]]+/EasySynQ[^[:space:])>]*##g; s#`?[^/[:space:]`]+/EasySynQ`?##g; s#(^|[^A-Za-z0-9_-])Owner:\*{0,2}[[:space:]]*[A-Za-z0-9_-]+#\1#g' \
+    | grep -iE "(^|[^A-Za-z0-9_-])${repo_owner}([^A-Za-z0-9_-]|$)" \
+    | sed -E 's#^([^:]+:[0-9]+):.*#\1:<redacted-personal-identifier>#' || true)"
+  [ -z "$hits" ] || report "Repository-owner token used as a personal identifier (R61):" $hits
+fi
 
 # --- IPv4 addresses (public OR private) outside the sanctioned set ---------------------------
 # ⚠ Must match all FOUR octets. A three-octet pattern makes every ISO clause number (10.2.1,

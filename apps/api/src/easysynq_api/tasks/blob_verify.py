@@ -2,10 +2,13 @@
 
 Daily rolling re-hash of vault blobs against their sha256 PK — FAILED-pinned rows first
 (``blob.verify_failed_at``, the alarm latch), then least-recently-verified. A finding is pinned
-and re-alarms every run until the operator restores the object (there is no auto-correction for
-blobs — restore-from-backup is the runbook action); the pin clears on a pass. Single-flight under
-``LOCK_BLOB_VERIFY`` (skip-if-held); own disposed async engine per ``asyncio.run`` (the app's
-non-owner role); the scan itself NEVER raises (an infra failure is an honest FAILED summary row).
+and re-alarms every run until the exact object reads cleanly again. There is no automatic or
+currently supported archive-based repair: preserve the object and evidence, quarantine affected
+access, and investigate while retaining the source object store. Current archives contain no object
+bytes, and no supported repair/cutover path exists. The pin clears only after a later verification
+pass. Single-flight under ``LOCK_BLOB_VERIFY`` (skip-if-held); own disposed async engine per
+``asyncio.run`` (the app's non-owner role); the scan itself NEVER raises (an infrastructure failure
+is an honest FAILED summary row).
 """
 
 from __future__ import annotations

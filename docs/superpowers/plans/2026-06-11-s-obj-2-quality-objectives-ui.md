@@ -2160,7 +2160,7 @@ just up s --build   # pick up merged 0049 + the objectives router
 just demo-user      # if Keycloak was recreated
 ```
 
-Grant the live `demo` app_user row SYSTEM overrides for `objective.read`, `objective.manage`, `kpi.read`, `kpi.record` (org short_code `AHT`) so the surface is reachable. Then, find-then-click in separate batches, text-first verification, client-side nav only: load `/objectives` (band + table render), open the create modal and create an objective, open its detail page, add a plan, record a measurement (confirm the rollup `current_value` updates), remove the plan. Confirm a calm no-access panel by revoking one key. Note: `demo` holds none of these keys natively — without the overrides every surface is a calm panel (the expected default).
+Grant the live `demo` app_user row SYSTEM overrides for `objective.read`, `objective.manage`, `kpi.read`, `kpi.record` (org short_code `ORG_EXAMPLE`) so the surface is reachable. Then, find-then-click in separate batches, text-first verification, client-side nav only: load `/objectives` (band + table render), open the create modal and create an objective, open its detail page, add a plan, record a measurement (confirm the rollup `current_value` updates), remove the plan. Confirm a calm no-access panel by revoking one key. Note: `demo` holds none of these keys natively — without the overrides every surface is a calm panel (the expected default).
 
 - [ ] **Step 4: Docs — slice-history + CLAUDE.md learning**
 

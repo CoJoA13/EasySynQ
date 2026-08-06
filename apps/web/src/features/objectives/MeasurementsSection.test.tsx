@@ -37,7 +37,7 @@ it("keeps the append-only note and drops the 'arrive in a later release' placeho
 it("shows a calm no-access panel when kpi.read is denied", async () => {
   server.use(
     http.get("/api/v1/objectives/:id/measurements", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<MeasurementsSection objectiveId={ID} unit="%" />);

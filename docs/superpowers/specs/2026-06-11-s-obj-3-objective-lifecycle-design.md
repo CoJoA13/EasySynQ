@@ -219,7 +219,7 @@ No serializer change for F-3: `_version` already returns `metadata_snapshot` ([a
 | Read Effective POL (create modal) | `objective.read` | `GET /objectives/policy` | — |
 | Approver-context commitment read | `document.read` | existing `GET /documents/{id}/versions` (the approver holds it) | — |
 
-**Demo (live smoke):** grant the LIVE `demo` `app_user` row (org **AHT**) SYSTEM overrides for `objective.manage` + `document.submit`/`document.approve`/`document.release` + `document.read`/`document.read_draft` (the content-read overrides are likely already present from prior smokes). `localhost` only; the owner performs the Keycloak login.
+**Demo (live smoke):** grant the LIVE `demo` `app_user` row (org **ORG_EXAMPLE**) SYSTEM overrides for `objective.manage` + `document.submit`/`document.approve`/`document.release` + `document.read`/`document.read_draft` (the content-read overrides are likely already present from prior smokes). `localhost` only; the owner performs the Keycloak login.
 
 ---
 
@@ -262,7 +262,7 @@ New paths to document (redocly-lint, not codegen): `POST /objectives/{objective_
 
 ## s9 · Testing strategy
 
-**Local gates (this Windows box):** web (`/check-web`: eslint + strict `tsc` + build + vitest) and the api static checks (`/check-api`: ruff/format/mypy). The api unit+integration suites and `/check-migrations` are Linux-CI gates; verify backend behaviour via the worker-container heredoc smoke + the live stack, not local pytest. `/check-contracts` (openapi changed).
+**Local gates (the then-current Windows development environment):** web (`/check-web`: eslint + strict `tsc` + build + vitest) and the api static checks (`/check-api`: ruff/format/mypy). The api unit+integration suites and `/check-migrations` are Linux-CI gates; verify backend behaviour via the worker-container heredoc smoke + the live stack, not local pytest. `/check-contracts` (openapi changed).
 
 - **API unit:** `_objective_commitment_dict` canonical shape (decimals-as-strings, None handling); `_snapshot` adds `objective_commitment` only when passed and leaves ordinary/form snapshots byte-identical; the submit service's Draft-only guard + the freeze-iff-no-version logic; `_objective_capabilities` gating.
 - **API integration** (testcontainers; **run-scoped / delta-based assertions** — the shared session DB is dirty): create→submit→approve→release an OBJ; assert `current_state=Effective`, exactly one `document_version` (Effective) with `metadata_snapshot.objective_commitment` matching the committed values + the `application/json` WORM source blob; assert `signature_event` rows `approval` + `release` (and that the submitter is SoD-blocked from approving — author≠approver); assert the **6.2 checklist node flips COVERED** for *this run's* objective (scope the assertion to the created clause mapping / a before→after delta, never a global count); assert `GET /objectives/{id}/approval` returns the instance; `GET /objectives/policy` returns the Effective POL or null. Prove the **two-session populate_existing** trap (prime via `session.get`, mutate via session B, locked-load on A) for the submit handler's `for_update` load.

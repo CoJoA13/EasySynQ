@@ -272,7 +272,7 @@ Two **additive (R38)** CONTENT-domain keys, seeded in 0052:
 
 Seed recipe (the 0028 `retention.read`/`retention.manage` precedent):
 `pg_insert(permission_t).values([...]).on_conflict_do_nothing(['key'])`; resilient org lookup
-(`short_code='DEFAULT'` else `scalar_one` over all orgs — this install's is **`AHT`**);
+(`short_code='DEFAULT'` else `scalar_one` over all orgs — an operational install may use a non-`DEFAULT` short code);
 `role_grant(...).on_conflict_do_nothing(['org_id','role_id','permission_id'])` with a `scope_template`;
 downgrade deletes **`permission_override` → `role_grant` → `permission`** (the RESTRICT-FK order). Bump
 `test_authz.py:133` `assert len(perms) == 100` → `102` and update its comment.
@@ -388,7 +388,7 @@ R44/R45 `kind=DOCUMENT` rationale is **not** copied here (category error — the
 
 | Slice | Scope | Migration | Verify |
 |---|---|---|---|
-| **S-improvement-1** (backend core) | `0052` (2 enums from ORM `*_VALUES`, 2 tables + the REVOKE block, the partial-UNIQUE + `env.py` exclusion, `audit_object_type` + 4 `event_type` ADD VALUEs in an `autocommit_block`, the `improvement.*` keys + role grants + downgrade, model registration in `__init__.py`) · `domain/improvement/fsm.py` · `services/improvement` (create / transition / list / get / stage-events; `_improvement_scope`) · `api/improvement.py` · `openapi.yaml` · **register R46** | `0052` | `/check-migrations`, `/check-api` (ruff + mypy-strict + **targeted** units; integration + full-unit are **CI-only** on this Windows box), `/check-contracts`; `migration-reviewer` + `diff-critic` |
+| **S-improvement-1** (backend core) | `0052` (2 enums from ORM `*_VALUES`, 2 tables + the REVOKE block, the partial-UNIQUE + `env.py` exclusion, `audit_object_type` + 4 `event_type` ADD VALUEs in an `autocommit_block`, the `improvement.*` keys + role grants + downgrade, model registration in `__init__.py`) · `domain/improvement/fsm.py` · `services/improvement` (create / transition / list / get / stage-events; `_improvement_scope`) · `api/improvement.py` · `openapi.yaml` · **register R46** | `0052` | `/check-migrations`, `/check-api` (ruff + mypy-strict + **targeted** units; integration + full-unit are **CI-only** in that Windows development environment), `/check-contracts`; `migration-reviewer` + `diff-critic` |
 | **S-improvement-2** (spawn wiring) | `POST /findings/{id}/raise-initiative` (OBSERVATION/OFI only) + `POST /management-reviews/{id}/outputs/{oid}/raise-initiative` (1:N `source_link`, replay-before-gate, `Idempotency-Key`, `IntegrityError` re-lookup) · `MGMT_REVIEW_INITIATIVE_SPAWNED` emit · `spawned_initiative_id` in the `_review_output` serializer + FE type + OpenAPI | **none** (all columns/enums in 0052) | as above + `diff-critic` |
 | **S-improvement-3** (web) | the register + per-initiative drawer + stage timeline + raise affordances + the PDCA-ACT pipeline tile | none | `/check-web` (full eslint + strict tsc + build + vitest); `web-test-trap-reviewer` |
 | **S-improvement-4** (DEFERRED, named — not built) | the optional unsigned **Verified** benefit-review stage (verdict frozen into the sealed `stage_event.payload`) and/or an engine-routed **management-authorization** approval (a new `WorkflowSubjectType`) | TBD | opt-in only |

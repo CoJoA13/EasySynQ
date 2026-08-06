@@ -12,11 +12,11 @@ from typing import Any
 import jwt
 
 from ..config import get_settings
-from ..problems import ProblemException
+from ..problems import ProblemCode, ProblemException
 from .jwks import JWKSCache, JWKSUnavailable
 
 
-def _unauthorized(code: str, title: str, detail: str | None = None) -> ProblemException:
+def _unauthorized(code: ProblemCode, title: str, detail: str | None = None) -> ProblemException:
     return ProblemException(status=401, code=code, title=title, detail=detail)
 
 

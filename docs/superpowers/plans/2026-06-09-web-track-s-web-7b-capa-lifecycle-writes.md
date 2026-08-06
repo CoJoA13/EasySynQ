@@ -22,7 +22,7 @@ FastAPI · SQLAlchemy async · Pydantic (api). Redocly (contract).
 
 **Spec:** `docs/superpowers/specs/2026-06-09-web-track-s-web-7b-capa-lifecycle-writes-design.md`.
 
-**Local gates (native-Windows box):** web = `/check-web` (eslint + strict tsc + build + the full vitest
+**Local gates (native-Windows development environment):** web = `/check-web` (eslint + strict tsc + build + the full vitest
 suite) is the reliable front-end gate. The api **test** suites are **Linux-CI-only** here — for Task 1 the
 local gate is `/check-api` (ruff/format/mypy-strict) + `/check-contracts`; the integration tests you write run
 red→green in **CI**, not locally. Do not run `pytest` locally.

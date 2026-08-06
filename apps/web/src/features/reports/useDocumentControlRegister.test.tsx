@@ -66,7 +66,7 @@ test("returns the register on success", async () => {
 test("flags forbidden on a 403 (caller lacks report.read)", async () => {
   server.use(
     http.get("/api/v1/reports/document-control", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   const { result } = renderHook(() => useDocumentControlRegister(), { wrapper });

@@ -3010,7 +3010,7 @@ img, svg { display: block; max-width: 100%; }
             <span class="es-avatar es-avatar--sm es-avatar--c2">KE</span>
             <span>
               <span class="es-body">Signing as <b>Ken</b> · Approver</span>
-              <span class="es-small es-text-muted es-block">cojo.jones1308@gmail.com · 2026-05-31 14:20 UTC</span>
+              <span class="es-small es-text-muted es-block">auditor@example.com · 2026-05-31 14:20 UTC</span>
             </span>
           </div>
           <label class="es-row es-items-center es-gap-2" style="cursor:pointer">
@@ -4014,7 +4014,7 @@ img, svg { display: block; max-width: 100%; }
         </div>
         <div class="es-card__body">
           <p class="es-body es-text-secondary" style="margin:0">
-            A backup is only trustworthy once it has been restored. Before you can proceed, EasySynQ runs an end-to-end backup <b>and</b> restores it into an isolated scratch namespace — a temporary PostgreSQL schema and a scratch MinIO bucket that never touch live data. <em>“Configured but never verified” is not enough.</em>
+            Before you can proceed, EasySynQ writes a PostgreSQL dump and blob manifest archive, restores the database into an isolated scratch database, and copies/re-hashes manifested bytes from the currently configured source object store into a scratch bucket. A PASS is source-store-dependent archive/database/object integrity evidence only; it does not prove source-independent recovery or authorize cutover. <em>“Configured but never verified” is not enough.</em>
           </p>
         </div>
       </div>
@@ -4030,8 +4030,8 @@ img, svg { display: block; max-width: 100%; }
           <div class="es-grid es-grid--2">
             <div class="es-field">
               <label class="es-label">Backup destination</label>
-              <input class="es-input es-mono" value="s3://offsite-easysynq/acme-mfg/backups" placeholder="Local path / NFS mount / S3-compatible bucket">
-              <div class="es-hint es-row es-items-center es-gap-2"><span class="es-text-success">●</span> Reachable · writable · 412 GB free</div>
+              <input class="es-input es-mono" value="/var/lib/easysynq/backups" placeholder="Absolute non-root POSIX filesystem path">
+              <div class="es-hint es-row es-items-center es-gap-2"><span class="es-text-success">●</span> Preliminary API-context probe only · worker access and persistent mount not yet proven</div>
             </div>
             <div class="es-field">
               <label class="es-label">Schedule <span class="es-label__opt">cron · org tz Europe/Oslo</span></label>
@@ -4043,29 +4043,29 @@ img, svg { display: block; max-width: 100%; }
           <div class="es-grid es-grid--3 es-mt-4">
             <div class="es-field">
               <label class="es-label">Keep daily</label>
-              <input class="es-input es-num" value="7">
+              <input class="es-input es-num" value="7" disabled>
             </div>
             <div class="es-field">
               <label class="es-label">Keep weekly</label>
-              <input class="es-input es-num" value="4">
+              <input class="es-input es-num" value="4" disabled>
             </div>
             <div class="es-field">
               <label class="es-label">Keep monthly</label>
-              <input class="es-input es-num" value="6">
+              <input class="es-input es-num" value="6" disabled>
             </div>
           </div>
+          <div class="es-hint es-mt-2">Retention counts are recorded only; automatic pruning is not shipped.</div>
 
           <div class="es-grid es-grid--2 es-mt-4">
             <div class="es-field">
               <label class="es-label">Encryption at rest</label>
-              <select class="es-select">
-                <option selected>AES-256 · passphrase key</option>
-                <option>AES-256 · key file</option>
-                <option>Off (not recommended)</option>
+              <select class="es-select" disabled>
+                <option selected>Host-configured key · inspect result</option>
+                <option>Plaintext fallback · open M-01</option>
               </select>
               <div class="es-hint es-row es-items-center es-gap-2">
                 <span class="es-confidence-chip es-confidence-chip--high"><span class="es-confidence__bars"><span class="es-confidence__bar"></span><span class="es-confidence__bar"></span><span class="es-confidence__bar"></span></span><span class="es-confidence__label">Strong</span></span>
-                Passphrase strength verified — archive will be decryptable with this key.
+                Durable archive encryption is conditional; G-C does not exercise the key.
               </div>
             </div>
             <div class="es-field">
@@ -4079,24 +4079,24 @@ img, svg { display: block; max-width: 100%; }
             <div class="es-stack" style="gap:14px">
               <div class="es-row es-justify-between es-items-center es-wrap" style="gap:12px">
                 <div class="es-row es-items-center es-gap-3">
-                  <span class="es-switch is-on"><span class="es-switch__track"></span></span>
+                  <span class="es-switch"><span class="es-switch__track"></span></span>
                   <div>
-                    <div class="es-body" style="font-weight:600">WAL / point-in-time recovery (PITR)</div>
-                    <div class="es-small es-text-muted">Streams write-ahead logs for sub-day recovery. Requires reachable WAL archive.</div>
+                    <div class="es-body" style="font-weight:600">WAL / point-in-time recovery (PITR) · not shipped</div>
+                    <div class="es-small es-text-muted">Unavailable in the current release; nightly filesystem archives only.</div>
                   </div>
                 </div>
-                <span class="es-badge es-badge--success">Archive reachable</span>
+                <span class="es-badge es-badge--neutral">Unavailable</span>
               </div>
               <div class="es-divider"></div>
               <div class="es-row es-justify-between es-items-center es-wrap" style="gap:12px">
                 <div class="es-row es-items-center es-gap-3">
-                  <span class="es-switch is-on"><span class="es-switch__track"></span></span>
+                  <span class="es-switch"><span class="es-switch__track"></span></span>
                   <div>
-                    <div class="es-body" style="font-weight:600">Include append-only audit checkpoint</div>
-                    <div class="es-small es-text-muted">Anchors the tamper-evident audit chain into the archive.</div>
+                    <div class="es-body" style="font-weight:600">Audit checkpoint leg · best-effort</div>
+                    <div class="es-small es-text-muted">Inspect manifest legs; absence does not fail the DB/manifest archive.</div>
                   </div>
                 </div>
-                <span class="es-badge es-badge--info">Recommended</span>
+                <span class="es-badge es-badge--neutral">May be absent</span>
               </div>
             </div>
           </div>
@@ -4114,8 +4114,8 @@ img, svg { display: block; max-width: 100%; }
           <div class="es-row es-wrap es-gap-2">
             <span class="es-badge es-badge--neutral">⛁ PostgreSQL dump</span>
             <span class="es-badge es-badge--neutral">⛁ MinIO object manifest</span>
-            <span class="es-badge es-badge--neutral">⛁ Keycloak realm export</span>
-            <span class="es-badge es-badge--neutral">⛁ Encrypted config</span>
+            <span class="es-badge es-badge--neutral">⛁ Realm export · optional</span>
+            <span class="es-badge es-badge--neutral">⛁ Config snapshot · optional</span>
             <span class="es-badge es-badge--obsolete es-badge--nodot">OpenSearch index · excluded</span>
             <span class="es-badge es-badge--obsolete es-badge--nodot">Filesystem mirror · excluded</span>
           </div>
@@ -4127,7 +4127,7 @@ img, svg { display: block; max-width: 100%; }
         <div class="es-card__header es-row es-justify-between es-items-center es-wrap" style="gap:12px">
           <div>
             <div class="es-card__title">Mandatory restore-test <span class="es-tag es-tag--accent">Gate G-C</span></div>
-            <div class="es-card__subtitle">The gate is not “a backup ran” — it is “a backup was restored and verified.”</div>
+            <div class="es-card__subtitle">G-C packs, checksums, and unpacks a transient plaintext tar; it does not test durable encryption.</div>
           </div>
           <span class="es-badge es-badge--warning">Pending verification</span>
         </div>
@@ -4143,11 +4143,11 @@ img, svg { display: block; max-width: 100%; }
             <div class="es-stepper">
               <div class="es-stepper__step is-done">
                 <div class="es-stepper__rail"><div class="es-stepper__marker">✓</div><div class="es-stepper__line"></div></div>
-                <div class="es-stepper__body"><div class="es-stepper__title">Test archive written &amp; encrypted</div><div class="es-stepper__sub">Checksum verified · decryptable with provided key</div></div>
+                <div class="es-stepper__body"><div class="es-stepper__title">Transient plaintext tar written</div><div class="es-stepper__sub">Checksum verified · dump and manifest unpacked</div></div>
               </div>
               <div class="es-stepper__step is-done">
                 <div class="es-stepper__rail"><div class="es-stepper__marker">✓</div><div class="es-stepper__line"></div></div>
-                <div class="es-stepper__body"><div class="es-stepper__title">Restore PG dump + MinIO objects into scratch</div><div class="es-stepper__sub">Temporary schema <span class="es-mono">_scratch_restore</span> · scratch bucket created</div></div>
+                <div class="es-stepper__body"><div class="es-stepper__title">Restore PG dump + copy referenced current-source objects</div><div class="es-stepper__sub">Temporary database · unique prefix in the shared scratch bucket</div></div>
               </div>
               <div class="es-stepper__step is-current">
                 <div class="es-stepper__rail"><div class="es-stepper__marker">3</div><div class="es-stepper__line"></div></div>
@@ -4165,7 +4165,7 @@ img, svg { display: block; max-width: 100%; }
             <div class="es-metric">
               <div class="es-metric__top"><span class="es-metric__label">Est. RPO</span><span class="es-metric__icon">↺</span></div>
               <div class="es-metric__value">~ 24h</div>
-              <div class="es-metric__sub">nightly full · PITR narrows to minutes</div>
+              <div class="es-metric__sub">nightly filesystem archive · no current WAL/PITR benefit</div>
             </div>
             <div class="es-metric">
               <div class="es-metric__top"><span class="es-metric__label">Est. RTO</span><span class="es-metric__icon">◷</span></div>

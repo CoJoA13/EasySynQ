@@ -53,7 +53,7 @@ test("404 → a calm not-found panel", async () => {
 test("403 → a calm no-access panel", async () => {
   server.use(
     http.get("/api/v1/audits/:id", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   harness("au000001-0001-0001-0001-000000000001");

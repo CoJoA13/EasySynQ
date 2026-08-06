@@ -1,15 +1,16 @@
 """AES-256-GCM archive envelope encryption (slice S11, doc 12 §6.2 / §8.1).
 
-The durable backup archive is a single AES-256-GCM ciphertext over the plaintext tar (db.dump +
-manifest.json + realm.json + config.json + audit_checkpoint.json). The key is derived from
+When configured, durable backup encryption produces a single AES-256-GCM ciphertext over the
+plaintext tar (db.dump + manifest.json + optional legs). The key is derived from
 ``BACKUP_ENCRYPTION_KEY`` — install.sh-generated, held in the 0600 .env / a Docker secret in
 SEPARATE custody from the app KEK, and **never** written into the archive or VCS. A stolen
 ``.tar.enc`` is useless without the key (doc 12 §6.2). Uses ``cryptography`` (already a dependency
 for the Ed25519 checkpoints) — no new package.
 
 The restore-into-scratch DRILL (gate G-C) stays plaintext-internal (it writes + reads the archive
-in one process); only the on-disk DURABLE archive is encrypted. ``decrypt_archive`` is the seam the
-S11 ``easysynq restore`` calls before unpacking.
+in one process). Durable archives use this module only when the key is configured; otherwise the
+caller writes a plaintext fallback. ``decrypt_archive`` is the seam the S11 ``easysynq restore``
+calls before unpacking an encrypted artifact.
 """
 
 from __future__ import annotations

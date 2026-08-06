@@ -320,7 +320,7 @@ back door, not a UI affordance.
 
 SoD-1/2 are non-overridable → the loop needs three users. Fixture: `just demo-user` + `just seed-personas`
 (re-run after any `just down` — Keycloak is ephemeral) → `priya` (author), `ken` (Approver role → in the
-pool), `mara` (QMS Owner → releaser), all `Demo-Password-1`, org `AHT`.
+pool), `mara` (QMS Owner → releaser), all `Demo-Password-1`, org `ORG_EXAMPLE`.
 1. **priya**: create a doc → check-in → map a clause → submit for review (or reuse the persisted
    `SOP-PUR-001` 2-version demo doc; if owned by `demo`, author a fresh one as priya).
 2. **ken**: `/tasks` shows the APPROVE task → open → review the redline → **Approve**.

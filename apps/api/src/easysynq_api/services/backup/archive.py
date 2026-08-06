@@ -5,10 +5,11 @@ they are easy to reason about and the missing-binary/timeout failure modes are e
 A backup archive (manifest v2, S11) is a ``tar`` containing the custom-format ``pg_dump``
 (``db.dump``) + a ``manifest.json`` (the blob-snapshot: sha256/size/bucket per position, doc 18
 §337; plus per-table row counts for the restore triad and the ``legs`` presence markers) + the
-optional legs ``realm.json`` / ``config.json`` / ``audit_checkpoint.json``. The durable on-disk
-archive is then AES-256-GCM encrypted to ``…tar.enc`` (``crypto.py``); the restore-into-scratch
-DRILL stays plaintext-internal. Each on-disk artifact has a sibling ``.sha256`` over its bytes. Blob
-*bytes* stay in MinIO/WORM (separately durable); the manifest references them.
+optional legs ``realm.json`` / ``config.json`` / ``audit_checkpoint.json``. With a configured key,
+the durable on-disk archive is AES-256-GCM encrypted to ``…tar.enc`` (``crypto.py``); without one it
+is a plaintext ``.tar`` and omits secret-bearing legs. The restore-into-scratch DRILL always stays
+plaintext-internal. Each on-disk artifact has a sibling ``.sha256`` over its bytes. Blob
+*bytes* remain only in the configured source object store; the archive merely references them.
 """
 
 from __future__ import annotations
@@ -118,10 +119,12 @@ def build_manifest(
     config_snapshot: str = "absent",
     audit_checkpoint: str = "absent",
     encryption_key_ref: str | None = None,
+    encrypted: bool = False,
 ) -> dict[str, Any]:
     """The MinIO blob-snapshot manifest (doc 18 §337) + recorded backup config + the S11 ``legs``
-    presence markers and ``encryption_key_ref``. ``config`` may carry ``table_counts`` so the
-    restore triad has point-in-time expected counts without re-reading the (gone) source DB."""
+    presence markers, encryption state, and ``encryption_key_ref``. ``config`` may carry
+    ``table_counts`` so the restore triad has point-in-time expected counts without re-reading the
+    (gone) source DB."""
     return {
         "manifest_version": 2,
         "config": config,
@@ -131,6 +134,7 @@ def build_manifest(
             "config_snapshot": config_snapshot,
             "audit_checkpoint": audit_checkpoint,
         },
+        "encrypted": encrypted,
         "encryption_key_ref": encryption_key_ref,
     }
 

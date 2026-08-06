@@ -1005,7 +1005,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 - [ ] **Backend gate:** `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -m unit` — clean/green.
 - [ ] **Migrations gate:** `/check-migrations` — round-trip still green (no migration added; confirms nothing drifted).
-- [ ] **Integration:** `cd apps/api && uv run pytest -m integration tests/integration/test_partition_runway.py tests/integration/test_notification_requeue.py -v` — green (full `-m integration` is CI-authoritative on this box; run scoped locally).
+- [ ] **Integration:** `cd apps/api && uv run pytest -m integration tests/integration/test_partition_runway.py tests/integration/test_notification_requeue.py -v` — green (full `-m integration` is CI-authoritative in that development environment; run scoped locally).
 - [ ] **Web gate:** `/check-web` (eslint + strict tsc + build + full vitest) — green.
 - [ ] **Contract gate:** `/check-contracts` — redocly lint clean.
 - [ ] **Adversarial review:** run the `diff-critic` agent on the branch diff, and the `web-test-trap-reviewer` agent on the web diff. Fold only confirmed findings.

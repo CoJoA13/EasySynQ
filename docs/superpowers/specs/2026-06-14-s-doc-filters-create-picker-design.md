@@ -128,10 +128,10 @@ not required, with a short description noting they narrow the candidate set). re
 
 ## 8. Tests
 
-- **API unit (native-runnable on this Windows box):** `_parse_filter_bool` / `_filter_condition` raise
+- **API unit (native-runnable in that Windows development environment):** `_parse_filter_bool` / `_filter_condition` raise
   422 `validation_error` on a non-boolean value for each new field; `_parse_document_filters` accepts
   the two new pairs and still 400s an unknown `filter[...]`. (Pure Python, no DB.)
-- **API integration (CI-only on this box — write failing-first by reasoning):** seed an org with an
+- **API integration (CI-only in that development environment — write failing-first by reasoning):** seed an org with an
   Effective initial doc, an Approved-new doc (no effective version), an Approved *revision* of an
   Effective doc (effective-bearing), and an OBJ (managed subtype). Assert: `has_effective_version=false`
   returns only the never-released docs (excludes the revision + Effective doc); `managed_subtype=false`

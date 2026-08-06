@@ -92,7 +92,7 @@ test("the debounced search filters rows by identifier, title, and lead-auditor n
 test("renders a calm no-access panel on a 403 (audit.read)", async () => {
   server.use(
     http.get("/api/v1/audits", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderWithProviders(<AuditsListPage />, { route: "/audits" });

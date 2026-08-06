@@ -95,7 +95,7 @@ it("shows a calm not-found alert on a 404", async () => {
 it("shows the shared no-access state on a 403", async () => {
   server.use(
     http.get("/api/v1/management-reviews/:id", () =>
-      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
   renderAt(ID);

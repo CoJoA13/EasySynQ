@@ -74,7 +74,7 @@ LAN name). Browsers warn until that CA is trusted. One-time fix for the whole fl
    Import → `easysynq-root-ca.crt`. Workstations pick it up at the next `gpupdate`.
 
 The CA is unique to this appliance (generated at first boot) — trusting it trusts only
-this box.
+this appliance.
 
 ## Connecting the QMS share (for the import)
 
