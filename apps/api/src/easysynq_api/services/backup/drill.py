@@ -595,15 +595,15 @@ def verify_retained_archive(
     destination: str,
     after_restore: Callable[[ScratchHandle], None] | None = None,
 ) -> DrillResult:
-    """Verify the NEWEST RETAINED durable backup archive (``build_durable_backup``'s output) is
-    restorable + intact — the gap the fresh-drill ``run_drill`` cannot catch: it proves the actual
-    stored archive (encrypted, with ``BACKUP_ENCRYPTION_KEY`` set) decrypts and round-trips, so
-    silent rot in the real backups is caught (Phase-1 I-7 / Codex P2, #155).
+    """Verify the NEWEST RETAINED archive (``build_durable_backup``'s output) decrypts and remains
+    scratch-verifiable against the configured source object store. This catches silent archive rot
+    that the fresh-drill ``run_drill`` cannot, but it does not prove source-independent recovery
+    (Phase-1 I-7 / Codex P2, #155).
 
     Modelled on ``restore.run_restore`` steps 1-5 (decrypt → manifest → restore-into-scratch →
-    blob-copy → triad), but VERIFY-ONLY: it skips the live-restore checkpoint-not-ahead + chain
-    re-verify (those are tamper guards whose FLAGGED-on-unreachable semantics would muddy a clean
-    weekly PASS/FAIL — the integrity triad is the rot signal), and it ALWAYS tears the scratch
+    blob-copy → triad), but VERIFY-ONLY: it skips the operator-verification checkpoint-not-ahead +
+    chain re-verify (those are tamper guards whose FLAGGED-on-unreachable semantics would muddy a
+    clean weekly PASS/FAIL — the integrity triad is the rot signal), and it ALWAYS tears the scratch
     namespace down (never a standing verification target). Restores into a dedicated
     ``verify_easysynq_`` namespace, DISTINCT from the drill's ``scratch_easysynq_`` and
     the restore's ``restore_easysynq_``. Never raises — a crash / wrong key / missing binary is an

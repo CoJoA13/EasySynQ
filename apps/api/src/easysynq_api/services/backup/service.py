@@ -281,11 +281,11 @@ async def verify_latest_retained_backup(
     *,
     after_restore: Callable[[ScratchHandle], None] | None = None,
 ) -> dict[str, Any]:
-    """Verify the NEWEST RETAINED durable backup archive for ``org_id`` is restorable + intact, and
-    persist the result. This is the scheduled (Phase-1 I-7) check: unlike the on-demand G-C drill
-    (``run_restore_test``, which builds + restores a FRESH transient archive), it opens the actual
-    stored ``easysynq-backup-*.tar[.enc]`` an operator would restore from — so silent rot in the
-    real, encrypted backups is caught (Codex P2, #155).
+    """Verify the NEWEST RETAINED archive for ``org_id`` is scratch-verifiable and intact relative
+    to the configured source object store, then persist the result. This scheduled (Phase-1 I-7)
+    check opens the actual stored ``easysynq-backup-*.tar[.enc]`` instead of the fresh transient
+    archive built by the on-demand G-C drill, so silent archive rot is caught. It does not prove
+    source-independent recovery (Codex P2, #155).
 
     Serialized on ``LOCK_RESTORE_DRILL`` (shared with the on-demand drill — they contend for the
     same pg_restore/scratch resource family, so a concurrent drill or verify SKIPs). No policy →

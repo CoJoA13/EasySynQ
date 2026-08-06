@@ -27,7 +27,7 @@ checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy'
 > pre-upgrade archive as a disaster safety net.
 
 > **Key custody (critical):** `BACKUP_ENCRYPTION_KEY` lives ONLY in the `0600` `.env` / a Docker
-> secret — never in the archive. **Lose it and every `.tar.enc` is unrecoverable.** Back it up
+> secret — never in the archive. **Lose it and every `.tar.enc` is undecryptable and unusable.** Back it up
 > out-of-band with the same custody as the host disk-encryption key. See [key-rotation.md](key-rotation.md).
 
 ## When a backup fails — the operator alarm

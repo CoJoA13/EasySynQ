@@ -7,10 +7,11 @@ RESTORED copy — per-table row-count parity, the ``document_version → blob`` 
 SHA-256 re-hash. Only a PASS (persisted to ``backup_policy.last_restore_test_result``) satisfies
 G-C; finalize reads the persisted result and never runs the drill inline (it is a worker task).
 
-Faithful (owner fork): a real ``pg_dump``/``pg_restore`` artifact round-trip, not a logical copy —
-so the drill proves the actual backup mechanism, the thing "configured-but-unverified ≠ backup"
-demands. The drill runs as the **OWNER** DB role (``settings.sync_dsn``); the runtime
-``easysynq_app`` role can neither dump the whole DB nor ``CREATE DATABASE``.
+Faithful (owner fork): a real ``pg_dump``/``pg_restore`` archive round-trip, not a logical copy. The
+drill proves the database/manifest mechanism and source-store object reads; because the archive has
+no object bytes, it does not prove source-independent recovery. The drill runs as the **OWNER** DB
+role (``settings.sync_dsn``); the runtime ``easysynq_app`` role can neither dump the whole DB nor
+``CREATE DATABASE``.
 """
 
 from __future__ import annotations

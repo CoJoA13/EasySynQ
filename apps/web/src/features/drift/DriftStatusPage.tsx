@@ -155,8 +155,10 @@ export function DriftStatusPage() {
             <Text fw={600}>Blob verification coverage</Text>
             {cov.failing > 0 && (
               <Alert color="red" title="Integrity findings open">
-                {cov.failing} unresolved integrity findings — re-alarming until restored. See the
-                runbook (restore from backup, then re-run the verify).
+                {cov.failing} unresolved integrity findings — re-alarming until the object reads
+                cleanly. Preserve evidence, quarantine affected access, and investigate while
+                retaining the source object store. Current archives contain no object bytes, and no
+                supported repair or cutover path exists.
               </Alert>
             )}
             <Group gap="lg">

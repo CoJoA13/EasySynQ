@@ -1,5 +1,6 @@
-"""Operator CLI for the WORM-aware live restore (slice S11, R37) — runs inside the worker image
-(postgresql-client + the OWNER ``DATABASE_URL_SYNC``).
+"""Operator CLI for WORM-aware restore integrity verification (slice S11, R37).
+
+Runs in the worker image (postgresql-client + the OWNER ``DATABASE_URL_SYNC``).
 
     python -m easysynq_api.cli.restore <archive> --confirm
     python -m easysynq_api.cli.restore <archive> --confirm --audit-checkpoint-ack

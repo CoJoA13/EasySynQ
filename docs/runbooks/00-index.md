@@ -21,7 +21,7 @@ For an end-to-end entry point, start with the
 | [minio-object-lock-prereq.md](minio-object-lock-prereq.md) | Provision the WORM (object-lock) vault bucket — a hard prereq. |
 | [nfs-root-squash-mirror-caveat.md](nfs-root-squash-mirror-caveat.md) | The read-only mirror is on an NFS/SMB share. |
 | [mirror-drift-scan.md](mirror-drift-scan.md) | The D2+D3 mirror tamper/staleness scan — cadence knob, the quarantine area + cleanup, the `scan`/`sync`/`rebuild` CLI. |
-| [blob-integrity-verify.md](blob-integrity-verify.md) | D1 blob re-hash alarms: classifications, restore-from-backup response, the D4 recall list. |
+| [blob-integrity-verify.md](blob-integrity-verify.md) | D1 blob re-hash alarms: classifications, evidence-preservation/investigation response, and the D4 recall list. Current archives do not provide object-byte repair. |
 | [nfr-budgets.md](nfr-budgets.md) | Validate the performance budgets (incl. the render budgets CI can't measure). |
 
 **Conventions:** the admin CLI is `scripts/easysynq <command>` (dispatches into the Compose stack).

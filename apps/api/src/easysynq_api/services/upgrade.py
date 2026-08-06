@@ -120,8 +120,9 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
     ``stage`` is one of ``pre_backup`` | ``migrate`` | ``health_gate`` | ``orchestration``; the last
     covers a failure outside the three guarded stages (see the outer handler). A ``pre_backup``
     failure includes an archive that was written but did NOT pass its own checksum verification —
-    an unusable recovery artifact cannot authorize migration. Ordinary operational exceptions become
-    a structured ``FAILED`` result; cancellation and process-exit signals still propagate.
+    an invalid pre-upgrade artifact cannot authorize migration mechanics. Ordinary operational
+    exceptions become a structured ``FAILED`` result; cancellation and process-exit signals still
+    propagate.
     """
     # ⚠ Setup lives INSIDE the protected boundary. `get_settings()` (a malformed DSN or a missing
     # required field), `create_async_engine()` (an unparseable URL / bad driver) and the
@@ -182,10 +183,10 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
             # ⚠ `build_durable_backup` reports a checksum mismatch by RETURNING verified=False,
             # never by raising — so the handler above cannot see it, and without this check the
             # upgrade migrates the live database against an archive already known to be unusable,
-            # then points UPGRADE_FAILED.pre_backup_archive (the operator's only recovery pointer)
-            # at that same dead file. Fail CLOSED on a missing key: an unreportable check is not
-            # a pass. This mirrors `services/backup/service.py:197-209`, which hardened the nightly
-            # path against precisely this scenario; the guard was never propagated here.
+            # then points UPGRADE_FAILED.pre_backup_archive (the operator's preserved investigation
+            # pointer) at that same dead file. Fail CLOSED on a missing key: an unreportable check
+            # is not a pass. This mirrors `services/backup/service.py:197-209`, which hardened the
+            # nightly path against precisely this scenario; the guard was never propagated here.
             # (Folding both into one shared typed validator is deferred to the full S-upgrade-safety
             # slice — see docs/superpowers/plans/2026-08-04-audit-remediation-v2.md.)
             if not backup.get("verified", False):
@@ -278,7 +279,8 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
         # this outer block previously carried only a `finally:` — so any of them escaped and the
         # docstring's "Never raises" was simply untrue. That matters concretely: `cli/upgrade.py`
         # does not wrap this call, so an escape hands the operator a traceback instead of a stage
-        # and a recovery pointer, and strands UPGRADE_STARTED with no terminal event.
+        # and the preserved pre-upgrade artifact pointer, and strands UPGRADE_STARTED with no
+        # terminal event.
         logger.exception("upgrade: unexpected failure outside a guarded stage")
         reason = f"{type(exc).__name__}: {exc}"[:300]
         if sessionmaker is not None:

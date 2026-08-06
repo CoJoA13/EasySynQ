@@ -1,10 +1,11 @@
-"""Live Keycloak realm export for the backup archive (slice S11, doc 08 §8.1, doc 12 §6.2).
+"""Live Keycloak realm export leg for the backup archive (slice S11, doc 08 §8.1, doc 12 §6.2).
 
-A disaster-recovery restore must be able to recover the identity config (users / roles / federation
-mappings) — without the realm, a restored install has no accounts. The worker runs the *api* image
-(no ``kcadm.sh``), so the export goes through the Keycloak **Admin REST API over httpx** on the
-INTERNAL network (``http://keycloak:8080``), mirroring ``readiness._check_keycloak``: obtain an
-admin token (``admin-cli`` password grant on the ``master`` realm) → ``GET /admin/realms/{realm}``.
+A future supported recovery must recover matching identity config (users / roles / federation
+mappings); this export is one non-self-contained leg and does not establish recovery by itself. The
+worker runs the *api* image (no ``kcadm.sh``), so the export goes through the Keycloak **Admin REST
+API over httpx** on the INTERNAL network (``http://keycloak:8080``), mirroring
+``readiness._check_keycloak``: obtain an admin token (``admin-cli`` password grant on the ``master``
+realm) → ``GET /admin/realms/{realm}``.
 
 GRACEFUL DEGRADATION (a hard constraint): a Keycloak outage MUST NOT fail the nightly backup. On any
 error this returns ``None`` and the caller records ``legs.realm_export = "absent"`` + a logged

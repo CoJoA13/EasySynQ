@@ -323,7 +323,8 @@ setup.
 ### Key custody
 
 `BACKUP_ENCRYPTION_KEY` is not stored in the archive. Losing it makes every archive sealed with that
-key unrecoverable. Retain old backup keys for as long as their archives must remain restorable.
+key undecryptable. Retain old backup keys for as long as their archives must remain decryptable and
+available for integrity verification.
 Store keys independently from both the host and its backup destination.
 
 ### Restore integrity verification

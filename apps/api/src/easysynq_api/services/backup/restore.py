@@ -1,4 +1,4 @@
-"""Operator-grade WORM-aware restore (slice S11, doc 12 §8.2 / R37, doc 18 §7/§9).
+"""WORM-aware restore integrity verification (slice S11, doc 12 §8.2 / R37, doc 18 §7/§9).
 
 ``easysynq restore <archive>`` restores to an integrity-verification target: it decrypts + verifies
 the archive, restores PostgreSQL into a FRESH scratch DATABASE, and copies manifested blobs into a
@@ -482,6 +482,9 @@ def run_restore(
                 details={
                     "blobs": len(blobs),
                     "legs": legs,
+                    # Compatibility for callers of the former cutover-oriented contract. Empty is
+                    # intentional: this verification target has no safe post-cutover procedure.
+                    "post_cutover_actions": [],
                     "future_recovery_requirements": [
                         "source-independent object-byte generation",
                         "role-preserving object-store targets",
