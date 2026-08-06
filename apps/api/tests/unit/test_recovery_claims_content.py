@@ -82,6 +82,7 @@ MOCKUP_SETUP_SURFACES = (
 class ClaimRule:
     name: str
     pattern: re.Pattern[str]
+    direct_negations: tuple[re.Pattern[str], ...] = ()
 
 
 @dataclass(frozen=True, order=True)
@@ -92,8 +93,13 @@ class Violation:
     excerpt: str
 
 
-def _rule(name: str, pattern: str) -> ClaimRule:
-    return ClaimRule(name, re.compile(pattern, re.IGNORECASE | re.MULTILINE | re.DOTALL))
+def _rule(name: str, pattern: str, *direct_negations: str) -> ClaimRule:
+    flags = re.IGNORECASE | re.MULTILINE | re.DOTALL
+    return ClaimRule(
+        name,
+        re.compile(pattern, flags),
+        tuple(re.compile(negation, flags) for negation in direct_negations),
+    )
 
 
 # Context-specific affirmative forms that previously shipped. Avoid generic tokens such as
@@ -125,6 +131,8 @@ FORBIDDEN_CLAIMS = (
     _rule(
         "drift_claims_restore_from_backup_repair",
         r"unresolved integrity findings.{0,160}restore from backup,\s*then re-run the verify",
+        r"\bunresolved integrity findings,[ \t]+do[ \t]+not[ \t]+restore from backup,"
+        r"[ \t]+then re-run the verify\b",
     ),
     _rule(
         "setup_claims_recoverability_is_real",
@@ -152,6 +160,8 @@ FORBIDDEN_CLAIMS = (
     _rule(
         "scheduler_claims_retained_archive_restores",
         r"the stored(?:,\s*encrypted)? ones still restore",
+        r"\b(?:do|does|did)[ \t]+not[ \t]+prove[ \t]+"
+        r"the stored(?:,[ \t]*encrypted)? ones still restore\b",
     ),
     _rule(
         "backup_prose_calls_archive_real",
@@ -171,6 +181,7 @@ FORBIDDEN_CLAIMS = (
     _rule(
         "upgrade_prose_calls_archive_only_recovery_pointer",
         r"operator's only recovery pointer",
+        r"\boperator's only recovery pointer[ \t]+is[ \t]+not[ \t]+this[ \t]+archive\b",
     ),
     _rule(
         "blob_alarm_claims_restore_resolves_failure",
@@ -182,8 +193,8 @@ FORBIDDEN_CLAIMS = (
     ),
 )
 
-# Supported direct-negation grammar is deliberately small and adjacency-based. A match is negated
-# only by one of these same-line forms ending exactly where the guarded text starts:
+# Supported direct-negation grammar is deliberately small. Most matches use one of these same-line,
+# adjacency-based forms ending exactly where the guarded text starts:
 #
 # * ``do not [claim that] <claim>`` / ``is not [a|an|the] <claim>``;
 # * ``not true that [the] <claim>`` / ``false that [the] <claim>``; or
@@ -192,6 +203,8 @@ FORBIDDEN_CLAIMS = (
 # The corresponding postfix form must begin exactly where the match ends: ``<claim> is not
 # supported`` or ``<claim> — not true`` (with the other explicit status words below). This is not a
 # prose-window heuristic: any intervening word, sentence, or line break prevents the exemption.
+# A rule whose guarded span cuts across or omits its negator instead owns an explicit negative form
+# above. That form exempts only the particular guarded match it fully contains.
 _DIRECT_NEGATION_PREFIX = re.compile(
     r"(?:"
     r"\b(?:do|does|did)[ \t]+not[ \t]+(?:claim[ \t]+that[ \t]+)?|"
@@ -213,10 +226,16 @@ _DIRECT_NEGATION_SUFFIX = re.compile(
 )
 
 
-def _is_supported_direct_negation(text: str, match: re.Match[str]) -> bool:
+def _is_supported_direct_negation(rule: ClaimRule, text: str, match: re.Match[str]) -> bool:
+    rule_owned_negation = any(
+        negative_match.start() <= match.start() and match.end() <= negative_match.end()
+        for pattern in rule.direct_negations
+        for negative_match in pattern.finditer(text)
+    )
     return bool(
         _DIRECT_NEGATION_PREFIX.search(text[: match.start()])
         or _DIRECT_NEGATION_SUFFIX.match(text[match.end() :])
+        or rule_owned_negation
     )
 
 
@@ -224,7 +243,7 @@ def _violations(relative_path: str, text: str) -> set[Violation]:
     by_pattern_and_line: dict[tuple[str, int, str], Violation] = {}
     for rule in FORBIDDEN_CLAIMS:
         for match in rule.pattern.finditer(text):
-            if _is_supported_direct_negation(text, match):
+            if _is_supported_direct_negation(rule, text, match):
                 continue
             line_number = text.count("\n", 0, match.start()) + 1
             key = (relative_path, line_number, rule.name)
@@ -364,6 +383,36 @@ def test_guard_accepts_direct_negation_of_each_guarded_claim(
     _expected_claim: str, _former_claim: str, direct_negative: str
 ) -> None:
     assert _violations("direct-negative.txt", direct_negative) == set()
+
+
+@pytest.mark.parametrize(
+    "direct_negative",
+    (
+        "This check does not prove the stored, encrypted ones still restore.",
+        "For unresolved integrity findings, do not restore from backup, then re-run the verify.",
+        "The operator's only recovery pointer is not this archive.",
+    ),
+)
+def test_guard_accepts_original_contextual_negation_sentences(
+    direct_negative: str,
+) -> None:
+    assert _violations("original-contextual-negative.txt", direct_negative) == set()
+
+
+def test_rule_owned_negation_does_not_hide_separate_affirmative_same_rule() -> None:
+    text = (
+        "This check does not prove the stored, encrypted ones still restore.\n"
+        "This report proves the stored, encrypted ones still restore."
+    )
+
+    assert _violations("rule-owned-negative.txt", text) == {
+        Violation(
+            "rule-owned-negative.txt",
+            2,
+            "scheduler_claims_retained_archive_restores",
+            "the stored, encrypted ones still restore",
+        )
+    }
 
 
 def test_every_forbidden_claim_rule_has_exactly_one_both_polarity_oracle() -> None:
