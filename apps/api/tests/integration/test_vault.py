@@ -12,20 +12,29 @@ import asyncio
 import hashlib
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from types import SimpleNamespace
+from typing import Any
 
+import boto3
 import httpx
 import pytest
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easysynq_api.api import documents as documents_api
+from easysynq_api.config import get_settings
+from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
 from easysynq_api.db.models.app_user import AppUser, UserStatus
+from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.clause import Clause
 from easysynq_api.db.models.document_type import DocumentType
+from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.framework import Framework
 from easysynq_api.db.models.organization import Organization
@@ -34,9 +43,15 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.models.working_draft import WorkingDraft
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
-from easysynq_api.services.vault import locks, storage
+from easysynq_api.services.vault import locks, storage, upload_rejection
 from easysynq_api.services.vault import service as vault_service
 from easysynq_api.services.vault.audit import VaultAuditSink
+from easysynq_api.services.vault.staged_identity import (
+    StagedVersionLocator,
+    StagingDomain,
+    StorageStage,
+    StorageUnavailable,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -147,7 +162,7 @@ async def _map_clause(client: AsyncClient, h: dict[str, str], doc_id: str) -> st
 
 async def _upload(
     client: AsyncClient, h: dict[str, str], doc_id: str, content: bytes, ct: str = "application/pdf"
-) -> str:
+) -> _UploadResult:
     sha = hashlib.sha256(content).hexdigest()
     init = await client.post(
         f"/api/v1/documents/{doc_id}/versions:init-upload",
@@ -156,17 +171,63 @@ async def _upload(
     )
     assert init.status_code == 200, init.text
     body = init.json()
+    version_id: str | None = None
     if not body["dedup"]:
         async with httpx.AsyncClient(timeout=30) as raw:
             put = await raw.put(body["upload_url"], content=content, headers={"Content-Type": ct})
             assert put.status_code in (200, 204), f"{put.status_code} {put.text}"
-    return sha
+            version_id = put.headers["x-amz-version-id"]
+    return _UploadResult(sha256=sha, version_id=version_id)
+
+
+@dataclass(frozen=True, slots=True)
+class _UploadResult:
+    sha256: str
+    version_id: str | None
+
+
+def _s3_client() -> Any:
+    settings = get_settings()
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint,
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key,
+        region_name="us-east-1",
+        config=Config(signature_version="s3v4"),
+    )
+
+
+def _object_version_exists(bucket: str, key: str, version_id: str) -> bool:
+    try:
+        _s3_client().head_object(Bucket=bucket, Key=key, VersionId=version_id)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NoSuchVersion"}:
+            return False
+        raise
+    return True
+
+
+def _object_exists(bucket: str, key: str) -> bool:
+    try:
+        _s3_client().head_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey"}:
+            return False
+        raise
+    return True
 
 
 async def _checkin(
-    client: AsyncClient, h: dict[str, str], doc_id: str, sha: str, **kw
+    client: AsyncClient, h: dict[str, str], doc_id: str, upload: _UploadResult, **kw
 ) -> httpx.Response:
-    payload = {"sha256": sha, "change_reason": "edit", "change_significance": "MINOR", **kw}
+    payload = {
+        "sha256": upload.sha256,
+        "staging_version_id": upload.version_id,
+        "change_reason": "edit",
+        "change_significance": "MINOR",
+        **kw,
+    }
     return await client.post(f"/api/v1/documents/{doc_id}/checkin", headers=h, json=payload)
 
 
@@ -420,6 +481,252 @@ async def test_checkin_requires_reason_and_significance(
     assert ok.status_code == 201, ok.text
 
 
+async def test_checkin_requires_staging_version_for_new_bytes_and_preserves_checkout(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    actor_id = await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    did = (await _create(app_client, h, await _sop_type_id()))["id"]
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    upload = await _upload(app_client, h, did, f"version-required-{subj.a}".encode())
+
+    response = await app_client.post(
+        f"/api/v1/documents/{did}/checkin",
+        headers=h,
+        json={
+            "sha256": upload.sha256,
+            "change_reason": "edit",
+            "change_significance": "MINOR",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "staging_version_required"
+    async with get_sessionmaker()() as s:
+        draft = (
+            await s.execute(select(WorkingDraft).where(WorkingDraft.document_id == uuid.UUID(did)))
+        ).scalar_one()
+        assert draft.checked_out_by == actor_id
+    assert await locks.ttl(uuid.UUID(did)) > 0
+
+
+async def test_checkin_rejects_false_bytes_cleans_only_exact_version_then_allows_honest_retry(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor_id = await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    doc = await _create(app_client, h, await _sop_type_id())
+    did = doc["id"]
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+
+    honest = f"honest-document-{subj.a}".encode()
+    false = b"x" * len(honest)
+    sha = hashlib.sha256(honest).hexdigest()
+    init = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=h,
+        json={"sha256": sha, "content_type": "application/pdf"},
+    )
+    assert init.status_code == 200, init.text
+    async with httpx.AsyncClient(timeout=30) as raw:
+        put = await raw.put(
+            init.json()["upload_url"], content=false, headers={"Content-Type": "application/pdf"}
+        )
+    assert put.status_code in (200, 204), put.text
+    bad_version = put.headers["x-amz-version-id"]
+
+    replacement_ref = None
+    original_record = upload_rejection.DbUploadRejectionSink.record
+
+    async def _record_then_write_replacement(
+        self: upload_rejection.DbUploadRejectionSink,
+        context: upload_rejection.RejectionContext,
+        failure: upload_rejection.IdentityRefusal | upload_rejection.TargetIdentityConflict,
+    ) -> upload_rejection.AuditEventRef:
+        nonlocal replacement_ref
+        ref = await original_record(self, context, failure)
+        replacement_ref = await storage.put_staging_bytes(
+            honest, sha, content_type="application/pdf"
+        )
+        return ref
+
+    monkeypatch.setattr(
+        upload_rejection.DbUploadRejectionSink, "record", _record_then_write_replacement
+    )
+    rejected = await _checkin(
+        app_client,
+        h,
+        did,
+        _UploadResult(sha256=sha, version_id=bad_version),
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "upload_identity_mismatch"
+    assert all(
+        secret not in rejected.text
+        for secret in (hashlib.sha256(false).hexdigest(), bad_version, "staging")
+    )
+    assert replacement_ref is not None
+    assert not _object_version_exists("staging", sha, bad_version)
+    assert _object_version_exists("staging", sha, replacement_ref.locator.version_id)
+    assert not _object_exists("documents", sha)
+
+    async with get_sessionmaker()() as s:
+        draft = (
+            await s.execute(select(WorkingDraft).where(WorkingDraft.document_id == uuid.UUID(did)))
+        ).scalar_one()
+        assert (draft.checked_out_by, draft.scratch_blob_ref) == (actor_id, sha)
+        assert (
+            await s.execute(select(Blob).where(Blob.sha256 == sha))
+        ).scalar_one_or_none() is None
+        assert (
+            await s.execute(
+                select(DocumentVersion).where(DocumentVersion.document_id == uuid.UUID(did))
+            )
+        ).scalars().all() == []
+        events = (
+            (await s.execute(select(AuditEvent).where(AuditEvent.scope_ref == doc["identifier"])))
+            .scalars()
+            .all()
+        )
+    assert await locks.ttl(uuid.UUID(did)) > 0
+    rejection_events = [
+        event for event in events if event.event_type is EventType.BLOB_INTEGRITY_FAILED
+    ]
+    assert len(rejection_events) == 1
+    rejection = rejection_events[0]
+    assert (rejection.actor_type, rejection.actor_id, rejection.object_type) == (
+        ActorType.user,
+        actor_id,
+        AuditObjectType.config,
+    )
+    assert rejection.after == {
+        "operation": "document_checkin",
+        "classification": "digest_mismatch",
+        "source": {
+            "bucket": "staging",
+            "object_key": sha,
+            "version_id": bad_version,
+            "etag": put.headers.get("etag"),
+        },
+        "expected": {"sha256": sha, "size_bytes": None},
+        "observed": {"sha256": hashlib.sha256(false).hexdigest(), "size_bytes": len(false)},
+        "cleanup": {"policy": "delete_exact_version_after_audit"},
+    }
+    assert not any(event.event_type in {EventType.CHECKIN, EventType.NO_CHANGE} for event in events)
+
+    honest_upload = await _upload(app_client, h, did, honest)
+    accepted = await _checkin(app_client, h, did, honest_upload)
+    assert accepted.status_code == 201, accepted.text
+    versions = (await app_client.get(f"/api/v1/documents/{did}/versions", headers=h)).json()
+    assert len(versions) == 1
+    async with get_sessionmaker()() as s:
+        checkins = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.scope_ref == doc["identifier"],
+                        AuditEvent.event_type == EventType.CHECKIN,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(checkins) == 1
+
+
+async def test_checkin_rejects_missing_exact_version_and_retains_newer_upload(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    actor_id = await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    doc = await _create(app_client, h, await _sop_type_id())
+    did = doc["id"]
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    upload = await _upload(app_client, h, did, f"missing-version-{subj.a}".encode())
+    assert upload.version_id is not None
+    replacement = await storage.put_staging_bytes(
+        f"missing-version-{subj.a}".encode(),
+        upload.sha256,
+        content_type="application/pdf",
+    )
+    await storage.delete_staged_version(
+        StagedVersionLocator(
+            domain=StagingDomain.STAGING,
+            object_key=upload.sha256,
+            version_id=upload.version_id,
+        )
+    )
+
+    rejected = await _checkin(app_client, h, did, upload)
+
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "staged_source_unavailable"
+    assert not _object_version_exists("staging", upload.sha256, upload.version_id)
+    assert _object_version_exists("staging", upload.sha256, replacement.locator.version_id)
+    async with get_sessionmaker()() as s:
+        draft = (
+            await s.execute(select(WorkingDraft).where(WorkingDraft.document_id == uuid.UUID(did)))
+        ).scalar_one()
+        assert draft.checked_out_by == actor_id
+        assert (
+            await s.execute(select(Blob).where(Blob.sha256 == upload.sha256))
+        ).scalar_one_or_none() is None
+        events = (
+            (await s.execute(select(AuditEvent).where(AuditEvent.scope_ref == doc["identifier"])))
+            .scalars()
+            .all()
+        )
+    assert await locks.ttl(uuid.UUID(did)) > 0
+    assert sum(event.event_type is EventType.BLOB_INTEGRITY_FAILED for event in events) == 1
+    assert not any(event.event_type in {EventType.CHECKIN, EventType.NO_CHANGE} for event in events)
+
+
+async def test_checkin_source_read_failure_retains_source_without_rejection_cleanup(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor_id = await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    doc = await _create(app_client, h, await _sop_type_id())
+    did = doc["id"]
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    upload = await _upload(app_client, h, did, f"source-read-failure-{subj.a}".encode())
+    assert upload.version_id is not None
+
+    async def _source_read_failure(*_args: object, **_kwargs: object) -> None:
+        raise StorageUnavailable(StorageStage.SOURCE_READ)
+
+    monkeypatch.setattr(upload_rejection.storage, "promote_worm", _source_read_failure)
+    rejected = await _checkin(app_client, h, did, upload)
+
+    assert rejected.status_code == 503
+    assert rejected.json()["code"] == "storage_unavailable"
+    assert _object_version_exists("staging", upload.sha256, upload.version_id)
+    async with get_sessionmaker()() as s:
+        draft = (
+            await s.execute(select(WorkingDraft).where(WorkingDraft.document_id == uuid.UUID(did)))
+        ).scalar_one()
+        assert draft.checked_out_by == actor_id
+        assert (
+            await s.execute(select(Blob).where(Blob.sha256 == upload.sha256))
+        ).scalar_one_or_none() is None
+        events = (
+            (await s.execute(select(AuditEvent).where(AuditEvent.scope_ref == doc["identifier"])))
+            .scalars()
+            .all()
+        )
+    assert await locks.ttl(uuid.UUID(did)) > 0
+    assert not any(event.event_type is EventType.BLOB_INTEGRITY_FAILED for event in events)
+    assert not any(event.event_type in {EventType.CHECKIN, EventType.NO_CHANGE} for event in events)
+
+
 # --- content-addressed dedup ------------------------------------------------------------
 
 
@@ -451,6 +758,72 @@ async def test_recheckin_identical_bytes_no_new_version(
 
     versions = (await app_client.get(f"/api/v1/documents/{did}/versions", headers=h)).json()
     assert len(versions) == 1  # no new version was created
+
+
+async def test_checkin_reuses_existing_documents_worm_blob_without_staging_version(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    type_id = await _sop_type_id()
+    source_doc = await _create(app_client, h, type_id)
+    target_doc = await _create(app_client, h, type_id)
+    content = f"cross-document-dedup-{subj.a}".encode()
+
+    await app_client.post(f"/api/v1/documents/{source_doc['id']}/checkout", headers=h)
+    source_upload = await _upload(app_client, h, source_doc["id"], content)
+    source_checkin = await _checkin(app_client, h, source_doc["id"], source_upload)
+    assert source_checkin.status_code == 201, source_checkin.text
+
+    await app_client.post(f"/api/v1/documents/{target_doc['id']}/checkout", headers=h)
+    dedup_upload = await _upload(app_client, h, target_doc["id"], content)
+    assert dedup_upload.version_id is None
+    target_checkin = await _checkin(app_client, h, target_doc["id"], dedup_upload)
+
+    assert target_checkin.status_code == 201, target_checkin.text
+    assert target_checkin.json()["change_detected"] is True
+
+
+async def test_no_change_checkin_revalidates_current_blob_domain_before_null_staging(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    did = (await _create(app_client, h, await _sop_type_id()))["id"]
+    content = f"dedup-domain-{subj.a}".encode()
+
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    upload = await _upload(app_client, h, did, content)
+    first = await _checkin(app_client, h, did, upload)
+    assert first.status_code == 201, first.text
+
+    async with get_sessionmaker()() as s:
+        blob = (await s.execute(select(Blob).where(Blob.sha256 == upload.sha256))).scalar_one()
+        blob.bucket = "records"
+        await s.commit()
+    try:
+        await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+        rejected = await _checkin(
+            app_client,
+            h,
+            did,
+            _UploadResult(sha256=upload.sha256, version_id=None),
+        )
+
+        assert rejected.status_code == 423
+        assert rejected.json()["code"] == "source_bytes_in_foreign_bucket"
+        async with get_sessionmaker()() as s:
+            assert (
+                await s.execute(
+                    select(WorkingDraft).where(WorkingDraft.document_id == uuid.UUID(did))
+                )
+            ).scalar_one_or_none() is not None
+        assert await locks.ttl(uuid.UUID(did)) > 0
+    finally:
+        async with get_sessionmaker()() as s:
+            blob = (await s.execute(select(Blob).where(Blob.sha256 == upload.sha256))).scalar_one()
+            blob.bucket = "documents"
+            await s.commit()
 
 
 # --- break-lock preserves scratch (R9) --------------------------------------------------
@@ -501,12 +874,12 @@ async def test_blob_worm_locked_before_version(
     doc = await _create(app_client, h, await _sop_type_id())
     did = doc["id"]
     await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
-    sha = await _upload(app_client, h, did, f"worm-{subj.a}".encode())
-    ci = await _checkin(app_client, h, did, sha, change_reason="r", change_significance="MAJOR")
+    upload = await _upload(app_client, h, did, f"worm-{subj.a}".encode())
+    ci = await _checkin(app_client, h, did, upload, change_reason="r", change_significance="MAJOR")
     assert ci.status_code == 201, ci.text
 
     async with get_sessionmaker()() as s:
-        blob = (await s.execute(select(Blob).where(Blob.sha256 == sha))).scalar_one()
+        blob = (await s.execute(select(Blob).where(Blob.sha256 == upload.sha256))).scalar_one()
     assert blob.worm_locked is True
     assert blob.worm_retain_until is not None  # WORM applied before the version committed
     assert blob.bucket == "documents"
@@ -530,8 +903,8 @@ async def test_content_io_is_presigned_never_proxied(
     upload_url = init.json()["upload_url"]
     assert upload_url.startswith("http") and "/api/v1/" not in upload_url  # points at MinIO
 
-    await _upload(app_client, h, did, f"presign-{subj.a}".encode())
-    ci = await _checkin(app_client, h, did, sha, change_reason="r", change_significance="MAJOR")
+    upload = await _upload(app_client, h, did, f"presign-{subj.a}".encode())
+    ci = await _checkin(app_client, h, did, upload, change_reason="r", change_significance="MAJOR")
     vid = ci.json()["id"]
     dl = await app_client.get(f"/api/v1/documents/{did}/versions/{vid}/download", headers=h)
     assert dl.status_code == 200, dl.text
@@ -610,10 +983,8 @@ async def test_checkin_refuses_foreign_bucket_source_blob(
     # Keep the shared integration database's blob-row-iff-bytes invariant true. A later backup or
     # restore test enumerates every persisted Blob row; inserting only the synthetic row here used
     # to poison that order with a locator that could never resolve in the session-scoped MinIO.
-    await storage.put_staging_bytes(content, sha, content_type="application/pdf")
-    promoted = await storage.finalize_worm(sha, bucket="records")
-    assert promoted.exists is True
-    assert promoted.retain_until is not None
+    source = await storage.put_staging_bytes(content, sha, content_type="application/pdf")
+    promoted = await storage.promote_worm(source, target_bucket="records")
     async with get_sessionmaker()() as s:
         org_id = (
             await s.execute(select(Organization.id).order_by(Organization.created_at).limit(1))
@@ -622,10 +993,10 @@ async def test_checkin_refuses_foreign_bucket_source_blob(
             Blob(
                 sha256=sha,
                 org_id=org_id,
-                size_bytes=len(content),
-                mime_type="application/pdf",
-                bucket="records",  # NOT the documents bucket
-                object_key=sha,
+                size_bytes=promoted.size,
+                mime_type=promoted.content_type or "application/pdf",
+                bucket=promoted.target_bucket,  # NOT the documents bucket
+                object_key=promoted.target_key,
                 worm_locked=True,
                 worm_retain_until=promoted.retain_until,
             )
@@ -644,7 +1015,14 @@ async def test_checkin_refuses_foreign_bucket_source_blob(
 
     # check-in fails closed with the cross-kind-collision reason (mirrors ingestion-commit +
     # records-capture); no version is created.
-    ci = await _checkin(app_client, h, did, sha, change_reason="r", change_significance="MAJOR")
+    ci = await _checkin(
+        app_client,
+        h,
+        did,
+        _UploadResult(sha256=sha, version_id=None),
+        change_reason="r",
+        change_significance="MAJOR",
+    )
     assert ci.status_code == 423, ci.text
     assert ci.json()["code"] == "source_bytes_in_foreign_bucket"
 
@@ -663,11 +1041,11 @@ async def test_blob_needed_by_other_live_record_document_version_leg(
     doc = await _create(app_client, h, await _sop_type_id())
     did = doc["id"]
     await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
-    sha = await _upload(app_client, h, did, f"docver-leg-{subj.a}".encode())
-    ci = await _checkin(app_client, h, did, sha, change_reason="r", change_significance="MAJOR")
+    upload = await _upload(app_client, h, did, f"docver-leg-{subj.a}".encode())
+    ci = await _checkin(app_client, h, did, upload, change_reason="r", change_significance="MAJOR")
     assert ci.status_code == 201, ci.text
 
     # No record references this documents-bucket sha, but a document_version does → "needed".
     async with get_sessionmaker()() as s:
-        needed = await records_repo.blob_needed_by_other_live_record(s, sha, uuid.uuid4())
+        needed = await records_repo.blob_needed_by_other_live_record(s, upload.sha256, uuid.uuid4())
     assert needed is True

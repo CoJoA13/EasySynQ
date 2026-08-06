@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
+from ...db.models._audit_enums import ActorType
 from ...db.models._vault_enums import (
     ChangeSignificance,
     Classification,
@@ -49,6 +50,8 @@ from ...problems import ProblemException
 from . import locks, repository, storage, watermark
 from .audit import VaultAuditEvent, VaultAuditSink
 from .review import REVIEW_PERIOD_DEFAULT_MONTHS
+from .staged_identity import StagingDomain
+from .upload_rejection import RejectionContext, promote_for_owner, require_staging_ref
 
 logger = logging.getLogger("easysynq.vault")
 
@@ -544,6 +547,7 @@ async def checkin(
     doc: DocumentedInformation,
     *,
     sha256: str,
+    staging_version_id: str | None,
     change_reason: str,
     change_significance: str,
     mime_type: str = "application/octet-stream",
@@ -581,6 +585,7 @@ async def checkin(
     # Content-addressed dedup: identical bytes to the current latest version → no new version.
     latest = await repository.latest_version(session, doc.id)
     if latest is not None and latest.source_blob_sha256 == sha256:
+        await _assert_documents_worm_blob(session, sha256, object_label="Current source object")
         await session.delete(wd)
         _emit(session, sink, "NO_CHANGE", actor, "document", doc.id, identifier=doc.identifier)
         await session.commit()
@@ -590,17 +595,27 @@ async def checkin(
     # Promote the staged upload into the WORM documents bucket BEFORE the version commits.
     blob = await repository.get_blob(session, sha256)
     if blob is None:
-        promoted = await storage.finalize_worm(sha256)
-        if not promoted.exists:
-            raise ProblemException(
-                status=422,
-                code="validation_error",
-                title="Uploaded object not found — upload via init-upload before check-in",
-            )
-        if promoted.retain_until is None:
-            raise ProblemException(
-                status=423, code="worm_required", title="Object is not WORM-locked"
-            )
+        settings = get_settings()
+        source = require_staging_ref(
+            domain=StagingDomain.STAGING,
+            sha256=sha256,
+            version_id=staging_version_id,
+            content_type=mime_type,
+            operation="document_checkin",
+        )
+        promoted = await promote_for_owner(
+            session,
+            source,
+            target_bucket=settings.s3_bucket_documents,
+            context=RejectionContext(
+                operation="document_checkin",
+                org_id=actor.org_id,
+                actor_id=actor.id,
+                actor_type=ActorType.user,
+                scope_ref=doc.identifier,
+                user_correctable=True,
+            ),
+        )
         # Dedup is GLOBAL (sha256 PK), so two check-ins of *different* documents with identical
         # bytes race here under different locks — ON CONFLICT DO NOTHING treats "already vaulted"
         # as the dedup success it is, instead of a 500 on the loser.
@@ -609,12 +624,12 @@ async def checkin(
             .values(
                 sha256=sha256,
                 org_id=actor.org_id,
-                size_bytes=promoted.size or 0,
+                size_bytes=promoted.size,
                 # Prefer the Content-Type MinIO recorded from the client PUT (drives S7b render
                 # routing); fall back to the declared default. Set once on insert (content-hashed).
                 mime_type=promoted.content_type or mime_type,
-                bucket=get_settings().s3_bucket_documents,
-                object_key=sha256,
+                bucket=promoted.target_bucket,
+                object_key=promoted.target_key,
                 worm_locked=True,
                 worm_retain_until=promoted.retain_until,
             )

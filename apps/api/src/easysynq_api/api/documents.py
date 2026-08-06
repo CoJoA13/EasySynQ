@@ -155,6 +155,7 @@ class InitUpload(BaseModel):
 
 class CheckIn(BaseModel):
     sha256: Sha256Hex
+    staging_version_id: str | None = Field(default=None, min_length=1, max_length=1024)
     change_reason: str = ""
     change_significance: str = ""
     mime_type: str = "application/octet-stream"
@@ -1727,6 +1728,7 @@ async def checkin_endpoint(
         caller,
         doc,
         sha256=body.sha256,
+        staging_version_id=body.staging_version_id,
         change_reason=body.change_reason,
         change_significance=body.change_significance,
         mime_type=body.mime_type,

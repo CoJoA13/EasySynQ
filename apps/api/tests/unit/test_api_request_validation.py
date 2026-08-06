@@ -53,6 +53,19 @@ def test_content_address_models_accept_lowercase_sha256(model: type[BaseModel]) 
     assert model.model_validate({"sha256": "a" * 64}).sha256 == "a" * 64
 
 
+@pytest.mark.parametrize("invalid_version", ["", "v" * 1025])
+def test_checkin_rejects_invalid_staging_version_id(invalid_version: str) -> None:
+    with pytest.raises(ValidationError):
+        CheckIn.model_validate({"sha256": "a" * 64, "staging_version_id": invalid_version})
+
+
+def test_checkin_allows_null_staging_version_for_conditional_service_validation() -> None:
+    assert (
+        CheckIn.model_validate({"sha256": "a" * 64, "staging_version_id": None}).staging_version_id
+        is None
+    )
+
+
 @pytest.mark.parametrize("path", _SHA_BODY_OPERATIONS)
 def test_sha_body_operations_document_validation_response(path: str) -> None:
     contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))

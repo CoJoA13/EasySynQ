@@ -204,8 +204,10 @@ export interface WorkingDraft {
 
 // POST /documents/{id}/versions:init-upload response.
 export interface InitUploadResult {
+  // A dedup hit means the controlled bytes already exist in the documents WORM domain.
   dedup: boolean;
   object_key: string;
+  // Present only when the browser must PUT; the exact PUT version is returned by MinIO itself.
   upload_url: string | null;
 }
 
