@@ -125,7 +125,7 @@
         </div>
         <div class="es-card__body">
           <p class="es-body es-text-secondary" style="margin:0">
-            A backup is only trustworthy once it has been restored. Before you can proceed, EasySynQ runs an end-to-end backup <b>and</b> restores it into an isolated scratch namespace — a temporary PostgreSQL schema and a scratch MinIO bucket that never touch live data. <em>“Configured but never verified” is not enough.</em>
+            Before you can proceed, EasySynQ writes a PostgreSQL dump and blob manifest archive, restores the database into an isolated scratch database, and copies/re-hashes manifested bytes from the currently configured source object store into a scratch bucket. A PASS is source-store-dependent archive/database/object integrity evidence only; it does not prove source-independent recovery or authorize cutover. <em>“Configured but never verified” is not enough.</em>
           </p>
         </div>
       </div>

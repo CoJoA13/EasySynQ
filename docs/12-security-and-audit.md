@@ -470,7 +470,9 @@ flowchart TD
   copies bytes from the configured source object store into a flattened scratch layout, and verifies
   the audit chain plus both blob-verification views. PASS is integrity evidence only. The scratch
   target is not role-preserving or cutover-ready.
-- A documented **restore drill** is part of the admin runbook and is itself an auditable, recommended-periodic activity (the only way to trust a backup is to have restored one).
+- The documented **restore integrity drill** is an auditable, recommended-periodic check of
+  archive/database/manifest integrity against the currently configured source object store. Its PASS
+  is source-dependent evidence only, not source-independent recovery or cutover proof.
 
 ### 8.2.1 WORM-aware restore, PITR ↔ blob alignment & quiesce bound (reconciled per Decisions Register R37)
 
