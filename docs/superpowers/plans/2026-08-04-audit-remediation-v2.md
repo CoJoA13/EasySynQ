@@ -1161,8 +1161,8 @@ Fresh integrated evidence on 2026-08-05:
 
 ## 10. Current-head implementation dispositions — do not rewrite the `376ec1e` baseline
 
-Sections 1–9 preserve the audit and planning-pass record. This overlay records only the two approved
-sub-slices subsequently implemented on this branch. It does **not** close C-01, C-01b,
+Sections 1–9 preserve the audit and planning-pass record. This overlay records current-head dispositions
+subsequently implemented and reviewed on this branch. It does **not** close C-01, C-01b,
 `S-restore-target`, `S-backup-legs`, or the overall programme.
 
 ### 10.1 Task 1 — C-01c stored-locator verification implemented
@@ -1196,3 +1196,26 @@ The focused three-file suite passed 27 tests; typecheck, lint, and build passed.
 approved the work after the two oracle-review fixes. This closes M-22's release-cache boundary only;
 the invalidations remain intentionally fire-and-forget, with awaiting them in `onSuccess` as the named
 escalation if the deterministic proof later becomes flaky.
+
+### 10.3 Task 4 — L-10 release-confirmation copy implemented
+
+`45a800d` closes `S-release-copy`: a first release now says it creates the document's first governing
+version and makes no supersession claim, while a later release retains the warning that it supersedes the
+current Effective version. The focused pre-fix proof was genuine RED (`1 failed, 7 passed`); the corrected
+suite passed 8/8, and the full web gate passed 1,462 tests. Independent review approved the slice.
+`S-checkin-feedback` and the open, inventory-backed `S-lifecycle-copy` remain separate L-10 boundaries.
+
+### 10.4 Task 5 — current recovery/upgrade operator truth aligned
+
+`12fdf8f` closes two whole-branch review blockers by aligning current operator surfaces with implemented
+recovery limits. Restore PASS is now described as source-store-dependent integrity verification, its
+flattened scratch copy is not called cutover-ready, and durable/pre-upgrade archives are described as
+non-self-contained database/manifest/config artifacts without MinIO object bytes. Host and Python CLIs,
+service/module descriptions and result metadata, README, environment/Compose comments,
+architecture/security/setup/developer documentation, the administrator manual, and active runbooks now
+carry that contract.
+
+The focused operator-recovery proof was genuine RED with 3 failures; the final focused selection passed
+5 tests. The API unit gate passed 1,286 tests with 1 skip, with Ruff, format, strict mypy, shell syntax,
+R61, and diff checks also clean. This operator-truth closure does **not** close C-01, C-01b,
+`S-recovery-generation`, or `S-upgrade-safety`, and it does not make production upgrades eligible.
