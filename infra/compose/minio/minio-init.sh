@@ -36,49 +36,152 @@ case "$PUBLIC_BASE_URL" in
 	*[[:space:]]*|*','*|*'*'*|*'<'*|*'>'*|*'&'*|*'"'*|*"'"*) reject_public_base_url ;;
 esac
 
-ORIGIN_HOST="$ORIGIN_AUTHORITY"
-ORIGIN_HAS_PORT=0
-ORIGIN_PORT=""
-case "$ORIGIN_AUTHORITY" in
-	*:*)
-		ORIGIN_HAS_PORT=1
-		ORIGIN_HOST="${ORIGIN_AUTHORITY%:*}"
-		ORIGIN_PORT="${ORIGIN_AUTHORITY##*:}"
-		;;
-esac
-
-case "$ORIGIN_HOST" in
-	""|.*|*.|*[!A-Za-z0-9.-]*) reject_public_base_url ;;
-esac
-[ "${#ORIGIN_HOST}" -le 253 ] || reject_public_base_url
-
-HOST_REMAINDER="$ORIGIN_HOST"
-while [ -n "$HOST_REMAINDER" ]; do
-	case "$HOST_REMAINDER" in
-		*.*)
-			HOST_LABEL="${HOST_REMAINDER%%.*}"
-			HOST_REMAINDER="${HOST_REMAINDER#*.}"
-			;;
-		*)
-			HOST_LABEL="$HOST_REMAINDER"
-			HOST_REMAINDER=""
-			;;
-	esac
-	case "$HOST_LABEL" in
-		""|-*|*-) reject_public_base_url ;;
-	esac
-	[ "${#HOST_LABEL}" -le 63 ] || reject_public_base_url
-done
-
-if [ "$ORIGIN_HAS_PORT" -eq 1 ]; then
-	case "$ORIGIN_PORT" in
+validate_origin_port() {
+	VALIDATE_PORT="$1"
+	case "$VALIDATE_PORT" in
 		""|*[!0-9]*) reject_public_base_url ;;
 	esac
-	[ "${#ORIGIN_PORT}" -le 5 ] || reject_public_base_url
-	if [ "$ORIGIN_PORT" -lt 1 ] || [ "$ORIGIN_PORT" -gt 65535 ]; then
+	[ "${#VALIDATE_PORT}" -le 5 ] || reject_public_base_url
+	if [ "$VALIDATE_PORT" -lt 1 ] || [ "$VALIDATE_PORT" -gt 65535 ]; then
 		reject_public_base_url
 	fi
-fi
+}
+
+validate_ipv4_tail() {
+	IPV4_VALUE="$1"
+	case "$IPV4_VALUE" in
+		""|.*|*.|*..*|*[!0-9.]*) return 1 ;;
+	esac
+	IPV4_OLD_IFS="$IFS"
+	IFS=.
+	set -- $IPV4_VALUE
+	IFS="$IPV4_OLD_IFS"
+	[ "$#" -eq 4 ] || return 1
+	for IPV4_OCTET do
+		case "$IPV4_OCTET" in
+			0|[1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;;
+			*) return 1 ;;
+		esac
+		[ "$IPV4_OCTET" -le 255 ] || return 1
+	done
+}
+
+count_ipv6_sequence() {
+	IPV6_SEQUENCE="$1"
+	IPV6_ALLOW_IPV4_TAIL="$2"
+	IPV6_SEQUENCE_COUNT=0
+	[ -n "$IPV6_SEQUENCE" ] || return 0
+	case "$IPV6_SEQUENCE" in
+		:*|*:|*::*) return 1 ;;
+	esac
+	IPV6_OLD_IFS="$IFS"
+	IFS=:
+	set -- $IPV6_SEQUENCE
+	IFS="$IPV6_OLD_IFS"
+	IPV6_GROUP_INDEX=0
+	IPV6_GROUP_TOTAL="$#"
+	for IPV6_GROUP do
+		IPV6_GROUP_INDEX=$((IPV6_GROUP_INDEX + 1))
+		case "$IPV6_GROUP" in
+			*.*)
+				[ "$IPV6_ALLOW_IPV4_TAIL" -eq 1 ] || return 1
+				[ "$IPV6_GROUP_INDEX" -eq "$IPV6_GROUP_TOTAL" ] || return 1
+				validate_ipv4_tail "$IPV6_GROUP" || return 1
+				IPV6_SEQUENCE_COUNT=$((IPV6_SEQUENCE_COUNT + 2))
+				;;
+			*)
+				case "$IPV6_GROUP" in
+					""|*[!0-9A-Fa-f]*|?????*) return 1 ;;
+				esac
+				IPV6_SEQUENCE_COUNT=$((IPV6_SEQUENCE_COUNT + 1))
+				;;
+		esac
+	done
+}
+
+validate_ipv6_literal() {
+	IPV6_VALUE="$1"
+	case "$IPV6_VALUE" in
+		""|*[!0-9A-Fa-f:.]*) return 1 ;;
+	esac
+	case "$IPV6_VALUE" in
+		*::*)
+			IPV6_PREFIX="${IPV6_VALUE%%::*}"
+			IPV6_SUFFIX="${IPV6_VALUE#*::}"
+			case "$IPV6_SUFFIX" in
+				*::*) return 1 ;;
+			esac
+			count_ipv6_sequence "$IPV6_PREFIX" 0 || return 1
+			IPV6_PREFIX_COUNT="$IPV6_SEQUENCE_COUNT"
+			count_ipv6_sequence "$IPV6_SUFFIX" 1 || return 1
+			IPV6_TOTAL_COUNT=$((IPV6_PREFIX_COUNT + IPV6_SEQUENCE_COUNT))
+			[ "$IPV6_TOTAL_COUNT" -lt 8 ] || return 1
+			;;
+		*)
+			count_ipv6_sequence "$IPV6_VALUE" 1 || return 1
+			[ "$IPV6_SEQUENCE_COUNT" -eq 8 ] || return 1
+			;;
+	esac
+}
+
+case "$ORIGIN_AUTHORITY" in
+	\[*\])
+		IPV6_LITERAL="${ORIGIN_AUTHORITY#\[}"
+		IPV6_LITERAL="${IPV6_LITERAL%\]}"
+		validate_ipv6_literal "$IPV6_LITERAL" || reject_public_base_url
+		;;
+	\[*\]:*)
+		IPV6_LITERAL="${ORIGIN_AUTHORITY#\[}"
+		IPV6_LITERAL="${IPV6_LITERAL%%\]*}"
+		IPV6_PORT="${ORIGIN_AUTHORITY#*\]}"
+		case "$IPV6_PORT" in
+			:*) IPV6_PORT="${IPV6_PORT#:}" ;;
+			*) reject_public_base_url ;;
+		esac
+		validate_ipv6_literal "$IPV6_LITERAL" || reject_public_base_url
+		validate_origin_port "$IPV6_PORT"
+		;;
+	*'['*|*']'*) reject_public_base_url ;;
+	*)
+		ORIGIN_HOST="$ORIGIN_AUTHORITY"
+		ORIGIN_HAS_PORT=0
+		ORIGIN_PORT=""
+		case "$ORIGIN_AUTHORITY" in
+			*:*)
+				ORIGIN_HAS_PORT=1
+				ORIGIN_HOST="${ORIGIN_AUTHORITY%:*}"
+				ORIGIN_PORT="${ORIGIN_AUTHORITY##*:}"
+				;;
+		esac
+
+		case "$ORIGIN_HOST" in
+			""|.*|*.|*[!A-Za-z0-9.-]*) reject_public_base_url ;;
+		esac
+		[ "${#ORIGIN_HOST}" -le 253 ] || reject_public_base_url
+
+		HOST_REMAINDER="$ORIGIN_HOST"
+		while [ -n "$HOST_REMAINDER" ]; do
+			case "$HOST_REMAINDER" in
+				*.*)
+					HOST_LABEL="${HOST_REMAINDER%%.*}"
+					HOST_REMAINDER="${HOST_REMAINDER#*.}"
+					;;
+				*)
+					HOST_LABEL="$HOST_REMAINDER"
+					HOST_REMAINDER=""
+					;;
+			esac
+			case "$HOST_LABEL" in
+				""|-*|*-) reject_public_base_url ;;
+			esac
+			[ "${#HOST_LABEL}" -le 63 ] || reject_public_base_url
+		done
+
+		if [ "$ORIGIN_HAS_PORT" -eq 1 ]; then
+			validate_origin_port "$ORIGIN_PORT"
+		fi
+		;;
+esac
 # S8b2: the restore-test drill copies blobs INTO this plain (NON-WORM) scratch bucket and tears the
 # per-drill prefix down — object-lock can't be retro-added (R37), so the drill never restores into a
 # locked bucket. Deliberately NOT --with-lock.
