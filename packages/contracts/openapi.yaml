@@ -7042,7 +7042,10 @@ components:
             - sod_self_verify
             - sod_violation
             - source_bytes_in_foreign_bucket
+            - staged_source_unavailable
+            - staging_version_required
             - step_up_required
+            - storage_unavailable
             - system_default_protected
             - system_policy_protected
             - target_kind_deferred
@@ -7051,6 +7054,7 @@ components:
             - two_tier_violation
             - unauthenticated
             - unknown_filter
+            - upload_identity_mismatch
             - use_legal_hold_endpoint
             - user_exists
             - user_not_linked
