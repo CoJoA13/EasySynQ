@@ -806,12 +806,21 @@ Existing integration surfaces:
   export function checkRouterRscUsage({ repoRoot, typescript, execFileSyncImpl }) {}
   ```
 
-  A violation has stable code, path, one-based line/column, and optional symbol/specifier; diagnostics
-  never contain source text. Test both forbidden manifest packages in dependencies and devDependencies,
-  all six RSC APIs, alias import, named/star re-export, namespace/property/element access, CommonJS
-  destructuring/property access, and every forbidden literal dynamic-import form. Also prove comments,
-  strings, local names, unrelated modules, tests, fixtures, `_generated`, build output, node_modules, and
+  A source input is `{ path, text }`. A violation has stable code, path, one-based line/column, and
+  optional symbol/specifier; manifest violations use `apps/web/package.json` at `1:1`, and diagnostics
+  never contain source text. Test both forbidden manifest packages, including npm aliases, in
+  dependencies, devDependencies, optionalDependencies, and peerDependencies. Treat `react-router` and
+  `react-router-dom` as Router sources. Cover all six RSC APIs, type-only and value alias imports,
+  named/star/namespace re-exports, namespace/property/element access, TypeScript import-equals, direct
+  and bound CommonJS destructuring/property access, optional chaining/parentheses, and every forbidden
+  literal dynamic-import form. Prove shadowed bindings, comments, strings, local names, unrelated
+  modules, nonliteral imports, tests, fixtures, `_generated`, generated/build output, node_modules, and
   untracked files do not match; parse/read/Git/TypeScript-resolution failures fail closed.
+
+  Exercise all eight admitted extensions and exact segment/suffix exclusions. Include near-miss paths
+  such as `contest.ts`, `testimony/feature.ts`, and `generatedReport.ts` so substring filtering cannot
+  silently exclude production source. Shuffle source inputs to prove deterministic sorting and reject
+  parse diagnostics without including source bodies in errors.
 
 - [ ] **Step 2: Run the usage suite to prove RED**
 
@@ -829,8 +838,13 @@ Existing integration surfaces:
   createRequire(path.join(repoRoot, "apps/web/package.json"))("typescript")
   ```
 
-  Match the six named APIs by imported name (`propertyName ?? name`), Router namespace/CommonJS access,
-  named/star re-exports, and forbidden literal dynamic imports. Sort by path, line, column, then code.
+  Match the six named APIs by imported name (`propertyName ?? name`) from `react-router` or
+  `react-router-dom`, including their documented entry points, Router namespace/CommonJS access,
+  named/star/namespace re-exports, and forbidden literal dynamic imports. Reject exact literal dynamic
+  imports of `react-router`, `react-router/dom`, and `react-router-dom`, plus `react-router/` and
+  `react-router-dom/` subpaths containing `rsc` or `react-server`. Track lexical bindings so shadowed
+  namespace/CommonJS identifiers do not false-positive. Nonliteral module expressions are outside this
+  syntax-only policy and remain explicitly regression-tested. Sort by path, line, column, then code.
 
 - [ ] **Step 4: Run the AST suite and inspect diagnostics**
 

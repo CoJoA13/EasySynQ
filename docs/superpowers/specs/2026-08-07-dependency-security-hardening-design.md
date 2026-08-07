@@ -173,13 +173,17 @@ The exception is stored in `.github/security/npm-audit-exceptions.json` rather t
 flow. It links to the maintainer advisory and explains the global-feed discrepancy.
 
 A companion source-policy checker uses the TypeScript compiler API from the frozen web lock. It rejects
-the RSC packages `@react-router/dev` and `@vitejs/plugin-rsc` in the web manifest, identifies static
-imports and re-exports of the six unstable RSC APIs documented by React Router, and rejects dynamic
-imports whose specifier is `react-router` or `react-router/dom`, or whose `react-router/` subpath
+the RSC packages `@react-router/dev` and `@vitejs/plugin-rsc`, including npm aliases, from the web
+manifest's `dependencies`, `devDependencies`, `optionalDependencies`, and `peerDependencies` sections.
+It treats both `react-router` and `react-router-dom` as Router API sources because the installed DOM
+entry point re-exports Router APIs. It identifies static imports and re-exports of the six unstable RSC
+APIs documented by React Router, and rejects dynamic imports whose specifier is `react-router`,
+`react-router/dom`, or `react-router-dom`, or whose `react-router/` or `react-router-dom/` subpath
 contains `rsc` or `react-server`, while the exception is active. The six APIs are
 `unstable_RSCHydratedRouter`, `unstable_RSCStaticRouter`,
 `unstable_createCallServer`, `unstable_getRSCStream`, `unstable_matchRSCServerRequest`, and
-`unstable_routeRSCServerRequest`. Aliases are evaluated by their imported symbol, not their local name.
+`unstable_routeRSCServerRequest`. Aliases are evaluated by their imported symbol, not their local name;
+the same source boundary applies to named, namespace, CommonJS, re-export, and type-only forms.
 The checker examines Git-tracked first-party `.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.mjs`, `.cts`, and
 `.cjs` files under `apps/web/src`; it excludes generated output, tests, fixtures, build output, and
 `node_modules`. AST inspection prevents comments and ordinary string contents from creating false
