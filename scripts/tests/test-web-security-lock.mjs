@@ -24,6 +24,8 @@ test('web lock selects approved patched dependency versions', () => {
   assert.deepEqual(versions('react-router-dom'), new Set(['7.18.2']));
   assert.equal(manifest.dependencies.nanoid, undefined);
   assert.equal(manifest.devDependencies.nanoid, undefined);
+  assert.equal(manifest.optionalDependencies?.nanoid, undefined);
+  assert.equal(manifest.peerDependencies?.nanoid, undefined);
   assert.equal(manifest.overrides.nanoid, undefined);
   assert.equal(manifest.overrides['react-router'], undefined);
   assert.equal(manifest.overrides['react-router-dom'], undefined);
