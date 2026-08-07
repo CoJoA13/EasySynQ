@@ -1,0 +1,48 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "synthetic-vulnerable": {
+      "name": "synthetic-vulnerable",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        {
+          "source": 1000001,
+          "name": "synthetic-vulnerable",
+          "dependency": "synthetic-vulnerable",
+          "title": "Synthetic high-severity advisory",
+          "url": "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
+          "severity": "high",
+          "cwe": ["CWE-20"],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": null
+          },
+          "range": "<2.0.0"
+        }
+      ],
+      "effects": [],
+      "range": "<2.0.0",
+      "nodes": ["node_modules/synthetic-vulnerable"],
+      "fixAvailable": true
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 1,
+      "critical": 0,
+      "total": 1
+    },
+    "dependencies": {
+      "prod": 3,
+      "dev": 0,
+      "optional": 0,
+      "peer": 0,
+      "peerOptional": 0,
+      "total": 3
+    }
+  }
+}
