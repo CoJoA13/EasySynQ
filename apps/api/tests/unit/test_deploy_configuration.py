@@ -13,6 +13,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+import yaml
+
 
 def _repo_root() -> Path:
     here = Path(__file__).resolve()
@@ -54,6 +57,144 @@ def test_minio_init_receives_sink_credentials_and_retention() -> None:
     ):
         assert f"{key}: ${{{key}:-" in compose
     assert "WORM_RETENTION=30d" in template
+
+
+def test_minio_init_versions_staging_without_unsupported_bucket_cors() -> None:
+    init = _read("infra/compose/minio/minio-init.sh")
+    compose = _read("infra/compose/compose.yml")
+
+    assert "mc version enable local/staging" in init
+    assert "mc version enable local/import-staging" in init
+    assert "mc cors set" not in init
+    assert "<CORSConfiguration>" not in init
+    assert "MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_BASE_URL:-http://localhost}" in compose
+    assert "--purge-on-delete" not in init
+    assert "lifecycle" not in init.lower()
+
+
+def _run_minio_init(tmp_path: Path, origin: str) -> subprocess.CompletedProcess[str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_mc = fake_bin / "mc"
+    fake_mc.write_text("#!/bin/sh\nexit 0\n")
+    fake_mc.chmod(0o755)
+    return subprocess.run(  # noqa: S603 - fixed script with an isolated fake mc
+        ["/bin/sh", str(ROOT / "infra/compose/minio/minio-init.sh")],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PUBLIC_BASE_URL": origin,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://one.test,http://two.test",
+        "http://*",
+        "http://bad test",
+        "http://bad\ntest",
+        "http://bad&test",
+        "http://bad<test",
+        'http://bad"test',
+        "ftp://test",
+        "http:///path",
+        "http://test/path",
+        "http://:",
+        "http://host:",
+        "https://host:not-a-port",
+        "http://host:0",
+        "http://host:65536",
+        "http://host:999999999999999999999",
+        "http://bad_host",
+        "http://-host.test",
+        "http://host-.test",
+        "http://host..test",
+        "http://.host",
+        "http://host.",
+        f"http://{'a' * 64}.test",
+        "http://" + ".".join(["aa"] * 85),
+        "http://::1",
+        "http://[::1",
+        "http://::1]",
+        "http://[]",
+        "http://[:::1]",
+        "http://[2001:db8::1::1]",
+        "http://[2001:db8:0:0:0:0:0:0:1]",
+        "http://[1:2:3]",
+        "http://[12345::1]",
+        "http://[gggg::1]",
+        "http://[::ffff:192.0.2.999]",
+        "http://[::1]:",
+        "http://[::1]:not-a-port",
+        "http://[::1]:0",
+        "http://[::1]:65536",
+        "http://[::1]extra",
+    ],
+)
+def test_minio_init_rejects_non_exact_browser_origins(tmp_path: Path, origin: str) -> None:
+    result = _run_minio_init(tmp_path, origin)
+
+    assert result.returncode != 0
+    assert "one exact HTTP(S) origin" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost",
+        "http://localhost:9000",
+        "https://qms.example.com",
+        "https://QMS.example.com:9443",
+        "http://[::1]",
+        "http://[::1]:9000",
+        "https://[2001:db8::1]",
+        "https://[2001:DB8:0:1::abcd]:443",
+        "http://[::ffff:192.0.2.1]",
+    ],
+)
+def test_minio_init_accepts_valid_browser_origins(tmp_path: Path, origin: str) -> None:
+    result = _run_minio_init(tmp_path, origin)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_staging_initializer_gates_every_promotion_capable_service() -> None:
+    compose = yaml.safe_load(_read("infra/compose/compose.yml"))
+
+    for service_name in ("api", "worker", "beat"):
+        depends_on = compose["services"][service_name]["depends_on"]
+        assert depends_on["minio-init"] == {"condition": "service_completed_successfully"}
+
+
+def test_compose_passes_safe_cors_origin_and_default_off_rollback_guard() -> None:
+    compose = _read("infra/compose/compose.yml")
+    template = _read(".env.example")
+
+    assert "PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}" in compose
+    assert "EASYSYNQ_COMPATIBILITY_READ_ONLY: ${EASYSYNQ_COMPATIBILITY_READ_ONLY:-0}" in compose
+    assert "EASYSYNQ_COMPATIBILITY_READ_ONLY=0" in template
+
+
+def test_compatibility_rollback_guard_precedes_every_api_proxy_handle() -> None:
+    caddy = _read("infra/compose/caddy/Caddyfile")
+    matcher = """@compatibility_rollback_write {
+		path /api/*
+		method POST PUT PATCH DELETE
+		vars {env.EASYSYNQ_COMPATIBILITY_READ_ONLY} 1
+	}"""
+
+    assert matcher in caddy
+    assert 'respond "Write operations are disabled during compatibility rollback." 503' in caddy
+    guard_index = caddy.index("handle @compatibility_rollback_write")
+    assert guard_index < caddy.index("handle @sse")
+    assert guard_index < caddy.index("handle @public_html")
+    assert guard_index < caddy.index("handle @api")
 
 
 def test_import_source_default_resolves_to_repository_root() -> None:

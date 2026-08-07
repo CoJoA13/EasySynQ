@@ -29,7 +29,7 @@ from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEv
 from easysynq_api.db.session import get_sessionmaker
 
 from . import s5_helpers as s5
-from .test_vault import _auth, _checkin, _create, _map_clause, _upload
+from .test_vault import _auth, _checkin, _create, _map_clause, _upload, _UploadResult
 
 pytestmark = pytest.mark.integration
 
@@ -390,6 +390,11 @@ async def test_byte_path_is_fsm_gated_when_not_editable(
     assert co.status_code == 409, co.text
     assert co.json()["code"] == "not_editable"
 
-    ci = await _checkin(app_client, ha, did, "0" * 64)
+    ci = await _checkin(
+        app_client,
+        ha,
+        did,
+        _UploadResult(sha256="0" * 64, version_id="unused-staging-version"),
+    )
     assert ci.status_code == 409, ci.text
     assert ci.json()["code"] == "not_editable"

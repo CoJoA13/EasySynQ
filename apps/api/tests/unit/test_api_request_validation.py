@@ -16,12 +16,24 @@ from easysynq_api.api.capa import (
 )
 from easysynq_api.api.documents import CheckIn, InitUpload
 from easysynq_api.api.records import EvidenceRef, RecordInitUpload
+from easysynq_api.problems import ProblemException
+from easysynq_api.services.records import service as records_service
+from easysynq_api.services.vault import (
+    StagedObjectRef,
+    StagedVersionLocator,
+    StagingDomain,
+)
 
 _OPENAPI = pathlib.Path(__file__).resolve().parents[4] / "packages" / "contracts" / "openapi.yaml"
 _SHA_BODY_OPERATIONS = (
     "/documents/{document_id}/versions:init-upload",
     "/documents/{document_id}/checkin",
     "/records:init-upload",
+    "/records",
+    "/records/{record_id}/correction",
+)
+_VERSION_BOUND_PROMOTION_OPERATIONS = (
+    "/documents/{document_id}/checkin",
     "/records",
     "/records/{record_id}/correction",
 )
@@ -51,6 +63,163 @@ def test_content_address_models_reject_noncanonical_sha256(
 @pytest.mark.parametrize("model", [InitUpload, CheckIn, RecordInitUpload, EvidenceRef])
 def test_content_address_models_accept_lowercase_sha256(model: type[BaseModel]) -> None:
     assert model.model_validate({"sha256": "a" * 64}).sha256 == "a" * 64
+
+
+@pytest.mark.parametrize("invalid_version", ["", "v" * 1025])
+def test_checkin_rejects_invalid_staging_version_id(invalid_version: str) -> None:
+    with pytest.raises(ValidationError):
+        CheckIn.model_validate({"sha256": "a" * 64, "staging_version_id": invalid_version})
+
+
+def test_checkin_allows_null_staging_version_for_conditional_service_validation() -> None:
+    assert (
+        CheckIn.model_validate({"sha256": "a" * 64, "staging_version_id": None}).staging_version_id
+        is None
+    )
+
+
+def test_checkin_rejects_empty_mime_type_before_service_mapping() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        CheckIn.model_validate({"sha256": "a" * 64, "mime_type": ""})
+    assert exc_info.value.errors()[0]["type"] == "string_too_short"
+
+
+@pytest.mark.parametrize("invalid_version", ["", "v" * 1025])
+def test_evidence_ref_rejects_invalid_staging_version_id(invalid_version: str) -> None:
+    with pytest.raises(ValidationError):
+        EvidenceRef.model_validate({"sha256": "a" * 64, "staging_version_id": invalid_version})
+
+
+def test_evidence_ref_carries_nullable_staging_version_for_conditional_service_validation() -> None:
+    parsed = EvidenceRef.model_validate({"sha256": "a" * 64, "staging_version_id": None})
+    assert parsed.model_dump() == {
+        "sha256": "a" * 64,
+        "content_type": "application/octet-stream",
+        "staging_version_id": None,
+    }
+
+
+@pytest.mark.parametrize("schema_name", ["CheckIn", "EvidenceRef"])
+def test_openapi_publishes_nullable_bounded_staging_version_id(schema_name: str) -> None:
+    contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))
+    property_schema = contract["components"]["schemas"][schema_name]["properties"][
+        "staging_version_id"
+    ]
+
+    assert property_schema["type"] == ["string", "null"]
+    assert property_schema["minLength"] == 1
+    assert property_schema["maxLength"] == 1024
+    assert "dedup" in property_schema["description"].lower()
+
+
+def test_init_upload_contract_does_not_accept_a_staging_version_id() -> None:
+    contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))
+
+    assert contract["components"]["schemas"]["InitUpload"]["properties"] == {
+        "sha256": {"$ref": "#/components/schemas/Sha256Hex"},
+        "content_type": {"type": "string", "default": "application/octet-stream"},
+    }
+
+
+@pytest.mark.parametrize("path", _VERSION_BOUND_PROMOTION_OPERATIONS)
+def test_upload_response_matrix_publishes_stable_version_bound_failures(path: str) -> None:
+    contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))
+    responses = contract["paths"][path]["post"]["responses"]
+
+    assert {"409", "422", "503"} <= responses.keys()
+    for status in ("409", "422", "503"):
+        assert responses[status]["content"]["application/problem+json"]["schema"] == {
+            "$ref": "#/components/schemas/Problem"
+        }
+
+
+def test_evidence_ref_rejects_empty_content_type_before_service_mapping() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceRef.model_validate({"sha256": "a" * 64, "content_type": ""})
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "property_name"),
+    [("CheckIn", "mime_type"), ("EvidenceRef", "content_type")],
+)
+def test_openapi_publishes_nonempty_promotion_content_types(
+    schema_name: str, property_name: str
+) -> None:
+    contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))
+    property_schema = contract["components"]["schemas"][schema_name]["properties"][property_name]
+
+    assert property_schema == {
+        "type": "string",
+        "minLength": 1,
+        "default": "application/octet-stream",
+    }
+
+
+def _evidence_input(
+    sha256: str,
+    content_type: str,
+    source: StagedObjectRef | None,
+) -> object:
+    evidence_input = getattr(records_service, "EvidenceInput", None)
+    assert evidence_input is not None, "EvidenceInput service contract is missing"
+    return evidence_input(sha256=sha256, content_type=content_type, source=source)
+
+
+def _staged_source(sha256: str, version_id: str) -> StagedObjectRef:
+    return StagedObjectRef(
+        locator=StagedVersionLocator(
+            domain=StagingDomain.STAGING,
+            object_key=sha256,
+            version_id=version_id,
+        ),
+        expected_sha256=sha256,
+        content_type="application/pdf",
+    )
+
+
+def test_evidence_input_rejects_a_source_with_different_evidence_claims() -> None:
+    source = _staged_source("a" * 64, "v-one")
+
+    with pytest.raises(ValueError, match="sha256"):
+        _evidence_input("b" * 64, "application/pdf", source)
+    with pytest.raises(ValueError, match="content type"):
+        _evidence_input("a" * 64, "text/plain", source)
+
+
+def test_normalize_evidence_collapses_duplicate_same_sha_and_same_version() -> None:
+    source = _staged_source("a" * 64, "v-one")
+    first = _evidence_input("a" * 64, "application/pdf", source)
+    duplicate = _evidence_input("a" * 64, "application/pdf", source)
+    normalize = getattr(records_service, "_normalize_evidence", None)
+    assert normalize is not None, "_normalize_evidence is missing"
+
+    assert normalize([first, duplicate]) == [first]
+
+
+@pytest.mark.parametrize("second_version", ["v-two", None])
+def test_normalize_evidence_rejects_same_sha_with_ambiguous_staging_versions(
+    second_version: str | None,
+) -> None:
+    first = _evidence_input("a" * 64, "application/pdf", _staged_source("a" * 64, "v-one"))
+    second = _evidence_input(
+        "a" * 64,
+        "application/pdf",
+        _staged_source("a" * 64, second_version) if second_version is not None else None,
+    )
+    normalize = getattr(records_service, "_normalize_evidence", None)
+    assert normalize is not None, "_normalize_evidence is missing"
+
+    with pytest.raises(ProblemException) as caught:
+        normalize([first, second])
+
+    assert (caught.value.status, caught.value.code) == (422, "validation_error")
+    assert caught.value.errors == [
+        {
+            "field": "evidence",
+            "code": "ambiguous_staging_version",
+            "message": "the same evidence sha256 names different staging versions",
+        }
+    ]
 
 
 @pytest.mark.parametrize("path", _SHA_BODY_OPERATIONS)

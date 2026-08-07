@@ -23,6 +23,7 @@ from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._audit_enums import ActorType
 from ..db.models._evidence_enums import EvidenceForTargetType
 from ..db.models._record_enums import RecordDispositionState, RecordType
 from ..db.models.app_user import AppUser
@@ -39,6 +40,7 @@ from ..domain.records.retention import retention_until
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.records import (
+    EvidenceInput,
     advance_disposition,
     approve_worm_destroy,
     cancel_worm_destroy,
@@ -54,6 +56,8 @@ from ..services.records import (
 from ..services.records import repository as records_repo
 from ..services.vault import repository as vault_repo
 from ..services.vault import storage
+from ..services.vault.staged_identity import StagingDomain
+from ..services.vault.upload_rejection import RejectionContext, require_staging_ref
 from ._validation import Sha256Hex
 
 router = APIRouter(prefix="/api/v1", tags=["records"])
@@ -69,7 +73,8 @@ class RecordInitUpload(BaseModel):
 
 class EvidenceRef(BaseModel):
     sha256: Sha256Hex
-    content_type: str = "application/octet-stream"
+    content_type: str = Field(default="application/octet-stream", min_length=1)
+    staging_version_id: str | None = Field(default=None, min_length=1, max_length=1024)
 
 
 class RecordCreate(BaseModel):
@@ -112,6 +117,38 @@ class WormDestroyRequestCreate(BaseModel):
 
 class DispositionReason(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
+
+
+def _evidence_inputs(evidence: list[EvidenceRef]) -> list[EvidenceInput]:
+    return [
+        EvidenceInput(
+            sha256=item.sha256,
+            content_type=item.content_type,
+            source=(
+                require_staging_ref(
+                    domain=StagingDomain.STAGING,
+                    sha256=item.sha256,
+                    version_id=item.staging_version_id,
+                    content_type=item.content_type,
+                    operation="record_capture",
+                )
+                if item.staging_version_id is not None
+                else None
+            ),
+        )
+        for item in evidence
+    ]
+
+
+def _evidence_rejection_context(caller: AppUser) -> RejectionContext:
+    return RejectionContext(
+        operation="record_capture",
+        org_id=caller.org_id,
+        actor_id=caller.id,
+        actor_type=ActorType.user,
+        scope_ref=None,
+        user_correctable=True,
+    )
 
 
 # --- serializers ------------------------------------------------------------------------
@@ -455,9 +492,10 @@ async def capture_endpoint(
         area_code=body.area_code,
         source_document_id=body.source_document_id,
         source_version_id=body.source_version_id,
-        evidence=[(e.sha256, e.content_type) for e in body.evidence],
+        evidence=_evidence_inputs(body.evidence),
         form_field_values=body.form_field_values,
         retention_policy_id=body.retention_policy_id,
+        rejection_context=_evidence_rejection_context(caller),
     )
     _, base = await _load(session, caller, record.id)
     return await _serialize_full(session, record, base)
@@ -654,9 +692,10 @@ async def correction_endpoint(
         area_code=body.area_code,
         source_document_id=body.source_document_id,
         source_version_id=body.source_version_id,
-        evidence=[(e.sha256, e.content_type) for e in body.evidence],
+        evidence=_evidence_inputs(body.evidence),
         form_field_values=body.form_field_values,
         retention_policy_id=body.retention_policy_id,
+        rejection_context=_evidence_rejection_context(caller),
     )
     _, base = await _load(session, caller, new_record.id)
     return await _serialize_full(session, new_record, base)

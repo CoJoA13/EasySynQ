@@ -38,7 +38,12 @@ async def _run_build(pack_id: str) -> None:
     try:
         # Stage 1: seal the canonical ZIP (re-raises on failure → no portfolio attempt).
         async with sessionmaker() as session:
-            await build(session, pid, authz_sink=authz_sink)
+            await build(
+                session,
+                pid,
+                authz_sink=authz_sink,
+                rejection_sessionmaker=sessionmaker,
+            )
         # Stage 2: the PDF portfolio variant (S-pack-2) — a SEPARATE transaction after the seal
         # commits, so a Gotenberg/assembly hiccup can never block or fail the canonical pack. Best
         # effort + idempotent on portfolio_blob_sha256 (a hard kill re-runs it on redelivery).

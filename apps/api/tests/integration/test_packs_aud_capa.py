@@ -56,7 +56,7 @@ from ._owner_db import owner_delete_disposition_events
 from .test_audits import _new_audit, _walk
 from .test_capa import _ACTION_PLAN, _assign_seeded_role, _latest_stage_id, _my_pending_task
 from .test_packs import _seal
-from .test_records import _capture, _grant, _subject, _upload_evidence
+from .test_records import _capture, _evidence_json, _grant, _subject, _upload_evidence
 from .test_vault import _auth
 
 pytestmark = pytest.mark.integration
@@ -67,13 +67,13 @@ _PACK_KEYS = ("report.evidence_pack.generate", "report.export", "record.read", "
 
 async def _evidence_record(client: AsyncClient, h: dict[str, str], title: str) -> str:
     """Upload a real WORM-sealed evidence blob + capture it as an EVIDENCE record; return its id."""
-    sha = await _upload_evidence(client, h, f"{title}-{uuid.uuid4().hex}".encode())
+    upload = await _upload_evidence(client, h, f"{title}-{uuid.uuid4().hex}".encode())
     r = await _capture(
         client,
         h,
         record_type="EVIDENCE",
         title=title,
-        evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+        evidence=[_evidence_json(upload)],
     )
     assert r.status_code == 201, r.text
     return r.json()["id"]

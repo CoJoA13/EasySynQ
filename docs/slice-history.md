@@ -140,6 +140,57 @@
   after a future rotation would verify the historical signature against the current key. **Closing it
   needs** a key-id on the checkpoint + a retained public-key history.
 
+### S-upload-identity — exact staged-source identity through WORM promotion
+
+Every non-dedup staging promotion binds to the exact source version selected by its producer. Browser
+document check-in, Record evidence capture/correction, server-generated controlled content, and import
+workers carry that source identity without resolving key-latest as a substitute. On success, the service
+GETs and hashes that source version, verifies size where known, copies only that version, then HEADs and
+verifies the returned target version. On an identity/source refusal, the caller rolls back, commits
+durable rejection evidence, and only then deletes the exact rejected source version. Target object-store
+version IDs remain transient storage/result/error details and do not enter ORM models, migrations, or
+audit payloads.
+
+The published contract adds nullable, bounded staging-version fields only where correct-domain WORM
+dedup permits omission, and documents the stable `409 staged_source_unavailable`,
+`422 staging_version_required`/`upload_identity_mismatch`, and `503 storage_unavailable` boundaries.
+Public problems, import reason tokens, metrics, and logs do not expose hashes, ETags, bucket names, or
+version IDs. The rollback runbook preserves new infrastructure during an API-only incompatible rollback,
+activates the default-off compatibility write guard, and requires exact artifact and replica verification.
+
+The pinned Community MinIO image does not implement per-bucket `PutBucketCors`; the owner approved its
+exact-origin, MinIO-API-wide CORS control. It grants browser response visibility only: IAM plus the
+presigned request's signature, method, key, and expiry remain the object-authorization boundary. Real
+HTTP/MinIO evidence proves an allowed origin can read `x-amz-version-id` and ETag from the presigned PUT
+response, a disallowed origin receives no allow headers, both staging buckets are versioned, and neither
+has lifecycle expiry.
+
+Mutation evidence:
+
+- accepting a digest mismatch turned the fixed storage falsifier plus document, Record
+  capture/correction, and import refusal/audit/cleanup proofs RED;
+- omitting `CopySource.VersionId` turned the exact call proof and a real-MinIO
+  same-bytes/different-metadata V1/V2 proof RED;
+- using the owner transaction for rejection evidence turned ordering/durability proofs RED, and the
+  document and Record integration proofs observed zero committed rejection events;
+- deleting by key-latest removed/hid the newer version and turned exact-delete/domain behavior RED.
+
+Each production mutation was restored exactly and its named commands returned GREEN. Task 10 repaired
+the selectors that initially missed intended falsifiers, added the independent metadata oracle, updated
+stale test-only structured-upload consumers to pair each SHA with its originating version, and made the
+task-local worker fake prove rejection-session ownership. The only production-file Task 10 diff is
+behavior-neutral `__all__` ordering.
+
+Fresh completion evidence: API Ruff/format/mypy and 1,686 unit tests; web lint/typecheck/build plus 249
+files/1,468 tests; Redocly and generated-contract check plus 283 contract tests; 1,051 integration tests
+passed with 2 skipped; Alembic head exactly `0085`; one throwaway PostgreSQL 16 round trip
+`upgrade head → downgrade base → upgrade head → alembic check` completed with no new upgrade operations;
+and R61 plus the corrected final mechanical scope audit were green. The corrected target-version search
+uses repository-root `migrations` (the Alembic script location) and found zero migration matches. No
+migration was added, and the temporary local PostgreSQL 16.14 client extraction under `/tmp` produced no
+repository artifact. Verification repairs are committed as `e6f531d`; shipped evidence is this entry and
+the companion `CLAUDE.md` pointer.
+
 ## IDENTITY PROVISIONING — one-step user creation from the Admin SPA (the product handoff §4 backlog)
 
 > The first slice off the handoff's §4 owner backlog (`docs/superpowers/plans/2026-08-02-product-handoff.md`

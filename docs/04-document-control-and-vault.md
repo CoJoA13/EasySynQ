@@ -308,12 +308,17 @@ sequenceDiagram
 
     Note over Author: edits in native tool (offline ok)
 
-    Author->>API: POST /documents/{id}/checkin (file, change_reason*)
+    Author->>API: POST /documents/{id}/versions:init-upload (SHA-256)
+    API-->>Author: dedup result or presigned staging PUT
+    Author->>MinIO: PUT bytes directly to versioned staging
+    MinIO-->>Author: CORS-exposed x-amz-version-id
+    Author->>API: POST /documents/{id}/checkin (SHA-256, VersionId, change_reason*)
     API->>API: authz; require non-empty change_reason
-    API->>MinIO: PUT source blob (SHA-256, WORM)
     alt SHA-256 identical to current
-        API-->>Author: 200 "No change detected" (no new version)
+        API-->>Author: 201 change_detected=false (no new version)
     else changed
+        API->>MinIO: GET exact VersionId; stream-hash and count bytes
+        API->>MinIO: COPY exact VersionId to WORM (ETag precondition only)
         API->>PG: create immutable Version (next rev, Draft/Under Revision)
         API->>PG: append audit CHECKIN (+change_reason)
         API->>Redis: DEL lock:doc:{id}
@@ -323,6 +328,16 @@ sequenceDiagram
         Worker->>PG/Index: index extracted text + metadata
     end
 ```
+
+`staging_version_id` is nullable on the wire only for the first branch: the SHA-256 already has a
+WORM-sealed blob in the **documents** retention domain. Otherwise check-in requires the opaque
+1–1024-character VersionId returned by the browser PUT. It never trusts the client SHA-256, a HEAD
+size, an ETag digest, or the latest value at a key: it reads and hashes the exact staged version
+before the exact server-side copy. A mismatch rolls back the owner transaction, commits
+`BLOB_INTEGRITY_FAILED` independently, and only then deletes that exact rejected version; failed
+cleanup is retried from the committed audit reference. Audit failure forbids deletion and returns
+`503`. The target WORM VersionId is verified during promotion but is not persisted as an ownership
+identifier; this flow does not claim to solve target-version ownership.
 
 ### 5.2 Locking rules (Redis distributed lock)
 

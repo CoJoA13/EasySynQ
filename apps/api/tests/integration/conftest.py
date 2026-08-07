@@ -85,7 +85,11 @@ def _minio() -> Iterator[dict[str, str]]:
     import boto3
     from testcontainers.minio import MinioContainer
 
-    with MinioContainer() as mc:
+    container = MinioContainer("minio/minio:RELEASE.2024-09-13T20-26-02Z")
+    # Community MinIO's CORS control is global browser response access only. IAM/presigned request
+    # authorization remains the access boundary, and the exact shipped image is exercised here.
+    container.with_env("MINIO_API_CORS_ALLOW_ORIGIN", "http://test")
+    with container as mc:
         cfg = mc.get_config()
         endpoint = f"http://{cfg['endpoint']}"
         client = boto3.client(
@@ -114,6 +118,9 @@ def _minio() -> Iterator[dict[str, str]]:
             },
         )
         client.create_bucket(Bucket="staging")  # plain bucket for presigned uploads
+        client.put_bucket_versioning(
+            Bucket="staging", VersioningConfiguration={"Status": "Enabled"}
+        )
         client.create_bucket(Bucket="renditions")  # S7b derived watermarked PDFs (non-WORM)
         # S8b2 restore-test drill: a plain (NON-WORM) scratch bucket the drill copies blobs into +
         # tears the per-drill prefix down (R37 — never restore into the object-locked documents).
@@ -121,6 +128,9 @@ def _minio() -> Iterator[dict[str, str]]:
         # S6 off-host audit-checkpoint anchor bucket (object-lock, R13).
         client.create_bucket(Bucket="audit-checkpoints", ObjectLockEnabledForBucket=True)
         client.create_bucket(Bucket="import-staging")  # S-ing-1 plain (non-WORM) import staging
+        client.put_bucket_versioning(
+            Bucket="import-staging", VersioningConfiguration={"Status": "Enabled"}
+        )
         yield {
             "endpoint": endpoint,
             "access_key": cfg["access_key"],
@@ -138,11 +148,44 @@ def _redis() -> Iterator[str]:
         yield f"redis://{host}:{port}/0"
 
 
+@pytest.fixture(scope="session")
+def _celery_redis(_redis: str) -> Iterator[None]:
+    """Bind the collection-created Celery singleton to the integration Redis container."""
+    from easysynq_api.tasks.app import app as celery_app
+
+    previous_broker_url = celery_app.conf.broker_url
+    previous_result_backend = celery_app.conf.result_backend
+    previous_backend_cache = celery_app._backend_cache
+    had_local_backend = hasattr(celery_app._local, "backend")
+    previous_local_backend = getattr(celery_app._local, "backend", None)
+    previous_pool = celery_app._pool
+
+    celery_app.conf.update(broker_url=_redis, result_backend=_redis)
+    celery_app._backend_cache = None
+    if had_local_backend:
+        del celery_app._local.backend
+    celery_app._pool = None
+    try:
+        yield
+    finally:
+        celery_app.conf.update(
+            broker_url=previous_broker_url,
+            result_backend=previous_result_backend,
+        )
+        celery_app._backend_cache = previous_backend_cache
+        if had_local_backend:
+            celery_app._local.backend = previous_local_backend
+        elif hasattr(celery_app._local, "backend"):
+            del celery_app._local.backend
+        celery_app._pool = previous_pool
+
+
 @pytest.fixture
 async def app_under_test(
     _pg: str,
     _minio: dict[str, str],
     _redis: str,
+    _celery_redis: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[Any]:
@@ -226,11 +269,9 @@ async def app_under_test(
         set_mirror_enqueue_sink,
     )
 
-    # The Celery app singleton binds REDIS_URL at import (collection) time — unreachable in CI —
-    # so every .delay() costs a ~19.5s backend-subscribe retry storm that blocks the event loop
-    # (the S-ack-1 shard-1 forensics; the tax predates S-ack-1 via the mirror sink — see the
-    # 18-22s quantization in .test_durations). Tests assert enqueue effects via the Capturing
-    # doubles where needed (test_mirror.py swaps locally and restores).
+    # High-fanout mirror/ack assertions use capturing sinks in their owning tests. Their default
+    # integration sinks remain logging-only; task endpoints exercise the real fixture Redis through
+    # the collection-bound Celery singleton normalized by ``_celery_redis``.
     prev_mirror = set_mirror_enqueue_sink(LoggingMirrorEnqueueSink())
     prev_ack = set_ack_enqueue_sink(LoggingAckEnqueueSink())
 

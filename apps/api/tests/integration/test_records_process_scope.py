@@ -28,7 +28,14 @@ from easysynq_api.services.records.service import link_evidence
 
 from . import s5_helpers as s5
 from .test_processes import _create_process, _link_doc_to_process
-from .test_records import _capture, _first_iso_clause_id, _grant, _subject, _upload_evidence
+from .test_records import (
+    _capture,
+    _evidence_json,
+    _first_iso_clause_id,
+    _grant,
+    _subject,
+    _upload_evidence,
+)
 from .test_vault import _auth, _checkin, _create, _ensure_user, _upload
 
 pytestmark = pytest.mark.integration
@@ -72,13 +79,13 @@ async def _grant_artifact(subject: str, key: str, artifact_id: str) -> uuid.UUID
 
 async def _capture_evidence(client: AsyncClient, h: dict[str, str]) -> dict:
     """Capture an ad-hoc EVIDENCE record (no source doc → no leg-B binding)."""
-    sha = await _upload_evidence(client, h, f"ev-{uuid.uuid4().hex}".encode())
+    upload = await _upload_evidence(client, h, f"ev-{uuid.uuid4().hex}".encode())
     r = await _capture(
         client,
         h,
         record_type="EVIDENCE",
         title=f"R-{uuid.uuid4().hex[:6]}",
-        evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+        evidence=[_evidence_json(upload)],
     )
     assert r.status_code == 201, r.text
     return r.json()
@@ -181,14 +188,14 @@ async def test_correction_chain_keeps_process_visibility(
     await _link_process(app_client, ha, original["id"], p1["id"])  # leg A → {P1}
 
     # Correct the original (ad-hoc → the successor copies no evidence link → empty own binding).
-    sha = await _upload_evidence(app_client, ha, f"corr-{uuid.uuid4().hex}".encode())
+    upload = await _upload_evidence(app_client, ha, f"corr-{uuid.uuid4().hex}".encode())
     corr = await app_client.post(
         f"/api/v1/records/{original['id']}/correction",
         headers=ha,
         json={
             "record_type": "EVIDENCE",
             "title": "Corrected",
-            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+            "evidence": [_evidence_json(upload)],
         },
     )
     assert corr.status_code == 201, corr.text
@@ -203,14 +210,14 @@ async def test_correction_chain_keeps_process_visibility(
 
 async def _correct(client: AsyncClient, h: dict[str, str], record_id: str) -> str:
     """Capture a source-less correction of ``record_id``; returns the successor id."""
-    sha = await _upload_evidence(client, h, f"corr-{uuid.uuid4().hex}".encode())
+    upload = await _upload_evidence(client, h, f"corr-{uuid.uuid4().hex}".encode())
     r = await client.post(
         f"/api/v1/records/{record_id}/correction",
         headers=h,
         json={
             "record_type": "EVIDENCE",
             "title": "Corrected",
-            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+            "evidence": [_evidence_json(upload)],
         },
     )
     assert r.status_code == 201, r.text
@@ -356,7 +363,7 @@ async def test_process_owner_correction_cannot_introduce_unowned_source(
     await _grant_process(owner, "record.create", p1["id"])  # owns P1, NOT P2
     hb = _auth(token_factory, owner)
     # The author stages evidence (init-upload is SYSTEM record.create); the re-auth 403s first.
-    sha = await _upload_evidence(app_client, ha, f"corr-{uuid.uuid4().hex}".encode())
+    upload = await _upload_evidence(app_client, ha, f"corr-{uuid.uuid4().hex}".encode())
     deny = await app_client.post(
         f"/api/v1/records/{original['id']}/correction",
         headers=hb,
@@ -364,7 +371,7 @@ async def test_process_owner_correction_cannot_introduce_unowned_source(
             "record_type": "EVIDENCE",
             "title": "smuggled source",
             "source_document_id": shared["id"],
-            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+            "evidence": [_evidence_json(upload)],
         },
     )
     assert deny.status_code == 403, deny.text
@@ -386,7 +393,7 @@ async def test_process_owner_cannot_capture_under_unowned_shared_doc(
     doc = await _create(app_client, ha, await s5.type_id("SOP"))
     await _link_doc_to_process(app_client, ha, doc["id"], p1["id"])
     await _link_doc_to_process(app_client, ha, doc["id"], p2["id"])  # D spans P1 + P2
-    sha = await _upload_evidence(app_client, ha, f"cap-{uuid.uuid4().hex}".encode())
+    upload = await _upload_evidence(app_client, ha, f"cap-{uuid.uuid4().hex}".encode())
 
     owner = _subject("wcap-b")
     await _grant_process(owner, "record.create", p1["id"])  # owns P1, NOT P2
@@ -398,7 +405,7 @@ async def test_process_owner_cannot_capture_under_unowned_shared_doc(
             "record_type": "EVIDENCE",
             "title": "shared-doc capture",
             "source_document_id": doc["id"],
-            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+            "evidence": [_evidence_json(upload)],
         },
     )
     assert deny.status_code == 403, deny.text
@@ -456,14 +463,14 @@ async def test_process_owner_correction_reauths_inherited_binding(
     owner = _subject("winh-b")
     await _grant_process(owner, "record.create", p1["id"])  # owns P1, NOT P2
     hb = _auth(token_factory, owner)
-    sha = await _upload_evidence(app_client, ha, f"inh-{uuid.uuid4().hex}".encode())
+    upload = await _upload_evidence(app_client, ha, f"inh-{uuid.uuid4().hex}".encode())
     deny = await app_client.post(
         f"/api/v1/records/{original['id']}/correction",
         headers=hb,
         json={
             "record_type": "EVIDENCE",
             "title": "inherited-binding correction",
-            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+            "evidence": [_evidence_json(upload)],
         },
     )
     assert deny.status_code == 403, deny.text

@@ -18,6 +18,7 @@ from .disposition import (
 )
 from .render import build_structured_pdf, redrive_missing_structured_pdfs
 from .service import (
+    EvidenceInput,
     capture_correction,
     capture_record,
     emit_record_event,
@@ -29,6 +30,7 @@ from .service import (
 )
 
 __all__ = [
+    "EvidenceInput",
     "advance_disposition",
     "approve_worm_destroy",
     "build_structured_pdf",

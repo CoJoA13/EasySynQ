@@ -25,6 +25,18 @@
 		-Server
 	}
 
+	# Default-off rollback guard. During an incompatible application rollback, stop only mutating
+	# API requests before any more-specific proxy handle can claim them; reads and non-API routes
+	# continue normally.
+	@compatibility_rollback_write {
+		path /api/*
+		method POST PUT PATCH DELETE
+		vars {env.EASYSYNQ_COMPATIBILITY_READ_ONLY} 1
+	}
+	handle @compatibility_rollback_write {
+		respond "Write operations are disabled during compatibility rollback." 503
+	}
+
 	# The notification SSE stream needs immediate flushing (no response buffering) for a long-lived
 	# connection — its own reverse_proxy with flush_interval -1 (doc 10 §9, S-notify-5c). MUST precede
 	# @api (handle is first-match-wins; this path is a subset of /api/*).

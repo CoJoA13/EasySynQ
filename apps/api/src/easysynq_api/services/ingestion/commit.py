@@ -28,17 +28,21 @@ promote.
 
 from __future__ import annotations
 
+import dataclasses
+import datetime
 import hashlib
 import logging
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...config import get_settings
-from ...db.models._audit_enums import AuditObjectType, EventType
+from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._ingestion_enums import ImportCommitResultStatus, ImportRunStatus
 from ...db.models._record_enums import RecordType
 from ...db.models._vault_enums import (
@@ -65,23 +69,77 @@ from ...domain.ingestion.import_report import (
     render_import_report,
 )
 from ...domain.vault.identifier import format_identifier, parse_identifier, revision_label
+from ...problems import ProblemException
 from ..records import repository as records_repo
 from ..records import service as records_svc
+from ..records.service import EvidenceInput
 from ..reports.checklist import compute_checklist
 from ..vault import repository as vault_repo
-from ..vault import storage
+from ..vault import storage, upload_rejection
 from ..vault.mirror_sink import get_mirror_enqueue_sink
 from ..vault.service import _snapshot
 from ..vault.signature import SignatureEvent, get_vault_signature_sink
+from ..vault.staged_identity import (
+    IdentityRefusal,
+    StagedObjectRef,
+    StagedSourceChanged,
+    StagedSourceUnavailable,
+    StagingVersionRequired,
+    StorageStage,
+    StorageUnavailable,
+    TargetIdentityConflict,
+    UploadIdentityMismatch,
+    WormNotApplied,
+)
 from . import repository as repo
+from . import storage as ingestion_storage
 from .review import EffectiveFileState, fold_file_decisions
 from .service import _now, emit_import_event_system
+from .source import FilesystemSourceProvider
 
 logger = logging.getLogger("easysynq.ingestion")
 
 # the Form/Template document_type — importing one is unsupported (it needs an authored schema)
 _FRM_CODE = "FRM"
 _RECORD_TYPE_VALUES = frozenset(rt.value for rt in RecordType)
+_ITEM_COMMIT_REASONS = frozenset(
+    {
+        "blank_identifier",
+        "context_register_import_unsupported",
+        "evidence_bytes_already_vaulted",
+        "form_template_import_unsupported",
+        "interested_parties_register_import_unsupported",
+        "no_staged_bytes",
+        "owner_ambiguous",
+        "owner_not_found",
+        "restage_source_changed",
+        "restage_source_unavailable",
+        "risk_register_import_unsupported",
+        "source_bytes_in_foreign_bucket",
+        "staged_object_not_found",
+        "unknown_document_type",
+    }
+)
+_RESTAGEABLE_REASONS = frozenset(
+    {
+        "restage_source_unavailable",
+        "upload_identity_digest_mismatch",
+        "upload_identity_size_mismatch",
+        "staged_source_missing",
+        "staged_source_changed",
+    }
+)
+_STORAGE_REASON_BY_STAGE = {
+    StorageStage.STAGING_PUT: "storage_unavailable_staging_put",
+    StorageStage.VERSIONING: "storage_unavailable_versioning",
+    StorageStage.SOURCE_GET: "storage_unavailable_source_get",
+    StorageStage.SOURCE_READ: "storage_unavailable_source_read",
+    StorageStage.TARGET_HEAD: "storage_unavailable_target_head",
+    StorageStage.TARGET_GET: "storage_unavailable_target_get",
+    StorageStage.TARGET_READ: "storage_unavailable_target_read",
+    StorageStage.COPY: "storage_unavailable_copy",
+    StorageStage.RETENTION: "storage_unavailable_retention",
+}
 
 
 class _ItemCommitError(Exception):
@@ -95,6 +153,87 @@ class _ItemCommitError(Exception):
 class _LostRace(Exception):
     """A concurrent worker already committed this item (the ledger claim lost) — roll back this
     worker's half-built vault rows and treat it as a no-op (NOT a failure)."""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _FailedRecordResult:
+    won: bool
+    audit_ref: upload_rejection.AuditEventRef | None = None
+
+
+@dataclasses.dataclass(slots=True)
+class _CommitAttempt:
+    """Failure ownership generation plus any exact restage verified during this attempt."""
+
+    expected_committed_at: datetime.datetime | None = None
+    restage_requested: bool = False
+    restaged_blob_uri: str | None = None
+
+
+def _failure_reason(exc: BaseException) -> str:
+    """Map item failures to the closed, identity-free import ledger vocabulary."""
+    if isinstance(exc, _ItemCommitError):
+        return exc.reason if exc.reason in _ITEM_COMMIT_REASONS else "internal_error"
+    if isinstance(exc, StagingVersionRequired):
+        return "staging_version_required"
+    if isinstance(exc, UploadIdentityMismatch):
+        return f"upload_identity_{exc.classification}"
+    if isinstance(exc, StagedSourceUnavailable):
+        return "staged_source_missing"
+    if isinstance(exc, StagedSourceChanged):
+        return "staged_source_changed"
+    if isinstance(exc, StorageUnavailable):
+        return _STORAGE_REASON_BY_STAGE.get(exc.stage, "internal_error")
+    if isinstance(exc, WormNotApplied):
+        return "worm_not_applied"
+    if isinstance(exc, TargetIdentityConflict):
+        return "target_identity_conflict"
+    return "internal_error"
+
+
+def _attempt_failure_reason(exc: BaseException, attempt: _CommitAttempt) -> str:
+    """Keep an interrupted restage resumable without misclassifying later storage failures."""
+    if (
+        isinstance(exc, StorageUnavailable)
+        and attempt.restage_requested
+        and attempt.restaged_blob_uri is None
+    ):
+        return "restage_source_unavailable"
+    return _failure_reason(exc)
+
+
+async def _restage_source(file: ImportFile, source_root: str) -> StagedObjectRef:
+    """Restage one confined source and change only its transient exact locator."""
+    if file.sha256 is None:
+        raise _ItemCommitError("restage_source_changed")
+    stack = ExitStack()
+    try:
+        provider = FilesystemSourceProvider(Path(source_root))
+        handle = stack.enter_context(provider.open_stream(file.rel_path))
+    except (OSError, ValueError) as exc:
+        stack.close()
+        raise _ItemCommitError("restage_source_unavailable") from exc
+    with stack:
+        staged = await ingestion_storage.stage_stream(
+            handle, content_type=file.mime_type or "application/octet-stream"
+        )
+    if staged.sha256 != file.sha256 or staged.size_bytes != file.size_bytes:
+        raise _ItemCommitError("restage_source_changed")
+    file.staged_blob_uri = staged.staged_blob_uri
+    return staged.source
+
+
+def _parse_import_source(file: ImportFile) -> StagedObjectRef:
+    if file.sha256 is None:
+        raise _ItemCommitError("no_staged_bytes")
+    if file.staged_blob_uri is None:
+        raise StagingVersionRequired
+    return ingestion_storage.parse_staged_uri(
+        file.staged_blob_uri,
+        expected_sha256=file.sha256,
+        content_type=file.mime_type or "application/octet-stream",
+        expected_size=file.size_bytes,
+    )
 
 
 def _decided_by(decisions: list[ImportDecision]) -> str:
@@ -182,6 +321,7 @@ async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) ->
         org_id = run.org_id
         committed_by = run.committed_by
         classifier_version = run.classifier_version
+        source_root = run.source_root
         raw_owner_snapshot = run.commit_owner_snapshot
         owner_snapshot = dict(raw_owner_snapshot) if isinstance(raw_owner_snapshot, dict) else {}
         await guard.commit()  # release the run FOR UPDATE before the (long) per-item loop
@@ -224,6 +364,7 @@ async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) ->
         framework_id,
         classifier_version,
         owner_snapshot,
+        source_root,
     )
 
 
@@ -235,6 +376,7 @@ async def _commit_items(
     framework_id: uuid.UUID,
     classifier_version: str | None,
     owner_snapshot: dict[str, str],
+    source_root: str,
 ) -> None:
     async with sm() as reads:
         nodes = await repo.list_proposal_nodes(reads, run_id)
@@ -248,6 +390,7 @@ async def _commit_items(
             decisions_by_file.setdefault(d.file_id, []).append(d)
 
     for node in nodes:
+        attempt = _CommitAttempt()
         try:
             # The whole per-node body (the pure preamble + the commit) is inside the try so a single
             # poison node is isolated as result=failed (per-item isolation) and the loop always
@@ -263,11 +406,20 @@ async def _commit_items(
             # Each item is its OWN session+transaction → no cross-item state, no reuse-after-error.
             async with sm() as s:
                 existing = await repo.get_commit_result(s, run_id, node.file_id)
+                attempt.expected_committed_at = (
+                    existing.committed_at if existing is not None else None
+                )
                 if existing is not None and existing.result in (
                     ImportCommitResultStatus.SUCCESS,
                     ImportCommitResultStatus.NOOP,
                 ):
                     continue  # idempotent: already committed (a resume / re-delivery)
+                restage = bool(
+                    existing is not None
+                    and existing.result is ImportCommitResultStatus.FAILED
+                    and existing.error in _RESTAGEABLE_REASONS
+                )
+                attempt.restage_requested = restage
                 owner_user_id = await _resolve_owner_user_id(
                     s,
                     org_id,
@@ -289,6 +441,9 @@ async def _commit_items(
                         node,
                         decisions,
                         classifier_version,
+                        source_root=source_root,
+                        restage=restage,
+                        attempt=attempt,
                     )
                 else:  # RECORD
                     await _commit_record(
@@ -302,25 +457,77 @@ async def _commit_items(
                         cls,
                         decisions,
                         classifier_version,
+                        source_root=source_root,
+                        restage=restage,
+                        attempt=attempt,
                     )
                 await s.commit()
         except _LostRace:
             pass  # a concurrent worker committed this item — the item session rolled back; no-op
-        except Exception as exc:  # noqa: BLE001 — isolate the failure to this item (§10.2/§11.2)
-            reason = exc.reason if isinstance(exc, _ItemCommitError) else repr(exc)[:500]
-            async with sm() as fs:  # a FRESH session for the failed-ledger write
-                failure_recorded = await _record_failed(fs, run_id, org_id, node.file_id, reason)
-            if failure_recorded:
-                logger.warning(
-                    "ingestion.commit.item_failed",
+        except IdentityRefusal as exc:
+            reason = _failure_reason(exc)
+            context = _import_rejection_context(org_id, cast(ImportFile, file))
+            async with sm() as fs:
+                recorded = await _record_failed(
+                    fs,
+                    run_id,
+                    org_id,
+                    node.file_id,
+                    reason,
+                    expected_committed_at=attempt.expected_committed_at,
+                    rejection=(exc, context),
+                )
+            if recorded.won and recorded.audit_ref is not None:
+                await _cleanup_rejected_import_source(exc, recorded.audit_ref)
+                _log_item_failure(run_id, node.file_id, reason)
+        except TargetIdentityConflict as exc:
+            reason = _failure_reason(exc)
+            context = _import_rejection_context(org_id, cast(ImportFile, file))
+            async with sm() as fs:
+                recorded = await _record_failed(
+                    fs,
+                    run_id,
+                    org_id,
+                    node.file_id,
+                    reason,
+                    expected_committed_at=attempt.expected_committed_at,
+                    retained_staged_blob_uri=attempt.restaged_blob_uri,
+                    rejection=(exc, context),
+                )
+            if recorded.won:
+                upload_rejection.emit_upload_identity_metric(
+                    metric="identity_mismatch",
+                    operation="import_commit",
+                    classification="target_identity_conflict",
+                    domain=upload_rejection._failure_domain(exc),
+                    stage="target_read",
+                    outcome="retained",
+                )
+                _log_item_failure(run_id, node.file_id, reason)
+        except Exception as exc:
+            reason = _attempt_failure_reason(exc, attempt)
+            if reason == "internal_error":
+                logger.exception(
+                    "ingestion.commit.item_internal_error",
                     extra={
                         "extra_fields": {
                             "run_id": str(run_id),
                             "file_id": str(node.file_id),
-                            "reason": reason,
                         }
                     },
                 )
+            async with sm() as fs:  # a FRESH session for the failed-ledger write
+                recorded = await _record_failed(
+                    fs,
+                    run_id,
+                    org_id,
+                    node.file_id,
+                    reason,
+                    expected_committed_at=attempt.expected_committed_at,
+                    retained_staged_blob_uri=attempt.restaged_blob_uri,
+                )
+            if recorded.won:
+                _log_item_failure(run_id, node.file_id, reason)
 
     # Terminal flip + the Import Report + the mirror enqueue.
     await _finalize(sm, run_id, org_id, committer, framework_id)
@@ -339,11 +546,16 @@ async def _commit_document(
     node: ImportProposalNode,
     decisions: list[ImportDecision],
     classifier_version: str | None,
+    *,
+    source_root: str,
+    restage: bool,
+    attempt: _CommitAttempt,
 ) -> None:
     settings = get_settings()
     sha = file.sha256
     if sha is None:
         raise _ItemCommitError("no_staged_bytes")
+    blob = await vault_repo.get_blob(session, sha)
     # Revalidate the folded state at the write boundary. Older append-only decisions may predate
     # request validation, and must not promote bytes or mint a vault row with a blank identifier.
     if st.identifier is not None and not st.identifier.strip():
@@ -395,29 +607,33 @@ async def _commit_document(
         ):
             legacy_identifier = st.identifier
 
+    if blob is not None and (blob.bucket != settings.s3_bucket_documents or not blob.worm_locked):
+        raise _ItemCommitError("source_bytes_in_foreign_bucket")
+
     # Promote the staged bytes into the documents WORM bucket (one server-side copy). Reuse an
     # existing
     # documents-bucket blob; refuse foreign-bucket bytes (the symmetric cross-kind sha collision).
-    blob = await vault_repo.get_blob(session, sha)
     if blob is None:
-        head = await storage.finalize_worm(
-            sha,
-            bucket=settings.s3_bucket_documents,
-            source_bucket=storage._import_staging_bucket(),
-        )
-        if not head.exists:
-            raise _ItemCommitError("staged_object_not_found")
+        source = await _restage_source(file, source_root) if restage else _parse_import_source(file)
+        if restage:
+            attempt.restaged_blob_uri = file.staged_blob_uri
+            await session.execute(
+                update(ImportFile)
+                .where(ImportFile.id == file.id)
+                .values(staged_blob_uri=file.staged_blob_uri)
+            )
+        promoted = await storage.promote_worm(source, target_bucket=settings.s3_bucket_documents)
         await session.execute(
             pg_insert(Blob)
             .values(
                 sha256=sha,
                 org_id=org_id,
-                size_bytes=head.size or 0,
-                mime_type=head.content_type or file.mime_type or "application/octet-stream",
-                bucket=settings.s3_bucket_documents,
-                object_key=sha,
+                size_bytes=promoted.size,
+                mime_type=promoted.content_type or file.mime_type or "application/octet-stream",
+                bucket=promoted.target_bucket,
+                object_key=promoted.target_key,
                 worm_locked=True,
-                worm_retain_until=head.retain_until,
+                worm_retain_until=promoted.retain_until,
             )
             .on_conflict_do_nothing(index_elements=["sha256"])
         )
@@ -555,28 +771,44 @@ async def _commit_record(
     cls: ImportClassification | None,
     decisions: list[ImportDecision],
     classifier_version: str | None,
+    *,
+    source_root: str,
+    restage: bool,
+    attempt: _CommitAttempt,
 ) -> None:
     settings = get_settings()
     sha = file.sha256
     if sha is None:
         raise _ItemCommitError("no_staged_bytes")
+    blob = await vault_repo.get_blob(session, sha)
+    if blob is not None and (blob.bucket != settings.s3_bucket_records or not blob.worm_locked):
+        raise _ItemCommitError("evidence_bytes_already_vaulted")
     rtype = (
         st.type_code.upper()
         if st.type_code and st.type_code.upper() in _RECORD_TYPE_VALUES
         else RecordType.EVIDENCE.value
     )
     content_type = file.mime_type or "application/octet-stream"
+    source = None
+    if blob is None:
+        source = await _restage_source(file, source_root) if restage else _parse_import_source(file)
+        if restage:
+            attempt.restaged_blob_uri = file.staged_blob_uri
+            await session.execute(
+                update(ImportFile)
+                .where(ImportFile.id == file.id)
+                .values(staged_blob_uri=file.staged_blob_uri)
+            )
     try:
         rec = await records_svc.capture_record(
             session,
             committer,
             record_type=rtype,
             title=_title_for(file),
-            evidence=[(sha, content_type)],
+            evidence=[EvidenceInput(sha, content_type, source)],
             source_document_id=None,
             retention_policy_id=None,
             _commit=False,
-            _evidence_source_bucket=settings.s3_bucket_import_staging,
         )
     except Exception as exc:
         # A cross-bucket sha collision (the bytes already vaulted elsewhere) surfaces as a 423 from
@@ -621,29 +853,127 @@ async def _commit_record(
         raise _LostRace
 
 
+def _log_item_failure(run_id: uuid.UUID, file_id: uuid.UUID, reason: str) -> None:
+    logger.warning(
+        "ingestion.commit.item_failed",
+        extra={
+            "extra_fields": {
+                "run_id": str(run_id),
+                "file_id": str(file_id),
+                "reason": reason,
+            }
+        },
+    )
+
+
+def _import_rejection_context(
+    org_id: uuid.UUID, file: ImportFile
+) -> upload_rejection.RejectionContext:
+    return upload_rejection.RejectionContext(
+        operation="import_commit",
+        org_id=org_id,
+        actor_id=None,
+        actor_type=ActorType.system,
+        scope_ref=file.rel_path,
+        user_correctable=False,
+    )
+
+
+async def _cleanup_rejected_import_source(
+    failure: IdentityRefusal, ref: upload_rejection.AuditEventRef
+) -> None:
+    """Delete only the audited refused version, with Task 3's bounded retry signal."""
+    classification = upload_rejection._failure_classification(failure)
+    domain = upload_rejection._failure_domain(failure)
+    source = upload_rejection._source_from_failure(failure)
+    locator = source.locator if hasattr(source, "locator") else source
+    try:
+        await storage.delete_staged_version(locator)
+    except Exception:  # noqa: BLE001 -- cleanup failure must preserve the item refusal
+        try:
+            upload_rejection._enqueue_cleanup_retry(ref)
+        except Exception:  # noqa: BLE001 -- bounded terminal signal; never broaden/retry inline
+            upload_rejection.emit_upload_identity_metric(
+                metric="cleanup_final_failure",
+                operation="import_commit",
+                classification=classification,
+                domain=domain,
+                stage="cleanup",
+                outcome="publish_failed",
+            )
+        else:
+            upload_rejection.emit_upload_identity_metric(
+                metric="cleanup_retry",
+                operation="import_commit",
+                classification=classification,
+                domain=domain,
+                stage="cleanup",
+                outcome="retry_scheduled",
+            )
+    else:
+        upload_rejection.emit_upload_identity_metric(
+            metric="cleanup_success",
+            operation="import_commit",
+            classification=classification,
+            domain=domain,
+            stage="cleanup",
+            outcome="deleted",
+        )
+    upload_rejection.emit_upload_identity_metric(
+        metric="identity_mismatch",
+        operation="import_commit",
+        classification=classification,
+        domain=domain,
+        stage="source_read",
+        outcome="refused",
+    )
+
+
 async def _record_failed(
     session: AsyncSession,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
     file_id: uuid.UUID,
     reason: str,
-) -> bool:
+    *,
+    expected_committed_at: datetime.datetime | None,
+    retained_staged_blob_uri: str | None = None,
+    rejection: tuple[IdentityRefusal | TargetIdentityConflict, upload_rejection.RejectionContext]
+    | None = None,
+) -> _FailedRecordResult:
     """Atomically record + audit an isolated failure after the item transaction rolled back."""
     won = await repo.record_failed_result(
-        session, org_id=org_id, run_id=run_id, file_id=file_id, error=reason
+        session,
+        org_id=org_id,
+        run_id=run_id,
+        file_id=file_id,
+        error=reason,
+        expected_committed_at=expected_committed_at,
     )
     if not won:
         await session.rollback()
-        return False
-    emit_import_event_system(
+        return _FailedRecordResult(won=False)
+    if retained_staged_blob_uri is not None:
+        await session.execute(
+            update(ImportFile)
+            .where(ImportFile.id == file_id)
+            .values(staged_blob_uri=retained_staged_blob_uri)
+        )
+    after: dict[str, Any] = {"file_id": str(file_id), "error": reason}
+    if rejection is not None:
+        failure, context = rejection
+        after.update(upload_rejection.rejection_payload(failure, context))
+    row = emit_import_event_system(
         session,
         org_id,
         EventType.IMPORT_ITEM_FAILED,
         run_id,
-        after={"file_id": str(file_id), "error": reason},
+        after=after,
     )
+    await session.flush()
+    ref = upload_rejection.AuditEventRef(id=row.id, occurred_at=row.occurred_at)
     await session.commit()
-    return True
+    return _FailedRecordResult(won=True, audit_ref=ref)
 
 
 async def _finalize(
@@ -670,10 +1000,36 @@ async def _finalize(
         # commits — the report is regenerable evidence, never blocking).
         report_record_id: uuid.UUID | None = None
         try:
-            async with session.begin_nested():
+            async with session.begin_nested() as _report_savepoint:
                 report_record_id = await _capture_report(
                     session, run, committer, results, committed, failed
                 )
+        except (IdentityRefusal, TargetIdentityConflict) as failure:
+            # The savepoint context has finished rolling back the half-built Record/audit rows.
+            # Only now may the fresh audit transaction record the generated-object refusal.
+            try:
+                await upload_rejection.reject_after_owner_rollback(
+                    failure,
+                    context=upload_rejection.RejectionContext(
+                        operation="server_generated",
+                        org_id=org_id,
+                        actor_id=None,
+                        actor_type=ActorType.system,
+                        scope_ref=str(run_id),
+                        user_correctable=False,
+                    ),
+                    rejection_sessionmaker=sm,
+                )
+            except ProblemException as rejection_problem:
+                if (rejection_problem.status, rejection_problem.code) != (
+                    503,
+                    "storage_unavailable",
+                ):
+                    raise
+            report_record_id = None
+            logger.warning(
+                "ingestion.commit.report_failed", extra={"extra_fields": {"run_id": str(run_id)}}
+            )
         except Exception:  # noqa: BLE001 — savepoint rolled back; the outer txn stays usable
             report_record_id = None
             logger.warning(
@@ -805,14 +1161,18 @@ async def _capture_report(
     )
     md_bytes = md.encode("utf-8")
     md_sha = hashlib.sha256(md_bytes).hexdigest()
-    await storage.put_staging_bytes(md_bytes, md_sha, content_type="text/markdown")
+    report_source = await storage.put_staging_bytes(
+        md_bytes,
+        md_sha,
+        content_type="text/markdown",
+    )
     permanent = await records_repo.ensure_default_policy(session, org_id)
     rec = await records_svc.capture_record(
         session,
         committer,
         record_type=RecordType.EVIDENCE.value,
         title=f"Import Report — {run.source_root} — {run.id}",
-        evidence=[(md_sha, "text/markdown")],
+        evidence=[EvidenceInput(md_sha, "text/markdown", report_source)],
         retention_policy_id=permanent.id,
         _commit=False,
     )

@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import httpx
 import pytest
@@ -21,7 +22,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easysynq_api.config import get_settings
-from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
+from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
 from easysynq_api.db.models._clause_enums import PdcaPhase
 from easysynq_api.db.models._record_enums import RecordType
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
@@ -41,12 +42,28 @@ from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.domain.records.content_hash import record_content_hash
 from easysynq_api.services.records import service as records_service
+from easysynq_api.services.vault import storage, upload_rejection
+from easysynq_api.services.vault.staged_identity import StagedVersionLocator, StagingDomain
 
-from .test_vault import _auth, _ensure_user, _grant_doc_perms, _sop_type_id, _upload
+from .test_vault import (
+    _auth,
+    _ensure_user,
+    _grant_doc_perms,
+    _object_exists,
+    _object_version_exists,
+    _sop_type_id,
+    _upload,
+)
 
 pytestmark = pytest.mark.integration
 
 _RECORD_PERMS = ("record.read", "record.create")
+
+
+@dataclass(frozen=True, slots=True)
+class _EvidenceUpload:
+    sha256: str
+    version_id: str | None
 
 
 def _subject(prefix: str) -> str:
@@ -77,22 +94,77 @@ async def _grant(subject: str, keys: tuple[str, ...]) -> uuid.UUID:
 
 async def _upload_evidence(
     client: AsyncClient, h: dict[str, str], content: bytes, ct: str = "application/pdf"
-) -> str:
+) -> _EvidenceUpload:
     sha = hashlib.sha256(content).hexdigest()
     init = await client.post(
         "/api/v1/records:init-upload", headers=h, json={"sha256": sha, "content_type": ct}
     )
     assert init.status_code == 200, init.text
     body = init.json()
+    version_id: str | None = None
     if not body["dedup"]:
         async with httpx.AsyncClient(timeout=30) as raw:
             put = await raw.put(body["upload_url"], content=content, headers={"Content-Type": ct})
             assert put.status_code in (200, 204), f"{put.status_code} {put.text}"
-    return sha
+            version_id = put.headers["x-amz-version-id"]
+    return _EvidenceUpload(sha256=sha, version_id=version_id)
+
+
+def _evidence_json(
+    upload: _EvidenceUpload, content_type: str = "application/pdf"
+) -> dict[str, str | None]:
+    return {
+        "sha256": upload.sha256,
+        "content_type": content_type,
+        "staging_version_id": upload.version_id,
+    }
 
 
 async def _capture(client: AsyncClient, h: dict[str, str], **body: object) -> httpx.Response:
     return await client.post("/api/v1/records", headers=h, json=body)
+
+
+async def _assert_correction_refused(
+    *, original_id: str, corrected_title: str, actor_id: uuid.UUID
+) -> None:
+    """The original survives and no successor/audit success escapes a refused correction."""
+    async with get_sessionmaker()() as s:
+        original_record = await s.get(Record, uuid.UUID(original_id))
+        original_base = await s.get(DocumentedInformation, uuid.UUID(original_id))
+        assert original_record is not None
+        assert original_base is not None
+        assert original_record.superseded_by_correction is None
+        assert (
+            await s.execute(
+                select(DocumentedInformation).where(DocumentedInformation.title == corrected_title)
+            )
+        ).scalar_one_or_none() is None
+        correction_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == uuid.UUID(original_id),
+                        AuditEvent.event_type == EventType.RECORD_CORRECTED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        captured_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.actor_id == actor_id,
+                        AuditEvent.event_type == EventType.RECORD_CAPTURED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert correction_events == []
+    assert len(captured_events) == 1
 
 
 async def _first_iso_clause_id() -> str:
@@ -120,14 +192,15 @@ async def test_capture_read_download_round_trip(
     await _grant(subject, _RECORD_PERMS)
     h = _auth(token_factory, subject)
     content = f"evidence-{uuid.uuid4().hex}".encode()
-    sha = await _upload_evidence(app_client, h, content)
+    upload = await _upload_evidence(app_client, h, content)
+    sha = upload.sha256
 
     r = await _capture(
         app_client,
         h,
         record_type="EVIDENCE",
         title="Calibration certificate",
-        evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+        evidence=[_evidence_json(upload)],
     )
     assert r.status_code == 201, r.text
     rec = r.json()
@@ -165,6 +238,327 @@ async def test_capture_read_download_round_trip(
         assert fetched.content == content
 
 
+async def test_record_upload_identity_requires_staging_version_for_new_evidence(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("rec-upload-version")
+    await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    title = f"missing version {uuid.uuid4().hex}"
+    upload = await _upload_evidence(app_client, h, title.encode())
+    assert upload.version_id is not None
+
+    response = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=title,
+        evidence=[
+            {
+                "sha256": upload.sha256,
+                "content_type": "application/pdf",
+                "staging_version_id": None,
+            }
+        ],
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "staging_version_required"
+    assert _object_version_exists("staging", upload.sha256, upload.version_id)
+    assert not _object_exists("records", upload.sha256)
+    async with get_sessionmaker()() as s:
+        assert await s.get(Blob, upload.sha256) is None
+        assert (
+            await s.execute(
+                select(DocumentedInformation).where(DocumentedInformation.title == title)
+            )
+        ).scalar_one_or_none() is None
+
+
+async def test_record_upload_identity_rejects_same_sha_with_different_versions_before_storage(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("rec-ambiguous-version")
+    await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    title = f"ambiguous version {uuid.uuid4().hex}"
+    content = title.encode()
+    first = await _upload_evidence(app_client, h, content)
+    second = await _upload_evidence(app_client, h, content)
+    assert first.version_id is not None and second.version_id is not None
+    assert first.version_id != second.version_id
+
+    response = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=title,
+        evidence=[_evidence_json(first), _evidence_json(second)],
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    assert response.json()["errors"] == [
+        {
+            "field": "evidence",
+            "code": "ambiguous_staging_version",
+            "message": "the same evidence sha256 names different staging versions",
+        }
+    ]
+    assert _object_version_exists("staging", first.sha256, first.version_id)
+    assert _object_version_exists("staging", second.sha256, second.version_id)
+    assert not _object_exists("records", first.sha256)
+    async with get_sessionmaker()() as s:
+        assert await s.get(Blob, first.sha256) is None
+        assert (
+            await s.execute(
+                select(DocumentedInformation).where(DocumentedInformation.title == title)
+            )
+        ).scalar_one_or_none() is None
+
+
+async def test_record_upload_identity_mismatch_rolls_back_audits_exact_cleanup_and_retries(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = _subject("rec-upload-mismatch")
+    actor_id = await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    title = f"identity mismatch {uuid.uuid4().hex}"
+    honest = f"honest-record-{uuid.uuid4().hex}".encode()
+    false = b"x" * len(honest)
+    sha = hashlib.sha256(honest).hexdigest()
+    init = await app_client.post(
+        "/api/v1/records:init-upload",
+        headers=h,
+        json={"sha256": sha, "content_type": "application/pdf"},
+    )
+    assert init.status_code == 200, init.text
+    async with httpx.AsyncClient(timeout=30) as raw:
+        put = await raw.put(
+            init.json()["upload_url"],
+            content=false,
+            headers={"Content-Type": "application/pdf"},
+        )
+    assert put.status_code in (200, 204), put.text
+    bad_version = put.headers["x-amz-version-id"]
+
+    replacement_ref = None
+    original_record = upload_rejection.DbUploadRejectionSink.record
+
+    async def _record_then_write_replacement(
+        self: upload_rejection.DbUploadRejectionSink,
+        context: upload_rejection.RejectionContext,
+        failure: upload_rejection.IdentityRefusal | upload_rejection.TargetIdentityConflict,
+    ) -> upload_rejection.AuditEventRef:
+        nonlocal replacement_ref
+        ref = await original_record(self, context, failure)
+        replacement_ref = await storage.put_staging_bytes(
+            honest, sha, content_type="application/pdf"
+        )
+        return ref
+
+    monkeypatch.setattr(
+        upload_rejection.DbUploadRejectionSink, "record", _record_then_write_replacement
+    )
+    rejected = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=title,
+        evidence=[
+            {
+                "sha256": sha,
+                "content_type": "application/pdf",
+                "staging_version_id": bad_version,
+            }
+        ],
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "upload_identity_mismatch"
+    assert all(
+        secret not in rejected.text
+        for secret in (hashlib.sha256(false).hexdigest(), bad_version, "staging")
+    )
+    assert replacement_ref is not None
+    assert not _object_version_exists("staging", sha, bad_version)
+    assert _object_version_exists("staging", sha, replacement_ref.locator.version_id)
+    assert not _object_exists("records", sha)
+
+    async with get_sessionmaker()() as s:
+        assert await s.get(Blob, sha) is None
+        assert (
+            await s.execute(
+                select(DocumentedInformation).where(DocumentedInformation.title == title)
+            )
+        ).scalar_one_or_none() is None
+        assert (
+            await s.execute(select(EvidenceBlob).where(EvidenceBlob.blob_sha256 == sha))
+        ).scalars().all() == []
+        identity_events = [
+            event
+            for event in (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED
+                    )
+                )
+            )
+            .scalars()
+            .all()
+            if event.after is not None and event.after.get("expected", {}).get("sha256") == sha
+        ]
+        captured_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.actor_id == actor_id,
+                        AuditEvent.event_type == EventType.RECORD_CAPTURED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert captured_events == []
+    assert len(identity_events) == 1
+    rejection = identity_events[0]
+    assert (rejection.actor_type, rejection.actor_id, rejection.object_type) == (
+        ActorType.user,
+        actor_id,
+        AuditObjectType.config,
+    )
+    assert rejection.after == {
+        "operation": "record_capture",
+        "classification": "digest_mismatch",
+        "source": {
+            "bucket": "staging",
+            "object_key": sha,
+            "version_id": bad_version,
+            "etag": put.headers.get("etag"),
+        },
+        "expected": {"sha256": sha, "size_bytes": None},
+        "observed": {"sha256": hashlib.sha256(false).hexdigest(), "size_bytes": len(false)},
+        "cleanup": {"policy": "delete_exact_version_after_audit"},
+    }
+
+    honest_upload = await _upload_evidence(app_client, h, honest)
+    accepted = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=title,
+        evidence=[_evidence_json(honest_upload)],
+    )
+    assert accepted.status_code == 201, accepted.text
+    async with get_sessionmaker()() as s:
+        records = (
+            (await s.execute(select(Record).where(Record.captured_by == actor_id))).scalars().all()
+        )
+        captured_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.actor_id == actor_id,
+                        AuditEvent.event_type == EventType.RECORD_CAPTURED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(records) == 1
+    assert len(captured_events) == 1
+
+
+async def test_record_upload_identity_missing_exact_version_is_conflict_and_retains_newer(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("rec-missing-exact")
+    actor_id = await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    title = f"missing exact {uuid.uuid4().hex}"
+    content = title.encode()
+    upload = await _upload_evidence(app_client, h, content)
+    assert upload.version_id is not None
+    replacement = await storage.put_staging_bytes(
+        content, upload.sha256, content_type="application/pdf"
+    )
+    await storage.delete_staged_version(
+        StagedVersionLocator(
+            domain=StagingDomain.STAGING,
+            object_key=upload.sha256,
+            version_id=upload.version_id,
+        )
+    )
+
+    rejected = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=title,
+        evidence=[_evidence_json(upload)],
+    )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "staged_source_unavailable"
+    assert _object_version_exists("staging", upload.sha256, replacement.locator.version_id)
+    assert not _object_exists("records", upload.sha256)
+    async with get_sessionmaker()() as s:
+        assert await s.get(Blob, upload.sha256) is None
+        assert (
+            await s.execute(
+                select(DocumentedInformation).where(DocumentedInformation.title == title)
+            )
+        ).scalar_one_or_none() is None
+        events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.actor_id == actor_id,
+                        AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(events) == 1
+
+
+async def test_record_upload_identity_allows_records_worm_dedup_without_staging_version(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("rec-worm-dedup")
+    await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    content = f"record dedup {uuid.uuid4().hex}".encode()
+    first_upload = await _upload_evidence(app_client, h, content)
+    first = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title="first dedup source",
+        evidence=[_evidence_json(first_upload)],
+    )
+    assert first.status_code == 201, first.text
+
+    dedup = await _upload_evidence(app_client, h, content)
+    assert dedup.version_id is None
+    second = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title="second dedup consumer",
+        evidence=[_evidence_json(dedup)],
+    )
+
+    assert second.status_code == 201, second.text
+    assert [item["sha256"] for item in second.json()["evidence_blobs"]] == [dedup.sha256]
+
+
 async def test_capture_pins_source_version(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
@@ -183,11 +577,16 @@ async def test_capture_pins_source_version(
     ).json()
     did = doc["id"]
     await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
-    sha = await _upload(app_client, h, did, f"doc-{uuid.uuid4().hex}".encode())
+    upload = await _upload(app_client, h, did, f"doc-{uuid.uuid4().hex}".encode())
     ci = await app_client.post(
         f"/api/v1/documents/{did}/checkin",
         headers=h,
-        json={"sha256": sha, "change_reason": "v1", "change_significance": "MAJOR"},
+        json={
+            "sha256": upload.sha256,
+            "staging_version_id": upload.version_id,
+            "change_reason": "v1",
+            "change_significance": "MAJOR",
+        },
     )
     assert ci.status_code == 201, ci.text
     version_id = ci.json()["id"]
@@ -313,7 +712,8 @@ async def test_evidence_revalidates_blob_after_insert_conflict(
     user_id = await _grant(subject, _RECORD_PERMS)
     h = _auth(token_factory, subject)
     content = f"record-blob-race-{uuid.uuid4().hex}".encode()
-    sha = await _upload_evidence(app_client, h, content)
+    upload = await _upload_evidence(app_client, h, content)
+    sha = upload.sha256
 
     async with get_sessionmaker()() as s:
         user = await s.get(AppUser, user_id)
@@ -352,7 +752,7 @@ async def test_evidence_revalidates_blob_after_insert_conflict(
             h,
             record_type="EVIDENCE",
             title="conflicting evidence placement",
-            evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+            evidence=[_evidence_json(upload)],
         )
         assert response.status_code == 423, response.text
         assert response.json()["code"] == "worm_required"
@@ -550,6 +950,412 @@ async def test_correction_creates_new_flags_old(
             )
         ).scalar_one()
         assert n == 1
+
+
+async def test_record_correction_upload_identity_mismatch_preserves_pointer_and_retries_once(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+) -> None:
+    subject = _subject("rec-correction-mismatch")
+    actor_id = await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    original = await _capture(
+        app_client, h, record_type="CALIBRATION", title=f"original {uuid.uuid4().hex}"
+    )
+    assert original.status_code == 201, original.text
+    original_id = original.json()["id"]
+    corrected_title = f"corrected {uuid.uuid4().hex}"
+    honest = f"honest-correction-{uuid.uuid4().hex}".encode()
+    false = b"x" * len(honest)
+    sha = hashlib.sha256(honest).hexdigest()
+    init = await app_client.post(
+        "/api/v1/records:init-upload",
+        headers=h,
+        json={"sha256": sha, "content_type": "application/pdf"},
+    )
+    assert init.status_code == 200, init.text
+    async with httpx.AsyncClient(timeout=30) as raw:
+        put = await raw.put(
+            init.json()["upload_url"],
+            content=false,
+            headers={"Content-Type": "application/pdf"},
+        )
+    assert put.status_code in (200, 204), put.text
+    bad_version = put.headers["x-amz-version-id"]
+
+    rejected = await app_client.post(
+        f"/api/v1/records/{original_id}/correction",
+        headers=h,
+        json={
+            "record_type": "CALIBRATION",
+            "title": corrected_title,
+            "evidence": [
+                {
+                    "sha256": sha,
+                    "content_type": "application/pdf",
+                    "staging_version_id": bad_version,
+                }
+            ],
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "upload_identity_mismatch"
+    assert not _object_version_exists("staging", sha, bad_version)
+    assert not _object_exists("records", sha)
+    async with get_sessionmaker()() as s:
+        original_row = await s.get(Record, uuid.UUID(original_id))
+        assert original_row is not None
+        assert original_row.superseded_by_correction is None
+        assert (
+            await s.execute(
+                select(DocumentedInformation).where(DocumentedInformation.title == corrected_title)
+            )
+        ).scalar_one_or_none() is None
+        assert await s.get(Blob, sha) is None
+        assert (
+            await s.execute(select(EvidenceBlob).where(EvidenceBlob.blob_sha256 == sha))
+        ).scalars().all() == []
+        rejection_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.actor_id == actor_id,
+                        AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        correction_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == uuid.UUID(original_id),
+                        AuditEvent.event_type == EventType.RECORD_CORRECTED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rejection_events) == 1
+    assert correction_events == []
+
+    retry_upload = await _upload_evidence(app_client, h, honest)
+    accepted = await app_client.post(
+        f"/api/v1/records/{original_id}/correction",
+        headers=h,
+        json={
+            "record_type": "CALIBRATION",
+            "title": corrected_title,
+            "evidence": [_evidence_json(retry_upload)],
+        },
+    )
+    assert accepted.status_code == 201, accepted.text
+    async with get_sessionmaker()() as s:
+        original_row = await s.get(Record, uuid.UUID(original_id))
+        assert original_row is not None
+        assert str(original_row.superseded_by_correction) == accepted.json()["id"]
+        correction_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == uuid.UUID(original_id),
+                        AuditEvent.event_type == EventType.RECORD_CORRECTED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(correction_events) == 1
+
+
+async def test_record_correction_upload_identity_requires_version_and_preserves_original(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("rec-correction-version")
+    actor_id = await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    original = await _capture(
+        app_client, h, record_type="CALIBRATION", title=f"original {uuid.uuid4().hex}"
+    )
+    assert original.status_code == 201, original.text
+    original_id = original.json()["id"]
+    corrected_title = f"missing-version correction {uuid.uuid4().hex}"
+    upload = await _upload_evidence(app_client, h, corrected_title.encode())
+    assert upload.version_id is not None
+
+    rejected = await app_client.post(
+        f"/api/v1/records/{original_id}/correction",
+        headers=h,
+        json={
+            "record_type": "CALIBRATION",
+            "title": corrected_title,
+            "evidence": [
+                {
+                    "sha256": upload.sha256,
+                    "content_type": "application/pdf",
+                    "staging_version_id": None,
+                }
+            ],
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "staging_version_required"
+    assert _object_version_exists("staging", upload.sha256, upload.version_id)
+    assert not _object_exists("records", upload.sha256)
+    await _assert_correction_refused(
+        original_id=original_id, corrected_title=corrected_title, actor_id=actor_id
+    )
+    async with get_sessionmaker()() as s:
+        assert await s.get(Blob, upload.sha256) is None
+        assert (
+            await s.execute(
+                select(AuditEvent).where(
+                    AuditEvent.actor_id == actor_id,
+                    AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED,
+                )
+            )
+        ).scalars().all() == []
+
+
+async def test_record_correction_upload_identity_rejects_ambiguous_versions_before_storage(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("rec-correction-ambiguous")
+    actor_id = await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    original = await _capture(
+        app_client, h, record_type="CALIBRATION", title=f"original {uuid.uuid4().hex}"
+    )
+    assert original.status_code == 201, original.text
+    original_id = original.json()["id"]
+    corrected_title = f"ambiguous correction {uuid.uuid4().hex}"
+    content = corrected_title.encode()
+    first = await _upload_evidence(app_client, h, content)
+    second = await _upload_evidence(app_client, h, content)
+    assert first.version_id is not None and second.version_id is not None
+    assert first.version_id != second.version_id
+
+    rejected = await app_client.post(
+        f"/api/v1/records/{original_id}/correction",
+        headers=h,
+        json={
+            "record_type": "CALIBRATION",
+            "title": corrected_title,
+            "evidence": [_evidence_json(first), _evidence_json(second)],
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "validation_error"
+    assert rejected.json()["errors"] == [
+        {
+            "field": "evidence",
+            "code": "ambiguous_staging_version",
+            "message": "the same evidence sha256 names different staging versions",
+        }
+    ]
+    assert _object_version_exists("staging", first.sha256, first.version_id)
+    assert _object_version_exists("staging", second.sha256, second.version_id)
+    assert not _object_exists("records", first.sha256)
+    await _assert_correction_refused(
+        original_id=original_id, corrected_title=corrected_title, actor_id=actor_id
+    )
+    async with get_sessionmaker()() as s:
+        assert await s.get(Blob, first.sha256) is None
+        assert (
+            await s.execute(
+                select(AuditEvent).where(
+                    AuditEvent.actor_id == actor_id,
+                    AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED,
+                )
+            )
+        ).scalars().all() == []
+
+
+async def test_record_correction_upload_identity_missing_exact_version_retains_newer(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("rec-correction-missing-exact")
+    actor_id = await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    original = await _capture(
+        app_client, h, record_type="CALIBRATION", title=f"original {uuid.uuid4().hex}"
+    )
+    assert original.status_code == 201, original.text
+    original_id = original.json()["id"]
+    corrected_title = f"missing exact correction {uuid.uuid4().hex}"
+    content = corrected_title.encode()
+    upload = await _upload_evidence(app_client, h, content)
+    assert upload.version_id is not None
+    replacement = await storage.put_staging_bytes(
+        content, upload.sha256, content_type="application/pdf"
+    )
+    await storage.delete_staged_version(
+        StagedVersionLocator(
+            domain=StagingDomain.STAGING,
+            object_key=upload.sha256,
+            version_id=upload.version_id,
+        )
+    )
+
+    rejected = await app_client.post(
+        f"/api/v1/records/{original_id}/correction",
+        headers=h,
+        json={
+            "record_type": "CALIBRATION",
+            "title": corrected_title,
+            "evidence": [_evidence_json(upload)],
+        },
+    )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "staged_source_unavailable"
+    assert not _object_version_exists("staging", upload.sha256, upload.version_id)
+    assert _object_version_exists("staging", upload.sha256, replacement.locator.version_id)
+    assert not _object_exists("records", upload.sha256)
+    await _assert_correction_refused(
+        original_id=original_id, corrected_title=corrected_title, actor_id=actor_id
+    )
+    async with get_sessionmaker()() as s:
+        assert await s.get(Blob, upload.sha256) is None
+        rejection_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.actor_id == actor_id,
+                        AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rejection_events) == 1
+    rejection = rejection_events[0]
+    assert rejection.after is not None
+    assert rejection.after["operation"] == "record_capture"
+    assert rejection.after["classification"] == "source_missing"
+    assert rejection.after["source"] == {
+        "bucket": "staging",
+        "object_key": upload.sha256,
+        "version_id": upload.version_id,
+        "etag": None,
+    }
+
+
+async def test_record_correction_upload_identity_allows_records_worm_dedup_without_version(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("rec-correction-dedup")
+    actor_id = await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    content = f"correction dedup {uuid.uuid4().hex}".encode()
+    upload = await _upload_evidence(app_client, h, content)
+    original = await _capture(
+        app_client,
+        h,
+        record_type="CALIBRATION",
+        title=f"original {uuid.uuid4().hex}",
+        evidence=[_evidence_json(upload)],
+    )
+    assert original.status_code == 201, original.text
+    original_id = original.json()["id"]
+    corrected_title = f"dedup correction {uuid.uuid4().hex}"
+    dedup = await _upload_evidence(app_client, h, content)
+    assert dedup.version_id is None
+
+    accepted = await app_client.post(
+        f"/api/v1/records/{original_id}/correction",
+        headers=h,
+        json={
+            "record_type": "CALIBRATION",
+            "title": corrected_title,
+            "evidence": [_evidence_json(dedup)],
+        },
+    )
+
+    assert accepted.status_code == 201, accepted.text
+    successor_id = accepted.json()["id"]
+    assert [item["sha256"] for item in accepted.json()["evidence_blobs"]] == [dedup.sha256]
+    assert _object_exists("records", dedup.sha256)
+    async with get_sessionmaker()() as s:
+        original_record = await s.get(Record, uuid.UUID(original_id))
+        original_base = await s.get(DocumentedInformation, uuid.UUID(original_id))
+        successor = await s.get(Record, uuid.UUID(successor_id))
+        assert original_record is not None
+        assert original_base is not None
+        assert successor is not None
+        assert str(original_record.superseded_by_correction) == successor_id
+        successors = (
+            (
+                await s.execute(
+                    select(DocumentedInformation).where(
+                        DocumentedInformation.title == corrected_title
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        attachments = (
+            (
+                await s.execute(
+                    select(EvidenceBlob).where(
+                        EvidenceBlob.record_id == uuid.UUID(successor_id),
+                        EvidenceBlob.blob_sha256 == dedup.sha256,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        correction_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == uuid.UUID(original_id),
+                        AuditEvent.event_type == EventType.RECORD_CORRECTED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        captured_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.actor_id == actor_id,
+                        AuditEvent.event_type == EventType.RECORD_CAPTURED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        rejection_events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.actor_id == actor_id,
+                        AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(successors) == 1
+    assert len(attachments) == 1
+    assert len(correction_events) == 1
+    assert len(captured_events) == 2
+    assert rejection_events == []
 
 
 async def test_correction_of_already_superseded_409(

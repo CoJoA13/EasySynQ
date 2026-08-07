@@ -22,7 +22,7 @@ from easysynq_api.db.session import get_sessionmaker
 from . import s5_helpers as s5
 from .test_objective_lifecycle import _OBJ_KEYS, _create_objective
 from .test_quality_objectives import _grant
-from .test_vault import _auth, _checkin
+from .test_vault import _auth, _checkin, _UploadResult
 
 pytestmark = pytest.mark.integration
 
@@ -62,7 +62,12 @@ async def test_generic_byte_path_rejected_on_objective(
     assert r2.json()["errors"][0]["code"] == "objective_managed_via_objectives"
     # checkin: the guard fires BEFORE the working-draft 409 (deterministic 422, no checkout exists)
     ci = await _checkin(
-        app_client, h, oid, "0" * 64, change_reason="x", change_significance="MAJOR"
+        app_client,
+        h,
+        oid,
+        _UploadResult(sha256="0" * 64, version_id="unused-staging-version"),
+        change_reason="x",
+        change_significance="MAJOR",
     )
     assert ci.status_code == 422, ci.text
     assert ci.json()["errors"][0]["code"] == "objective_managed_via_objectives"

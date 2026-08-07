@@ -107,11 +107,16 @@ export function useUploadAndCheckin() {
         { sha256, content_type: contentType },
       );
       // Skip the PUT when the bytes are already vaulted (content-addressed dedup).
-      if (!init.dedup && init.upload_url) {
-        await putToPresigned(init.upload_url, file, contentType);
+      let stagingVersionId: string | null = null;
+      if (!init.dedup) {
+        if (!init.upload_url) {
+          throw new Error("Upload failed: storage did not provide an upload URL");
+        }
+        stagingVersionId = (await putToPresigned(init.upload_url, file, contentType)).versionId;
       }
       return api.send<CheckinResult>("POST", `/api/v1/documents/${documentId}/checkin`, {
         sha256,
+        staging_version_id: stagingVersionId,
         change_reason: changeReason,
         change_significance: changeSignificance,
         mime_type: contentType,

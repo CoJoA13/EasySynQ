@@ -86,3 +86,21 @@ def test_public_api_html_has_dedicated_csp_and_frame_denial() -> None:
         assert directive in block, f"public HTML CSP missing: {directive}"
     assert 'X-Frame-Options "DENY"' in block
     assert 'Referrer-Policy "no-referrer"' in block
+
+
+def test_compatibility_rollback_guard_is_narrow_and_first_match() -> None:
+    text = _caddyfile()
+    match = re.search(
+        r"@compatibility_rollback_write \{\n(?P<body>.*?)\n\t\}", text, flags=re.DOTALL
+    )
+
+    assert match is not None
+    matcher = match.group("body")
+    assert "path /api/*" in matcher
+    assert "method POST PUT PATCH DELETE" in matcher
+    assert "vars {env.EASYSYNQ_COMPATIBILITY_READ_ONLY} 1" in matcher
+    assert "GET" not in matcher
+    assert "HEAD" not in matcher
+    assert "OPTIONS" not in matcher
+    assert text.index("handle @compatibility_rollback_write") < text.index("handle @sse")
+    assert 'respond "Write operations are disabled during compatibility rollback." 503' in text

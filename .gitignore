@@ -49,6 +49,9 @@ backups/
 # --- brainstorming visual-companion artifacts ---
 .superpowers/
 
+# --- agent-isolated implementation worktrees ---
+.worktrees/
+
 # --- external audit evidence (R61) ---
 # Audit runs capture screenshots and JSON from a LIVE authenticated instance: real hostnames, account
 # names, org identifiers and network detail. scripts/check-no-site-data.sh is a mechanical text scan and

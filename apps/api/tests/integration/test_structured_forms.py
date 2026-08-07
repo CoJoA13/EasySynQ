@@ -22,16 +22,21 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.db.models._audit_enums import ActorType, EventType
 from easysynq_api.db.models._record_enums import RecordDispositionState
 from easysynq_api.db.models._retention_enums import DispositionAction
+from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.disposition_event import DispositionEvent
+from easysynq_api.db.models.document_version import DocumentVersion
+from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.records.content_hash import CONTENT_HASH_VERSION_V1, record_content_hash
 from easysynq_api.services.records import build_structured_pdf, redrive_missing_structured_pdfs
 from easysynq_api.services.records import service as records_service
 from easysynq_api.services.vault import storage
+from easysynq_api.services.vault.staged_identity import UploadIdentityMismatch
 
 from . import s5_helpers as s5
 from .test_records import _grant, _subject
@@ -123,10 +128,31 @@ async def _authors(token_factory: Callable[..., str]) -> tuple[dict[str, str], d
 
 
 async def test_mode_b_happy_path(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ha, hb = await _authors(token_factory)
+    original_put = storage.put_staging_bytes
+    original_promote = storage.promote_worm
+    schema_source: object | None = None
+
+    async def capture_schema_source(data: bytes, sha256: str, *, content_type: str) -> object:
+        nonlocal schema_source
+        source = await original_put(data, sha256, content_type=content_type)
+        if content_type == "application/json":
+            schema_source = source
+        return source
+
+    async def require_exact_schema_source(source: object, *, target_bucket: str) -> object:
+        if getattr(source, "content_type", None) == "application/json":
+            assert source is schema_source
+        return await original_promote(source, target_bucket=target_bucket)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(storage, "put_staging_bytes", capture_schema_source)
+    monkeypatch.setattr(storage, "promote_worm", require_exact_schema_source)
     did = await _drive_template_effective(app_client, ha, hb, _CAL_SCHEMA)
+    assert schema_source is not None
 
     # The render-the-form read returns the pinned schema + the resolved version.
     eff = await app_client.get(f"/api/v1/documents/{did}/effective-form-schema", headers=ha)
@@ -153,6 +179,75 @@ async def test_mode_b_happy_path(
     assert body["source_version_id"] == effective_version_id
     assert body["source_document_id"] == did
     assert body["form_field_values"]["result"] == "pass"
+
+
+async def test_generated_schema_mismatch_is_system_503_without_owner_success(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ha, _hb = await _authors(token_factory)
+    mismatch_schema = {
+        "fields": [
+            {
+                "key": f"probe_{uuid.uuid4().hex[:8]}",
+                "label": "Generated mismatch probe",
+                "type": "string",
+                "required": True,
+            }
+        ]
+    }
+    did = await _new_form_template(app_client, ha, mismatch_schema)
+
+    async def mismatch(source: object, *, target_bucket: str) -> object:
+        raise UploadIdentityMismatch(
+            source=source,  # type: ignore[arg-type]
+            expected_sha256=source.expected_sha256,  # type: ignore[union-attr]
+            observed_sha256="f" * 64,
+            expected_size=source.expected_size,  # type: ignore[union-attr]
+            observed_size=source.expected_size,  # type: ignore[union-attr]
+            etag='"etag"',
+            classification="digest_mismatch",
+        )
+
+    monkeypatch.setattr(storage, "promote_worm", mismatch)
+    response = await app_client.post(
+        f"/api/v1/documents/{did}/form-schema:checkin",
+        headers=ha,
+        json={"change_reason": "schema", "change_significance": "MAJOR"},
+    )
+    assert response.status_code == 503, response.text
+    assert response.json()["code"] == "storage_unavailable"
+
+    async with get_sessionmaker()() as session:
+        doc = await session.get(DocumentedInformation, uuid.UUID(did))
+        assert doc is not None
+        versions = (
+            (
+                await session.execute(
+                    select(DocumentVersion).where(DocumentVersion.document_id == uuid.UUID(did))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert versions == []
+        audits = (
+            (
+                await session.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.org_id == doc.org_id,
+                        AuditEvent.event_type == EventType.BLOB_INTEGRITY_FAILED,
+                        AuditEvent.scope_ref == doc.identifier,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(audits) == 1
+        assert audits[0].actor_type is ActorType.system
+        assert audits[0].actor_id is None
 
 
 async def test_mode_b_validation_failure_is_422(

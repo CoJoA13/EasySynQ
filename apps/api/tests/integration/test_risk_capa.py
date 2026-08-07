@@ -7,9 +7,10 @@ risk's OWN process scope (re-authorized under the lock — the TOCTOU close), in
 ``process_id`` + a band-derived severity, sets ``source=risk``, and emits a ``RISK_SPAWNED_CAPA`` on
 the register head (+ the CAPA's own ``CAPA_RAISED`` on the record side).
 
-Run-scoped assertions (the shared session DB). These tests only ADD risks + spawn (no register
-lifecycle drive) → the head stays editable, non-polluting. The spawn-while-Effective operational
-proof lives in ``test_risk_lifecycle.py`` (with the ``restore_register_head`` teardown).
+Run-scoped assertions share the session DB. Before each row-authoring proof, the fixture advances
+the singleton register through its real lifecycle to an editable head; this makes a prior contract
+publish non-polluting without bypassing the production state machine. The spawn-while-Effective
+operational proof lives in ``test_risk_lifecycle.py`` (with the ``restore_register_head`` teardown).
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from easysynq_api.db.models.capa import Capa
 from easysynq_api.db.session import get_sessionmaker
 
 from .test_processes import _create_process, _grant, _user_id
+from .test_risk_lifecycle import _drive_to_editable, _setup_actors
 from .test_vault import _auth
 
 pytestmark = pytest.mark.integration
@@ -40,6 +42,26 @@ pytestmark = pytest.mark.integration
 def subj() -> SimpleNamespace:
     salt = uuid.uuid4().hex[:10]
     return SimpleNamespace(a=f"kc-rcap-a-{salt}", b=f"kc-rcap-b-{salt}", c=f"kc-rcap-c-{salt}")
+
+
+@pytest.fixture
+async def editable_risk_register(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Normalize the shared singleton through its real lifecycle before a row-authoring proof."""
+    salt = uuid.uuid4().hex[:10]
+    actors = SimpleNamespace(
+        steward=f"kc-rcap-state-s-{salt}",
+        approver=f"kc-rcap-state-a-{salt}",
+        releaser=f"kc-rcap-state-r-{salt}",
+    )
+    await _setup_actors(actors)
+    await _drive_to_editable(
+        app_client,
+        _auth(token_factory, actors.steward),
+        _auth(token_factory, actors.approver),
+        _auth(token_factory, actors.releaser),
+    )
 
 
 async def _assign_owner(
@@ -73,7 +95,10 @@ async def _create_risk(
 
 
 async def test_spawn_capa_for_risk_idempotent(
-    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    editable_risk_register: None,
 ) -> None:
     """The happy path: a SYSTEM register.manage + capa.create holder spawns a CAPA to treat a
     process-scoped risk — 201, source=risk, severity band-derived (4x5=20 critical → Critical),
@@ -128,7 +153,10 @@ async def test_spawn_capa_for_risk_idempotent(
 
 
 async def test_spawn_capa_race_serializes_to_one(
-    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    editable_risk_register: None,
 ) -> None:
     """Codex L4: the FOR UPDATE lock on the risk row — NOT a UNIQUE on the latch — is the
     idempotency guard. Two CONCURRENT spawns (asyncio.gather over two HTTP POSTs, each its own
@@ -158,7 +186,10 @@ async def test_spawn_capa_race_serializes_to_one(
 
 
 async def test_spawn_capa_authz_escalation(
-    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    editable_risk_register: None,
 ) -> None:
     """The spawn is gated capa.create at the risk's OWN process: a bound Process Owner of P1 (who
     holds capa.create @ P1 via the seeded bundle + the owner-assignment binding) spawns for the P1
@@ -191,7 +222,10 @@ async def test_spawn_capa_authz_escalation(
 
 
 async def test_spawn_replay_denied_for_reassigned_risk_cross_process(
-    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    editable_risk_register: None,
 ) -> None:
     """Codex P1: the latched CAPA keeps its ORIGINAL process when the risk is later reassigned. The
     SYSTEM author creates a P1 risk, spawns a CAPA (@ P1), then reassigns the risk to P2. A bound
@@ -229,7 +263,10 @@ async def test_spawn_replay_denied_for_reassigned_risk_cross_process(
 
 
 async def test_spawn_replay_requires_capa_read(
-    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    editable_risk_register: None,
 ) -> None:
     """Codex round 2: the replay RETURNS the existing CAPA's details, so it is gated capa.read over
     the CAPA's process (the GET /capas/{id} authority), not merely capa.create. A caller with
@@ -254,7 +291,10 @@ async def test_spawn_replay_requires_capa_read(
 
 
 async def test_spawn_rejects_opportunity_rows(
-    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    editable_risk_register: None,
 ) -> None:
     """Codex round 2: a CAPA is a corrective/preventive action — only a ``risk`` row is treated by
     one. A ``type=opportunity`` row is rejected (422); opportunities are pursued via improvement

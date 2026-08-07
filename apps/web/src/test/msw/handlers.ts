@@ -3548,7 +3548,14 @@ export const handlers = [
     }),
   ),
   // the presigned MinIO PUT — cross-origin, no bearer.
-  http.put(/^https:\/\/minio\.test\//, () => new HttpResponse(null, { status: 200 })),
+  http.put(
+    /^https:\/\/minio\.test\//,
+    () =>
+      new HttpResponse(null, {
+        status: 200,
+        headers: { "x-amz-version-id": "v-browser-1" },
+      }),
+  ),
   http.post("/api/v1/documents/:id/checkin", ({ params }) =>
     HttpResponse.json(mkVersion(String(params.id)), { status: 201 }),
   ),

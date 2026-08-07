@@ -65,7 +65,7 @@ graph TB
         WK["worker (Celery)<br/>scan, extract, OCR,<br/>classify, dedup,<br/>propose, commit, mirror"]
         REND["renderer (Gotenberg/LO)<br/>Office&rarr;PDF normalization"]
         PG[("PostgreSQL 16<br/>import_* staging tables<br/>+ vault tables + audit")]
-        OBJ[("MinIO<br/>staging bucket (temp)<br/>+ vault blob buckets (WORM)")]
+        OBJ[("MinIO<br/>versioned import-staging (non-WORM)<br/>+ vault blob buckets (WORM)")]
         IDX[("In-process MinHash<br/>near-duplicate detection")]
         RDS[("Redis<br/>job state, locks,<br/>run idempotency keys")]
     end
@@ -91,7 +91,9 @@ graph TB
 
 **Boundary rules inherited:**
 - Source tree is mounted **read-only** (`:ro`) — the engine physically cannot write back (NG3).
-- Staging blobs live in a dedicated MinIO bucket **without** object-lock; only on **Commit** are blobs promoted (copied content-addressed) into the **WORM** vault buckets. This keeps abandoned/rolled-back imports from polluting the immutable store.
+- Staging blobs live in the dedicated, **versioned** `import-staging` MinIO bucket without
+  object-lock; only on **Commit** are exact versions promoted into WORM. There is no blanket expiry:
+  reviewed long-running imports and valid restart evidence must not disappear underneath their rows.
 - The shipped in-process MinHash provider proposes near-duplicates; authoritative human decisions
   are persisted in PostgreSQL. A future search sidecar remains an optional provider, not a current
   dependency.
@@ -182,9 +184,13 @@ A single walker enumerates the source root depth-first, emitting batches (defaul
 | `mtime`, `ctime` | stat | used as date hints for version/obsolescence heuristics |
 | `mime_type` | libmagic content sniff (not just extension) | guards against mislabeled extensions |
 | `sha256` | streamed hash | the **exact-dup key** and the eventual blob content address |
-| `staged_blob_uri` | copy-to-staging | content-addressed object in the staging bucket |
+| `staged_blob_uri` | copy-to-staging | Exact locator `s3://import-staging/{sha256}?versionId={URL-encoded opaque VersionId}`. |
 
-> Files are **streamed** to compute SHA-256 and copied to the staging bucket in one pass, so large trees aren't read twice. Staging copy is itself content-addressed, so two identical files copy once.
+> Files are **streamed** to compute SHA-256 and copied to `import-staging` in one pass, so large trees
+> are not read twice. The scanner pins the exact canonical VersionId it verified. A pre-change URI
+> without `versionId` fails closed with restart/rescan guidance; its run, classifications, and review
+> decisions remain visible. Canonical reuse is allowed only after GET/hash of a pinned version, never
+> by key-exists or key-latest.
 
 ### 4.2 Filters & quarantine (configurable, with safe defaults)
 
@@ -534,7 +540,8 @@ sequenceDiagram
     API->>PG: lock run; validate decisions; snapshot reviewed owner IDs; status=Committing
     loop per confirmed item (bounded parallelism)
         WK->>PG: begin tx
-        WK->>OBJ: promote staging blob -> vault bucket (content-addressed, object-lock ON)
+        WK->>OBJ: GET/hash exact import-staging VersionId
+        WK->>OBJ: conditional COPY exact version -> WORM vault
         WK->>PG: create Document (identifier, kind, clause_map, process_links, pdca_phase, owner, framework_id)
         WK->>PG: create Version Rev A (immutable) referencing source blob
         WK->>PG: set lifecycle = Effective (baseline)
@@ -554,11 +561,13 @@ sequenceDiagram
 |---|---|
 | **Baseline state** | Every imported Document lands at **`Rev A`, Effective** — it is treated as the org's *currently governing* version (these are existing, in-force documents, not new drafts). Per family, only the canonical (current/latest) is Effective; by **default** older members are **archived as provenance** (not ingested as versions). **Only** when a family is **explicitly opted into revision-chain reconstruction and confirmed at commit time** would older members be materialized as provenance, not approved history (R10). **Current behavior:** an opted-in family is refused at commit (422 `revision_chain_reconstruction_unsupported`) rather than fabricating a chain; see §7.2. |
 | **Immutability** | The source bytes become an **immutable, content-addressed blob** in a **WORM/object-lock** vault bucket; the Version snapshot is immutable. (Architecture invariant 3.) |
+| **Exact source identity** | Commit parses the URL-encoded `versionId`, GETs and stream-hashes that exact source, and copies that exact version. ETag is only `CopySourceIfMatch`; it is not a digest. A legacy key-only row requires restart/rescan. |
 | **Records are retained, not versioned** | Items classified **RECORD** are committed as immutable **Record** entities with `captured_at` (best-effort from embedded/mtime), `retention` (org default policy, Mara-set), and **no edit affordance** — honoring the maintain/retain distinction. A Record pins its source where evidence allows. |
 | **Reviewed ownership** | The folded reviewed owner is materialized on both imported Documents and Records. Ownership is separate from commit attribution: `created_by` / `captured_by` and the `import_baseline` signer remain the human committer. An unresolved best-effort engine hint falls back to the committer. An unresolved or ambiguous explicit human assignment blocks the initial commit while the run remains reviewable; the review→commit transaction stores the validated directory ID in internal run-level materialization state, leaving accepted/corrected counts and decision history untouched. Resume lazily snapshots remaining items from older partial runs; failed/remaining files may receive a per-file correction, while successful/no-op items are immutable. The worker still fails closed on a missing, guest, or cross-org snapshot. |
 | **Provenance** | Every committed item stores its **import provenance**: original `rel_path`, source `sha256`, `run_id`, `classifier_version`, final `confidence`, and `decided_by` (engine-auto vs Mara-corrected). This is permanent and appears in the artifact's history. |
 | **Approval-as-import** | The baseline "release" is recorded as a `signature_event` whose `meaning` is the canonical enum value **`import_baseline`** (reconciled per Decisions Register R2) — capturing who committed and when. Per R2, `import_baseline` is the **signature meaning that signifies the baseline acceptance of a pre-existing controlled document into the vault at commit**: it is *not* a fresh authoring/approval signature but the formal, attributed acknowledgement that this imported artifact is the org's currently-governing baseline. This reuses the **Part-11 signature hook** so the baseline is on the same append-only signature spine as future e-signatures — no special-casing. |
 | **No partial vault state** | A per-item tx either fully creates {blob promoted + Document + Version + audit} or rolls that **one** item back; it never half-commits. |
+| **Refusal evidence and cleanup** | An identity/source refusal rolls back the item, commits the failed ledger and audit evidence, then deletes only the rejected exact version. Cleanup retry uses the committed exact locator; audit failure forbids cleanup. Storage/WORM ambiguity retains source bytes. |
 | **Idempotent re-commit** | If `commit_item` re-runs for an item already committed (crash/retry), it detects the existing `(run_id, file_id)` commit result + matching content hash and **no-ops** — never a duplicate Document. Success/no-op and failure ledger writes are conditional and atomic; a losing failure writer emits no false `IMPORT_ITEM_FAILED` audit event. |
 
 ### 10.3 Mirror generation (Stage 8)

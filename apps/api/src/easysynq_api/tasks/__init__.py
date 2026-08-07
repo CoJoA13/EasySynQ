@@ -20,6 +20,7 @@ from . import (  # noqa: F401  (registers the Celery tasks)
     packs,
     records,
     review,
+    upload_identity,
     visual_diff,
 )
 from .app import app

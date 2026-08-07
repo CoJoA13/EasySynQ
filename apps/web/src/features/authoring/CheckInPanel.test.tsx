@@ -10,10 +10,18 @@ const DOC = "33333333-3333-3333-3333-333333333333";
 
 it("checks out, uploads, and checks in a new version (PUT carries no bearer)", async () => {
   let putAuth: string | null = "unset";
+  let checkinBody: Record<string, unknown> | null = null;
   server.use(
     http.put(/^https:\/\/minio\.test\//, ({ request }) => {
       putAuth = request.headers.get("authorization");
-      return new HttpResponse(null, { status: 200 });
+      return new HttpResponse(null, {
+        status: 200,
+        headers: { "x-amz-version-id": "v-browser-1" },
+      });
+    }),
+    http.post("/api/v1/documents/:id/checkin", async ({ request }) => {
+      checkinBody = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json({ id: "version-1" }, { status: 201 });
     }),
   );
   const onCheckedIn = vi.fn();
@@ -32,6 +40,7 @@ it("checks out, uploads, and checks in a new version (PUT carries no bearer)", a
 
   await waitFor(() => expect(onCheckedIn).toHaveBeenCalledTimes(1));
   expect(putAuth).toBeNull();
+  expect(checkinBody).toMatchObject({ staging_version_id: "v-browser-1" });
   // after check-in the lock is released server-side → the panel returns to the check-out affordance
   // (so an iterative second revision in the drawer re-checks-out instead of 409-ing)
   expect(await screen.findByRole("button", { name: /check out to edit/i })).toBeInTheDocument();
@@ -63,6 +72,7 @@ it("shows the lock holder + a force-unlock affordance on a 409 lock conflict", a
 
 it("skips the MinIO PUT when init-upload reports a dedup hit", async () => {
   let putCalled = false;
+  let checkinBody: Record<string, unknown> | null = null;
   server.use(
     http.post(/\/api\/v1\/documents\/[^/]+\/versions:init-upload$/, () =>
       HttpResponse.json({ dedup: true, object_key: "sha-existing", upload_url: null }),
@@ -70,6 +80,10 @@ it("skips the MinIO PUT when init-upload reports a dedup hit", async () => {
     http.put(/^https:\/\/minio\.test\//, () => {
       putCalled = true;
       return new HttpResponse(null, { status: 200 });
+    }),
+    http.post("/api/v1/documents/:id/checkin", async ({ request }) => {
+      checkinBody = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json({ id: "version-dedup" }, { status: 201 });
     }),
   );
   const onCheckedIn = vi.fn();
@@ -85,4 +99,34 @@ it("skips the MinIO PUT when init-upload reports a dedup hit", async () => {
   await user.click(screen.getByRole("button", { name: /check in as draft/i }));
   await waitFor(() => expect(onCheckedIn).toHaveBeenCalled());
   expect(putCalled).toBe(false);
+  expect(checkinBody).toMatchObject({ staging_version_id: null });
+});
+
+it("does not call check-in when a non-dedup init response omits the upload URL", async () => {
+  let checkinCalled = false;
+  server.use(
+    http.post(/\/api\/v1\/documents\/[^/]+\/versions:init-upload$/, () =>
+      HttpResponse.json({ dedup: false, object_key: "sha-new", upload_url: null }),
+    ),
+    http.post("/api/v1/documents/:id/checkin", () => {
+      checkinCalled = true;
+      return HttpResponse.json({ id: "must-not-exist" }, { status: 201 });
+    }),
+  );
+
+  const onCheckedIn = vi.fn();
+  const { container } = renderWithProviders(
+    <CheckInPanel documentId={DOC} onCheckedIn={onCheckedIn} />,
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: /check out to edit/i }));
+  await screen.findByText(/checked out by you/i);
+  const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+  await user.upload(fileInput, new File(["bytes"], "doc.pdf", { type: "application/pdf" }));
+  await user.type(screen.getByLabelText(/change reason/i), "new bytes");
+  await user.click(screen.getByRole("button", { name: /check in as draft/i }));
+
+  expect(await screen.findByText(/something went wrong/i)).toBeInTheDocument();
+  expect(checkinCalled).toBe(false);
+  expect(onCheckedIn).not.toHaveBeenCalled();
 });
