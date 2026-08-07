@@ -48,8 +48,8 @@ Branch: `feat/s-<name>`.
 Verify the head with `cd apps/api && uv run alembic heads` — **never** `ls migrations/versions/ | tail -1`,
 which returns `__pycache__`.
 
-⚠ **What the gates cannot see:** `redocly lint` passes an omitted or factually wrong status code or
-summary, and **no CI job runs `scripts/gen-contracts.sh`**, so `.contract.lock` drift never goes red.
+⚠ **What the gates cannot see:** Redocly plus the CI checksum gate catch shape and committed contract
+drift, but an omitted or factually wrong status code or summary can still pass.
 
 ## Reviewers, before the PR
 

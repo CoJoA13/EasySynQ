@@ -44,7 +44,7 @@ Seed a GLOBAL `notification_template` (no `org_id`) so the seed is exercised by 
   - ⚠ Do not use one shared-DB local `-m integration` run as the sole gate — run the SCOPED file + a cross-file ordering proof; the isolated CI shards are authoritative (`docs/dev-workflow.md`).
 
 ### 7. Verify + review
-- `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -m unit` (fast, clean locally).
+- `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest tests/unit -m unit` (fast, clean locally).
 - `/check-migrations` for the round-trip; if a column was added, the `migration-reviewer` agent.
 - Run the **`notification-wiring-reviewer`** agent on the branch diff — it is pre-loaded with exactly these traps — then the whole-branch `diff-critic`.
 

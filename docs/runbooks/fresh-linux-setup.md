@@ -165,10 +165,10 @@ With a native Docker engine, the integration suite can run locally.
 
 | Gate | Command |
 |---|---|
-| API unit | `cd apps/api && uv run pytest -m unit -q` (or the `/check-api` skill: ruff + format + mypy-strict + unit) |
+| API unit | `cd apps/api && uv run pytest tests/unit -m unit -q` (or the `/check-api` skill: ruff + format + mypy-strict + unit) |
 | Migrations | `/check-migrations` (alembic up↔down↔check on a throwaway PG16) |
-| Web | `cd apps/web && npx vitest run --pool=forks --maxWorkers=1` + `npm run lint && npm run typecheck && npm run build` (**vitest 4** — the old `--poolOptions.forks.singleFork` flag is gone) |
-| Integration | Run **CI-sharded** (a single full process pollutes — see ⚠): `cd apps/api && for g in 1 2 3 4; do uv run pytest -m integration --splits 4 --group $g --durations-path .test_durations; done` (needs Docker **and a version-matched `pg_dump`** — see ⚠) |
+| Web | `(set -e; cd apps/web; for shard in 1 2; do npm test -- --shard="$shard/2"; done; npm run lint; npm run build)` (`build` owns the one `tsc --noEmit` pass) |
+| Integration | Run **CI-sharded** (a single full process pollutes — see ⚠): `(set -e; cd apps/api; for g in 1 2 3 4; do uv run pytest tests/integration -m integration --splits 4 --group "$g" --durations-path .test_durations; done)` (needs Docker **and a version-matched `pg_dump`** — see ⚠) |
 
 ⚠ **If Docker Desktop for Linux is installed, testcontainers cannot reach the daemon** — this is a
 hard blocker, not an ignorable artifact, and it presents as the ENTIRE integration suite erroring out
@@ -215,7 +215,8 @@ any comment you add must not contain an equals sign or it is silently read as a 
 ⚠ **Host-environment test traps (not product regressions when the clean CI gate passes):**
 - **Run the integration suite sharded, the way CI does.** CI runs it as **4 parallel shards**
   (`--splits 4 --group {1..4}`, each its own process + testcontainers). A single full
-  `pytest -m integration` process reuses one shared DB + mirror filesystem across all ~760 tests and
+  `pytest tests/integration -m integration` process reuses one shared DB + mirror filesystem across
+  all 1,057 current tests and
   produces **~44 cross-file-pollution failures** (concentrated in `test_setup` / `test_mirror_scan` /
   `test_restore` — shared `setup_state`, `mirror_build` rows, restore-scratch). The very same files pass
   **in isolation** and **sharded**. Use the sharded command in the table; the single-process number is
@@ -253,4 +254,4 @@ any comment you add must not contain an equals sign or it is silently read as a 
 - `.claude/rules/windows-dev.md` is **historical** — its gotchas (`MSYS_NO_PATHCONV`, "bash.exe on PATH",
   Docker Desktop path mangling) are Windows-only and do not apply on native Linux.
 - Older Windows-native baselines involving ProactorEventLoop / `O_NOFOLLOW` do not apply on Linux;
-  `pytest -m unit` is expected to be a clean gate.
+  `pytest tests/unit -m unit` is expected to be a clean gate.

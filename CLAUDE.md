@@ -50,7 +50,7 @@ Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no sh
 ## Workflow
 
 - `main` has **no enforced protection** (branch protection is unavailable on this free-plan private repo — verified 2026-08-02 via API, `protected: false`; rulesets are paywalled). The five required checks and no-direct-push are **convention/discipline, not enforcement**: slice work on a `feat/sN-*` branch → PR → green CI → squash-merge.
-- CI = **9 jobs / 12 checks** (`.github/workflows/ci.yml`): `contracts` (redocly lint **+ the R61 backstop**) · `contract-responses` (schemathesis over every mounted operation) · `api` (ruff/mypy-strict/unit) · `migrations` (alembic up↔down + `alembic check`) · `integration-shards` (×4, `.test_durations`-balanced) · `integration` · `web` (eslint/tsc/build/test) · `security` (**warn-only** until its ratchet) · `compose-images-lock`. The five "core" ones are convention, not the whole gate — green ≠ done unless all 12 are.
+- CI = **10 jobs / 14 checks** (`.github/workflows/ci.yml`): `contracts` (Redocly lint + contract-lock check **+ the R61 backstop**) · `contract-responses` (schemathesis over every mounted operation) · `api` (ruff/mypy-strict/unit) · `migrations` (alembic up↔down + `alembic check`) · `integration-shards` (×4, `.test_durations`-balanced) · `integration` · `web-shards` (×2 isolated Vitest partitions; shard 2 also runs eslint/tsc/build) · stable `web` aggregate · `security` (**warn-only** until its ratchet) · `compose-images-lock`. The five "core" ones are convention, not the whole gate — green ≠ done unless all 14 are.
 - Toolchain: `uv` + managed **Python 3.12** (do not depend on system Python), Node 22, and a current
   supported Docker/Compose.
 - Run the stack: `just up s` → http://localhost; stop `just down`. ⚠ Point the app at the **non-owner** DB role for S6+ — see `docs/dev-workflow.md`.
@@ -65,7 +65,10 @@ Search currently uses PostgreSQL FTS behind the R34 OpenSearch-ready seam; no sh
 - Web: `/check-web` (eslint + tsc + build + test).
 - Contracts: `/check-contracts` (redocly lint on `packages/contracts/openapi.yaml`).
 - Before a PR: run the `diff-critic` agent on the branch diff (see Working preferences).
-- ⚠ **What the gates can't see:** `redocly lint` validates shape, not completeness — an **omitted or factually wrong** status code / summary passes a green `contracts` job. And **no CI job runs `scripts/gen-contracts.sh`**, so `packages/contracts/.contract.lock` can drift from `openapi.yaml` and never go red — run `bash scripts/gen-contracts.sh` after editing the contract and commit the lock.
+- ⚠ **What the gates can't see:** Redocly and the bundled-contract checksum validate shape and
+  committed contract drift, not semantic completeness — an **omitted or factually wrong** status
+  code / summary can still pass a green `contracts` job. Run `bash scripts/gen-contracts.sh` after
+  editing the contract so the local generated clients stay current; CI verifies the committed lock.
 
 ## Deep Dive — read on demand
 

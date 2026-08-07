@@ -15,8 +15,8 @@ that `just`, the `.sh` glue, and Claude Code's `.claude/hooks/*.sh` all require*
   `bash.exe` is on PATH.
 - After completing setup, create the documented disposable `demo` fixture before a UI smoke; do not
   assume any particular live instance is already operational.
-- `just check` runs ruff + ruff-format + mypy-strict + the **full `pytest -m unit`** (api) + the web
-  loop (eslint/tsc/build/test); no Docker. Native Windows cannot faithfully exercise every POSIX
+- `just check` runs ruff + ruff-format + mypy-strict + the **full `pytest tests/unit -m unit`** (api)
+  + the web loop (eslint/one tsc+build pass/test); no Docker. Native Windows cannot faithfully exercise every POSIX
   `O_NOFOLLOW`/symlink path, so run targeted unit files locally and require the Linux CI/full-suite
   result rather than accepting a machine-specific failure baseline.
 - `just demo-user` — (re)create the `demo` login (see Keycloak note). `just seed-personas` — the SoD
