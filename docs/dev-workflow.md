@@ -6,8 +6,8 @@
 ## Branch + PR flow
 
 `main` is not technically protected on the current hosting plan; no-direct-push and review are
-project conventions. Do slice work on a `feat/sN-*` branch → open a PR → all 12 CI checks green →
-squash-merge. See `CLAUDE.md` for the current 9-job/12-check matrix.
+project conventions. Do slice work on a `feat/sN-*` branch → open a PR → all 14 CI checks green →
+squash-merge. See `CLAUDE.md` for the current 10-job/14-check matrix.
 
 ## Toolchain (Linux CI / a Linux dev host)
 
@@ -23,17 +23,19 @@ depend on the system Python. Lockfiles are committed (`uv.lock`, `package-lock.j
   `sg docker -c "…"` wrapper can refresh group membership for that command.
 - **Fresh-clone contract generation:** `just setup` → `just contracts` creates the gitignored server
   and web `_generated/` directories, lints/bundles `openapi.yaml`, and generates Pydantic models plus
-  TypeScript schema types. The required CI/pre-commit contract gate remains Redocly lint; the
-  authenticated `contract-responses` job separately checks mounted response schemas.
+  TypeScript schema types. The required CI contract gate runs Redocly lint plus
+  `gen-contracts.sh --check`; pre-commit runs the matching lint step, and the authenticated
+  `contract-responses` job separately checks mounted response schemas.
 
 ## Local loops (fast; no commit needed to iterate)
 
 - API: `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest` (unit always; `-m integration` needs Docker for testcontainers).
-- Web: `cd apps/web && npm run lint && npm run typecheck && npm run build && npm test` (or the `/check-web` skill).
+- Web: `cd apps/web && npm run lint && npm run build && npm test` (or the `/check-web` skill; `build`
+  already runs `tsc --noEmit`).
 - **Docker-backed checks:** when `docker info` succeeds, run integration tests via testcontainers and
   migrations against a disposable PostgreSQL 16 instance. Backup/restore tests also require a
   version-matched PostgreSQL client (`pg_dump`/`pg_restore`). If group membership requires it, wrap
-  the command with `sg docker -c "cd apps/api && uv run pytest -m integration …"`.
+  the command with `sg docker -c "cd apps/api && uv run pytest tests/integration -m integration …"`.
 - **Integration isolation:** the suite shares a database within each process, and shard composition
   moves. Prefer a focused file plus an order-check during iteration; before publication, run the
   same four isolated shards as CI with a version-matched client. Treat a failure as evidence to

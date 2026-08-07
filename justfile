@@ -42,12 +42,12 @@ test:
     cd apps/web && npm test
 
 test-contract:
-    cd apps/api && uv run pytest -m contract
+    cd apps/api && uv run pytest tests/integration/test_contract_response_schemas.py -m contract
 
 # Local CI: the full api + web fast loops (uv/node toolchain; no Docker). Mirror of the green gates.
 check:
-    cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -m unit
-    cd apps/web && npm run lint && npm run typecheck && npm run build && npm test
+    cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest tests/unit -m unit
+    cd apps/web && npm run lint && npm run build && npm test
 
 # --- migrations (single tree at repo root) ---
 migrate-new msg="":
