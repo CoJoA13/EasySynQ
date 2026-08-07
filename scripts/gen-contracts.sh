@@ -4,10 +4,8 @@
 # bundled contract hash drifts from packages/contracts/.contract.lock.
 set -euo pipefail
 
-# ⚠ The fallback MUST be a subshell: `A || B && pwd` is left-associative, so when `git rev-parse`
-# SUCCEEDS the `&& pwd` still runs and ROOT captures TWO lines (toplevel + pwd) → a mangled spec
-# path. Wrapping the fallback as `(cd … && pwd)` keeps `pwd` inside the `||` branch only.
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || (cd "$(dirname "$0")/.." && pwd))"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+RUN_CONTRACT_TOOL="$ROOT/scripts/run-contract-tool.sh"
 SPEC="$ROOT/packages/contracts"
 DIST="$SPEC/dist"
 LOCK="$SPEC/.contract.lock"
@@ -19,8 +17,13 @@ mkdir -p \
   "$ROOT/apps/web/src/api/_generated"
 
 # 1. lint + bundle the (possibly split) spec into one file
-npx --yes @redocly/cli lint "$SPEC/openapi.yaml"
-npx --yes @redocly/cli bundle "$SPEC/openapi.yaml" -o "$DIST/openapi.json"
+"$RUN_CONTRACT_TOOL" redocly lint \
+  --config packages/contracts/redocly.yaml \
+  packages/contracts/openapi.yaml
+"$RUN_CONTRACT_TOOL" redocly bundle \
+  --config packages/contracts/redocly.yaml \
+  packages/contracts/openapi.yaml \
+  -o packages/contracts/dist/openapi.json
 
 # 2. checksum gate
 NEW_HASH="$(sha256sum "$DIST/openapi.json" | awk '{print $1}')"
@@ -42,10 +45,12 @@ echo "$NEW_HASH" > "$LOCK"
     --output src/easysynq_api/_generated/models.py \
     --output-model-type pydantic_v2.BaseModel \
     --set-default-enum-member \
-    --use-standard-collections --use-annotated --target-python-version 3.12 )
+    --use-standard-collections --use-annotated --target-python-version 3.12 \
+    --disable-timestamp )
 
 # 4. client: TS types
-( cd "$ROOT/apps/web" && npx --yes openapi-typescript "$DIST/openapi.json" \
-    -o src/api/_generated/schema.d.ts )
+"$RUN_CONTRACT_TOOL" openapi-typescript \
+  packages/contracts/dist/openapi.json \
+  -o apps/web/src/api/_generated/schema.d.ts
 
 echo "gen-contracts: bundled + generated (hash $NEW_HASH)"
