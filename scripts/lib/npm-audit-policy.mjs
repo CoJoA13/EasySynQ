@@ -100,7 +100,11 @@ function validateAdvisory(value, path) {
   if (value.cvss.vectorString !== null && typeof value.cvss.vectorString !== 'string') {
     fail('E_AUDIT_SCHEMA', `${path}.cvss.vectorString must be a string or null`);
   }
-  return advisoryIdFromUrl(value.url, value.source);
+  return {
+    kind: 'advisory',
+    advisoryId: advisoryIdFromUrl(value.url, value.source),
+    severity: value.severity,
+  };
 }
 
 function validateFixAvailable(value, path) {
@@ -131,12 +135,15 @@ function validateAuditRecord(key, value) {
   for (const [index, cause] of value.via.entries()) {
     if (typeof cause === 'string') {
       assertNonEmptyString(cause, 'E_AUDIT_SCHEMA', `${path}.via[${index}]`);
-      causes.push(cause);
+      causes.push({ kind: 'package', package: cause });
     } else {
       causes.push(validateAdvisory(cause, `${path}.via[${index}]`));
     }
   }
-  if (new Set(causes).size !== causes.length) {
+  const causeKeys = causes.map((cause) => cause.kind === 'advisory'
+    ? `advisory\0${cause.advisoryId}`
+    : `package\0${cause.package}`);
+  if (new Set(causeKeys).size !== causes.length) {
     fail('E_AUDIT_SCHEMA', `${path}.via must not contain duplicate causes`);
   }
   const effects = [...assertUniqueStringArray(
@@ -160,6 +167,41 @@ function validateAuditRecord(key, value) {
     effects,
     nodes,
   };
+}
+
+function validateCauseGraph(records) {
+  const byPackage = new Map(records.map((record) => [record.package, record]));
+  const resolvedSeverities = new Map();
+  const visiting = new Set();
+
+  function resolveSeverity(record) {
+    if (resolvedSeverities.has(record.package)) return resolvedSeverities.get(record.package);
+    if (visiting.has(record.package)) {
+      fail('E_AUDIT_SCHEMA', `vulnerability cause cycle includes ${record.package}`);
+    }
+    visiting.add(record.package);
+
+    const causeSeverities = record.causes.map((cause) => {
+      if (cause.kind === 'advisory') return cause.severity;
+      const inheritedRecord = byPackage.get(cause.package);
+      if (inheritedRecord === undefined) {
+        fail('E_AUDIT_SCHEMA', `${record.package} has unresolved inherited cause ${cause.package}`);
+      }
+      return resolveSeverity(inheritedRecord);
+    });
+    const severity = causeSeverities.reduce((highest, current) => (
+      SEVERITIES.indexOf(current) > SEVERITIES.indexOf(highest) ? current : highest
+    ));
+    if (record.severity !== severity) {
+      fail('E_AUDIT_SCHEMA', `${record.package} severity contradicts its causes`);
+    }
+
+    visiting.delete(record.package);
+    resolvedSeverities.set(record.package, severity);
+    return severity;
+  }
+
+  for (const record of records) resolveSeverity(record);
 }
 
 function validateAuditReport(report) {
@@ -205,6 +247,7 @@ function validateAuditReport(report) {
       `metadata.dependencies.${field}`,
     );
   }
+  validateCauseGraph(records);
   return records;
 }
 
@@ -244,6 +287,10 @@ function parseExpiry(value, path) {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) {
     fail('E_EXCEPTION_SCHEMA', `${path} must be a valid timestamp`);
+  }
+  const canonicalValue = value.includes('.') ? value : value.replace('Z', '.000Z');
+  if (new Date(timestamp).toISOString() !== canonicalValue) {
+    fail('E_EXCEPTION_SCHEMA', `${path} must be a valid calendar timestamp`);
   }
   return timestamp;
 }
@@ -332,14 +379,23 @@ function sameSet(left, right) {
   return left.length === right.length && left.every((value) => right.includes(value));
 }
 
-function recordMatchesException(record, expected) {
+function recordMatchesException(record, expected, rootPackage) {
+  const expectedCauseKind = expected.package === rootPackage ? 'advisory' : 'package';
+  const actualCauses = record.causes
+    .filter((cause) => cause.kind === expectedCauseKind)
+    .map((cause) => cause.kind === 'advisory' ? cause.advisoryId : cause.package);
   return record.package === expected.package
     && record.severity === 'high'
     && record.isDirect === expected.isDirect
     && record.versions.length === 1
     && record.versions[0] === expected.version
-    && sameSet(record.causes, expected.causes)
+    && actualCauses.length === record.causes.length
+    && sameSet(actualCauses, expected.causes)
     && sameSet(record.effects, expected.effects);
+}
+
+function causeIdentifier(cause) {
+  return cause.kind === 'advisory' ? cause.advisoryId : cause.package;
 }
 
 function blockedRecords(records, reason, advisoryIds) {
@@ -347,7 +403,7 @@ function blockedRecords(records, reason, advisoryIds) {
     package: record.package,
     severity: record.severity,
     version,
-    advisoryIds: advisoryIds ?? [...record.causes].sort(),
+    advisoryIds: advisoryIds ?? record.causes.map(causeIdentifier).sort(),
     reason,
   })));
 }
@@ -400,7 +456,8 @@ export function assessNpmAudit({
     const exact = candidates.length === exception.records.length
       && exception.records.every((expected) => {
         const record = actualByPackage.get(expected.package);
-        return record !== undefined && recordMatchesException(record, expected);
+        return record !== undefined
+          && recordMatchesException(record, expected, exception.rootPackage);
       });
 
     for (const record of candidates) consumedPackages.add(record.package);

@@ -175,6 +175,40 @@ test('the exact atomic Router pair is accepted before expiry', () => {
   });
 });
 
+test('a direct advisory object cannot be replaced by an inherited package string', () => {
+  const report = clone(routerFixture);
+  const lockfile = clone(lockFixture);
+  const advisoryIdPackage = advisoryRecord('GHSA-qwww-vcr4-c8h2', 'high');
+  report.vulnerabilities['react-router'].via = ['GHSA-qwww-vcr4-c8h2'];
+  replaceRecords(report, [...Object.values(report.vulnerabilities), advisoryIdPackage]);
+  lockfile.packages['node_modules/GHSA-qwww-vcr4-c8h2'] = { version: '1.0.0' };
+
+  const result = assess(report, { exitCode: 1, lockfile });
+  assert.deepEqual(result.accepted, []);
+  assert.deepEqual(
+    result.blocked.filter(({ package: name }) => name.startsWith('react-router'))
+      .map(({ package: name, reason }) => ({ name, reason })),
+    [
+      { name: 'react-router', reason: 'exception-record-mismatch' },
+      { name: 'react-router-dom', reason: 'exception-record-mismatch' },
+    ],
+  );
+});
+
+test('an inherited package string cannot be replaced by a direct advisory object', () => {
+  const report = clone(routerFixture);
+  report.vulnerabilities['react-router-dom'].via = [
+    clone(report.vulnerabilities['react-router'].via[0]),
+  ];
+
+  const result = assess(report, { exitCode: 1 });
+  assert.deepEqual(result.accepted, []);
+  assert.deepEqual(result.blocked.map(({ package: name, reason }) => ({ name, reason })), [
+    { name: 'react-router', reason: 'exception-record-mismatch' },
+    { name: 'react-router-dom', reason: 'exception-record-mismatch' },
+  ]);
+});
+
 test('a critical severity change blocks the formerly exact Router pair', () => {
   const report = clone(routerFixture);
   for (const record of Object.values(report.vulnerabilities)) record.severity = 'critical';
@@ -225,12 +259,30 @@ test('an additional object cause blocks the Router exception', () => {
   assert.ok(result.blocked.every(({ reason }) => reason === 'exception-record-mismatch'));
 });
 
-test('an additional string cause blocks the Router exception', () => {
+test('an unresolved inherited package cause fails closed', () => {
   const report = clone(routerFixture);
   report.vulnerabilities['react-router-dom'].via.push('unexpected-root');
-  const result = assess(report, { exitCode: 1 });
+  assertPolicyError('E_AUDIT_SCHEMA', () => assess(report, { exitCode: 1 }));
+});
+
+test('an additional resolved inherited package cause blocks the Router exception', () => {
+  const report = clone(routerFixture);
+  const lockfile = clone(lockFixture);
+  const unexpectedRoot = advisoryRecord('unexpected-root', 'high');
+  report.vulnerabilities['react-router-dom'].via.push('unexpected-root');
+  replaceRecords(report, [...Object.values(report.vulnerabilities), unexpectedRoot]);
+  lockfile.packages['node_modules/unexpected-root'] = { version: '1.0.0' };
+
+  const result = assess(report, { exitCode: 1, lockfile });
   assert.deepEqual(result.accepted, []);
-  assert.ok(result.blocked.every(({ reason }) => reason === 'exception-record-mismatch'));
+  assert.deepEqual(
+    result.blocked.filter(({ package: name }) => name.startsWith('react-router'))
+      .map(({ package: name, reason }) => ({ name, reason })),
+    [
+      { name: 'react-router', reason: 'exception-record-mismatch' },
+      { name: 'react-router-dom', reason: 'exception-record-mismatch' },
+    ],
+  );
 });
 
 test('an additional effect blocks the Router exception', () => {
@@ -281,8 +333,72 @@ test('the Router exception expires at an exclusive instant', () => {
   for (const now of [atExpiry, afterExpiry]) {
     const result = assess(routerFixture, { exitCode: 1, now });
     assert.deepEqual(result.accepted, []);
-    assert.ok(result.blocked.every(({ reason }) => reason === 'exception-expired'));
+    assert.deepEqual(result.blocked, [
+      {
+        package: 'react-router',
+        severity: 'high',
+        version: '7.18.2',
+        advisoryIds: ['GHSA-qwww-vcr4-c8h2'],
+        reason: 'exception-expired',
+      },
+      {
+        package: 'react-router-dom',
+        severity: 'high',
+        version: '7.18.2',
+        advisoryIds: ['GHSA-qwww-vcr4-c8h2'],
+        reason: 'exception-expired',
+      },
+    ]);
   }
+});
+
+test('direct advisory severity must agree with the top-level record severity', () => {
+  const report = clone(unexpectedFixture);
+  report.vulnerabilities['synthetic-vulnerable'].severity = 'low';
+  report.vulnerabilities['synthetic-vulnerable'].via[0].severity = 'critical';
+  report.metadata.vulnerabilities.high = 0;
+  report.metadata.vulnerabilities.low = 1;
+
+  assertPolicyError('E_AUDIT_SCHEMA', () => assess(report));
+});
+
+test('inherited severity must agree with the recursively resolved cause', () => {
+  const report = clone(routerFixture);
+  report.vulnerabilities['react-router-dom'].severity = 'low';
+  report.metadata.vulnerabilities.high = 1;
+  report.metadata.vulnerabilities.low = 1;
+
+  assertPolicyError('E_AUDIT_SCHEMA', () => assess(report, { exitCode: 1 }));
+});
+
+test('cyclic inherited vulnerability causes fail closed', () => {
+  const report = clone(cleanFixture);
+  const lockfile = clone(lockFixture);
+  const first = { ...advisoryRecord('cycle-first', 'high'), via: ['cycle-second'] };
+  const second = { ...advisoryRecord('cycle-second', 'high'), via: ['cycle-first'] };
+  replaceRecords(report, [first, second]);
+  lockfile.packages['node_modules/cycle-first'] = { version: '1.0.0' };
+  lockfile.packages['node_modules/cycle-second'] = { version: '1.0.0' };
+
+  assertPolicyError('E_AUDIT_SCHEMA', () => assess(report, { exitCode: 1, lockfile }));
+});
+
+test('impossible exception calendar dates fail closed whether consumed or dormant', () => {
+  const exceptionPolicy = clone(exceptionFixture);
+  exceptionPolicy.exceptions[0].expiresAt = '2026-09-31T00:00:00Z';
+
+  assertPolicyError('E_EXCEPTION_SCHEMA', () => assess(cleanFixture, { exceptionPolicy }));
+  assertPolicyError('E_EXCEPTION_SCHEMA', () => assess(routerFixture, {
+    exitCode: 1,
+    exceptionPolicy,
+  }));
+});
+
+test('exception expiry accepts UTC seconds and exactly three fractional digits', () => {
+  const exceptionPolicy = clone(exceptionFixture);
+  exceptionPolicy.exceptions[0].expiresAt = '2026-08-22T00:00:00.123Z';
+  assert.deepEqual(assess(routerFixture, { exitCode: 1, exceptionPolicy }).blocked, []);
+  assert.deepEqual(assess(routerFixture, { exitCode: 1 }).blocked, []);
 });
 
 test('unsupported report and lock versions fail closed', () => {
