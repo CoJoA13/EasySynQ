@@ -279,6 +279,63 @@ const { [\`unstable_RSCStaticRouter\`]: Static } = Router;
   ]);
 });
 
+test('detects direct CommonJS access through every transparent callee wrapper', () => {
+  const violations = inspect(`
+((require))('react-router').unstable_RSCHydratedRouter;
+(require as typeof require)('react-router-dom').unstable_RSCStaticRouter;
+(require satisfies typeof require)('react-router').unstable_createCallServer;
+require!('react-router-dom').unstable_getRSCStream;
+(<typeof require>require)('react-router').unstable_matchRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), forbiddenApis.slice(0, 5));
+});
+
+test('detects bound CommonJS access through every transparent callee wrapper', () => {
+  const violations = inspect(`
+const RouterA = ((require))('react-router');
+RouterA.unstable_RSCHydratedRouter;
+const RouterB = (require as typeof require)('react-router-dom');
+RouterB.unstable_RSCStaticRouter;
+const RouterC = (require satisfies typeof require)('react-router');
+RouterC.unstable_createCallServer;
+const RouterD = require!('react-router-dom');
+RouterD.unstable_getRSCStream;
+const RouterE = (<typeof require>require)('react-router');
+RouterE.unstable_matchRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), forbiddenApis.slice(0, 5));
+});
+
+test('detects destructured CommonJS access through every transparent callee wrapper', () => {
+  const violations = inspect(`
+const { unstable_RSCHydratedRouter: A } = ((require))('react-router');
+const { unstable_RSCStaticRouter: B } = (require as typeof require)('react-router-dom');
+const { unstable_createCallServer: C } = (require satisfies typeof require)('react-router');
+const { unstable_getRSCStream: D } = require!('react-router-dom');
+const { unstable_matchRSCServerRequest: E } = (<typeof require>require)('react-router');
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), forbiddenApis.slice(0, 5));
+});
+
+test('allows wrapped nonliteral CommonJS modules and wrapped shadowed require calls', () => {
+  assert.deepEqual(inspect(`
+const moduleName = 'react-router';
+((require))(moduleName).unstable_RSCHydratedRouter;
+const Router = (require as typeof require)(moduleName);
+Router.unstable_RSCStaticRouter;
+const { unstable_createCallServer } = (require satisfies typeof require)(moduleName);
+require!(moduleName).unstable_getRSCStream;
+(<typeof require>require)(moduleName).unstable_matchRSCServerRequest;
+function shadowed(require) {
+  ((require))('react-router').unstable_routeRSCServerRequest;
+  (require as typeof require)('react-router-dom').unstable_getRSCStream;
+  (require satisfies typeof require)('react-router').unstable_matchRSCServerRequest;
+  require!('react-router-dom').unstable_RSCHydratedRouter;
+  (<typeof require>require)('react-router').unstable_RSCStaticRouter;
+}
+`), []);
+});
+
 test('detects forbidden literal dynamic imports and allows nonliteral expressions', () => {
   const violations = inspect(`
 import('react-router');
@@ -436,6 +493,35 @@ Router.unstable_createCallServer;
 `), []);
 });
 
+test('shares one hoisted runtime binding across function and initialized var declarations', () => {
+  const varFirst = inspect(`
+var Router = require('react-router');
+function Router() {}
+Router.unstable_RSCHydratedRouter;
+`);
+  assert.deepEqual(varFirst.map(({ symbol }) => symbol), ['unstable_RSCHydratedRouter']);
+
+  const functionFirst = inspect(`
+function Router() {}
+var Router = require('react-router-dom');
+Router.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(functionFirst.map(({ symbol }) => symbol), ['unstable_RSCStaticRouter']);
+});
+
+test('keeps a function and uninitialized var declaration local in either lexical order', () => {
+  assert.deepEqual(inspect(`
+var Router;
+function Router() {}
+Router.unstable_createCallServer;
+`), []);
+  assert.deepEqual(inspect(`
+function Router() {}
+var Router;
+Router.unstable_getRSCStream;
+`), []);
+});
+
 test('uses the latest initialized declaration or assignment at each namespace access', () => {
   const violations = inspect(`
 var Router = require('react-router');
@@ -467,6 +553,135 @@ export { Router as RouterAfterReset };
     symbol: '*',
     specifier: 'react-router',
   }]);
+});
+
+test('does not apply unreachable or uncalled resets to an outer Router binding', () => {
+  const violations = inspect(`
+var Router = require('react-router');
+if (false) {
+  Router = {};
+}
+Router.unstable_RSCHydratedRouter;
+function resetWithoutCall() {
+  Router = {};
+}
+Router.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCHydratedRouter',
+    'unstable_RSCStaticRouter',
+  ]);
+});
+
+test('does not apply an uncalled nested Router setter to an outer local binding', () => {
+  assert.deepEqual(inspect(`
+var Router = {};
+function setWithoutCall() {
+  Router = require('react-router');
+}
+Router.unstable_createCallServer;
+`), []);
+});
+
+test('applies direct local setter calls without recursing forever', () => {
+  const violations = inspect(`
+var Router = {};
+function setRouter() {
+  Router = require('react-router-dom');
+}
+setRouter();
+Router.unstable_getRSCStream;
+
+function recursiveSetter() {
+  Router = require('react-router');
+  recursiveSetter();
+}
+Router = {};
+recursiveSetter();
+Router.unstable_matchRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_getRSCStream',
+    'unstable_matchRSCServerRequest',
+  ]);
+});
+
+test('applies a directly called local reset to an outer Router binding', () => {
+  assert.deepEqual(inspect(`
+var Router = require('react-router');
+function resetRouter() {
+  Router = {};
+}
+resetRouter();
+Router.unstable_routeRSCServerRequest;
+`), []);
+});
+
+test('treats local namespace exports as live bindings', () => {
+  const violations = inspect(`
+export { Router };
+var Router = require('react-router-dom');
+`);
+  assert.deepEqual(violations.map(({ symbol, specifier }) => ({ symbol, specifier })), [{
+    symbol: '*',
+    specifier: 'react-router-dom',
+  }]);
+});
+
+test('preserves exact straight-line Router write semantics', () => {
+  assert.deepEqual(inspect(`
+var Router = require('react-router');
+Router = {};
+Router.unstable_RSCHydratedRouter;
+`), []);
+
+  const violations = inspect(`
+var Router = {};
+Router = require('react-router-dom');
+Router.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_RSCStaticRouter']);
+});
+
+test('keeps possible Router state after an unknown conditional reset', () => {
+  const violations = inspect(`
+var Router = require('react-router');
+if (unknownCondition) {
+  Router = {};
+}
+Router.unstable_createCallServer;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_createCallServer']);
+});
+
+test('keeps possible Router state across unknown short-circuit resets', () => {
+  const violations = inspect(`
+var Router = require('react-router');
+unknownCondition && (Router = {});
+Router.unstable_RSCHydratedRouter;
+unknownCondition || (Router = {});
+Router.unstable_RSCStaticRouter;
+unknownValue ?? (Router = {});
+Router.unstable_createCallServer;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCHydratedRouter',
+    'unstable_RSCStaticRouter',
+    'unstable_createCallServer',
+  ]);
+});
+
+test('uses each nested function own straight-line state for its accesses', () => {
+  const violations = inspect(`
+function inspectInside() {
+  var Router = {};
+  Router = require('react-router-dom');
+  Router.unstable_getRSCStream;
+  Router = {};
+  Router.unstable_matchRSCServerRequest;
+}
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_getRSCStream']);
 });
 
 test('keeps nested namespace value bindings scoped to their ModuleBlock', () => {

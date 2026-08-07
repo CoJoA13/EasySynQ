@@ -259,8 +259,8 @@ function isForbiddenDynamicImport(specifier) {
   return false;
 }
 
-function createScope(parent) {
-  return { parent, bindings: new Map() };
+function createScope(parent, region = parent?.region) {
+  return { parent, region, bindings: new Map() };
 }
 
 function nearestFunctionScope(scope) {
@@ -275,13 +275,14 @@ function bindName(
   typescript,
   name,
   scope,
-  binding = { kind: 'local', writes: [] },
+  binding = { kind: 'local' },
   reuseExisting = false,
 ) {
   if (typescript.isIdentifier(name)) {
     if (reuseExisting && scope.bindings.has(name.text)) {
       return scope.bindings.get(name.text);
     }
+    if (binding.homeRegion === undefined) binding.homeRegion = scope.region;
     scope.bindings.set(name.text, binding);
     return binding;
   }
@@ -312,17 +313,90 @@ function externalModuleSpecifier(typescript, node) {
 }
 
 function buildLexicalModel(typescript, sourceFile) {
-  const rootScope = createScope(undefined);
+  const rootScope = createScope(undefined, sourceFile);
   rootScope.sourceScope = true;
   const scopeByNode = new WeakMap();
   const writeCandidates = [];
   const assignmentCandidates = [];
+  const callCandidates = [];
+  const functionRegionByBinding = new Map();
+  let candidateOrder = 0;
+
+  function booleanLiteralValue(node) {
+    const candidate = unwrapTransparentExpression(typescript, node);
+    if (candidate?.kind === typescript.SyntaxKind.TrueKeyword) return true;
+    if (candidate?.kind === typescript.SyntaxKind.FalseKeyword) return false;
+    return undefined;
+  }
+
+  function executionMode(node, region) {
+    let current = node;
+    let mode = 'always';
+    while (current !== region && current.parent !== undefined) {
+      const parent = current.parent;
+      if (parent.kind === typescript.SyntaxKind.IfStatement
+          && current !== parent.expression) {
+        const condition = booleanLiteralValue(parent.expression);
+        const isThen = current === parent.thenStatement;
+        const branchRuns = condition === undefined
+          ? undefined
+          : (isThen ? condition : !condition);
+        if (branchRuns === false) return 'never';
+        if (branchRuns === undefined) mode = 'maybe';
+      } else if (parent.kind === typescript.SyntaxKind.ConditionalExpression
+          && current !== parent.condition) {
+        const condition = booleanLiteralValue(parent.condition);
+        const isThen = current === parent.whenTrue;
+        const branchRuns = condition === undefined
+          ? undefined
+          : (isThen ? condition : !condition);
+        if (branchRuns === false) return 'never';
+        if (branchRuns === undefined) mode = 'maybe';
+      } else if ((parent.kind === typescript.SyntaxKind.ForStatement
+          || parent.kind === typescript.SyntaxKind.ForInStatement
+          || parent.kind === typescript.SyntaxKind.ForOfStatement
+          || parent.kind === typescript.SyntaxKind.WhileStatement
+          || parent.kind === typescript.SyntaxKind.DoStatement)
+          && current === parent.statement) {
+        mode = 'maybe';
+      } else if (parent.kind === typescript.SyntaxKind.SwitchStatement
+          && current === parent.caseBlock) {
+        mode = 'maybe';
+      } else if (typescript.isBinaryExpression(parent)
+          && current === parent.right
+          && (parent.operatorToken.kind === typescript.SyntaxKind.AmpersandAmpersandToken
+            || parent.operatorToken.kind === typescript.SyntaxKind.BarBarToken
+            || parent.operatorToken.kind === typescript.SyntaxKind.QuestionQuestionToken)) {
+        const left = booleanLiteralValue(parent.left);
+        if ((parent.operatorToken.kind === typescript.SyntaxKind.AmpersandAmpersandToken
+              && left === false)
+            || (parent.operatorToken.kind === typescript.SyntaxKind.BarBarToken
+              && left === true)) {
+          return 'never';
+        }
+        if (parent.operatorToken.kind === typescript.SyntaxKind.QuestionQuestionToken
+            || left === undefined) {
+          mode = 'maybe';
+        }
+      }
+      current = parent;
+    }
+    return mode;
+  }
 
   function collect(node, incomingScope, functionBody = false) {
     let scope = incomingScope;
+    let declarationBinding;
 
     if (typescript.isFunctionDeclaration(node) && node.name !== undefined) {
-      bindName(typescript, node.name, incomingScope);
+      declarationBinding = bindName(
+        typescript,
+        node.name,
+        incomingScope,
+        { kind: 'local' },
+        true,
+      );
+      functionRegionByBinding.set(declarationBinding, node);
     } else if (typescript.isClassDeclaration(node) && node.name !== undefined) {
       bindName(typescript, node.name, incomingScope);
     } else if (typescript.isModuleDeclaration(node) && typescript.isIdentifier(node.name)) {
@@ -332,11 +406,17 @@ function buildLexicalModel(typescript, sourceFile) {
     }
 
     if (typescript.isFunctionLike(node)) {
-      scope = createScope(incomingScope);
+      scope = createScope(incomingScope, node);
       scope.functionScope = true;
       if ((typescript.isFunctionExpression(node) || typescript.isFunctionDeclaration(node))
           && node.name !== undefined) {
-        bindName(typescript, node.name, scope);
+        const functionBinding = bindName(
+          typescript,
+          node.name,
+          scope,
+          declarationBinding,
+        );
+        functionRegionByBinding.set(functionBinding, node);
       }
       for (const parameter of node.parameters ?? []) bindName(typescript, parameter.name, scope);
     } else if ((typescript.isClassExpression(node) || typescript.isClassDeclaration(node))) {
@@ -366,8 +446,8 @@ function buildLexicalModel(typescript, sourceFile) {
       if (importClause?.namedBindings !== undefined
           && typescript.isNamespaceImport(importClause.namedBindings)) {
         bindName(typescript, importClause.namedBindings.name, scope, isRouterApiSource(specifier)
-          ? { kind: 'router-namespace', specifier, writes: [] }
-          : { kind: 'local', writes: [] });
+          ? { kind: 'router-namespace', specifier }
+          : { kind: 'local' });
       } else if (importClause?.namedBindings !== undefined
           && typescript.isNamedImports(importClause.namedBindings)) {
         for (const element of importClause.namedBindings.elements) {
@@ -377,8 +457,8 @@ function buildLexicalModel(typescript, sourceFile) {
     } else if (typescript.isImportEqualsDeclaration(node)) {
       const specifier = externalModuleSpecifier(typescript, node);
       bindName(typescript, node.name, scope, isRouterApiSource(specifier)
-        ? { kind: 'router-namespace', specifier, writes: [] }
-        : { kind: 'local', writes: [] });
+        ? { kind: 'router-namespace', specifier }
+        : { kind: 'local' });
     } else if (typescript.isVariableDeclaration(node)) {
       const declarationList = typescript.isVariableDeclarationList(node.parent)
         ? node.parent
@@ -390,14 +470,17 @@ function buildLexicalModel(typescript, sourceFile) {
         typescript,
         node.name,
         bindingScope,
-        { kind: 'local', writes: [] },
+        { kind: 'local' },
         !isBlockScoped,
       );
       if (typescript.isIdentifier(node.name) && node.initializer !== undefined) {
         writeCandidates.push({
           binding,
           expression: node.initializer,
+          node,
+          order: candidateOrder++,
           position: node.initializer.end,
+          region: scope.region,
           scope,
         });
       }
@@ -407,13 +490,30 @@ function buildLexicalModel(typescript, sourceFile) {
       assignmentCandidates.push({
         expression: node.right,
         name: node.left.text,
+        node,
+        order: candidateOrder++,
         position: node.end,
+        region: scope.region,
         scope,
       });
     } else if (typescript.isCatchClause(node) && node.variableDeclaration !== undefined) {
       bindName(typescript, node.variableDeclaration.name, scope);
     } else if (typescript.isParameter(node)) {
       bindName(typescript, node.name, scope);
+    }
+
+    if (typescript.isCallExpression(node)) {
+      const callee = unwrapTransparentExpression(typescript, node.expression);
+      if (typescript.isIdentifier(callee)) {
+        callCandidates.push({
+          name: callee.text,
+          node,
+          order: candidateOrder++,
+          position: node.end,
+          region: scope.region,
+          scope,
+        });
+      }
     }
 
     typescript.forEachChild(node, (child) => {
@@ -426,10 +526,13 @@ function buildLexicalModel(typescript, sourceFile) {
 
   function requireSpecifier(expression, scope) {
     const candidate = unwrapTransparentExpression(typescript, expression);
+    const callee = typescript.isCallExpression(candidate)
+      ? unwrapTransparentExpression(typescript, candidate.expression)
+      : undefined;
     if (!typescript.isCallExpression(candidate)
         || candidate.arguments.length !== 1
-        || !typescript.isIdentifier(candidate.expression)
-        || candidate.expression.text !== 'require'
+        || !typescript.isIdentifier(callee)
+        || callee.text !== 'require'
         || resolveBinding(scope, 'require') !== undefined) {
       return undefined;
     }
@@ -441,29 +544,137 @@ function buildLexicalModel(typescript, sourceFile) {
     if (binding !== undefined) writeCandidates.push({ ...candidate, binding });
   }
 
-  const bindingsWithWrites = new Set();
+  const effectsByRegion = new Map();
+
+  function addEffect(region, effect) {
+    const effects = effectsByRegion.get(region) ?? [];
+    effects.push(effect);
+    effectsByRegion.set(region, effects);
+  }
+
   for (const candidate of writeCandidates) {
     const specifier = requireSpecifier(candidate.expression, candidate.scope);
-    candidate.binding.writes.push({
+    addEffect(candidate.region, {
+      binding: candidate.binding,
+      kind: 'write',
+      mode: executionMode(candidate.node, candidate.region),
+      order: candidate.order,
       position: candidate.position,
       specifier: isRouterApiSource(specifier) ? specifier : undefined,
     });
-    bindingsWithWrites.add(candidate.binding);
-  }
-  for (const binding of bindingsWithWrites) {
-    binding.writes.sort((left, right) => left.position - right.position);
   }
 
-  function namespaceSpecifierAt(binding, position) {
-    let specifier = binding.kind === 'router-namespace' ? binding.specifier : undefined;
-    for (const write of binding.writes) {
-      if (write.position > position) break;
-      specifier = write.specifier;
+  for (const candidate of callCandidates) {
+    const binding = resolveBinding(candidate.scope, candidate.name);
+    const calleeRegion = functionRegionByBinding.get(binding);
+    if (calleeRegion !== undefined) {
+      addEffect(candidate.region, {
+        calleeRegion,
+        kind: 'call',
+        mode: executionMode(candidate.node, candidate.region),
+        order: candidate.order,
+        position: candidate.position,
+      });
     }
-    return specifier;
   }
 
-  return { namespaceSpecifierAt, scopeByNode, requireSpecifier };
+  for (const effects of effectsByRegion.values()) {
+    effects.sort((left, right) => left.position - right.position
+      || (left.kind === right.kind ? left.order - right.order : left.kind === 'call' ? -1 : 1));
+  }
+
+  function initialState(binding) {
+    return new Set([binding.kind === 'router-namespace' ? binding.specifier : undefined]);
+  }
+
+  function unionStates(left, right) {
+    return new Set([...left, ...right]);
+  }
+
+  function runFunction(calleeRegion, binding, inputState, activeFunctions) {
+    if (activeFunctions.has(calleeRegion)) return new Set(inputState);
+    activeFunctions.add(calleeRegion);
+    try {
+      return runEffects(binding, calleeRegion, Infinity, inputState, activeFunctions);
+    } finally {
+      activeFunctions.delete(calleeRegion);
+    }
+  }
+
+  function applyEffect(binding, state, effect, activeFunctions) {
+    if (effect.mode === 'never') return state;
+    let changedState;
+    if (effect.kind === 'write') {
+      if (effect.binding !== binding) return state;
+      changedState = new Set([effect.specifier]);
+    } else {
+      changedState = runFunction(effect.calleeRegion, binding, state, activeFunctions);
+    }
+    return effect.mode === 'maybe' ? unionStates(state, changedState) : changedState;
+  }
+
+  function runEffects(binding, region, position, inputState, activeFunctions) {
+    let state = new Set(inputState);
+    for (const effect of effectsByRegion.get(region) ?? []) {
+      if (effect.position > position) break;
+      state = applyEffect(binding, state, effect, activeFunctions);
+    }
+    return state;
+  }
+
+  function reachableHomeState(binding, activeFunctions) {
+    let state = initialState(binding);
+    let reachable = new Set(state);
+    for (const effect of effectsByRegion.get(binding.homeRegion) ?? []) {
+      state = applyEffect(binding, state, effect, activeFunctions);
+      reachable = unionStates(reachable, state);
+    }
+    return reachable;
+  }
+
+  function stateAt(binding, region, position) {
+    const activeFunctions = new Set();
+    const entryState = binding.homeRegion === region
+      ? initialState(binding)
+      : reachableHomeState(binding, activeFunctions);
+    return runEffects(binding, region, position, entryState, activeFunctions);
+  }
+
+  function routerSpecifier(state) {
+    return [...state]
+      .filter((specifier) => isRouterApiSource(specifier))
+      .sort(compareText)[0];
+  }
+
+  function namespaceSpecifierAt(binding, region, position) {
+    return routerSpecifier(stateAt(binding, region, position));
+  }
+
+  function liveNamespaceSpecifier(binding, region, position) {
+    const activeFunctions = new Set();
+    const entryState = binding.homeRegion === region
+      ? initialState(binding)
+      : reachableHomeState(binding, activeFunctions);
+    let state = new Set(entryState);
+    let reachableAfterExport;
+    for (const effect of effectsByRegion.get(region) ?? []) {
+      if (effect.position > position && reachableAfterExport === undefined) {
+        reachableAfterExport = new Set(state);
+      }
+      state = applyEffect(binding, state, effect, activeFunctions);
+      if (effect.position > position) {
+        reachableAfterExport = unionStates(reachableAfterExport, state);
+      }
+    }
+    return routerSpecifier(reachableAfterExport ?? state);
+  }
+
+  return {
+    liveNamespaceSpecifier,
+    namespaceSpecifierAt,
+    scopeByNode,
+    requireSpecifier,
+  };
 }
 
 function inspectSource(typescript, sourceInput) {
@@ -544,7 +755,7 @@ function inspectSource(typescript, sourceInput) {
       const binding = resolveBinding(scope, candidate.text);
       const specifier = binding === undefined
         ? undefined
-        : lexicalModel.namespaceSpecifierAt(binding, candidate.pos);
+        : lexicalModel.namespaceSpecifierAt(binding, scope.region, candidate.pos);
       return specifier === undefined ? undefined : { kind: 'router-namespace', specifier };
     }
     const specifier = lexicalModel.requireSpecifier(candidate, scope);
@@ -632,7 +843,7 @@ function inspectSource(typescript, sourceInput) {
           const binding = resolveBinding(scope, localNode.text);
           const specifier = binding === undefined
             ? undefined
-            : lexicalModel.namespaceSpecifierAt(binding, localNode.pos);
+            : lexicalModel.liveNamespaceSpecifier(binding, scope.region, localNode.pos);
           if (specifier !== undefined) {
             addViolation('forbidden-router-rsc-api', localNode, {
               symbol: '*',
