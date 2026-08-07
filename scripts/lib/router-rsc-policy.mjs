@@ -61,14 +61,17 @@ function assertTypescriptApi(typescript) {
   const functions = [
     'createSourceFile',
     'forEachChild',
+    'isAsExpression',
     'isArrayBindingPattern',
     'isBlock',
+    'isBinaryExpression',
     'isCallExpression',
     'isCatchClause',
     'isClassDeclaration',
     'isClassExpression',
     'isComputedPropertyName',
     'isElementAccessExpression',
+    'isEnumDeclaration',
     'isExportDeclaration',
     'isFunctionDeclaration',
     'isFunctionExpression',
@@ -77,17 +80,24 @@ function assertTypescriptApi(typescript) {
     'isImportDeclaration',
     'isImportEqualsDeclaration',
     'isImportTypeNode',
+    'isIndexedAccessTypeNode',
     'isLiteralTypeNode',
+    'isModuleBlock',
+    'isModuleDeclaration',
     'isNamedExports',
     'isNamedImports',
     'isNamespaceExport',
     'isNamespaceImport',
     'isNoSubstitutionTemplateLiteral',
+    'isNonNullExpression',
     'isObjectBindingPattern',
     'isParameter',
     'isParenthesizedExpression',
+    'isParenthesizedTypeNode',
     'isPropertyAccessExpression',
+    'isSatisfiesExpression',
     'isStringLiteral',
+    'isTypeAssertionExpression',
     'isVariableDeclaration',
     'isVariableDeclarationList',
   ];
@@ -182,7 +192,7 @@ function scriptKindForPath(typescript, sourcePath) {
 }
 
 function literalText(typescript, node) {
-  const candidate = unwrapParentheses(typescript, node);
+  const candidate = unwrapTransparentExpression(typescript, node);
   if (candidate !== undefined
       && (typescript.isStringLiteral(candidate)
         || typescript.isNoSubstitutionTemplateLiteral(candidate))) {
@@ -197,12 +207,32 @@ function propertyNameText(typescript, node) {
   return literalText(typescript, node);
 }
 
-function unwrapParentheses(typescript, node) {
+function unwrapTransparentExpression(typescript, node) {
   let current = node;
-  while (current !== undefined && typescript.isParenthesizedExpression(current)) {
+  while (current !== undefined
+      && (typescript.isParenthesizedExpression(current)
+        || typescript.isAsExpression(current)
+        || typescript.isSatisfiesExpression(current)
+        || typescript.isNonNullExpression(current)
+        || typescript.isTypeAssertionExpression(current))) {
     current = current.expression;
   }
   return current;
+}
+
+function unwrapTransparentType(typescript, node) {
+  let current = node;
+  while (current !== undefined && typescript.isParenthesizedTypeNode(current)) {
+    current = current.type;
+  }
+  return current;
+}
+
+function literalTypeText(typescript, node) {
+  const candidate = unwrapTransparentType(typescript, node);
+  return candidate !== undefined && typescript.isLiteralTypeNode(candidate)
+    ? literalText(typescript, candidate.literal)
+    : undefined;
 }
 
 function isRouterApiSource(specifier) {
@@ -241,16 +271,28 @@ function nearestFunctionScope(scope) {
   return current;
 }
 
-function bindName(typescript, name, scope, binding = { kind: 'local' }) {
+function bindName(
+  typescript,
+  name,
+  scope,
+  binding = { kind: 'local', writes: [] },
+  reuseExisting = false,
+) {
   if (typescript.isIdentifier(name)) {
+    if (reuseExisting && scope.bindings.has(name.text)) {
+      return scope.bindings.get(name.text);
+    }
     scope.bindings.set(name.text, binding);
-    return;
+    return binding;
   }
   if (typescript.isObjectBindingPattern(name) || typescript.isArrayBindingPattern(name)) {
     for (const element of name.elements) {
-      if (element.name !== undefined) bindName(typescript, element.name, scope);
+      if (element.name !== undefined) {
+        bindName(typescript, element.name, scope, undefined, reuseExisting);
+      }
     }
   }
+  return undefined;
 }
 
 function resolveBinding(scope, name) {
@@ -273,7 +315,8 @@ function buildLexicalModel(typescript, sourceFile) {
   const rootScope = createScope(undefined);
   rootScope.sourceScope = true;
   const scopeByNode = new WeakMap();
-  const requireCandidates = [];
+  const writeCandidates = [];
+  const assignmentCandidates = [];
 
   function collect(node, incomingScope, functionBody = false) {
     let scope = incomingScope;
@@ -281,6 +324,10 @@ function buildLexicalModel(typescript, sourceFile) {
     if (typescript.isFunctionDeclaration(node) && node.name !== undefined) {
       bindName(typescript, node.name, incomingScope);
     } else if (typescript.isClassDeclaration(node) && node.name !== undefined) {
+      bindName(typescript, node.name, incomingScope);
+    } else if (typescript.isModuleDeclaration(node) && typescript.isIdentifier(node.name)) {
+      bindName(typescript, node.name, incomingScope);
+    } else if (typescript.isEnumDeclaration(node)) {
       bindName(typescript, node.name, incomingScope);
     }
 
@@ -295,7 +342,13 @@ function buildLexicalModel(typescript, sourceFile) {
     } else if ((typescript.isClassExpression(node) || typescript.isClassDeclaration(node))) {
       scope = createScope(incomingScope);
       if (node.name !== undefined) bindName(typescript, node.name, scope);
+    } else if (typescript.isModuleDeclaration(node)) {
+      scope = createScope(incomingScope);
+    } else if (typescript.isEnumDeclaration(node)) {
+      scope = createScope(incomingScope);
+      bindName(typescript, node.name, scope);
     } else if ((typescript.isBlock(node) && !functionBody)
+        || typescript.isModuleBlock(node)
         || typescript.isCatchClause(node)
         || node.kind === typescript.SyntaxKind.ForStatement
         || node.kind === typescript.SyntaxKind.ForInStatement
@@ -313,8 +366,8 @@ function buildLexicalModel(typescript, sourceFile) {
       if (importClause?.namedBindings !== undefined
           && typescript.isNamespaceImport(importClause.namedBindings)) {
         bindName(typescript, importClause.namedBindings.name, scope, isRouterApiSource(specifier)
-          ? { kind: 'router-namespace', specifier }
-          : { kind: 'local' });
+          ? { kind: 'router-namespace', specifier, writes: [] }
+          : { kind: 'local', writes: [] });
       } else if (importClause?.namedBindings !== undefined
           && typescript.isNamedImports(importClause.namedBindings)) {
         for (const element of importClause.namedBindings.elements) {
@@ -324,8 +377,8 @@ function buildLexicalModel(typescript, sourceFile) {
     } else if (typescript.isImportEqualsDeclaration(node)) {
       const specifier = externalModuleSpecifier(typescript, node);
       bindName(typescript, node.name, scope, isRouterApiSource(specifier)
-        ? { kind: 'router-namespace', specifier }
-        : { kind: 'local' });
+        ? { kind: 'router-namespace', specifier, writes: [] }
+        : { kind: 'local', writes: [] });
     } else if (typescript.isVariableDeclaration(node)) {
       const declarationList = typescript.isVariableDeclarationList(node.parent)
         ? node.parent
@@ -333,11 +386,30 @@ function buildLexicalModel(typescript, sourceFile) {
       const isBlockScoped = declarationList !== undefined
         && (declarationList.flags & typescript.NodeFlags.BlockScoped) !== 0;
       const bindingScope = isBlockScoped ? scope : nearestFunctionScope(scope);
-      const binding = { kind: 'local' };
-      bindName(typescript, node.name, bindingScope, binding);
+      const binding = bindName(
+        typescript,
+        node.name,
+        bindingScope,
+        { kind: 'local', writes: [] },
+        !isBlockScoped,
+      );
       if (typescript.isIdentifier(node.name) && node.initializer !== undefined) {
-        requireCandidates.push({ binding, initializer: node.initializer, scope });
+        writeCandidates.push({
+          binding,
+          expression: node.initializer,
+          position: node.initializer.end,
+          scope,
+        });
       }
+    } else if (typescript.isBinaryExpression(node)
+        && node.operatorToken.kind === typescript.SyntaxKind.EqualsToken
+        && typescript.isIdentifier(node.left)) {
+      assignmentCandidates.push({
+        expression: node.right,
+        name: node.left.text,
+        position: node.end,
+        scope,
+      });
     } else if (typescript.isCatchClause(node) && node.variableDeclaration !== undefined) {
       bindName(typescript, node.variableDeclaration.name, scope);
     } else if (typescript.isParameter(node)) {
@@ -353,7 +425,7 @@ function buildLexicalModel(typescript, sourceFile) {
   collect(sourceFile, rootScope);
 
   function requireSpecifier(expression, scope) {
-    const candidate = unwrapParentheses(typescript, expression);
+    const candidate = unwrapTransparentExpression(typescript, expression);
     if (!typescript.isCallExpression(candidate)
         || candidate.arguments.length !== 1
         || !typescript.isIdentifier(candidate.expression)
@@ -364,15 +436,34 @@ function buildLexicalModel(typescript, sourceFile) {
     return literalText(typescript, candidate.arguments[0]);
   }
 
-  for (const candidate of requireCandidates) {
-    const specifier = requireSpecifier(candidate.initializer, candidate.scope);
-    if (isRouterApiSource(specifier)) {
-      candidate.binding.kind = 'router-namespace';
-      candidate.binding.specifier = specifier;
-    }
+  for (const candidate of assignmentCandidates) {
+    const binding = resolveBinding(candidate.scope, candidate.name);
+    if (binding !== undefined) writeCandidates.push({ ...candidate, binding });
   }
 
-  return { scopeByNode, requireSpecifier };
+  const bindingsWithWrites = new Set();
+  for (const candidate of writeCandidates) {
+    const specifier = requireSpecifier(candidate.expression, candidate.scope);
+    candidate.binding.writes.push({
+      position: candidate.position,
+      specifier: isRouterApiSource(specifier) ? specifier : undefined,
+    });
+    bindingsWithWrites.add(candidate.binding);
+  }
+  for (const binding of bindingsWithWrites) {
+    binding.writes.sort((left, right) => left.position - right.position);
+  }
+
+  function namespaceSpecifierAt(binding, position) {
+    let specifier = binding.kind === 'router-namespace' ? binding.specifier : undefined;
+    for (const write of binding.writes) {
+      if (write.position > position) break;
+      specifier = write.specifier;
+    }
+    return specifier;
+  }
+
+  return { namespaceSpecifierAt, scopeByNode, requireSpecifier };
 }
 
 function inspectSource(typescript, sourceInput) {
@@ -388,23 +479,42 @@ function inspectSource(typescript, sourceInput) {
   } catch {
     fail('E_TYPESCRIPT_PARSE', `TypeScript could not parse ${sourceInput.path}`);
   }
-  if (!isObject(sourceFile) || !Array.isArray(sourceFile.parseDiagnostics)) {
-    fail('E_TYPESCRIPT_API', 'TypeScript returned an incompatible source file');
-  }
-  if (sourceFile.parseDiagnostics.length > 0) {
-    const diagnostic = sourceFile.parseDiagnostics[0];
-    let line = 1;
-    let column = 1;
-    if (Number.isInteger(diagnostic.start) && diagnostic.start >= 0) {
-      try {
-        const location = sourceFile.getLineAndCharacterOfPosition(diagnostic.start);
-        line = location.line + 1;
-        column = location.character + 1;
-      } catch {
+  try {
+    if (!isObject(sourceFile)) {
+      fail('E_TYPESCRIPT_API', 'TypeScript returned an incompatible source file');
+    }
+    const parseDiagnostics = sourceFile.parseDiagnostics;
+    if (!Array.isArray(parseDiagnostics)) {
+      fail('E_TYPESCRIPT_API', 'TypeScript returned an incompatible source file');
+    }
+    if (parseDiagnostics.length > 0) {
+      const diagnostic = parseDiagnostics[0];
+      if (!isObject(diagnostic)) {
         fail('E_TYPESCRIPT_API', 'TypeScript returned an incompatible parse diagnostic');
       }
+      const start = diagnostic.start;
+      let line = 1;
+      let column = 1;
+      if (start !== undefined) {
+        if (!Number.isInteger(start) || start < 0) {
+          fail('E_TYPESCRIPT_API', 'TypeScript returned an incompatible parse diagnostic');
+        }
+        const location = sourceFile.getLineAndCharacterOfPosition(start);
+        if (!isObject(location)
+            || !Number.isInteger(location.line)
+            || location.line < 0
+            || !Number.isInteger(location.character)
+            || location.character < 0) {
+          fail('E_TYPESCRIPT_API', 'TypeScript returned an incompatible parse diagnostic');
+        }
+        line = location.line + 1;
+        column = location.character + 1;
+      }
+      fail('E_SOURCE_PARSE', `${sourceInput.path}:${line}:${column}: TypeScript parse diagnostic`);
     }
-    fail('E_SOURCE_PARSE', `${sourceInput.path}:${line}:${column}: TypeScript parse diagnostic`);
+  } catch (error) {
+    if (error instanceof RouterRscPolicyError) throw error;
+    fail('E_TYPESCRIPT_API', 'TypeScript returned an incompatible parse diagnostic');
   }
 
   let lexicalModel;
@@ -429,10 +539,13 @@ function inspectSource(typescript, sourceInput) {
   }
 
   function namespaceBindingForExpression(expression, scope) {
-    const candidate = unwrapParentheses(typescript, expression);
+    const candidate = unwrapTransparentExpression(typescript, expression);
     if (typescript.isIdentifier(candidate)) {
       const binding = resolveBinding(scope, candidate.text);
-      return binding?.kind === 'router-namespace' ? binding : undefined;
+      const specifier = binding === undefined
+        ? undefined
+        : lexicalModel.namespaceSpecifierAt(binding, candidate.pos);
+      return specifier === undefined ? undefined : { kind: 'router-namespace', specifier };
     }
     const specifier = lexicalModel.requireSpecifier(candidate, scope);
     return isRouterApiSource(specifier)
@@ -460,10 +573,17 @@ function inspectSource(typescript, sourceInput) {
   function visit(node) {
     const scope = lexicalModel.scopeByNode.get(node);
 
-    if (typescript.isImportTypeNode(node)
-        && typescript.isLiteralTypeNode(node.argument)
-        && node.qualifier !== undefined) {
-      const specifier = literalText(typescript, node.argument.literal);
+    if (typescript.isIndexedAccessTypeNode(node)) {
+      const importType = unwrapTransparentType(typescript, node.objectType);
+      const specifier = typescript.isImportTypeNode(importType)
+        ? literalTypeText(typescript, importType.argument)
+        : undefined;
+      const symbol = literalTypeText(typescript, node.indexType);
+      if (isRouterApiSource(specifier) && FORBIDDEN_APIS.has(symbol)) {
+        addViolation('forbidden-router-rsc-api', node.indexType, { symbol, specifier });
+      }
+    } else if (typescript.isImportTypeNode(node) && node.qualifier !== undefined) {
+      const specifier = literalTypeText(typescript, node.argument);
       let symbolNode = node.qualifier;
       while (symbolNode.left !== undefined) symbolNode = symbolNode.left;
       const symbol = typescript.isIdentifier(symbolNode) ? symbolNode.text : undefined;
@@ -510,10 +630,13 @@ function inspectSource(typescript, sourceInput) {
         for (const element of node.exportClause.elements) {
           const localNode = element.propertyName ?? element.name;
           const binding = resolveBinding(scope, localNode.text);
-          if (binding?.kind === 'router-namespace') {
+          const specifier = binding === undefined
+            ? undefined
+            : lexicalModel.namespaceSpecifierAt(binding, localNode.pos);
+          if (specifier !== undefined) {
             addViolation('forbidden-router-rsc-api', localNode, {
               symbol: '*',
-              specifier: binding.specifier,
+              specifier,
             });
           }
         }
@@ -620,6 +743,13 @@ function readManifest(repoRoot) {
   }
 }
 
+function isCanonicalWebSourceRecord(sourcePath) {
+  if (!sourcePath.startsWith(WEB_SOURCE_PREFIX) || sourcePath === WEB_SOURCE_PREFIX) return false;
+  return sourcePath.split('/').every((segment) => (
+    segment.length > 0 && segment !== '.' && segment !== '..'
+  ));
+}
+
 function trackedPaths(repoRoot, execFileSyncImpl) {
   let output;
   try {
@@ -637,8 +767,7 @@ function trackedPaths(repoRoot, execFileSyncImpl) {
   const paths = output.length === 0 ? [] : output.slice(0, -1).split('\0');
   const seen = new Set();
   for (const sourcePath of paths) {
-    if (sourcePath.length === 0
-        || !sourcePath.startsWith(WEB_SOURCE_PREFIX)
+    if (!isCanonicalWebSourceRecord(sourcePath)
         || seen.has(sourcePath)) {
       fail('E_GIT_OUTPUT', 'Git returned a malformed NUL-delimited source list');
     }

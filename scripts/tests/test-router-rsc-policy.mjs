@@ -199,6 +199,27 @@ type Static = typeof import('react-router-dom').unstable_RSCStaticRouter;
   ]);
 });
 
+test('detects indexed import-type references for all Router APIs and both packages', () => {
+  const violations = inspect(`
+type A = typeof import((('react-router')))[(('unstable_RSCHydratedRouter'))];
+type B = typeof import(\`react-router-dom\`)[\`unstable_RSCStaticRouter\`];
+type C = typeof import('react-router')['unstable_createCallServer'];
+type D = typeof import('react-router-dom')['unstable_getRSCStream'];
+type E = typeof import('react-router')['unstable_matchRSCServerRequest'];
+type F = typeof import('react-router-dom')['unstable_routeRSCServerRequest'];
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), forbiddenApis);
+});
+
+test('allows unrelated and nonliteral indexed import types', () => {
+  assert.deepEqual(inspect(`
+type Key = 'unstable_RSCHydratedRouter';
+type A = typeof import('unrelated-router')['unstable_RSCHydratedRouter'];
+type B = typeof import('react-router')[Key];
+type C = typeof import(ModuleName)['unstable_RSCHydratedRouter'];
+`), []);
+});
+
 test('detects named, type-only, star, and namespace re-exports', () => {
   const violations = inspect(`
 export { unstable_createCallServer as createServer } from 'react-router';
@@ -303,6 +324,39 @@ import((\`react-router-dom\`));
   ]);
 });
 
+test('recursively unwraps every runtime-transparent TypeScript expression wrapper', () => {
+  const violations = inspect(`
+import(('react-router' as string));
+import((('react-router-dom' satisfies string)!));
+import(<string>'react-router/dom');
+require('react-router' as string).unstable_RSCHydratedRouter;
+require((('react-router-dom' satisfies string)!)).unstable_RSCStaticRouter;
+const Router = require('react-router');
+(Router as typeof Router).unstable_createCallServer;
+((Router satisfies typeof Router)!).unstable_getRSCStream;
+(<typeof Router>Router)['unstable_matchRSCServerRequest' as const];
+Router[((('unstable_routeRSCServerRequest' satisfies string)!))];
+`);
+  assert.deepEqual(violations.map(({ symbol, specifier }) => symbol ?? specifier), [
+    'react-router',
+    'react-router-dom',
+    'react-router/dom',
+    ...forbiddenApis,
+  ]);
+});
+
+test('does not turn wrapped nonliteral expressions into Router violations', () => {
+  assert.deepEqual(inspect(`
+const moduleName = 'react-router';
+const propertyName = 'unstable_RSCHydratedRouter';
+import(moduleName as string);
+require((moduleName satisfies string)!).unstable_RSCHydratedRouter;
+const Router = require('react-router');
+Router[propertyName as string];
+(localNamespace as typeof localNamespace).unstable_RSCHydratedRouter;
+`), []);
+});
+
 test('ignores comments, strings, local APIs, and unrelated module imports', () => {
   assert.deepEqual(inspect(`
 // import { unstable_RSCHydratedRouter } from 'react-router';
@@ -361,6 +415,92 @@ Router.unstable_getRSCStream;
     'unstable_RSCHydratedRouter',
     'unstable_getRSCStream',
   ]);
+});
+
+test('shares one position-aware runtime binding across valid var redeclarations', () => {
+  assert.deepEqual(inspect(`
+var Router = require('react-router');
+var Router;
+Router.unstable_RSCHydratedRouter;
+`).map(({ symbol }) => symbol), ['unstable_RSCHydratedRouter']);
+
+  assert.deepEqual(inspect(`
+var Router;
+var Router = require('react-router-dom');
+Router.unstable_RSCStaticRouter;
+`).map(({ symbol }) => symbol), ['unstable_RSCStaticRouter']);
+
+  assert.deepEqual(inspect(`
+var Router;
+Router.unstable_createCallServer;
+`), []);
+});
+
+test('uses the latest initialized declaration or assignment at each namespace access', () => {
+  const violations = inspect(`
+var Router = require('react-router');
+Router.unstable_RSCHydratedRouter;
+var Router = {};
+Router.unstable_RSCStaticRouter;
+var Router = require('react-router-dom');
+Router.unstable_createCallServer;
+Router = {};
+Router.unstable_getRSCStream;
+Router = require('react-router');
+Router.unstable_matchRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCHydratedRouter',
+    'unstable_createCallServer',
+    'unstable_matchRSCServerRequest',
+  ]);
+});
+
+test('uses position-aware CommonJS identity for local namespace re-exports', () => {
+  const violations = inspect(`
+var Router = require('react-router');
+export { Router as RouterBeforeReset };
+Router = {};
+export { Router as RouterAfterReset };
+`);
+  assert.deepEqual(violations.map(({ symbol, specifier }) => ({ symbol, specifier })), [{
+    symbol: '*',
+    specifier: 'react-router',
+  }]);
+});
+
+test('keeps nested namespace value bindings scoped to their ModuleBlock', () => {
+  const outerViolations = inspect(`
+import * as Router from 'react-router';
+namespace Inner {
+  namespace Router {}
+  Router.unstable_RSCHydratedRouter;
+}
+Router.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(outerViolations.map(({ symbol }) => symbol), ['unstable_RSCStaticRouter']);
+
+  const innerViolations = inspect(`
+const Router = {};
+module Inner {
+  const Router = require('react-router-dom');
+  Router.unstable_createCallServer;
+}
+Router.unstable_getRSCStream;
+`);
+  assert.deepEqual(innerViolations.map(({ symbol }) => symbol), ['unstable_createCallServer']);
+});
+
+test('treats a nested enum as a value binding that shadows only inside its scope', () => {
+  const violations = inspect(`
+import * as Router from 'react-router-dom';
+function inner() {
+  enum Router { Local }
+  Router.unstable_RSCHydratedRouter;
+}
+Router.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_RSCStaticRouter']);
 });
 
 test('filters excluded source inputs before parsing or inspection', () => {
@@ -521,6 +661,57 @@ test('sanitizes incompatible TypeScript parse-diagnostic locations', () => {
   }), secret);
 });
 
+test('sanitizes throwing compiler-result getters without leaking source bodies', () => {
+  const secret = 'SOURCE_BODY_SENTINEL';
+  for (const createSourceFile of [
+    () => ({
+      get parseDiagnostics() { throw new Error(secret); },
+    }),
+    () => ({
+      parseDiagnostics: new Proxy([], {
+        get(target, property, receiver) {
+          if (property === 'length') throw new Error(secret);
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    }),
+    () => ({
+      parseDiagnostics: [{
+        get start() { throw new Error(secret); },
+      }],
+    }),
+  ]) {
+    const brokenCompiler = { ...typescript, createSourceFile };
+    assertPolicyError('E_TYPESCRIPT_API', () => inspectRouterRscInputs({
+      typescript: brokenCompiler,
+      manifest: {},
+      sources: [{ path: 'apps/web/src/a.ts', text: secret }],
+    }), secret);
+  }
+});
+
+test('sanitizes null diagnostics and malformed diagnostic locations', () => {
+  const secret = 'SOURCE_BODY_SENTINEL';
+  for (const createSourceFile of [
+    () => ({ parseDiagnostics: [null] }),
+    () => ({
+      parseDiagnostics: [{ start: 0 }],
+      getLineAndCharacterOfPosition: () => null,
+    }),
+    () => ({
+      parseDiagnostics: [{ start: 0 }],
+      getLineAndCharacterOfPosition: () => ({ line: -1, character: 0 }),
+    }),
+  ]) {
+    const brokenCompiler = { ...typescript, createSourceFile };
+    assertPolicyError('E_TYPESCRIPT_API', () => inspectRouterRscInputs({
+      typescript: brokenCompiler,
+      manifest: {},
+      sources: [{ path: 'apps/web/src/a.ts', text: secret }],
+    }), secret);
+  }
+});
+
 test('checks only admitted Git-tracked files using the exact NUL-delimited Git boundary', () => {
   withTempRepo((repoRoot) => {
     fs.writeFileSync(
@@ -605,6 +796,28 @@ test('fails closed with stable sanitized errors at Git, manifest, file-read, and
       typescript,
       execFileSyncImpl: () => 'apps/web/src/missing.ts\0',
     }));
+  });
+});
+
+test('rejects every noncanonical Git path record before source exclusions', () => {
+  withTempRepo((repoRoot) => {
+    for (const gitOutput of [
+      'apps/web/src/../escape.ts\0',
+      'apps/web/src//escape.ts\0',
+      'apps/web/src/\0',
+    ]) {
+      assertPolicyError('E_GIT_OUTPUT', () => checkRouterRscUsage({
+        repoRoot,
+        typescript,
+        execFileSyncImpl: () => gitOutput,
+      }));
+    }
+
+    assert.deepEqual(checkRouterRscUsage({
+      repoRoot,
+      typescript,
+      execFileSyncImpl: () => 'apps/web/src/missing.test.ts\0apps/web/src/generated/missing.ts\0',
+    }), []);
   });
 });
 
