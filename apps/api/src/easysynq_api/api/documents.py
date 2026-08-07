@@ -158,7 +158,7 @@ class CheckIn(BaseModel):
     staging_version_id: str | None = Field(default=None, min_length=1, max_length=1024)
     change_reason: str = ""
     change_significance: str = ""
-    mime_type: str = "application/octet-stream"
+    mime_type: str = Field(default="application/octet-stream", min_length=1)
 
 
 class Obsolete(BaseModel):

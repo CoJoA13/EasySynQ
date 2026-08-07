@@ -7751,7 +7751,7 @@ components:
             dedup); otherwise check-in returns staging_version_required.
         change_reason: { type: string, description: "Mandatory, non-empty (INV-3)." }
         change_significance: { type: string, enum: [MAJOR, MINOR], description: Mandatory (INV-3). }
-        mime_type: { type: string, default: application/octet-stream }
+        mime_type: { type: string, minLength: 1, default: application/octet-stream }
 
     Obsolete:
       type: object
@@ -8517,7 +8517,7 @@ components:
       required: [sha256]
       properties:
         sha256: { $ref: "#/components/schemas/Sha256Hex" }
-        content_type: { type: string, default: application/octet-stream }
+        content_type: { type: string, minLength: 1, default: application/octet-stream }
         staging_version_id:
           type: [string, "null"]
           minLength: 1

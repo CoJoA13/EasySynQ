@@ -165,6 +165,7 @@ def test_import_failure_reason_preserves_existing_allow_list_and_fixes_unexpecte
 def test_restageable_prior_reason_set_is_exact() -> None:
     assert commit_svc._RESTAGEABLE_REASONS == frozenset(
         {
+            "restage_source_unavailable",
             "upload_identity_digest_mismatch",
             "upload_identity_size_mismatch",
             "staged_source_missing",
@@ -172,6 +173,30 @@ def test_restageable_prior_reason_set_is_exact() -> None:
         }
     )
     assert "staging_version_required" not in commit_svc._RESTAGEABLE_REASONS
+
+
+def test_attempt_failure_reason_only_marks_an_unfinished_restage_as_restageable() -> None:
+    before_restage = commit_svc._CommitAttempt(restage_requested=True)
+    after_restage = commit_svc._CommitAttempt(
+        restage_requested=True,
+        restaged_blob_uri="s3://import-staging/new?versionId=exact",
+    )
+    ordinary_attempt = commit_svc._CommitAttempt()
+
+    assert (
+        commit_svc._attempt_failure_reason(
+            StorageUnavailable(StorageStage.STAGING_PUT), before_restage
+        )
+        == "restage_source_unavailable"
+    )
+    assert (
+        commit_svc._attempt_failure_reason(StorageUnavailable(StorageStage.COPY), after_restage)
+        == "storage_unavailable_copy"
+    )
+    assert (
+        commit_svc._attempt_failure_reason(StorageUnavailable(StorageStage.COPY), ordinary_attempt)
+        == "storage_unavailable_copy"
+    )
 
 
 async def test_restage_source_updates_only_locator_after_exact_digest_and_size(
@@ -225,6 +250,52 @@ async def test_restage_source_updates_only_locator_after_exact_digest_and_size(
         "rel_path": file.rel_path,
         "scan_flags": file.scan_flags,
     } == before
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ValueError("stage result construction failed"),
+        StorageUnavailable(StorageStage.STAGING_PUT),
+        UploadIdentityMismatch(
+            source=_source(),
+            expected_sha256="a" * 64,
+            observed_sha256="b" * 64,
+            expected_size=7,
+            observed_size=7,
+            etag="restage-etag",
+            classification="digest_mismatch",
+        ),
+    ],
+)
+async def test_restage_source_preserves_typed_staging_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "reviewed.txt").write_bytes(b"content")
+    file = commit_svc.ImportFile(
+        rel_path="reviewed.txt",
+        filename="reviewed.txt",
+        size_bytes=7,
+        mime_type="text/plain",
+        sha256="a" * 64,
+        staged_blob_uri="s3://import-staging/old?versionId=old",
+        scan_flags={"disposition": "included"},
+        included_candidate=True,
+    )
+
+    async def stage_stream(_handle: object, *, content_type: str) -> object:
+        assert content_type == "text/plain"
+        raise failure
+
+    monkeypatch.setattr(commit_svc.ingestion_storage, "stage_stream", stage_stream)
+
+    with pytest.raises(type(failure)) as caught:
+        await commit_svc._restage_source(file, str(source_root))
+    assert caught.value is failure
 
 
 @pytest.mark.parametrize(

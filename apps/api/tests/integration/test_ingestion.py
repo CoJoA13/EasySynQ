@@ -1589,6 +1589,33 @@ async def _confirm_for_commit(
     assert r2.status_code == 200, r2.text
 
 
+async def _seed_deleted_restage_source(run_id: uuid.UUID, file_id: uuid.UUID) -> StagedObjectRef:
+    """Model the durable state after a prior exact-version refusal and cleanup."""
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, run_id)
+        file = await session.get(ImportFile, file_id)
+        assert run is not None and file is not None
+        assert file.sha256 is not None and file.staged_blob_uri is not None
+        source = ingestion_storage.parse_staged_uri(
+            file.staged_blob_uri,
+            expected_sha256=file.sha256,
+            content_type=file.mime_type or "application/octet-stream",
+            expected_size=file.size_bytes,
+        )
+        won = await ingestion_repo.record_failed_result(
+            session,
+            org_id=run.org_id,
+            run_id=run_id,
+            file_id=file_id,
+            error="upload_identity_digest_mismatch",
+            expected_committed_at=None,
+        )
+        assert won is True
+        await session.commit()
+    await commit_svc.storage.delete_staged_version(source.locator)
+    return source
+
+
 async def test_commit_document_revalidates_blob_after_insert_conflict(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
@@ -2739,10 +2766,235 @@ async def test_upload_identity_mismatch_partial_resume_audits_then_deletes_only_
         ).scalar_one() == 1
 
 
+async def test_restage_storage_outage_preserves_restage_intent_for_next_resume(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient stage-stream outage must not make resume reuse a deleted refused locator."""
+    admin = _subject("restage-storage-outage")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(
+        app_client,
+        headers,
+        _stub_tika,
+        content_suffix=f" restage-storage-{uuid.uuid4().hex}",
+    )
+    run_uuid = uuid.UUID(run_id)
+    document = by_name["SOP-PUR-002 Purchasing.docx"]
+    peer = by_name["Internal Audit Report Q2 2023.pdf"]
+    file_id = uuid.UUID(document["id"])
+    await _confirm_for_commit(
+        app_client,
+        headers,
+        run_id,
+        document["id"],
+        peer["id"],
+        doc_identifier=f"SOP-{uuid.uuid4().hex[:6].upper()}-001",
+    )
+    deleted_source = await _seed_deleted_restage_source(run_uuid, file_id)
+    original_stage = commit_svc.ingestion_storage.stage_stream
+    stage_calls = 0
+
+    async def _fail_restage(_handle: object, *, content_type: str) -> object:
+        nonlocal stage_calls
+        stage_calls += 1
+        assert content_type == document["mime_type"]
+        raise StorageUnavailable(StorageStage.STAGING_PUT)
+
+    monkeypatch.setattr(commit_svc.ingestion_storage, "stage_stream", _fail_restage)
+    started = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    assert started.status_code == 202, started.text
+    await _drive_commit(run_uuid)
+
+    partial = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files/{document['id']}", headers=headers
+        )
+    ).json()
+    assert partial["commit"]["error"] == "restage_source_unavailable"
+    assert partial["staged_blob_uri"] == ingestion_storage.format_staged_uri(deleted_source)
+    assert stage_calls == 1
+    async with get_sessionmaker()() as session:
+        failure_events = (
+            (
+                await session.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == run_uuid,
+                        AuditEvent.event_type == EventType.IMPORT_ITEM_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        item_events = [
+            event for event in failure_events if (event.after or {}).get("file_id") == str(file_id)
+        ]
+        assert [event.after for event in item_events] == [
+            {"file_id": str(file_id), "error": "restage_source_unavailable"}
+        ]
+
+    async def _observe_restage(handle: object, *, content_type: str) -> object:
+        nonlocal stage_calls
+        stage_calls += 1
+        return await original_stage(handle, content_type=content_type)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(commit_svc.ingestion_storage, "stage_stream", _observe_restage)
+    resumed = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    assert resumed.status_code == 202, resumed.text
+    await _drive_commit(run_uuid)
+
+    complete = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=headers)).json()
+    detail = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files/{document['id']}", headers=headers
+        )
+    ).json()
+    assert complete["status"] == "Completed"
+    assert detail["commit"]["result"] == "success"
+    assert detail["staged_blob_uri"] != ingestion_storage.format_staged_uri(deleted_source)
+    assert stage_calls == 2
+
+
+async def test_restage_identity_refusal_audits_cleans_and_restages_again(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refusal raised by stage_stream keeps its typed audit/cleanup ownership across resume."""
+    admin = _subject("restage-identity-refusal")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(
+        app_client,
+        headers,
+        _stub_tika,
+        content_suffix=f" restage-refusal-{uuid.uuid4().hex}",
+    )
+    run_uuid = uuid.UUID(run_id)
+    document = by_name["SOP-PUR-002 Purchasing.docx"]
+    peer = by_name["Internal Audit Report Q2 2023.pdf"]
+    file_id = uuid.UUID(document["id"])
+    await _confirm_for_commit(
+        app_client,
+        headers,
+        run_id,
+        document["id"],
+        peer["id"],
+        doc_identifier=f"SOP-{uuid.uuid4().hex[:6].upper()}-001",
+    )
+    deleted_source = await _seed_deleted_restage_source(run_uuid, file_id)
+    original_stage = commit_svc.ingestion_storage.stage_stream
+    original_delete = commit_svc.storage.delete_staged_version
+    refused_source: StagedObjectRef | None = None
+    cleanup_versions: list[str] = []
+
+    async def _refuse_restage(handle: object, *, content_type: str) -> object:
+        nonlocal refused_source
+        staged = await original_stage(handle, content_type=content_type)  # type: ignore[arg-type]
+        refused_source = staged.source
+        raise UploadIdentityMismatch(
+            source=staged.source,
+            expected_sha256=staged.source.expected_sha256,
+            observed_sha256="f" * 64,
+            expected_size=staged.source.expected_size,
+            observed_size=staged.source.expected_size or 0,
+            etag="restage-refusal-etag",
+            classification="digest_mismatch",
+        )
+
+    async def _observe_cleanup(locator: StagedVersionLocator) -> None:
+        assert refused_source is not None
+        assert locator == refused_source.locator
+        async with get_sessionmaker()() as observer:
+            events = (
+                (
+                    await observer.execute(
+                        select(AuditEvent).where(
+                            AuditEvent.object_id == run_uuid,
+                            AuditEvent.event_type == EventType.IMPORT_ITEM_FAILED,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert any(
+                (event.after or {}).get("source", {}).get("version_id") == locator.version_id
+                for event in events
+            )
+        cleanup_versions.append(locator.version_id)
+        await original_delete(locator)
+
+    monkeypatch.setattr(commit_svc.ingestion_storage, "stage_stream", _refuse_restage)
+    monkeypatch.setattr(commit_svc.storage, "delete_staged_version", _observe_cleanup)
+    started = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    assert started.status_code == 202, started.text
+    await _drive_commit(run_uuid)
+
+    assert refused_source is not None
+    partial = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files/{document['id']}", headers=headers
+        )
+    ).json()
+    assert partial["commit"]["error"] == "upload_identity_digest_mismatch"
+    assert partial["staged_blob_uri"] == ingestion_storage.format_staged_uri(deleted_source)
+    assert cleanup_versions == [refused_source.locator.version_id]
+    async with get_sessionmaker()() as session:
+        failure_events = (
+            (
+                await session.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == run_uuid,
+                        AuditEvent.event_type == EventType.IMPORT_ITEM_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        item_events = [
+            event for event in failure_events if (event.after or {}).get("file_id") == str(file_id)
+        ]
+        assert len(item_events) == 1
+        assert item_events[0].after["classification"] == "digest_mismatch"
+        assert item_events[0].after["source"]["version_id"] == refused_source.locator.version_id
+        assert item_events[0].after["cleanup"] == {"policy": "delete_exact_version_after_audit"}
+
+    restage_calls = 0
+
+    async def _observe_restage(handle: object, *, content_type: str) -> object:
+        nonlocal restage_calls
+        restage_calls += 1
+        return await original_stage(handle, content_type=content_type)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(commit_svc.ingestion_storage, "stage_stream", _observe_restage)
+    resumed = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)
+    assert resumed.status_code == 202, resumed.text
+    await _drive_commit(run_uuid)
+
+    complete = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=headers)).json()
+    detail = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files/{document['id']}", headers=headers
+        )
+    ).json()
+    assert complete["status"] == "Completed"
+    assert detail["commit"]["result"] == "success"
+    assert detail["staged_blob_uri"] != ingestion_storage.format_staged_uri(deleted_source)
+    assert restage_calls == 1
+
+
 async def test_upload_identity_legacy_locator_requires_restart_and_never_restages(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
     _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     admin = _subject("avery-import-legacy")
     await _assign_role(admin, "System Administrator")
@@ -2777,6 +3029,11 @@ async def test_upload_identity_legacy_locator_requires_restart_and_never_restage
             {"uri": legacy_uri, "file": uuid.UUID(legacy["id"])},
         )
         await session.commit()
+
+    async def _forbid_restage(_handle: object, *, content_type: str) -> object:
+        raise AssertionError(f"legacy/no-version row must not restage ({content_type})")
+
+    monkeypatch.setattr(commit_svc.ingestion_storage, "stage_stream", _forbid_restage)
 
     assert (
         await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=headers)

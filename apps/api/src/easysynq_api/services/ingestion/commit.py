@@ -33,6 +33,7 @@ import datetime
 import hashlib
 import logging
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
 
@@ -81,7 +82,6 @@ from ..vault.signature import SignatureEvent, get_vault_signature_sink
 from ..vault.staged_identity import (
     IdentityRefusal,
     StagedObjectRef,
-    StagedPromotionError,
     StagedSourceChanged,
     StagedSourceUnavailable,
     StagingVersionRequired,
@@ -122,6 +122,7 @@ _ITEM_COMMIT_REASONS = frozenset(
 )
 _RESTAGEABLE_REASONS = frozenset(
     {
+        "restage_source_unavailable",
         "upload_identity_digest_mismatch",
         "upload_identity_size_mismatch",
         "staged_source_missing",
@@ -165,6 +166,7 @@ class _CommitAttempt:
     """Failure ownership generation plus any exact restage verified during this attempt."""
 
     expected_committed_at: datetime.datetime | None = None
+    restage_requested: bool = False
     restaged_blob_uri: str | None = None
 
 
@@ -189,18 +191,32 @@ def _failure_reason(exc: BaseException) -> str:
     return "internal_error"
 
 
+def _attempt_failure_reason(exc: BaseException, attempt: _CommitAttempt) -> str:
+    """Keep an interrupted restage resumable without misclassifying later storage failures."""
+    if (
+        isinstance(exc, StorageUnavailable)
+        and attempt.restage_requested
+        and attempt.restaged_blob_uri is None
+    ):
+        return "restage_source_unavailable"
+    return _failure_reason(exc)
+
+
 async def _restage_source(file: ImportFile, source_root: str) -> StagedObjectRef:
     """Restage one confined source and change only its transient exact locator."""
     if file.sha256 is None:
         raise _ItemCommitError("restage_source_changed")
+    stack = ExitStack()
     try:
         provider = FilesystemSourceProvider(Path(source_root))
-        with provider.open_stream(file.rel_path) as handle:
-            staged = await ingestion_storage.stage_stream(
-                handle, content_type=file.mime_type or "application/octet-stream"
-            )
-    except (OSError, ValueError, StagedPromotionError) as exc:
+        handle = stack.enter_context(provider.open_stream(file.rel_path))
+    except (OSError, ValueError) as exc:
+        stack.close()
         raise _ItemCommitError("restage_source_unavailable") from exc
+    with stack:
+        staged = await ingestion_storage.stage_stream(
+            handle, content_type=file.mime_type or "application/octet-stream"
+        )
     if staged.sha256 != file.sha256 or staged.size_bytes != file.size_bytes:
         raise _ItemCommitError("restage_source_changed")
     file.staged_blob_uri = staged.staged_blob_uri
@@ -403,6 +419,7 @@ async def _commit_items(
                     and existing.result is ImportCommitResultStatus.FAILED
                     and existing.error in _RESTAGEABLE_REASONS
                 )
+                attempt.restage_requested = restage
                 owner_user_id = await _resolve_owner_user_id(
                     s,
                     org_id,
@@ -488,7 +505,7 @@ async def _commit_items(
                 )
                 _log_item_failure(run_id, node.file_id, reason)
         except Exception as exc:
-            reason = _failure_reason(exc)
+            reason = _attempt_failure_reason(exc, attempt)
             if reason == "internal_error":
                 logger.exception(
                     "ingestion.commit.item_internal_error",

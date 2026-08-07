@@ -481,6 +481,63 @@ async def test_checkin_requires_reason_and_significance(
     assert ok.status_code == 201, ok.text
 
 
+async def test_checkin_rejects_empty_mime_before_service_storage_or_audit(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _grant_doc_perms(subj.a)
+    headers = _auth(token_factory, subj.a)
+    did = (await _create(app_client, headers, await _sop_type_id()))["id"]
+
+    async with get_sessionmaker()() as session:
+        before_audit_ids = (
+            (
+                await session.execute(
+                    select(AuditEvent.id).where(AuditEvent.object_id == uuid.UUID(did))
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    async def _service_must_not_run(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("request validation must run before the check-in service")
+
+    async def _storage_must_not_run(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("request validation must run before storage")
+
+    monkeypatch.setattr(documents_api, "checkin", _service_must_not_run)
+    monkeypatch.setattr(documents_api.storage, "promote_worm", _storage_must_not_run)
+
+    response = await app_client.post(
+        f"/api/v1/documents/{did}/checkin",
+        headers=headers,
+        json={
+            "sha256": "a" * 64,
+            "staging_version_id": "unused-exact-version",
+            "change_reason": "must not reach service validation",
+            "change_significance": "MINOR",
+            "mime_type": "",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    async with get_sessionmaker()() as session:
+        after_audit_ids = (
+            (
+                await session.execute(
+                    select(AuditEvent.id).where(AuditEvent.object_id == uuid.UUID(did))
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert after_audit_ids == before_audit_ids
+
+
 async def test_checkin_requires_staging_version_for_new_bytes_and_preserves_checkout(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:

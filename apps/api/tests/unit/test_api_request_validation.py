@@ -78,6 +78,12 @@ def test_checkin_allows_null_staging_version_for_conditional_service_validation(
     )
 
 
+def test_checkin_rejects_empty_mime_type_before_service_mapping() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        CheckIn.model_validate({"sha256": "a" * 64, "mime_type": ""})
+    assert exc_info.value.errors()[0]["type"] == "string_too_short"
+
+
 @pytest.mark.parametrize("invalid_version", ["", "v" * 1025])
 def test_evidence_ref_rejects_invalid_staging_version_id(invalid_version: str) -> None:
     with pytest.raises(ValidationError):
@@ -130,6 +136,23 @@ def test_upload_response_matrix_publishes_stable_version_bound_failures(path: st
 def test_evidence_ref_rejects_empty_content_type_before_service_mapping() -> None:
     with pytest.raises(ValidationError):
         EvidenceRef.model_validate({"sha256": "a" * 64, "content_type": ""})
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "property_name"),
+    [("CheckIn", "mime_type"), ("EvidenceRef", "content_type")],
+)
+def test_openapi_publishes_nonempty_promotion_content_types(
+    schema_name: str, property_name: str
+) -> None:
+    contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))
+    property_schema = contract["components"]["schemas"][schema_name]["properties"][property_name]
+
+    assert property_schema == {
+        "type": "string",
+        "minLength": 1,
+        "default": "application/octet-stream",
+    }
 
 
 def _evidence_input(
