@@ -74,7 +74,7 @@ def test_build_task_binds_authz_sink_to_each_task_local_engine(
 
     engines: list[FakeEngine] = []
     session_factories: list[FakeSessionmaker] = []
-    builds: list[tuple[object, uuid.UUID, DbAuthzAuditSink]] = []
+    builds: list[tuple[object, uuid.UUID, DbAuthzAuditSink, FakeSessionmaker]] = []
 
     def fake_engine(_url: str) -> FakeEngine:
         engine = FakeEngine()
@@ -92,8 +92,9 @@ def test_build_task_binds_authz_sink_to_each_task_local_engine(
         pack_id: uuid.UUID,
         *,
         authz_sink: DbAuthzAuditSink,
+        rejection_sessionmaker: FakeSessionmaker,
     ) -> None:
-        builds.append((session, pack_id, authz_sink))
+        builds.append((session, pack_id, authz_sink, rejection_sessionmaker))
         await authz_sink.record(
             AuthzAuditEvent(
                 occurred_at=datetime.datetime.now(datetime.UTC),
@@ -126,6 +127,12 @@ def test_build_task_binds_authz_sink_to_each_task_local_engine(
     assert [entry[1] for entry in builds] == [first_id, second_id]
     assert len({id(factory) for factory in session_factories}) == 2
     assert len({id(entry[2]) for entry in builds}) == 2
+    assert all(
+        rejection_sessionmaker is task_sessionmaker
+        for (*_, rejection_sessionmaker), task_sessionmaker in zip(
+            builds, session_factories, strict=True
+        )
+    )
     assert all(
         len(factory.sessions) == 3
         and len(factory.sessions[1].added) == 1

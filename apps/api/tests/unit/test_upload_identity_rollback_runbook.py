@@ -33,9 +33,7 @@ def _write_executable(path: pathlib.Path, source: str) -> None:
     lines = source.strip("\n").splitlines()
     indent = len(lines[0]) - len(lines[0].lstrip())
     prefix = " " * indent
-    normalized = "\n".join(
-        line[indent:] if line.startswith(prefix) else line for line in lines
-    )
+    normalized = "\n".join(line[indent:] if line.startswith(prefix) else line for line in lines)
     path.write_text(normalized + "\n", encoding="utf-8")
     path.chmod(0o700)
 
@@ -107,8 +105,8 @@ def _json_records(output: str, prefix: str) -> list[dict[str, object]]:
 
 def _recorded_retained_identity(tmp_path: pathlib.Path) -> dict[str, int | str]:
     device, inode, uid, gid, mode = (
-        tmp_path / "recorded-retained-identity"
-    ).read_text(encoding="ascii").split()
+        (tmp_path / "recorded-retained-identity").read_text(encoding="ascii").split()
+    )
     return {
         "device": int(device),
         "inode": int(inode),
@@ -160,15 +158,13 @@ def _assert_inode_report_and_inventory_find_retained_entry(
     assert isinstance(current_matching_paths, list)
     matching_paths = [pathlib.Path(str(path)) for path in current_matching_paths]
     assert any(
-        (path.stat().st_dev, path.stat().st_ino)
-        == (recorded["device"], recorded["inode"])
+        (path.stat().st_dev, path.stat().st_ino) == (recorded["device"], recorded["inode"])
         for path in matching_paths
     )
 
     inventory = _run_library(
         tmp_path,
-        f"ESQ_MODE=repository\nESQ_ENV_FILE='{env_file}'\n"
-        "esq_inventory_quarantine",
+        f"ESQ_MODE=repository\nESQ_ENV_FILE='{env_file}'\nesq_inventory_quarantine",
         library=library,
     )
     assert inventory.returncode == 0, inventory.stderr
@@ -176,24 +172,18 @@ def _assert_inode_report_and_inventory_find_retained_entry(
     assert "SECRET=" not in inventory_output
     assert "RACER=" not in inventory_output
     assert "CONCURRENT=" not in inventory_output
-    directory_records = _json_records(
-        inventory.stdout, "rollback-quarantine-directory: "
-    )
+    directory_records = _json_records(inventory.stdout, "rollback-quarantine-directory: ")
     assert directory_records == [report["validated_quarantine"]]
     entries = _json_records(inventory.stdout, "rollback-quarantine-entry: ")
     actual_entries = list(quarantine.iterdir())
     assert len(entries) == len(actual_entries) == 2
-    assert {
-        (entry.stat().st_dev, entry.stat().st_ino) for entry in actual_entries
-    } == {
-        (int(record["identity"]["device"]), int(record["identity"]["inode"]))
-        for record in entries
+    assert {(entry.stat().st_dev, entry.stat().st_ino) for entry in actual_entries} == {
+        (int(record["identity"]["device"]), int(record["identity"]["inode"])) for record in entries
     }
     authoritative = [
         entry
         for entry in entries
-        if entry["identity"] == report["identity"]
-        and entry["metadata"] == report["metadata"]
+        if entry["identity"] == report["identity"] and entry["metadata"] == report["metadata"]
     ]
     assert len(authoritative) == 1
     observed_path = pathlib.Path(str(authoritative[0]["observed_path"]))
@@ -260,17 +250,13 @@ def test_env_setter_is_mode_specific_privileged_and_atomic() -> None:
 
     assert "ESQ_MODE=appliance" in text
     assert "ESQ_EXPECTED_API_REPLICAS=1" in text
-    assert "m) ESQ_PROFILE_FILE='infra/compose/compose.m.yml'; " \
-        "ESQ_EXPECTED_API_REPLICAS=2" in text
+    assert "m) ESQ_PROFILE_FILE='infra/compose/compose.m.yml'; ESQ_EXPECTED_API_REPLICAS=2" in text
     assert "esq_set_env_appliance" in library
     assert "esq_set_env_repository" in library
     assert "sudo bash -c" in library
     assert "/opt/easysynq/.env" in library
     assert "root:easysynq" in library
-    assert (
-        "esq_atomic_set_env_file /opt/easysynq/.env 0 '$easysynq_gid' 640"
-        in library
-    )
+    assert "esq_atomic_set_env_file /opt/easysynq/.env 0 '$easysynq_gid' 640" in library
     assert 'esq_atomic_set_env_file "$ESQ_ENV_FILE" "$owner" "$group" "$mode"' in library
     assert "EASYSYNQ_COMPATIBILITY_READ_ONLY" in library
     assert 'value not in {"0", "1"}' in library
@@ -339,12 +325,10 @@ def test_each_api_cutover_selects_retags_recreates_and_verifies_exact_image() ->
     for section in (rollback_slice, recovery_slice):
         assert "esq_select_api_artifact" in section
         assert "SELECTED_API_IMAGE_ID" in section
-        assert 'up -d --no-deps --force-recreate --no-build api' in section
+        assert "up -d --no-deps --force-recreate --no-build api" in section
         assert "esq_require_running_api_image" in section
         assert section.index("esq_select_api_artifact") < section.index("force-recreate")
-        assert section.index("force-recreate") < section.index(
-            "esq_require_running_api_image"
-        )
+        assert section.index("force-recreate") < section.index("esq_require_running_api_image")
 
     library = _bash_block("rollback-helper-library")
     assert "hashlib.sha256" in library
@@ -355,10 +339,7 @@ def test_each_api_cutover_selects_retags_recreates_and_verifies_exact_image() ->
     assert "container inspect" in library
     assert "{{.Image}}" in library
     assert 'image tag "$SELECTED_API_IMAGE_ID" "$ESQ_API_SERVICE_IMAGE"' in library
-    assert (
-        '[ "$ESQ_RECOVERY_API_IMAGE_ID" != "$ESQ_ROLLBACK_API_IMAGE_ID" ]'
-        in text
-    )
+    assert '[ "$ESQ_RECOVERY_API_IMAGE_ID" != "$ESQ_ROLLBACK_API_IMAGE_ID" ]' in text
 
 
 def test_every_http_probe_uses_mode_specific_curl_array() -> None:
@@ -487,8 +468,7 @@ def test_env_exchange_restores_a_final_boundary_replacement(tmp_path: pathlib.Pa
     assert marker in library
     injected = library.replace(
         marker,
-        "os.rename('racer', name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)\n    "
-        + marker,
+        "os.rename('racer', name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)\n    " + marker,
         1,
     )
     env_file = tmp_path / ".env"
@@ -507,9 +487,7 @@ def test_env_exchange_restores_a_final_boundary_replacement(tmp_path: pathlib.Pa
     assert env_file.read_text(encoding="utf-8") == "CONCURRENT_SENTINEL=preserve\n"
     retained = list((tmp_path / ".env.rollback-quarantine").iterdir())
     assert len(retained) == 1
-    assert "EASYSYNQ_COMPATIBILITY_READ_ONLY=1\n" in retained[0].read_text(
-        encoding="utf-8"
-    )
+    assert "EASYSYNQ_COMPATIBILITY_READ_ONLY=1\n" in retained[0].read_text(encoding="utf-8")
     assert retained[0].stat().st_mode & 0o777 == 0o640
     assert str(retained[0]) in result.stderr
 
@@ -543,7 +521,7 @@ def test_curl_array_ignores_hostile_config_and_proxy(tmp_path: pathlib.Path) -> 
     result = _run_library(
         tmp_path,
         'ESQ_MODE=repository\nESQ_CURL_LOG="$PWD/curl-args"\nexport ESQ_CURL_LOG\n'
-        'ESQ_BASE_URL=https://app.example\nesq_configure_curl\n'
+        "ESQ_BASE_URL=https://app.example\nesq_configure_curl\n"
         '"${ESQ_CURL[@]}" "$ESQ_BASE_URL/healthz"',
         env={
             "PATH": f"{fake_bin}:/usr/bin:/bin",
@@ -821,8 +799,7 @@ def test_appliance_loads_a_sealed_snapshot_after_same_inode_source_mutation(
         marker,
         "racer_fd = os.open(archive_path, os.O_WRONLY | os.O_TRUNC)\n"
         "    os.write(racer_fd, b'IN-PLACE-SOURCE-MUTATION')\n"
-        "    os.close(racer_fd)\n    "
-        + marker,
+        "    os.close(racer_fd)\n    " + marker,
         1,
     )
     result = _run_library(
@@ -976,8 +953,7 @@ def test_appliance_archive_and_sidecar_are_read_from_retained_fds(
     injected = library.replace(
         marker,
         "os.replace(os.environ['ESQ_ARCHIVE_RACER'], archive_path)\n"
-        "    os.replace(os.environ['ESQ_SIDECAR_RACER'], sidecar_path)\n    "
-        + marker,
+        "    os.replace(os.environ['ESQ_SIDECAR_RACER'], sidecar_path)\n    " + marker,
         1,
     )
     result = _run_library(
@@ -1058,9 +1034,7 @@ def test_cleanup_quarantines_success_boundary_replacement(tmp_path: pathlib.Path
     )
     assert result.returncode != 0
     retained = list((tmp_path / ".env.rollback-quarantine").iterdir())
-    assert [path.read_text(encoding="utf-8") for path in retained] == [
-        "REPLACEMENT-MUST-SURVIVE\n"
-    ]
+    assert [path.read_text(encoding="utf-8") for path in retained] == ["REPLACEMENT-MUST-SURVIVE\n"]
 
 
 def test_cleanup_quarantines_restoration_boundary_replacement(
@@ -1095,9 +1069,7 @@ def test_cleanup_quarantines_restoration_boundary_replacement(
     assert result.returncode != 0
     assert env_file.read_text(encoding="utf-8") == "CONCURRENT-ENV\n"
     retained = list((tmp_path / ".env.rollback-quarantine").iterdir())
-    assert [path.read_text(encoding="utf-8") for path in retained] == [
-        "CLEANUP-RACER-SURVIVES\n"
-    ]
+    assert [path.read_text(encoding="utf-8") for path in retained] == ["CLEANUP-RACER-SURVIVES\n"]
 
 
 def test_success_cleanup_retains_post_fstat_replacement_and_old_env(
@@ -1125,9 +1097,7 @@ def test_success_cleanup_retains_post_fstat_replacement_and_old_env(
         "RACER=success\n",
     }
     assert all(path.stat().st_mode & 0o777 == 0o640 for path in retained)
-    _assert_inode_report_and_inventory_find_retained_entry(
-        tmp_path, env_file, library, result
-    )
+    _assert_inode_report_and_inventory_find_retained_entry(tmp_path, env_file, library, result)
     assert str(tmp_path / ".env.rollback-quarantine") in result.stderr
     assert "SECRET=old-success" not in result.stderr
     assert "RACER=success" not in result.stderr
@@ -1142,8 +1112,7 @@ def test_restoration_cleanup_retains_post_fstat_replacement_and_helper_temp(
     marker = "# final-exchange-boundary"
     library = library.replace(
         marker,
-        "os.rename('boundary-racer', name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)\n    "
-        + marker,
+        "os.rename('boundary-racer', name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)\n    " + marker,
         1,
     )
     env_file = tmp_path / ".env"
@@ -1167,15 +1136,12 @@ def test_restoration_cleanup_retains_post_fstat_replacement_and_helper_temp(
     contents = {path.read_text(encoding="utf-8") for path in retained}
     assert "RACER=restoration\n" in contents
     assert any(
-        content
-        == "SECRET=old-restoration\nEASYSYNQ_COMPATIBILITY_READ_ONLY=1\n"
+        content == "SECRET=old-restoration\nEASYSYNQ_COMPATIBILITY_READ_ONLY=1\n"
         for content in contents
     )
     assert len(retained) == 2
     assert all(path.stat().st_mode & 0o777 == 0o640 for path in retained)
-    _assert_inode_report_and_inventory_find_retained_entry(
-        tmp_path, env_file, library, result
-    )
+    _assert_inode_report_and_inventory_find_retained_entry(tmp_path, env_file, library, result)
     assert str(tmp_path / ".env.rollback-quarantine") in result.stderr
     assert "SECRET=old-restoration" not in result.stderr
 
@@ -1210,14 +1176,11 @@ def test_final_failure_cleanup_retains_post_fstat_replacement_and_helper_temp(
     contents = {path.read_text(encoding="utf-8") for path in retained}
     assert "RACER=final-failure\n" in contents
     assert any(
-        content == "SECRET=old-final\nEASYSYNQ_COMPATIBILITY_READ_ONLY=1\n"
-        for content in contents
+        content == "SECRET=old-final\nEASYSYNQ_COMPATIBILITY_READ_ONLY=1\n" for content in contents
     )
     assert len(retained) == 2
     assert all(path.stat().st_mode & 0o777 == 0o640 for path in retained)
-    _assert_inode_report_and_inventory_find_retained_entry(
-        tmp_path, env_file, library, result
-    )
+    _assert_inode_report_and_inventory_find_retained_entry(tmp_path, env_file, library, result)
     assert str(tmp_path / ".env.rollback-quarantine") in result.stderr
     assert "SECRET=old-final" not in result.stderr
 
@@ -1340,9 +1303,7 @@ def test_repository_build_and_cleanup_failures_are_safe(tmp_path: pathlib.Path) 
         stdin=f"{commit}\n",
     )
     assert result.returncode != 0
-    failed_cleanup_source = pathlib.Path(
-        worktree_path.read_text(encoding="utf-8").strip()
-    )
+    failed_cleanup_source = pathlib.Path(worktree_path.read_text(encoding="utf-8").strip())
     assert not failed_cleanup_source.exists()
     assert failed_cleanup_source.parent.exists()
     assert git_log.read_text(encoding="utf-8").count("worktree remove --force") >= 1
@@ -1408,8 +1369,7 @@ def test_setter_rejects_invalid_duplicate_symlink_and_metadata_drift(
     link.symlink_to(target)
     result = _run_library(
         tmp_path,
-        f"esq_atomic_set_env_file '{link}' {uid} {gid} 640 "
-        "EASYSYNQ_COMPATIBILITY_READ_ONLY 1",
+        f"esq_atomic_set_env_file '{link}' {uid} {gid} 640 EASYSYNQ_COMPATIBILITY_READ_ONLY 1",
     )
     assert result.returncode != 0
     assert target.read_text(encoding="utf-8") == "SECRET=old\n"

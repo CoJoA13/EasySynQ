@@ -2485,7 +2485,7 @@ async def test_commit_partial_then_resume_keeps_committed_item(
         assert n == 1  # the committed SOP is not duplicated across the resume
 
 
-async def test_upload_identity_partial_resume_audits_then_deletes_only_rejected_version(
+async def test_upload_identity_mismatch_partial_resume_audits_then_deletes_only_rejected_version(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
     _stub_tika: None,

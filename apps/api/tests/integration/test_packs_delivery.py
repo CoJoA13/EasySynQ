@@ -45,7 +45,7 @@ from easysynq_api.services.vault import storage
 
 from ._owner_db import owner_delete_disposition_events
 from .test_packs import _PACK_PERMS, _link_process, _make_process, _teardown
-from .test_records import _capture, _grant, _subject, _upload_evidence
+from .test_records import _capture, _evidence_json, _grant, _subject, _upload_evidence
 from .test_vault import _auth
 
 pytestmark = pytest.mark.integration
@@ -106,14 +106,14 @@ async def _make_sealed_pack(
     app_client: AsyncClient, h: dict[str, str], process_id: uuid.UUID
 ) -> tuple[uuid.UUID, str]:
     """An INCLUDED-record pack, sealed with its PDF portfolio. Returns (pack_id, record_id)."""
-    sha = await _upload_evidence(app_client, h, f"ev-{uuid.uuid4().hex}".encode())
+    upload = await _upload_evidence(app_client, h, f"ev-{uuid.uuid4().hex}".encode())
     rid = (
         await _capture(
             app_client,
             h,
             record_type="EVIDENCE",
             title="included",
-            evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+            evidence=[_evidence_json(upload)],
         )
     ).json()["id"]
     await _link_process(app_client, h, rid, process_id)
@@ -968,7 +968,7 @@ async def test_pack_build_and_r27_destroy_serialize_without_a_last_copy(
     approve_task: asyncio.Task[httpx.Response] | None = None
     release_build = asyncio.Event()
     try:
-        sha = await _upload_evidence(
+        upload = await _upload_evidence(
             app_client, requester_headers, f"race-{uuid.uuid4().hex}".encode()
         )
         rid = (
@@ -977,7 +977,7 @@ async def test_pack_build_and_r27_destroy_serialize_without_a_last_copy(
                 requester_headers,
                 record_type="EVIDENCE",
                 title="race source",
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         await _link_process(app_client, requester_headers, rid, process_id)

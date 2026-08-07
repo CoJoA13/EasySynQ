@@ -113,7 +113,7 @@ class _AuditSessionmaker:
 
 
 @pytest.mark.asyncio
-async def test_refusal_rolls_back_then_commits_audit_before_exact_delete(
+async def test_refusal_order_rolls_back_then_commits_audit_before_exact_delete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -367,7 +367,7 @@ async def test_target_conflict_commits_retain_source_evidence_without_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_db_sink_persists_private_fixed_payload_and_partition_identity(
+async def test_durable_db_sink_persists_private_fixed_payload_and_partition_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []

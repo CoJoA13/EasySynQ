@@ -124,12 +124,12 @@ def _run_minio_init(tmp_path: Path, origin: str) -> subprocess.CompletedProcess[
         "http://::1]",
         "http://[]",
         "http://[:::1]",
-        "http://[2001::db8::1]",
-        "http://[1:2:3:4:5:6:7:8:9]",
+        "http://[2001:db8::1::1]",
+        "http://[2001:db8:0:0:0:0:0:0:1]",
         "http://[1:2:3]",
         "http://[12345::1]",
         "http://[gggg::1]",
-        "http://[::ffff:999.0.2.1]",
+        "http://[::ffff:192.0.2.999]",
         "http://[::1]:",
         "http://[::1]:not-a-port",
         "http://[::1]:0",
@@ -177,9 +177,7 @@ def test_compose_passes_safe_cors_origin_and_default_off_rollback_guard() -> Non
     template = _read(".env.example")
 
     assert "PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}" in compose
-    assert (
-        "EASYSYNQ_COMPATIBILITY_READ_ONLY: ${EASYSYNQ_COMPATIBILITY_READ_ONLY:-0}" in compose
-    )
+    assert "EASYSYNQ_COMPATIBILITY_READ_ONLY: ${EASYSYNQ_COMPATIBILITY_READ_ONLY:-0}" in compose
     assert "EASYSYNQ_COMPATIBILITY_READ_ONLY=0" in template
 
 

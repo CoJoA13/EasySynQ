@@ -197,7 +197,7 @@ def test_locator_accepts_opaque_url_significant_version() -> None:
     assert locator.version_id == "v+/=?%opaque"
 
 
-def test_finalize_sync_rejects_same_size_false_bytes_before_copy(
+def test_finalize_sync_upload_identity_mismatch_rejects_same_size_false_bytes_before_copy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     good = b"approved-2026"
@@ -217,7 +217,7 @@ def test_finalize_sync_rejects_same_size_false_bytes_before_copy(
     assert client.source_body.closed is True
 
 
-def test_finalize_sync_copies_exact_version_with_opaque_etag(
+def test_finalize_sync_copy_pins_exact_source_version_with_opaque_etag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     data = b"approved"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
@@ -26,9 +27,7 @@ from easysynq_api.services.vault.staged_identity import (
 
 
 @pytest.fixture
-def s3_client(
-    _minio: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> Iterator[Any]:
+def s3_client(_minio: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     from easysynq_api.config import get_settings
 
     monkeypatch.setenv("S3_ENDPOINT", _minio["endpoint"])
@@ -217,6 +216,43 @@ def test_overwrite_between_verify_and_copy_never_promotes_newer_bytes(s3_client:
 
 
 @pytest.mark.integration
+def test_overwrite_same_bytes_still_copies_pinned_source_version_metadata(
+    s3_client: Any,
+) -> None:
+    body = f"same-bytes-{uuid.uuid4().hex}".encode()
+    sha256 = hashlib.sha256(body).hexdigest()
+    put_v1 = s3_client.put_object(
+        Bucket="staging",
+        Key=sha256,
+        Body=body,
+        Metadata={"source-version": "v1"},
+    )
+    source = _source_ref(body, put_v1["VersionId"])
+
+    def overwrite_with_same_bytes_v2() -> None:
+        s3_client.put_object(
+            Bucket="staging",
+            Key=sha256,
+            Body=body,
+            Metadata={"source-version": "v2"},
+        )
+
+    result = storage._finalize_sync(
+        source,
+        "documents",
+        client=s3_client,
+        before_copy=overwrite_with_same_bytes_v2,
+    )
+    target = s3_client.head_object(
+        Bucket="documents",
+        Key=sha256,
+        VersionId=result.target_version_id,
+    )
+
+    assert target["Metadata"] == {"source-version": "v1"}
+
+
+@pytest.mark.integration
 async def test_exact_rejected_version_delete_leaves_newer_version_readable(s3_client: Any) -> None:
     v1 = b"rejected-version-one"
     v2 = b"accepted-version-two"
@@ -236,9 +272,7 @@ async def test_exact_rejected_version_delete_leaves_newer_version_readable(s3_cl
     assert current["VersionId"] == put_v2["VersionId"]
     assert current["Body"].read() == v2
     with pytest.raises(ClientError) as caught:
-        s3_client.get_object(
-            Bucket="staging", Key=key, VersionId=put_v1["VersionId"]
-        )
+        s3_client.get_object(Bucket="staging", Key=key, VersionId=put_v1["VersionId"])
     assert caught.value.response["Error"]["Code"] == "NoSuchVersion"
 
 
@@ -274,8 +308,8 @@ def test_copy_failure_preserves_exact_verified_source_for_retry(s3_client: Any) 
 
     assert caught.value.stage is StorageStage.COPY
     assert failing.source_gets[0]["VersionId"] == put["VersionId"]
-    retry_source = s3_client.get_object(
-        Bucket="staging", Key=sha256, VersionId=put["VersionId"]
-    )["Body"].read()
+    retry_source = s3_client.get_object(Bucket="staging", Key=sha256, VersionId=put["VersionId"])[
+        "Body"
+    ].read()
     assert retry_source == source_bytes
     _assert_missing(s3_client, bucket="documents", key=sha256)

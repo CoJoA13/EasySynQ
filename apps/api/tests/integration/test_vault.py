@@ -510,7 +510,7 @@ async def test_checkin_requires_staging_version_for_new_bytes_and_preserves_chec
     assert await locks.ttl(uuid.UUID(did)) > 0
 
 
-async def test_checkin_rejects_false_bytes_cleans_only_exact_version_then_allows_honest_retry(
+async def test_document_upload_identity_mismatch_audits_exact_cleanup_then_allows_honest_retry(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
     subj: SimpleNamespace,

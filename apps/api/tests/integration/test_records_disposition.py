@@ -50,7 +50,7 @@ from easysynq_api.services.vault.staged_identity import (
 )
 
 from ._owner_db import owner_delete_disposition_events
-from .test_records import _capture, _grant, _subject, _upload_evidence
+from .test_records import _capture, _evidence_json, _grant, _subject, _upload_evidence
 from .test_vault import _auth
 
 pytestmark = pytest.mark.integration
@@ -347,7 +347,7 @@ async def test_sweep_destroy_worm_unexpired_stays_due(
     h = _auth(token_factory, subject)
     policy_id = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=False)
     try:
-        sha = await _upload_evidence(app_client, h, f"e-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, h, f"e-{uuid.uuid4().hex}".encode())
         rid = (
             await _capture(
                 app_client,
@@ -355,7 +355,7 @@ async def test_sweep_destroy_worm_unexpired_stays_due(
                 record_type="CALIBRATION",
                 title="cal",
                 retention_policy_id=str(policy_id),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         await _backdate(rid, days=30)
@@ -454,7 +454,7 @@ async def test_manual_destroy_worm_unexpired_refused_and_audited(
     h_disposer = _auth(token_factory, disposer)
     policy_id = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
-        sha = await _upload_evidence(app_client, h, f"e-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, h, f"e-{uuid.uuid4().hex}".encode())
         rid = (
             await _capture(
                 app_client,
@@ -462,7 +462,7 @@ async def test_manual_destroy_worm_unexpired_refused_and_audited(
                 record_type="CALIBRATION",
                 title="cal",
                 retention_policy_id=str(policy_id),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         # ACTIVE → DUE (manual early review), then a DESTROY attempt while the WORM lock is live.
@@ -502,7 +502,8 @@ async def test_dual_control_destroy_happy_path_and_same_actor_block(
     hb = _auth(token_factory, b_subject)
     policy_id = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
-        sha = await _upload_evidence(app_client, ha, f"e-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, ha, f"e-{uuid.uuid4().hex}".encode())
+        sha = upload.sha256
         rid = (
             await _capture(
                 app_client,
@@ -510,7 +511,7 @@ async def test_dual_control_destroy_happy_path_and_same_actor_block(
                 record_type="CALIBRATION",
                 title="cal",
                 retention_policy_id=str(policy_id),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         # Sanity: the WORM object exists in the records bucket before destruction.
@@ -590,7 +591,8 @@ async def test_dual_control_compliance_mode_refused(
     policy_id = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
         await _set_object_lock_mode(org_id, "COMPLIANCE")
-        sha = await _upload_evidence(app_client, ha, f"e-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, ha, f"e-{uuid.uuid4().hex}".encode())
+        sha = upload.sha256
         rid = (
             await _capture(
                 app_client,
@@ -598,7 +600,7 @@ async def test_dual_control_compliance_mode_refused(
                 record_type="CALIBRATION",
                 title="cal",
                 retention_policy_id=str(policy_id),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         req_id = (
@@ -693,7 +695,8 @@ async def test_purge_failure_defers_to_reaper(
     hb = _auth(token_factory, b_subject)
     policy_id = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
-        sha = await _upload_evidence(app_client, ha, f"e-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, ha, f"e-{uuid.uuid4().hex}".encode())
+        sha = upload.sha256
         rid = (
             await _capture(
                 app_client,
@@ -701,7 +704,7 @@ async def test_purge_failure_defers_to_reaper(
                 record_type="CALIBRATION",
                 title="cal",
                 retention_policy_id=str(policy_id),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         req_id = (
@@ -1227,7 +1230,8 @@ async def test_shared_blob_concurrent_disposition_purges_once(
     h = _auth(token_factory, subject)
     pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
-        sha = await _upload_evidence(app_client, h, f"shared-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, h, f"shared-{uuid.uuid4().hex}".encode())
+        sha = upload.sha256
         rids = [
             (
                 await _capture(
@@ -1236,7 +1240,7 @@ async def test_shared_blob_concurrent_disposition_purges_once(
                     record_type="CALIBRATION",
                     title=title,
                     retention_policy_id=str(pol),
-                    evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                    evidence=[_evidence_json(upload)],
                 )
             ).json()["id"]
             for title in ("r1", "r2")
@@ -1310,7 +1314,8 @@ async def test_reaper_completes_stranded_purge(
     h = _auth(token_factory, subject)
     pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
-        sha = await _upload_evidence(app_client, h, f"reap-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, h, f"reap-{uuid.uuid4().hex}".encode())
+        sha = upload.sha256
         rid = (
             await _capture(
                 app_client,
@@ -1318,7 +1323,7 @@ async def test_reaper_completes_stranded_purge(
                 record_type="CALIBRATION",
                 title="reap",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         # Dispose but SIMULATE A CRASH: mark + commit, skip the immediate _purge_marked.
@@ -1378,7 +1383,7 @@ async def test_reaper_reclaims_every_marker_after_per_marker_commit(
     h = _auth(token_factory, subject)
     pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
-        shas = [
+        uploads = [
             await _upload_evidence(
                 app_client,
                 h,
@@ -1386,6 +1391,7 @@ async def test_reaper_reclaims_every_marker_after_per_marker_commit(
             )
             for index in range(2)
         ]
+        shas = [upload.sha256 for upload in uploads]
         rid = (
             await _capture(
                 app_client,
@@ -1393,7 +1399,7 @@ async def test_reaper_reclaims_every_marker_after_per_marker_commit(
                 record_type="CALIBRATION",
                 title="reaper reclaims",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"} for sha in shas],
+                evidence=[_evidence_json(upload) for upload in uploads],
             )
         ).json()["id"]
         async with get_sessionmaker()() as s:
@@ -1451,7 +1457,8 @@ async def test_reaper_completes_ordinary_policy_purge_without_bypass(
     real_purge = storage.purge_object
     seen_bypass: list[bool] = []
     try:
-        sha = await _upload_evidence(app_client, h, f"ordinary-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, h, f"ordinary-{uuid.uuid4().hex}".encode())
+        sha = upload.sha256
         rid = (
             await _capture(
                 app_client,
@@ -1459,7 +1466,7 @@ async def test_reaper_completes_ordinary_policy_purge_without_bypass(
                 record_type="CALIBRATION",
                 title="ordinary crash",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         async with get_sessionmaker()() as s:
@@ -1502,7 +1509,8 @@ async def test_recapture_before_purge_cancels_stale_marker(
     pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
         content = f"recap-{uuid.uuid4().hex}".encode()
-        sha = await _upload_evidence(app_client, h, content)
+        original_upload = await _upload_evidence(app_client, h, content)
+        sha = original_upload.sha256
         r1 = (
             await _capture(
                 app_client,
@@ -1510,7 +1518,7 @@ async def test_recapture_before_purge_cancels_stale_marker(
                 record_type="CALIBRATION",
                 title="r1",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(original_upload)],
             )
         ).json()["id"]
         # Dispose r1 but skip the immediate purge (crash sim): blob row deleted, marker written.
@@ -1528,7 +1536,8 @@ async def test_recapture_before_purge_cancels_stale_marker(
             assert await s.get(Blob, sha) is None  # blob row gone; object still present
 
         # RE-CAPTURE the identical content under a new record → re-creates the blob row.
-        await _upload_evidence(app_client, h, content)  # re-stage the identical bytes
+        recapture_upload = await _upload_evidence(app_client, h, content)
+        assert recapture_upload.sha256 == sha
         (
             await _capture(
                 app_client,
@@ -1536,7 +1545,7 @@ async def test_recapture_before_purge_cancels_stale_marker(
                 record_type="CALIBRATION",
                 title="r2",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(recapture_upload)],
             )
         ).json()
         async with get_sessionmaker()() as s:
@@ -1596,13 +1605,7 @@ async def test_recapture_serializes_with_check_then_purge_window(
                 record_type="CALIBRATION",
                 title=f"original-{purge_mode}",
                 retention_policy_id=str(pol),
-                evidence=[
-                    {
-                        "sha256": sha,
-                        "content_type": "application/pdf",
-                        "staging_version_id": original_upload.version_id,
-                    }
-                ],
+                evidence=[_evidence_json(original_upload)],
             )
         ).json()["id"]
         async with get_sessionmaker()() as s:
@@ -1755,7 +1758,8 @@ async def test_immediate_purge_claims_marker_before_physical_lock(
     immediate_task: asyncio.Task[None] | None = None
     try:
         content = f"purge-lock-order-{uuid.uuid4().hex}".encode()
-        sha = await _upload_evidence(app_client, h, content)
+        upload = await _upload_evidence(app_client, h, content)
+        sha = upload.sha256
         original_id = (
             await _capture(
                 app_client,
@@ -1763,7 +1767,7 @@ async def test_immediate_purge_claims_marker_before_physical_lock(
                 record_type="CALIBRATION",
                 title="purge-lock-order",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         async with get_sessionmaker()() as s:
@@ -1828,7 +1832,8 @@ async def test_false_sha_cannot_hide_live_object_owner(
     pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     purge_calls: list[str] = []
     try:
-        live_sha = await _upload_evidence(app_client, h, f"live-{uuid.uuid4().hex}".encode())
+        live_upload = await _upload_evidence(app_client, h, f"live-{uuid.uuid4().hex}".encode())
+        live_sha = live_upload.sha256
         (
             await _capture(
                 app_client,
@@ -1836,7 +1841,7 @@ async def test_false_sha_cannot_hide_live_object_owner(
                 record_type="CALIBRATION",
                 title="live target",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": live_sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(live_upload)],
             )
         ).json()
         authority_rid = (
@@ -2049,7 +2054,8 @@ async def test_recapture_into_other_bucket_still_purges_records_object(
     doc_blob_sha: str | None = None
     try:
         content = f"xbucket-{uuid.uuid4().hex}".encode()
-        sha = await _upload_evidence(app_client, h, content)
+        upload = await _upload_evidence(app_client, h, content)
+        sha = upload.sha256
         rid = (
             await _capture(
                 app_client,
@@ -2057,7 +2063,7 @@ async def test_recapture_into_other_bucket_still_purges_records_object(
                 record_type="CALIBRATION",
                 title="xb",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         # Dispose (crash sim): blob row deleted, records-bucket marker written; bytes remain.
@@ -2126,7 +2132,8 @@ async def test_purge_post_commit_db_error_defers_to_reaper(
     hb = _auth(token_factory, b_subject)
     pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
-        sha = await _upload_evidence(app_client, ha, f"dbdef-{uuid.uuid4().hex}".encode())
+        upload = await _upload_evidence(app_client, ha, f"dbdef-{uuid.uuid4().hex}".encode())
+        sha = upload.sha256
         rid = (
             await _capture(
                 app_client,
@@ -2134,7 +2141,7 @@ async def test_purge_post_commit_db_error_defers_to_reaper(
                 record_type="CALIBRATION",
                 title="cal",
                 retention_policy_id=str(pol),
-                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+                evidence=[_evidence_json(upload)],
             )
         ).json()["id"]
         req_id = (
