@@ -12,7 +12,7 @@
 
 - Pin `@redocly/cli` exactly to `2.46.0`, `openapi-typescript` exactly to `7.13.0`, and `pip-audit` exactly to `2.10.1`.
 - Generate npm locks with Node 22 and npm 10.9.x; the npm policy accepts only `/^10\.9\.\d+$/`, audit report version `2`, and lockfile version `3`.
-- Upgrade only compatible web selections: `brace-expansion` to `1.1.18`/`5.0.9`, `undici` to `7.29.0`, and `react-router`/`react-router-dom` to `7.18.2`.
+- Upgrade only compatible web selections: `brace-expansion` to `1.1.18`/`5.0.9`, `undici` to `7.29.0`, `nanoid` to `3.3.18` for `GHSA-2v37-7h3g-55p8` (patched 3.x begins at `3.3.17`), and `react-router`/`react-router-dom` to `7.18.2`.
 - Do not use `npm audit fix --force`, broad dependency overrides, a Router downgrade, a jsdom major
   upgrade, `npx`, or a network fallback. The sole permitted contract security override is
   `@redocly/openapi-core` → `js-yaml` 4.3.1 for GHSA-5p4m-2wfm-xmq; remove it when Redocly ships
@@ -609,8 +609,12 @@ Existing integration surfaces:
   assert.equal(manifest.dependencies["react-router-dom"], "^7.18.2");
   assert.deepEqual(versions("brace-expansion"), new Set(["1.1.18", "5.0.9"]));
   assert.deepEqual(versions("undici"), new Set(["7.29.0"]));
+  assert.deepEqual(versions("nanoid"), new Set(["3.3.18"]));
   assert.deepEqual(versions("react-router"), new Set(["7.18.2"]));
   assert.deepEqual(versions("react-router-dom"), new Set(["7.18.2"]));
+  assert.equal(manifest.dependencies.nanoid, undefined);
+  assert.equal(manifest.devDependencies.nanoid, undefined);
+  assert.equal(manifest.overrides.nanoid, undefined);
   assert.equal(manifest.overrides["react-router"], undefined);
   assert.equal(manifest.overrides["react-router-dom"], undefined);
   ```
@@ -628,7 +632,7 @@ Existing integration surfaces:
   Change the manifest floor to `^7.18.2`, then under Node 22/npm 10.9.x run:
 
   ```bash
-  npm update --prefix apps/web brace-expansion undici react-router-dom \
+  npm update --prefix apps/web brace-expansion undici nanoid react-router-dom \
     --package-lock-only --ignore-scripts --no-audit --no-fund
   npm ci --prefix apps/web
   ```
@@ -647,7 +651,9 @@ Existing integration surfaces:
   (cd apps/web && npm audit --package-lock-only --audit-level=high --json)
   ```
 
-  Expected: web gates pass; the live audit contains only the Router root and inherited DOM records.
+  Expected: web gates pass and the live audit has zero high or critical findings. Preserve the Router
+  fixture and exception policy for later tasks; the exact pair may be accepted before expiry if it
+  returns, but a clean feed leaves that exception unused and is successful.
 
 - [ ] **Step 5: Commit the compatible remediation**
 
@@ -929,8 +935,10 @@ Existing integration surfaces:
 
   Run: `node scripts/check-npm-audit.mjs`
 
-  Expected: exit zero with exactly one accepted advisory, the two atomic Router records, exact
-  7.18.2 versions, expiry `2026-08-22T00:00:00Z`, and a clean RSC usage check.
+  Expected: exit zero with zero high/critical findings when the live feed is clean; that successful
+  result leaves the Router exception unused. If the live feed returns exactly the two atomic Router
+  records before `2026-08-22T00:00:00Z`, exact 7.18.2 versions and a clean RSC usage check may accept
+  them. No other high or critical finding may pass.
 
 - [ ] **Step 8: Commit the production audit entry point**
 
@@ -1136,8 +1144,10 @@ Existing integration surfaces:
 
 - [ ] **Step 7: Stop at the publication boundary**
 
-  Report the branch, commits, exact test counts/results, accepted Router exception/expiry, and any
-  environment-limited check. Do not push or open a pull request until the owner authorizes publication.
+  Report the branch, commits, exact test counts/results, and any environment-limited check. A clean
+  live feed is a successful unused Router exception; if the exact atomic Router pair returns before
+  expiry it may be reported as accepted with its expiry. No other high or critical finding may pass.
+  Do not push or open a pull request until the owner authorizes publication.
 
 ### Task 12: Enable Dependabot vulnerability automation after publication is green
 

@@ -22,13 +22,14 @@ that produces 19 warnings and reports that no configuration was supplied; from
 `packages/contracts`, config discovery succeeds. Bundle bytes happen to be identical today, but the
 lint and future transform behavior are working-directory dependent.
 
-The web lock currently resolves four high-severity npm vulnerability records: `brace-expansion`,
-`undici`, `react-router`, and the inherited `react-router-dom` record. Compatible patch updates resolve
-the vulnerable code without a major upgrade:
+The web lock's compatible patch selections remediate the original high-severity `brace-expansion`,
+`undici`, `react-router`, and inherited `react-router-dom` records, plus the later transitive
+`nanoid` advisory `GHSA-2v37-7h3g-55p8`, without a major upgrade:
 
 - `brace-expansion` to `1.1.18` and `5.0.9`, as selected by each dependency range;
 - `undici` to `7.29.0`;
 - `react-router` and `react-router-dom` to `7.18.2`.
+- `nanoid` to `3.3.18`, which is in the advisory's patched 3.x range beginning at `3.3.17`.
 
 The React Router maintainer advisory identifies `7.18.2` as patched and limits the affected path to
 unstable React Server Component APIs. The repository does not import those APIs. The global advisory
@@ -133,7 +134,8 @@ other status, missing report, invalid JSON, or unexpected report schema.
 ### 3. Compatible web dependency remediation
 
 Raise the direct `react-router-dom` floor from `^7.18.1` to `^7.18.2` and refresh only compatible
-lockfile selections needed to reach the patched versions listed in Context. Do not use
+lockfile selections needed to reach the patched versions listed in Context, including transitive
+`nanoid` `3.3.18` for `GHSA-2v37-7h3g-55p8`. Do not use
 `npm audit fix --force`, broad dependency overrides, a Router downgrade, or a jsdom major upgrade.
 The sole exception is the narrowly targeted contract override
 `@redocly/openapi-core` → `js-yaml` 4.3.1 for GHSA-5p4m-2wfm-xmq; remove it when Redocly ships
@@ -282,8 +284,10 @@ Use committed synthetic npm-audit fixtures and temporary lock/source trees to pr
 - unsupported npm versions and audit report versions fail before policy evaluation;
 - malformed JSON, a changed schema, and simulated command failure fail closed.
 
-Run one live npm audit after the fixture tests. The expected current result is no unapproved high or
-critical advisory; npm may still emit the one documented Router advisory and inherited DOM record.
+Run one live npm audit after the fixture tests. The expected current result is zero high or critical
+findings. The Router fixture and time-limited exception remain covered by synthetic tests: a clean feed
+leaves the exception unused and passes, while the exact documented Router pair may still be accepted
+before expiry. No other high or critical finding is accepted.
 
 ### Regression suite
 
@@ -305,7 +309,7 @@ critical advisory; npm may still emit the one documented Router advisory and inh
 - Full contract generation creates valid Python and TypeScript output with identical hashes from inside
   and outside the repository.
 - Redocly telemetry and update notices are disabled in every active wrapper invocation.
-- The web lock contains the patched brace-expansion, Undici, and Router versions.
+- The web lock contains the patched brace-expansion, Undici, Router, and nanoid versions.
 - A synthetic new high/critical npm advisory makes the security check red.
 - Only the exact Router exception before its exclusive expiry passes, and mutation tests prove every
   version, inheritance, RSC-usage, and time constraint.
@@ -332,6 +336,7 @@ critical advisory; npm may still emit the one documented Router advisory and inh
 ## References
 
 - [React Router maintainer advisory GHSA-qwww-vcr4-c8h2](https://github.com/remix-run/react-router/security/advisories/GHSA-qwww-vcr4-c8h2)
+- [nanoid advisory GHSA-2v37-7h3g-55p8](https://github.com/advisories/GHSA-2v37-7h3g-55p8)
 - [React Router v7 changelog: unstable RSC APIs](https://reactrouter.com/start/start/changelog#v770)
 - [Redocly CLI changelog](https://redocly.com/docs/cli/changelog)
 - [npm exec behavior](https://docs.npmjs.com/cli/v11/commands/npm-exec/)
