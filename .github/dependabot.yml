@@ -37,6 +37,17 @@ updates:
       - dependency-name: "@mantine/*"
         update-types: ["version-update:semver-major"]
 
+  # Contract-generation tools (the separately locked Node toolchain used by the contracts CI job)
+  - package-ecosystem: "npm"
+    directory: "/packages/contracts"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      contract-tools-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
   # CI action pins (keeps astral-sh/setup-uv, actions/*, trivy fresh — supply-chain hygiene)
   - package-ecosystem: "github-actions"
     directory: "/"

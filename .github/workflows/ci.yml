@@ -27,9 +27,21 @@ jobs:
       - name: CI workflow contract
         run: bash scripts/tests/test-ci-hardening.sh
       - uses: actions/setup-node@v7
-        with: { node-version: "22" }
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/contracts/package-lock.json
+      - name: install locked contract tools
+        run: npm ci --prefix packages/contracts --ignore-scripts
+      - name: contract toolchain regressions
+        run: |
+          bash scripts/tests/test-run-contract-tool.sh
+          node --test scripts/tests/test-contract-lock.mjs
+          bash scripts/tests/test-gen-contracts.sh
       - name: lint OpenAPI
-        run: npx --yes @redocly/cli lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
+        run: bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
+      - name: audit locked contract tools
+        run: npm --prefix packages/contracts audit --package-lock-only --audit-level=high
       - name: generated contract lock
         run: bash scripts/gen-contracts.sh --check
 

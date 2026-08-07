@@ -9,9 +9,10 @@ default:
 # --- setup ---
 setup:
     cd apps/api && uv sync
-    cd apps/web && npm install
-    pre-commit install
+    npm ci --prefix apps/web
+    npm ci --prefix packages/contracts --ignore-scripts
     just contracts
+    pre-commit install
 
 # --- contracts (OpenAPI-first; the source of truth) ---
 contracts:

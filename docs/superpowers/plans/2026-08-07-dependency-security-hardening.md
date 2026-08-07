@@ -405,6 +405,8 @@ Existing integration surfaces:
       bash scripts/tests/test-gen-contracts.sh
   - name: lint OpenAPI
     run: bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
+  - name: audit locked contract tools
+    run: npm --prefix packages/contracts audit --package-lock-only --audit-level=high
   - name: generated contract lock
     run: bash scripts/gen-contracts.sh --check
   ```

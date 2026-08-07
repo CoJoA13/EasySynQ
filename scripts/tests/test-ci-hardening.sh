@@ -182,6 +182,56 @@ assert_text_contains \
   "$CONTRACTS_BLOCK" \
   '      - name: CI workflow contract
         run: bash scripts/tests/test-ci-hardening.sh'
+assert_text_not_contains \
+  "contracts job does not run floating npx contract tools" \
+  "$CONTRACTS_BLOCK" \
+  "npx"
+assert_text_contains \
+  "contracts job pins Node and caches the contract lock" \
+  "$CONTRACTS_BLOCK" \
+  '      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/contracts/package-lock.json'
+assert_text_contains \
+  "contracts job installs locked tools without lifecycle scripts" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: install locked contract tools
+        run: npm ci --prefix packages/contracts --ignore-scripts'
+assert_text_contains \
+  "contracts job proves the locked toolchain before linting" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: contract toolchain regressions
+        run: |
+          bash scripts/tests/test-run-contract-tool.sh
+          node --test scripts/tests/test-contract-lock.mjs
+          bash scripts/tests/test-gen-contracts.sh'
+assert_text_contains \
+  "contracts job lints through the locked wrapper" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: lint OpenAPI
+        run: bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml'
+assert_text_contains \
+  "contracts job audits the locked dependency graph" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: audit locked contract tools
+        run: npm --prefix packages/contracts audit --package-lock-only --audit-level=high'
+assert_before \
+  "R61 regression runs before contract tool hydration" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: R61 backstop regression harness" \
+  "      - uses: actions/setup-node@v7"
+assert_before \
+  "workflow regression runs before contract tool hydration" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: CI workflow contract" \
+  "      - uses: actions/setup-node@v7"
+assert_before \
+  "contract audit runs before generated-lock verification" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: audit locked contract tools" \
+  "      - name: generated contract lock"
 assert_text_not_contains "Python gates cannot continue on error" "$API_BLOCK$INTEGRATION_SHARDS_BLOCK$CONTRACT_RESPONSES_BLOCK" "continue-on-error:"
 assert_text_not_contains "contract gates cannot continue on error" "$CONTRACTS_BLOCK" "continue-on-error:"
 assert_text_not_contains "Python and contract commands cannot suppress failures" "$API_BLOCK$INTEGRATION_SHARDS_BLOCK$CONTRACT_RESPONSES_BLOCK$CONTRACTS_BLOCK" "|| true"

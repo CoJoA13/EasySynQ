@@ -101,6 +101,57 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
         assert "if" not in step
         assert step["run"] == command
 
+    contracts = jobs["contracts"]
+    _assert_hard_fail(contracts)
+    expected_contract_steps = [
+        {"uses": "actions/checkout@v7"},
+        {
+            "name": "R61 backstop regression harness",
+            "run": "bash scripts/tests/test-check-no-site-data.sh",
+        },
+        {
+            "name": "R61 site-data backstop (check-no-site-data)",
+            "run": "./scripts/check-no-site-data.sh",
+        },
+        {"name": "CI workflow contract", "run": "bash scripts/tests/test-ci-hardening.sh"},
+        {
+            "uses": "actions/setup-node@v7",
+            "with": {
+                "node-version": "22",
+                "cache": "npm",
+                "cache-dependency-path": "packages/contracts/package-lock.json",
+            },
+        },
+        {
+            "name": "install locked contract tools",
+            "run": "npm ci --prefix packages/contracts --ignore-scripts",
+        },
+        {
+            "name": "contract toolchain regressions",
+            "run": (
+                "bash scripts/tests/test-run-contract-tool.sh\n"
+                "node --test scripts/tests/test-contract-lock.mjs\n"
+                "bash scripts/tests/test-gen-contracts.sh\n"
+            ),
+        },
+        {
+            "name": "lint OpenAPI",
+            "run": (
+                "bash scripts/run-contract-tool.sh redocly lint --config "
+                "packages/contracts/redocly.yaml packages/contracts/openapi.yaml"
+            ),
+        },
+        {
+            "name": "audit locked contract tools",
+            "run": (
+                "npm --prefix packages/contracts audit --package-lock-only "
+                "--audit-level=high"
+            ),
+        },
+        {"name": "generated contract lock", "run": "bash scripts/gen-contracts.sh --check"},
+    ]
+    assert contracts["steps"] == expected_contract_steps
+
     package = json.loads((_ROOT / "apps" / "web" / "package.json").read_text(encoding="utf-8"))
     assert package["scripts"]["test"] == "vitest run"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
