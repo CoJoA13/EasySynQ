@@ -8,11 +8,11 @@ boundaries with live dependent rows.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
 
 import psycopg
 import pytest
@@ -24,9 +24,9 @@ from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
 
 from easysynq_api.config import get_settings
+from easysynq_api.readiness import MIGRATIONS_DIR
 from easysynq_api.services.backup.dsn import conn_kwargs
 
-_API_ROOT = Path(__file__).resolve().parents[2]
 _M9_REVISION = "0079_migration_orm_coherence"
 _M10_REVISION = "0080_schema_index_design"
 _PURGE_AUTHORITY_REVISION = "0081_pending_purge_authority"
@@ -88,7 +88,11 @@ def _scratch_database(admin_url: str) -> Iterator[str]:
 
 
 def _config() -> Config:
-    return Config(str(_API_ROOT / "alembic.ini"))
+    # Alembic's INI logging setup mutates process-global logger state. These migrations run inside
+    # pytest, so use the same explicit script-only configuration as the integration fixture.
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    return config
 
 
 def _retention_grants(connection: sa.Connection) -> set[tuple[str, str]]:
@@ -180,6 +184,8 @@ def test_populated_historical_transitions_and_head_repairs(
     postgres_admin_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    application_logger = logging.getLogger("easysynq.migration_isolation_probe")
+    application_logger.disabled = False
     with _scratch_database(postgres_admin_url) as scratch_url:
         monkeypatch.setenv("DATABASE_URL", scratch_url)
         monkeypatch.setenv("DATABASE_URL_SYNC", scratch_url)
@@ -189,6 +195,7 @@ def test_populated_historical_transitions_and_head_repairs(
         try:
             # 0004: role assignments and permission overrides must preserve their full FK closure.
             command.upgrade(config, "0004_seed_authz")
+            assert application_logger.disabled is False
             with engine.begin() as connection:
                 org_id = connection.execute(sa.text("SELECT id FROM organization")).scalar_one()
                 user_id = connection.execute(
