@@ -10,6 +10,7 @@ WEB_CONFIG="$ROOT/apps/web/vite.config.ts"
 WEB_PACKAGE="$ROOT/apps/web/package.json"
 JUSTFILE="$ROOT/justfile"
 SEMANTIC_TEST="$ROOT/apps/api/tests/unit/test_ci_workflow.py"
+PIP_AUDIT_RUNNER="$ROOT/scripts/run-pip-audit.sh"
 PASS=0
 FAIL=0
 
@@ -78,6 +79,7 @@ CONTRACTS_BLOCK="$(job_block contracts)"
 CONTRACT_RESPONSES_BLOCK="$(job_block contract-responses)"
 API_BLOCK="$(job_block api)"
 INTEGRATION_SHARDS_BLOCK="$(job_block integration-shards)"
+SECURITY_BLOCK="$(job_block security)"
 
 assert_text_contains \
   "web suite has exactly two hard-fail shards" \
@@ -235,6 +237,55 @@ assert_before \
 assert_text_not_contains "Python gates cannot continue on error" "$API_BLOCK$INTEGRATION_SHARDS_BLOCK$CONTRACT_RESPONSES_BLOCK" "continue-on-error:"
 assert_text_not_contains "contract gates cannot continue on error" "$CONTRACTS_BLOCK" "continue-on-error:"
 assert_text_not_contains "Python and contract commands cannot suppress failures" "$API_BLOCK$INTEGRATION_SHARDS_BLOCK$CONTRACT_RESPONSES_BLOCK$CONTRACTS_BLOCK" "|| true"
+
+assert_contains \
+  "security preamble keeps pip-audit and Trivy findings report-only but operational failures fatal" \
+  "$WORKFLOW" \
+  "pip-audit and Trivy FINDINGS remain REPORT-ONLY; operational failures fail the job."
+assert_text_contains \
+  "security job runs the pip-audit regression then the root-aware locked runner" \
+  "$SECURITY_BLOCK" \
+  '      - name: pip-audit runner regressions
+        run: bash scripts/tests/test-pip-audit-runner.sh
+      - name: pip-audit (Python deps, resolved from uv.lock)
+        run: bash scripts/run-pip-audit.sh'
+assert_before \
+  "security installs uv before its runner regression" \
+  "$SECURITY_BLOCK" \
+  "      - name: install uv" \
+  "      - name: pip-audit runner regressions"
+assert_before \
+  "security exercises the runner before its live audit" \
+  "$SECURITY_BLOCK" \
+  "      - name: pip-audit runner regressions" \
+  "      - name: pip-audit (Python deps, resolved from uv.lock)"
+assert_before \
+  "locked Python audit completes before Node audit setup" \
+  "$SECURITY_BLOCK" \
+  "      - name: pip-audit (Python deps, resolved from uv.lock)" \
+  "      - uses: actions/setup-node@v7"
+assert_text_not_contains "security job does not run floating pip-audit" "$SECURITY_BLOCK" "uvx pip-audit"
+assert_text_not_contains "security job cannot continue on operational pip-audit failures" "$SECURITY_BLOCK" "continue-on-error:"
+assert_text_contains \
+  "Trivy findings remain report-only" \
+  "$SECURITY_BLOCK" \
+  '          exit-code: "0"'
+assert_contains \
+  "pip-audit runner exports the frozen default graph without its security tool group" \
+  "$PIP_AUDIT_RUNNER" \
+  'uv export --frozen --no-group security --no-emit-project \'
+assert_contains \
+  "pip-audit executes only through the frozen security group" \
+  "$PIP_AUDIT_RUNNER" \
+  'uv run --frozen --only-group security pip-audit \'
+assert_not_contains \
+  "active workflow rejects floating pip-audit" \
+  "$WORKFLOW" \
+  "uvx pip-audit"
+assert_not_contains \
+  "runner keeps uv lock validation enabled" \
+  "$PIP_AUDIT_RUNNER" \
+  "UV_SKIP_WHEEL_FILENAME_CHECK"
 
 assert_contains \
   "web shards retain deterministic one-worker isolation" \

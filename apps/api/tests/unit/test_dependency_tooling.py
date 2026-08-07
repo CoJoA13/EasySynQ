@@ -16,10 +16,14 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _read_toml(path: Path) -> dict[str, Any]:
+    return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
 def test_locked_contract_toolchain_manifest_and_resolution_are_exact() -> None:
     manifest = _read_json(_ROOT / "packages" / "contracts" / "package.json")
     lock = _read_json(_ROOT / "packages" / "contracts" / "package-lock.json")
-    api_project = tomllib.loads((_ROOT / "apps" / "api" / "pyproject.toml").read_text(encoding="utf-8"))
+    api_project = _read_toml(_ROOT / "apps" / "api" / "pyproject.toml")
 
     assert api_project["project"]["requires-python"] == ">=3.12,<3.13"
     assert manifest == {
@@ -42,6 +46,25 @@ def test_locked_contract_toolchain_manifest_and_resolution_are_exact() -> None:
         for name, package in lock["packages"].items()
         if name.endswith("/js-yaml")
     )
+
+
+def test_locked_python_security_group_and_resolution_are_exact() -> None:
+    project = _read_toml(_ROOT / "apps" / "api" / "pyproject.toml")
+    lock = _read_toml(_ROOT / "apps" / "api" / "uv.lock")
+
+    assert project["dependency-groups"]["security"] == ["pip-audit==2.10.1"]
+    pip_audit = [package for package in lock["package"] if package["name"] == "pip-audit"]
+    assert [package["version"] for package in pip_audit] == ["2.10.1"]
+
+    editable_root = next(
+        package
+        for package in lock["package"]
+        if package["name"] == "easysynq-api" and package["source"] == {"editable": "."}
+    )
+    assert editable_root["dev-dependencies"]["security"] == [{"name": "pip-audit"}]
+    assert editable_root["metadata"]["requires-dev"]["security"] == [
+        {"name": "pip-audit", "specifier": "==2.10.1"}
+    ]
 
 
 def test_dependabot_tracks_only_version_updates_for_the_locked_contract_toolchain() -> None:

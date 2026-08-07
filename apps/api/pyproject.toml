@@ -50,6 +50,9 @@ dev = [
   "minio>=7.2.20",
   "pytest-split>=0.9",
 ]
+security = [
+  "pip-audit==2.10.1",
+]
 
 [build-system]
 requires = ["hatchling"]

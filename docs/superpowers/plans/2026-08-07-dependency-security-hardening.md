@@ -450,6 +450,9 @@ Existing integration surfaces:
 - Modify: `apps/api/uv.lock`
 - Create: `scripts/run-pip-audit.sh`
 - Create: `scripts/tests/test-pip-audit-runner.sh`
+- Create: `scripts/tests/fixtures/uv-lock-provenance/pyproject.toml`
+- Create: `scripts/tests/fixtures/uv-lock-provenance/uv.lock.pypdf-6.13.2`
+- Create: `scripts/tests/fixtures/uv-lock-provenance/uv.lock.pypdf-6.14.2`
 - Modify: `.github/workflows/ci.yml:243-273`
 - Modify: `scripts/tests/test-ci-hardening.sh`
 - Modify: `apps/api/tests/unit/test_dependency_tooling.py`
@@ -545,9 +548,23 @@ Existing integration surfaces:
 
 - [ ] **Step 6: Prove frozen-lock input reaches pip-audit**
 
-  In the shell regression, copy `apps/api/pyproject.toml` and `uv.lock` to a temporary project, export
-  once, mutate one selected package version only in the copied lock, export again, and assert the
-  requirements line changes to the copied lock's version. No network install is part of this proof.
+  Add `scripts/tests/fixtures/uv-lock-provenance/` with a common minimal `pyproject.toml` for project
+  `lock-provenance` version `0.0.1`, Python `==3.12.*`, dependency `pypdf>=6.13.2,<7`, and an empty
+  `security` dependency group. Add two valid minimal locks with editable-root/security metadata:
+  `uv.lock.pypdf-6.13.2` contains an artifact-consistent pypdf 6.13.2 record, and
+  `uv.lock.pypdf-6.14.2` has the same project/shape with an artifact-consistent pypdf 6.14.2 record.
+
+  For each fixture, copy the common pyproject and selected lock to a guarded temporary project, then
+  run real uv 0.12.2 with `UV_OFFLINE=1 UV_NO_CACHE=1` and exact production export flags:
+
+  ```text
+  --frozen --no-group security --no-emit-project --format requirements-txt
+  ```
+
+  Assert the exported requirement contains the selected literal `pypdf==6.13.2` or
+  `pypdf==6.14.2`. Keep lock validation enabled: do not set `UV_SKIP_WHEEL_FILENAME_CHECK`. Also prove
+  an artifact-inconsistent selected record is rejected when that negative check can be derived from
+  a valid fixture without duplicating fixture logic. No network install is part of this proof.
 
 - [ ] **Step 7: Run focused verification**
 
@@ -567,7 +584,7 @@ Existing integration surfaces:
 - [ ] **Step 8: Commit the Python audit boundary**
 
   ```bash
-  git add apps/api/pyproject.toml apps/api/uv.lock scripts/run-pip-audit.sh scripts/tests/test-pip-audit-runner.sh .github/workflows/ci.yml scripts/tests/test-ci-hardening.sh apps/api/tests/unit/test_dependency_tooling.py
+  git add apps/api/pyproject.toml apps/api/uv.lock scripts/run-pip-audit.sh scripts/tests/test-pip-audit-runner.sh scripts/tests/fixtures/uv-lock-provenance .github/workflows/ci.yml scripts/tests/test-ci-hardening.sh apps/api/tests/unit/test_dependency_tooling.py docs/superpowers/plans/2026-08-07-dependency-security-hardening.md
   git commit -m "ci: lock the Python audit runner"
   ```
 

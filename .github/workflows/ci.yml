@@ -252,13 +252,13 @@ jobs:
           fi
           echo "all web shards passed"
 
-  # Dependency + filesystem + base-image vulnerability scan (Phase-1 tech-debt: I-1). WARN-ONLY on the
-  # FINDINGS: a scan that RUNS and finds CVEs/secrets is reported but does not fail the job (so the
-  # baseline surfaces without blocking merges on pre-existing transitive CVEs). But a scan that FAILS TO
-  # RUN (uvx/npm/registry error → no valid report) DOES fail its step, so a never-ran scan can't read
-  # green (Codex #153). NOT in branch protection's required checks. RATCHET to a hard gate once the
-  # baseline is clean: make pip-audit/npm-audit also fail on findings, set trivy `exit-code: "1"`, and
-  # add `security` to the required checks.
+  # Dependency + filesystem + base-image vulnerability scan (Phase-1 tech-debt: I-1).
+  # pip-audit and Trivy FINDINGS remain REPORT-ONLY; operational failures fail the job. Valid findings
+  # surface without blocking merges on pre-existing transitive CVEs, but a scan that fails to run or
+  # produce a valid report fails its step so a never-ran scan cannot read green (Codex #153). NOT in
+  # branch protection's required checks. RATCHET to a hard gate once the baseline is clean: make
+  # pip-audit/npm-audit also fail on findings, set trivy `exit-code: "1"`, and add `security` to the
+  # required checks.
   security:
     runs-on: ubuntu-latest
     steps:
@@ -268,21 +268,10 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
+      - name: pip-audit runner regressions
+        run: bash scripts/tests/test-pip-audit-runner.sh
       - name: pip-audit (Python deps, resolved from uv.lock)
-        working-directory: apps/api
-        run: |
-          uv export --frozen --no-emit-project --format requirements-txt -o "$RUNNER_TEMP/py-requirements.txt"
-          # A valid JSON report proves pip-audit actually RAN. Warn-only on findings; FAIL the step if
-          # no report was produced (uvx couldn't fetch pip-audit, a resolver error, …) so a never-ran
-          # scan isn't silently green (Codex #153).
-          set +e
-          uvx pip-audit -r "$RUNNER_TEMP/py-requirements.txt" --format json -o "$RUNNER_TEMP/pip-audit.json"
-          set -e
-          if ! jq -e . "$RUNNER_TEMP/pip-audit.json" >/dev/null 2>&1; then
-            echo "::error::pip-audit produced no valid JSON report — the scan did not run"; exit 1
-          fi
-          echo "pip-audit ran. Vulnerable locked dependencies (if any):"
-          jq -r '(.dependencies // [])[] | select((.vulns // []) | length > 0) | "  \(.name) \(.version): \([.vulns[].id] | join(", "))"' "$RUNNER_TEMP/pip-audit.json"
+        run: bash scripts/run-pip-audit.sh
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
