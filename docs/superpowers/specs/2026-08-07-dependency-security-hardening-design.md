@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 
-**Status:** Draft specification awaiting owner review
+**Status:** Approved for implementation by the repository owner
 
 **Scope:** Contract-generation tools, the Python audit runner, web dependency remediation,
 the npm advisory gate, and Dependabot vulnerability automation
@@ -110,6 +110,10 @@ Both Redocly `lint` and `bundle` calls pass the repository-relative
 result whether invoked from the root, the contracts directory, or another working directory. Existing
 historical implementation plans remain historical records and are not rewritten.
 
+The generator resolves its root from `scripts/gen-contracts.sh` itself, never from the caller's Git
+repository. Add datamodel-code-generator's `--disable-timestamp` flag so two full generations have
+byte-identical Python output; the timestamp is generator metadata, not an API contract field.
+
 ### 2. Locked Python audit runner
 
 Add a `security` dependency group to `apps/api/pyproject.toml` containing the exact
@@ -139,9 +143,9 @@ lint, type checking, and the production build verify the refreshed tree.
 ### 4. Fail-closed npm advisory policy
 
 Add a dependency-free Node program, `scripts/check-npm-audit.mjs`. It runs npm audit against
-`apps/web/package-lock.json` with JSON output and a fresh cache directory, then applies repository policy.
-An npm exit caused by reported vulnerabilities is parsed; an invalid response, command failure, or
-unexpected exit fails the check.
+`apps/web/package-lock.json` with `--package-lock-only`, JSON output, and a fresh cache directory, then
+applies repository policy. An npm exit caused by reported vulnerabilities is parsed; an invalid response,
+command failure, or unexpected exit fails the check.
 
 The npm executable is the one bundled with the CI Node runtime, not an ad hoc download. The checker
 supports npm `10.9.x` and npm audit report version `2`; it validates both before interpreting findings
@@ -179,6 +183,10 @@ positives.
 The audit CLI uses its real UTC clock; tests inject a clock through the policy module rather than
 exposing a production time-bypass flag. The RFC 3339 expiry is an exclusive boundary: the exception
 passes immediately before it and fails at or after it.
+
+The two Router audit records are accepted atomically. When—and only when—the audit exception is used,
+the same CLI runs the RSC usage checker before returning success. A missing root/inherited record or an
+RSC-policy failure therefore cannot leave half of the exception accepted.
 
 If the advisory disappears from npm's feed, the exception is simply unused and the check passes. If
 the feed changes shape, either installed version changes, a prohibited RSC import appears, another
@@ -240,7 +248,9 @@ and remain subject to the normal CI and owner review process.
   compile the generated Python module, and include the generated TypeScript declaration in type checking.
 - Invoke full generation through the script's absolute path from outside the repository and compare
   hashes for the bundle and both generated files with the root invocation. The wrapper changes to the
-  resolved repository root before executing tools, so relative config arguments have one meaning.
+  resolved repository root before executing tools, so relative config arguments have one meaning. The
+  outside invocation runs from an initialized unrelated temporary Git repository to prove caller Git
+  discovery cannot redirect the generator.
 - Run the pre-commit contract hook against all files.
 - Assert the wrapper exports the Redocly telemetry/update-notice opt-outs.
 
