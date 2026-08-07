@@ -71,6 +71,25 @@ def _image_id(char: str) -> str:
     return f"sha256:{char * 64}"
 
 
+def _inject_post_fstat_quarantine_replacement(library: str, label: str) -> str:
+    marker = "    retained_stat = os.fstat(retained_fd)\n"
+    assert marker in library
+    injection = (
+        marker
+        + f'    if label == "{label}":\n'
+        + f'        saved_name = "helper-owned-{label}"\n'
+        + "        os.rename(\n"
+        + "            retained_name, saved_name,\n"
+        + "            src_dir_fd=quarantine_fd, dst_dir_fd=quarantine_fd,\n"
+        + "        )\n"
+        + "        os.rename(\n"
+        + "            'cleanup-racer', retained_name,\n"
+        + "            src_dir_fd=dir_fd, dst_dir_fd=quarantine_fd,\n"
+        + "        )\n"
+    )
+    return library.replace(marker, injection, 1)
+
+
 def _install_compose_docker_fakes(
     tmp_path: pathlib.Path,
     *,
@@ -174,8 +193,6 @@ def test_atomic_setter_shell_harness_preserves_owner_mode_and_content(
         test "$(command stat -c %a "$env_file")" = 640
         test "$(grep -c '^EASYSYNQ_COMPATIBILITY_READ_ONLY=1$' "$env_file")" = 1
         test "$(grep -c '^SECRET_SENTINEL=not-printed$' "$env_file")" = 1
-        test -z "$(find "$(dirname "$env_file")" -maxdepth 1 \
-          -name '.env.upload-identity.*' -print -quit)"
         """
     )
     result = subprocess.run(  # noqa: S603 - executes the reviewed runbook helper
@@ -186,6 +203,15 @@ def test_atomic_setter_shell_harness_preserves_owner_mode_and_content(
     )
     assert result.returncode == 0, result.stderr
     assert "SECRET_SENTINEL" not in result.stdout
+    assert "SECRET_SENTINEL" not in result.stderr
+    quarantine = tmp_path / ".env.rollback-quarantine"
+    retained = list(quarantine.iterdir())
+    assert len(retained) == 1
+    assert retained[0].read_text(encoding="utf-8") == (
+        "SECRET_SENTINEL=not-printed\nEASYSYNQ_PROFILE=s\n"
+    )
+    assert retained[0].stat().st_mode & 0o777 == 0o640
+    assert str(retained[0]) in result.stderr
 
 
 def test_each_api_cutover_selects_retags_recreates_and_verifies_exact_image() -> None:
@@ -364,7 +390,13 @@ def test_env_exchange_restores_a_final_boundary_replacement(tmp_path: pathlib.Pa
     )
     assert result.returncode != 0
     assert env_file.read_text(encoding="utf-8") == "CONCURRENT_SENTINEL=preserve\n"
-    assert not list(tmp_path.glob(".env.upload-identity.*"))
+    retained = list((tmp_path / ".env.rollback-quarantine").iterdir())
+    assert len(retained) == 1
+    assert "EASYSYNQ_COMPATIBILITY_READ_ONLY=1\n" in retained[0].read_text(
+        encoding="utf-8"
+    )
+    assert retained[0].stat().st_mode & 0o777 == 0o640
+    assert str(retained[0]) in result.stderr
 
 
 def test_curl_array_ignores_hostile_config_and_proxy(tmp_path: pathlib.Path) -> None:
@@ -611,6 +643,179 @@ def test_appliance_archive_load_uses_the_hashed_inode_after_path_swap(
     assert loaded_digest.read_text(encoding="utf-8").strip() == approved_digest
 
 
+def test_appliance_loads_a_sealed_snapshot_after_same_inode_source_mutation(
+    tmp_path: pathlib.Path,
+) -> None:
+    archive = tmp_path / "approved.tar"
+    sidecar = tmp_path / "approved.sha256"
+    archive.write_bytes(b"APPROVED-SEALED-ARCHIVE")
+    archive.chmod(0o644)
+    approved_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    sidecar.write_text(f"{approved_digest}  {archive.name}\n", encoding="utf-8")
+    sidecar.chmod(0o644)
+    fake_docker = tmp_path / "fake-docker"
+    loaded_digest = tmp_path / "loaded-digest"
+    mutation_rejected = tmp_path / "mutation-rejected"
+    tag_state = tmp_path / "tag-state"
+    selected_id = _image_id("9")
+    _write_executable(
+        fake_docker,
+        """
+        #!/bin/bash
+        set -euo pipefail
+        case "$1 $2" in
+          'load --input')
+            /usr/bin/python3 - "$3" "$ESQ_MUTATION_REJECTED" <<'PY'
+        import errno
+        import os
+        import sys
+
+        descriptor = os.open(sys.argv[1], os.O_RDWR)
+        try:
+            try:
+                os.write(descriptor, b"UNAPPROVED-MEMFD-MUTATION")
+            except OSError as error:
+                if error.errno != errno.EPERM:
+                    raise
+                with open(sys.argv[2], "w", encoding="ascii") as marker:
+                    marker.write("sealed\\n")
+            else:
+                raise SystemExit("Docker input remained writable")
+        finally:
+            os.close(descriptor)
+        PY
+            sha256sum "$3" | awk '{print $1}' >"$ESQ_LOADED_DIGEST"
+            printf '%s\n' 'Loaded image: approved-api:sealed'
+            ;;
+          'image inspect')
+            if [ "$5" = approved-api:sealed ]; then
+              printf '%s\n' "$ESQ_SELECTED_ID"
+            else
+              cat "$ESQ_TAG_STATE"
+            fi
+            ;;
+          'image tag') printf '%s\n' "$3" >"$ESQ_TAG_STATE" ;;
+          *) exit 73 ;;
+        esac
+        """,
+    )
+    library = _bash_block("rollback-helper-library")
+    marker = "# artifact-digest-complete"
+    assert marker in library
+    injected = library.replace(
+        marker,
+        "racer_fd = os.open(archive_path, os.O_WRONLY | os.O_TRUNC)\n"
+        "    os.write(racer_fd, b'IN-PLACE-SOURCE-MUTATION')\n"
+        "    os.close(racer_fd)\n    "
+        + marker,
+        1,
+    )
+    result = _run_library(
+        tmp_path,
+        f"ESQ_MODE=appliance\nESQ_DOCKER=({fake_docker})\n"
+        "ESQ_API_SERVICE_IMAGE=easysynq-api:latest\n"
+        "esq_select_api_artifact rollback",
+        library=injected,
+        env={
+            "ESQ_LOADED_DIGEST": str(loaded_digest),
+            "ESQ_MUTATION_REJECTED": str(mutation_rejected),
+            "ESQ_SELECTED_ID": selected_id,
+            "ESQ_TAG_STATE": str(tag_state),
+        },
+        stdin=f"{archive}\n{sidecar}\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert mutation_rejected.read_text(encoding="utf-8") == "sealed\n"
+    assert loaded_digest.read_text(encoding="utf-8").strip() == approved_digest
+    assert archive.read_bytes() == b"IN-PLACE-SOURCE-MUTATION"
+
+
+def test_appliance_snapshot_honors_archive_and_process_size_limits(
+    tmp_path: pathlib.Path,
+) -> None:
+    fake_docker = tmp_path / "fake-docker"
+    docker_marker = tmp_path / "docker-called"
+    _write_executable(
+        fake_docker,
+        f"""
+        #!/bin/bash
+        touch '{docker_marker}'
+        exit 74
+        """,
+    )
+    library = _bash_block("rollback-helper-library")
+    size_limit = "MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024"
+    assert size_limit in library
+
+    for name, body_prefix, case_library, content in [
+        (
+            "archive-limit",
+            "",
+            library.replace(size_limit, "MAX_ARCHIVE_BYTES = 32", 1),
+            b"X" * 33,
+        ),
+        ("process-limit", "ulimit -f 1\n", library, b"Y" * 4096),
+    ]:
+        case_dir = tmp_path / name
+        case_dir.mkdir()
+        archive = case_dir / "limited.tar"
+        sidecar = case_dir / "limited.sha256"
+        archive.write_bytes(content)
+        archive.chmod(0o644)
+        digest = hashlib.sha256(content).hexdigest()
+        sidecar.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+        sidecar.chmod(0o644)
+        result = _run_library(
+            case_dir,
+            body_prefix
+            + f"ESQ_MODE=appliance\nESQ_DOCKER=({fake_docker})\n"
+            + "ESQ_API_SERVICE_IMAGE=easysnq-api:latest\n"
+            + "esq_select_api_artifact rollback",
+            library=case_library,
+            stdin=f"{archive}\n{sidecar}\n",
+        )
+        assert result.returncode != 0, name
+        assert not docker_marker.exists(), name
+
+
+def test_appliance_snapshot_read_error_fails_before_docker(tmp_path: pathlib.Path) -> None:
+    archive = tmp_path / "read-error.tar"
+    sidecar = tmp_path / "read-error.sha256"
+    archive.write_bytes(b"READ-ERROR-ARCHIVE")
+    archive.chmod(0o644)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    sidecar.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+    sidecar.chmod(0o644)
+    docker_marker = tmp_path / "docker-called"
+    fake_docker = tmp_path / "fake-docker"
+    _write_executable(
+        fake_docker,
+        f"""
+        #!/bin/bash
+        touch '{docker_marker}'
+        exit 75
+        """,
+    )
+    library = _bash_block("rollback-helper-library")
+    marker = "# artifact-snapshot-read-boundary"
+    assert marker in library
+    injected = library.replace(
+        marker,
+        "os.close(archive_fd)\n        " + marker,
+        1,
+    )
+    result = _run_library(
+        tmp_path,
+        f"ESQ_MODE=appliance\nESQ_DOCKER=({fake_docker})\n"
+        "ESQ_API_SERVICE_IMAGE=easysynq-api:latest\n"
+        "esq_select_api_artifact rollback",
+        library=injected,
+        stdin=f"{archive}\n{sidecar}\n",
+    )
+    assert result.returncode != 0
+    assert not docker_marker.exists()
+
+
 def test_appliance_archive_and_sidecar_are_read_from_retained_fds(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -778,6 +983,119 @@ def test_cleanup_quarantines_restoration_boundary_replacement(
     assert [path.read_text(encoding="utf-8") for path in retained] == [
         "CLEANUP-RACER-SURVIVES\n"
     ]
+
+
+def test_success_cleanup_retains_post_fstat_replacement_and_old_env(
+    tmp_path: pathlib.Path,
+) -> None:
+    library = _inject_post_fstat_quarantine_replacement(
+        _bash_block("rollback-helper-library"), "replaced-source"
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("SECRET=old-success\n", encoding="utf-8")
+    env_file.chmod(0o640)
+    cleanup_racer = tmp_path / "cleanup-racer"
+    cleanup_racer.write_text("RACER=success\n", encoding="utf-8")
+    cleanup_racer.chmod(0o640)
+    result = _run_library(
+        tmp_path,
+        f"esq_atomic_set_env_file '{env_file}' {env_file.stat().st_uid} "
+        f"{env_file.stat().st_gid} 640 EASYSYNQ_COMPATIBILITY_READ_ONLY 1",
+        library=library,
+    )
+    assert result.returncode == 0, result.stderr
+    retained = list((tmp_path / ".env.rollback-quarantine").iterdir())
+    assert {path.read_text(encoding="utf-8") for path in retained} == {
+        "SECRET=old-success\n",
+        "RACER=success\n",
+    }
+    assert all(path.stat().st_mode & 0o777 == 0o640 for path in retained)
+    assert str(tmp_path / ".env.rollback-quarantine") in result.stderr
+    assert "SECRET=old-success" not in result.stderr
+    assert "RACER=success" not in result.stderr
+
+
+def test_restoration_cleanup_retains_post_fstat_replacement_and_helper_temp(
+    tmp_path: pathlib.Path,
+) -> None:
+    library = _inject_post_fstat_quarantine_replacement(
+        _bash_block("rollback-helper-library"), "restored-update"
+    )
+    marker = "# final-exchange-boundary"
+    library = library.replace(
+        marker,
+        "os.rename('boundary-racer', name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)\n    "
+        + marker,
+        1,
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("SECRET=old-restoration\n", encoding="utf-8")
+    env_file.chmod(0o640)
+    boundary_racer = tmp_path / "boundary-racer"
+    boundary_racer.write_text("CONCURRENT=restored\n", encoding="utf-8")
+    boundary_racer.chmod(0o640)
+    cleanup_racer = tmp_path / "cleanup-racer"
+    cleanup_racer.write_text("RACER=restoration\n", encoding="utf-8")
+    cleanup_racer.chmod(0o640)
+    result = _run_library(
+        tmp_path,
+        f"esq_atomic_set_env_file '{env_file}' {env_file.stat().st_uid} "
+        f"{env_file.stat().st_gid} 640 EASYSYNQ_COMPATIBILITY_READ_ONLY 1",
+        library=library,
+    )
+    assert result.returncode != 0
+    assert env_file.read_text(encoding="utf-8") == "CONCURRENT=restored\n"
+    retained = list((tmp_path / ".env.rollback-quarantine").iterdir())
+    contents = {path.read_text(encoding="utf-8") for path in retained}
+    assert "RACER=restoration\n" in contents
+    assert any(
+        content
+        == "SECRET=old-restoration\nEASYSYNQ_COMPATIBILITY_READ_ONLY=1\n"
+        for content in contents
+    )
+    assert len(retained) == 2
+    assert all(path.stat().st_mode & 0o777 == 0o640 for path in retained)
+    assert str(tmp_path / ".env.rollback-quarantine") in result.stderr
+    assert "SECRET=old-restoration" not in result.stderr
+
+
+def test_final_failure_cleanup_retains_post_fstat_replacement_and_helper_temp(
+    tmp_path: pathlib.Path,
+) -> None:
+    library = _inject_post_fstat_quarantine_replacement(
+        _bash_block("rollback-helper-library"), "failed-update"
+    )
+    marker = "# final-exchange-boundary"
+    library = library.replace(
+        marker,
+        "raise RuntimeError('forced final-failure cleanup')\n    " + marker,
+        1,
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("SECRET=old-final\n", encoding="utf-8")
+    env_file.chmod(0o640)
+    cleanup_racer = tmp_path / "cleanup-racer"
+    cleanup_racer.write_text("RACER=final-failure\n", encoding="utf-8")
+    cleanup_racer.chmod(0o640)
+    result = _run_library(
+        tmp_path,
+        f"esq_atomic_set_env_file '{env_file}' {env_file.stat().st_uid} "
+        f"{env_file.stat().st_gid} 640 EASYSYNQ_COMPATIBILITY_READ_ONLY 1",
+        library=library,
+    )
+    assert result.returncode != 0
+    assert env_file.read_text(encoding="utf-8") == "SECRET=old-final\n"
+    retained = list((tmp_path / ".env.rollback-quarantine").iterdir())
+    contents = {path.read_text(encoding="utf-8") for path in retained}
+    assert "RACER=final-failure\n" in contents
+    assert any(
+        content == "SECRET=old-final\nEASYSYNQ_COMPATIBILITY_READ_ONLY=1\n"
+        for content in contents
+    )
+    assert len(retained) == 2
+    assert all(path.stat().st_mode & 0o777 == 0o640 for path in retained)
+    assert str(tmp_path / ".env.rollback-quarantine") in result.stderr
+    assert "SECRET=old-final" not in result.stderr
 
 
 def test_appliance_rejects_invalid_hostname_and_real_openssl_rejects_ca(

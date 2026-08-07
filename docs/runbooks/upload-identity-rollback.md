@@ -68,9 +68,11 @@ same-directory lock serializes every writer using this helper. Linux `RENAME_EXC
 that the exact inode opened under the lock was swapped; if one noncooperating replacement is present
 at that boundary, the helper atomically restores it and aborts. This cannot prevent an arbitrary
 noncooperating writer from racing repeatedly. Cleanup first moves a candidate with no-overwrite
-semantics into a validated operator-owned `0700` quarantine. Only a proven helper-owned inode is
-removed there; an unexpected entry is retained, its exact safe path is reported, and the helper
-aborts for manual inspection.
+semantics into a validated operator-owned `0700` quarantine. No quarantined pathname is removed
+automatically: the normal parked old environment, a restored helper temporary, and every unexpected
+entry are retained and their exact safe paths are reported for manual inspection and cleanup. These
+files can contain prior `.env` secrets and preserve their restrictive ownership and mode; do not
+print their contents or relax their metadata while inspecting them.
 
 ```bash
 # rollback-helper-library
@@ -148,13 +150,21 @@ if (
 ):
     raise SystemExit("rollback: unsafe cleanup quarantine")
 
-def quarantine_cleanup(candidate: str, expected_identity: tuple[int, int], label: str) -> None:
+def quarantine_retain(candidate: str, expected_identity: tuple[int, int], label: str) -> None:
     retained_name = (
         f"{label}.{expected_identity[0]:x}.{expected_identity[1]:x}."
         f"{secrets.token_hex(8)}"
     )
-    rename_linux(dir_fd, candidate, quarantine_fd, retained_name, 1)
     safe_path = os.path.join(parent, quarantine_name, retained_name)
+    source_path = os.path.join(parent, candidate)
+    try:
+        rename_linux(dir_fd, candidate, quarantine_fd, retained_name, 1)
+    except OSError as error:
+        raise SystemExit(
+            f"rollback: could not establish safe quarantine move; retained in place at {source_path}"
+        ) from error
+    os.fsync(quarantine_fd)
+    os.fsync(dir_fd)
     try:
         retained_fd = os.open(
             retained_name,
@@ -167,12 +177,13 @@ def quarantine_cleanup(candidate: str, expected_identity: tuple[int, int], label
     retained_identity = (retained_stat.st_dev, retained_stat.st_ino)
     if retained_identity != expected_identity:
         os.close(retained_fd)
-        os.fsync(quarantine_fd)
         raise SystemExit(f"rollback: retained unexpected cleanup inode at {safe_path}")
-    os.unlink(retained_name, dir_fd=quarantine_fd)
     os.close(retained_fd)
-    os.fsync(quarantine_fd)
-    os.fsync(dir_fd)
+    print(
+        f"rollback: retained {label} at {safe_path}; "
+        "contains prior .env secrets; inspect and remove manually",
+        file=sys.stderr,
+    )
 
 source_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
 source_stat = os.fstat(source_fd)
@@ -237,22 +248,22 @@ try:
         if (returned.st_dev, returned.st_ino) != temp_identity:
             raise SystemExit("rollback: exchange rollback could not prove its temporary file")
         # restoration-cleanup-boundary
-        quarantine_cleanup(temp_name, temp_identity, "restored-update")
+        retention_identity = temp_identity
         temp_identity = None
+        quarantine_retain(temp_name, retention_identity, "restored-update")
         raise SystemExit("rollback: concurrent environment replacement restored; update aborted")
     if (installed.st_dev, installed.st_ino) != temp_identity:
         raise SystemExit("rollback: noncooperating replacement after exchange; no file was removed")
     # success-cleanup-boundary
-    quarantine_cleanup(temp_name, source_identity, "replaced-source")
     temp_identity = None
+    quarantine_retain(temp_name, source_identity, "replaced-source")
 finally:
     if temp_fd is not None:
         os.close(temp_fd)
     if temp_identity is not None:
-        try:
-            quarantine_cleanup(temp_name, temp_identity, "failed-update")
-        except FileNotFoundError:
-            pass
+        retention_identity = temp_identity
+        temp_identity = None
+        quarantine_retain(temp_name, retention_identity, "failed-update")
     os.close(source_fd)
     os.close(quarantine_fd)
     fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -414,9 +425,11 @@ esq_select_api_artifact() {
     read -rp "Absolute path to approved ${purpose} API image archive: " archive_input
     read -rp "Absolute path to its SHA-256 sidecar: " sidecar_input
     load_output="$(python3 -I - "$archive_input" "$sidecar_input" "$purpose" "${ESQ_DOCKER[@]}" <<'PY'
+import fcntl
 import hashlib
 import os
 import re
+import resource
 import stat
 import subprocess
 import sys
@@ -429,7 +442,10 @@ if not os.path.isabs(archive_path) or not os.path.isabs(sidecar_path):
 if archive_path == sidecar_path:
     raise SystemExit("rollback: archive and sidecar paths must differ")
 
-def stable_open(path: str) -> int:
+MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024
+MAX_SIDECAR_BYTES = 8192
+
+def stable_open(path: str, maximum_size: int, label: str) -> int:
     parent = os.path.abspath(os.path.dirname(path))
     if parent != os.path.realpath(parent):
         raise SystemExit("rollback: artifact parent must not traverse a symlink")
@@ -449,14 +465,24 @@ def stable_open(path: str) -> int:
     if metadata.st_uid not in {0, os.getuid()} or stat.S_IMODE(metadata.st_mode) & 0o022:
         os.close(descriptor)
         raise SystemExit("rollback: artifact input owner or permissions are unsafe")
+    if metadata.st_size > maximum_size:
+        os.close(descriptor)
+        raise SystemExit(f"rollback: {label} exceeds the allowed snapshot size")
     return descriptor
 
-archive_fd = stable_open(archive_path)
-sidecar_fd = stable_open(sidecar_path)
+soft_file_size, _ = resource.getrlimit(resource.RLIMIT_FSIZE)
+snapshot_limit = MAX_ARCHIVE_BYTES
+if soft_file_size != resource.RLIM_INFINITY:
+    snapshot_limit = min(snapshot_limit, max(0, soft_file_size))
+
+archive_fd = stable_open(archive_path, snapshot_limit, "archive")
+sidecar_fd = None
+snapshot_fd = None
 try:
+    sidecar_fd = stable_open(sidecar_path, MAX_SIDECAR_BYTES, "digest sidecar")
     # artifact-stable-fds-opened
-    sidecar_bytes = os.read(sidecar_fd, 8193)
-    if len(sidecar_bytes) > 8192 or os.read(sidecar_fd, 1):
+    sidecar_bytes = os.read(sidecar_fd, MAX_SIDECAR_BYTES + 1)
+    if len(sidecar_bytes) > MAX_SIDECAR_BYTES or os.read(sidecar_fd, 1):
         raise SystemExit("rollback: digest sidecar is too large")
     try:
         sidecar_text = sidecar_bytes.decode("ascii")
@@ -471,14 +497,59 @@ try:
     expected, listed = match.groups()
     if listed and listed != os.path.basename(archive_path):
         raise SystemExit("rollback: digest sidecar names a different archive")
+
+    try:
+        snapshot_fd = os.memfd_create(
+            "easysynq-approved-api",
+            flags=os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
+        )
+    except (AttributeError, OSError) as error:
+        raise SystemExit("rollback: cannot create a sealable in-memory archive snapshot") from error
     digest = hashlib.sha256()
-    while chunk := os.read(archive_fd, 1024 * 1024):
+    copied = 0
+    while True:
+        # artifact-snapshot-read-boundary
+        try:
+            chunk = os.read(archive_fd, 1024 * 1024)
+        except OSError as error:
+            raise SystemExit("rollback: archive snapshot read failed") from error
+        if not chunk:
+            break
+        copied += len(chunk)
+        if copied > snapshot_limit:
+            raise SystemExit("rollback: archive grew beyond the allowed snapshot size")
+        view = memoryview(chunk)
+        while view:
+            try:
+                written = os.write(snapshot_fd, view)
+            except OSError as error:
+                raise SystemExit("rollback: archive snapshot write failed") from error
+            if written <= 0:
+                raise SystemExit("rollback: archive snapshot write made no progress")
+            view = view[written:]
         digest.update(chunk)
+    if os.fstat(snapshot_fd).st_size != copied:
+        raise SystemExit("rollback: archive snapshot size verification failed")
     if digest.hexdigest() != expected:
         raise SystemExit(f"rollback: {purpose} archive digest mismatch")
-    os.lseek(archive_fd, 0, os.SEEK_SET)
+
+    try:
+        required_seals = (
+            fcntl.F_SEAL_WRITE
+            | fcntl.F_SEAL_GROW
+            | fcntl.F_SEAL_SHRINK
+            | fcntl.F_SEAL_SEAL
+        )
+        fcntl.fcntl(snapshot_fd, fcntl.F_ADD_SEALS, required_seals)
+        observed_seals = fcntl.fcntl(snapshot_fd, fcntl.F_GET_SEALS)
+    except (AttributeError, OSError) as error:
+        raise SystemExit("rollback: archive snapshot sealing failed") from error
+    if observed_seals & required_seals != required_seals:
+        raise SystemExit("rollback: archive snapshot seal verification failed")
+    os.lseek(snapshot_fd, 0, os.SEEK_SET)
+    # artifact-snapshot-sealed
     # artifact-digest-complete
-    stable_archive = f"/proc/{os.getpid()}/fd/{archive_fd}"
+    stable_archive = f"/proc/{os.getpid()}/fd/{snapshot_fd}"
     completed = subprocess.run(
         [*docker_command, "load", "--input", stable_archive],
         stdin=subprocess.DEVNULL,
@@ -490,7 +561,10 @@ try:
         raise SystemExit(completed.returncode)
     sys.stdout.write(completed.stdout)
 finally:
-    os.close(sidecar_fd)
+    if snapshot_fd is not None:
+        os.close(snapshot_fd)
+    if sidecar_fd is not None:
+        os.close(sidecar_fd)
     os.close(archive_fd)
 PY
 )"
@@ -646,12 +720,16 @@ fi
 
 For an appliance, select an approved prebuilt API image archive and its separately supplied SHA-256
 sidecar. The helper opens each path once without following symlinks, validates the retained regular
-inodes and their ownership/link count/permissions, reads the sidecar and hashes through those file
-descriptors, rewinds the archive descriptor, then gives noninteractive Docker a stable `/proc` FD path
-with stdin disabled. It accepts exactly one tagged image. For a repository install, select an approved
-full commit that already exists locally; the helper builds it from a separate detached temporary
-worktree. In both modes, the selected immutable ID is retagged to the actual Compose API service image,
-only `api` is recreated, and the running container ID must match.
+inodes and their ownership/link count/permissions, and reads the expected digest from the retained
+sidecar. It copies and hashes the opened archive into an 8 GiB-bounded Linux memfd, also respecting the
+process file-size resource limit, then applies and verifies write/grow/shrink/further-sealing seals.
+Only that immutable snapshot is rewound and exposed to noninteractive Docker through the live loader's
+`/proc` FD path with stdin disabled. A source mutation during copying changes the verified snapshot
+digest and aborts unless the copied bytes still equal the approved digest; a mutation after copying is
+irrelevant to the sealed bytes Docker reads. It accepts exactly one tagged image. For a repository
+install, select an approved full commit that already exists locally; the helper builds it from a
+separate detached temporary worktree. In both modes, the selected immutable ID is retagged to the
+actual Compose API service image, only `api` is recreated, and the running container ID must match.
 The post-cutover check also requires exactly the expected running replica set, rejects any extra
 stopped/exited API container, and compares every replica's immutable `.Image` value.
 
