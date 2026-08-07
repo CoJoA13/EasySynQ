@@ -25,6 +25,7 @@ from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.backup_policy import BackupPolicy
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services import backup as backup_service
+from easysynq_api.tasks.app import app as celery_app
 
 from . import s5_helpers as s5
 from .test_setup import (
@@ -174,6 +175,24 @@ async def test_run_restore_test_requires_configured_backup(
     r = await app_client.post("/api/v1/setup/run-restore-test", headers=h)
     assert r.status_code == 409
     assert r.json()["code"] == "backup_not_configured"
+
+
+async def test_run_restore_test_uses_fixture_redis(
+    app_client: AsyncClient, token_factory: Callable[..., str], _redis: str
+) -> None:
+    """The collection-bound Celery singleton enqueues through the integration Redis container."""
+    secret = await _reset_uninitialized()
+    h = _auth(token_factory, _sub("fixture-redis"))
+    await _bootstrap(app_client, h, secret)
+    await _insert_backup_policy(
+        await _org_id(), tempfile.mkdtemp(prefix="easysynq-restore-enqueue-")
+    )
+
+    assert celery_app.conf.broker_url == _redis
+    assert celery_app.conf.result_backend == _redis
+    response = await app_client.post("/api/v1/setup/run-restore-test", headers=h)
+    assert response.status_code == 202, response.text
+    assert response.json() == {"status": "enqueued"}
 
 
 async def test_durable_backup_writes_verified_archive(

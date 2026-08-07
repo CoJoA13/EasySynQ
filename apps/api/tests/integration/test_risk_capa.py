@@ -7,9 +7,10 @@ risk's OWN process scope (re-authorized under the lock — the TOCTOU close), in
 ``process_id`` + a band-derived severity, sets ``source=risk``, and emits a ``RISK_SPAWNED_CAPA`` on
 the register head (+ the CAPA's own ``CAPA_RAISED`` on the record side).
 
-Run-scoped assertions (the shared session DB). These tests only ADD risks + spawn (no register
-lifecycle drive) → the head stays editable, non-polluting. The spawn-while-Effective operational
-proof lives in ``test_risk_lifecycle.py`` (with the ``restore_register_head`` teardown).
+Run-scoped assertions share the session DB. Before each row-authoring proof, the fixture advances
+the singleton register through its real lifecycle to an editable head; this makes a prior contract
+publish non-polluting without bypassing the production state machine. The spawn-while-Effective
+operational proof lives in ``test_risk_lifecycle.py`` (with the ``restore_register_head`` teardown).
 """
 
 from __future__ import annotations

@@ -148,11 +148,44 @@ def _redis() -> Iterator[str]:
         yield f"redis://{host}:{port}/0"
 
 
+@pytest.fixture(scope="session")
+def _celery_redis(_redis: str) -> Iterator[None]:
+    """Bind the collection-created Celery singleton to the integration Redis container."""
+    from easysynq_api.tasks.app import app as celery_app
+
+    previous_broker_url = celery_app.conf.broker_url
+    previous_result_backend = celery_app.conf.result_backend
+    previous_backend_cache = celery_app._backend_cache
+    had_local_backend = hasattr(celery_app._local, "backend")
+    previous_local_backend = getattr(celery_app._local, "backend", None)
+    previous_pool = celery_app._pool
+
+    celery_app.conf.update(broker_url=_redis, result_backend=_redis)
+    celery_app._backend_cache = None
+    if had_local_backend:
+        del celery_app._local.backend
+    celery_app._pool = None
+    try:
+        yield
+    finally:
+        celery_app.conf.update(
+            broker_url=previous_broker_url,
+            result_backend=previous_result_backend,
+        )
+        celery_app._backend_cache = previous_backend_cache
+        if had_local_backend:
+            celery_app._local.backend = previous_local_backend
+        elif hasattr(celery_app._local, "backend"):
+            del celery_app._local.backend
+        celery_app._pool = previous_pool
+
+
 @pytest.fixture
 async def app_under_test(
     _pg: str,
     _minio: dict[str, str],
     _redis: str,
+    _celery_redis: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[Any]:
@@ -236,11 +269,9 @@ async def app_under_test(
         set_mirror_enqueue_sink,
     )
 
-    # The Celery app singleton binds REDIS_URL at import (collection) time — unreachable in CI —
-    # so every .delay() costs a ~19.5s backend-subscribe retry storm that blocks the event loop
-    # (the S-ack-1 shard-1 forensics; the tax predates S-ack-1 via the mirror sink — see the
-    # 18-22s quantization in .test_durations). Tests assert enqueue effects via the Capturing
-    # doubles where needed (test_mirror.py swaps locally and restores).
+    # High-fanout mirror/ack assertions use capturing sinks in their owning tests. Their default
+    # integration sinks remain logging-only; task endpoints exercise the real fixture Redis through
+    # the collection-bound Celery singleton normalized by ``_celery_redis``.
     prev_mirror = set_mirror_enqueue_sink(LoggingMirrorEnqueueSink())
     prev_ack = set_ack_enqueue_sink(LoggingAckEnqueueSink())
 
