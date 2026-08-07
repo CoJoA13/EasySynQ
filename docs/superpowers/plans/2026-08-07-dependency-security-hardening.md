@@ -554,8 +554,9 @@ Existing integration surfaces:
   `uv.lock.pypdf-6.13.2` contains an artifact-consistent pypdf 6.13.2 record, and
   `uv.lock.pypdf-6.14.2` has the same project/shape with an artifact-consistent pypdf 6.14.2 record.
 
-  For each fixture, copy the common pyproject and selected lock to a guarded temporary project, then
-  run real uv 0.12.2 with `UV_OFFLINE=1 UV_NO_CACHE=1` and exact production export flags:
+  The fixtures were freshly proven with uv 0.12.2. For each fixture, copy the common pyproject and
+  selected lock to a guarded temporary project, then run the supported installed uv used by CI with
+  `UV_OFFLINE=1 UV_NO_CACHE=1` and exact production export flags:
 
   ```text
   --frozen --no-group security --no-emit-project --format requirements-txt

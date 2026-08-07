@@ -62,6 +62,11 @@ assert_file_lines() {
   if [ "$actual" = "$expected" ]; then ok "$label"; else bad "$label"; fi
 }
 
+has_exact_requirement_pin() {
+  local expected="$1" file="$2"
+  awk -v expected="$expected" '$1 == expected { found = 1 } END { exit(found ? 0 : 1) }' "$file"
+}
+
 mkdir -p "$TEST_ROOT/fake-bin" "$TEST_ROOT/caller"
 cat >"$TEST_ROOT/fake-bin/uv" <<'FAKE_UV'
 #!/usr/bin/env bash
@@ -223,10 +228,29 @@ printf '\n== frozen lock provenance ==\n'
 if [ -z "$REAL_UV" ]; then
   bad "real uv is available for copied-lock provenance"
 else
-  case "$($REAL_UV --version 2>/dev/null || true)" in
-    "uv 0.12.2 "*) ok "real provenance tool is uv 0.12.2" ;;
-    *) bad "real provenance tool is uv 0.12.2" ;;
-  esac
+  provenance_uv="$TEST_ROOT/provenance-uv"
+  cat >"$provenance_uv" <<'PROVENANCE_UV'
+#!/usr/bin/env bash
+if [ "${1-}" = "--version" ]; then
+  printf '%s\n' 'uv 9.99.0 (fixture)'
+  exit 0
+fi
+exec "${PIP_AUDIT_INSTALLED_UV:?}" "$@"
+PROVENANCE_UV
+  chmod +x "$provenance_uv"
+  export PIP_AUDIT_INSTALLED_UV="$REAL_UV"
+  assert_equals \
+    "provenance shim reports a different well-formed uv version" \
+    "$($provenance_uv --version 2>/dev/null || true)" \
+    "uv 9.99.0 (fixture)"
+
+  false_positive_output="$TEST_ROOT/provenance-false-positive.txt"
+  printf '%s\n' 'pypdf==6.13.20 \' >"$false_positive_output"
+  if ! has_exact_requirement_pin "pypdf==6.13.2" "$false_positive_output"; then
+    ok "pypdf 6.13.20 cannot satisfy the exact 6.13.2 provenance oracle"
+  else
+    bad "pypdf 6.13.20 cannot satisfy the exact 6.13.2 provenance oracle"
+  fi
   for selected_version in 6.13.2 6.14.2; do
     project="$TEST_ROOT/provenance-$selected_version"
     output="$TEST_ROOT/provenance-$selected_version.txt"
@@ -236,12 +260,12 @@ else
     provenance_status=0
     (
       cd "$project" &&
-        env UV_OFFLINE=1 UV_NO_CACHE=1 "$REAL_UV" export \
+        env UV_OFFLINE=1 UV_NO_CACHE=1 "$provenance_uv" export \
           --frozen --no-group security --no-emit-project \
           --format requirements-txt -o "$output"
     ) >/dev/null 2>&1 || provenance_status=$?
     assert_zero "artifact-consistent pypdf $selected_version lock exports offline" "$provenance_status"
-    if grep -q "^pypdf==$selected_version" "$output" 2>/dev/null; then
+    if has_exact_requirement_pin "pypdf==$selected_version" "$output" 2>/dev/null; then
       ok "exported requirement follows pypdf $selected_version fixture lock"
     else
       bad "exported requirement follows pypdf $selected_version fixture lock"
@@ -256,7 +280,7 @@ else
   provenance_status=0
   provenance_output="$(
     cd "$inconsistent_project" &&
-      env UV_OFFLINE=1 UV_NO_CACHE=1 "$REAL_UV" export \
+      env UV_OFFLINE=1 UV_NO_CACHE=1 "$provenance_uv" export \
         --frozen --no-group security --no-emit-project \
         --format requirements-txt -o "$TEST_ROOT/provenance-inconsistent.txt" 2>&1
   )" || provenance_status=$?
