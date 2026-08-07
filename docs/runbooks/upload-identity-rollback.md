@@ -70,9 +70,12 @@ at that boundary, the helper atomically restores it and aborts. This cannot prev
 noncooperating writer from racing repeatedly. Cleanup first moves a candidate with no-overwrite
 semantics into a validated operator-owned `0700` quarantine. No quarantined pathname is removed
 automatically: the normal parked old environment, a restored helper temporary, and every unexpected
-entry are retained and their exact safe paths are reported for manual inspection and cleanup. These
-files can contain prior `.env` secrets and preserve their restrictive ownership and mode; do not
-print their contents or relax their metadata while inspecting them.
+entry are retained. Device and inode are the authoritative retained identity; reports also include
+uid, gid, mode, the validated quarantine directory identity, best-effort matching paths observed while
+holding the cooperative lock, and an explicitly non-authoritative last-known path. A same-UID
+noncooperating writer can rename paths during or after that scan, so no pathname is claimed stable.
+These files can contain prior `.env` secrets and preserve their restrictive ownership and mode; do
+not print their contents or relax their metadata while inspecting them.
 
 ```bash
 # rollback-helper-library
@@ -80,6 +83,7 @@ esq_atomic_set_env_file() {
   python3 -I - "$@" <<'PY'
 import ctypes
 import fcntl
+import json
 import os
 import secrets
 import stat
@@ -149,6 +153,61 @@ if (
     or stat.S_IMODE(quarantine_stat.st_mode) != 0o700
 ):
     raise SystemExit("rollback: unsafe cleanup quarantine")
+quarantine_path = os.path.join(parent, quarantine_name)
+
+def metadata_record(metadata: os.stat_result) -> dict[str, int | str]:
+    return {
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+    }
+
+def validated_quarantine_record() -> dict[str, int | str]:
+    return {
+        "last_known_path": quarantine_path,
+        "device": quarantine_stat.st_dev,
+        "inode": quarantine_stat.st_ino,
+        **metadata_record(quarantine_stat),
+    }
+
+def matching_quarantine_paths(identity: tuple[int, int]) -> list[str]:
+    matches = []
+    for entry_name in sorted(os.listdir(quarantine_fd)):
+        try:
+            entry = os.stat(entry_name, dir_fd=quarantine_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if (entry.st_dev, entry.st_ino) == identity:
+            matches.append(os.path.join(quarantine_path, entry_name))
+    return matches
+
+def report_retained_entry(
+    label: str,
+    retained: os.stat_result,
+    expected_identity: tuple[int, int],
+    last_known_path: str,
+) -> None:
+    identity = (retained.st_dev, retained.st_ino)
+    report = {
+        "label": label,
+        "identity": {"device": identity[0], "inode": identity[1]},
+        "metadata": metadata_record(retained),
+        "expected_identity": {
+            "device": expected_identity[0],
+            "inode": expected_identity[1],
+        },
+        "identity_authoritative": True,
+        "validated_quarantine": validated_quarantine_record(),
+        "last_known_path": last_known_path,
+        "path_authority": "last-known-only",
+        "current_matching_paths": matching_quarantine_paths(identity),
+        "matching_path_scope": "best-effort-under-cooperative-lock",
+    }
+    print(
+        "rollback-retained-entry: "
+        + json.dumps(report, sort_keys=True, separators=(",", ":")),
+        file=sys.stderr,
+    )
 
 def quarantine_retain(candidate: str, expected_identity: tuple[int, int], label: str) -> None:
     retained_name = (
@@ -161,7 +220,8 @@ def quarantine_retain(candidate: str, expected_identity: tuple[int, int], label:
         rename_linux(dir_fd, candidate, quarantine_fd, retained_name, 1)
     except OSError as error:
         raise SystemExit(
-            f"rollback: could not establish safe quarantine move; retained in place at {source_path}"
+            "rollback: could not establish safe quarantine move; retained in place; "
+            f"last-known-path={source_path}"
         ) from error
     os.fsync(quarantine_fd)
     os.fsync(dir_fd)
@@ -172,16 +232,21 @@ def quarantine_retain(candidate: str, expected_identity: tuple[int, int], label:
             dir_fd=quarantine_fd,
         )
     except OSError as error:
-        raise SystemExit(f"rollback: retained unsafe cleanup entry at {safe_path}") from error
+        raise SystemExit(
+            f"rollback: retained unsafe cleanup entry; last-known-path={safe_path}"
+        ) from error
     retained_stat = os.fstat(retained_fd)
     retained_identity = (retained_stat.st_dev, retained_stat.st_ino)
+    report_retained_entry(label, retained_stat, expected_identity, safe_path)
     if retained_identity != expected_identity:
         os.close(retained_fd)
-        raise SystemExit(f"rollback: retained unexpected cleanup inode at {safe_path}")
+        raise SystemExit(
+            "rollback: retained unexpected cleanup inode; use the authoritative identity report"
+        )
     os.close(retained_fd)
     print(
-        f"rollback: retained {label} at {safe_path}; "
-        "contains prior .env secrets; inspect and remove manually",
+        f"rollback: retained {label}; contains prior .env secrets; "
+        "inventory the full quarantine and match device/inode before manual cleanup",
         file=sys.stderr,
     )
 
@@ -272,6 +337,88 @@ finally:
 PY
 }
 
+esq_inventory_env_quarantine() {
+  python3 -I - "$@" <<'PY'
+import fcntl
+import json
+import os
+import stat
+import sys
+
+if len(sys.argv) != 3:
+    raise SystemExit("rollback: quarantine inventory requires environment path and expected owner")
+path, uid_text = sys.argv[1:]
+expected_uid = int(uid_text, 10)
+parent = os.path.abspath(os.path.dirname(path) or ".")
+if parent != os.path.realpath(parent):
+    raise SystemExit("rollback: environment parent must not traverse a symlink")
+name = os.path.basename(path)
+if not name or name in {".", ".."}:
+    raise SystemExit("rollback: invalid environment filename")
+
+dir_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+lock_name = f"{name}.rollback.lock"
+lock_fd = os.open(lock_name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=dir_fd)
+lock_stat = os.fstat(lock_fd)
+if not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_nlink != 1:
+    raise SystemExit("rollback: unsafe environment lock file")
+if lock_stat.st_uid != expected_uid or stat.S_IMODE(lock_stat.st_mode) != 0o600:
+    raise SystemExit("rollback: environment lock metadata mismatch")
+fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+quarantine_name = f"{name}.rollback-quarantine"
+quarantine_fd = os.open(
+    quarantine_name,
+    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    dir_fd=dir_fd,
+)
+quarantine_stat = os.fstat(quarantine_fd)
+if (
+    not stat.S_ISDIR(quarantine_stat.st_mode)
+    or quarantine_stat.st_uid != expected_uid
+    or stat.S_IMODE(quarantine_stat.st_mode) != 0o700
+):
+    raise SystemExit("rollback: unsafe cleanup quarantine")
+quarantine_path = os.path.join(parent, quarantine_name)
+directory_record = {
+    "last_known_path": quarantine_path,
+    "device": quarantine_stat.st_dev,
+    "inode": quarantine_stat.st_ino,
+    "uid": quarantine_stat.st_uid,
+    "gid": quarantine_stat.st_gid,
+    "mode": f"{stat.S_IMODE(quarantine_stat.st_mode):04o}",
+}
+print(
+    "rollback-quarantine-directory: "
+    + json.dumps(directory_record, sort_keys=True, separators=(",", ":"))
+)
+for entry_name in sorted(os.listdir(quarantine_fd)):
+    try:
+        entry = os.stat(entry_name, dir_fd=quarantine_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        continue
+    entry_record = {
+        "identity": {"device": entry.st_dev, "inode": entry.st_ino},
+        "metadata": {
+            "uid": entry.st_uid,
+            "gid": entry.st_gid,
+            "mode": f"{stat.S_IMODE(entry.st_mode):04o}",
+        },
+        "observed_path": os.path.join(quarantine_path, entry_name),
+        "path_authority": "observation-only",
+    }
+    print(
+        "rollback-quarantine-entry: "
+        + json.dumps(entry_record, sort_keys=True, separators=(",", ":"))
+    )
+
+os.close(quarantine_fd)
+fcntl.flock(lock_fd, fcntl.LOCK_UN)
+os.close(lock_fd)
+os.close(dir_fd)
+PY
+}
+
 esq_set_env_appliance() {
   local key="$1" value="$2" easysynq_gid
   easysynq_gid="$(getent group easysynq | awk -F: 'NR == 1 { print $3 }')"
@@ -310,6 +457,44 @@ esq_set_env() {
   case "$ESQ_MODE" in
     appliance) esq_set_env_appliance "$@" ;;
     repository) esq_set_env_repository "$@" ;;
+    *) echo 'rollback: unknown installation mode' >&2; return 1 ;;
+  esac
+}
+
+esq_inventory_quarantine_appliance() {
+  sudo bash -c "$(declare -f esq_inventory_env_quarantine)
+set -euo pipefail
+test -d /opt/easysynq
+test ! -L /opt/easysynq
+[ \"\$(stat -c %u /opt/easysynq)\" = 0 ]
+directory_mode=\"\$(stat -c %A /opt/easysynq)\"
+case \"\${directory_mode:5:1}\${directory_mode:8:1}\" in *w*) exit 1 ;; esac
+test \"\$(stat -c %U:%G /opt/easysynq/.env)\" = root:easysynq
+esq_inventory_env_quarantine /opt/easysynq/.env 0"
+}
+
+esq_inventory_quarantine_repository() {
+  local owner group mode current_uid current_groups
+  test -f "$ESQ_ENV_FILE"
+  test ! -L "$ESQ_ENV_FILE"
+  owner="$(stat -c %u "$ESQ_ENV_FILE")"
+  group="$(stat -c %g "$ESQ_ENV_FILE")"
+  mode="$(stat -c %a "$ESQ_ENV_FILE")"
+  current_uid="$(id -u)"
+  [ "$owner" = "$current_uid" ] || {
+    echo 'rollback: repository .env must be owned by the invoking user' >&2
+    return 1
+  }
+  case "$mode" in 600|640) ;; *) echo 'rollback: repository .env mode must be 0600 or 0640' >&2; return 1 ;; esac
+  current_groups=" $(id -G) "
+  case "$current_groups" in *" $group "*) ;; *) echo 'rollback: repository .env group is inaccessible' >&2; return 1 ;; esac
+  esq_inventory_env_quarantine "$ESQ_ENV_FILE" "$owner"
+}
+
+esq_inventory_quarantine() {
+  case "$ESQ_MODE" in
+    appliance) esq_inventory_quarantine_appliance ;;
+    repository) esq_inventory_quarantine_repository ;;
     *) echo 'rollback: unknown installation mode' >&2; return 1 ;;
   esac
 }
@@ -655,6 +840,20 @@ esq_require_running_api_image() {
   done
 }
 ```
+
+Whenever the setter emits `rollback-retained-entry`, record its authoritative device/inode and
+metadata. Before any later manual cleanup, stop any known noncooperating writer and inventory the
+entire validated quarantine under the same mode-specific privilege boundary and cooperative lock:
+
+```bash
+esq_inventory_quarantine
+```
+
+Match the retained report's device and inode to a `rollback-quarantine-entry` record and confirm its
+uid, gid, and mode. The directory and entry path fields are explicitly last-known or observation-only;
+a same-UID writer can rename them during or after inventory. Repeat the full inventory if such a writer
+may still be active. This helper reads no file contents and deletes nothing; any eventual removal is a
+separate, deliberate manual operation after identity review.
 
 ## 2. Enable and prove the compatibility guard
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import pathlib
 import re
 import shutil
@@ -76,6 +77,12 @@ def _inject_post_fstat_quarantine_replacement(library: str, label: str) -> str:
     assert marker in library
     injection = (
         marker
+        + "    with open('recorded-retained-identity', 'w', encoding='ascii') as record:\n"
+        + "        record.write(\n"
+        + "            f'{retained_stat.st_dev} {retained_stat.st_ino} '\n"
+        + "            f'{retained_stat.st_uid} {retained_stat.st_gid} '\n"
+        + "            f'{stat.S_IMODE(retained_stat.st_mode):04o}\\n'\n"
+        + "        )\n"
         + f'    if label == "{label}":\n'
         + f'        saved_name = "helper-owned-{label}"\n'
         + "        os.rename(\n"
@@ -88,6 +95,114 @@ def _inject_post_fstat_quarantine_replacement(library: str, label: str) -> str:
         + "        )\n"
     )
     return library.replace(marker, injection, 1)
+
+
+def _json_records(output: str, prefix: str) -> list[dict[str, object]]:
+    return [
+        json.loads(line.removeprefix(prefix))
+        for line in output.splitlines()
+        if line.startswith(prefix)
+    ]
+
+
+def _recorded_retained_identity(tmp_path: pathlib.Path) -> dict[str, int | str]:
+    device, inode, uid, gid, mode = (
+        tmp_path / "recorded-retained-identity"
+    ).read_text(encoding="ascii").split()
+    return {
+        "device": int(device),
+        "inode": int(inode),
+        "uid": int(uid),
+        "gid": int(gid),
+        "mode": mode,
+    }
+
+
+def _assert_inode_report_and_inventory_find_retained_entry(
+    tmp_path: pathlib.Path,
+    env_file: pathlib.Path,
+    library: str,
+    result: subprocess.CompletedProcess[str],
+) -> None:
+    recorded = _recorded_retained_identity(tmp_path)
+    reports = _json_records(result.stderr, "rollback-retained-entry: ")
+    assert len(reports) == 1
+    report = reports[0]
+    assert report["identity"] == {
+        "device": recorded["device"],
+        "inode": recorded["inode"],
+    }
+    assert report["metadata"] == {
+        "uid": recorded["uid"],
+        "gid": recorded["gid"],
+        "mode": recorded["mode"],
+    }
+    assert report["identity_authoritative"] is True
+    assert report["path_authority"] == "last-known-only"
+
+    quarantine = tmp_path / ".env.rollback-quarantine"
+    quarantine_stat = quarantine.stat()
+    assert report["validated_quarantine"] == {
+        "last_known_path": str(quarantine),
+        "device": quarantine_stat.st_dev,
+        "inode": quarantine_stat.st_ino,
+        "uid": quarantine_stat.st_uid,
+        "gid": quarantine_stat.st_gid,
+        "mode": "0700",
+    }
+    last_known_path = pathlib.Path(str(report["last_known_path"]))
+    last_known_stat = last_known_path.stat()
+    assert (last_known_stat.st_dev, last_known_stat.st_ino) != (
+        recorded["device"],
+        recorded["inode"],
+    )
+    current_matching_paths = report["current_matching_paths"]
+    assert isinstance(current_matching_paths, list)
+    matching_paths = [pathlib.Path(str(path)) for path in current_matching_paths]
+    assert any(
+        (path.stat().st_dev, path.stat().st_ino)
+        == (recorded["device"], recorded["inode"])
+        for path in matching_paths
+    )
+
+    inventory = _run_library(
+        tmp_path,
+        f"ESQ_MODE=repository\nESQ_ENV_FILE='{env_file}'\n"
+        "esq_inventory_quarantine",
+        library=library,
+    )
+    assert inventory.returncode == 0, inventory.stderr
+    inventory_output = inventory.stdout + inventory.stderr
+    assert "SECRET=" not in inventory_output
+    assert "RACER=" not in inventory_output
+    assert "CONCURRENT=" not in inventory_output
+    directory_records = _json_records(
+        inventory.stdout, "rollback-quarantine-directory: "
+    )
+    assert directory_records == [report["validated_quarantine"]]
+    entries = _json_records(inventory.stdout, "rollback-quarantine-entry: ")
+    actual_entries = list(quarantine.iterdir())
+    assert len(entries) == len(actual_entries) == 2
+    assert {
+        (entry.stat().st_dev, entry.stat().st_ino) for entry in actual_entries
+    } == {
+        (int(record["identity"]["device"]), int(record["identity"]["inode"]))
+        for record in entries
+    }
+    authoritative = [
+        entry
+        for entry in entries
+        if entry["identity"] == report["identity"]
+        and entry["metadata"] == report["metadata"]
+    ]
+    assert len(authoritative) == 1
+    observed_path = pathlib.Path(str(authoritative[0]["observed_path"]))
+    observed_stat = observed_path.stat()
+    assert (observed_stat.st_dev, observed_stat.st_ino) == (
+        recorded["device"],
+        recorded["inode"],
+    )
+    assert authoritative[0]["path_authority"] == "observation-only"
 
 
 def _install_compose_docker_fakes(
@@ -1010,6 +1125,9 @@ def test_success_cleanup_retains_post_fstat_replacement_and_old_env(
         "RACER=success\n",
     }
     assert all(path.stat().st_mode & 0o777 == 0o640 for path in retained)
+    _assert_inode_report_and_inventory_find_retained_entry(
+        tmp_path, env_file, library, result
+    )
     assert str(tmp_path / ".env.rollback-quarantine") in result.stderr
     assert "SECRET=old-success" not in result.stderr
     assert "RACER=success" not in result.stderr
@@ -1055,6 +1173,9 @@ def test_restoration_cleanup_retains_post_fstat_replacement_and_helper_temp(
     )
     assert len(retained) == 2
     assert all(path.stat().st_mode & 0o777 == 0o640 for path in retained)
+    _assert_inode_report_and_inventory_find_retained_entry(
+        tmp_path, env_file, library, result
+    )
     assert str(tmp_path / ".env.rollback-quarantine") in result.stderr
     assert "SECRET=old-restoration" not in result.stderr
 
@@ -1094,6 +1215,9 @@ def test_final_failure_cleanup_retains_post_fstat_replacement_and_helper_temp(
     )
     assert len(retained) == 2
     assert all(path.stat().st_mode & 0o777 == 0o640 for path in retained)
+    _assert_inode_report_and_inventory_find_retained_entry(
+        tmp_path, env_file, library, result
+    )
     assert str(tmp_path / ".env.rollback-quarantine") in result.stderr
     assert "SECRET=old-final" not in result.stderr
 
