@@ -134,7 +134,10 @@ other status, missing report, invalid JSON, or unexpected report schema.
 
 Raise the direct `react-router-dom` floor from `^7.18.1` to `^7.18.2` and refresh only compatible
 lockfile selections needed to reach the patched versions listed in Context. Do not use
-`npm audit fix --force`, dependency overrides, a Router downgrade, or a jsdom major upgrade.
+`npm audit fix --force`, broad dependency overrides, a Router downgrade, or a jsdom major upgrade.
+The sole exception is the narrowly targeted contract override
+`@redocly/openapi-core` → `js-yaml` 4.3.1 for GHSA-5p4m-2wfm-xmq; remove it when Redocly ships
+the patched resolution.
 
 The manifest change records the patched minimum for the production dependency. The lock refresh fixes
 the transitive development dependencies without adding unnecessary direct requirements. Full web tests,
@@ -307,7 +310,9 @@ critical advisory; npm may still emit the one documented Router advisory and inh
 - Only the exact Router exception before its exclusive expiry passes, and mutation tests prove every
   version, inheritance, RSC-usage, and time constraint.
 - The policy rejects unsupported npm/audit-report versions instead of guessing at changed output.
-- No force, major, or override-based npm remediation is introduced.
+- No force, major, or broad override-based npm remediation is introduced. The contract toolchain has
+  the sole narrowly targeted security override `@redocly/openapi-core` → `js-yaml` 4.3.1 for
+  GHSA-5p4m-2wfm-xmq; remove it when Redocly ships a resolution that no longer requires it.
 - Dependabot covers the contract manifest; vulnerability alerts and automated security updates read
   back as enabled.
 - Existing web, contract, API workflow, and CI-hardening regressions pass.

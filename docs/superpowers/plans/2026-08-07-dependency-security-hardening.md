@@ -13,7 +13,10 @@
 - Pin `@redocly/cli` exactly to `2.46.0`, `openapi-typescript` exactly to `7.13.0`, and `pip-audit` exactly to `2.10.1`.
 - Generate npm locks with Node 22 and npm 10.9.x; the npm policy accepts only `/^10\.9\.\d+$/`, audit report version `2`, and lockfile version `3`.
 - Upgrade only compatible web selections: `brace-expansion` to `1.1.18`/`5.0.9`, `undici` to `7.29.0`, and `react-router`/`react-router-dom` to `7.18.2`.
-- Do not use `npm audit fix --force`, dependency overrides, a Router downgrade, a jsdom major upgrade, `npx`, or a network fallback.
+- Do not use `npm audit fix --force`, broad dependency overrides, a Router downgrade, a jsdom major
+  upgrade, `npx`, or a network fallback. The sole permitted contract security override is
+  `@redocly/openapi-core` → `js-yaml` 4.3.1 for GHSA-5p4m-2wfm-xmq; remove it when Redocly ships
+  the patched resolution. All other override use remains prohibited.
 - Fail npm policy on every unapproved high/critical advisory and every execution/schema/lock mismatch.
 - The only exception is `GHSA-qwww-vcr4-c8h2`; its two Router records are atomic, require exact 7.18.2 lock nodes plus the `router-rsc-absent` usage policy, and expire exclusively at `2026-08-22T00:00:00Z`.
 - Keep Python vulnerability findings and every Trivy finding report-only; operational failures must still fail the security job.
@@ -208,6 +211,11 @@ Existing integration surfaces:
     "name": "@easysynq/contracts-toolchain",
     "version": "0.1.0",
     "private": true,
+    "overrides": {
+      "@redocly/openapi-core": {
+        "js-yaml": "4.3.1"
+      }
+    },
     "devDependencies": {
       "@redocly/cli": "2.46.0",
       "openapi-typescript": "7.13.0"
@@ -232,6 +240,7 @@ Existing integration surfaces:
   node --test scripts/tests/test-contract-lock.mjs
   bash scripts/run-contract-tool.sh redocly --version
   bash scripts/run-contract-tool.sh openapi-typescript --version
+  npm --prefix packages/contracts audit --package-lock-only --audit-level=high
   npm --prefix packages/contracts audit signatures
   ```
 
@@ -351,6 +360,7 @@ Existing integration surfaces:
   node --test scripts/tests/test-contract-lock.mjs
   bash scripts/tests/test-gen-contracts.sh
   bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
+  npm --prefix packages/contracts audit --package-lock-only --audit-level=high
   bash scripts/gen-contracts.sh --check
   ```
 
@@ -418,6 +428,7 @@ Existing integration surfaces:
   bash scripts/tests/test-ci-hardening.sh
   bash scripts/tests/test-run-contract-tool.sh
   node --test scripts/tests/test-contract-lock.mjs
+  npm --prefix packages/contracts audit --package-lock-only --audit-level=high
   bash scripts/tests/test-gen-contracts.sh
   (cd apps/api && uv run pytest tests/unit/test_ci_workflow.py tests/unit/test_dependency_tooling.py -m unit -q)
   pre-commit run contracts-lint --all-files
