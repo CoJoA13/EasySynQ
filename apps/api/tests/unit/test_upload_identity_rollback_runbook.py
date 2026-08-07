@@ -29,7 +29,13 @@ def _bash_block(marker: str) -> str:
 
 
 def _write_executable(path: pathlib.Path, source: str) -> None:
-    path.write_text(textwrap.dedent(source), encoding="utf-8")
+    lines = source.strip("\n").splitlines()
+    indent = len(lines[0]) - len(lines[0].lstrip())
+    prefix = " " * indent
+    normalized = "\n".join(
+        line[indent:] if line.startswith(prefix) else line for line in lines
+    )
+    path.write_text(normalized + "\n", encoding="utf-8")
     path.chmod(0o700)
 
 
@@ -200,8 +206,8 @@ def test_each_api_cutover_selects_retags_recreates_and_verifies_exact_image() ->
         )
 
     library = _bash_block("rollback-helper-library")
-    assert "sha256sum" in library
-    assert "docker load" in library
+    assert "hashlib.sha256" in library
+    assert '"load", "--input"' in library
     assert "git rev-parse --verify" in library
     assert 'worktree add --detach "$build_source" "$resolved_commit"' in library
     assert "docker build" in library
@@ -488,10 +494,17 @@ def test_appliance_artifact_digest_load_ref_and_tag_oracles(tmp_path: pathlib.Pa
             if [ "$reference" = approved-api:round2 ]; then
               printf '%s\n' "$ESQ_SELECTED_ID"
             else
-              cat "$ESQ_TAG_STATE"
+              if [ "$ESQ_LOAD_MODE" = tag-mismatch ]; then
+                printf '%s\n' "$ESQ_MISMATCH_ID"
+              else
+                cat "$ESQ_TAG_STATE"
+              fi
             fi
             ;;
-          'image tag') printf '%s\n' "$3" >"$ESQ_TAG_STATE" ;;
+          'image tag')
+            [ "$ESQ_LOAD_MODE" != tag-fail ] || exit 47
+            printf '%s\n' "$3" >"$ESQ_TAG_STATE"
+            ;;
           *) exit 46 ;;
         esac
         """,
@@ -502,15 +515,19 @@ def test_appliance_artifact_digest_load_ref_and_tag_oracles(tmp_path: pathlib.Pa
         ("digest", False, "good", False),
         ("load", True, "fail", False),
         ("ref", True, "bad-ref", False),
+        ("tag-fail", True, "tag-fail", False),
+        ("tag-mismatch", True, "tag-mismatch", False),
     ]:
         archive = tmp_path / f"{name}.tar"
         sidecar = tmp_path / f"{name}.sha256"
         archive.write_bytes(f"archive-{name}".encode())
+        archive.chmod(0o644)
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         sidecar.write_text(
             f"{digest if digest_ok else '0' * 64}  {archive.name}\n",
             encoding="utf-8",
         )
+        sidecar.chmod(0o644)
         log.write_text("", encoding="utf-8")
         tag_state.write_text("", encoding="utf-8")
         result = _run_library(
@@ -524,6 +541,7 @@ def test_appliance_artifact_digest_load_ref_and_tag_oracles(tmp_path: pathlib.Pa
                 "ESQ_TAG_STATE": str(tag_state),
                 "ESQ_LOAD_MODE": load_mode,
                 "ESQ_SELECTED_ID": selected_id,
+                "ESQ_MISMATCH_ID": _image_id("6"),
             },
             stdin=f"{archive}\n{sidecar}\n",
         )
@@ -533,6 +551,264 @@ def test_appliance_artifact_digest_load_ref_and_tag_oracles(tmp_path: pathlib.Pa
             assert "load --input" not in calls
         if should_pass:
             assert tag_state.read_text(encoding="utf-8").strip() == selected_id
+
+
+def test_appliance_archive_load_uses_the_hashed_inode_after_path_swap(
+    tmp_path: pathlib.Path,
+) -> None:
+    archive = tmp_path / "approved.tar"
+    replacement = tmp_path / "replacement.tar"
+    sidecar = tmp_path / "approved.sha256"
+    archive.write_bytes(b"APPROVED-ARCHIVE")
+    replacement.write_bytes(b"UNAPPROVED-REPLACEMENT")
+    archive.chmod(0o644)
+    replacement.chmod(0o644)
+    approved_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    sidecar.write_text(f"{approved_digest}  {archive.name}\n", encoding="utf-8")
+    sidecar.chmod(0o644)
+    fake_docker = tmp_path / "fake-docker"
+    loaded_digest = tmp_path / "loaded-digest"
+    tag_state = tmp_path / "tag-state"
+    selected_id = _image_id("7")
+    _write_executable(
+        fake_docker,
+        """
+        #!/bin/bash
+        set -euo pipefail
+        case "$1 $2" in
+          'load --input')
+            mv "$ESQ_REPLACEMENT_ARCHIVE" "$ESQ_ORIGINAL_ARCHIVE"
+            sha256sum "$3" | awk '{print $1}' >"$ESQ_LOADED_DIGEST"
+            printf '%s\n' 'Loaded image: approved-api:stable'
+            ;;
+          'image inspect')
+            if [ "$5" = approved-api:stable ]; then
+              printf '%s\n' "$ESQ_SELECTED_ID"
+            else
+              cat "$ESQ_TAG_STATE"
+            fi
+            ;;
+          'image tag') printf '%s\n' "$3" >"$ESQ_TAG_STATE" ;;
+          *) exit 70 ;;
+        esac
+        """,
+    )
+    result = _run_library(
+        tmp_path,
+        f"ESQ_MODE=appliance\nESQ_DOCKER=({fake_docker})\n"
+        "ESQ_API_SERVICE_IMAGE=easysynq-api:latest\n"
+        "esq_select_api_artifact rollback",
+        env={
+            "ESQ_REPLACEMENT_ARCHIVE": str(replacement),
+            "ESQ_ORIGINAL_ARCHIVE": str(archive),
+            "ESQ_LOADED_DIGEST": str(loaded_digest),
+            "ESQ_SELECTED_ID": selected_id,
+            "ESQ_TAG_STATE": str(tag_state),
+        },
+        stdin=f"{archive}\n{sidecar}\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert loaded_digest.read_text(encoding="utf-8").strip() == approved_digest
+
+
+def test_appliance_archive_and_sidecar_are_read_from_retained_fds(
+    tmp_path: pathlib.Path,
+) -> None:
+    archive = tmp_path / "stable.tar"
+    sidecar = tmp_path / "stable.sha256"
+    archive_racer = tmp_path / "archive-racer"
+    sidecar_racer = tmp_path / "sidecar-racer"
+    archive.write_bytes(b"STABLE-ARCHIVE")
+    approved_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    sidecar.write_text(f"{approved_digest}  {archive.name}\n", encoding="utf-8")
+    archive_racer.write_bytes(b"RACED-ARCHIVE")
+    sidecar_racer.write_text(f"{'0' * 64}  {archive.name}\n", encoding="utf-8")
+    for path in (archive, sidecar, archive_racer, sidecar_racer):
+        path.chmod(0o644)
+    fake_docker = tmp_path / "fake-docker"
+    loaded_digest = tmp_path / "loaded-digest"
+    tag_state = tmp_path / "tag-state"
+    selected_id = _image_id("8")
+    _write_executable(
+        fake_docker,
+        """
+        #!/bin/bash
+        set -euo pipefail
+        case "$1 $2" in
+          'load --input')
+            sha256sum "$3" | awk '{print $1}' >"$ESQ_LOADED_DIGEST"
+            printf '%s\n' 'Loaded image: approved-api:both-fds'
+            ;;
+          'image inspect')
+            if [ "$5" = approved-api:both-fds ]; then
+              printf '%s\n' "$ESQ_SELECTED_ID"
+            else
+              cat "$ESQ_TAG_STATE"
+            fi
+            ;;
+          'image tag') printf '%s\n' "$3" >"$ESQ_TAG_STATE" ;;
+          *) exit 71 ;;
+        esac
+        """,
+    )
+    library = _bash_block("rollback-helper-library")
+    marker = "# artifact-stable-fds-opened"
+    injected = library.replace(
+        marker,
+        "os.replace(os.environ['ESQ_ARCHIVE_RACER'], archive_path)\n"
+        "    os.replace(os.environ['ESQ_SIDECAR_RACER'], sidecar_path)\n    "
+        + marker,
+        1,
+    )
+    result = _run_library(
+        tmp_path,
+        f"ESQ_MODE=appliance\nESQ_DOCKER=({fake_docker})\n"
+        "ESQ_API_SERVICE_IMAGE=easysynq-api:latest\n"
+        "esq_select_api_artifact rollback",
+        library=injected,
+        env={
+            "ESQ_ARCHIVE_RACER": str(archive_racer),
+            "ESQ_SIDECAR_RACER": str(sidecar_racer),
+            "ESQ_LOADED_DIGEST": str(loaded_digest),
+            "ESQ_SELECTED_ID": selected_id,
+            "ESQ_TAG_STATE": str(tag_state),
+        },
+        stdin=f"{archive}\n{sidecar}\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert loaded_digest.read_text(encoding="utf-8").strip() == approved_digest
+
+
+def test_appliance_artifact_rejects_writable_or_linked_inputs(
+    tmp_path: pathlib.Path,
+) -> None:
+    fake_docker = tmp_path / "fake-docker"
+    docker_marker = tmp_path / "docker-called"
+    _write_executable(
+        fake_docker,
+        f"""
+        #!/bin/bash
+        touch '{docker_marker}'
+        exit 72
+        """,
+    )
+    for name, archive_mode, link_sidecar in [
+        ("writable", 0o664, False),
+        ("linked", 0o644, True),
+    ]:
+        archive = tmp_path / f"{name}.tar"
+        sidecar = tmp_path / f"{name}.sha256"
+        archive.write_bytes(name.encode())
+        archive.chmod(archive_mode)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        sidecar.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+        sidecar.chmod(0o644)
+        if link_sidecar:
+            (tmp_path / f"{name}.hardlink").hardlink_to(sidecar)
+        result = _run_library(
+            tmp_path,
+            f"ESQ_MODE=appliance\nESQ_DOCKER=({fake_docker})\n"
+            "ESQ_API_SERVICE_IMAGE=easysynq-api:latest\n"
+            "esq_select_api_artifact rollback",
+            stdin=f"{archive}\n{sidecar}\n",
+        )
+        assert result.returncode != 0, name
+        assert not docker_marker.exists()
+
+
+def test_cleanup_quarantines_success_boundary_replacement(tmp_path: pathlib.Path) -> None:
+    library = _bash_block("rollback-helper-library")
+    marker = "# success-cleanup-boundary"
+    assert marker in library
+    injected = library.replace(
+        marker,
+        "os.rename('cleanup-racer', temp_name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)\n    "
+        + marker,
+        1,
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("SECRET=old\n", encoding="utf-8")
+    env_file.chmod(0o640)
+    (tmp_path / "cleanup-racer").write_text("REPLACEMENT-MUST-SURVIVE\n", encoding="utf-8")
+    result = _run_library(
+        tmp_path,
+        f"esq_atomic_set_env_file '{env_file}' {env_file.stat().st_uid} "
+        f"{env_file.stat().st_gid} 640 EASYSYNQ_COMPATIBILITY_READ_ONLY 1",
+        library=injected,
+    )
+    assert result.returncode != 0
+    retained = list((tmp_path / ".env.rollback-quarantine").iterdir())
+    assert [path.read_text(encoding="utf-8") for path in retained] == [
+        "REPLACEMENT-MUST-SURVIVE\n"
+    ]
+
+
+def test_cleanup_quarantines_restoration_boundary_replacement(
+    tmp_path: pathlib.Path,
+) -> None:
+    library = _bash_block("rollback-helper-library")
+    final_marker = "# final-exchange-boundary"
+    cleanup_marker = "# restoration-cleanup-boundary"
+    assert cleanup_marker in library
+    injected = library.replace(
+        final_marker,
+        "os.rename('boundary-racer', name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)\n    "
+        + final_marker,
+        1,
+    ).replace(
+        cleanup_marker,
+        "os.rename('cleanup-racer', temp_name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)\n        "
+        + cleanup_marker,
+        1,
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("SECRET=old\n", encoding="utf-8")
+    env_file.chmod(0o640)
+    (tmp_path / "boundary-racer").write_text("CONCURRENT-ENV\n", encoding="utf-8")
+    (tmp_path / "cleanup-racer").write_text("CLEANUP-RACER-SURVIVES\n", encoding="utf-8")
+    result = _run_library(
+        tmp_path,
+        f"esq_atomic_set_env_file '{env_file}' {env_file.stat().st_uid} "
+        f"{env_file.stat().st_gid} 640 EASYSYNQ_COMPATIBILITY_READ_ONLY 1",
+        library=injected,
+    )
+    assert result.returncode != 0
+    assert env_file.read_text(encoding="utf-8") == "CONCURRENT-ENV\n"
+    retained = list((tmp_path / ".env.rollback-quarantine").iterdir())
+    assert [path.read_text(encoding="utf-8") for path in retained] == [
+        "CLEANUP-RACER-SURVIVES\n"
+    ]
+
+
+def test_appliance_rejects_invalid_hostname_and_real_openssl_rejects_ca(
+    tmp_path: pathlib.Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sudo_log = tmp_path / "sudo-log"
+    _write_executable(
+        fake_bin / "sudo",
+        """
+        #!/bin/bash
+        set -euo pipefail
+        printf '%s\n' "$*" >>"$ESQ_SUDO_LOG"
+        printf '%s\n' 'not-a-certificate'
+        """,
+    )
+    invalid_host = _run_library(
+        tmp_path,
+        "ESQ_MODE=appliance\nESQ_BASE_URL=https://bad..host\nesq_configure_curl",
+        env={"PATH": f"{fake_bin}:/usr/bin:/bin", "ESQ_SUDO_LOG": str(sudo_log)},
+    )
+    assert invalid_host.returncode != 0
+    assert not sudo_log.exists()
+    invalid_ca = _run_library(
+        tmp_path,
+        "ESQ_MODE=appliance\nESQ_BASE_URL=https://valid.example\nesq_configure_curl",
+        env={"PATH": f"{fake_bin}:/usr/bin:/bin", "ESQ_SUDO_LOG": str(sudo_log)},
+    )
+    assert invalid_ca.returncode != 0
+    assert "Could not read certificate" in invalid_ca.stderr
 
 
 def test_repository_build_and_cleanup_failures_are_safe(tmp_path: pathlib.Path) -> None:

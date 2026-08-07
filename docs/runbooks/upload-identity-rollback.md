@@ -18,7 +18,7 @@ cd /opt/easysynq
 ESQ_MODE=appliance
 ESQ_ENV_FILE=/opt/easysynq/.env
 ESQ_COMPOSE=(sudo easysynq-compose)
-ESQ_DOCKER=(sudo docker)
+ESQ_DOCKER=(sudo -n docker)
 ESQ_EXPECTED_API_REPLICAS=1
 "${ESQ_COMPOSE[@]}" config --quiet
 sudo bash scripts/validate-browser-origins.sh --env-file "$ESQ_ENV_FILE"
@@ -67,8 +67,10 @@ symlinks, duplicates, metadata drift, arbitrary keys, and arbitrary values. A pe
 same-directory lock serializes every writer using this helper. Linux `RENAME_EXCHANGE` then proves
 that the exact inode opened under the lock was swapped; if one noncooperating replacement is present
 at that boundary, the helper atomically restores it and aborts. This cannot prevent an arbitrary
-noncooperating writer from racing repeatedly; in that case it aborts without unlinking an entry whose
-identity it cannot prove and requires manual inspection.
+noncooperating writer from racing repeatedly. Cleanup first moves a candidate with no-overwrite
+semantics into a validated operator-owned `0700` quarantine. Only a proven helper-owned inode is
+removed there; an unexpected entry is retained, its exact safe path is reported, and the helper
+aborts for manual inspection.
 
 ```bash
 # rollback-helper-library
@@ -99,6 +101,16 @@ if not name or name in {".", ".."}:
     raise SystemExit("rollback: invalid environment filename")
 
 dir_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+libc = ctypes.CDLL(None, use_errno=True)
+renameat2 = libc.renameat2
+renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+renameat2.restype = ctypes.c_int
+
+def rename_linux(left_fd: int, left: str, right_fd: int, right: str, flags: int) -> None:
+    if renameat2(left_fd, os.fsencode(left), right_fd, os.fsencode(right), flags) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
 lock_name = f"{name}.rollback.lock"
 lock_fd = os.open(
     lock_name,
@@ -112,6 +124,55 @@ if not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_nlink != 1:
 if lock_stat.st_uid != expected_uid or stat.S_IMODE(lock_stat.st_mode) != 0o600:
     raise SystemExit("rollback: environment lock metadata mismatch")
 fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+quarantine_name = f"{name}.rollback-quarantine"
+quarantine_created = False
+try:
+    os.mkdir(quarantine_name, 0o700, dir_fd=dir_fd)
+    quarantine_created = True
+except FileExistsError:
+    pass
+quarantine_fd = os.open(
+    quarantine_name,
+    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    dir_fd=dir_fd,
+)
+if quarantine_created:
+    os.fchown(quarantine_fd, expected_uid, -1)
+    os.fchmod(quarantine_fd, 0o700)
+quarantine_stat = os.fstat(quarantine_fd)
+if (
+    not stat.S_ISDIR(quarantine_stat.st_mode)
+    or quarantine_stat.st_uid != expected_uid
+    or stat.S_IMODE(quarantine_stat.st_mode) != 0o700
+):
+    raise SystemExit("rollback: unsafe cleanup quarantine")
+
+def quarantine_cleanup(candidate: str, expected_identity: tuple[int, int], label: str) -> None:
+    retained_name = (
+        f"{label}.{expected_identity[0]:x}.{expected_identity[1]:x}."
+        f"{secrets.token_hex(8)}"
+    )
+    rename_linux(dir_fd, candidate, quarantine_fd, retained_name, 1)
+    safe_path = os.path.join(parent, quarantine_name, retained_name)
+    try:
+        retained_fd = os.open(
+            retained_name,
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=quarantine_fd,
+        )
+    except OSError as error:
+        raise SystemExit(f"rollback: retained unsafe cleanup entry at {safe_path}") from error
+    retained_stat = os.fstat(retained_fd)
+    retained_identity = (retained_stat.st_dev, retained_stat.st_ino)
+    if retained_identity != expected_identity:
+        os.close(retained_fd)
+        os.fsync(quarantine_fd)
+        raise SystemExit(f"rollback: retained unexpected cleanup inode at {safe_path}")
+    os.unlink(retained_name, dir_fd=quarantine_fd)
+    os.close(retained_fd)
+    os.fsync(quarantine_fd)
+    os.fsync(dir_fd)
 
 source_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
 source_stat = os.fstat(source_fd)
@@ -158,15 +219,8 @@ try:
     os.close(temp_fd)
     temp_fd = None
 
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = libc.renameat2
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    renameat2.restype = ctypes.c_int
-
     def exchange(left: str, right: str) -> None:
-        if renameat2(dir_fd, os.fsencode(left), dir_fd, os.fsencode(right), 2) != 0:
-            error = ctypes.get_errno()
-            raise OSError(error, os.strerror(error))
+        rename_linux(dir_fd, left, dir_fd, right, 2)
 
     # final-exchange-boundary
     exchange(temp_name, name)
@@ -182,27 +236,25 @@ try:
             raise SystemExit("rollback: repeated noncooperating race; no file was removed")
         if (returned.st_dev, returned.st_ino) != temp_identity:
             raise SystemExit("rollback: exchange rollback could not prove its temporary file")
-        os.unlink(temp_name, dir_fd=dir_fd)
+        # restoration-cleanup-boundary
+        quarantine_cleanup(temp_name, temp_identity, "restored-update")
         temp_identity = None
-        os.fsync(dir_fd)
         raise SystemExit("rollback: concurrent environment replacement restored; update aborted")
     if (installed.st_dev, installed.st_ino) != temp_identity:
         raise SystemExit("rollback: noncooperating replacement after exchange; no file was removed")
-    os.unlink(temp_name, dir_fd=dir_fd)
+    # success-cleanup-boundary
+    quarantine_cleanup(temp_name, source_identity, "replaced-source")
     temp_identity = None
-    os.fsync(dir_fd)
 finally:
     if temp_fd is not None:
         os.close(temp_fd)
     if temp_identity is not None:
         try:
-            candidate = os.stat(temp_name, dir_fd=dir_fd, follow_symlinks=False)
-            if (candidate.st_dev, candidate.st_ino) == temp_identity:
-                os.unlink(temp_name, dir_fd=dir_fd)
-                os.fsync(dir_fd)
+            quarantine_cleanup(temp_name, temp_identity, "failed-update")
         except FileNotFoundError:
             pass
     os.close(source_fd)
+    os.close(quarantine_fd)
     fcntl.flock(lock_fd, fcntl.LOCK_UN)
     os.close(lock_fd)
     os.close(dir_fd)
@@ -357,31 +409,91 @@ esq_select_api_artifact() {
   local purpose="$1" selected_ref selected_id
   SELECTED_API_IMAGE_ID=''
   if [ "$ESQ_MODE" = appliance ]; then
-    local archive archive_input sidecar sidecar_input expected actual listed load_output
-    local -a sidecar_lines loaded_refs
+    local archive_input sidecar_input load_output
+    local -a loaded_refs
     read -rp "Absolute path to approved ${purpose} API image archive: " archive_input
     read -rp "Absolute path to its SHA-256 sidecar: " sidecar_input
-    case "$archive_input:$sidecar_input" in /*:/*) ;; *) echo 'rollback: artifact paths must be absolute' >&2; return 1 ;; esac
-    test ! -L "$archive_input"; test ! -L "$sidecar_input"
-    archive="$(realpath -e -- "$archive_input")"
-    sidecar="$(realpath -e -- "$sidecar_input")"
-    [ "$archive" != "$sidecar" ]
-    test -f "$archive"; test ! -L "$archive"; test -r "$archive"
-    test -f "$sidecar"; test ! -L "$sidecar"; test -r "$sidecar"
-    mapfile -t sidecar_lines <"$sidecar"
-    [ "${#sidecar_lines[@]}" -eq 1 ]
-    [[ "${sidecar_lines[0]}" =~ ^([0-9a-f]{64})([[:space:]]+\*?([^/[:space:]]+))?$ ]]
-    expected="${BASH_REMATCH[1]}"
-    listed="${BASH_REMATCH[3]:-}"
-    [ -z "$listed" ] || [ "$listed" = "$(basename -- "$archive")" ]
-    actual="$(sha256sum -- "$archive")"
-    actual="${actual%% *}"
-    [ "$actual" = "$expected" ] || {
-      echo "rollback: ${purpose} archive digest mismatch" >&2
-      return 1
-    }
-    # docker load: the verified archive must declare exactly one tagged image.
-    load_output="$("${ESQ_DOCKER[@]}" load --input "$archive")"
+    load_output="$(python3 -I - "$archive_input" "$sidecar_input" "$purpose" "${ESQ_DOCKER[@]}" <<'PY'
+import hashlib
+import os
+import re
+import stat
+import subprocess
+import sys
+
+if len(sys.argv) < 5:
+    raise SystemExit("rollback: stable artifact loader requires archive, sidecar, purpose, and Docker command")
+archive_path, sidecar_path, purpose, *docker_command = sys.argv[1:]
+if not os.path.isabs(archive_path) or not os.path.isabs(sidecar_path):
+    raise SystemExit("rollback: artifact paths must be absolute")
+if archive_path == sidecar_path:
+    raise SystemExit("rollback: archive and sidecar paths must differ")
+
+def stable_open(path: str) -> int:
+    parent = os.path.abspath(os.path.dirname(path))
+    if parent != os.path.realpath(parent):
+        raise SystemExit("rollback: artifact parent must not traverse a symlink")
+    directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        descriptor = os.open(
+            os.path.basename(path),
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+    finally:
+        os.close(directory_fd)
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        os.close(descriptor)
+        raise SystemExit("rollback: artifact input must be one regular inode")
+    if metadata.st_uid not in {0, os.getuid()} or stat.S_IMODE(metadata.st_mode) & 0o022:
+        os.close(descriptor)
+        raise SystemExit("rollback: artifact input owner or permissions are unsafe")
+    return descriptor
+
+archive_fd = stable_open(archive_path)
+sidecar_fd = stable_open(sidecar_path)
+try:
+    # artifact-stable-fds-opened
+    sidecar_bytes = os.read(sidecar_fd, 8193)
+    if len(sidecar_bytes) > 8192 or os.read(sidecar_fd, 1):
+        raise SystemExit("rollback: digest sidecar is too large")
+    try:
+        sidecar_text = sidecar_bytes.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise SystemExit("rollback: digest sidecar must be ASCII") from error
+    lines = sidecar_text.splitlines()
+    if len(lines) != 1:
+        raise SystemExit("rollback: digest sidecar must contain exactly one line")
+    match = re.fullmatch(r"([0-9a-f]{64})(?:[ \t]+\*?([^/\s]+))?", lines[0])
+    if match is None:
+        raise SystemExit("rollback: malformed digest sidecar")
+    expected, listed = match.groups()
+    if listed and listed != os.path.basename(archive_path):
+        raise SystemExit("rollback: digest sidecar names a different archive")
+    digest = hashlib.sha256()
+    while chunk := os.read(archive_fd, 1024 * 1024):
+        digest.update(chunk)
+    if digest.hexdigest() != expected:
+        raise SystemExit(f"rollback: {purpose} archive digest mismatch")
+    os.lseek(archive_fd, 0, os.SEEK_SET)
+    # artifact-digest-complete
+    stable_archive = f"/proc/{os.getpid()}/fd/{archive_fd}"
+    completed = subprocess.run(
+        [*docker_command, "load", "--input", stable_archive],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise SystemExit(completed.returncode)
+    sys.stdout.write(completed.stdout)
+finally:
+    os.close(sidecar_fd)
+    os.close(archive_fd)
+PY
+)"
     printf '%s\n' "$load_output"
     mapfile -t loaded_refs < <(printf '%s\n' "$load_output" | sed -n 's/^Loaded image: //p')
     [ "${#loaded_refs[@]}" -eq 1 ] || {
@@ -533,10 +645,13 @@ fi
 ```
 
 For an appliance, select an approved prebuilt API image archive and its separately supplied SHA-256
-sidecar. The helper verifies the archive before loading it and accepts exactly one tagged image. For a
-repository install, select an approved full commit that already exists locally; the helper builds it
-from a separate detached temporary worktree. In both modes, the selected immutable ID is retagged to
-the actual Compose API service image, only `api` is recreated, and the running container ID must match.
+sidecar. The helper opens each path once without following symlinks, validates the retained regular
+inodes and their ownership/link count/permissions, reads the sidecar and hashes through those file
+descriptors, rewinds the archive descriptor, then gives noninteractive Docker a stable `/proc` FD path
+with stdin disabled. It accepts exactly one tagged image. For a repository install, select an approved
+full commit that already exists locally; the helper builds it from a separate detached temporary
+worktree. In both modes, the selected immutable ID is retagged to the actual Compose API service image,
+only `api` is recreated, and the running container ID must match.
 The post-cutover check also requires exactly the expected running replica set, rejects any extra
 stopped/exited API container, and compares every replica's immutable `.Image` value.
 
