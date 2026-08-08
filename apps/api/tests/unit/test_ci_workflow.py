@@ -131,7 +131,14 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
             "name": "R61 site-data backstop (check-no-site-data)",
             "run": "./scripts/check-no-site-data.sh",
         },
-        {"name": "CI workflow contract", "run": "bash scripts/tests/test-ci-hardening.sh"},
+        {
+            "name": "Fedora/bootstrap/doctor shell contracts",
+            "run": (
+                "bash scripts/tests/test-bootstrap-fedora-dev.sh\n"
+                "bash scripts/tests/test-doctor.sh\n"
+                "bash scripts/tests/test-fedora-proof-contract.sh\n"
+            ),
+        },
         {
             "uses": "actions/setup-node@v7",
             "with": {
@@ -140,6 +147,11 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
                 "cache-dependency-path": "packages/contracts/package-lock.json",
             },
         },
+        {
+            "name": "PostgreSQL MCP disabled contract",
+            "run": "node --test scripts/tests/test-postgres-mcp-disabled.mjs",
+        },
+        {"name": "CI workflow contract", "run": "bash scripts/tests/test-ci-hardening.sh"},
         {
             "name": "install locked contract tools",
             "run": "npm ci --prefix packages/contracts --ignore-scripts",

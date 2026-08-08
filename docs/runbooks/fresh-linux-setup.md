@@ -57,6 +57,12 @@ profile:
 ./scripts/doctor.sh test
 ```
 
+If a reason fails, use the reason-to-command table in
+[`docs/dev-workflow.md`](../dev-workflow.md#toolchain-linux-ci--a-linux-dev-host); do not guess at socket,
+SELinux, runtime, or package changes. A passing local doctor and fast structural tests are contributor
+readiness only. The PR/release acceptance artifact is the separate two-media
+[`Fedora Workstation proof`](fedora-proof.md), which must be executed on a suitable libvirt host.
+
 ### 1a. Fedora Atomic variants (advanced and unsupported)
 
 Silverblue, Kinoite, and other rpm-ostree/Atomic variants are not the standard Fedora Workstation

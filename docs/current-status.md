@@ -61,3 +61,21 @@ only after fresh evidence; partial or unavailable checks must be reported as suc
 The frontmatter records the current workflow topology snapshot. The workflow files themselves are
 executable truth. Contributor workflow and evidence expectations live in [`../AGENTS.md`](../AGENTS.md)
 and [`dev-workflow.md`](dev-workflow.md).
+
+The dependency-light `contracts` job runs repository-authority and R61 protection first, then the Fedora
+bootstrap/doctor/proof structural contracts and the disabled PostgreSQL MCP contract before dependency
+hydration. These checks prove tracked interfaces and failure propagation; they do not emulate Fedora,
+SELinux, libvirt, Docker, or a live application stack.
+
+## Programme 0 acceptance status
+
+- PostgreSQL MCP: **disabled** after the reviewed package failed the high-severity advisory gate. No
+  connector, launcher, package lock, owner-database port overlay, or orphan database role ships. The sole
+  re-enablement contract is [`RES-POSTGRES-MCP-REPLACEMENT`](open-residuals.md#res-postgres-mcp-replacement).
+- Disposable Fedora Workstation proof: **PENDING — not run on this checkout as of 2026-08-08**. No Fedora
+  media checksum, evidence commit, or PASS result is recorded because the required Fedora 44 Everything
+  netinstall and Workstation Live media plus a usable `qemu:///system` proof host were not available.
+  Completion requires the manual PR/release gate in [`runbooks/fedora-proof.md`](runbooks/fedora-proof.md).
+- Local focused Python acceptance: **PASS on 2026-08-08 with CPython 3.12.13**. The Programme 0
+  dependency-tooling, deployment-configuration, and CI-workflow matrix completed 80 tests. This does not
+  replace the full repository suites or the pending Fedora VM proof.

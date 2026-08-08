@@ -192,6 +192,19 @@ assert_text_contains \
           bash scripts/tests/test-agent-authority.sh
           bash scripts/tests/test-claude-hooks.sh
           ./scripts/check-repo-authority.sh'
+assert_text_contains \
+  "contracts job runs Fedora bootstrap, doctor, and proof contracts" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: Fedora/bootstrap/doctor shell contracts
+        run: |
+          bash scripts/tests/test-bootstrap-fedora-dev.sh
+          bash scripts/tests/test-doctor.sh
+          bash scripts/tests/test-fedora-proof-contract.sh'
+assert_text_contains \
+  "contracts job proves the PostgreSQL MCP path stays disabled" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: PostgreSQL MCP disabled contract
+        run: node --test scripts/tests/test-postgres-mcp-disabled.mjs'
 assert_text_not_contains \
   "contracts job does not run floating npx contract tools" \
   "$CONTRACTS_BLOCK" \
@@ -238,10 +251,30 @@ assert_before \
   "      - name: R61 backstop regression harness" \
   "      - uses: actions/setup-node@v7"
 assert_before \
+  "Fedora shell contracts run before contract tool hydration" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: Fedora/bootstrap/doctor shell contracts" \
+  "      - uses: actions/setup-node@v7"
+assert_before \
+  "Node 22 is selected before the disabled PostgreSQL MCP contract" \
+  "$CONTRACTS_BLOCK" \
+  "      - uses: actions/setup-node@v7" \
+  "      - name: PostgreSQL MCP disabled contract"
+assert_before \
+  "disabled PostgreSQL MCP contract runs before dependency hydration" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: PostgreSQL MCP disabled contract" \
+  "      - name: install locked contract tools"
+assert_before \
+  "site-data backstop stays ahead of new Fedora contracts" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: R61 site-data backstop (check-no-site-data)" \
+  "      - name: Fedora/bootstrap/doctor shell contracts"
+assert_before \
   "workflow regression runs before contract tool hydration" \
   "$CONTRACTS_BLOCK" \
   "      - name: CI workflow contract" \
-  "      - uses: actions/setup-node@v7"
+  "      - name: install locked contract tools"
 assert_before \
   "contract audit runs before generated-lock verification" \
   "$CONTRACTS_BLOCK" \

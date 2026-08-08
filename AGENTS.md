@@ -26,15 +26,21 @@ It links to mutable project facts instead of copying them.
 
 ## Supported contributor workflow
 
-1. Run `just setup` from a supported host to hydrate the committed Python and npm locks.
-2. Work on a branch and keep the change bounded to one reviewed behavior or documentation contract.
-3. Run the smallest focused test first, then the affected `just check-*` gates.
-4. Run `just authority-check` for repository-authority changes and `just check` when the full local
+1. On a fresh Fedora developer host, run `./scripts/bootstrap-fedora-dev.sh --check`; follow
+   [`docs/runbooks/fresh-linux-setup.md`](docs/runbooks/fresh-linux-setup.md) for the reviewed setup path.
+2. Run `./scripts/doctor.sh contributor`, then `just setup` to hydrate the committed Python and npm locks.
+3. Work on a branch and keep the change bounded to one reviewed behavior or documentation contract.
+4. Run the smallest focused test first, then the affected `just check-*` gates.
+5. Run `just authority-check` for repository-authority changes and `just check` when the full local
    dependency set is available.
-5. Hand off through a reviewed pull request; do not push directly to `main`.
+6. Hand off through a reviewed pull request; do not push directly to `main`.
 
 See [`docs/dev-workflow.md`](docs/dev-workflow.md) and the relevant manual or runbook for detailed setup
 and per-stack commands.
+
+The disposable Fedora Workstation proof is a separate PR/release acceptance gate. Its two-media command,
+host prerequisites, evidence block, and cleanup rules live only in
+[`docs/runbooks/fedora-proof.md`](docs/runbooks/fedora-proof.md); fast contract tests do not replace it.
 
 ## Tests and evidence
 

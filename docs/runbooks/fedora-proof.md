@@ -5,6 +5,11 @@ qcow2 disk, installs the official Fedora Workstation 44 live payload in a transi
 runs the repository acceptance contract with SELinux enforcing, and removes the exact VM and disk. It
 does not replace the fast structural tests.
 
+A structural-contract pass is not a Fedora proof pass. Record `PASS` only after this complete command
+finishes on the immutable evidence commit and its retained log has been reviewed. When the media or a
+usable libvirt host is unavailable, report the gate as `PENDING` or `BLOCKED`; do not invent a date,
+checksum, evidence commit, or partial PASS.
+
 ## Why two Fedora media are required
 
 Fedora Workstation is distributed as a Live ISO, not an Anaconda installation tree that

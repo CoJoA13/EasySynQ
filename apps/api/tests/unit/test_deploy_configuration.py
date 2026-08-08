@@ -321,7 +321,7 @@ def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     assert 'legs.realm_export = "present"' in restore_runbook
     assert "<compose-project>_keycloakimport" in restore_runbook
     assert "before the first Keycloak start" in restore_runbook
-    assert justfile.count("ensure-keycloak-db-password.sh --env-file .env") == 4
+    assert justfile.count("ensure-keycloak-db-password.sh --env-file .env") == 3
     assert justfile.index("ensure-keycloak-db-password.sh") < justfile.index(
         "migrate-keycloak-h2.sh"
     )
@@ -554,12 +554,19 @@ def test_keycloak_db_password_backfill_is_distinct_persistent_and_idempotent(
     assert f"KEYCLOAK_DB_PASSWORD={first_value}" in env_file.read_text()
 
 
-def test_dev_keycloak_hostname_tracks_nondefault_http_port() -> None:
+def test_dev_keycloak_hostname_tracks_nondefault_http_port(tmp_path: Path) -> None:
     browser_keys = {
         "HTTP_PORT",
         "KEYCLOAK_HOSTNAME",
         "KEYCLOAK_DB_PASSWORD",
     }
+
+    compose_dir = tmp_path / "infra" / "compose"
+    compose_dir.mkdir(parents=True)
+    for name in ("compose.yml", "compose.s.yml", "compose.dev.yml"):
+        shutil.copyfile(ROOT / "infra" / "compose" / name, compose_dir / name)
+    shutil.copyfile(ROOT / ".env.example", tmp_path / ".env")
+    shutil.copyfile(ROOT / ".env.example", tmp_path / ".env.example")
 
     def render(http_port: str | None) -> str:
         docker = shutil.which("docker")
@@ -573,18 +580,18 @@ def test_dev_keycloak_hostname_tracks_nondefault_http_port() -> None:
                 docker,
                 "compose",
                 "--env-file",
-                str(ROOT / ".env.example"),
+                str(tmp_path / ".env.example"),
                 "-f",
-                str(ROOT / "infra/compose/compose.yml"),
+                str(compose_dir / "compose.yml"),
                 "-f",
-                str(ROOT / "infra/compose/compose.s.yml"),
+                str(compose_dir / "compose.s.yml"),
                 "-f",
-                str(ROOT / "infra/compose/compose.dev.yml"),
+                str(compose_dir / "compose.dev.yml"),
                 "config",
                 "--format",
                 "json",
             ],
-            cwd=ROOT,
+            cwd=tmp_path,
             env=env,
             capture_output=True,
             text=True,
