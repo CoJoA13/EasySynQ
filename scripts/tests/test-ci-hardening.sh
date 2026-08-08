@@ -242,6 +242,10 @@ assert_contains \
   "security preamble gates npm high/critical while keeping pip-audit and Trivy findings report-only" \
   "$WORKFLOW" \
   "npm high/critical findings are GATED; pip-audit and Trivy FINDINGS remain REPORT-ONLY."
+assert_not_contains \
+  "workflow guidance does not call the mixed security job warn-only" \
+  "$WORKFLOW" \
+  '`security` is warn-only'
 assert_text_contains \
   "security job runs the pip-audit regression then the root-aware locked runner" \
   "$SECURITY_BLOCK" \

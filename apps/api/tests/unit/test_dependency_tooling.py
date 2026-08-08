@@ -171,6 +171,7 @@ def test_active_guidance_tracks_both_frozen_npm_locks_and_mixed_policy() -> None
 
     assert "packages/contracts/package-lock.json" in claude
     assert "npm high/critical gated; pip-audit and Trivy findings report-only" in claude
+    assert "`security` is warn-only" not in claude
 
     assert "apps/web/package-lock.json" in dev_workflow
     assert "packages/contracts/package-lock.json" in dev_workflow
