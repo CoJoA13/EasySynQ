@@ -120,7 +120,7 @@ if [ -f "$ROOT/docs/current-status.md" ]; then
     reason AUTHORITY_STATUS_FRONTMATTER
   fi
   for key in "${!STATUS_VALUES[@]}"; do
-    [ "${STATUS_COUNTS[$key]:-0}" -eq 1 ] || reason AUTHORITY_MISSING_STATUS_KEY
+    [ "${STATUS_COUNTS[$key]:-0}" -ne 0 ] || reason AUTHORITY_MISSING_STATUS_KEY
   done
 fi
 
@@ -140,6 +140,10 @@ fi
 
 if [ -f "$ROOT/CLAUDE.md" ] && grep -Eqi '^#{1,6}[[:space:]].*(current[[:space:]]+status|recent[[:space:]]+learnings)' "$ROOT/CLAUDE.md"; then
   reason AUTHORITY_CLAUDE_CURRENT_OWNER
+fi
+
+if [ -f "$ROOT/CLAUDE.md" ] && grep -Eqi '(migration[[:space:]]+(head|snapshot)|next[[:space:]]+migration|baseline[[:space:]]+commit|last[[:space:]]+shipped[[:space:]]+slice|current[[:space:]]+slice|api[[:space:]]+unit[[:space:]]+tests|web[[:space:]]+(test[[:space:]]+files|tests)|contract[[:space:]]+tests|integration[[:space:]]+(passed|skipped)|ci[[:space:]]+(jobs|checks)|RES-[A-Z][A-Z0-9-]*|decision[[:space:]]+range|R[1-9][0-9]*[–-]R[1-9][0-9]*|permission[[:space:]]+(catalog|count|keys))' "$ROOT/CLAUDE.md"; then
+  reason AUTHORITY_CLAUDE_MUTABLE_FACTS
 fi
 
 if [ -f "$ROOT/docs/slice-history.md" ]; then
@@ -168,27 +172,23 @@ CURRENT_PATHS=(README.md AGENTS.md CLAUDE.md apps .claude docs/00-overview.md
 HISTORICAL_EXCLUDES=(docs/superpowers docs/audit-2026-06-17.md
   docs/review-2026-07-22.md docs/slice-history.md)
 
-# Dependency and build trees are neither repository authority nor tracked source text. Everything
-# else is scanned, including paths absent from the reviewed manifest.
-live_files() {
-  find "$ROOT" \( \
-    -path "$ROOT/.git" -o \
-    -path '*/node_modules' -o \
-    -path '*/.venv' -o \
-    -path '*/.pytest_cache' -o \
-    -path '*/dist' -o \
-    -path '*/build' \
-  \) -prune -o \
-    -type f -print0
+# Fixture scripts deliberately contain malformed authority examples. They exercise the guard but
+# are not repository authority consumers and must never make the live gate fail.
+is_fixture_test_path() {
+  case "$1" in
+    scripts/tests/test-agent-authority.sh|scripts/tests/test-claude-hooks.sh) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 declare -a LIVE_TEXT_FILES=()
 while IFS= read -r -d '' absolute_path; do
-  relative_path="${absolute_path#$ROOT/}"
+  relative_path="$absolute_path"
   is_historical_path "$relative_path" && continue
   [ "$relative_path" = 'CLAUDE.md' ] && continue
-  LIVE_TEXT_FILES+=("$absolute_path")
-done < <(live_files)
+  is_fixture_test_path "$relative_path" && continue
+  LIVE_TEXT_FILES+=("$ROOT/$relative_path")
+done < <(git -C "$ROOT" ls-files --cached -z)
 
 if [ "${#LIVE_TEXT_FILES[@]}" -gt 0 ]; then
   if grep -I -Eqi 'CLAUDE\.md.{0,160}(authoritative|owns|current[[:space:]]+status|migration[[:space:]]+head|residual|rules)|(authoritative|owns|current[[:space:]]+status|migration[[:space:]]+head|residual|rules).{0,160}CLAUDE\.md' "${LIVE_TEXT_FILES[@]}"; then

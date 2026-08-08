@@ -92,6 +92,30 @@ mutate_fixture() {
     unresolved_residual_ref)
       printf '\nSee RES-NOT-REGISTERED for the remaining work.\n' >>"$fixture/AGENTS.md"
       ;;
+    tracked_new_consumer)
+      printf 'CLAUDE.md owns current status and residuals.\n' >"$fixture/docs/new-consumer.md"
+      ;;
+    claude_mutable_migration)
+      printf '\nThe migration head is 0085.\n' >>"$fixture/CLAUDE.md"
+      ;;
+    claude_mutable_status)
+      printf '\nAPI unit tests: 1686.\n' >>"$fixture/CLAUDE.md"
+      ;;
+    claude_mutable_residual)
+      printf '\nRES-EXAMPLE remains open.\n' >>"$fixture/CLAUDE.md"
+      ;;
+    claude_mutable_ci)
+      printf '\nCI jobs: 10.\n' >>"$fixture/CLAUDE.md"
+      ;;
+    claude_mutable_decision)
+      printf '\nThe current decision range is R1–R64.\n' >>"$fixture/CLAUDE.md"
+      ;;
+    claude_mutable_permission)
+      printf '\nPermission catalog: 102.\n' >>"$fixture/CLAUDE.md"
+      ;;
+    claude_mutable_slice)
+      printf '\nLast shipped slice: S-upload-identity.\n' >>"$fixture/CLAUDE.md"
+      ;;
     *)
       printf 'unknown fixture mutation: %s\n' "$case_name" >&2
       return 2
@@ -103,10 +127,11 @@ run_bad() {
   local case_name="$1" expected="$2" fixture output status
   fixture="$(fixture_root)"
   mutate_fixture "$fixture" "$case_name"
+  git -C "$fixture" add --all
   output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
   status=$?
   rm -rf "$fixture"
-  if [ "$status" -eq 1 ] && grep -Fqx "$expected" <<<"$output"; then
+  if [ "$status" -eq 1 ] && [ "$output" = "$expected" ]; then
     ok "$case_name emits $expected"
   else
     bad "$case_name emits $expected (status=$status output=$output)"
@@ -116,6 +141,7 @@ run_bad() {
 run_good() {
   local case_name="$1" fixture output status
   fixture="$(fixture_root)"
+  git -C "$fixture" add --all
   output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
   status=$?
   rm -rf "$fixture"
@@ -126,6 +152,44 @@ run_good() {
   fi
 }
 
+run_good_fixture_payloads() {
+  local fixture output status
+  fixture="$(fixture_root)"
+  mkdir -p "$fixture/scripts/tests"
+  cat >"$fixture/scripts/tests/test-agent-authority.sh" <<'EOF'
+# Fixture payloads must never become live authority claims.
+# CLAUDE.md owns current status and residuals.
+# See RES-NOT-REGISTERED for the remaining work.
+EOF
+  cat >"$fixture/scripts/tests/test-claude-hooks.sh" <<'EOF'
+# Current decision range is R1–R64.
+EOF
+  git -C "$fixture" add --all
+  output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
+  status=$?
+  rm -rf "$fixture"
+  if [ "$status" -eq 0 ] && [ "$output" = 'AUTHORITY_OK' ]; then
+    ok 'tracked fixture payloads are not live authority consumers'
+  else
+    bad "tracked fixture payloads are not live authority consumers (status=$status output=$output)"
+  fi
+}
+
+run_good_untracked_payload() {
+  local fixture output status
+  fixture="$(fixture_root)"
+  git -C "$fixture" add --all
+  printf 'CLAUDE.md owns current status and residuals.\n' >"$fixture/docs/untracked-authority.md"
+  output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
+  status=$?
+  rm -rf "$fixture"
+  if [ "$status" -eq 0 ] && [ "$output" = 'AUTHORITY_OK' ]; then
+    ok 'untracked payload does not affect the authority contract'
+  else
+    bad "untracked payload does not affect the authority contract (status=$status output=$output)"
+  fi
+}
+
 printf '== repository authority contract ==\n'
 run_bad duplicate_status_key AUTHORITY_DUPLICATE_STATUS_KEY
 run_bad claude_current_heading AUTHORITY_CLAUDE_CURRENT_OWNER
@@ -133,6 +197,16 @@ run_bad slice_history_head AUTHORITY_HISTORY_MUTABLE_HEAD
 run_bad live_claude_reference AUTHORITY_LIVE_CLAUDE_OWNER
 run_bad duplicate_residual_id AUTHORITY_DUPLICATE_RESIDUAL_ID
 run_bad unresolved_residual_ref AUTHORITY_UNKNOWN_RESIDUAL_ID
+run_bad tracked_new_consumer AUTHORITY_LIVE_CLAUDE_OWNER
+run_bad claude_mutable_migration AUTHORITY_CLAUDE_MUTABLE_FACTS
+run_bad claude_mutable_status AUTHORITY_CLAUDE_MUTABLE_FACTS
+run_bad claude_mutable_residual AUTHORITY_CLAUDE_MUTABLE_FACTS
+run_bad claude_mutable_ci AUTHORITY_CLAUDE_MUTABLE_FACTS
+run_bad claude_mutable_decision AUTHORITY_CLAUDE_MUTABLE_FACTS
+run_bad claude_mutable_permission AUTHORITY_CLAUDE_MUTABLE_FACTS
+run_bad claude_mutable_slice AUTHORITY_CLAUDE_MUTABLE_FACTS
+run_good_fixture_payloads
+run_good_untracked_payload
 run_good neutral_authority_split
 
 if [ "${1:-}" != "--fixtures-only" ]; then
