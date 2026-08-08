@@ -6,7 +6,7 @@ BOOTSTRAP_SOURCE="$PROJECT_ROOT/scripts/bootstrap-fedora-dev.sh"
 NODE_PIN="$PROJECT_ROOT/.node-version"
 
 TEST_ROOT="$(mktemp -d)"
-trap 'rm -rf "$TEST_ROOT"' EXIT
+trap 'if [[ ${KEEP_FEDORA_BOOTSTRAP_FIXTURES:-0} == 1 ]]; then printf "fixtures: %s\n" "$TEST_ROOT"; else rm -rf "$TEST_ROOT"; fi' EXIT
 
 checks=0
 failures=0
@@ -160,9 +160,20 @@ new_fixture() {
   CASE_OS_RELEASE="$CASE_SYSTEM_ROOT/etc/os-release"
   CASE_REPO_FILE="$CASE_SYSTEM_ROOT/etc/yum.repos.d/docker-ce.repo"
   CASE_EVIL_BIN="$CASE_ROOT/evil-bin"
+  CASE_FIXTURE_ENTRY="$CASE_REPO/scripts/bootstrap-fixture-entry.sh"
   mkdir -p "$CASE_REPO/scripts" "$CASE_BIN" "$CASE_STATE" "$CASE_SYSTEM_ROOT/etc/yum.repos.d" "$CASE_EVIL_BIN"
   cp "$BOOTSTRAP_SOURCE" "$CASE_REPO/scripts/bootstrap-fedora-dev.sh"
   cp "$NODE_PIN" "$CASE_REPO/.node-version"
+  printf '%s\n' 'easysynq-fedora-bootstrap-fixture-v1' >"$CASE_ROOT/.easysynq-bootstrap-fixture"
+  printf '%s\n' \
+    '#!/usr/bin/bash' \
+    'set -euo pipefail' \
+    'entry_path=${BASH_SOURCE[0]}' \
+    'entry_dir=${entry_path%/*}' \
+    'source "$entry_dir/bootstrap-fedora-dev.sh"' \
+    "bootstrap_fixture_main $(printf '%q' "$CASE_ROOT") \"\$@\"" \
+    >"$CASE_FIXTURE_ENTRY"
+  chmod +x "$CASE_FIXTURE_ENTRY"
   make_dispatcher "$CASE_BIN/dispatcher"
   local tool
   for tool in dnf rpm sudo uname node uv systemctl usermod groupmod firewall-cmd setenforce install tee dnf-3 npm npx just pre-commit; do
@@ -211,11 +222,8 @@ run_bootstrap() {
   printf '%s' "$input" | env \
     PATH="$CASE_EVIL_BIN:/usr/bin:/bin" \
     STUB_STATE_DIR="$CASE_STATE" \
-    FEDORA_BOOTSTRAP_TEST_MODE=1 \
-    FEDORA_BOOTSTRAP_TEST_ROOT="$CASE_SYSTEM_ROOT" \
-    FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT="$CASE_BIN" \
     USER=developer \
-    /usr/bin/bash "$CASE_REPO/scripts/bootstrap-fedora-dev.sh" "$@" \
+    /usr/bin/bash "$CASE_FIXTURE_ENTRY" "$@" \
     >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
   CASE_EXIT=$?
   set +e
@@ -229,11 +237,49 @@ run_bootstrap_pty() {
   env \
     PATH="$CASE_EVIL_BIN:/usr/bin:/bin" \
     STUB_STATE_DIR="$CASE_STATE" \
-    FEDORA_BOOTSTRAP_TEST_MODE=1 \
-    FEDORA_BOOTSTRAP_TEST_ROOT="$CASE_SYSTEM_ROOT" \
-    FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT="$CASE_BIN" \
     USER=developer \
-    /usr/bin/python3 - "$input" "$CASE_REPO/scripts/bootstrap-fedora-dev.sh" "$@" \
+    /usr/bin/python3 - "$input" "$CASE_FIXTURE_ENTRY" "$@" \
+    >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr" <<'PY'
+import errno
+import os
+import pty
+import sys
+
+answer = sys.argv[1].encode()
+argv = ["/usr/bin/bash", *sys.argv[2:]]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execve(argv[0], argv, os.environ.copy())
+os.write(fd, answer)
+chunks = []
+while True:
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError as exc:
+        if exc.errno == errno.EIO:
+            break
+        raise
+    if not chunk:
+        break
+    chunks.append(chunk)
+_, status = os.waitpid(pid, 0)
+os.write(1, b"".join(chunks))
+raise SystemExit(os.waitstatus_to_exitcode(status))
+PY
+  CASE_EXIT=$?
+  set +e
+  CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
+}
+
+run_direct_pty() {
+  local input=$1
+  shift
+  set +e
+  env \
+    PATH="$CASE_EVIL_BIN:/usr/bin:/bin" \
+    STUB_STATE_DIR="$CASE_STATE" \
+    USER=developer \
+    /usr/bin/python3 - "$input" "$BOOTSTRAP_SOURCE" "$@" \
     >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr" <<'PY'
 import errno
 import os
@@ -461,20 +507,83 @@ assert_not_contains 'configured repo preview does not disclose an unplanned repo
   'The approved dnf config-manager command writes /etc/yum.repos.d/docker-ce.repo.'
 
 new_fixture rejected-production-override
+export FEDORA_BOOTSTRAP_TEST_MODE=1
+export FEDORA_BOOTSTRAP_TEST_ROOT="$CASE_SYSTEM_ROOT"
+export FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT=/usr/bin
+run_direct_pty $'no\n' --apply
+unset FEDORA_BOOTSTRAP_TEST_MODE FEDORA_BOOTSTRAP_TEST_ROOT FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT
+assert_eq 'direct execution rejects fixture mode with real commands' 2 "$CASE_EXIT"
+assert_contains 'direct fixture-mode rejection is explicit' "$CASE_OUTPUT" \
+  'bootstrap: direct execution rejects FEDORA_BOOTSTRAP_TEST_* variables'
+assert_empty_file 'rejected production override invokes no PATH stub' "$CASE_STATE/actions"
+
+new_fixture delegating-production-override
+CASE_DELEGATE_BIN="$CASE_ROOT/delegating-bin"
+mkdir -p "$CASE_DELEGATE_BIN"
+for tool in uname rpm node uv; do
+  printf '%s\n' \
+    '#!/usr/bin/bash' \
+    'tool=${0##*/}' \
+    'printf "delegate %s %s\n" "$tool" "$*" >>"${STUB_STATE_DIR:?}/actions"' \
+    'exec "/usr/bin/$tool" "$@"' \
+    >"$CASE_DELEGATE_BIN/$tool"
+  chmod +x "$CASE_DELEGATE_BIN/$tool"
+done
+printf '%s\n' \
+  '#!/usr/bin/bash' \
+  'printf "blocked delegate dnf %s\n" "$*" >>"${STUB_STATE_DIR:?}/actions"' \
+  'exit 91' \
+  >"$CASE_DELEGATE_BIN/dnf"
+chmod +x "$CASE_DELEGATE_BIN/dnf"
+printf '%s\n' \
+  '#!/usr/bin/bash' \
+  'printf "delegate sudo %s\n" "$*" >>"${STUB_STATE_DIR:?}/actions"' \
+  'exit 91' \
+  >"$CASE_DELEGATE_BIN/sudo"
+chmod +x "$CASE_DELEGATE_BIN/sudo"
+export FEDORA_BOOTSTRAP_TEST_MODE=1
+export FEDORA_BOOTSTRAP_TEST_ROOT="$CASE_SYSTEM_ROOT"
+export FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT="$CASE_DELEGATE_BIN"
+run_direct_pty $'yes\n' --apply
+unset FEDORA_BOOTSTRAP_TEST_MODE FEDORA_BOOTSTRAP_TEST_ROOT FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT
+assert_eq 'direct execution rejects delegating fixture wrappers' 2 "$CASE_EXIT"
+assert_contains 'delegating fixture rejection occurs before platform checks' "$CASE_OUTPUT" \
+  'bootstrap: direct execution rejects FEDORA_BOOTSTRAP_TEST_* variables'
+assert_empty_file 'delegating fixture commands never execute' "$CASE_STATE/actions"
+
+new_fixture unknown-production-override
+export FEDORA_BOOTSTRAP_TEST_SURPRISE=1
+run_direct_pty '' --check
+unset FEDORA_BOOTSTRAP_TEST_SURPRISE
+assert_eq 'direct execution rejects every test-prefixed variable' 2 "$CASE_EXIT"
+assert_contains 'unknown test-prefixed variable is named' "$CASE_OUTPUT" 'FEDORA_BOOTSTRAP_TEST_SURPRISE'
+assert_empty_file 'unknown fixture override invokes no command' "$CASE_STATE/actions"
+
+for unsafe_fixture_root in / /usr /etc; do
+  new_fixture "unsafe-source-root-${unsafe_fixture_root##*/}"
+  set +e
+  /usr/bin/bash -c 'source "$1"; bootstrap_fixture_main "$2" --check' \
+    _ "$BOOTSTRAP_SOURCE" "$unsafe_fixture_root" \
+    >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
+  CASE_EXIT=$?
+  CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
+  assert_eq "source-only fixture rejects unsafe root $unsafe_fixture_root" 2 "$CASE_EXIT"
+  assert_contains "unsafe source root $unsafe_fixture_root is rejected before commands" "$CASE_OUTPUT" \
+    'bootstrap: fixture root must be an isolated marked directory'
+  assert_empty_file "unsafe source root $unsafe_fixture_root invokes no command" "$CASE_STATE/actions"
+done
+
+new_fixture unmarked-source-root
 set +e
-env \
-  PATH="$CASE_EVIL_BIN:/usr/bin:/bin" \
-  STUB_STATE_DIR="$CASE_STATE" \
-  FEDORA_BOOTSTRAP_TEST_ROOT="$CASE_SYSTEM_ROOT" \
-  FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT="$CASE_BIN" \
-  /usr/bin/bash "$BOOTSTRAP_SOURCE" --check \
+/usr/bin/bash -c 'source "$1"; bootstrap_fixture_main "$2" --check' \
+  _ "$BOOTSTRAP_SOURCE" "$CASE_SYSTEM_ROOT" \
   >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
 CASE_EXIT=$?
 CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
-assert_eq 'production mode rejects fixture root overrides' 2 "$CASE_EXIT"
-assert_contains 'production override rejection is explicit' "$CASE_OUTPUT" \
-  'bootstrap: fixture overrides require FEDORA_BOOTSTRAP_TEST_MODE=1'
-assert_empty_file 'rejected production override invokes no PATH stub' "$CASE_STATE/actions"
+assert_eq 'source-only fixture rejects an unmarked temporary root' 2 "$CASE_EXIT"
+assert_contains 'unmarked fixture root is rejected before commands' "$CASE_OUTPUT" \
+  'bootstrap: fixture root must be an isolated marked directory'
+assert_empty_file 'unmarked fixture root invokes no command' "$CASE_STATE/actions"
 
 new_fixture production-path-adversary
 set +e

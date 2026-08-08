@@ -13,6 +13,12 @@ usage() {
     '  -h, --help' >&2
 }
 
+bootstrap_run() {
+local system_root=$1
+local command_root=$2
+local repo_root=$3
+shift 3
+
 mode=check
 if (( $# > 1 )); then
   usage
@@ -25,22 +31,6 @@ case "${1---check}" in
   *) usage; exit 2 ;;
 esac
 
-test_mode=${FEDORA_BOOTSTRAP_TEST_MODE:-0}
-if [[ $test_mode == 1 ]]; then
-  if [[ -z ${FEDORA_BOOTSTRAP_TEST_ROOT:-} || -z ${FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT:-} ]]; then
-    printf '%s\n' 'bootstrap: fixture mode requires an isolated root and command root.' >&2
-    exit 2
-  fi
-  system_root=${FEDORA_BOOTSTRAP_TEST_ROOT%/}
-  command_root=${FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT%/}
-else
-  if [[ -v FEDORA_BOOTSTRAP_TEST_ROOT || -v FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT ]]; then
-    printf '%s\n' 'bootstrap: fixture overrides require FEDORA_BOOTSTRAP_TEST_MODE=1' >&2
-    exit 2
-  fi
-  system_root=
-  command_root=/usr/bin
-fi
 if [[ $mode == apply && $EUID == 0 ]]; then
   printf '%s\n' \
     'bootstrap: do not run --apply with sudo or as root; run it from the unprivileged developer account.' >&2
@@ -56,14 +46,6 @@ sudo_bin=$command_root/sudo
 uname_bin=$command_root/uname
 node_bin=$command_root/node
 uv_bin=$command_root/uv
-
-script_path=${BASH_SOURCE[0]}
-script_dir=${script_path%/*}
-[[ $script_dir == "$script_path" ]] && script_dir=.
-if ! repo_root=$(cd "$script_dir/.." 2>/dev/null && pwd -P); then
-  printf '%s\n' 'bootstrap: unable to resolve the repository root' >&2
-  exit 2
-fi
 
 fedora_packages=(
   git curl openssl dnf-plugins-core
@@ -373,3 +355,63 @@ if [[ ! -x $doctor_bin ]]; then
   exit 1
 fi
 "$doctor_bin" contributor
+}
+
+bootstrap_fixture_main() {
+  local fixture_root=${1-}
+  if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    printf '%s\n' 'bootstrap: fixture entrypoint is available only when the script is sourced.' >&2
+    return 2
+  fi
+  case "$fixture_root" in
+    /*) ;;
+    *) fixture_root= ;;
+  esac
+  case "$fixture_root" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+      fixture_root=
+      ;;
+  esac
+  if [[ -z $fixture_root || -L $fixture_root || ! -d $fixture_root || ! -O $fixture_root \
+        || ! -f $fixture_root/.easysynq-bootstrap-fixture \
+        || ! -O $fixture_root/.easysynq-bootstrap-fixture \
+        || $(<"$fixture_root/.easysynq-bootstrap-fixture") != easysynq-fedora-bootstrap-fixture-v1 ]]; then
+    printf '%s\n' 'bootstrap: fixture root must be an isolated marked directory.' >&2
+    return 2
+  fi
+  local fixture_system_root=$fixture_root/system-root
+  local fixture_command_root=$fixture_root/bin
+  local fixture_repo_root=$fixture_root/repo
+  local child
+  for child in "$fixture_system_root" "$fixture_command_root" "$fixture_repo_root"; do
+    if [[ -L $child || ! -d $child || ! -O $child ]]; then
+      printf '%s\n' 'bootstrap: fixture root must contain owned, non-link system-root, bin, and repo directories.' >&2
+      return 2
+    fi
+  done
+  shift
+  bootstrap_run "$fixture_system_root" "$fixture_command_root" "$fixture_repo_root" "$@"
+}
+
+bootstrap_direct_main() {
+  local fixture_name
+  for fixture_name in ${!FEDORA_BOOTSTRAP_TEST_@}; do
+    printf 'bootstrap: direct execution rejects FEDORA_BOOTSTRAP_TEST_* variables (found %s).\n' \
+      "$fixture_name" >&2
+    return 2
+  done
+
+  local script_path=${BASH_SOURCE[0]}
+  local script_dir=${script_path%/*}
+  [[ $script_dir == "$script_path" ]] && script_dir=.
+  local direct_repo_root
+  if ! direct_repo_root=$(cd "$script_dir/.." 2>/dev/null && pwd -P); then
+    printf '%s\n' 'bootstrap: unable to resolve the repository root' >&2
+    return 2
+  fi
+  bootstrap_run '' /usr/bin "$direct_repo_root" "$@"
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  bootstrap_direct_main "$@"
+fi
