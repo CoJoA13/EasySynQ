@@ -319,6 +319,9 @@ while IFS= read -r -d '' absolute_path; do
   relative_path="$absolute_path"
   is_historical_path "$relative_path" && continue
   [ "$relative_path" = 'CLAUDE.md' ] && continue
+  # This guard embeds the scanner patterns as executable implementation, not as a repository
+  # authority consumer. Scanning it would make the guard diagnose its own enforcement strings.
+  [ "$relative_path" = 'scripts/check-repo-authority.sh' ] && continue
   is_fixture_test_path "$relative_path" && continue
   LIVE_TEXT_FILES+=("$ROOT/$relative_path")
 done < <(git -C "$ROOT" ls-files --cached -z)

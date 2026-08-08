@@ -310,6 +310,23 @@ EOF
   fi
 }
 
+run_good_guard_implementation() {
+  local fixture output status
+  fixture="$(fixture_root)"
+  cat >"$fixture/scripts/check-repo-authority.sh" <<'EOF'
+# The authority guard itself contains the scanner's patterns for CLAUDE.md ownership and current status.
+EOF
+  git -C "$fixture" add --all
+  output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
+  status=$?
+  rm -rf "$fixture"
+  if [ "$status" -eq 0 ] && [ "$output" = 'AUTHORITY_OK' ]; then
+    ok 'authority guard implementation is not scanned as a live consumer'
+  else
+    bad "authority guard implementation is not scanned as a live consumer (status=$status output=$output)"
+  fi
+}
+
 require_live_text() {
   local path="$1" pattern="$2" label="$3"
   if [ -f "$ROOT/$path" ] && grep -Eq "$pattern" "$ROOT/$path"; then
@@ -467,6 +484,7 @@ run_bad_residual_status_keys
 run_good_fixture_payloads
 run_good_untracked_payload
 run_good_register_range
+run_good_guard_implementation
 run_good neutral_authority_split
 
 if [ "${1:-}" != "--fixtures-only" ]; then
