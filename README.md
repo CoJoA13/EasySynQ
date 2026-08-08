@@ -88,7 +88,24 @@ React + TypeScript + Mantine + Tailwind (SPA) · FastAPI / Python 3.12 · Postgr
 
 ## Quick start (developer)
 
-Requires Docker Compose v2, [uv](https://docs.astral.sh/uv/), Node 22, and [just](https://github.com/casey/just).
+The primary developer host is standard Fedora Workstation 44 on x86_64. From a fresh clone, inspect
+the host first; the default is read-only:
+
+```bash
+./scripts/bootstrap-fedora-dev.sh          # same as --check; never mutates
+./scripts/bootstrap-fedora-dev.sh --apply  # previews everything and requires literal `yes`
+```
+
+The bootstrap installs missing host RPMs only after that approval, uses Docker's official Fedora
+repository, installs the tracked Node 22 and Python 3.12 runtimes, and ends at the contributor doctor.
+It never starts/enables Docker or changes groups, firewalld, or SELinux; those operator actions and
+the required new login session are explained in the
+[fresh Linux developer setup](docs/runbooks/fresh-linux-setup.md). Fedora Atomic variants are a
+separate advanced/unsupported path. Ubuntu production deployment remains documented in the
+[online](docs/runbooks/install-online.md) and [air-gapped](docs/runbooks/install-airgapped.md) runbooks
+and continues to use `scripts/bootstrap-ubuntu.sh` unchanged.
+
+Once the host prerequisites are ready, create the developer environment:
 
 ```bash
 cp .env.example .env
