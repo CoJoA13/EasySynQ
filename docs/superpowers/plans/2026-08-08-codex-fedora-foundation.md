@@ -2,11 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver `S-codex-fedora-foundation`: vendor-neutral repository ownership, deterministic Fedora Workstation bootstrap and diagnostics, and a genuinely least-privilege, reproducible local PostgreSQL MCP path without changing application or production behavior.
+**Goal:** Deliver `S-codex-fedora-foundation`: vendor-neutral repository ownership, deterministic Fedora Workstation bootstrap and diagnostics, and a fail-closed local PostgreSQL MCP boundary without changing application or production behavior.
 
-**Architecture:** Repository authority is split into stable contributor guidance (`AGENTS.md`), one structured execution snapshot (`docs/current-status.md`), one current residual ledger (`docs/open-residuals.md`), and historical evidence (`docs/slice-history.md`); executable gates prevent those roles drifting. A dependency-light shell doctor drives an explicit Fedora package bootstrap and a disposable libvirt Fedora proof. The optional MCP connector runs only through a locked local Node installation and a dev-overlay-only PostgreSQL role whose grants, role attributes, and prohibited operations are integration-tested.
+**Architecture:** Repository authority is split into stable contributor guidance (`AGENTS.md`), one structured execution snapshot (`docs/current-status.md`), one current residual ledger (`docs/open-residuals.md`), and historical evidence (`docs/slice-history.md`); executable gates prevent those roles drifting. A dependency-light shell doctor drives an explicit Fedora package bootstrap and a disposable libvirt Fedora proof. The optional PostgreSQL MCP connector stays disabled after its exact approved package failed the mandatory advisory gate; a maintained, audit-clean replacement and dedicated least-privilege role are one named residual.
 
 **Tech Stack:** Bash 5, Git, Fedora 44/DNF, Node.js 22/npm, uv-managed CPython 3.12, Docker Engine with Compose 2.24.4+, PostgreSQL 16, libvirt/virt-install, GitHub Actions, pytest, Node test runner, pre-commit, Markdown.
+
+**Owner-approved security amendment (2026-08-08):** The Task 7 audit resolved two high findings for
+`@modelcontextprotocol/server-postgres@0.6.2` through `@modelcontextprotocol/sdk`
+(`GHSA-w48q-cv73-mx4w`) and reported `fixAvailable: false`. The owner approved the plan's fail-closed
+branch: remove the legacy floating connector, do not commit the vulnerable toolchain, record
+`RES-POSTGRES-MCP-REPLACEMENT`, and skip Task 8 because it consumes the disabled launcher.
 
 ## Global Constraints
 
@@ -26,8 +32,11 @@
 - Doctor exit codes are `0` ready for the selected profile, `1` selected-profile blockers, and `2` invalid invocation or internal contract failure.
 - Doctor output never prints secret values; tests cover missing, placeholder, and configured states with synthetic values.
 - Do not install project dependencies during fixture/unit tests. The disposable Fedora proof is the only automation in this slice allowed to hydrate the full toolchain and project dependencies.
-- The MCP path is opt-in, local-development-only, forbidden for production/site data, never uses owner credentials, and never falls back to `npx` or an unpinned package fetch.
-- Pin `@modelcontextprotocol/server-postgres` to `0.6.2` in a private lockfile while documenting that the package is deprecated and replacement is a named follow-up; do not silently upgrade or substitute it during this slice.
+- The PostgreSQL MCP path is disabled: `.mcp.json` has no PostgreSQL server, and no package, lock,
+  launcher, setup recipe, or database role for it ships in this slice.
+- Re-enablement is forbidden until `RES-POSTGRES-MCP-REPLACEMENT` closes with a maintained locked
+  implementation, clean high/critical audit, dedicated least-privilege proof, and no production/site or
+  owner credentials.
 - Shell tests use isolated temporary fixtures/stub `PATH`s and must not inspect or mutate the contributor's real host state.
 - All tasks land in one atomic PR; task commits are review checkpoints, not independently mergeable partial authority states.
 
@@ -42,8 +51,7 @@
 | Host diagnostics | `scripts/doctor.sh`, `scripts/tests/test-doctor.sh`, `justfile` | Read-only profile-aware checks with stable reason IDs. |
 | Fedora setup | `.node-version`, `scripts/bootstrap-fedora-dev.sh`, `scripts/tests/test-bootstrap-fedora-dev.sh`, `docs/runbooks/fresh-linux-setup.md` | Check-first DNF/bootstrap flow and exact operator guidance. |
 | Fedora acceptance | `infra/dev/fedora-proof/ks.cfg`, `scripts/run-fedora-proof.sh`, `scripts/inside-fedora-proof.sh`, `scripts/tests/test-fedora-proof-contract.sh`, `docs/runbooks/fedora-proof.md` | Disposable local libvirt Workstation proof, SELinux-enforcing checks, second-run idempotence, and bounded repository verification. |
-| MCP dependency | `tools/mcp-postgres/package.json`, `tools/mcp-postgres/package-lock.json`, `scripts/run-postgres-mcp.sh` | Exact optional package resolution with no network-on-launch behavior. |
-| MCP database boundary | `infra/compose/postgres/mcp-readonly-init.sh`, `infra/compose/compose.mcp.yml`, `.mcp.json`, `.env.example` | Dev-only role provisioning, loopback publication, and MCP-only credential injection. |
+| MCP disabled boundary | `.mcp.json`, `scripts/tests/test-postgres-mcp-disabled.mjs`, `apps/api/tests/unit/test_dependency_tooling.py`, `docs/open-residuals.md` | No PostgreSQL MCP server or vulnerable toolchain; a stable residual owns re-enablement proof. |
 | CI and dependency upkeep | `.github/workflows/ci.yml`, `.github/dependabot.yml`, `.pre-commit-config.yaml`, `apps/api/tests/unit/test_ci_workflow.py`, `scripts/tests/test-ci-hardening.sh` | Required fast contracts and locked-tool maintenance. |
 
 The following interfaces are fixed across tasks:
@@ -74,9 +82,9 @@ scripts/run-fedora-proof.sh \
   creates one disposable libvirt VM under a mktemp-owned directory
   destroys only the exact VM/disk it created after target validation
 
-scripts/run-postgres-mcp.sh
-  execs tools/mcp-postgres/node_modules/.bin/mcp-server-postgres with one MCP-only DSN
-  exits before launch if package files or MCP credentials are absent
+.mcp.json
+  contains an empty mcpServers object
+  exposes no PostgreSQL, npx, floating-package, owner-credential, or default-secret path
 ```
 
 ### Task 1: Establish executable repository-authority contracts
@@ -679,179 +687,72 @@ git add infra/dev/fedora-proof infra/compose/compose.dev.yml scripts/run-fedora-
 git commit -m "test: add Fedora Workstation acceptance proof"
 ```
 
-### Task 7: Lock the optional PostgreSQL MCP launcher
+### Task 7: Disable the vulnerable PostgreSQL MCP path
 
 **Files:**
-- Create: `tools/mcp-postgres/package.json`
-- Create: `tools/mcp-postgres/package-lock.json`
-- Create: `scripts/run-postgres-mcp.sh`
-- Create: `scripts/tests/test-postgres-mcp-lock.mjs`
-- Create: `scripts/tests/test-run-postgres-mcp.sh`
+- Create: `scripts/tests/test-postgres-mcp-disabled.mjs`
 - Modify: `.mcp.json`
-- Modify: `.github/dependabot.yml`
-- Modify: `justfile`
 - Modify: `apps/api/tests/unit/test_dependency_tooling.py`
+- Modify: `docs/open-residuals.md`
+- Modify: `docs/superpowers/specs/2026-08-08-codex-takeover-design.md`
+- Modify: this plan
 
 **Interfaces:**
-- Consumes: Node 22 and MCP-only environment keys `MCP_POSTGRES_USER`, `MCP_POSTGRES_PASSWORD`, `MCP_POSTGRES_HOST`, `MCP_POSTGRES_PORT`, and `MCP_POSTGRES_DB`.
-- Produces: `just setup-mcp` and a launcher that executes only the locally locked `mcp-server-postgres` binary.
+- Consumes: the mandatory audit result for `@modelcontextprotocol/server-postgres@0.6.2`.
+- Produces: an empty repository MCP server registry, executable absence proofs, and
+  `RES-POSTGRES-MCP-REPLACEMENT`.
 
-- [ ] **Step 1: Write lock and launcher RED tests**
+- [x] **Step 1: Observe the advisory stop condition**
 
-Assert private manifest, exact dependency `0.6.2`, lockfile version 3, exact installed package/binary, no ranges, and no lifecycle-script execution during install. Launcher cases must prove local binary execution, missing-install guidance, missing credential refusal, URL-safe DSN construction, and absence of `npm`, `npx`, `yarn`, or `pnpm` fallback.
+`npm --prefix tools/mcp-postgres audit --package-lock-only --audit-level=high --json` resolved two high
+findings through `@modelcontextprotocol/sdk` (`GHSA-w48q-cv73-mx4w`) and reported
+`fixAvailable: false`. No `node_modules` installation was performed.
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Obtain the owner decision**
 
-Run:
+The owner approved the recommended fail-closed path on 2026-08-08: remove the legacy floating connector,
+ship none of the vulnerable package/lock/launcher/setup/Dependabot surface, and defer a maintained
+replacement under a closure-gated residual.
 
-```bash
-node --test scripts/tests/test-postgres-mcp-lock.mjs
-bash scripts/tests/test-run-postgres-mcp.sh
-```
+- [ ] **Step 3: Write and observe disabled-state RED tests**
 
-Expected: fail because the manifest, lock, and launcher do not exist.
-
-- [ ] **Step 3: Create the private locked package**
-
-Use this manifest and generate its lock under Node 22:
-
-```json
-{
-  "name": "@easysynq/mcp-postgres-tool",
-  "private": true,
-  "version": "0.0.0",
-  "engines": { "node": "22.x" },
-  "dependencies": { "@modelcontextprotocol/server-postgres": "0.6.2" }
-}
-```
-
-Run:
+Prove `.mcp.json` contains no PostgreSQL, `npx`, or floating server, and that the deprecated package,
+lock, launcher, setup recipe, and Dependabot entry are absent. Run:
 
 ```bash
-npm install --prefix tools/mcp-postgres --package-lock-only --ignore-scripts
-npm ci --prefix tools/mcp-postgres --ignore-scripts
-```
-
-- [ ] **Step 4: Implement the local-only launcher and MCP config**
-
-Resolve the binary relative to repository root, require all MCP credential keys, percent-encode user/password/database components without printing them, and `exec` the local binary. `.mcp.json` invokes `./scripts/run-postgres-mcp.sh` with no owner variable, owner default, default password, `npx`, or floating spec.
-
-- [ ] **Step 5: Wire optional setup and dependency maintenance**
-
-Add `just setup-mcp` as `npm ci --prefix tools/mcp-postgres --ignore-scripts`. Add `/tools/mcp-postgres` to Dependabot. Keep this optional lock separate from the web audit policy and add an explicit contracts-job audit in Task 9.
-
-- [ ] **Step 6: Run lock, launcher, and audit proofs**
-
-Run:
-
-```bash
-node --test scripts/tests/test-postgres-mcp-lock.mjs
-bash scripts/tests/test-run-postgres-mcp.sh
-npm --prefix tools/mcp-postgres audit --package-lock-only --audit-level=high
+node --test scripts/tests/test-postgres-mcp-disabled.mjs
 cd apps/api && uv run pytest tests/unit/test_dependency_tooling.py -m unit --tb=short
 ```
 
-Expected: all pass. If the pinned deprecated package has a high/critical advisory with no compatible fixed release, stop the slice and record the connector as disabled rather than weakening the audit gate.
+- [ ] **Step 4: Implement the fail-closed boundary and residual**
 
-- [ ] **Step 7: Commit**
+Set `.mcp.json` to an empty `mcpServers` object. Add `RES-POSTGRES-MCP-REPLACEMENT` with the advisory
+source and a closure contract requiring a maintained locked tool, clean high/critical audit, and a
+dedicated dev-only role whose prohibited operations are integration-tested. Do not provision an orphan
+role or change application, schema, production Compose, or production configuration.
 
-```bash
-git add tools/mcp-postgres scripts/run-postgres-mcp.sh \
-  scripts/tests/test-postgres-mcp-lock.mjs scripts/tests/test-run-postgres-mcp.sh \
-  .mcp.json .github/dependabot.yml justfile apps/api/tests/unit/test_dependency_tooling.py
-git commit -m "build: lock the PostgreSQL MCP tool"
-```
-
-### Task 8: Provision and prove a dev-only read-only MCP role
-
-**Files:**
-- Create: `infra/compose/postgres/mcp-readonly-init.sh`
-- Create: `apps/api/tests/integration/test_mcp_postgres_role.py`
-- Modify: `infra/compose/compose.mcp.yml`
-- Modify: `.env.example`
-- Modify: `justfile`
-- Modify: `apps/api/tests/unit/test_deploy_configuration.py`
-- Modify: `README.md`
-- Modify: `docs/dev-workflow.md`
-
-**Interfaces:**
-- Consumes: Task 7 launcher and existing dev PostgreSQL/migration services.
-- Produces: opt-in `easysynq_mcp_ro` with select-only grants and bounded session defaults; no Alembic or production role changes.
-
-- [ ] **Step 1: Write source and Docker-backed RED tests**
-
-Source assertions require loopback-only port publication, post-migration init dependency, required `MCP_POSTGRES_PASSWORD`, no default secret, and no production overlay reference. Integration tests provision the real artifact twice and assert:
-
-```text
-SELECT succeeds
-INSERT, UPDATE, DELETE, TRUNCATE, CREATE, and sequence access fail
-SET ROLE to owner, easysynq_app, or easysynq_linker fails
-Keycloak schema access fails
-SHOW default_transaction_read_only returns on
-SHOW statement_timeout, lock_timeout, idle_in_transaction_session_timeout are bounded
-owner-created table after provisioning is readable
-easysynq_create_audit_partition cannot create a partition
-second provisioning is idempotent and rotates only the MCP password
-```
-
-- [ ] **Step 2: Run focused tests and verify RED**
-
-Run:
+- [ ] **Step 5: Verify and commit**
 
 ```bash
-cd apps/api && uv run pytest tests/unit/test_deploy_configuration.py \
-  tests/integration/test_mcp_postgres_role.py --tb=short
+node --test scripts/tests/test-postgres-mcp-disabled.mjs
+cd apps/api && uv run pytest tests/unit/test_dependency_tooling.py -m unit --tb=short
+./scripts/check-repo-authority.sh
+bash scripts/check-no-site-data.sh .mcp.json docs/open-residuals.md
+git diff --check
+git add .mcp.json scripts/tests/test-postgres-mcp-disabled.mjs \
+  apps/api/tests/unit/test_dependency_tooling.py docs/open-residuals.md \
+  docs/superpowers/specs/2026-08-08-codex-takeover-design.md \
+  docs/superpowers/plans/2026-08-08-codex-fedora-foundation.md
+git commit -m "fix: disable vulnerable PostgreSQL MCP path"
 ```
 
-Expected: fails because the role provisioning service does not exist and the current MCP overlay exposes the owner only.
+### Task 8: SKIPPED — PostgreSQL MCP role provisioning
 
-- [ ] **Step 3: Implement idempotent dev-only provisioning**
-
-After migration completion, create/alter exactly `easysynq_mcp_ro` with:
-
-```sql
-LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
-ALTER ROLE easysynq_mcp_ro SET default_transaction_read_only = on;
-ALTER ROLE easysynq_mcp_ro SET statement_timeout = '15s';
-ALTER ROLE easysynq_mcp_ro SET lock_timeout = '2s';
-ALTER ROLE easysynq_mcp_ro SET idle_in_transaction_session_timeout = '30s';
-GRANT CONNECT ON DATABASE easysynq TO easysynq_mcp_ro;
-GRANT USAGE ON SCHEMA public TO easysynq_mcp_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO easysynq_mcp_ro;
-ALTER DEFAULT PRIVILEGES FOR ROLE easysynq IN SCHEMA public
-  GRANT SELECT ON TABLES TO easysynq_mcp_ro;
-```
-
-Revoke schema creation, temporary database use, sequence access, and role memberships. PostgreSQL grants function execution to `PUBLIC` by default, so the dev-only initializer must execute `REVOKE EXECUTE ON FUNCTION easysynq_create_audit_partition(date) FROM PUBLIC`, then re-grant that exact function to `easysynq_app`; a role-local revoke alone is insufficient. Add a regression that the app retains the intended call while MCP cannot call it. Quote the password through `psql` variables rather than string interpolation. Keep the script and service in `compose.mcp.yml`; do not add an Alembic revision or production include.
-
-- [ ] **Step 4: Wire opt-in operation**
-
-Add required `.env.example` keys with obvious placeholders. `just up-mcp` validates the MCP password, starts the dev PostgreSQL/migration/init services, and prints `just setup-mcp` plus the client restart step. Document teardown and state that production/site data is forbidden.
-
-- [ ] **Step 5: Run least-privilege and Compose proofs**
-
-Run:
-
-```bash
-cd apps/api && uv run pytest tests/unit/test_deploy_configuration.py \
-  tests/integration/test_mcp_postgres_role.py --tb=short
-docker compose --env-file .env.example -f infra/compose/compose.yml \
-  -f infra/compose/compose.s.yml -f infra/compose/compose.dev.yml \
-  -f infra/compose/compose.mcp.yml config --quiet
-bash scripts/check-no-site-data.sh .mcp.json .env.example infra/compose/compose.mcp.yml \
-  infra/compose/postgres/mcp-readonly-init.sh
-```
-
-Expected: all pass; the security-definer mutation probe fails for the MCP role without creating an audit partition.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add infra/compose/postgres/mcp-readonly-init.sh infra/compose/compose.mcp.yml \
-  apps/api/tests/integration/test_mcp_postgres_role.py \
-  apps/api/tests/unit/test_deploy_configuration.py .env.example justfile README.md docs/dev-workflow.md
-git commit -m "fix: enforce read-only PostgreSQL MCP access"
-```
+Task 8 consumed the Task 7 launcher. Because that launcher is disabled by the approved security stop,
+provisioning a database role would create an unused attack surface. No initializer, Compose service,
+credential, grant, integration test, application change, schema change, or production configuration is
+authorized in this slice. The complete role and prohibited-operation proof moves into the closure
+contract of `RES-POSTGRES-MCP-REPLACEMENT`.
 
 ### Task 9: Close CI, documentation, and clean-Fedora acceptance
 
@@ -866,7 +767,7 @@ git commit -m "fix: enforce read-only PostgreSQL MCP access"
 - Modify: `docs/runbooks/fedora-proof.md`
 
 **Interfaces:**
-- Consumes: all Tasks 1–8 plus approved Fedora 44 Everything netinstall and Workstation Live ISO
+- Consumes: Tasks 1–7, the explicit Task 8 skip, plus approved Fedora 44 Everything netinstall and Workstation Live ISO
   checksums.
 - Produces: required fast CI contracts, recorded clean-VM evidence, and the complete Programme 0 handoff.
 
@@ -880,14 +781,8 @@ Update exact workflow expectations so `contracts` includes, before dependency hy
     bash scripts/tests/test-bootstrap-fedora-dev.sh
     bash scripts/tests/test-doctor.sh
     bash scripts/tests/test-fedora-proof-contract.sh
-- name: install locked PostgreSQL MCP tool
-  run: npm ci --prefix tools/mcp-postgres --ignore-scripts
-- name: PostgreSQL MCP tool contracts
-  run: |
-    node --test scripts/tests/test-postgres-mcp-lock.mjs
-    bash scripts/tests/test-run-postgres-mcp.sh
-- name: audit locked PostgreSQL MCP tool
-  run: npm --prefix tools/mcp-postgres audit --package-lock-only --audit-level=high
+- name: PostgreSQL MCP disabled contract
+  run: node --test scripts/tests/test-postgres-mcp-disabled.mjs
 ```
 
 Assert all are hard-fail and the authority/R61 checks remain first.
@@ -905,7 +800,7 @@ Expected: fails until the workflow contains the exact new steps.
 
 - [ ] **Step 3: Wire the fast gates and finish documentation**
 
-Add the workflow steps without adding a misleading container-only Fedora job. In the docs, give each common doctor reason its exact next command; document MCP deprecation/opt-in boundary; state that the clean Fedora VM proof is a release/PR acceptance artifact; and link all commands from `AGENTS.md` without copying mutable results.
+Add the workflow steps without adding a misleading container-only Fedora job. In the docs, give each common doctor reason its exact next command; document the disabled MCP boundary and replacement residual; state that the clean Fedora VM proof is a release/PR acceptance artifact; and link all commands from `AGENTS.md` without copying mutable results.
 
 - [ ] **Step 4: Run the full focused local verification matrix**
 
@@ -918,15 +813,12 @@ bash scripts/tests/test-claude-hooks.sh
 bash scripts/tests/test-bootstrap-fedora-dev.sh
 bash scripts/tests/test-doctor.sh
 bash scripts/tests/test-fedora-proof-contract.sh
-node --test scripts/tests/test-postgres-mcp-lock.mjs
-bash scripts/tests/test-run-postgres-mcp.sh
+node --test scripts/tests/test-postgres-mcp-disabled.mjs
 bash scripts/tests/test-ci-hardening.sh
 bash scripts/tests/test-check-no-site-data.sh
 bash scripts/check-no-site-data.sh
-npm --prefix tools/mcp-postgres audit --package-lock-only --audit-level=high
 cd apps/api && uv run pytest tests/unit/test_dependency_tooling.py \
   tests/unit/test_deploy_configuration.py tests/unit/test_ci_workflow.py -m unit --tb=short
-cd apps/api && uv run pytest tests/integration/test_mcp_postgres_role.py -m integration --tb=short
 git diff --check
 ```
 
@@ -988,10 +880,12 @@ git commit -m "ci: enforce Fedora foundation acceptance"
 - [ ] The reviewed live-path manifest and global scan cover all current root/docs/source/test/Claude consumers, not only the originally enumerated files.
 - [ ] No mutable migration, suite, CI, decision-range, permission-count, slice, or residual fact has two canonical homes.
 - [ ] Hook/command behavior executes against fixtures; file-existence-only checks are insufficient.
-- [ ] `.mcp.json` uses a dedicated dev-only role and locked local launcher; owner credentials and floating fetches are absent.
-- [ ] MCP grants are proven by successful reads and failed DML/DDL/role-switch/security-definer operations.
+- [ ] `.mcp.json` exposes no PostgreSQL connector; owner credentials, floating fetches, and the vulnerable
+  package/lock/launcher are absent.
+- [ ] `RES-POSTGRES-MCP-REPLACEMENT` is the sole current re-enablement contract; no orphan MCP database
+  role or provisioning service is introduced.
 - [ ] Fedora check/default mode is non-mutating and the second apply is idempotent.
 - [ ] Doctor distinguishes every named Docker access state, does not disclose secrets, and gates only the selected profile.
 - [ ] The clean Fedora Workstation proof is SELinux-enforcing and exercises setup, Docker/testcontainers, fast API/web/contracts, Compose, and the live dev stack.
 - [ ] Ubuntu production bootstrap behavior and links remain intact.
-- [ ] R61 site-data gates, shell syntax, focused tests, link/traceability checks, dependency audits, and `git diff --check` pass.
+- [ ] R61 site-data gates, shell syntax, focused tests, link/traceability checks, applicable dependency audits, and `git diff --check` pass.

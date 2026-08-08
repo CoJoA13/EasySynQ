@@ -1,7 +1,8 @@
 # EasySynQ Codex Takeover Design
 
-> **Status:** Programme 0 approved by the owner on 2026-08-08; Programmes 1–6 remain proposed and no
-> production behavior is authorized by this document
+> **Status:** Programme 0 approved by the owner on 2026-08-08; its PostgreSQL MCP security-disable
+> amendment was approved the same day; Programmes 1–6 remain proposed and no production behavior is
+> authorized by this document
 > **Date:** 2026-08-08
 > **Baseline:** `main` at `c15541f` (squash merge of PR #447)
 > **Visual command center:** [EasySynQ Takeover Command Center](https://www.figma.com/design/sdtIklWupCvzQvJOxTbf9z)
@@ -151,11 +152,14 @@ equivalent vendor-neutral path exists and has been verified.
 
 #### Agent database safety
 
-The current `.mcp.json` must not advertise a read-only PostgreSQL connection while using the migration
-owner. Programme 0 either provisions a dedicated login with connect/schema usage/select-only grants and
-`default_transaction_read_only=on`, or disables/renames that connector until the dedicated role exists.
-The MCP package must also be version-pinned and installed from a lockable tool manifest. No agent database
-integration may require production credentials.
+The original `.mcp.json` advertised a read-only PostgreSQL connection while using the migration owner and
+a floating `npx` fetch. Programme 0 evaluated the approved exact package
+`@modelcontextprotocol/server-postgres@0.6.2`; the required npm audit found high-severity
+`GHSA-w48q-cv73-mx4w` through `@modelcontextprotocol/sdk` with no compatible fix. The owner therefore
+approved the fail-closed branch on 2026-08-08: `.mcp.json` exposes no PostgreSQL server, the vulnerable
+package/lock/launcher are not committed, and no orphan database role is provisioned. A maintained,
+locked, audit-clean implementation and its dedicated least-privilege dev role are deferred under
+`RES-POSTGRES-MCP-REPLACEMENT`. No agent database integration may use production or owner credentials.
 
 #### Fedora bootstrap
 
@@ -216,8 +220,8 @@ daemon access is not reported as missing or healthy.
 2. A complete reviewed live-reference manifest migrates every `CLAUDE.md` current-authority consumer
    atomically; each mutable fact has one canonical home; no-live-current-authority and duplicate-fact
    gates pass; and hook/command behavior passes executable contract tests before the file is slimmed.
-3. `.mcp.json` no longer uses or defaults to owner credentials for a connection described as read-only,
-   and its package resolution is pinned.
+3. `.mcp.json` exposes no PostgreSQL connector; no floating launcher or vulnerable PostgreSQL MCP package
+   is tracked. Re-enablement requires the closure proof in `RES-POSTGRES-MCP-REPLACEMENT`.
 4. Fedora detection and dry-run behavior are fixture-tested without changing the host.
 5. A disposable clean Fedora Workstation VM/CI proof boots Anaconda from an independently checksummed
    Fedora 44 Everything netinstall ISO, installs the independently checksummed Workstation Live

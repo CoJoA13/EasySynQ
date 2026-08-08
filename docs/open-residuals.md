@@ -4,6 +4,20 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
+## RES-POSTGRES-MCP-REPLACEMENT
+
+Status: OPEN
+Owner: Repository owner
+Source: Programme 0 security stop, 2026-08-08;
+[GHSA-w48q-cv73-mx4w](https://github.com/advisories/GHSA-w48q-cv73-mx4w)
+Reason: The deprecated PostgreSQL MCP package selected by the approved plan resolves a high-severity
+advisory with no compatible fix, so the repository PostgreSQL connector is disabled.
+Closure contract: Select or build a maintained PostgreSQL MCP implementation, pin it through a committed
+lock, pass a high/critical dependency audit with no unaccepted finding, provision a dedicated dev-only
+read-only login, and prove reads succeed while DML, DDL, role switching, sequence access, privileged
+functions, owner credentials, production data, and site data remain unavailable.
+Last reviewed: 2026-08-08
+
 ## RES-INGEST-PROGRESS
 
 Status: OPEN
