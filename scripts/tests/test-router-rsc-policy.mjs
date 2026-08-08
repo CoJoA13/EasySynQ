@@ -617,6 +617,329 @@ Router.unstable_routeRSCServerRequest;
 `), []);
 });
 
+test('stops direct setter summaries at unconditional returns', () => {
+  const violations = inspect(`
+var RouterA = {};
+function setBeforeReturn() {
+  RouterA = require('react-router');
+  return;
+  RouterA = {};
+}
+setBeforeReturn();
+RouterA.unstable_RSCHydratedRouter;
+
+var RouterB = {};
+function setAfterReturn() {
+  return;
+  RouterB = require('react-router-dom');
+}
+setAfterReturn();
+RouterB.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_RSCHydratedRouter']);
+});
+
+test('stops direct setter summaries at unconditional throws', () => {
+  const violations = inspect(`
+var RouterA = {};
+function setBeforeThrow() {
+  RouterA = require('react-router');
+  throw new Error('stop');
+  RouterA = {};
+}
+setBeforeThrow();
+RouterA.unstable_createCallServer;
+
+var RouterB = {};
+function setAfterThrow() {
+  throw new Error('stop');
+  RouterB = require('react-router-dom');
+}
+setAfterThrow();
+RouterB.unstable_getRSCStream;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_createCallServer']);
+});
+
+test('keeps both states reachable after unknown conditional return and throw', () => {
+  const violations = inspect(`
+var RouterA = {};
+function maybeSet() {
+  if (unknownCondition) return;
+  RouterA = require('react-router');
+}
+maybeSet();
+RouterA.unstable_matchRSCServerRequest;
+
+var RouterB = require('react-router-dom');
+function maybeReset() {
+  if (unknownCondition) throw new Error('stop');
+  RouterB = {};
+}
+maybeReset();
+RouterB.unstable_routeRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_matchRSCServerRequest',
+    'unstable_routeRSCServerRequest',
+  ]);
+});
+
+test('treats catch effects as possible rather than unconditional', () => {
+  const violations = inspect(`
+var RouterA = require('react-router');
+try {} catch {
+  RouterA = {};
+}
+RouterA.unstable_RSCHydratedRouter;
+
+var RouterB = {};
+try {} catch {
+  RouterB = require('react-router-dom');
+}
+RouterB.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCHydratedRouter',
+    'unstable_RSCStaticRouter',
+  ]);
+});
+
+test('always applies finally effects after abrupt try completion', () => {
+  const violations = inspect(`
+var RouterA = {};
+function setInFinally() {
+  try {
+    return;
+  } finally {
+    RouterA = require('react-router');
+  }
+}
+setInFinally();
+RouterA.unstable_createCallServer;
+
+var RouterB = require('react-router-dom');
+function resetInFinally() {
+  try {
+    throw new Error('stop');
+  } finally {
+    RouterB = {};
+  }
+}
+resetInFinally();
+RouterB.unstable_getRSCStream;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_createCallServer']);
+});
+
+test('never applies a literal-false for-loop update', () => {
+  const violations = inspect(`
+var Router = require('react-router');
+for (; false; Router = {}) {}
+Router.unstable_matchRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_matchRSCServerRequest']);
+});
+
+test('never executes while-false bodies and executes do-while-false bodies once', () => {
+  const violations = inspect(`
+var RouterA = require('react-router');
+while (false) {
+  RouterA = {};
+}
+RouterA.unstable_RSCHydratedRouter;
+
+var RouterB = {};
+while (false) {
+  RouterB = require('react-router-dom');
+}
+RouterB.unstable_RSCStaticRouter;
+
+var RouterC = {};
+do {
+  RouterC = require('react-router');
+} while (false);
+RouterC.unstable_createCallServer;
+
+var RouterD = require('react-router-dom');
+do {
+  RouterD = {};
+} while (false);
+RouterD.unstable_getRSCStream;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCHydratedRouter',
+    'unstable_createCallServer',
+  ]);
+});
+
+test('ignores same-iteration effects after unconditional break and continue', () => {
+  const violations = inspect(`
+var RouterA = {};
+do {
+  RouterA = require('react-router');
+  break;
+  RouterA = {};
+} while (false);
+RouterA.unstable_matchRSCServerRequest;
+
+var RouterB = {};
+do {
+  continue;
+  RouterB = require('react-router-dom');
+} while (false);
+RouterB.unstable_routeRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_matchRSCServerRequest']);
+});
+
+test('summarizes directly called arrow and function-expression setters', () => {
+  const violations = inspect(`
+var RouterA = {};
+const setArrow = () => {
+  RouterA = require('react-router');
+};
+setArrow();
+RouterA.unstable_RSCHydratedRouter;
+
+var RouterB = {};
+const setFunction = function () {
+  RouterB = require('react-router-dom');
+};
+setFunction();
+RouterB.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCHydratedRouter',
+    'unstable_RSCStaticRouter',
+  ]);
+});
+
+test('does not summarize uncalled arrow or function-expression setters', () => {
+  assert.deepEqual(inspect(`
+var RouterA = {};
+const setArrow = () => {
+  RouterA = require('react-router');
+};
+var RouterB = {};
+const setFunction = function () {
+  RouterB = require('react-router-dom');
+};
+RouterA.unstable_createCallServer;
+RouterB.unstable_getRSCStream;
+`), []);
+});
+
+test('uses no-op reassignment before direct setter calls', () => {
+  assert.deepEqual(inspect(`
+var RouterA = {};
+let setArrow = () => {
+  RouterA = require('react-router');
+};
+setArrow = () => {};
+setArrow();
+RouterA.unstable_matchRSCServerRequest;
+
+var RouterB = {};
+let setFunction = function () {
+  RouterB = require('react-router-dom');
+};
+setFunction = function () {};
+setFunction();
+RouterB.unstable_routeRSCServerRequest;
+`), []);
+});
+
+test('uses Router-setter reassignment before direct local calls', () => {
+  const violations = inspect(`
+var RouterA = {};
+let setArrow = () => {};
+setArrow = () => {
+  RouterA = require('react-router');
+};
+setArrow();
+RouterA.unstable_RSCHydratedRouter;
+
+var RouterB = {};
+let setFunction = function () {};
+setFunction = function () {
+  RouterB = require('react-router-dom');
+};
+setFunction();
+RouterB.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCHydratedRouter',
+    'unstable_RSCStaticRouter',
+  ]);
+});
+
+test('unions possible callable targets after conditional reassignment', () => {
+  const violations = inspect(`
+var RouterA = {};
+let maybeArrow = () => {};
+if (unknownCondition) {
+  maybeArrow = () => {
+    RouterA = require('react-router');
+  };
+}
+maybeArrow();
+RouterA.unstable_createCallServer;
+
+var RouterB = {};
+let maybeFunction = function () {
+  RouterB = require('react-router-dom');
+};
+if (unknownCondition) {
+  maybeFunction = function () {};
+}
+maybeFunction();
+RouterB.unstable_getRSCStream;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_createCallServer',
+    'unstable_getRSCStream',
+  ]);
+});
+
+test('guards recursive arrow and function-expression call targets', () => {
+  const violations = inspect(`
+var RouterA = {};
+const recursiveArrow = () => {
+  RouterA = require('react-router');
+  recursiveArrow();
+};
+recursiveArrow();
+RouterA.unstable_matchRSCServerRequest;
+
+var RouterB = {};
+const recursiveFunction = function () {
+  RouterB = require('react-router-dom');
+  recursiveFunction();
+};
+recursiveFunction();
+RouterB.unstable_routeRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_matchRSCServerRequest',
+    'unstable_routeRSCServerRequest',
+  ]);
+});
+
+test('does not expand direct-call summaries through aliases or higher-order calls', () => {
+  assert.deepEqual(inspect(`
+var Router = {};
+const setRouter = () => {
+  Router = require('react-router');
+};
+const alias = setRouter;
+alias();
+invoke(setRouter);
+(0, setRouter)();
+Router.unstable_RSCHydratedRouter;
+`), []);
+});
+
 test('treats local namespace exports as live bindings', () => {
   const violations = inspect(`
 export { Router };

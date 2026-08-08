@@ -61,6 +61,7 @@ function assertTypescriptApi(typescript) {
   const functions = [
     'createSourceFile',
     'forEachChild',
+    'isArrowFunction',
     'isAsExpression',
     'isArrayBindingPattern',
     'isBlock',
@@ -329,6 +330,72 @@ function buildLexicalModel(typescript, sourceFile) {
     return undefined;
   }
 
+  function alternativeAbruptMode(left, right) {
+    if (left === 'always' && right === 'always') return 'always';
+    if (left === 'none' && right === 'none') return 'none';
+    return 'maybe';
+  }
+
+  function abruptCompletionMode(node) {
+    if (node === undefined) return 'none';
+    if (node.kind === typescript.SyntaxKind.ReturnStatement
+        || node.kind === typescript.SyntaxKind.ThrowStatement
+        || node.kind === typescript.SyntaxKind.BreakStatement
+        || node.kind === typescript.SyntaxKind.ContinueStatement) {
+      return 'always';
+    }
+    if (typescript.isBlock(node)) {
+      let mode = 'none';
+      for (const statement of node.statements) {
+        const statementMode = abruptCompletionMode(statement);
+        if (statementMode === 'always') return 'always';
+        if (statementMode === 'maybe') mode = 'maybe';
+      }
+      return mode;
+    }
+    if (node.kind === typescript.SyntaxKind.IfStatement) {
+      const condition = booleanLiteralValue(node.expression);
+      const thenMode = abruptCompletionMode(node.thenStatement);
+      const elseMode = abruptCompletionMode(node.elseStatement);
+      if (condition === true) return thenMode;
+      if (condition === false) return elseMode;
+      return alternativeAbruptMode(thenMode, elseMode);
+    }
+    if (node.kind === typescript.SyntaxKind.TryStatement) {
+      const finallyMode = abruptCompletionMode(node.finallyBlock);
+      if (finallyMode === 'always') return 'always';
+      const tryMode = abruptCompletionMode(node.tryBlock);
+      const catchMode = node.catchClause === undefined
+        ? tryMode
+        : alternativeAbruptMode(tryMode, abruptCompletionMode(node.catchClause.block));
+      return finallyMode === 'maybe' || catchMode === 'maybe' ? 'maybe' : catchMode;
+    }
+    if (node.kind === typescript.SyntaxKind.LabeledStatement) {
+      return abruptCompletionMode(node.statement);
+    }
+    return 'none';
+  }
+
+  function precedingAbruptMode(node, region) {
+    let current = node;
+    let mode = 'none';
+    while (current !== region && current.parent !== undefined) {
+      const statements = current.parent.statements;
+      if (Array.isArray(statements)) {
+        const index = statements.indexOf(current);
+        if (index >= 0) {
+          for (const statement of statements.slice(0, index)) {
+            const statementMode = abruptCompletionMode(statement);
+            if (statementMode === 'always') return 'always';
+            if (statementMode === 'maybe') mode = 'maybe';
+          }
+        }
+      }
+      current = current.parent;
+    }
+    return mode;
+  }
+
   function executionMode(node, region) {
     let current = node;
     let mode = 'always';
@@ -352,12 +419,23 @@ function buildLexicalModel(typescript, sourceFile) {
           : (isThen ? condition : !condition);
         if (branchRuns === false) return 'never';
         if (branchRuns === undefined) mode = 'maybe';
-      } else if ((parent.kind === typescript.SyntaxKind.ForStatement
-          || parent.kind === typescript.SyntaxKind.ForInStatement
-          || parent.kind === typescript.SyntaxKind.ForOfStatement
-          || parent.kind === typescript.SyntaxKind.WhileStatement
-          || parent.kind === typescript.SyntaxKind.DoStatement)
+      } else if (parent.kind === typescript.SyntaxKind.ForStatement
+          && (current === parent.statement || current === parent.incrementor)) {
+        const condition = parent.condition === undefined
+          ? undefined
+          : booleanLiteralValue(parent.condition);
+        if (condition === false) return 'never';
+        mode = 'maybe';
+      } else if ((parent.kind === typescript.SyntaxKind.ForInStatement
+          || parent.kind === typescript.SyntaxKind.ForOfStatement)
           && current === parent.statement) {
+        mode = 'maybe';
+      } else if (parent.kind === typescript.SyntaxKind.WhileStatement
+          && current === parent.statement) {
+        if (booleanLiteralValue(parent.expression) === false) return 'never';
+        mode = 'maybe';
+      } else if (parent.kind === typescript.SyntaxKind.CatchClause
+          && current === parent.block) {
         mode = 'maybe';
       } else if (parent.kind === typescript.SyntaxKind.SwitchStatement
           && current === parent.caseBlock) {
@@ -381,6 +459,9 @@ function buildLexicalModel(typescript, sourceFile) {
       }
       current = parent;
     }
+    const abruptMode = precedingAbruptMode(node, region);
+    if (abruptMode === 'always') return 'never';
+    if (abruptMode === 'maybe') mode = 'maybe';
     return mode;
   }
 
@@ -539,6 +620,13 @@ function buildLexicalModel(typescript, sourceFile) {
     return literalText(typescript, candidate.arguments[0]);
   }
 
+  function callableRegionForExpression(expression) {
+    const candidate = unwrapTransparentExpression(typescript, expression);
+    return typescript.isArrowFunction(candidate) || typescript.isFunctionExpression(candidate)
+      ? candidate
+      : undefined;
+  }
+
   for (const candidate of assignmentCandidates) {
     const binding = resolveBinding(candidate.scope, candidate.name);
     if (binding !== undefined) writeCandidates.push({ ...candidate, binding });
@@ -560,20 +648,21 @@ function buildLexicalModel(typescript, sourceFile) {
       mode: executionMode(candidate.node, candidate.region),
       order: candidate.order,
       position: candidate.position,
+      callableRegion: callableRegionForExpression(candidate.expression),
       specifier: isRouterApiSource(specifier) ? specifier : undefined,
     });
   }
 
   for (const candidate of callCandidates) {
     const binding = resolveBinding(candidate.scope, candidate.name);
-    const calleeRegion = functionRegionByBinding.get(binding);
-    if (calleeRegion !== undefined) {
+    if (binding !== undefined) {
       addEffect(candidate.region, {
-        calleeRegion,
+        calleeBinding: binding,
         kind: 'call',
         mode: executionMode(candidate.node, candidate.region),
         order: candidate.order,
         position: candidate.position,
+        region: candidate.region,
       });
     }
   }
@@ -589,6 +678,39 @@ function buildLexicalModel(typescript, sourceFile) {
 
   function unionStates(left, right) {
     return new Set([...left, ...right]);
+  }
+
+  function initialCallableState(binding) {
+    return new Set([functionRegionByBinding.get(binding)]);
+  }
+
+  function applyCallableWrite(binding, state, effect) {
+    if (effect.kind !== 'write' || effect.binding !== binding || effect.mode === 'never') {
+      return state;
+    }
+    const changedState = new Set([effect.callableRegion]);
+    return effect.mode === 'maybe' ? unionStates(state, changedState) : changedState;
+  }
+
+  function reachableCallableHomeState(binding) {
+    let state = initialCallableState(binding);
+    let reachable = new Set(state);
+    for (const effect of effectsByRegion.get(binding.homeRegion) ?? []) {
+      state = applyCallableWrite(binding, state, effect);
+      reachable = unionStates(reachable, state);
+    }
+    return reachable;
+  }
+
+  function callableTargetsAt(binding, region, position) {
+    let state = binding.homeRegion === region
+      ? initialCallableState(binding)
+      : reachableCallableHomeState(binding);
+    for (const effect of effectsByRegion.get(region) ?? []) {
+      if (effect.position >= position) break;
+      state = applyCallableWrite(binding, state, effect);
+    }
+    return state;
   }
 
   function runFunction(calleeRegion, binding, inputState, activeFunctions) {
@@ -608,7 +730,19 @@ function buildLexicalModel(typescript, sourceFile) {
       if (effect.binding !== binding) return state;
       changedState = new Set([effect.specifier]);
     } else {
-      changedState = runFunction(effect.calleeRegion, binding, state, activeFunctions);
+      changedState = new Set();
+      for (const calleeRegion of callableTargetsAt(
+        effect.calleeBinding,
+        effect.region,
+        effect.position,
+      )) {
+        changedState = unionStates(
+          changedState,
+          calleeRegion === undefined
+            ? state
+            : runFunction(calleeRegion, binding, state, activeFunctions),
+        );
+      }
     }
     return effect.mode === 'maybe' ? unionStates(state, changedState) : changedState;
   }
