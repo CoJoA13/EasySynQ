@@ -17,6 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Agent authority and Claude compatibility contracts
+        run: |
+          bash scripts/tests/test-agent-authority.sh
+          bash scripts/tests/test-claude-hooks.sh
+          ./scripts/check-repo-authority.sh
       # R61 backstop lives in THIS job because contracts IS in branch protection's required
       # checks — `security` remains outside that required-check set, so a site-data match there
       # would not block a merge.

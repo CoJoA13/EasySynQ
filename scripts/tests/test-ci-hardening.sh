@@ -184,6 +184,14 @@ assert_text_contains \
   "$CONTRACTS_BLOCK" \
   '      - name: CI workflow contract
         run: bash scripts/tests/test-ci-hardening.sh'
+assert_text_contains \
+  "contracts job runs authority and Claude compatibility contracts" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: Agent authority and Claude compatibility contracts
+        run: |
+          bash scripts/tests/test-agent-authority.sh
+          bash scripts/tests/test-claude-hooks.sh
+          ./scripts/check-repo-authority.sh'
 assert_text_not_contains \
   "contracts job does not run floating npx contract tools" \
   "$CONTRACTS_BLOCK" \
@@ -219,6 +227,11 @@ assert_text_contains \
   "$CONTRACTS_BLOCK" \
   '      - name: audit locked contract tools
         run: npm --prefix packages/contracts audit --package-lock-only --audit-level=high'
+assert_before \
+  "authority and Claude contracts run before contract tool hydration" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: Agent authority and Claude compatibility contracts" \
+  "      - uses: actions/setup-node@v7"
 assert_before \
   "R61 regression runs before contract tool hydration" \
   "$CONTRACTS_BLOCK" \

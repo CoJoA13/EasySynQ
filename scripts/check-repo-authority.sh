@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# Dependency-free authority contract. It deliberately checks the whole live tree as well as the
+# reviewed manifest: a newly added consumer must not be able to bypass an older manifest.
+set -uo pipefail
+LC_ALL=C
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${AUTHORITY_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+MANIFEST="${ROOT}/scripts/repo-authority-live-paths.txt"
+FAIL=0
+declare -A EMITTED=()
+
+reason() {
+  local code="$1"
+  if [ -z "${EMITTED[$code]+x}" ]; then
+    printf '%s\n' "$code"
+    EMITTED["$code"]=1
+    FAIL=1
+  fi
+}
+
+if [ ! -d "$ROOT" ]; then
+  printf 'AUTHORITY_INTERNAL_BAD_ROOT\n' >&2
+  exit 2
+fi
+
+for required in AGENTS.md CLAUDE.md docs/current-status.md docs/open-residuals.md docs/slice-history.md; do
+  if [ ! -f "$ROOT/$required" ]; then
+    case "$required" in
+      AGENTS.md) reason AUTHORITY_MISSING_AGENTS ;;
+      CLAUDE.md) reason AUTHORITY_MISSING_CLAUDE ;;
+      docs/current-status.md) reason AUTHORITY_MISSING_CURRENT_STATUS ;;
+      docs/open-residuals.md) reason AUTHORITY_MISSING_OPEN_RESIDUALS ;;
+      docs/slice-history.md) reason AUTHORITY_MISSING_SLICE_HISTORY ;;
+    esac
+  fi
+done
+
+if [ ! -f "$MANIFEST" ]; then
+  reason AUTHORITY_MISSING_LIVE_PATH_MANIFEST
+else
+  declare -A MANIFEST_PATHS=()
+  while IFS= read -r path || [ -n "$path" ]; do
+    [ -z "$path" ] && continue
+    case "$path" in
+      \#*) continue ;;
+    esac
+    if [ -n "${MANIFEST_PATHS[$path]+x}" ]; then
+      reason AUTHORITY_DUPLICATE_LIVE_PATH
+    fi
+    MANIFEST_PATHS["$path"]=1
+    if [ ! -e "$ROOT/$path" ]; then
+      # Task 1 deliberately precedes creation of these neutral authority homes.
+      case "$path" in
+        AGENTS.md|docs/current-status.md|docs/open-residuals.md) ;;
+        *) reason AUTHORITY_UNKNOWN_LIVE_PATH ;;
+      esac
+    fi
+  done <"$MANIFEST"
+fi
+
+if [ -f "$ROOT/docs/current-status.md" ]; then
+  declare -A STATUS_VALUES=(
+    [easysynq_status_schema]='1'
+    [as_of]='"2026-08-08"'
+    [baseline_commit]='"c15541f"'
+    [last_shipped_slice]='"S-upload-identity"'
+    [migration_head]='"0085"'
+    [next_migration]='"0086"'
+    [api_unit_tests]='1686'
+    [web_test_files]='249'
+    [web_tests]='1468'
+    [contract_tests]='283'
+    [integration_passed]='1051'
+    [integration_skipped]='2'
+    [ci_jobs]='10'
+    [ci_checks]='14'
+  )
+  declare -A STATUS_COUNTS=()
+  in_frontmatter=0
+  closed_frontmatter=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_frontmatter" -eq 0 ]; then
+      if [ "$line" = '---' ]; then
+        in_frontmatter=1
+      elif [ -n "$line" ]; then
+        reason AUTHORITY_STATUS_FRONTMATTER
+        break
+      fi
+      continue
+    fi
+    if [ "$line" = '---' ]; then
+      closed_frontmatter=1
+      break
+    fi
+    if [[ ! "$line" =~ ^([a-z_]+):[[:space:]](.+)$ ]]; then
+      reason AUTHORITY_STATUS_FRONTMATTER
+      continue
+    fi
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    if [ -z "${STATUS_VALUES[$key]+x}" ]; then
+      reason AUTHORITY_UNKNOWN_STATUS_KEY
+      continue
+    fi
+    STATUS_COUNTS["$key"]=$(( ${STATUS_COUNTS[$key]:-0} + 1 ))
+    if [ "${STATUS_COUNTS[$key]}" -gt 1 ]; then
+      reason AUTHORITY_DUPLICATE_STATUS_KEY
+    fi
+    if [ "$value" != "${STATUS_VALUES[$key]}" ]; then
+      reason AUTHORITY_STATUS_VALUE
+    fi
+    case "$key" in
+      easysynq_status_schema|api_unit_tests|web_test_files|web_tests|contract_tests|integration_passed|integration_skipped|ci_jobs|ci_checks)
+        [[ "$value" =~ ^[0-9]+$ ]] || reason AUTHORITY_STATUS_VALUE
+        ;;
+    esac
+  done <"$ROOT/docs/current-status.md"
+  if [ "$in_frontmatter" -eq 0 ] || [ "$closed_frontmatter" -eq 0 ]; then
+    reason AUTHORITY_STATUS_FRONTMATTER
+  fi
+  for key in "${!STATUS_VALUES[@]}"; do
+    [ "${STATUS_COUNTS[$key]:-0}" -eq 1 ] || reason AUTHORITY_MISSING_STATUS_KEY
+  done
+fi
+
+if [ -f "$ROOT/AGENTS.md" ]; then
+  for authority_home in docs/current-status.md docs/open-residuals.md docs/slice-history.md docs/decisions-register.md; do
+    grep -Fq "$authority_home" "$ROOT/AGENTS.md" || reason AUTHORITY_AGENT_DECLARATIONS
+  done
+fi
+
+if [ -f "$ROOT/docs/current-status.md" ] && grep -Eq '^##[[:space:]]+RES-' "$ROOT/docs/current-status.md"; then
+  reason AUTHORITY_STATUS_RESIDUAL_RECORD
+fi
+
+if [ -f "$ROOT/docs/open-residuals.md" ] && ! grep -Eq '^##[[:space:]]+RES-[A-Z][A-Z0-9-]*' "$ROOT/docs/open-residuals.md"; then
+  reason AUTHORITY_RESIDUAL_LEDGER_SCHEMA
+fi
+
+if [ -f "$ROOT/CLAUDE.md" ] && grep -Eqi '^#{1,6}[[:space:]].*(current[[:space:]]+status|recent[[:space:]]+learnings)' "$ROOT/CLAUDE.md"; then
+  reason AUTHORITY_CLAUDE_CURRENT_OWNER
+fi
+
+if [ -f "$ROOT/docs/slice-history.md" ]; then
+  history_preamble="$(sed -n '1,220p' "$ROOT/docs/slice-history.md")"
+  if grep -Eqi '(^#{1,6}[[:space:]].*open[[:space:]]+residuals|migration[[:space:]]+head|current[[:space:]]+(migration[[:space:]]+)?head)' <<<"$history_preamble"; then
+    reason AUTHORITY_HISTORY_MUTABLE_HEAD
+  fi
+  if ! grep -Fq 'docs/open-residuals.md' "$ROOT/docs/slice-history.md"; then
+    reason AUTHORITY_HISTORY_AUTHORITY
+  fi
+fi
+
+is_historical_path() {
+  case "$1" in
+    docs/superpowers/*|docs/audit-2026-06-17.md|docs/review-2026-07-22.md|docs/slice-history.md)
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# Keep these scopes explicit for reviewers; the full-tree scan below is the enforcement backstop.
+CURRENT_PATHS=(README.md AGENTS.md CLAUDE.md apps .claude docs/00-overview.md
+  docs/16-roadmap.md docs/17-gaps-and-open-questions.md
+  docs/18-mvp-implementation-plan.md docs/dev-workflow.md docs/manuals docs/runbooks)
+HISTORICAL_EXCLUDES=(docs/superpowers docs/audit-2026-06-17.md
+  docs/review-2026-07-22.md docs/slice-history.md)
+
+# Dependency and build trees are neither repository authority nor tracked source text. Everything
+# else is scanned, including paths absent from the reviewed manifest.
+live_files() {
+  find "$ROOT" \( \
+    -path "$ROOT/.git" -o \
+    -path '*/node_modules' -o \
+    -path '*/.venv' -o \
+    -path '*/.pytest_cache' -o \
+    -path '*/dist' -o \
+    -path '*/build' \
+  \) -prune -o \
+    -type f -print0
+}
+
+declare -a LIVE_TEXT_FILES=()
+while IFS= read -r -d '' absolute_path; do
+  relative_path="${absolute_path#$ROOT/}"
+  is_historical_path "$relative_path" && continue
+  [ "$relative_path" = 'CLAUDE.md' ] && continue
+  LIVE_TEXT_FILES+=("$absolute_path")
+done < <(live_files)
+
+if [ "${#LIVE_TEXT_FILES[@]}" -gt 0 ]; then
+  if grep -I -Eqi 'CLAUDE\.md.{0,160}(authoritative|owns|current[[:space:]]+status|migration[[:space:]]+head|residual|rules)|(authoritative|owns|current[[:space:]]+status|migration[[:space:]]+head|residual|rules).{0,160}CLAUDE\.md' "${LIVE_TEXT_FILES[@]}"; then
+    reason AUTHORITY_LIVE_CLAUDE_OWNER
+  fi
+  if grep -I -Eq 'R[1-9][0-9]*[–-]R[1-9][0-9]*' "${LIVE_TEXT_FILES[@]}"; then
+    reason AUTHORITY_DECISION_RANGE_MIRROR
+  fi
+fi
+
+if [ -f "$ROOT/docs/open-residuals.md" ]; then
+  declare -A RESIDUAL_IDS=()
+  while IFS= read -r residual_id; do
+    if [ -n "${RESIDUAL_IDS[$residual_id]+x}" ]; then
+      reason AUTHORITY_DUPLICATE_RESIDUAL_ID
+    fi
+    RESIDUAL_IDS["$residual_id"]=1
+  done < <(grep -Eo '^##[[:space:]]+(RES-[A-Z][A-Z0-9-]*)' "$ROOT/docs/open-residuals.md" | sed -E 's/^##[[:space:]]+//')
+
+  while IFS= read -r referenced_id; do
+    [ -z "$referenced_id" ] && continue
+    [ -n "${RESIDUAL_IDS[$referenced_id]+x}" ] || reason AUTHORITY_UNKNOWN_RESIDUAL_ID
+  done < <(grep -I -Eho 'RES-[A-Z][A-Z0-9-]*' "${LIVE_TEXT_FILES[@]}" || true)
+fi
+
+if [ "$FAIL" -eq 0 ]; then
+  printf 'AUTHORITY_OK\n'
+  exit 0
+fi
+exit 1
