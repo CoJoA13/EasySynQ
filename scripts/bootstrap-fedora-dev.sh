@@ -4,6 +4,22 @@
 # requires one literal confirmation before invoking sudo.
 set -euo pipefail
 
+bootstrap_process_arg_index=0
+bootstrap_process_entry=
+while builtin read -r -d '' bootstrap_process_arg; do
+  if (( bootstrap_process_arg_index == 1 )); then
+    bootstrap_process_entry=$bootstrap_process_arg
+    break
+  fi
+  bootstrap_process_arg_index=$((bootstrap_process_arg_index + 1))
+done <"/proc/$$/cmdline"
+if [[ ${BASH_SOURCE[0]} == "$0" && $bootstrap_process_entry == "${BASH_SOURCE[0]}" ]]; then
+  builtin readonly bootstrap_execution_context=direct
+else
+  builtin readonly bootstrap_execution_context=simulation
+fi
+builtin unset bootstrap_process_arg_index bootstrap_process_entry bootstrap_process_arg
+
 usage() {
   printf '%s\n' \
     'usage: ./scripts/bootstrap-fedora-dev.sh [--check|--apply]' \
@@ -13,11 +29,27 @@ usage() {
     '  -h, --help' >&2
 }
 
-bootstrap_run() {
-local system_root=$1
-local command_root=$2
-local repo_root=$3
-shift 3
+bootstrap_core() {
+local fixture_root= simulation=0 state_dir=
+local system_root= command_root=/usr/bin repo_root=
+if [[ $bootstrap_execution_context == direct ]]; then
+  local script_path=${BASH_SOURCE[0]}
+  local script_dir=${script_path%/*}
+  [[ $script_dir == "$script_path" ]] && script_dir=.
+  if ! repo_root=$(cd "$script_dir/.." 2>/dev/null && pwd -P); then
+    printf '%s\n' 'bootstrap: unable to resolve the repository root' >&2
+    exit 2
+  fi
+else
+  simulation=1
+  fixture_root=${1-}
+  shift || true
+  validate_fixture_root "$fixture_root" || exit 2
+  system_root=$fixture_root/system-root
+  command_root=$fixture_root/bin
+  repo_root=$fixture_root/repo
+  state_dir=$fixture_root/state
+fi
 
 mode=check
 if (( $# > 1 )); then
@@ -117,11 +149,16 @@ if [[ $os_variant != workstation ]]; then
   exit 2
 fi
 
-if [[ ! -x $uname_bin ]]; then
+if (( ! simulation )) && [[ ! -x $uname_bin ]]; then
   printf 'bootstrap: trusted uname executable is unavailable at %s.\n' "$uname_bin" >&2
   exit 2
 fi
-architecture=$($uname_bin -m 2>/dev/null || printf unknown)
+if (( simulation )); then
+  architecture=x86_64
+  [[ -r $state_dir/arch ]] && IFS= read -r architecture <"$state_dir/arch"
+else
+  architecture=$($uname_bin -m 2>/dev/null || printf unknown)
+fi
 if [[ $architecture != x86_64 ]]; then
   printf 'bootstrap: x86_64 is required (found %s). Use an x86_64 Fedora Workstation 44 host.\n' \
     "$architecture" >&2
@@ -138,7 +175,7 @@ if [[ $node_major != 22 ]]; then
   exit 2
 fi
 
-if [[ ! -x $rpm_bin ]]; then
+if (( ! simulation )) && [[ ! -x $rpm_bin ]]; then
   printf 'bootstrap: trusted rpm executable is unavailable at %s.\n' "$rpm_bin" >&2
   exit 2
 fi
@@ -146,6 +183,14 @@ fi
 missing_fedora=()
 missing_docker=()
 package_is_installed() {
+  if (( simulation )); then
+    local wanted=$1 package
+    [[ -r $state_dir/installed_packages ]] || return 1
+    while IFS= read -r package || [[ -n $package ]]; do
+      [[ $package == "$wanted" ]] && return 0
+    done <"$state_dir/installed_packages"
+    return 1
+  fi
   "$rpm_bin" -q --quiet "$1"
 }
 collect_missing_packages() {
@@ -158,6 +203,44 @@ collect_missing_packages() {
   for package in "${docker_packages[@]}"; do
     package_is_installed "$package" || missing_docker+=("$package")
   done
+}
+
+record_simulated_action() {
+  printf '%s\n' "$1" >>"$state_dir/actions"
+}
+
+simulate_install_packages() {
+  local package
+  for package in "$@"; do
+    package_is_installed "$package" || printf '%s\n' "$package" >>"$state_dir/installed_packages"
+  done
+}
+
+simulate_transaction() {
+  local command package
+  if (( ${#missing_fedora[@]} )); then
+    command='sudo dnf install --assumeyes'
+    for package in "${missing_fedora[@]}"; do command+=" $package"; done
+    record_simulated_action "$command"
+    simulate_install_packages "${missing_fedora[@]}"
+  fi
+  if (( ! docker_repo_configured )); then
+    record_simulated_action "sudo dnf config-manager addrepo --from-repofile=$docker_repo_url"
+    printf '%s\n' \
+      '[docker-ce-stable]' \
+      'name=Docker CE Stable' \
+      'baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable' \
+      'enabled=1' \
+      'gpgcheck=1' \
+      'gpgkey=https://download.docker.com/linux/fedora/gpg' \
+      >"$docker_repo_file"
+  fi
+  if (( ${#missing_docker[@]} )); then
+    command='sudo dnf install --assumeyes'
+    for package in "${missing_docker[@]}"; do command+=" $package"; done
+    record_simulated_action "$command"
+    simulate_install_packages "${missing_docker[@]}"
+  fi
 }
 
 docker_repo_configured=0
@@ -249,7 +332,11 @@ print_status() {
 
   local active_node_path=missing system_node_version=missing system_node_major=unknown
   active_node_path=$(type -P node 2>/dev/null || printf missing)
-  if [[ -x $node_bin ]]; then
+  if (( simulation )); then
+    system_node_version=v22.18.0
+    [[ -r $state_dir/node_version ]] && IFS= read -r system_node_version <"$state_dir/node_version"
+    [[ $system_node_version =~ ^v?([0-9]+)\. ]] && system_node_major=${BASH_REMATCH[1]}
+  elif [[ -x $node_bin ]]; then
     system_node_version=$($node_bin --version 2>/dev/null || printf unreadable)
     [[ $system_node_version =~ ^v?([0-9]+)\. ]] && system_node_major=${BASH_REMATCH[1]}
   fi
@@ -304,7 +391,7 @@ if (( transaction_needed )); then
     printf '%s\n' 'bootstrap: --apply confirmation must be entered in an interactive terminal.' >&2
     exit 2
   fi
-  if [[ ! -x $sudo_bin || ! -x $dnf_bin ]]; then
+  if (( ! simulation )) && [[ ! -x $sudo_bin || ! -x $dnf_bin ]]; then
     printf 'bootstrap: approved package transactions require trusted executables %s and %s.\n' \
       "$sudo_bin" "$dnf_bin" >&2
     exit 2
@@ -317,14 +404,18 @@ if (( transaction_needed )); then
   fi
   printf '\n'
 
-  if (( ${#missing_fedora[@]} )); then
-    "$sudo_bin" "$dnf_bin" install --assumeyes "${missing_fedora[@]}"
-  fi
-  if (( ! docker_repo_configured )); then
-    "$sudo_bin" "$dnf_bin" config-manager addrepo --from-repofile="$docker_repo_url"
-  fi
-  if (( ${#missing_docker[@]} )); then
-    "$sudo_bin" "$dnf_bin" install --assumeyes "${missing_docker[@]}"
+  if (( simulation )); then
+    simulate_transaction
+  else
+    if (( ${#missing_fedora[@]} )); then
+      "$sudo_bin" "$dnf_bin" install --assumeyes "${missing_fedora[@]}"
+    fi
+    if (( ! docker_repo_configured )); then
+      "$sudo_bin" "$dnf_bin" config-manager addrepo --from-repofile="$docker_repo_url"
+    fi
+    if (( ${#missing_docker[@]} )); then
+      "$sudo_bin" "$dnf_bin" install --assumeyes "${missing_docker[@]}"
+    fi
   fi
 
   collect_missing_packages
@@ -341,28 +432,32 @@ else
 fi
 
 printf '\n%s\n' 'Installing the pinned Python runtime as the current unprivileged user:'
-if [[ ! -x $uv_bin ]]; then
+if (( simulation )); then
+  record_simulated_action 'uv python install 3.12'
+  printf '%s\n' 'SIMULATED uv python install 3.12'
+elif [[ ! -x $uv_bin ]]; then
   printf 'bootstrap: trusted uv executable is unavailable at %s after package verification.\n' "$uv_bin" >&2
   exit 1
+else
+  "$uv_bin" python install 3.12
 fi
-"$uv_bin" python install 3.12
 
 printf '\n%s\n' 'Running the EasySynQ contributor doctor:'
-cd "$repo_root"
 doctor_bin=$repo_root/scripts/doctor.sh
-if [[ ! -x $doctor_bin ]]; then
+if (( simulation )); then
+  record_simulated_action 'doctor contributor'
+  printf '%s\n' 'SIMULATED doctor contributor'
+elif [[ ! -x $doctor_bin ]]; then
   printf 'bootstrap: contributor doctor is unavailable at %s.\n' "$doctor_bin" >&2
   exit 1
+else
+  cd "$repo_root"
+  "$doctor_bin" contributor
 fi
-"$doctor_bin" contributor
 }
 
-bootstrap_fixture_main() {
+validate_fixture_root() {
   local fixture_root=${1-}
-  if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-    printf '%s\n' 'bootstrap: fixture entrypoint is available only when the script is sourced.' >&2
-    return 2
-  fi
   case "$fixture_root" in
     /*) ;;
     *) fixture_root= ;;
@@ -382,18 +477,58 @@ bootstrap_fixture_main() {
   local fixture_system_root=$fixture_root/system-root
   local fixture_command_root=$fixture_root/bin
   local fixture_repo_root=$fixture_root/repo
+  local fixture_state_root=$fixture_root/state
   local child
-  for child in "$fixture_system_root" "$fixture_command_root" "$fixture_repo_root"; do
+  for child in "$fixture_system_root" "$fixture_command_root" "$fixture_repo_root" "$fixture_state_root" \
+      "$fixture_system_root/etc" "$fixture_system_root/etc/yum.repos.d" "$fixture_repo_root/scripts"; do
     if [[ -L $child || ! -d $child || ! -O $child ]]; then
-      printf '%s\n' 'bootstrap: fixture root must contain owned, non-link system-root, bin, and repo directories.' >&2
+      printf '%s\n' 'bootstrap: fixture root must contain owned, non-link simulation directories.' >&2
       return 2
     fi
   done
+  local fixture_file
+  for fixture_file in \
+      "$fixture_state_root/actions" \
+      "$fixture_state_root/installed_packages" \
+      "$fixture_state_root/arch" \
+      "$fixture_state_root/node_version" \
+      "$fixture_system_root/etc/yum.repos.d/docker-ce.repo" \
+      "$fixture_repo_root/.node-version"; do
+    if [[ -e $fixture_file || -L $fixture_file ]]; then
+      if [[ -L $fixture_file || ! -f $fixture_file || ! -O $fixture_file ]]; then
+        printf 'bootstrap: fixture simulation file must be owned, regular, and non-link: %s\n' \
+          "$fixture_file" >&2
+        return 2
+      fi
+    fi
+  done
+}
+
+bootstrap_run() {
+  if [[ $bootstrap_execution_context == simulation ]]; then
+    printf '%s\n' 'bootstrap: sourced execution is simulation-only; use bootstrap_fixture_main.' >&2
+    return 2
+  fi
+  printf '%s\n' 'bootstrap: internal entrypoint misuse.' >&2
+  return 2
+}
+
+bootstrap_fixture_main() {
+  if [[ $bootstrap_execution_context != simulation ]]; then
+    printf '%s\n' 'bootstrap: fixture entrypoint is available only when the script is sourced.' >&2
+    return 2
+  fi
+  local fixture_root=${1-}
+  validate_fixture_root "$fixture_root" || return 2
   shift
-  bootstrap_run "$fixture_system_root" "$fixture_command_root" "$fixture_repo_root" "$@"
+  bootstrap_core "$fixture_root" "$@"
 }
 
 bootstrap_direct_main() {
+  if [[ $bootstrap_execution_context != direct ]]; then
+    printf '%s\n' 'bootstrap: sourced execution cannot enter the direct bootstrap context.' >&2
+    return 2
+  fi
   local fixture_name
   for fixture_name in ${!FEDORA_BOOTSTRAP_TEST_@}; do
     printf 'bootstrap: direct execution rejects FEDORA_BOOTSTRAP_TEST_* variables (found %s).\n' \
@@ -401,17 +536,9 @@ bootstrap_direct_main() {
     return 2
   done
 
-  local script_path=${BASH_SOURCE[0]}
-  local script_dir=${script_path%/*}
-  [[ $script_dir == "$script_path" ]] && script_dir=.
-  local direct_repo_root
-  if ! direct_repo_root=$(cd "$script_dir/.." 2>/dev/null && pwd -P); then
-    printf '%s\n' 'bootstrap: unable to resolve the repository root' >&2
-    return 2
-  fi
-  bootstrap_run '' /usr/bin "$direct_repo_root" "$@"
+  bootstrap_core "$@"
 }
 
-if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+if [[ $bootstrap_execution_context == direct ]]; then
   bootstrap_direct_main "$@"
 fi

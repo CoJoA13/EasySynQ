@@ -67,14 +67,6 @@ assert_no_action_tool() {
   fi
 }
 
-line_number() {
-  local haystack=$1 needle=$2 line number=0
-  while IFS= read -r line; do
-    number=$((number + 1))
-    [[ $line == *"$needle"* ]] && { printf '%s' "$number"; return; }
-  done <<<"$haystack"
-}
-
 if [[ ! -f $BOOTSTRAP_SOURCE ]]; then
   not_ok 'scripts/bootstrap-fedora-dev.sh exists'
   printf '\n%d checks, %d failures\n' "$checks" "$failures"
@@ -465,13 +457,12 @@ assert_contains 'preview discloses the approved repo-file write' "$CASE_OUTPUT" 
 assert_contains 'preview says the bootstrap does not edit /etc directly' "$CASE_OUTPUT" \
   'The bootstrap does not edit /etc directly.'
 assert_eq 'preview heading is emitted once' 1 "$(awk '/^Proposed privileged transaction:\r?$/ { count++ } END { print count + 0 }' "$CASE_ROOT/stdout")"
-preview_line=$(line_number "$CASE_OUTPUT" 'Proposed privileged transaction:')
-sudo_line=$(line_number "$CASE_OUTPUT" 'STUB_SUDO ')
-if [[ -n $preview_line && -n $sudo_line && $preview_line -lt $sudo_line ]]; then
-  ok 'the whole preview appears before the first sudo call'
-else
-  not_ok "the whole preview appears before the first sudo call (preview=${preview_line:-none} sudo=${sudo_line:-none})"
-fi
+mapfile -t applied_actions <"$CASE_STATE/actions"
+assert_eq 'simulation ledger starts with the previewed Fedora transaction' "$BASE_COMMAND" "${applied_actions[0]-}"
+assert_eq 'simulation ledger preserves repository transaction order' "$REPO_COMMAND" "${applied_actions[1]-}"
+assert_eq 'simulation ledger preserves Docker transaction order' "$DOCKER_COMMAND" "${applied_actions[2]-}"
+assert_eq 'simulation ledger records unprivileged Python after packages' 'uv python install 3.12' "${applied_actions[3]-}"
+assert_eq 'simulation ledger records contributor doctor last' 'doctor contributor' "${applied_actions[4]-}"
 assert_empty_file 'successful apply invokes no forbidden host action' "$CASE_STATE/host_mutations"
 assert_no_action_tool 'successful apply repo verification invokes no direct DNF' "$CASE_STATE/actions" dnf
 if [[ -r $CASE_REPO_FILE ]] \
@@ -584,6 +575,94 @@ assert_eq 'source-only fixture rejects an unmarked temporary root' 2 "$CASE_EXIT
 assert_contains 'unmarked fixture root is rejected before commands' "$CASE_OUTPUT" \
   'bootstrap: fixture root must be an isolated marked directory'
 assert_empty_file 'unmarked fixture root invokes no command' "$CASE_STATE/actions"
+
+new_fixture sourced-core-capability-bypass
+set +e
+/usr/bin/bash -c 'source "$1"; bootstrap_run "$2" /usr/bin "$3" --apply' \
+  _ "$BOOTSTRAP_SOURCE" "$CASE_SYSTEM_ROOT" "$CASE_REPO" \
+  >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
+CASE_EXIT=$?
+CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
+assert_eq 'sourced callers cannot pass /usr/bin into the execution core' 2 "$CASE_EXIT"
+assert_contains 'direct core call is rejected as simulation-only' "$CASE_OUTPUT" \
+  'bootstrap: sourced execution is simulation-only; use bootstrap_fixture_main.'
+assert_empty_file 'direct sourced core call touches no fixture command' "$CASE_STATE/actions"
+
+new_fixture sourced-context-promotion
+set +e
+env bootstrap_execution_context=direct STUB_STATE_DIR="$CASE_STATE" \
+  /usr/bin/bash -c 'source "$1"; printf "context=%s\n" "$bootstrap_execution_context"; bootstrap_direct_main --apply' \
+  _ "$BOOTSTRAP_SOURCE" >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
+CASE_EXIT=$?
+CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
+assert_eq 'sourced caller cannot promote itself to direct context' 2 "$CASE_EXIT"
+assert_contains 'source-time context decision overrides caller environment' "$CASE_OUTPUT" 'context=simulation'
+assert_contains 'direct entrypoint refuses sourced context' "$CASE_OUTPUT" \
+  'bootstrap: sourced execution cannot enter the direct bootstrap context.'
+assert_empty_file 'failed context promotion touches no fixture command' "$CASE_STATE/actions"
+
+new_fixture sourced-argv-zero-spoof
+set +e
+env STUB_STATE_DIR="$CASE_STATE" \
+  /usr/bin/bash -c 'source "$0"; bootstrap_direct_main --apply' "$BOOTSTRAP_SOURCE" \
+  >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
+CASE_EXIT=$?
+CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
+assert_eq 'spoofing sourced argv zero cannot select direct context' 2 "$CASE_EXIT"
+assert_contains 'argv-zero spoof is rejected by the direct entrypoint' "$CASE_OUTPUT" \
+  'bootstrap: sourced execution cannot enter the direct bootstrap context.'
+assert_empty_file 'argv-zero spoof touches no fixture command' "$CASE_STATE/actions"
+
+make_delegating_fixture_commands() {
+  local delegate_dir=$CASE_ROOT/delegating-children
+  mkdir -p "$delegate_dir"
+  local tool
+  for tool in dnf rpm sudo uname node uv; do
+    printf '%s\n' \
+      '#!/usr/bin/bash' \
+      'tool=${0##*/}' \
+      'printf "sentinel %s\n" "$tool" >>"${STUB_STATE_DIR:?}/sentinels"' \
+      'exec /usr/bin/env WRAPPED_TOOL="$tool" /usr/bin/bash "${STUB_STATE_DIR:?}/../bin/dispatcher" "$@"' \
+      >"$delegate_dir/$tool"
+    chmod +x "$delegate_dir/$tool"
+  done
+  printf '%s\n' \
+    '#!/usr/bin/bash' \
+    'printf "%s\n" "sentinel doctor" >>"${STUB_STATE_DIR:?}/sentinels"' \
+    'exec /usr/bin/env WRAPPED_TOOL=doctor.sh /usr/bin/bash "${STUB_STATE_DIR:?}/../bin/dispatcher" "$@"' \
+    >"$delegate_dir/doctor.sh"
+  chmod +x "$delegate_dir/doctor.sh"
+  : >"$CASE_STATE/sentinels"
+  printf '%s' "$delegate_dir"
+}
+
+new_fixture sourced-symlink-children
+CASE_DELEGATE_DIR=$(make_delegating_fixture_commands)
+for tool in dnf rpm sudo uname node uv; do
+  ln -sfn "$CASE_DELEGATE_DIR/$tool" "$CASE_BIN/$tool"
+done
+ln -sfn "$CASE_DELEGATE_DIR/doctor.sh" "$CASE_REPO/scripts/doctor.sh"
+run_bootstrap_pty $'yes\n' --apply
+assert_eq 'simulation accepts symlink children without executing them' 0 "$CASE_EXIT"
+assert_empty_file 'symlink children cannot reach delegated real commands' "$CASE_STATE/sentinels"
+assert_contains 'symlink fixture preserves exact simulated sudo ledger' "$(<"$CASE_STATE/actions")" \
+  'sudo dnf install --assumeyes git curl openssl dnf-plugins-core nodejs22 nodejs22-bin nodejs22-npm nodejs22-npm-bin uv just pre-commit postgresql16'
+assert_eq 'symlink fixture simulation still ends at doctor ledger' 'doctor contributor' \
+  "$(tail -n 1 "$CASE_STATE/actions")"
+
+new_fixture sourced-delegating-children
+CASE_DELEGATE_DIR=$(make_delegating_fixture_commands)
+for tool in dnf rpm sudo uname node uv; do
+  cp "$CASE_DELEGATE_DIR/$tool" "$CASE_BIN/$tool"
+done
+cp "$CASE_DELEGATE_DIR/doctor.sh" "$CASE_REPO/scripts/doctor.sh"
+run_bootstrap_pty $'yes\n' --apply
+assert_eq 'simulation accepts delegating wrappers without executing them' 0 "$CASE_EXIT"
+assert_empty_file 'delegating wrappers cannot reach sudo dnf uv or doctor' "$CASE_STATE/sentinels"
+assert_contains 'wrapper fixture preserves exact simulated repository ledger' "$(<"$CASE_STATE/actions")" \
+  'sudo dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo'
+assert_eq 'wrapper fixture simulation still ends at doctor ledger' 'doctor contributor' \
+  "$(tail -n 1 "$CASE_STATE/actions")"
 
 new_fixture production-path-adversary
 set +e
