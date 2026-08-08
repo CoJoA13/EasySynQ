@@ -31,6 +31,7 @@ test('deprecated PostgreSQL MCP package and launcher are absent', async () => {
     'tools/mcp-postgres/package.json',
     'tools/mcp-postgres/package-lock.json',
     'scripts/run-postgres-mcp.sh',
+    'infra/compose/compose.mcp.yml',
   ];
   for (const relativePath of forbidden) {
     assert.equal(await exists(path.join(root, relativePath)), false, `${relativePath} must be absent`);

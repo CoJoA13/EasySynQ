@@ -157,9 +157,10 @@ a floating `npx` fetch. Programme 0 evaluated the approved exact package
 `@modelcontextprotocol/server-postgres@0.6.2`; the required npm audit found high-severity
 `GHSA-w48q-cv73-mx4w` through `@modelcontextprotocol/sdk` with no compatible fix. The owner therefore
 approved the fail-closed branch on 2026-08-08: `.mcp.json` exposes no PostgreSQL server, the vulnerable
-package/lock/launcher are not committed, and no orphan database role is provisioned. A maintained,
-locked, audit-clean implementation and its dedicated least-privilege dev role are deferred under
-`RES-POSTGRES-MCP-REPLACEMENT`. No agent database integration may use production or owner credentials.
+package/lock/launcher are not committed, the MCP-labelled owner-database port overlay/recipe are removed,
+and no orphan database role is provisioned. A maintained, locked, audit-clean implementation and its
+dedicated least-privilege dev role are deferred under `RES-POSTGRES-MCP-REPLACEMENT`. No agent database
+integration may use production or owner credentials.
 
 #### Fedora bootstrap
 
@@ -220,8 +221,9 @@ daemon access is not reported as missing or healthy.
 2. A complete reviewed live-reference manifest migrates every `CLAUDE.md` current-authority consumer
    atomically; each mutable fact has one canonical home; no-live-current-authority and duplicate-fact
    gates pass; and hook/command behavior passes executable contract tests before the file is slimmed.
-3. `.mcp.json` exposes no PostgreSQL connector; no floating launcher or vulnerable PostgreSQL MCP package
-   is tracked. Re-enablement requires the closure proof in `RES-POSTGRES-MCP-REPLACEMENT`.
+3. `.mcp.json` exposes no PostgreSQL connector; no floating launcher, vulnerable PostgreSQL MCP package,
+   or MCP-labelled owner-database port overlay/recipe is tracked. Re-enablement requires the closure proof
+   in `RES-POSTGRES-MCP-REPLACEMENT`.
 4. Fedora detection and dry-run behavior are fixture-tested without changing the host.
 5. A disposable clean Fedora Workstation VM/CI proof boots Anaconda from an independently checksummed
    Fedora 44 Everything netinstall ISO, installs the independently checksummed Workstation Live

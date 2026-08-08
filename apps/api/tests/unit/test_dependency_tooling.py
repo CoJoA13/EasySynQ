@@ -112,9 +112,11 @@ def test_vulnerable_postgres_mcp_connector_is_disabled() -> None:
 
     assert mcp_config == {"mcpServers": {}}
     assert "setup-mcp:" not in justfile
+    assert "up-mcp" not in justfile
     assert not (_ROOT / "tools" / "mcp-postgres" / "package.json").exists()
     assert not (_ROOT / "tools" / "mcp-postgres" / "package-lock.json").exists()
     assert not (_ROOT / "scripts" / "run-postgres-mcp.sh").exists()
+    assert not (_ROOT / "infra" / "compose" / "compose.mcp.yml").exists()
     assert not [
         entry
         for entry in dependabot["updates"]

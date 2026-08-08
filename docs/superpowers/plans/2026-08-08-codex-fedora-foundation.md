@@ -33,7 +33,8 @@ branch: remove the legacy floating connector, do not commit the vulnerable toolc
 - Doctor output never prints secret values; tests cover missing, placeholder, and configured states with synthetic values.
 - Do not install project dependencies during fixture/unit tests. The disposable Fedora proof is the only automation in this slice allowed to hydrate the full toolchain and project dependencies.
 - The PostgreSQL MCP path is disabled: `.mcp.json` has no PostgreSQL server, and no package, lock,
-  launcher, setup recipe, or database role for it ships in this slice.
+  launcher, setup recipe, owner-database port overlay/recipe, or database role for it ships in this
+  slice.
 - Re-enablement is forbidden until `RES-POSTGRES-MCP-REPLACEMENT` closes with a maintained locked
   implementation, clean high/critical audit, dedicated least-privilege proof, and no production/site or
   owner credentials.
@@ -691,7 +692,9 @@ git commit -m "test: add Fedora Workstation acceptance proof"
 
 **Files:**
 - Create: `scripts/tests/test-postgres-mcp-disabled.mjs`
+- Delete: `infra/compose/compose.mcp.yml`
 - Modify: `.mcp.json`
+- Modify: `justfile`
 - Modify: `apps/api/tests/unit/test_dependency_tooling.py`
 - Modify: `docs/open-residuals.md`
 - Modify: `docs/superpowers/specs/2026-08-08-codex-takeover-design.md`
@@ -717,7 +720,8 @@ replacement under a closure-gated residual.
 - [ ] **Step 3: Write and observe disabled-state RED tests**
 
 Prove `.mcp.json` contains no PostgreSQL, `npx`, or floating server, and that the deprecated package,
-lock, launcher, setup recipe, and Dependabot entry are absent. Run:
+lock, launcher, setup recipe, Dependabot entry, MCP-labelled owner-database port overlay, and `up-mcp`
+recipe are absent. Run:
 
 ```bash
 node --test scripts/tests/test-postgres-mcp-disabled.mjs
@@ -726,10 +730,11 @@ cd apps/api && uv run pytest tests/unit/test_dependency_tooling.py -m unit --tb=
 
 - [ ] **Step 4: Implement the fail-closed boundary and residual**
 
-Set `.mcp.json` to an empty `mcpServers` object. Add `RES-POSTGRES-MCP-REPLACEMENT` with the advisory
-source and a closure contract requiring a maintained locked tool, clean high/critical audit, and a
-dedicated dev-only role whose prohibited operations are integration-tested. Do not provision an orphan
-role or change application, schema, production Compose, or production configuration.
+Set `.mcp.json` to an empty `mcpServers` object and remove the obsolete dev-only MCP port overlay/recipe.
+Add `RES-POSTGRES-MCP-REPLACEMENT` with the advisory source and a closure contract requiring a maintained
+locked tool, clean high/critical audit, and a dedicated dev-only role whose prohibited operations are
+integration-tested. Do not provision an orphan role or change application, schema, production Compose,
+or production configuration.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -739,7 +744,7 @@ cd apps/api && uv run pytest tests/unit/test_dependency_tooling.py -m unit --tb=
 ./scripts/check-repo-authority.sh
 bash scripts/check-no-site-data.sh .mcp.json docs/open-residuals.md
 git diff --check
-git add .mcp.json scripts/tests/test-postgres-mcp-disabled.mjs \
+git add .mcp.json justfile infra/compose/compose.mcp.yml scripts/tests/test-postgres-mcp-disabled.mjs \
   apps/api/tests/unit/test_dependency_tooling.py docs/open-residuals.md \
   docs/superpowers/specs/2026-08-08-codex-takeover-design.md \
   docs/superpowers/plans/2026-08-08-codex-fedora-foundation.md
@@ -881,7 +886,7 @@ git commit -m "ci: enforce Fedora foundation acceptance"
 - [ ] No mutable migration, suite, CI, decision-range, permission-count, slice, or residual fact has two canonical homes.
 - [ ] Hook/command behavior executes against fixtures; file-existence-only checks are insufficient.
 - [ ] `.mcp.json` exposes no PostgreSQL connector; owner credentials, floating fetches, and the vulnerable
-  package/lock/launcher are absent.
+  package/lock/launcher plus the MCP-labelled owner-database port overlay/recipe are absent.
 - [ ] `RES-POSTGRES-MCP-REPLACEMENT` is the sole current re-enablement contract; no orphan MCP database
   role or provisioning service is introduced.
 - [ ] Fedora check/default mode is non-mutating and the second apply is idempotent.
