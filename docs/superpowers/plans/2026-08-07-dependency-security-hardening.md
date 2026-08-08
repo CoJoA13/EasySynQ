@@ -4,7 +4,7 @@
 
 **Goal:** Lock every ad hoc dependency tool, remediate the currently patchable web advisories, and make every unapproved high or critical npm advisory fail CI.
 
-**Architecture:** Contract and Python audit tools move into ecosystem-native manifests and committed locks, with root-aware wrappers as the only execution paths. A dependency-free Node policy layer interprets npm's lock-only audit report, applies one atomic expiring Router exception, and invokes an AST-based first-party usage guard before accepting it. CI wiring remains thin and is protected by Bash and parsed-YAML structural regressions.
+**Architecture:** Contract and Python audit tools move into ecosystem-native manifests and committed locks, with root-aware wrappers as the only execution paths. A dependency-free Node policy layer interprets npm's lock-only audit report and rejects every high or critical finding under the production empty-exception policy. Generic exception and Router source-policy behavior remains isolated to synthetic fixtures. CI wiring remains thin and is protected by Bash and parsed-YAML structural regressions.
 
 **Tech Stack:** Bash, npm 10.9.x on Node 22, ECMAScript modules with `node:test`, TypeScript compiler API, uv/Python 3.12, GitHub Actions YAML, Dependabot, GitHub REST API.
 
@@ -18,7 +18,8 @@
   `@redocly/openapi-core` → `js-yaml` 4.3.1 for GHSA-5p4m-2wfm-xmq; remove it when Redocly ships
   the patched resolution. All other override use remains prohibited.
 - Fail npm policy on every unapproved high/critical advisory and every execution/schema/lock mismatch.
-- The only exception is `GHSA-qwww-vcr4-c8h2`; its two Router records are atomic, require exact 7.18.2 lock nodes plus the `router-rsc-absent` usage policy, and expire exclusively at `2026-08-22T00:00:00Z`.
+- The production exception policy is exactly empty. Any returning Router high or critical finding,
+  including the former two-record 7.18.2 case, blocks as unapproved.
 - Keep Python vulnerability findings and every Trivy finding report-only; operational failures must still fail the security job.
 - Keep Dependabot security updates individual: no security grouping, auto-merge, or edits to existing Dependabot PRs.
 - Resolve tool roots from the script location, not the caller's current Git repository.
@@ -44,7 +45,7 @@ New Python-audit files:
 
 New npm-policy files:
 
-- `.github/security/npm-audit-exceptions.json` — the single reviewed exception record.
+- `.github/security/npm-audit-exceptions.json` — the exact empty production exception policy.
 - `scripts/check-npm-audit.mjs` — no-argument production entry point.
 - `scripts/lib/npm-audit-runner.mjs` — npm subprocess and isolated-cache lifecycle.
 - `scripts/lib/npm-audit-policy.mjs` — pure schema, lock, advisory, and expiry policy.
@@ -55,6 +56,8 @@ New npm-policy files:
 - `scripts/tests/test-router-rsc-policy.mjs` — first-party usage-policy tests.
 - `scripts/tests/fixtures/npm-audit/audit-clean.json` — valid empty v2 report.
 - `scripts/tests/fixtures/npm-audit/audit-router-7.18.2.json` — current two-record Router report.
+- `scripts/tests/fixtures/npm-audit/exceptions-router-7.18.2.json` — retired Router policy record,
+  isolated for generic exception and dormant RSC-policy tests.
 - `scripts/tests/fixtures/npm-audit/audit-unexpected-high.json` — one synthetic unapproved high.
 - `scripts/tests/fixtures/npm-audit/package-lock.json` — minimal lock v3 for policy tests.
 - `scripts/tests/test-web-security-lock.mjs` — exact patched-version regression over the real web lock.
@@ -69,6 +72,28 @@ Existing integration surfaces:
 - `scripts/tests/test-ci-hardening.sh`, `apps/api/tests/unit/test_ci_workflow.py`.
 - `.claude/commands/check-contracts.md`, `.claude/commands/pr.md`, `.claude/hooks/contract-lock-drift.sh`.
 - `CLAUDE.md`, `README.md`, `docs/dev-workflow.md`, `docs/runbooks/fresh-linux-setup.md`.
+
+## Owner amendments — 2026-08-07
+
+These decisions supersede every later historical task step or expected result that describes the
+Router pair as acceptable in production or requires deletion of a cache path before its identity can
+be trusted:
+
+- The production policy is exactly `{ "schemaVersion": 1, "exceptions": [] }`. Every returning high
+  or critical record, including the former Router pair, is blocked as
+  `unapproved-high-or-critical`.
+- The former Router policy record moves unchanged to a committed test fixture. Generic exception
+  schema, atomic-record, expiry, reason, and orchestration behavior remains covered only through that
+  fixture.
+- `router-rsc-policy.mjs` remains a bounded, dormant, non-authorizing defense-in-depth checker for the
+  synthetic fixture. It is not a complete JavaScript program analysis, and a clean result can never
+  authorize a live production finding.
+- After a temporary cache identity token is acquired, the runner must retain it through one guarded
+  removal attempt on every success or failure and must fail operationally if removal or identity
+  verification fails. If identity/token acquisition itself fails after `mkdtemp`, Node core cannot
+  safely prove that the pathname was not substituted; the runner must return `E_CACHE_CLEANUP` and
+  leave that unverifiable path rather than risk recursively deleting unrelated data. It must never
+  close an identity handle and retry deletion.
 
 ---
 
@@ -652,8 +677,8 @@ Existing integration surfaces:
   ```
 
   Expected: web gates pass and the live audit has zero high or critical findings. Preserve the Router
-  fixture and exception policy for later tasks; the exact pair may be accepted before expiry if it
-  returns, but a clean feed leaves that exception unused and is successful.
+  report and retired policy fixtures for later generic-policy tests. Under the production empty policy,
+  the exact pair blocks if it returns.
 
 - [ ] **Step 5: Commit the compatible remediation**
 
@@ -670,6 +695,7 @@ Existing integration surfaces:
 - Create: `scripts/tests/test-npm-audit-policy.mjs`
 - Create: `scripts/tests/fixtures/npm-audit/audit-clean.json`
 - Create: `scripts/tests/fixtures/npm-audit/audit-router-7.18.2.json`
+- Create: `scripts/tests/fixtures/npm-audit/exceptions-router-7.18.2.json`
 - Create: `scripts/tests/fixtures/npm-audit/audit-unexpected-high.json`
 - Create: `scripts/tests/fixtures/npm-audit/package-lock.json`
 
@@ -707,8 +733,8 @@ Existing integration surfaces:
   ```
 
   Tests must cover clean status zero, ignored low/moderate records, unexpected high/critical records,
-  exact Router success, both version mutations, missing inherited record, additional object/string
-  causes, additional effects, missing lock nodes, unrelated high beside Router, unused exception,
+  exact Router fixture acceptance, both version mutations, missing inherited record, additional
+  object/string causes, additional effects, missing lock nodes, unrelated high beside Router, unused exception,
   immediately-before/exactly-at/after expiry, unsupported npm/audit/lock versions, malformed JSON,
   wrong field types, status two, and status/report contradictions.
 
@@ -718,9 +744,19 @@ Existing integration surfaces:
 
   Expected: module-not-found failure for the policy implementation.
 
-- [ ] **Step 4: Add the single exception data record**
+- [ ] **Step 4: Add the empty production policy and isolated Router fixture**
 
-  Create exactly:
+  Create `.github/security/npm-audit-exceptions.json` exactly as:
+
+  ```json
+  {
+    "schemaVersion": 1,
+    "exceptions": []
+  }
+  ```
+
+  Store the following retired record only in
+  `scripts/tests/fixtures/npm-audit/exceptions-router-7.18.2.json`:
 
   ```json
   {
@@ -768,6 +804,8 @@ Existing integration surfaces:
 
   Unknown extra fields may pass; missing or wrongly typed required fields fail closed. Return accepted
   records with `usagePolicy`, blocked records with stable reasons, and ignored info/low/moderate counts.
+  The populated synthetic fixture exercises accepted records; the real empty policy blocks the Router
+  pair as unapproved.
 
 - [ ] **Step 6: Run policy checks and syntax validation**
 
@@ -785,7 +823,7 @@ Existing integration surfaces:
   git commit -m "ci: define the npm advisory policy"
   ```
 
-### Task 8: Add the Router RSC usage policy
+### Task 8: Retain a dormant Router RSC usage-policy boundary
 
 **Files:**
 - Create: `scripts/lib/router-rsc-policy.mjs`
@@ -793,7 +831,8 @@ Existing integration surfaces:
 
 **Interfaces:**
 - Consumes: frozen web TypeScript compiler, web manifest, Git-tracked first-party source files
-- Produces: sorted `RouterRscViolation[]` for the `router-rsc-absent` policy
+- Produces: sorted `RouterRscViolation[]` for synthetic `router-rsc-absent` fixture tests; it does not
+  authorize any production finding
 
 - [ ] **Step 1: Write the failing AST and file-selection suite**
 
@@ -845,6 +884,8 @@ Existing integration surfaces:
   `react-router-dom/` subpaths containing `rsc` or `react-server`. Track lexical bindings so shadowed
   namespace/CommonJS identifiers do not false-positive. Nonliteral module expressions are outside this
   syntax-only policy and remain explicitly regression-tested. Sort by path, line, column, then code.
+  This bounded analyzer is defense-in-depth for the isolated retired-policy fixture, not a complete
+  JavaScript analysis or production authorization condition.
 
 - [ ] **Step 4: Run the AST suite and inspect diagnostics**
 
@@ -916,8 +957,10 @@ Existing integration surfaces:
   web CWD; a unique `npm_config_cache`; update-notifier suppression; a 120-second timeout; bounded
   stdout/stderr; status one captured as data; spawn error (classified before a companion signal),
   signal, timeout, absent status, and output overflow rejected; and cache removal after success and
-  every failure. Remove every inherited case variant of npm cache/notifier environment keys, then set
-  exactly the controlled child keys so inherited configuration cannot override the isolated run.
+  every failure once a stable cache identity has been acquired. Prove that failure before identity
+  acquisition returns `E_CACHE_CLEANUP` without recursively removing an unverifiable path. Remove every
+  inherited case variant of npm cache/notifier environment keys, then set exactly the controlled child
+  keys so inherited configuration cannot override the isolated run.
   Include a real boundary fixture whose `npm-cli.js` is executed through real `process.execPath` and
   `spawnSync`, proving the shell-free JavaScript entry works beyond mocked argv assertions.
 
@@ -932,11 +975,17 @@ Existing integration surfaces:
   Resolve a regular `npm-cli.js` file through bounded, platform-specific candidates rooted at the real
   active `process.execPath`; execute it with that same Node executable, argument arrays, `shell: false`,
   bounded buffers, and `timeout: 120_000`. Never fall back to `npm`, `npm.cmd`, a shell, or an ad hoc
-  download. Use a `mkdtemp` directory under the supplied cache parent. Validate that the cleanup target
-  is the exact non-link child returned by `mkdtemp`, keep sibling sentinels untouched, remove it in
-  `finally`, and treat cleanup failure as operational failure. Return `{ exitCode, stdout, stderr }`
-  only for a normal status zero or one. Convert spawn errors, timeout, signals, absent statuses, and
-  bounded-buffer failures into stable `NpmAuditExecutionError.code` values.
+  download. Use a `mkdtemp` directory under the supplied cache parent. Acquire and retain a random,
+  exclusive sentinel plus a directory identity handle; revalidate both before one recursive removal
+  attempt, keep them open through that attempt, close each exactly once afterward, require final
+  `ENOENT`, and never close-then-retry. Keep sibling sentinels and substituted paths untouched. Once a
+  stable identity exists, removal/verification failure outranks close failure, which outranks the
+  original execution/setup failure. If identity/token acquisition itself fails, return
+  `E_CACHE_CLEANUP` and preserve the unverifiable path because Node core offers no atomic
+  `mkdtemp`-plus-handle or descriptor-relative recursive removal. Return
+  `{ exitCode, stdout, stderr }` only for a normal status zero or one. Convert spawn errors, timeout,
+  signals, absent statuses, and bounded-buffer failures into stable `NpmAuditExecutionError.code`
+  values.
 
 - [ ] **Step 4: Write a failing CLI orchestration test**
 
@@ -986,10 +1035,9 @@ Existing integration surfaces:
 
   Run: `node scripts/check-npm-audit.mjs`
 
-  Expected: exit zero with zero high/critical findings when the live feed is clean; that successful
-  result leaves the Router exception unused. If the live feed returns exactly the two atomic Router
-  records before `2026-08-22T00:00:00Z`, exact 7.18.2 versions and a clean RSC usage check may accept
-  them. No other high or critical finding may pass.
+  Expected: exit zero with zero high/critical findings when the live feed is clean. If the live feed
+  returns the former two-record Router case—or any other high or critical finding—the empty production
+  policy blocks it. Synthetic tests alone exercise accepted exception/RSC orchestration.
 
 - [ ] **Step 8: Commit the production audit entry point**
 
@@ -1196,8 +1244,8 @@ Existing integration surfaces:
 - [ ] **Step 7: Stop at the publication boundary**
 
   Report the branch, commits, exact test counts/results, and any environment-limited check. A clean
-  live feed is a successful unused Router exception; if the exact atomic Router pair returns before
-  expiry it may be reported as accepted with its expiry. No other high or critical finding may pass.
+  live feed is successful. The former Router pair and every other high or critical finding must be
+  reported as blocked under the empty production policy.
   Do not push or open a pull request until the owner authorizes publication.
 
 ### Task 12: Enable Dependabot vulnerability automation after publication is green

@@ -32,10 +32,10 @@ The web lock's compatible patch selections remediate the original high-severity 
 - `nanoid` to `3.3.18`, which is in the advisory's patched 3.x range beginning at `3.3.17`.
 
 The React Router maintainer advisory identifies `7.18.2` as patched and limits the affected path to
-unstable React Server Component APIs. The repository does not import those APIs. The global advisory
-record currently models one continuous range below `8.3.0`, so npm continues to report the patched
-7.18.2 tree as high severity. The design must distinguish that feed inconsistency from a blanket audit
-waiver.
+unstable React Server Component APIs. A temporary source-usage exception was designed for the earlier
+global-feed discrepancy, but the feed is now clean and final review found another JavaScript binding
+form outside the bounded analyzer. The owner therefore retired the production Router exception on
+2026-08-07. Any returning high or critical Router finding now blocks, regardless of first-party usage.
 
 Finally, GitHub's dependency graph is populated and version-update pull requests work, but Dependabot
 vulnerability alerts and automated security updates are disabled. Those are repository settings; the
@@ -43,14 +43,16 @@ existing `.github/dependabot.yml` cannot enable them.
 
 ## Objective
 
-Make dependency-related execution reproducible and make every new high or critical npm advisory stop
-the CI security job, without introducing a knowingly false failure for the patched React Router release.
+Make dependency-related execution reproducible and make every high or critical npm advisory stop the
+CI security job. The patched Router lock remains selected, but no production advisory exception is
+active.
 
 The change must preserve these invariants:
 
 - no contract or audit tool is fetched from an unqualified moving tag at execution time;
 - contract lint and bundle behavior is independent of the caller's working directory;
-- every accepted advisory exception is narrow, machine-checked, documented, and time-limited;
+- the production exception policy is exactly empty; generic exception machinery remains fixture-tested
+  but cannot authorize a live finding without a separately reviewed policy change;
 - audit transport, schema, or policy errors fail closed;
 - existing Python, web, contract, and generated-artifact behavior remains unchanged;
 - security-update pull requests remain individually reviewable.
@@ -158,61 +160,29 @@ invokes `[npmCliPath, ...args]` with `process.execPath`, an argument array, `she
 output, and a 120-second timeout. This works with native Windows `npm.cmd` installations without ever
 executing the command shim. A missing, ambiguous, timed-out, or otherwise invalid npm CLI boundary is
 an operational failure. The checker supports npm `10.9.x` and npm audit report version `2`; it
-validates both before interpreting findings and fails closed when either contract changes. Exact Node
-runtime and GitHub Action pinning remains the next repository-runner hardening slice.
+validates both before interpreting findings and fails closed when either contract changes.
 
-The checker evaluates high and critical findings by advisory identity, affected package, inherited
-cause chain, and installed lockfile version. It fails for every finding except this single policy record:
+The production policy file is exactly `{ "schemaVersion": 1, "exceptions": [] }`. Every high or
+critical finding—including the former two-record Router case—therefore blocks as unapproved. The old
+atomic Router record moves unchanged to a committed synthetic fixture so generic exception schema,
+expiry, reason, and orchestration behavior remain regression-tested without authorizing a live finding.
+Adding any future production exception requires a separately reviewed owner decision and policy change.
 
-| Field | Required value |
-|---|---|
-| Advisory | `GHSA-qwww-vcr4-c8h2` |
-| Vulnerable root | `react-router` |
-| Installed packages | `react-router@7.18.2`, `react-router-dom@7.18.2` |
-| Allowed inherited record | `react-router-dom` caused only by the allowed root |
-| Expiry instant | `2026-08-22T00:00:00Z` (exclusive; valid through 2026-08-21 UTC) |
-| Usage constraint | no Router RSC dependency or affected unstable Router RSC API under `apps/web` |
-
-The exception is stored in `.github/security/npm-audit-exceptions.json` rather than embedded in control
-flow. It links to the maintainer advisory and explains the global-feed discrepancy.
-
-A companion source-policy checker uses the TypeScript compiler API from the frozen web lock. It rejects
-the RSC packages `@react-router/dev` and `@vitejs/plugin-rsc`, including npm aliases, from the web
-manifest's `dependencies`, `devDependencies`, `optionalDependencies`, and `peerDependencies` sections.
-It treats both `react-router` and `react-router-dom` as Router API sources because the installed DOM
-entry point re-exports Router APIs. It identifies static imports and re-exports of the six unstable RSC
-APIs documented by React Router, and rejects dynamic imports whose specifier is `react-router`,
-`react-router/dom`, or `react-router-dom`, or whose `react-router/` or `react-router-dom/` subpath
-contains `rsc` or `react-server`, while the exception is active. The six APIs are
-`unstable_RSCHydratedRouter`, `unstable_RSCStaticRouter`,
-`unstable_createCallServer`, `unstable_getRSCStream`, `unstable_matchRSCServerRequest`, and
-`unstable_routeRSCServerRequest`. Aliases are evaluated by their imported symbol, not their local name;
-the same source boundary applies to named, namespace, CommonJS, re-export, and type-only forms.
-The checker examines Git-tracked first-party `.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.mjs`, `.cts`, and
-`.cjs` files under `apps/web/src`; it excludes generated output, tests, fixtures, build output, and
-`node_modules`. AST inspection prevents comments and ordinary string contents from creating false
-positives.
-
-The audit CLI uses its real UTC clock; tests inject a clock through the policy module rather than
-exposing a production time-bypass flag. The RFC 3339 expiry is an exclusive boundary: the exception
-passes immediately before it and fails at or after it.
-
-The two Router audit records are accepted atomically. When—and only when—the audit exception is used,
-the same CLI runs the RSC usage checker before returning success. A missing root/inherited record or an
-RSC-policy failure therefore cannot leave half of the exception accepted.
+The companion TypeScript source-policy checker remains tested as dormant defense-in-depth for that
+synthetic fixture. It is not a complete JavaScript program analysis and does not authorize any current
+production exception. In particular, a clean RSC scan cannot turn a live Router high finding green.
 
 The no-argument production entry point rejects every unexpected CLI argument before doing work and
 returns exit two. Its exported `main` permits dependency injection only as an internal module-test
-seam: tests may replace subprocess execution and the Router check's TypeScript/Git boundaries, while
-the executable exposes no path, clock, policy, compiler, or Git override. The CLI validates every
-configured `usagePolicy`, including unused exceptions, joins accepted records back to the validated
-exception document to print its review reason, and treats an unknown policy as an operational failure.
-Operational failure takes precedence over policy/RSC blocking when mapping exit codes.
+seam. Operational failure takes precedence over policy blocking when mapping exit codes. Synthetic
+tests retain the former accepted-record/usage-policy paths; the real empty policy produces no accepted
+records and never invokes the RSC analyzer.
 
-If the advisory disappears from npm's feed, the exception is simply unused and the check passes. If
-the feed changes shape, either installed version changes, a prohibited RSC import appears, another
-high/critical advisory is introduced, or the expiry instant is reached, CI fails.
-Renewing or replacing the exception therefore requires a reviewed repository change.
+The cache runner removes a temporary directory only after acquiring and revalidating a stable lifetime
+identity. Once that identity exists, cleanup is mandatory on success and failure. If identity/token
+acquisition itself fails, Node provides no atomic `mkdtemp`-plus-handle or descriptor-relative recursive
+removal; the runner must return `E_CACHE_CLEANUP` and leave the unverifiable path rather than risk
+recursively deleting a substituted directory. It never closes an identity handle and retries deletion.
 
 ### 5. CI and local flow
 
@@ -252,9 +222,9 @@ and remain subject to the normal CI and owner review process.
 - Missing npm CLI entry point, subprocess timeout after 120 seconds, output overflow, signal, or spawn
   error: fail closed as an operational error without retrying through a shell.
 - Unknown inherited vulnerability chain: fail closed instead of treating a package-name match as safe.
-- Allowed advisory on any version other than the two exact 7.18.2 packages: fail.
-- Allowed advisory at or after `2026-08-22T00:00:00Z`, or alongside a prohibited RSC
-  dependency/API: fail.
+- Any high or critical Router advisory, including the former exact 7.18.2 pair: fail as unapproved.
+- Cache identity acquisition failure: fail operationally and do not recursively remove an
+  unverifiable path; after identity acquisition, cleanup failure also fails operationally.
 - Any unexpected production CLI argument or unknown configured `usagePolicy`: fail with exit two
   before reporting success, even when the exception is unused.
 - GitHub setting mutation or read-back mismatch: stop and report the setting that was not enabled.
@@ -295,19 +265,18 @@ Use committed synthetic npm-audit fixtures and temporary lock/source trees to pr
 - no findings passes;
 - an unexpected high or critical finding fails;
 - low and moderate findings do not fail this policy;
-- the exact Router advisory and inherited DOM record pass before expiration on 7.18.2;
-- the exception fails for another Router version, an additional cause, an RSC import, or an expired
-  clock;
-- the exception passes immediately before `2026-08-22T00:00:00Z` and fails exactly at and after it;
+- the real empty policy blocks the Router advisory and inherited DOM record without invoking RSC
+  analysis;
+- an isolated populated fixture still proves exact-record, version, cause, expiry, reason, and RSC
+  orchestration behavior without authorizing production;
 - the RSC source checker catches aliased imports, re-exports, Router RSC dynamic imports, and manifest
   packages while ignoring comments, ordinary strings, tests, generated files, and installed dependencies;
 - unsupported npm versions and audit report versions fail before policy evaluation;
 - malformed JSON, a changed schema, and simulated command failure fail closed.
 
 Run one live npm audit after the fixture tests. The expected current result is zero high or critical
-findings. The Router fixture and time-limited exception remain covered by synthetic tests: a clean feed
-leaves the exception unused and passes, while the exact documented Router pair may still be accepted
-before expiry. No other high or critical finding is accepted.
+findings. Any live high or critical finding blocks; only isolated synthetic fixtures exercise generic
+exception behavior.
 
 ### Regression suite
 
@@ -331,8 +300,8 @@ before expiry. No other high or critical finding is accepted.
 - Redocly telemetry and update notices are disabled in every active wrapper invocation.
 - The web lock contains the patched brace-expansion, Undici, Router, and nanoid versions.
 - A synthetic new high/critical npm advisory makes the security check red.
-- Only the exact Router exception before its exclusive expiry passes, and mutation tests prove every
-  version, inheritance, RSC-usage, and time constraint.
+- The production exception policy is empty and the Router pair blocks; isolated fixtures preserve
+  generic exception and RSC-orchestration mutation coverage.
 - The policy rejects unsupported npm/audit-report versions instead of guessing at changed output.
 - No force, major, or broad override-based npm remediation is introduced. The contract toolchain has
   the sole narrowly targeted security override `@redocly/openapi-core` → `js-yaml` 4.3.1 for
