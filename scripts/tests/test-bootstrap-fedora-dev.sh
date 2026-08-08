@@ -113,22 +113,20 @@ make_dispatcher() {
     '    ;;' \
     '  dnf)' \
     '    log "dnf $*"' \
-    '    if [[ ${1-} == -q && ${2-} == repolist && ${3-} == --enabled && ${4-} == docker-ce-stable && $# -eq 4 ]]; then' \
-    '      [[ $(read_state docker_repo absent) == configured ]]' \
-    '    else' \
-    '      printf "%s\n" "unexpected direct dnf mutation: $*" >>"$state/host_mutations"; exit 90' \
-    '    fi' \
+    '    printf "%s\n" "direct dnf invocation: $*" >>"$state/host_mutations"; exit 90' \
     '    ;;' \
     '  sudo)' \
     '    log "sudo $*"; printf "STUB_SUDO %s\n" "$*"' \
-    '    [[ ${1-} == dnf ]] || { printf "%s\n" "sudo $*" >>"$state/host_mutations"; exit 90; }' \
+    '    [[ ${1##*/} == dnf ]] || { printf "%s\n" "sudo $*" >>"$state/host_mutations"; exit 90; }' \
     '    shift' \
     '    if [[ ${1-} == install && ${2-} == --assumeyes ]]; then' \
     '      shift' \
     '      shift' \
     '      for package in "$@"; do install_package "$package"; done' \
     '    elif [[ ${1-} == config-manager && ${2-} == addrepo && ${3-} == --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo && $# -eq 3 ]]; then' \
-    '      printf "configured\n" >"$state/docker_repo"' \
+    '      repo_file=$(read_state repo_file)' \
+    '      mkdir -p "${repo_file%/*}"' \
+    '      printf "%s\n" "[docker-ce-stable]" "name=Docker CE Stable" "baseurl=https://download.docker.com/linux/fedora/\$releasever/\$basearch/stable" "enabled=1" "gpgcheck=1" "gpgkey=https://download.docker.com/linux/fedora/gpg" >"$repo_file"' \
     '    else' \
     '      printf "%s\n" "sudo dnf $*" >>"$state/host_mutations"; exit 90' \
     '    fi' \
@@ -158,8 +156,11 @@ new_fixture() {
   CASE_REPO="$CASE_ROOT/repo"
   CASE_BIN="$CASE_ROOT/bin"
   CASE_STATE="$CASE_ROOT/state"
-  CASE_OS_RELEASE="$CASE_ROOT/os-release"
-  mkdir -p "$CASE_REPO/scripts" "$CASE_BIN" "$CASE_STATE"
+  CASE_SYSTEM_ROOT="$CASE_ROOT/system-root"
+  CASE_OS_RELEASE="$CASE_SYSTEM_ROOT/etc/os-release"
+  CASE_REPO_FILE="$CASE_SYSTEM_ROOT/etc/yum.repos.d/docker-ce.repo"
+  CASE_EVIL_BIN="$CASE_ROOT/evil-bin"
+  mkdir -p "$CASE_REPO/scripts" "$CASE_BIN" "$CASE_STATE" "$CASE_SYSTEM_ROOT/etc/yum.repos.d" "$CASE_EVIL_BIN"
   cp "$BOOTSTRAP_SOURCE" "$CASE_REPO/scripts/bootstrap-fedora-dev.sh"
   cp "$NODE_PIN" "$CASE_REPO/.node-version"
   make_dispatcher "$CASE_BIN/dispatcher"
@@ -171,7 +172,28 @@ new_fixture() {
   : >"$CASE_STATE/actions"
   : >"$CASE_STATE/host_mutations"
   : >"$CASE_STATE/installed_packages"
-  printf 'ID=fedora\nVERSION_ID=44\n' >"$CASE_OS_RELEASE"
+  printf '%s\n' "$CASE_REPO_FILE" >"$CASE_STATE/repo_file"
+  printf 'ID=fedora\nVERSION_ID=44\nVARIANT_ID=workstation\n' >"$CASE_OS_RELEASE"
+
+  make_dispatcher "$CASE_EVIL_BIN/dispatcher"
+  for tool in dnf rpm sudo uname node uv systemctl usermod groupmod firewall-cmd setenforce install tee dnf-3 npm npx just pre-commit cat; do
+    cp "$CASE_EVIL_BIN/dispatcher" "$CASE_EVIL_BIN/$tool"
+  done
+}
+
+write_docker_repo() {
+  local section=${1:-docker-ce-stable}
+  local baseurl=${2:-'https://download.docker.com/linux/fedora/$releasever/$basearch/stable'}
+  local enabled=${3:-1}
+  mkdir -p "${CASE_REPO_FILE%/*}"
+  printf '%s\n' \
+    "[$section]" \
+    'name=Docker CE Stable' \
+    "baseurl=$baseurl" \
+    "enabled=$enabled" \
+    'gpgcheck=1' \
+    'gpgkey=https://download.docker.com/linux/fedora/gpg' \
+    >"$CASE_REPO_FILE"
 }
 
 install_all_packages() {
@@ -187,13 +209,58 @@ run_bootstrap() {
   shift
   set +e
   printf '%s' "$input" | env \
-    PATH="$CASE_BIN:/usr/bin:/bin" \
+    PATH="$CASE_EVIL_BIN:/usr/bin:/bin" \
     STUB_STATE_DIR="$CASE_STATE" \
     FEDORA_BOOTSTRAP_TEST_MODE=1 \
-    FEDORA_BOOTSTRAP_OS_RELEASE="$CASE_OS_RELEASE" \
+    FEDORA_BOOTSTRAP_TEST_ROOT="$CASE_SYSTEM_ROOT" \
+    FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT="$CASE_BIN" \
     USER=developer \
-    bash "$CASE_REPO/scripts/bootstrap-fedora-dev.sh" "$@" \
+    /usr/bin/bash "$CASE_REPO/scripts/bootstrap-fedora-dev.sh" "$@" \
     >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
+  CASE_EXIT=$?
+  set +e
+  CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
+}
+
+run_bootstrap_pty() {
+  local input=$1
+  shift
+  set +e
+  env \
+    PATH="$CASE_EVIL_BIN:/usr/bin:/bin" \
+    STUB_STATE_DIR="$CASE_STATE" \
+    FEDORA_BOOTSTRAP_TEST_MODE=1 \
+    FEDORA_BOOTSTRAP_TEST_ROOT="$CASE_SYSTEM_ROOT" \
+    FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT="$CASE_BIN" \
+    USER=developer \
+    /usr/bin/python3 - "$input" "$CASE_REPO/scripts/bootstrap-fedora-dev.sh" "$@" \
+    >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr" <<'PY'
+import errno
+import os
+import pty
+import sys
+
+answer = sys.argv[1].encode()
+argv = ["/usr/bin/bash", *sys.argv[2:]]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execve(argv[0], argv, os.environ.copy())
+os.write(fd, answer)
+chunks = []
+while True:
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError as exc:
+        if exc.errno == errno.EIO:
+            break
+        raise
+    if not chunk:
+        break
+    chunks.append(chunk)
+_, status = os.waitpid(pid, 0)
+os.write(1, b"".join(chunks))
+raise SystemExit(os.waitstatus_to_exitcode(status))
+PY
   CASE_EXIT=$?
   set +e
   CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
@@ -218,7 +285,7 @@ assert_not_contains '--check never enters sudo' "$(<"$CASE_STATE/actions")" 'sud
 assert_not_contains '--check does not install Python' "$(<"$CASE_STATE/actions")" 'uv python install'
 
 new_fixture non-fedora
-printf 'ID=debian\nVERSION_ID=13\n' >"$CASE_OS_RELEASE"
+printf 'ID=debian\nVERSION_ID=13\nVARIANT_ID=workstation\n' >"$CASE_OS_RELEASE"
 run_bootstrap '' --check
 assert_eq 'non-Fedora exits 2' 2 "$CASE_EXIT"
 assert_contains 'non-Fedora prints exact guidance' "$CASE_OUTPUT" \
@@ -226,7 +293,7 @@ assert_contains 'non-Fedora prints exact guidance' "$CASE_OUTPUT" \
 assert_empty_file 'non-Fedora performs no host mutation' "$CASE_STATE/host_mutations"
 
 new_fixture unsupported-fedora
-printf 'ID=fedora\nVERSION_ID="43"\n' >"$CASE_OS_RELEASE"
+printf 'ID=fedora\nVERSION_ID="43"\nVARIANT_ID=workstation\n' >"$CASE_OS_RELEASE"
 run_bootstrap '' --check
 assert_eq 'unsupported Fedora release exits 2' 2 "$CASE_EXIT"
 assert_contains 'unsupported Fedora prints exact guidance' "$CASE_OUTPUT" \
@@ -247,8 +314,24 @@ assert_contains 'Fedora Atomic gets distinct advanced guidance' "$CASE_OUTPUT" \
   'bootstrap: Fedora Atomic variant silverblue is not supported by this host bootstrap. See the advanced Fedora Atomic note in docs/runbooks/fresh-linux-setup.md.'
 assert_empty_file 'Fedora Atomic rejection performs no host mutation' "$CASE_STATE/host_mutations"
 
+for unsupported_variant in kde server iot unknown; do
+  new_fixture "unsupported-variant-$unsupported_variant"
+  printf 'ID=fedora\nVERSION_ID=44\nVARIANT_ID=%s\n' "$unsupported_variant" >"$CASE_OS_RELEASE"
+  run_bootstrap '' --check
+  assert_eq "Fedora $unsupported_variant variant exits 2" 2 "$CASE_EXIT"
+  assert_contains "Fedora $unsupported_variant requires exact Workstation variant" "$CASE_OUTPUT" \
+    "bootstrap: Fedora Workstation 44 requires VARIANT_ID=workstation (found $unsupported_variant)."
+done
+
+new_fixture missing-variant
+printf 'ID=fedora\nVERSION_ID=44\n' >"$CASE_OS_RELEASE"
+run_bootstrap '' --check
+assert_eq 'missing Fedora variant exits 2' 2 "$CASE_EXIT"
+assert_contains 'missing Fedora variant requires exact Workstation variant' "$CASE_OUTPUT" \
+  'bootstrap: Fedora Workstation 44 requires VARIANT_ID=workstation (found missing).'
+
 new_fixture os-release-data-only
-printf 'ID=fedora\nVERSION_ID=44\nMALICIOUS=$(systemctl enable evil)\n' >"$CASE_OS_RELEASE"
+printf 'ID=fedora\nVERSION_ID=44\nVARIANT_ID=workstation\nMALICIOUS=$(systemctl enable evil)\n' >"$CASE_OS_RELEASE"
 run_bootstrap '' --check
 assert_eq 'os-release is parsed as data' 0 "$CASE_EXIT"
 assert_empty_file 'os-release contents are never executed' "$CASE_STATE/host_mutations"
@@ -260,15 +343,43 @@ assert_contains 'RPM package matching is exact' "$CASE_OUTPUT" 'Missing Fedora p
 
 new_fixture node-path-shadow
 install_all_packages
-printf 'configured\n' >"$CASE_STATE/docker_repo"
-printf 'v20.19.4\n' >"$CASE_STATE/node_version"
+write_docker_repo
 run_bootstrap '' --check
 assert_not_contains 'installed nodejs22 binary package is not reported missing' "$CASE_OUTPUT" 'Missing Fedora packages:'
 assert_contains 'earlier PATH Node is reported as shadowing' "$CASE_OUTPUT" \
-  'PATH_SHADOWED: active node is v20.19.4; Fedora nodejs22-bin provides /usr/bin/node for Node 22.'
+  "PATH_SHADOWED: $CASE_EVIL_BIN/node wins PATH; $CASE_BIN/node from nodejs22-bin is Node 22."
+
+new_fixture missing-docker-repo
+run_bootstrap '' --check
+assert_contains 'missing Docker repo file is reported absent' "$CASE_OUTPUT" 'Docker repository: missing or invalid'
+assert_no_action_tool 'missing Docker repo check invokes no DNF' "$CASE_STATE/actions" dnf
+
+new_fixture wrong-docker-repo-id
+write_docker_repo docker-ce-production
+run_bootstrap '' --check
+assert_contains 'wrong Docker repo ID is rejected' "$CASE_OUTPUT" 'Docker repository: missing or invalid'
+assert_no_action_tool 'wrong Docker repo ID check invokes no DNF' "$CASE_STATE/actions" dnf
+
+new_fixture wrong-docker-repo-url
+write_docker_repo docker-ce-stable 'https://mirror.example.invalid/linux/fedora/$releasever/$basearch/stable'
+run_bootstrap '' --check
+assert_contains 'wrong Docker repo URL is rejected' "$CASE_OUTPUT" 'Docker repository: missing or invalid'
+assert_no_action_tool 'wrong Docker repo URL check invokes no DNF' "$CASE_STATE/actions" dnf
+
+new_fixture disabled-docker-repo
+write_docker_repo docker-ce-stable 'https://download.docker.com/linux/fedora/$releasever/$basearch/stable' 0
+run_bootstrap '' --check
+assert_contains 'disabled Docker repo is rejected' "$CASE_OUTPUT" 'Docker repository: missing or invalid'
+assert_no_action_tool 'disabled Docker repo check invokes no DNF' "$CASE_STATE/actions" dnf
+
+new_fixture valid-docker-repo
+write_docker_repo
+run_bootstrap '' --check
+assert_contains 'exact official Docker repo data is accepted' "$CASE_OUTPUT" 'Docker repository: configured and verified'
+assert_no_action_tool 'valid Docker repo check invokes no DNF' "$CASE_STATE/actions" dnf
 
 new_fixture decline-apply
-run_bootstrap $'no\n' --apply
+run_bootstrap_pty $'no\n' --apply
 assert_eq 'declining apply exits zero' 0 "$CASE_EXIT"
 assert_contains 'declining apply cancels' "$CASE_OUTPUT" 'Cancelled; no changes were made.'
 assert_empty_file 'declining apply performs no host mutation' "$CASE_STATE/host_mutations"
@@ -276,37 +387,38 @@ assert_not_contains 'declining apply never enters sudo' "$(<"$CASE_STATE/actions
 assert_not_contains 'declining apply never installs Python' "$(<"$CASE_STATE/actions")" 'uv python install'
 
 new_fixture literal-confirmation
-run_bootstrap $'YES\n' --apply
+run_bootstrap_pty $'YES\n' --apply
 assert_contains 'confirmation requires literal lowercase yes' "$CASE_OUTPUT" 'Cancelled; no changes were made.'
 assert_not_contains 'uppercase confirmation never enters sudo' "$(<"$CASE_STATE/actions")" 'sudo '
 
-new_fixture root-apply
-set +e
-printf 'yes\n' | env \
-  PATH="$CASE_BIN:/usr/bin:/bin" \
-  STUB_STATE_DIR="$CASE_STATE" \
-  FEDORA_BOOTSTRAP_TEST_MODE=1 \
-  FEDORA_BOOTSTRAP_OS_RELEASE="$CASE_OS_RELEASE" \
-  FEDORA_BOOTSTRAP_EFFECTIVE_UID=0 \
-  USER=root \
-  bash "$CASE_REPO/scripts/bootstrap-fedora-dev.sh" --apply \
-  >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
-CASE_EXIT=$?
-CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
-assert_eq 'root --apply exits 2' 2 "$CASE_EXIT"
-assert_contains 'root --apply protects the unprivileged runtime step' "$CASE_OUTPUT" \
-  'bootstrap: do not run --apply with sudo or as root; run it from the unprivileged developer account.'
-assert_not_contains 'root --apply never enters sudo' "$(<"$CASE_STATE/actions")" 'sudo '
+new_fixture non-tty-apply
+run_bootstrap $'yes\n' --apply
+assert_eq 'fixture mode cannot bypass real terminal requirement' 2 "$CASE_EXIT"
+assert_contains 'non-TTY apply prints terminal guidance' "$CASE_OUTPUT" \
+  'bootstrap: --apply confirmation must be entered in an interactive terminal.'
+assert_not_contains 'non-TTY apply never enters sudo' "$(<"$CASE_STATE/actions")" 'sudo '
+
+new_fixture fake-euid
+export FEDORA_BOOTSTRAP_EFFECTIVE_UID=0
+run_bootstrap_pty $'no\n' --apply
+unset FEDORA_BOOTSTRAP_EFFECTIVE_UID
+assert_eq 'environment cannot spoof the actual effective UID' 0 "$CASE_EXIT"
+assert_contains 'fake EUID does not replace literal confirmation' "$CASE_OUTPUT" 'Cancelled; no changes were made.'
+assert_not_contains 'fake EUID decline never enters sudo' "$(<"$CASE_STATE/actions")" 'sudo '
 
 new_fixture complete-preview
-run_bootstrap $'yes\n' --apply
+run_bootstrap_pty $'yes\n' --apply
 BASE_COMMAND='sudo dnf install --assumeyes git curl openssl dnf-plugins-core nodejs22 nodejs22-bin nodejs22-npm nodejs22-npm-bin uv just pre-commit postgresql16'
 REPO_COMMAND='sudo dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo'
 DOCKER_COMMAND='sudo dnf install --assumeyes docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin'
 assert_contains 'preview includes exact Fedora package transaction' "$CASE_OUTPUT" "$BASE_COMMAND"
 assert_contains 'preview includes official Docker repository transaction' "$CASE_OUTPUT" "$REPO_COMMAND"
 assert_contains 'preview includes exact Docker package transaction' "$CASE_OUTPUT" "$DOCKER_COMMAND"
-assert_eq 'preview heading is emitted once' 1 "$(awk '/^Proposed privileged transaction:$/ { count++ } END { print count + 0 }' "$CASE_ROOT/stdout")"
+assert_contains 'preview discloses the approved repo-file write' "$CASE_OUTPUT" \
+  'The approved dnf config-manager command writes /etc/yum.repos.d/docker-ce.repo.'
+assert_contains 'preview says the bootstrap does not edit /etc directly' "$CASE_OUTPUT" \
+  'The bootstrap does not edit /etc directly.'
+assert_eq 'preview heading is emitted once' 1 "$(awk '/^Proposed privileged transaction:\r?$/ { count++ } END { print count + 0 }' "$CASE_ROOT/stdout")"
 preview_line=$(line_number "$CASE_OUTPUT" 'Proposed privileged transaction:')
 sudo_line=$(line_number "$CASE_OUTPUT" 'STUB_SUDO ')
 if [[ -n $preview_line && -n $sudo_line && $preview_line -lt $sudo_line ]]; then
@@ -315,6 +427,15 @@ else
   not_ok "the whole preview appears before the first sudo call (preview=${preview_line:-none} sudo=${sudo_line:-none})"
 fi
 assert_empty_file 'successful apply invokes no forbidden host action' "$CASE_STATE/host_mutations"
+assert_no_action_tool 'successful apply repo verification invokes no direct DNF' "$CASE_STATE/actions" dnf
+if [[ -r $CASE_REPO_FILE ]] \
+    && grep -qxF '[docker-ce-stable]' "$CASE_REPO_FILE" \
+    && grep -qxF 'enabled=1' "$CASE_REPO_FILE" \
+    && grep -qxF 'baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable' "$CASE_REPO_FILE"; then
+  ok 'post-apply verification reads exact official repo-file data'
+else
+  not_ok 'post-apply verification reads exact official repo-file data'
+fi
 assert_contains 'successful apply installs Python 3.12 unprivileged' "$(<"$CASE_STATE/actions")" 'uv python install 3.12'
 last_action=$(tail -n 1 "$CASE_STATE/actions")
 assert_eq 'successful flow ends at contributor doctor' 'doctor contributor' "$last_action"
@@ -324,18 +445,44 @@ assert_no_action_tool 'bootstrap never runs pre-commit installation' "$CASE_STAT
 
 new_fixture second-apply
 install_all_packages
-printf 'configured\n' >"$CASE_STATE/docker_repo"
-run_bootstrap '' --apply
+write_docker_repo
+run_bootstrap_pty '' --apply
 assert_eq 'second --apply exits zero without confirmation' 0 "$CASE_EXIT"
-assert_not_contains 'second --apply has no package transaction' "$(<"$CASE_STATE/actions")" 'sudo dnf'
+assert_no_action_tool 'second --apply has no package transaction' "$CASE_STATE/actions" sudo
 assert_not_contains 'second --apply has no privileged preview' "$CASE_OUTPUT" 'Proposed privileged transaction:'
 assert_empty_file 'second --apply performs no forbidden host action' "$CASE_STATE/host_mutations"
 assert_eq 'second --apply still ends at contributor doctor' 'doctor contributor' "$(tail -n 1 "$CASE_STATE/actions")"
 
 new_fixture configured-repo
-printf 'configured\n' >"$CASE_STATE/docker_repo"
-run_bootstrap $'yes\n' --apply
+write_docker_repo
+run_bootstrap_pty $'yes\n' --apply
 assert_not_contains 'configured Docker repository is not added again' "$(<"$CASE_STATE/actions")" 'config-manager addrepo'
+assert_not_contains 'configured repo preview does not disclose an unplanned repo write' "$CASE_OUTPUT" \
+  'The approved dnf config-manager command writes /etc/yum.repos.d/docker-ce.repo.'
+
+new_fixture rejected-production-override
+set +e
+env \
+  PATH="$CASE_EVIL_BIN:/usr/bin:/bin" \
+  STUB_STATE_DIR="$CASE_STATE" \
+  FEDORA_BOOTSTRAP_TEST_ROOT="$CASE_SYSTEM_ROOT" \
+  FEDORA_BOOTSTRAP_TEST_COMMAND_ROOT="$CASE_BIN" \
+  /usr/bin/bash "$BOOTSTRAP_SOURCE" --check \
+  >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
+CASE_EXIT=$?
+CASE_OUTPUT="$(<"$CASE_ROOT/stdout")"$'\n'"$(<"$CASE_ROOT/stderr")"
+assert_eq 'production mode rejects fixture root overrides' 2 "$CASE_EXIT"
+assert_contains 'production override rejection is explicit' "$CASE_OUTPUT" \
+  'bootstrap: fixture overrides require FEDORA_BOOTSTRAP_TEST_MODE=1'
+assert_empty_file 'rejected production override invokes no PATH stub' "$CASE_STATE/actions"
+
+new_fixture production-path-adversary
+set +e
+env PATH="$CASE_EVIL_BIN" STUB_STATE_DIR="$CASE_STATE" \
+  /usr/bin/bash "$BOOTSTRAP_SOURCE" --check \
+  >"$CASE_ROOT/stdout" 2>"$CASE_ROOT/stderr"
+CASE_EXIT=$?
+assert_empty_file 'normal-mode command resolution ignores hostile PATH stubs' "$CASE_STATE/actions"
 
 new_fixture invalid-option
 run_bootstrap '' --dry-run

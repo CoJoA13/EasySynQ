@@ -21,11 +21,14 @@ cd ~/Documents/EasySynQ
 ./scripts/bootstrap-fedora-dev.sh --apply
 ```
 
-Both the default and `--check` are non-mutating. `--apply` installs the exact Fedora package set,
-adds Docker's official Fedora repository only when absent, installs Docker Engine from that repository,
-runs `uv python install 3.12` as your unprivileged account, and finishes with
+Both the default and `--check` are non-mutating and require `VARIANT_ID=workstation` exactly.
+`--apply` installs the exact Fedora package set, adds Docker's official Fedora repository only when
+absent, installs Docker Engine from that repository, runs `uv python install 3.12` as your
+unprivileged account, and finishes with
 `./scripts/doctor.sh contributor`. It does not install repository dependencies, start or enable a
-service, change group membership, change firewalld or SELinux, or edit `/etc` directly.
+service, change group membership, change firewalld or SELinux, or edit `/etc` directly. When approved,
+DNF's `config-manager` writes the official repository definition to
+`/etc/yum.repos.d/docker-ce.repo`; the preview discloses that write before sudo.
 
 The Fedora Node packages `nodejs22-bin` and `nodejs22-npm-bin` provide the ordinary `node` and `npm`
 commands. The tracked `.node-version` is `22`. If a shell manager puts an older Node before
