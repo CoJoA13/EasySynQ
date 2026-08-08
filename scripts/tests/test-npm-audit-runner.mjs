@@ -587,6 +587,279 @@ test('refuses to remove an ordinary-directory substitution at the exact cache pa
   });
 });
 
+test('refuses a same-path directory substitution even when dev and ino are reused', () => {
+  withTempDirectory('npm-audit-runner-identity-aba-', (cacheParent) => {
+    if (process.platform === 'linux') {
+      const probeDirectory = path.join(cacheParent, 'aba-reuse-probe');
+      fs.mkdirSync(probeDirectory);
+      const probeStat = fs.lstatSync(probeDirectory, { bigint: true });
+      const probeIdentity = [probeStat.dev, probeStat.ino];
+      let reusedProbeIdentity;
+      let probeReused = false;
+      fs.rmdirSync(probeDirectory);
+      for (let attempt = 0; attempt < 2_000; attempt += 1) {
+        fs.mkdirSync(probeDirectory);
+        const replacementStat = fs.lstatSync(probeDirectory, { bigint: true });
+        reusedProbeIdentity = [replacementStat.dev, replacementStat.ino];
+        if (reusedProbeIdentity[0] === probeIdentity[0]
+            && reusedProbeIdentity[1] === probeIdentity[1]) {
+          probeReused = true;
+          break;
+        }
+        fs.rmdirSync(probeDirectory);
+      }
+      if (probeReused) assert.deepEqual(reusedProbeIdentity, probeIdentity);
+      if (fs.existsSync(probeDirectory)) fs.rmdirSync(probeDirectory);
+    }
+
+    const markerName = 'replacement-marker.txt';
+    let cacheDirectory;
+    let createdIdentity;
+    let replacementIdentity;
+
+    assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
+      nodeExecutable: '/runtime/bin/node',
+      npmCliPath: '/runtime/npm-cli.js',
+      webDirectory: '/repo/apps/web',
+      cacheParent,
+      spawnSyncImpl(_command, _args, options) {
+        cacheDirectory = options.env.npm_config_cache;
+        const createdStat = fs.lstatSync(cacheDirectory, { bigint: true });
+        createdIdentity = [createdStat.dev, createdStat.ino];
+        try {
+          fs.rmSync(cacheDirectory, { recursive: true });
+        } catch (error) {
+          fs.writeFileSync(path.join(cacheDirectory, markerName), 'preserve ABA replacement');
+          throw error;
+        }
+
+        for (let attempt = 0; attempt < 2_000; attempt += 1) {
+          fs.mkdirSync(cacheDirectory);
+          const replacementStat = fs.lstatSync(cacheDirectory, { bigint: true });
+          replacementIdentity = [replacementStat.dev, replacementStat.ino];
+          if (replacementIdentity[0] === createdIdentity[0]
+              && replacementIdentity[1] === createdIdentity[1]) {
+            break;
+          }
+          if (attempt === 1_999) break;
+          fs.rmdirSync(cacheDirectory);
+        }
+
+        assert.equal(fs.lstatSync(cacheDirectory).isDirectory(), true);
+        fs.writeFileSync(path.join(cacheDirectory, markerName), 'preserve ABA replacement');
+        return { status: 0, signal: null, stdout: '{}', stderr: '' };
+      },
+    }));
+
+    if (replacementIdentity !== undefined
+        && replacementIdentity[0] === createdIdentity[0]
+        && replacementIdentity[1] === createdIdentity[1]) {
+      assert.deepEqual(replacementIdentity, createdIdentity);
+    }
+    assert.equal(
+      fs.readFileSync(path.join(cacheDirectory, markerName), 'utf8'),
+      'preserve ABA replacement',
+    );
+  });
+});
+
+test('keeps the cache directory descriptor open through removal and reports lifecycle failures', async (t) => {
+  await t.test('successful removal precedes the single descriptor close', () => {
+    withTempDirectory('npm-audit-runner-handle-success-', (cacheParent) => {
+      const originalCloseSync = fs.closeSync;
+      let cacheDirectory;
+      const existedAtClose = [];
+      fs.closeSync = (descriptor) => {
+        existedAtClose.push(fs.existsSync(cacheDirectory));
+        return originalCloseSync(descriptor);
+      };
+      try {
+        const result = runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl(_command, _args, options) {
+            cacheDirectory = options.env.npm_config_cache;
+            return { status: 0, signal: null, stdout: '{}', stderr: '' };
+          },
+        });
+        assert.equal(result.exitCode, 0);
+        assert.deepEqual(existedAtClose, [false]);
+      } finally {
+        fs.closeSync = originalCloseSync;
+      }
+    });
+  });
+
+  await t.test('only ENOENT satisfies final removal verification', () => {
+    withTempDirectory('npm-audit-runner-handle-verify-', (cacheParent) => {
+      const originalCloseSync = fs.closeSync;
+      const originalLstatSync = fs.lstatSync;
+      let cacheDirectory;
+      let verificationArmed = false;
+      fs.closeSync = (descriptor) => {
+        const result = originalCloseSync(descriptor);
+        verificationArmed = true;
+        return result;
+      };
+      fs.lstatSync = (target, options) => {
+        if (verificationArmed && target === cacheDirectory) {
+          verificationArmed = false;
+          throw Object.assign(new Error('simulated inspection failure'), { code: 'EACCES' });
+        }
+        return originalLstatSync(target, options);
+      };
+      try {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl(_command, _args, options) {
+            cacheDirectory = options.env.npm_config_cache;
+            return { status: 0, signal: null, stdout: '{}', stderr: '' };
+          },
+        }));
+        assert.equal(fs.existsSync(cacheDirectory), false);
+      } finally {
+        fs.closeSync = originalCloseSync;
+        fs.lstatSync = originalLstatSync;
+      }
+    });
+  });
+
+  await t.test('removal failure closes once without retry and outranks an audit failure', () => {
+    withTempDirectory('npm-audit-runner-handle-removal-', (cacheParent) => {
+      const originalCloseSync = fs.closeSync;
+      const originalRmSync = fs.rmSync;
+      let cacheDirectory;
+      let closeCount = 0;
+      let removalCount = 0;
+      fs.closeSync = (descriptor) => {
+        closeCount += 1;
+        return originalCloseSync(descriptor);
+      };
+      fs.rmSync = (target, options) => {
+        if (target === cacheDirectory) {
+          removalCount += 1;
+          throw Object.assign(new Error('simulated removal failure'), { code: 'EACCES' });
+        }
+        return originalRmSync(target, options);
+      };
+      try {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl(_command, _args, options) {
+            cacheDirectory = options.env.npm_config_cache;
+            return {
+              error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }),
+              signal: 'SIGTERM', status: null, stdout: '', stderr: '',
+            };
+          },
+        }));
+        assert.equal(removalCount, 1);
+        assert.equal(closeCount, 1);
+        assert.equal(fs.lstatSync(cacheDirectory).isDirectory(), true);
+      } finally {
+        fs.closeSync = originalCloseSync;
+        fs.rmSync = originalRmSync;
+      }
+    });
+  });
+
+  await t.test('removal failure remains primary when descriptor close also fails', () => {
+    withTempDirectory('npm-audit-runner-handle-dual-failure-', (cacheParent) => {
+      const originalCloseSync = fs.closeSync;
+      const originalRmSync = fs.rmSync;
+      let cacheDirectory;
+      let closeFailureArmed = false;
+      let closeCount = 0;
+      let heldDescriptor;
+      let removalCount = 0;
+      fs.closeSync = (descriptor) => {
+        if (closeFailureArmed) {
+          closeFailureArmed = false;
+          closeCount += 1;
+          heldDescriptor = descriptor;
+          throw Object.assign(new Error('simulated close failure'), { code: 'EIO' });
+        }
+        return originalCloseSync(descriptor);
+      };
+      fs.rmSync = (target, options) => {
+        if (target === cacheDirectory) {
+          removalCount += 1;
+          throw Object.assign(new Error('simulated removal failure'), { code: 'EACCES' });
+        }
+        return originalRmSync(target, options);
+      };
+      try {
+        assert.throws(() => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl(_command, _args, options) {
+            cacheDirectory = options.env.npm_config_cache;
+            closeFailureArmed = true;
+            return { status: 0, signal: null, stdout: '{}', stderr: '' };
+          },
+        }), (error) => {
+          assert.ok(error instanceof NpmAuditExecutionError);
+          assert.equal(error.code, 'E_CACHE_CLEANUP');
+          assert.equal(error.message, 'the npm cache could not be removed');
+          return true;
+        });
+        assert.equal(removalCount, 1);
+        assert.equal(closeCount, 1);
+        assert.equal(fs.lstatSync(cacheDirectory).isDirectory(), true);
+      } finally {
+        fs.closeSync = originalCloseSync;
+        fs.rmSync = originalRmSync;
+        if (heldDescriptor !== undefined) originalCloseSync(heldDescriptor);
+      }
+    });
+  });
+
+  await t.test('descriptor close failure is operational after removal', () => {
+    withTempDirectory('npm-audit-runner-handle-close-', (cacheParent) => {
+      const originalCloseSync = fs.closeSync;
+      let cacheDirectory;
+      let closeFailureArmed = false;
+      let heldDescriptor;
+
+      fs.closeSync = (descriptor) => {
+        if (closeFailureArmed) {
+          closeFailureArmed = false;
+          heldDescriptor = descriptor;
+          throw Object.assign(new Error('simulated close failure'), { code: 'EIO' });
+        }
+        return originalCloseSync(descriptor);
+      };
+      try {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl(_command, _args, options) {
+            cacheDirectory = options.env.npm_config_cache;
+            closeFailureArmed = true;
+            return { status: 0, signal: null, stdout: '{}', stderr: '' };
+          },
+        }));
+        assert.equal(fs.existsSync(cacheDirectory), false);
+      } finally {
+        fs.closeSync = originalCloseSync;
+        if (heldDescriptor !== undefined) originalCloseSync(heldDescriptor);
+      }
+    });
+  });
+});
+
 test('executes a real npm-cli.js fixture through process.execPath without a shell', () => {
   withTempDirectory('npm-audit-real-boundary-', (directory) => {
     const npmCliPath = path.join(directory, 'npm-cli.js');

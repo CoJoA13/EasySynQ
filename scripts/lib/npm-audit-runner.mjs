@@ -201,6 +201,18 @@ function resolveCacheParent(cacheParent) {
   return realParent;
 }
 
+function stableIdentity(stat, code, message) {
+  if (stat === null
+      || typeof stat !== 'object'
+      || typeof stat.dev !== 'bigint'
+      || typeof stat.ino !== 'bigint'
+      || stat.dev < 0n
+      || stat.ino <= 0n) {
+    fail(code, message);
+  }
+  return { device: stat.dev, inode: stat.ino };
+}
+
 function validateCacheChild(cacheParent, cacheDirectory) {
   if (typeof cacheDirectory !== 'string'
       || path.dirname(cacheDirectory) !== cacheParent
@@ -220,29 +232,119 @@ function validateCacheChild(cacheParent, cacheDirectory) {
       || realChild !== cacheDirectory) {
     fail('E_CACHE_CLEANUP', 'the npm cache cleanup target is not a non-link directory');
   }
-  if (typeof childStat.dev !== 'bigint'
-      || typeof childStat.ino !== 'bigint'
-      || childStat.dev < 0n
-      || childStat.ino <= 0n) {
-    fail('E_CACHE_CLEANUP', 'the npm cache cleanup target has no stable filesystem identity');
-  }
-  return { device: childStat.dev, inode: childStat.ino };
+  return stableIdentity(
+    childStat,
+    'E_CACHE_CLEANUP',
+    'the npm cache cleanup target has no stable filesystem identity',
+  );
 }
 
-function removeCacheChild(cacheParent, cacheDirectory, createdIdentity) {
-  const currentIdentity = validateCacheChild(cacheParent, cacheDirectory);
-  if (currentIdentity.device !== createdIdentity.device
-      || currentIdentity.inode !== createdIdentity.inode) {
-    fail('E_CACHE_CLEANUP', 'the npm cache cleanup target changed identity');
-  }
+function cacheDirectoryOpenFlags() {
+  if (process.platform === 'win32') return 'r';
+  let flags = fs.constants.O_RDONLY;
+  if (Number.isInteger(fs.constants.O_DIRECTORY)) flags |= fs.constants.O_DIRECTORY;
+  if (Number.isInteger(fs.constants.O_NOFOLLOW)) flags |= fs.constants.O_NOFOLLOW;
+  return flags;
+}
+
+function openCacheDirectory(cacheParent, cacheDirectory) {
+  let descriptor;
   try {
-    fs.rmSync(cacheDirectory, { recursive: true, force: false, maxRetries: 0 });
+    descriptor = fs.openSync(cacheDirectory, cacheDirectoryOpenFlags());
+    const descriptorStat = fs.fstatSync(descriptor, { bigint: true });
+    const descriptorIdentity = stableIdentity(
+      descriptorStat,
+      'E_CACHE_CREATE',
+      'the npm cache directory handle has no stable filesystem identity',
+    );
+    const pathIdentity = validateCacheChild(cacheParent, cacheDirectory);
+    if (!descriptorStat.isDirectory()
+        || descriptorIdentity.device !== pathIdentity.device
+        || descriptorIdentity.inode !== pathIdentity.inode) {
+      fail('E_CACHE_CREATE', 'the npm cache directory handle does not match its path');
+    }
+    return { descriptor, identity: descriptorIdentity };
   } catch {
-    fail('E_CACHE_CLEANUP', 'the npm cache could not be removed');
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor);
+      } catch {
+        // Opening already failed operationally; closing was attempted before reporting it.
+      }
+    }
+    fail('E_CACHE_CREATE', 'the isolated npm cache directory could not be held open');
   }
-  if (fs.existsSync(cacheDirectory)) {
-    fail('E_CACHE_CLEANUP', 'the npm cache still exists after cleanup');
+}
+
+function validateCacheDirectoryHandle(cacheHandle) {
+  if (cacheHandle === null
+      || typeof cacheHandle !== 'object'
+      || !Number.isInteger(cacheHandle.descriptor)
+      || cacheHandle.descriptor < 0
+      || cacheHandle.identity === null
+      || typeof cacheHandle.identity !== 'object') {
+    fail('E_CACHE_CLEANUP', 'the npm cache directory handle is unusable');
   }
+
+  let descriptorStat;
+  try {
+    descriptorStat = fs.fstatSync(cacheHandle.descriptor, { bigint: true });
+  } catch {
+    fail('E_CACHE_CLEANUP', 'the npm cache directory handle could not be inspected');
+  }
+  const descriptorIdentity = stableIdentity(
+    descriptorStat,
+    'E_CACHE_CLEANUP',
+    'the npm cache directory handle has no stable filesystem identity',
+  );
+  if (!descriptorStat.isDirectory()
+      || descriptorIdentity.device !== cacheHandle.identity.device
+      || descriptorIdentity.inode !== cacheHandle.identity.inode) {
+    fail('E_CACHE_CLEANUP', 'the npm cache directory handle changed identity');
+  }
+  return descriptorIdentity;
+}
+
+function removeCacheChild(cacheParent, cacheDirectory, cacheHandle) {
+  let cleanupError;
+  try {
+    const descriptorIdentity = validateCacheDirectoryHandle(cacheHandle);
+    const currentIdentity = validateCacheChild(cacheParent, cacheDirectory);
+    if (currentIdentity.device !== descriptorIdentity.device
+        || currentIdentity.inode !== descriptorIdentity.inode) {
+      fail('E_CACHE_CLEANUP', 'the npm cache cleanup target changed identity');
+    }
+    fs.rmSync(cacheDirectory, { recursive: true, force: false, maxRetries: 0 });
+  } catch (error) {
+    cleanupError = error instanceof NpmAuditExecutionError
+      ? error
+      : new NpmAuditExecutionError('E_CACHE_CLEANUP', 'the npm cache could not be removed');
+  }
+
+  let closeError;
+  try {
+    fs.closeSync(cacheHandle.descriptor);
+    cacheHandle.descriptor = undefined;
+  } catch {
+    closeError = new NpmAuditExecutionError(
+      'E_CACHE_CLEANUP',
+      'the npm cache directory handle could not be closed',
+    );
+  }
+
+  if (cleanupError !== undefined) throw cleanupError;
+  if (closeError !== undefined) throw closeError;
+
+  let stillExists = false;
+  try {
+    fs.lstatSync(cacheDirectory);
+    stillExists = true;
+  } catch (error) {
+    if (error === null || typeof error !== 'object' || error.code !== 'ENOENT') {
+      fail('E_CACHE_CLEANUP', 'the npm cache removal could not be verified');
+    }
+  }
+  if (stillExists) fail('E_CACHE_CLEANUP', 'the npm cache still exists after cleanup');
 }
 
 export function runNpmAudit({
@@ -254,10 +356,10 @@ export function runNpmAudit({
 } = {}) {
   const realCacheParent = resolveCacheParent(cacheParent);
   let cacheDirectory;
-  let cacheIdentity;
+  let cacheHandle;
   try {
     cacheDirectory = fs.mkdtempSync(path.join(realCacheParent, CACHE_PREFIX));
-    cacheIdentity = validateCacheChild(realCacheParent, cacheDirectory);
+    cacheHandle = openCacheDirectory(realCacheParent, cacheDirectory);
   } catch (error) {
     if (error instanceof NpmAuditExecutionError) throw error;
     fail('E_CACHE_CREATE', 'the isolated npm cache could not be created');
@@ -289,7 +391,7 @@ export function runNpmAudit({
     auditError = error;
   }
 
-  removeCacheChild(realCacheParent, cacheDirectory, cacheIdentity);
+  removeCacheChild(realCacheParent, cacheDirectory, cacheHandle);
   if (auditError !== undefined) throw auditError;
   return auditResult;
 }
