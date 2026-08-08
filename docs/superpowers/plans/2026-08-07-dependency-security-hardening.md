@@ -885,24 +885,41 @@ Existing integration surfaces:
     code;
   }
 
+  export function resolveNpmCliPath({
+    nodeExecutable = process.execPath,
+    platform = process.platform,
+    realpathSyncImpl,
+    statSyncImpl,
+  }) {}
+
   export function getNpmVersion({
-    npmExecutable = "npm",
+    nodeExecutable = process.execPath,
+    npmCliPath,
     cwd,
     spawnSyncImpl,
   }) {}
 
   export function runNpmAudit({
-    npmExecutable = "npm",
+    nodeExecutable = process.execPath,
+    npmCliPath,
     webDirectory,
     cacheParent,
     spawnSyncImpl,
   }) {}
   ```
 
-  Tests assert `npm --version` first, then exact argv
-  `audit --package-lock-only --audit-level=high --json`; web CWD; a unique `npm_config_cache`;
-  update-notifier suppression; bounded stdout/stderr; status one captured as data; spawn error, signal,
-  and output overflow rejected; and cache removal after success and every failure.
+  Tests use synthetic POSIX and Windows Node-distribution layouts plus one active-runtime integration
+  to assert the npm JavaScript entry point is resolved from the active Node distribution, never from a
+  `PATH` shim. Assert `process.execPath` with exact argv
+  `[npmCliPath, "--version"]` first, then
+  `[npmCliPath, "audit", "--package-lock-only", "--audit-level=high", "--json"]`; `shell: false`;
+  web CWD; a unique `npm_config_cache`; update-notifier suppression; a 120-second timeout; bounded
+  stdout/stderr; status one captured as data; spawn error (classified before a companion signal),
+  signal, timeout, absent status, and output overflow rejected; and cache removal after success and
+  every failure. Remove every inherited case variant of npm cache/notifier environment keys, then set
+  exactly the controlled child keys so inherited configuration cannot override the isolated run.
+  Include a real boundary fixture whose `npm-cli.js` is executed through real `process.execPath` and
+  `spawnSync`, proving the shell-free JavaScript entry works beyond mocked argv assertions.
 
 - [ ] **Step 2: Run the runner suite to prove RED**
 
@@ -912,28 +929,48 @@ Existing integration surfaces:
 
 - [ ] **Step 3: Implement subprocess execution without a shell**
 
-  Use `spawnSync` argument arrays and a `mkdtemp` directory under the supplied cache parent. Validate
-  that the cleanup target is the directory returned by `mkdtemp`, remove it in `finally`, and return
-  `{ exitCode, stdout, stderr }` only for a normal status zero or one. Convert spawn errors, signals,
-  absent statuses, and bounded-buffer failures into stable `NpmAuditExecutionError.code` values.
+  Resolve a regular `npm-cli.js` file through bounded, platform-specific candidates rooted at the real
+  active `process.execPath`; execute it with that same Node executable, argument arrays, `shell: false`,
+  bounded buffers, and `timeout: 120_000`. Never fall back to `npm`, `npm.cmd`, a shell, or an ad hoc
+  download. Use a `mkdtemp` directory under the supplied cache parent. Validate that the cleanup target
+  is the exact non-link child returned by `mkdtemp`, keep sibling sentinels untouched, remove it in
+  `finally`, and treat cleanup failure as operational failure. Return `{ exitCode, stdout, stderr }`
+  only for a normal status zero or one. Convert spawn errors, timeout, signals, absent statuses, and
+  bounded-buffer failures into stable `NpmAuditExecutionError.code` values.
 
 - [ ] **Step 4: Write a failing CLI orchestration test**
 
-  Export an internal `main({ spawnSyncImpl, now, stdout, stderr })` for module tests, but expose no CLI
-  arguments, path override, or time override. Assert production orchestration:
+  Export an internal
+  `main({ spawnSyncImpl, now, stdout, stderr, readFileSyncImpl, checkRouterRscUsageImpl, typescript, execFileSyncImpl })`
+  for module tests. These are module-only dependency seams; expose no production CLI path, time,
+  policy, TypeScript, Git, or subprocess override. Assert production orchestration:
 
   1. resolves the repository from `import.meta.url`;
-  2. reads only `apps/web/package-lock.json` and `.github/security/npm-audit-exceptions.json`;
+  2. directly reads only `apps/web/package-lock.json` and
+     `.github/security/npm-audit-exceptions.json`; the delegated Router policy retains its Task 8
+     manifest, tracked-source, TypeScript, and Git inputs;
   3. validates npm version before audit;
   4. assesses the report;
-  5. runs `router-rsc-absent` only when the atomic exception is actually accepted;
-  6. emits concise package/advisory/expiry summaries without source or environment data.
+  5. runs every accepted `router-rsc-absent` policy, even when another finding is blocked, but never
+     runs it for an unused or rejected exception; an operational Router failure therefore retains
+     exit-two precedence over a simultaneous blocked finding;
+  6. validates every configured `usagePolicy`, including unused exceptions, and joins an accepted
+     result to the raw validated exception to print exactly one JSON-escaped, one-line reason summary
+     per accepted exception;
+  7. emits concise package/advisory/expiry summaries without source or environment data.
+
+  Include a real child-process boundary test proving an unexpected argument is rejected before npm,
+  filesystem, Git, or TypeScript work. The production entry point accepts exactly zero arguments.
 
 - [ ] **Step 5: Implement the production CLI and exit mapping**
 
   The executable entry calls `main` with the real `new Date()`. Map policy rejection, expiry, or an RSC
   violation to exit one; npm execution, JSON/schema, filesystem, Git, TypeScript resolution, or
-  unsupported-version errors to exit two. Treat an unknown `usagePolicy` as operational failure.
+  unsupported-version errors to exit two. Treat an unknown `usagePolicy` or any unexpected CLI
+  argument as operational failure, including when its exception is unused. When multiple outcomes are
+  observed, operational exit two takes precedence over blocked exit one, which takes precedence over
+  accepted exit zero. Keep output sorted and redact raw child stderr, paths outside the repository,
+  source text, and environment data.
 
 - [ ] **Step 6: Run pure runner/CLI/policy checks**
 

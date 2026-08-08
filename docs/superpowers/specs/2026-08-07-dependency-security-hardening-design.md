@@ -152,10 +152,14 @@ Add a dependency-free Node program, `scripts/check-npm-audit.mjs`. It runs npm a
 applies repository policy. An npm exit caused by reported vulnerabilities is parsed; an invalid response,
 command failure, or unexpected exit fails the check.
 
-The npm executable is the one bundled with the CI Node runtime, not an ad hoc download. The checker
-supports npm `10.9.x` and npm audit report version `2`; it validates both before interpreting findings
-and fails closed when either contract changes. Exact Node runtime and GitHub Action pinning remains the
-next repository-runner hardening slice.
+The npm CLI is the one bundled with the active CI Node runtime, not an ad hoc download or a `PATH`
+shim. The runner resolves that distribution's `npm-cli.js` from the real `process.execPath`, then
+invokes `[npmCliPath, ...args]` with `process.execPath`, an argument array, `shell: false`, bounded
+output, and a 120-second timeout. This works with native Windows `npm.cmd` installations without ever
+executing the command shim. A missing, ambiguous, timed-out, or otherwise invalid npm CLI boundary is
+an operational failure. The checker supports npm `10.9.x` and npm audit report version `2`; it
+validates both before interpreting findings and fails closed when either contract changes. Exact Node
+runtime and GitHub Action pinning remains the next repository-runner hardening slice.
 
 The checker evaluates high and critical findings by advisory identity, affected package, inherited
 cause chain, and installed lockfile version. It fails for every finding except this single policy record:
@@ -197,6 +201,14 @@ The two Router audit records are accepted atomically. When—and only when—the
 the same CLI runs the RSC usage checker before returning success. A missing root/inherited record or an
 RSC-policy failure therefore cannot leave half of the exception accepted.
 
+The no-argument production entry point rejects every unexpected CLI argument before doing work and
+returns exit two. Its exported `main` permits dependency injection only as an internal module-test
+seam: tests may replace subprocess execution and the Router check's TypeScript/Git boundaries, while
+the executable exposes no path, clock, policy, compiler, or Git override. The CLI validates every
+configured `usagePolicy`, including unused exceptions, joins accepted records back to the validated
+exception document to print its review reason, and treats an unknown policy as an operational failure.
+Operational failure takes precedence over policy/RSC blocking when mapping exit codes.
+
 If the advisory disappears from npm's feed, the exception is simply unused and the check passes. If
 the feed changes shape, either installed version changes, a prohibited RSC import appears, another
 high/critical advisory is introduced, or the expiry instant is reached, CI fails.
@@ -237,10 +249,14 @@ and remain subject to the normal CI and owner review process.
 - npm audit finding exit: parse and enforce the policy.
 - Unsupported npm version or npm audit report version: fail before evaluating exceptions.
 - npm transport failure, malformed JSON, unknown schema, or unexplained nonzero exit: fail closed.
+- Missing npm CLI entry point, subprocess timeout after 120 seconds, output overflow, signal, or spawn
+  error: fail closed as an operational error without retrying through a shell.
 - Unknown inherited vulnerability chain: fail closed instead of treating a package-name match as safe.
 - Allowed advisory on any version other than the two exact 7.18.2 packages: fail.
 - Allowed advisory at or after `2026-08-22T00:00:00Z`, or alongside a prohibited RSC
   dependency/API: fail.
+- Any unexpected production CLI argument or unknown configured `usagePolicy`: fail with exit two
+  before reporting success, even when the exception is unused.
 - GitHub setting mutation or read-back mismatch: stop and report the setting that was not enabled.
 
 ## Testing Strategy
