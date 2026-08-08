@@ -80,6 +80,7 @@ make_dispatcher() {
     '    elif [[ ${1-} == info ]]; then' \
     '      case "$(read_state docker_info ok)" in' \
     "        stopped) printf 'Cannot connect to the Docker daemon. Is the docker daemon running?\\n' >&2; exit 1 ;;" \
+    "        permission) printf 'Cannot connect to the Docker daemon socket: permission denied\\n' >&2; exit 1 ;;" \
     "        unreachable) printf 'synthetic transport failure\\n' >&2; exit 1 ;;" \
     "        *) printf 'Server Version: 27.5.1\\n' ;;" \
     '      esac' \
@@ -174,6 +175,10 @@ configure_case() {
       chmod +x "$CASE_ROOT/usr/bin/node"
       ;;
     node_unsupported) set_state node_version v20.19.0 ;;
+    node_pin_empty) : >"$CASE_REPO/.node-version" ;;
+    node_pin_nonnumeric) printf 'twenty-two\n' >"$CASE_REPO/.node-version" ;;
+    node_pin_multiline) printf '22\n23\n' >"$CASE_REPO/.node-version" ;;
+    node_pin_extra_newline) printf '22\n\n' >"$CASE_REPO/.node-version" ;;
     uv_missing) rm "$CASE_BIN/uv" ;;
     python_missing) set_state python_312 missing ;;
     just_missing) rm "$CASE_BIN/just" ;;
@@ -186,6 +191,7 @@ configure_case() {
     docker_compose_contract_newer) printf 'MINIMUM_VERSION="2.25.0"\n' >"$CASE_REPO/scripts/require-compose-version.sh" ;;
     docker_socket_missing) rm "$CASE_ROOT/var/run/docker.sock" ;;
     docker_daemon_stopped) set_state docker_info stopped ;;
+    docker_runtime_permission) set_state docker_info permission ;;
     docker_socket_permission)
       set_state socket_stat '600 root root'
       set_state current_groups 'developer wheel'
@@ -262,6 +268,8 @@ assert_case ubuntu_missing_git contributor 1 'FAIL TOOL_MISSING_GIT Run: sudo ap
 assert_case arch_unsupported contributor 1 'FAIL ARCH_UNSUPPORTED '
 assert_case selinux_disabled contributor 0 'WARN SELINUX_DISABLED '
 assert_case selinux_unverified contributor 0 'UNVERIFIED SELINUX_UNVERIFIED '
+assert_case selinux_unverified test 0 'UNVERIFIED SELINUX_UNVERIFIED '
+assert_case selinux_unverified stack 1 'UNVERIFIED SELINUX_UNVERIFIED '
 assert_case missing_git contributor 1 'FAIL TOOL_MISSING_GIT '
 assert_case missing_curl contributor 1 'FAIL TOOL_MISSING_CURL '
 assert_case missing_openssl contributor 1 'FAIL TOOL_MISSING_OPENSSL '
@@ -273,6 +281,10 @@ else
   not_ok 'NODE_PATH_SHADOWED did not print PATH=/usr/bin:$PATH'
 fi
 assert_case node_unsupported contributor 1 'FAIL NODE_UNSUPPORTED_VERSION '
+assert_case node_pin_empty contributor 2 'FAIL DOCTOR_CONTRACT_INVALID '
+assert_case node_pin_nonnumeric contributor 2 'FAIL DOCTOR_CONTRACT_INVALID '
+assert_case node_pin_multiline contributor 2 'FAIL DOCTOR_CONTRACT_INVALID '
+assert_case node_pin_extra_newline contributor 2 'FAIL DOCTOR_CONTRACT_INVALID '
 assert_case uv_missing contributor 1 'FAIL UV_MISSING '
 assert_case python_missing contributor 1 'FAIL PYTHON_312_MISSING '
 assert_case just_missing contributor 1 'FAIL JUST_MISSING '
@@ -285,6 +297,7 @@ assert_docker_case docker_compose_unsupported DOCKER_COMPOSE_UNSUPPORTED_VERSION
 assert_docker_case docker_compose_contract_newer DOCKER_COMPOSE_UNSUPPORTED_VERSION
 assert_docker_case docker_socket_missing DOCKER_SOCKET_MISSING
 assert_docker_case docker_daemon_stopped DOCKER_DAEMON_STOPPED
+assert_docker_case docker_runtime_permission DOCKER_SOCKET_PERMISSION
 assert_docker_case docker_socket_permission DOCKER_SOCKET_PERMISSION
 assert_docker_case docker_group_inactive DOCKER_GROUP_SESSION_INACTIVE
 assert_docker_case docker_daemon_unreachable DOCKER_DAEMON_UNREACHABLE

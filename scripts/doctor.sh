@@ -139,11 +139,16 @@ has_word() {
 }
 
 load_runtime_contracts() {
-  local line found=0 requirement_re='>=([0-9]+\.[0-9]+)'
+  local line found=0 requirement_re='>=([0-9]+\.[0-9]+)' node_line_count=0
   if [[ -f $repo_root/.node-version ]]; then
-    IFS= read -r node_major <"$repo_root/.node-version" || node_major=
-    node_major=$(trim "$node_major")
-    if [[ ! $node_major =~ ^[0-9]+$ ]]; then
+    node_major=
+    while IFS= read -r line || [[ -n $line ]]; do
+      node_line_count=$((node_line_count + 1))
+      if (( node_line_count == 1 )); then
+        node_major=$line
+      fi
+    done <"$repo_root/.node-version"
+    if (( node_line_count != 1 )) || [[ ! $node_major =~ ^[0-9]+$ ]]; then
       printf '%s\n' 'FAIL DOCTOR_CONTRACT_INVALID .node-version must contain one numeric major version' >&2
       return 1
     fi
@@ -185,6 +190,7 @@ load_runtime_contracts() {
 }
 
 check_platform() {
+  local selinux_blocker=none
   if ! read_os_release; then
     emit FAIL OS_UNSUPPORTED contributor 'Cannot read /etc/os-release. Use Fedora Workstation 44 or a supported Ubuntu host.'
   elif [[ $os_id == fedora && $os_version == 44 ]]; then
@@ -194,6 +200,7 @@ check_platform() {
   else
     emit FAIL OS_UNSUPPORTED contributor 'Use Fedora Workstation 44 or the documented Ubuntu workflow.'
   fi
+  [[ $os_id == fedora ]] && selinux_blocker=stack
 
   local architecture
   architecture=$(uname -m 2>/dev/null || printf unknown)
@@ -205,7 +212,7 @@ check_platform() {
 
   if ! command_exists getenforce; then
     selinux_mode=unverified
-    emit UNVERIFIED SELINUX_UNVERIFIED none 'Install policycoreutils and run: getenforce'
+    emit UNVERIFIED SELINUX_UNVERIFIED "$selinux_blocker" 'Install policycoreutils and run: getenforce'
   else
     selinux_mode=$(getenforce 2>/dev/null || printf unverified)
     case "${selinux_mode,,}" in
@@ -215,7 +222,7 @@ check_platform() {
         ;;
       *)
         selinux_mode=unverified
-        emit UNVERIFIED SELINUX_UNVERIFIED none 'Run: getenforce'
+        emit UNVERIFIED SELINUX_UNVERIFIED "$selinux_blocker" 'Run: getenforce'
         ;;
     esac
   fi
@@ -297,7 +304,7 @@ check_pg_dump() {
 
 check_docker() {
   local compose_version socket_metadata socket_mode socket_owner socket_group
-  local owner_digit group_digit other_digit current_user current_groups account_groups docker_error
+  local owner_digit group_digit other_digit current_user current_groups account_groups docker_error docker_error_lower
   local compose_major compose_minor compose_patch
 
   if ! command_exists docker; then
@@ -358,12 +365,20 @@ check_docker() {
   if docker_error=$(docker info 2>&1); then
     docker_daemon_ok=1
     emit PASS DOCKER_DAEMON_REACHABLE none 'Docker daemon is reachable.'
-  elif [[ ${docker_error,,} == *'cannot connect'* \
-        || ${docker_error,,} == *'daemon running'* \
-        || ${docker_error,,} == *'connection refused'* ]]; then
-    emit FAIL DOCKER_DAEMON_STOPPED test 'Start Docker Engine, then run: docker info'
   else
-    emit FAIL DOCKER_DAEMON_UNREACHABLE test 'Docker is installed but unreachable. Run: docker info'
+    docker_error_lower=${docker_error,,}
+    if [[ $docker_error_lower == *'permission denied'* \
+          || $docker_error_lower == *'access denied'* \
+          || $docker_error_lower == *'operation not permitted'* \
+          || ( $docker_error_lower == *'cannot connect'* && $docker_error_lower == *permission* ) ]]; then
+      emit FAIL DOCKER_SOCKET_PERMISSION test 'Docker socket access was denied at runtime. Inspect it with: docker info'
+    elif [[ $docker_error_lower == *'cannot connect'* \
+          || $docker_error_lower == *'daemon running'* \
+          || $docker_error_lower == *'connection refused'* ]]; then
+      emit FAIL DOCKER_DAEMON_STOPPED test 'Start Docker Engine, then run: docker info'
+    else
+      emit FAIL DOCKER_DAEMON_UNREACHABLE test 'Docker is installed but unreachable. Run: docker info'
+    fi
   fi
 }
 
@@ -498,7 +513,15 @@ check_ports() {
 check_selinux_labels() {
   local path context import_source=${local_env[IMPORT_SOURCE_PATH]:-../../.import-source}
   local unverified=0
-  if [[ $os_id != fedora || ${selinux_mode,,} != enforcing ]]; then
+  if [[ $os_id != fedora ]]; then
+    emit PASS SELINUX_LABEL_NOT_REQUIRED none 'SELinux bind-label verification is not required on this host state.'
+    return
+  fi
+  if [[ ${selinux_mode,,} == unverified ]]; then
+    emit UNVERIFIED SELINUX_LABEL_UNVERIFIED stack 'Verify Fedora SELinux mode with getenforce before checking bind labels.'
+    return
+  fi
+  if [[ ${selinux_mode,,} != enforcing ]]; then
     emit PASS SELINUX_LABEL_NOT_REQUIRED none 'SELinux bind-label verification is not required on this host state.'
     return
   fi
