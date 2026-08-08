@@ -21,6 +21,10 @@ contracts:
 contracts-check:
     bash scripts/gen-contracts.sh --check
 
+security-npm:
+    node --test scripts/tests/test-web-security-lock.mjs scripts/tests/test-npm-audit-runner.mjs scripts/tests/test-check-npm-audit.mjs scripts/tests/test-npm-audit-policy.mjs scripts/tests/test-router-rsc-policy.mjs
+    node scripts/check-npm-audit.mjs
+
 # --- dev servers ---
 api-dev:
     cd apps/api && uv run uvicorn easysynq_api.main:app --reload --host 0.0.0.0 --port 8000

@@ -143,10 +143,7 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
         },
         {
             "name": "audit locked contract tools",
-            "run": (
-                "npm --prefix packages/contracts audit --package-lock-only "
-                "--audit-level=high"
-            ),
+            "run": ("npm --prefix packages/contracts audit --package-lock-only --audit-level=high"),
         },
         {"name": "generated contract lock", "run": "bash scripts/gen-contracts.sh --check"},
     ]
@@ -160,3 +157,69 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
     assert 'pool: "forks"' in vitest_config
     assert "maxWorkers: 1" in vitest_config
     assert "isolate: false" not in vitest_config
+
+
+def test_security_job_gates_npm_and_keeps_trivy_findings_report_only() -> None:
+    workflow = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    security = workflow["jobs"]["security"]
+
+    assert set(security) == {"runs-on", "steps"}
+    assert security["runs-on"] == "ubuntu-latest"
+    _assert_hard_fail(security)
+
+    setup_matches = [
+        (index, step)
+        for index, step in enumerate(security["steps"])
+        if step.get("uses") == "actions/setup-node@v7"
+    ]
+    assert len(setup_matches) == 1
+    setup_index, setup = setup_matches[0]
+    assert setup == {
+        "uses": "actions/setup-node@v7",
+        "with": {
+            "node-version": "22",
+            "cache": "npm",
+            "cache-dependency-path": "apps/web/package-lock.json",
+        },
+    }
+
+    install_index, install = _step(security, "install frozen web dependencies for npm policy")
+    assert install == {
+        "name": "install frozen web dependencies for npm policy",
+        "working-directory": "apps/web",
+        "run": "npm ci --ignore-scripts",
+    }
+    regression_index, regressions = _step(security, "npm advisory policy regressions")
+    assert regressions == {
+        "name": "npm advisory policy regressions",
+        "run": (
+            "node --test \\\n"
+            "  scripts/tests/test-web-security-lock.mjs \\\n"
+            "  scripts/tests/test-npm-audit-runner.mjs \\\n"
+            "  scripts/tests/test-check-npm-audit.mjs \\\n"
+            "  scripts/tests/test-npm-audit-policy.mjs \\\n"
+            "  scripts/tests/test-router-rsc-policy.mjs\n"
+        ),
+    }
+    policy_index, policy = _step(security, "npm advisory policy (web lock)")
+    assert policy == {
+        "name": "npm advisory policy (web lock)",
+        "run": "node scripts/check-npm-audit.mjs",
+    }
+    assert [step for step in security["steps"] if "npm" in step.get("name", "").lower()] == [
+        install,
+        regressions,
+        policy,
+    ]
+    first_trivy_index, _ = _step(
+        security, "trivy filesystem scan (vuln + secret + IaC misconfig; HIGH/CRITICAL)"
+    )
+    assert setup_index < install_index < regression_index < policy_index < first_trivy_index
+
+    trivy_steps = [
+        step
+        for step in security["steps"]
+        if step.get("uses") == "aquasecurity/trivy-action@v0.36.0"
+    ]
+    assert len(trivy_steps) == 3
+    assert [step["with"]["exit-code"] for step in trivy_steps] == ["0", "0", "0"]

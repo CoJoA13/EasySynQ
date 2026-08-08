@@ -239,9 +239,9 @@ assert_text_not_contains "contract gates cannot continue on error" "$CONTRACTS_B
 assert_text_not_contains "Python and contract commands cannot suppress failures" "$API_BLOCK$INTEGRATION_SHARDS_BLOCK$CONTRACT_RESPONSES_BLOCK$CONTRACTS_BLOCK" "|| true"
 
 assert_contains \
-  "security preamble keeps pip-audit and Trivy findings report-only but operational failures fatal" \
+  "security preamble gates npm high/critical while keeping pip-audit and Trivy findings report-only" \
   "$WORKFLOW" \
-  "pip-audit and Trivy FINDINGS remain REPORT-ONLY; operational failures fail the job."
+  "npm high/critical findings are GATED; pip-audit and Trivy FINDINGS remain REPORT-ONLY."
 assert_text_contains \
   "security job runs the pip-audit regression then the root-aware locked runner" \
   "$SECURITY_BLOCK" \
@@ -264,6 +264,71 @@ assert_before \
   "$SECURITY_BLOCK" \
   "      - name: pip-audit (Python deps, resolved from uv.lock)" \
   "      - uses: actions/setup-node@v7"
+assert_text_contains \
+  "security pins Node 22 and caches the web lock" \
+  "$SECURITY_BLOCK" \
+  '      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json'
+assert_text_contains \
+  "security installs the frozen web tree without lifecycle scripts" \
+  "$SECURITY_BLOCK" \
+  '      - name: install frozen web dependencies for npm policy
+        working-directory: apps/web
+        run: npm ci --ignore-scripts'
+assert_text_contains \
+  "security runs the exact npm advisory regression matrix" \
+  "$SECURITY_BLOCK" \
+  '      - name: npm advisory policy regressions
+        run: |
+          node --test \
+            scripts/tests/test-web-security-lock.mjs \
+            scripts/tests/test-npm-audit-runner.mjs \
+            scripts/tests/test-check-npm-audit.mjs \
+            scripts/tests/test-npm-audit-policy.mjs \
+            scripts/tests/test-router-rsc-policy.mjs'
+assert_text_contains \
+  "security runs the live web-lock policy gate" \
+  "$SECURITY_BLOCK" \
+  '      - name: npm advisory policy (web lock)
+        run: node scripts/check-npm-audit.mjs'
+assert_before \
+  "security sets up Node before frozen web install" \
+  "$SECURITY_BLOCK" \
+  "      - uses: actions/setup-node@v7" \
+  "      - name: install frozen web dependencies for npm policy"
+assert_before \
+  "security installs the frozen web tree before npm regressions" \
+  "$SECURITY_BLOCK" \
+  "      - name: install frozen web dependencies for npm policy" \
+  "      - name: npm advisory policy regressions"
+assert_before \
+  "security runs npm regressions before the live policy gate" \
+  "$SECURITY_BLOCK" \
+  "      - name: npm advisory policy regressions" \
+  "      - name: npm advisory policy (web lock)"
+assert_before \
+  "security completes the live npm gate before the first Trivy scan" \
+  "$SECURITY_BLOCK" \
+  "      - name: npm advisory policy (web lock)" \
+  "      - name: trivy filesystem scan (vuln + secret + IaC misconfig; HIGH/CRITICAL)"
+assert_text_not_contains \
+  "security removes the old inline npm audit step" \
+  "$SECURITY_BLOCK" \
+  "      - name: npm audit (web deps, from package-lock.json)"
+assert_text_not_contains \
+  "security does not invoke raw npm audit" \
+  "$SECURITY_BLOCK" \
+  "npm audit "
+assert_text_not_contains \
+  "security does not write an npm audit report under RUNNER_TEMP" \
+  "$SECURITY_BLOCK" \
+  'RUNNER_TEMP/npm-audit.json'
+assert_text_not_contains "security npm policy does not use jq" "$SECURITY_BLOCK" "jq"
+assert_text_not_contains "security npm policy does not disable errexit" "$SECURITY_BLOCK" "set +e"
+assert_text_not_contains "security npm policy does not suppress failures" "$SECURITY_BLOCK" "|| true"
 assert_text_not_contains "security job does not run floating pip-audit" "$SECURITY_BLOCK" "uvx pip-audit"
 assert_text_not_contains "security job cannot continue on operational pip-audit failures" "$SECURITY_BLOCK" "continue-on-error:"
 assert_text_contains \

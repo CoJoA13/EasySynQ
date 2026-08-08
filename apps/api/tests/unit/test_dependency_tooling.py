@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,12 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _read_toml(path: Path) -> dict[str, Any]:
     return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+def _just_recipe_commands(source: str, name: str) -> list[str]:
+    match = re.search(rf"(?m)^{re.escape(name)}:\n((?:    [^\n]+\n)+)", source)
+    assert match is not None, f"missing just recipe {name!r}"
+    return [line.removeprefix("    ") for line in match.group(1).splitlines()]
 
 
 def test_locked_contract_toolchain_manifest_and_resolution_are_exact() -> None:
@@ -139,3 +146,45 @@ def test_local_contract_entry_points_use_the_locked_launcher() -> None:
         "    just contracts\n"
         "    pre-commit install" in justfile
     )
+
+
+def test_local_npm_security_recipe_is_the_exact_ci_mirror() -> None:
+    justfile = (_ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert _just_recipe_commands(justfile, "security-npm") == [
+        (
+            "node --test scripts/tests/test-web-security-lock.mjs "
+            "scripts/tests/test-npm-audit-runner.mjs "
+            "scripts/tests/test-check-npm-audit.mjs "
+            "scripts/tests/test-npm-audit-policy.mjs "
+            "scripts/tests/test-router-rsc-policy.mjs"
+        ),
+        "node scripts/check-npm-audit.mjs",
+    ]
+
+
+def test_active_guidance_tracks_both_frozen_npm_locks_and_mixed_policy() -> None:
+    claude = (_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    dev_workflow = (_ROOT / "docs" / "dev-workflow.md").read_text(encoding="utf-8")
+    fresh_linux = (_ROOT / "docs" / "runbooks" / "fresh-linux-setup.md").read_text(encoding="utf-8")
+
+    assert "packages/contracts/package-lock.json" in claude
+    assert "npm high/critical gated; pip-audit and Trivy findings report-only" in claude
+
+    assert "apps/web/package-lock.json" in dev_workflow
+    assert "packages/contracts/package-lock.json" in dev_workflow
+    assert "frozen" in dev_workflow
+    assert "just security-npm" in dev_workflow
+
+    for setup_guide in (readme, fresh_linux):
+        assert "just setup" in setup_guide
+        assert "packages/contracts/package-lock.json" in setup_guide
+
+
+def test_contract_lock_hook_keeps_the_reminder_without_stale_ci_claims() -> None:
+    hook = (_ROOT / ".claude" / "hooks" / "contract-lock-drift.sh").read_text(encoding="utf-8")
+
+    assert "Contract-lock reminder:" in hook
+    assert "NO CI JOB RUNS scripts/gen-contracts.sh" not in hook
+    assert "NO CI job runs scripts/gen-contracts.sh" not in hook
