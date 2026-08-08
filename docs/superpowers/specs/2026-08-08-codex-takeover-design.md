@@ -180,6 +180,16 @@ Ubuntu production-host bootstrap contract unchanged. The developer bootstrap wil
 The bootstrap script must not enable services, alter firewall policy, or add the user to privileged groups
 without an explicit interactive step and visible explanation.
 
+#### Disposable Fedora acceptance media
+
+The Fedora VM proof uses two independently checksummed Fedora 44 media artifacts. A Fedora 44
+Everything netinstall ISO boots the real Anaconda/Kickstart environment. A Fedora 44 Workstation Live
+ISO is attached read-only and its `LiveOS/squashfs.img` is the Kickstart `liveimg` payload. This is the
+supported unattended path for proving the installed Workstation payload; a Workstation Live ISO is not
+treated as a `virt-install --location` installation tree, and no cloud image or Server payload may be
+substituted. The installed guest must still prove `VARIANT_ID=workstation`, `VERSION_ID=44`, `x86_64`,
+and SELinux `Enforcing` before any repository acceptance command runs.
+
 #### Repository doctor
 
 Add one dependency-light read-only entry point at `./scripts/doctor.sh`, with `just doctor` as a convenience
@@ -209,9 +219,11 @@ daemon access is not reported as missing or healthy.
 3. `.mcp.json` no longer uses or defaults to owner credentials for a connection described as read-only,
    and its package resolution is pinned.
 4. Fedora detection and dry-run behavior are fixture-tested without changing the host.
-5. A disposable clean Fedora Workstation VM/CI proof installs or verifies the supported toolchain, survives
-   a second idempotent run, obtains Docker/testcontainers access after the documented session transition,
-   and runs setup, fast API/web/contract checks, and Compose configuration.
+5. A disposable clean Fedora Workstation VM/CI proof boots Anaconda from an independently checksummed
+   Fedora 44 Everything netinstall ISO, installs the independently checksummed Workstation Live
+   `LiveOS/squashfs.img` payload, verifies the supported toolchain, survives a second idempotent run,
+   obtains Docker/testcontainers access after the documented session transition, and runs setup, fast
+   API/web/contract checks, and Compose configuration.
 6. The Fedora proof runs with SELinux enforcing; bind mounts work through explicit compatible labels or
    pre-labelled directories rather than global disablement.
 7. Doctor output is deterministic under command stubs, uses stable reason identifiers, and fails only for

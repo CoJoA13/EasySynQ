@@ -66,7 +66,11 @@ scripts/bootstrap-fedora-dev.sh [--check|--apply]
   --apply: print complete transaction, obtain explicit terminal confirmation, then use sudo dnf
   exits: 0 verified, 1 missing/failed prerequisite, 2 unsupported invocation/platform
 
-scripts/run-fedora-proof.sh --iso /absolute/path/Fedora-Workstation-Live-x86_64-44-1.4.iso
+scripts/run-fedora-proof.sh \
+  --installer-iso /absolute/path/Fedora-Everything-netinst-x86_64-44-1.7.iso \
+  --installer-iso-sha256 <published-sha256> \
+  --workstation-iso /absolute/path/Fedora-Workstation-Live-44-1.7.x86_64.iso \
+  --workstation-iso-sha256 <published-sha256>
   creates one disposable libvirt VM under a mktemp-owned directory
   destroys only the exact VM/disk it created after target validation
 
@@ -568,12 +572,16 @@ git commit -m "feat: add Fedora developer bootstrap"
 - Modify: `apps/api/tests/unit/test_deploy_configuration.py`
 
 **Interfaces:**
-- Consumes: Tasks 4–5, a caller-supplied Fedora Workstation 44 ISO, libvirt, and the existing dev Compose stack.
+- Consumes: Tasks 4–5, independently checksummed Fedora 44 Everything netinstall and Workstation
+  Live ISOs, libvirt, and the existing dev Compose stack.
 - Produces: a reproducible local acceptance artifact and explicit SELinux-compatible dev bind mounts.
 
 - [ ] **Step 1: Write structural and Compose RED tests**
 
-Assert the proof scripts require an absolute ISO, validate its SHA-256 argument, generate an exact unique VM name, refuse cleanup outside their mktemp directory, and check these guest facts:
+Assert the proof scripts require absolute installer and Workstation ISO paths, validate both SHA-256
+arguments, use the netinstall ISO as the Anaconda `--location`, attach the Workstation ISO read-only,
+install its `LiveOS/squashfs.img` through Kickstart `liveimg`, generate an exact unique VM name, refuse
+cleanup outside their mktemp directory, and check these guest facts:
 
 ```text
 VARIANT_ID=workstation
@@ -629,11 +637,23 @@ Use only generated disposable `.env` secrets inside the VM; never copy host `.en
 
 - [ ] **Step 5: Implement the host VM lifecycle**
 
-Use `virt-install --transient` with a copy-on-write disk under a validated mktemp directory and Kickstart from `infra/dev/fedora-proof/ks.cfg`. Require `--iso` and `--iso-sha256`; reject symlinks and non-regular files. Print the VM name/disk before creation. On cleanup, resolve and verify exact targets and stop on any mismatch or locked disk rather than broadening deletion.
+Use `virt-install --transient` with a copy-on-write disk under a validated mktemp directory and a
+rendered copy of `infra/dev/fedora-proof/ks.cfg`. Require `--installer-iso`,
+`--installer-iso-sha256`, `--workstation-iso`, and `--workstation-iso-sha256`; reject symlinks and
+non-regular files and verify both digests before creating anything. Boot Anaconda from the Fedora 44
+Everything netinstall ISO, attach the Fedora 44 Workstation Live ISO read-only, and make Kickstart use
+its `LiveOS/squashfs.img` as a `liveimg` payload. Print the VM name/disk before creation. On cleanup,
+resolve and verify exact targets and stop on any mismatch or locked disk rather than broadening deletion.
 
 - [ ] **Step 6: Document the manual acceptance invocation**
 
-Document Fedora ISO acquisition/checksum verification, separate proof-host installation of `libvirt-daemon-kvm libvirt-client qemu-kvm virt-install guestfs-tools`, required libvirt service/group actions, expected duration, log location, safe rerun, and exact evidence block to paste into the PR. These virtualization packages are not installed by the contributor bootstrap. This proof is intentionally local/manual because GitHub-hosted Ubuntu runners do not provide a trustworthy SELinux-enforcing Fedora Workstation VM boundary.
+Document acquisition and signed-checksum verification for both Fedora 44 media, why the netinstall ISO
+is the Anaconda boot environment and the Workstation Live ISO is the payload, separate proof-host
+installation of `libvirt-daemon-kvm libvirt-client qemu-kvm virt-install guestfs-tools`, required
+libvirt service/group actions, expected duration, log location, safe rerun, and exact evidence block to
+paste into the PR. These virtualization packages are not installed by the contributor bootstrap. This
+proof is intentionally local/manual because GitHub-hosted Ubuntu runners do not provide a trustworthy
+SELinux-enforcing Fedora Workstation VM boundary.
 
 - [ ] **Step 7: Run fixture/configuration verification**
 
@@ -846,7 +866,8 @@ git commit -m "fix: enforce read-only PostgreSQL MCP access"
 - Modify: `docs/runbooks/fedora-proof.md`
 
 **Interfaces:**
-- Consumes: all Tasks 1–8 and an approved Fedora Workstation ISO checksum.
+- Consumes: all Tasks 1–8 plus approved Fedora 44 Everything netinstall and Workstation Live ISO
+  checksums.
 - Produces: required fast CI contracts, recorded clean-VM evidence, and the complete Programme 0 handoff.
 
 - [ ] **Step 1: Add CI RED assertions for all new fast gates**
@@ -913,22 +934,23 @@ Expected: every command passes. Use a writable task-specific uv cache if the san
 
 - [ ] **Step 5: Run the real disposable Fedora Workstation proof**
 
-Place the Fedora Workstation 44 ISO and its published `CHECKSUM` file in `.fedora-proof/`, then resolve and validate the single matching pair before launching:
+Place both Fedora 44 ISOs and their published `CHECKSUM` files in `.fedora-proof/`, then resolve and
+validate one installer pair and one Workstation pair before launching:
 
 ```bash
-mapfile -t EASYSYNQ_FEDORA_ISOS < <(find "$PWD/.fedora-proof" -maxdepth 1 -type f \
+mapfile -t EASYSYNQ_INSTALLER_ISOS < <(find "$PWD/.fedora-proof" -maxdepth 1 -type f \
+  -name 'Fedora-Everything-netinst-x86_64-44-*.iso' -print)
+mapfile -t EASYSYNQ_WORKSTATION_ISOS < <(find "$PWD/.fedora-proof" -maxdepth 1 -type f \
   -name 'Fedora-Workstation-Live-44-*.x86_64.iso' -print)
-mapfile -t EASYSYNQ_FEDORA_CHECKSUMS < <(find "$PWD/.fedora-proof" -maxdepth 1 -type f \
-  -name 'Fedora-Workstation-44-*-x86_64-CHECKSUM' -print)
-test "${#EASYSYNQ_FEDORA_ISOS[@]}" -eq 1
-test "${#EASYSYNQ_FEDORA_CHECKSUMS[@]}" -eq 1
-EASYSYNQ_FEDORA_ISO_SHA256="$(awk -v iso="$(basename "${EASYSYNQ_FEDORA_ISOS[0]}")" \
-  '$0 ~ iso {print $NF; exit}' \
-  "${EASYSYNQ_FEDORA_CHECKSUMS[0]}")"
-test "${#EASYSYNQ_FEDORA_ISO_SHA256}" -eq 64
+test "${#EASYSYNQ_INSTALLER_ISOS[@]}" -eq 1
+test "${#EASYSYNQ_WORKSTATION_ISOS[@]}" -eq 1
+EASYSYNQ_INSTALLER_ISO_SHA256='<sha256-from-verified-Everything-CHECKSUM>'
+EASYSYNQ_WORKSTATION_ISO_SHA256='<sha256-from-verified-Workstation-CHECKSUM>'
 ./scripts/run-fedora-proof.sh \
-  --iso "${EASYSYNQ_FEDORA_ISOS[0]}" \
-  --iso-sha256 "$EASYSYNQ_FEDORA_ISO_SHA256"
+  --installer-iso "${EASYSYNQ_INSTALLER_ISOS[0]}" \
+  --installer-iso-sha256 "$EASYSYNQ_INSTALLER_ISO_SHA256" \
+  --workstation-iso "${EASYSYNQ_WORKSTATION_ISOS[0]}" \
+  --workstation-iso-sha256 "$EASYSYNQ_WORKSTATION_ISO_SHA256"
 ```
 
 Expected: Fedora Workstation 44/x86_64, SELinux Enforcing, bootstrap apply twice, Docker/testcontainers access after the explicit session transition, setup, fast API/web/contracts, Compose configuration, live dev stack, and all three doctor profiles pass. The proof log contains no host `.env`, secrets, or site data.
