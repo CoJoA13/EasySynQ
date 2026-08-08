@@ -64,6 +64,17 @@ write_register() {
   } >"$repo/docs/decisions-register.md"
 }
 
+write_register_intro_collision() {
+  local repo="$1"
+  {
+    printf '%s\n\n' 'This register resolves R1–R64).'
+    printf '%s\n\n' '## Part 3 — Resolutions R1–R65'
+    printf '%s\n' '### R64 — Existing decision'
+    printf '%s\n\n' '### R65 — New decision'
+    printf '%s\n' 'Historical narrative later repeats R1–R65).'
+  } >"$repo/docs/decisions-register.md"
+}
+
 run_register_guard() {
   local repo="$1"
   printf '{"tool_input":{"file_path":"%s/docs/decisions-register.md"}}' "$repo" \
@@ -122,6 +133,14 @@ warning="$(run_register_guard "$repo")"
 [[ "$warning" != *'CLAUDE.md'* ]] \
   || fail "register warning still depends on CLAUDE.md (output=$warning)"
 printf '  ok   stale register self-range warns without CLAUDE.md\n'
+
+repo="$TMP_ROOT/stale-register-intro-collision"
+make_repo "$repo"
+write_register_intro_collision "$repo"
+warning="$(run_register_guard "$repo")"
+[[ "$warning" == *"register's intro paragraph"* ]] \
+  || fail "later register prose hid the stale intro declaration (output=$warning)"
+printf '  ok   later register prose cannot satisfy the intro self-declaration\n'
 
 repo="$TMP_ROOT/current-register"
 make_repo "$repo"

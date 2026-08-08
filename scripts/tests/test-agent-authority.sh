@@ -310,6 +310,40 @@ EOF
   fi
 }
 
+run_good_historical_decision_range() {
+  local fixture output status
+  fixture="$(fixture_root)"
+  cat >"$fixture/docs/documentation-audit-2026-07-30.md" <<'EOF'
+# Historical documentation audit
+
+The audit recorded the then-current register range R1–R60.
+EOF
+  git -C "$fixture" add --all
+  output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
+  status=$?
+  rm -rf "$fixture"
+  if [ "$status" -eq 0 ] && [ "$output" = 'AUTHORITY_OK' ]; then
+    ok 'historical decision range is not a live mirror'
+  else
+    bad "historical decision range is not a live mirror (status=$status output=$output)"
+  fi
+}
+
+run_bad_current_decision_range() {
+  local fixture output status
+  fixture="$(fixture_root)"
+  printf 'Current decision range is R1–R60.\n' >"$fixture/docs/current-decision-mirror.md"
+  git -C "$fixture" add --all
+  output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
+  status=$?
+  rm -rf "$fixture"
+  if [ "$status" -eq 1 ] && [ "$output" = 'AUTHORITY_DECISION_RANGE_MIRROR' ]; then
+    ok 'current decision range remains a rejected mirror'
+  else
+    bad "current decision range remains a rejected mirror (status=$status output=$output)"
+  fi
+}
+
 run_good_guard_implementation() {
   local fixture output status
   fixture="$(fixture_root)"
@@ -484,6 +518,8 @@ run_bad_residual_status_keys
 run_good_fixture_payloads
 run_good_untracked_payload
 run_good_register_range
+run_good_historical_decision_range
+run_bad_current_decision_range
 run_good_guard_implementation
 run_good neutral_authority_split
 

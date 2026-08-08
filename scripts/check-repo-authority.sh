@@ -291,7 +291,7 @@ fi
 
 is_historical_path() {
   case "$1" in
-    docs/superpowers/*|docs/audit-2026-06-17.md|docs/review-2026-07-22.md|docs/slice-history.md)
+    docs/superpowers/*|docs/audit-2026-06-17.md|docs/review-2026-07-22.md|docs/documentation-audit-2026-07-30.md|docs/slice-history.md)
       return 0
       ;;
     *) return 1 ;;
@@ -303,7 +303,7 @@ CURRENT_PATHS=(README.md AGENTS.md CLAUDE.md apps .claude docs/00-overview.md
   docs/16-roadmap.md docs/17-gaps-and-open-questions.md
   docs/18-mvp-implementation-plan.md docs/dev-workflow.md docs/manuals docs/runbooks)
 HISTORICAL_EXCLUDES=(docs/superpowers docs/audit-2026-06-17.md
-  docs/review-2026-07-22.md docs/slice-history.md)
+  docs/review-2026-07-22.md docs/documentation-audit-2026-07-30.md docs/slice-history.md)
 
 # Fixture scripts deliberately contain malformed authority examples. They exercise the guard but
 # are not repository authority consumers and must never make the live gate fail.

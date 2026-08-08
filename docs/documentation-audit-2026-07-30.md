@@ -28,7 +28,7 @@ The audit cross-checked documentation against:
 - host commands dispatched by `scripts/easysynq`;
 - OpenAPI generation in `scripts/gen-contracts.sh`;
 - shipped-slice and residual records in [`slice-history.md`](slice-history.md); and
-- the authoritative [`decisions-register.md`](decisions-register.md), whose then-current coverage ended at decision R60.
+- the authoritative [`decisions-register.md`](decisions-register.md), currently R1–R60.
 
 ## Corrections made
 
@@ -46,7 +46,7 @@ The audit cross-checked documentation against:
 | Restore | Restore instructions required an undefined reindex. | Shipped PostgreSQL FTS needs no separate reindex; rebuild the filesystem mirror. |
 | Audit witness | The runbook used unsupported `easysynq audit verify-offhost`. | It now invokes the implemented audit CLI in a one-off worker container. |
 | Runbook index | Hyper-V appliance installation was omitted. | The appliance runbook is now indexed. |
-| Decision range | The overview stopped at R46. | It now points to the register's then-current final decision. |
+| Decision range | The overview stopped at R46. | It now points to R1–R60. |
 | Lifecycle terminology | Mirror guidance mixed “Released” with the canonical `Effective` state. | Current-facing mirror guidance now consistently says Effective versions only. |
 | Break-glass audit | The direct `grant-role` CLI was described as audited. | The admin manual now states that it bypasses the API audit path and requires an independent change/incident record. |
 | Break-glass scope | Developer guidance required `--org`, but the host wrapper discarded that option. | The wrapper now forwards `--org` and optional `--bound-scope` arguments to the underlying CLI, and the manual requires the exact org short code. |

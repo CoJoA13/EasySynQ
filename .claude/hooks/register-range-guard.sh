@@ -27,7 +27,8 @@ highest="$(grep -o '^### R[0-9]\+ ' docs/decisions-register.md 2>/dev/null \
 
 stale=""
 # Compare the highest entry with the register's two self-declarations only.
-grep -q "R1–R${highest})" docs/decisions-register.md 2>/dev/null || stale="${stale} the register's intro paragraph;"
+intro="$(awk 'NF && $0 !~ /^#/ { print; exit }' docs/decisions-register.md 2>/dev/null)"
+[[ "$intro" == *"R1–R${highest})"* ]] || stale="${stale} the register's intro paragraph;"
 grep -q "^## Part 3 — Resolutions R1–R${highest}\$" docs/decisions-register.md 2>/dev/null || stale="${stale} the register's 'Part 3 — Resolutions' heading;"
 
 [ -z "$stale" ] && exit 0
