@@ -15,8 +15,11 @@ const cleanFixture = readJson(path.join(fixtureDirectory, 'audit-clean.json'));
 const routerFixture = readJson(path.join(fixtureDirectory, 'audit-router-7.18.2.json'));
 const unexpectedFixture = readJson(path.join(fixtureDirectory, 'audit-unexpected-high.json'));
 const lockFixture = readJson(path.join(fixtureDirectory, 'package-lock.json'));
-const exceptionFixture = readJson(
+const productionExceptionPolicy = readJson(
   path.join(root, '.github/security/npm-audit-exceptions.json'),
+);
+const routerExceptionFixture = readJson(
+  path.join(fixtureDirectory, 'exceptions-router-7.18.2.json'),
 );
 
 const beforeExpiry = new Date('2026-08-21T23:59:59.999Z');
@@ -57,7 +60,7 @@ function combineReports(...reports) {
 function fakeRun({
   report = cleanFixture,
   lockfile = lockFixture,
-  exceptions = exceptionFixture,
+  exceptions = productionExceptionPolicy,
   npmVersion = '10.9.8',
   auditStatus,
   auditStderr = '',
@@ -125,7 +128,7 @@ function fakeRun({
   };
 }
 
-function acceptedLine(reason = exceptionFixture.exceptions[0].reason) {
+function acceptedLine(reason = routerExceptionFixture.exceptions[0].reason) {
   const json = JSON.stringify({
     advisoryId: 'GHSA-qwww-vcr4-c8h2',
     rootPackage: 'react-router',
@@ -154,6 +157,40 @@ test('reads only the fixed lock and exception documents and accepts a clean repo
     path.join(root, '.github/security/npm-audit-exceptions.json'),
   ]);
   assert.equal(routerCalls, 0);
+});
+
+test('the production policy blocks the Router pair without invoking RSC analysis', () => {
+  let routerCalls = 0;
+  const result = fakeRun({
+    report: routerFixture,
+    checkRouterRscUsageImpl() {
+      routerCalls += 1;
+      return [];
+    },
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(routerCalls, 0);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout.includes('ACCEPTED'), false);
+  assert.equal(result.stdout, [
+    `BLOCKED ${JSON.stringify({
+      package: 'react-router',
+      version: '7.18.2',
+      severity: 'high',
+      advisoryIds: ['GHSA-qwww-vcr4-c8h2'],
+      reason: 'unapproved-high-or-critical',
+    })}`,
+    `BLOCKED ${JSON.stringify({
+      package: 'react-router-dom',
+      version: '7.18.2',
+      severity: 'high',
+      advisoryIds: ['react-router'],
+      reason: 'unapproved-high-or-critical',
+    })}`,
+    'SUMMARY {"accepted":0,"blocked":2,"ignored":{"info":0,"low":0,"moderate":0}}',
+    '',
+  ].join('\n'));
 });
 
 test('resolves fixed repository inputs and the web cwd independently of process.cwd()', () => {
@@ -256,6 +293,7 @@ test('runs one Router check and prints one reason for the two accepted records',
   const calls = [];
   const result = fakeRun({
     report: routerFixture,
+    exceptions: routerExceptionFixture,
     checkRouterRscUsageImpl(options) {
       calls.push(options);
       return [];
@@ -340,6 +378,7 @@ test('runs an accepted Router policy despite another blocked finding', () => {
   let routerCalls = 0;
   const result = fakeRun({
     report: combined,
+    exceptions: routerExceptionFixture,
     checkRouterRscUsageImpl() {
       routerCalls += 1;
       return [];
@@ -367,6 +406,7 @@ test('an operational Router failure outranks a simultaneous blocked finding', ()
   const combined = combineReports(routerFixture, unexpectedFixture);
   const result = fakeRun({
     report: combined,
+    exceptions: routerExceptionFixture,
     checkRouterRscUsageImpl() {
       throw Object.assign(new Error('/outside/repo SOURCE_BODY ENV_SECRET'), {
         code: 'E_TYPESCRIPT_RESOLUTION',
@@ -385,6 +425,7 @@ test('an operational Router failure outranks a simultaneous blocked finding', ()
 test('Router violations block the exception without printing its acceptance reason', () => {
   const result = fakeRun({
     report: routerFixture,
+    exceptions: routerExceptionFixture,
     checkRouterRscUsageImpl() {
       return [{
         code: 'E_ROUTER_RSC_API',
@@ -415,6 +456,7 @@ test('Router violations block the exception without printing its acceptance reas
 test('a malformed Router policy result is an operational failure', () => {
   const result = fakeRun({
     report: routerFixture,
+    exceptions: routerExceptionFixture,
     checkRouterRscUsageImpl() {
       return { length: 0 };
     },
@@ -429,6 +471,7 @@ test('does not run Router policy for an unused or policy-rejected exception', as
   await t.test('unused', () => {
     let calls = 0;
     const result = fakeRun({
+      exceptions: routerExceptionFixture,
       checkRouterRscUsageImpl() {
         calls += 1;
         return [];
@@ -442,6 +485,7 @@ test('does not run Router policy for an unused or policy-rejected exception', as
     let calls = 0;
     const result = fakeRun({
       report: routerFixture,
+      exceptions: routerExceptionFixture,
       now: atExpiry,
       checkRouterRscUsageImpl() {
         calls += 1;
@@ -460,6 +504,7 @@ test('does not run Router policy for an unused or policy-rejected exception', as
     let calls = 0;
     const result = fakeRun({
       report: routerFixture,
+      exceptions: routerExceptionFixture,
       lockfile: mismatchedLock,
       checkRouterRscUsageImpl() {
         calls += 1;
@@ -473,7 +518,7 @@ test('does not run Router policy for an unused or policy-rejected exception', as
 });
 
 test('rejects an unknown usage policy even when its exception is unused', () => {
-  const exceptions = clone(exceptionFixture);
+  const exceptions = clone(routerExceptionFixture);
   exceptions.exceptions.push({
     advisoryId: 'GHSA-1111-2222-4444',
     rootPackage: 'unused-root',
@@ -506,7 +551,7 @@ test('rejects an unknown usage policy even when its exception is unused', () => 
 });
 
 test('prints accepted reasons as one JSON-escaped physical line', () => {
-  const exceptions = clone(exceptionFixture);
+  const exceptions = clone(routerExceptionFixture);
   const reason = 'Reviewed reason with "quotes"\nand separators\u2028between\u2029lines';
   exceptions.exceptions[0].reason = reason;
   const result = fakeRun({ report: routerFixture, exceptions });
@@ -667,8 +712,16 @@ test('the zero-argument executable supplies the real current Date to policy eval
     const preload = path.join(directory, 'controlled-clock-and-npm.cjs');
     const cliPath = path.join(root, 'scripts/check-npm-audit.mjs');
     fs.writeFileSync(preload, `
+const fs = require('node:fs');
 const childProcess = require('node:child_process');
 const moduleApi = require('node:module');
+const originalRead = fs.readFileSync;
+const policyPath = ${JSON.stringify(path.join(root, '.github/security/npm-audit-exceptions.json'))};
+const exceptionPolicy = ${JSON.stringify(JSON.stringify(routerExceptionFixture))};
+fs.readFileSync = function(file, ...args) {
+  if (String(file) === policyPath) return exceptionPolicy;
+  return originalRead.call(this, file, ...args);
+};
 const RealDate = Date;
 global.Date = class ControlledDate extends RealDate {
   constructor(...args) {

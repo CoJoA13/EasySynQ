@@ -16,8 +16,14 @@ const cleanFixture = readJson(path.join(fixtureDirectory, 'audit-clean.json'));
 const routerFixture = readJson(path.join(fixtureDirectory, 'audit-router-7.18.2.json'));
 const unexpectedFixture = readJson(path.join(fixtureDirectory, 'audit-unexpected-high.json'));
 const lockFixture = readJson(path.join(fixtureDirectory, 'package-lock.json'));
-const exceptionFixture = readJson(
-  path.join(root, '.github/security/npm-audit-exceptions.json'),
+const productionExceptionPolicyPath = path.join(
+  root,
+  '.github/security/npm-audit-exceptions.json',
+);
+const productionExceptionPolicyText = fs.readFileSync(productionExceptionPolicyPath, 'utf8');
+const productionExceptionPolicy = JSON.parse(productionExceptionPolicyText);
+const routerExceptionFixture = readJson(
+  path.join(fixtureDirectory, 'exceptions-router-7.18.2.json'),
 );
 
 const beforeExpiry = new Date('2026-08-21T23:59:59.999Z');
@@ -76,7 +82,7 @@ function assess(report, overrides = {}) {
     exitCode: 0,
     stdout: typeof report === 'string' ? report : JSON.stringify(report),
     lockfile: clone(lockFixture),
-    exceptionPolicy: clone(exceptionFixture),
+    exceptionPolicy: clone(routerExceptionFixture),
     now: beforeExpiry,
     ...overrides,
   });
@@ -117,6 +123,46 @@ test('supported npm versions are limited to npm 10.9 patch releases', () => {
   for (const version of ['10.8.9', '10.10.0', '10.9', 'v10.9.4', '', null, 10.9]) {
     assertPolicyError('E_NPM_VERSION', () => assertSupportedNpmVersion(version));
   }
+});
+
+test('the production exception policy is exactly empty', () => {
+  assert.equal(productionExceptionPolicyText, [
+    '{',
+    '  "schemaVersion": 1,',
+    '  "exceptions": []',
+    '}',
+    '',
+  ].join('\n'));
+  assert.deepEqual(productionExceptionPolicy, {
+    schemaVersion: 1,
+    exceptions: [],
+  });
+});
+
+test('the production policy blocks the former Router pair as unapproved', () => {
+  assert.deepEqual(assess(routerFixture, {
+    exitCode: 1,
+    exceptionPolicy: clone(productionExceptionPolicy),
+  }), {
+    accepted: [],
+    blocked: [
+      {
+        package: 'react-router',
+        severity: 'high',
+        version: '7.18.2',
+        advisoryIds: ['GHSA-qwww-vcr4-c8h2'],
+        reason: 'unapproved-high-or-critical',
+      },
+      {
+        package: 'react-router-dom',
+        severity: 'high',
+        version: '7.18.2',
+        advisoryIds: ['react-router'],
+        reason: 'unapproved-high-or-critical',
+      },
+    ],
+    ignored: { info: 0, low: 0, moderate: 0 },
+  });
 });
 
 test('a clean v2 report with status zero is accepted', () => {
@@ -384,7 +430,7 @@ test('cyclic inherited vulnerability causes fail closed', () => {
 });
 
 test('impossible exception calendar dates fail closed whether consumed or dormant', () => {
-  const exceptionPolicy = clone(exceptionFixture);
+  const exceptionPolicy = clone(routerExceptionFixture);
   exceptionPolicy.exceptions[0].expiresAt = '2026-09-31T00:00:00Z';
 
   assertPolicyError('E_EXCEPTION_SCHEMA', () => assess(cleanFixture, { exceptionPolicy }));
@@ -395,7 +441,7 @@ test('impossible exception calendar dates fail closed whether consumed or dorman
 });
 
 test('exception expiry accepts UTC seconds and exactly three fractional digits', () => {
-  const exceptionPolicy = clone(exceptionFixture);
+  const exceptionPolicy = clone(routerExceptionFixture);
   exceptionPolicy.exceptions[0].expiresAt = '2026-08-22T00:00:00.123Z';
   assert.deepEqual(assess(routerFixture, { exitCode: 1, exceptionPolicy }).blocked, []);
   assert.deepEqual(assess(routerFixture, { exitCode: 1 }).blocked, []);
@@ -519,7 +565,7 @@ test('the exception policy schema fails closed when malformed', async (t) => {
 
   for (const [name, mutate] of cases) {
     await t.test(name, () => {
-      let policy = clone(exceptionFixture);
+      let policy = clone(routerExceptionFixture);
       const replacement = mutate(policy);
       if (replacement === null) policy = replacement;
       assertPolicyError('E_EXCEPTION_SCHEMA', () => assess(cleanFixture, {
@@ -537,7 +583,7 @@ test('the injected clock must be a valid Date', () => {
 test('unknown extra fields are tolerated at every validated boundary', () => {
   const report = clone(routerFixture);
   const lockfile = clone(lockFixture);
-  const exceptionPolicy = clone(exceptionFixture);
+  const exceptionPolicy = clone(routerExceptionFixture);
   report.futureReportField = true;
   report.metadata.futureMetadataField = true;
   report.vulnerabilities['react-router'].futureRecordField = true;

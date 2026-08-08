@@ -1,29 +1,4 @@
 {
   "schemaVersion": 1,
-  "exceptions": [
-    {
-      "advisoryId": "GHSA-qwww-vcr4-c8h2",
-      "rootPackage": "react-router",
-      "advisoryUrl": "https://github.com/remix-run/react-router/security/advisories/GHSA-qwww-vcr4-c8h2",
-      "reason": "The maintainer identifies 7.18.2 as patched while the global feed still models the v7 and v8 ranges continuously.",
-      "expiresAt": "2026-08-22T00:00:00Z",
-      "usagePolicy": "router-rsc-absent",
-      "records": [
-        {
-          "package": "react-router",
-          "version": "7.18.2",
-          "isDirect": false,
-          "causes": ["GHSA-qwww-vcr4-c8h2"],
-          "effects": ["react-router-dom"]
-        },
-        {
-          "package": "react-router-dom",
-          "version": "7.18.2",
-          "isDirect": true,
-          "causes": ["react-router"],
-          "effects": []
-        }
-      ]
-    }
-  ]
+  "exceptions": []
 }
