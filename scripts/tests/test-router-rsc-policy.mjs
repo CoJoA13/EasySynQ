@@ -793,6 +793,126 @@ RouterB.unstable_routeRSCServerRequest;
   assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_matchRSCServerRequest']);
 });
 
+test('routes do-while conditions only from normal and continue completions', () => {
+  const violations = inspect(`
+var RouterBreak = require('react-router');
+do {
+  break;
+} while (RouterBreak = {});
+RouterBreak.unstable_RSCHydratedRouter;
+
+var RouterReturn = require('react-router-dom');
+function returnBeforeCondition() {
+  do {
+    return;
+  } while (RouterReturn = {});
+}
+returnBeforeCondition();
+RouterReturn.unstable_RSCStaticRouter;
+
+var RouterThrow = require('react-router');
+function throwBeforeCondition() {
+  do {
+    throw new Error('stop');
+  } while (RouterThrow = {});
+}
+throwBeforeCondition();
+RouterThrow.unstable_createCallServer;
+
+var RouterContinue = require('react-router-dom');
+function continueToCondition() {
+  do {
+    continue;
+  } while (RouterContinue = {});
+}
+continueToCondition();
+RouterContinue.unstable_getRSCStream;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCHydratedRouter',
+    'unstable_RSCStaticRouter',
+    'unstable_createCallServer',
+  ]);
+});
+
+test('consumes explicit throw paths in catch without consuming returns', () => {
+  const violations = inspect(`
+var RouterReset = require('react-router');
+try {
+  throw new Error('caught');
+} catch {
+  RouterReset = {};
+}
+RouterReset.unstable_RSCHydratedRouter;
+
+var RouterSet = {};
+try {
+  throw new Error('caught');
+} catch {
+  RouterSet = require('react-router-dom');
+}
+RouterSet.unstable_RSCStaticRouter;
+
+var RouterAfterCatch = {};
+function returnThroughCatch() {
+  try {
+    return;
+  } catch {
+    RouterAfterCatch = {};
+  }
+  RouterAfterCatch = require('react-router');
+}
+returnThroughCatch();
+RouterAfterCatch.unstable_createCallServer;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_RSCStaticRouter']);
+});
+
+test('preserves incoming return when a finally block is only conditionally abrupt', () => {
+  assert.deepEqual(inspect(`
+var Router = {};
+function returnThroughFinally() {
+  try {
+    return;
+  } finally {
+    if (unknownCondition) {
+      throw new Error('override');
+    }
+  }
+  Router = require('react-router');
+}
+returnThroughFinally();
+Router.unstable_getRSCStream;
+`), []);
+});
+
+test('routes for-loop updates only from normal and continue completions', () => {
+  const violations = inspect(`
+var RouterBreak = {};
+for (; true; RouterBreak = require('react-router')) {
+  break;
+}
+RouterBreak.unstable_RSCHydratedRouter;
+
+var RouterContinue = {};
+for (; true; RouterContinue = require('react-router-dom')) {
+  continue;
+}
+RouterContinue.unstable_RSCStaticRouter;
+
+var RouterUnknown = {};
+for (; true; RouterUnknown = require('react-router')) {
+  if (unknownCondition) break;
+  continue;
+}
+RouterUnknown.unstable_createCallServer;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCStaticRouter',
+    'unstable_createCallServer',
+  ]);
+});
+
 test('summarizes directly called arrow and function-expression setters', () => {
   const violations = inspect(`
 var RouterA = {};
@@ -924,6 +1044,131 @@ RouterB.unstable_routeRSCServerRequest;
     'unstable_matchRSCServerRequest',
     'unstable_routeRSCServerRequest',
   ]);
+});
+
+test('does not use callable assignments after a nested caller cutoff', () => {
+  assert.deepEqual(inspect(`
+var RouterFutureSetter = {};
+let futureSetter = () => {};
+function callFutureSetter() {
+  futureSetter();
+}
+callFutureSetter();
+futureSetter = () => {
+  RouterFutureSetter = require('react-router');
+};
+RouterFutureSetter.unstable_RSCHydratedRouter;
+
+var RouterReplaced = {};
+let replacedSetter = () => {
+  RouterReplaced = require('react-router-dom');
+};
+function callReplacedSetter() {
+  replacedSetter();
+}
+replacedSetter = () => {};
+callReplacedSetter();
+RouterReplaced.unstable_RSCStaticRouter;
+`), []);
+});
+
+test('uses callable assignments visible at each nested caller cutoff', () => {
+  const violations = inspect(`
+var RouterBefore = {};
+let setterBefore = () => {};
+function callSetterBefore() {
+  setterBefore();
+}
+setterBefore = () => {
+  RouterBefore = require('react-router');
+};
+callSetterBefore();
+RouterBefore.unstable_createCallServer;
+
+var RouterTwice = {};
+let setterTwice = () => {};
+function callSetterTwice() {
+  setterTwice();
+}
+callSetterTwice();
+setterTwice = () => {
+  RouterTwice = require('react-router-dom');
+};
+callSetterTwice();
+RouterTwice.unstable_getRSCStream;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_createCallServer',
+    'unstable_getRSCStream',
+  ]);
+});
+
+test('uses callable assignments inside the active caller region', () => {
+  const violations = inspect(`
+var Router = {};
+let localSetter = () => {};
+function outer() {
+  localSetter = () => {
+    Router = require('react-router');
+  };
+  localSetter();
+}
+outer();
+Router.unstable_matchRSCServerRequest;
+
+var NestedRouter = {};
+let nestedSetter = () => {};
+function inner() {
+  nestedSetter();
+}
+function nestedOuter() {
+  nestedSetter = () => {
+    NestedRouter = require('react-router-dom');
+  };
+  inner();
+}
+nestedOuter();
+NestedRouter.unstable_routeRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_matchRSCServerRequest',
+    'unstable_routeRSCServerRequest',
+  ]);
+});
+
+test('propagates callable cutoffs through multiple direct-call levels', () => {
+  assert.deepEqual(inspect(`
+var RouterFuture = {};
+let deepFutureSetter = () => {};
+function innerFuture() {
+  deepFutureSetter();
+}
+function outerFuture() {
+  innerFuture();
+}
+outerFuture();
+deepFutureSetter = () => {
+  RouterFuture = require('react-router');
+};
+RouterFuture.unstable_routeRSCServerRequest;
+`), []);
+
+  const violations = inspect(`
+var RouterVisible = {};
+let deepVisibleSetter = () => {};
+function innerVisible() {
+  deepVisibleSetter();
+}
+function outerVisible() {
+  innerVisible();
+}
+deepVisibleSetter = () => {
+  RouterVisible = require('react-router-dom');
+};
+outerVisible();
+RouterVisible.unstable_routeRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_routeRSCServerRequest']);
 });
 
 test('does not expand direct-call summaries through aliases or higher-order calls', () => {

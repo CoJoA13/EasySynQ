@@ -330,65 +330,150 @@ function buildLexicalModel(typescript, sourceFile) {
     return undefined;
   }
 
-  function alternativeAbruptMode(left, right) {
-    if (left === 'always' && right === 'always') return 'always';
-    if (left === 'none' && right === 'none') return 'none';
-    return 'maybe';
+  const NORMAL_COMPLETION = 'normal';
+  const RETURN_COMPLETION = 'return';
+  const THROW_COMPLETION = 'throw';
+  const BREAK_COMPLETION = 'break';
+  const CONTINUE_COMPLETION = 'continue';
+
+  function unionOutcomes(...outcomeSets) {
+    return new Set(outcomeSets.flatMap((outcomes) => [...outcomes]));
   }
 
-  function abruptCompletionMode(node) {
-    if (node === undefined) return 'none';
-    if (node.kind === typescript.SyntaxKind.ReturnStatement
-        || node.kind === typescript.SyntaxKind.ThrowStatement
-        || node.kind === typescript.SyntaxKind.BreakStatement
-        || node.kind === typescript.SyntaxKind.ContinueStatement) {
-      return 'always';
+  function sequenceOutcomes(statements) {
+    let outcomes = new Set([NORMAL_COMPLETION]);
+    for (const statement of statements) {
+      const carried = new Set(
+        [...outcomes].filter((outcome) => outcome !== NORMAL_COMPLETION),
+      );
+      outcomes = outcomes.has(NORMAL_COMPLETION)
+        ? unionOutcomes(carried, statementOutcomes(statement))
+        : carried;
     }
-    if (typescript.isBlock(node)) {
-      let mode = 'none';
-      for (const statement of node.statements) {
-        const statementMode = abruptCompletionMode(statement);
-        if (statementMode === 'always') return 'always';
-        if (statementMode === 'maybe') mode = 'maybe';
+    return outcomes;
+  }
+
+  function loopOutcomes(bodyOutcomes, canSkipBody) {
+    const outcomes = new Set(canSkipBody ? [NORMAL_COMPLETION] : []);
+    for (const outcome of bodyOutcomes) {
+      if (outcome === RETURN_COMPLETION || outcome === THROW_COMPLETION) {
+        outcomes.add(outcome);
+      } else {
+        // A break exits normally. Normal and continue paths may eventually
+        // leave this deliberately bounded loop model.
+        outcomes.add(NORMAL_COMPLETION);
       }
-      return mode;
+    }
+    return outcomes;
+  }
+
+  function tryOutcomes(node) {
+    const fromTry = statementOutcomes(node.tryBlock);
+    let incoming = new Set(fromTry);
+    if (node.catchClause !== undefined) {
+      const fromCatch = statementOutcomes(node.catchClause.block);
+      incoming.delete(THROW_COMPLETION);
+      if (fromTry.has(THROW_COMPLETION) || fromTry.has(NORMAL_COMPLETION)) {
+        incoming = unionOutcomes(incoming, fromCatch);
+      }
+    }
+    if (node.finallyBlock === undefined) return incoming;
+
+    const fromFinally = statementOutcomes(node.finallyBlock);
+    const combined = new Set();
+    for (const incomingOutcome of incoming) {
+      if (fromFinally.has(NORMAL_COMPLETION)) combined.add(incomingOutcome);
+      for (const finallyOutcome of fromFinally) {
+        if (finallyOutcome !== NORMAL_COMPLETION) combined.add(finallyOutcome);
+      }
+    }
+    return combined;
+  }
+
+  function statementOutcomes(node) {
+    if (node === undefined) return new Set([NORMAL_COMPLETION]);
+    if (node.kind === typescript.SyntaxKind.ReturnStatement) {
+      return new Set([RETURN_COMPLETION]);
+    }
+    if (node.kind === typescript.SyntaxKind.ThrowStatement) {
+      return new Set([THROW_COMPLETION]);
+    }
+    if (node.kind === typescript.SyntaxKind.BreakStatement) {
+      return new Set([BREAK_COMPLETION]);
+    }
+    if (node.kind === typescript.SyntaxKind.ContinueStatement) {
+      return new Set([CONTINUE_COMPLETION]);
+    }
+    if (typescript.isBlock(node) || typescript.isSourceFile(node)) {
+      return sequenceOutcomes(node.statements);
     }
     if (node.kind === typescript.SyntaxKind.IfStatement) {
       const condition = booleanLiteralValue(node.expression);
-      const thenMode = abruptCompletionMode(node.thenStatement);
-      const elseMode = abruptCompletionMode(node.elseStatement);
-      if (condition === true) return thenMode;
-      if (condition === false) return elseMode;
-      return alternativeAbruptMode(thenMode, elseMode);
+      const fromThen = statementOutcomes(node.thenStatement);
+      const fromElse = statementOutcomes(node.elseStatement);
+      if (condition === true) return fromThen;
+      if (condition === false) return fromElse;
+      return unionOutcomes(fromThen, fromElse);
     }
-    if (node.kind === typescript.SyntaxKind.TryStatement) {
-      const finallyMode = abruptCompletionMode(node.finallyBlock);
-      if (finallyMode === 'always') return 'always';
-      const tryMode = abruptCompletionMode(node.tryBlock);
-      const catchMode = node.catchClause === undefined
-        ? tryMode
-        : alternativeAbruptMode(tryMode, abruptCompletionMode(node.catchClause.block));
-      return finallyMode === 'maybe' || catchMode === 'maybe' ? 'maybe' : catchMode;
+    if (node.kind === typescript.SyntaxKind.TryStatement) return tryOutcomes(node);
+    if (node.kind === typescript.SyntaxKind.DoStatement) {
+      return loopOutcomes(statementOutcomes(node.statement), false);
+    }
+    if (node.kind === typescript.SyntaxKind.WhileStatement
+        || node.kind === typescript.SyntaxKind.ForStatement) {
+      const expression = node.kind === typescript.SyntaxKind.WhileStatement
+        ? node.expression
+        : node.condition;
+      const condition = expression === undefined ? true : booleanLiteralValue(expression);
+      if (condition === false) return new Set([NORMAL_COMPLETION]);
+      return loopOutcomes(statementOutcomes(node.statement), condition !== true);
+    }
+    if (node.kind === typescript.SyntaxKind.ForInStatement
+        || node.kind === typescript.SyntaxKind.ForOfStatement) {
+      return loopOutcomes(statementOutcomes(node.statement), true);
+    }
+    if (node.kind === typescript.SyntaxKind.SwitchStatement) {
+      let outcomes = new Set([NORMAL_COMPLETION]);
+      for (const clause of node.caseBlock.clauses) {
+        outcomes = unionOutcomes(outcomes, sequenceOutcomes(clause.statements));
+      }
+      if (outcomes.delete(BREAK_COMPLETION)) outcomes.add(NORMAL_COMPLETION);
+      return outcomes;
     }
     if (node.kind === typescript.SyntaxKind.LabeledStatement) {
-      return abruptCompletionMode(node.statement);
+      const outcomes = statementOutcomes(node.statement);
+      if (outcomes.delete(BREAK_COMPLETION)) outcomes.add(NORMAL_COMPLETION);
+      return outcomes;
     }
-    return 'none';
+    return new Set([NORMAL_COMPLETION]);
   }
 
-  function precedingAbruptMode(node, region) {
+  function reachabilityFor(outcomes, acceptedOutcomes) {
+    const acceptedCount = [...outcomes]
+      .filter((outcome) => acceptedOutcomes.has(outcome)).length;
+    if (acceptedCount === 0) return 'never';
+    return acceptedCount === outcomes.size ? 'always' : 'maybe';
+  }
+
+  function combineExecutionModes(left, right) {
+    if (left === 'never' || right === 'never') return 'never';
+    return left === 'maybe' || right === 'maybe' ? 'maybe' : 'always';
+  }
+
+  function precedingNormalMode(node, region) {
     let current = node;
-    let mode = 'none';
+    let mode = 'always';
     while (current !== region && current.parent !== undefined) {
       const statements = current.parent.statements;
       if (Array.isArray(statements)) {
         const index = statements.indexOf(current);
         if (index >= 0) {
-          for (const statement of statements.slice(0, index)) {
-            const statementMode = abruptCompletionMode(statement);
-            if (statementMode === 'always') return 'always';
-            if (statementMode === 'maybe') mode = 'maybe';
-          }
+          const outcomes = sequenceOutcomes(statements.slice(0, index));
+          mode = combineExecutionModes(
+            mode,
+            reachabilityFor(outcomes, new Set([NORMAL_COMPLETION])),
+          );
+          if (mode === 'never') return mode;
         }
       }
       current = current.parent;
@@ -422,21 +507,40 @@ function buildLexicalModel(typescript, sourceFile) {
       } else if (parent.kind === typescript.SyntaxKind.ForStatement
           && (current === parent.statement || current === parent.incrementor)) {
         const condition = parent.condition === undefined
-          ? undefined
+          ? true
           : booleanLiteralValue(parent.condition);
         if (condition === false) return 'never';
-        mode = 'maybe';
+        if (current === parent.incrementor) {
+          const bodyMode = reachabilityFor(
+            statementOutcomes(parent.statement),
+            new Set([NORMAL_COMPLETION, CONTINUE_COMPLETION]),
+          );
+          if (bodyMode === 'never') return 'never';
+          mode = combineExecutionModes(mode, bodyMode);
+        }
+        if (condition === undefined) mode = 'maybe';
       } else if ((parent.kind === typescript.SyntaxKind.ForInStatement
           || parent.kind === typescript.SyntaxKind.ForOfStatement)
           && current === parent.statement) {
         mode = 'maybe';
       } else if (parent.kind === typescript.SyntaxKind.WhileStatement
           && current === parent.statement) {
-        if (booleanLiteralValue(parent.expression) === false) return 'never';
-        mode = 'maybe';
+        const condition = booleanLiteralValue(parent.expression);
+        if (condition === false) return 'never';
+        if (condition === undefined) mode = 'maybe';
+      } else if (parent.kind === typescript.SyntaxKind.DoStatement
+          && current === parent.expression) {
+        const bodyMode = reachabilityFor(
+          statementOutcomes(parent.statement),
+          new Set([NORMAL_COMPLETION, CONTINUE_COMPLETION]),
+        );
+        if (bodyMode === 'never') return 'never';
+        mode = combineExecutionModes(mode, bodyMode);
       } else if (parent.kind === typescript.SyntaxKind.CatchClause
           && current === parent.block) {
-        mode = 'maybe';
+        const fromTry = statementOutcomes(parent.parent.tryBlock);
+        if (!fromTry.has(THROW_COMPLETION) && !fromTry.has(NORMAL_COMPLETION)) return 'never';
+        if (fromTry.size !== 1 || !fromTry.has(THROW_COMPLETION)) mode = 'maybe';
       } else if (parent.kind === typescript.SyntaxKind.SwitchStatement
           && current === parent.caseBlock) {
         mode = 'maybe';
@@ -459,10 +563,7 @@ function buildLexicalModel(typescript, sourceFile) {
       }
       current = parent;
     }
-    const abruptMode = precedingAbruptMode(node, region);
-    if (abruptMode === 'always') return 'never';
-    if (abruptMode === 'maybe') mode = 'maybe';
-    return mode;
+    return combineExecutionModes(mode, precedingNormalMode(node, region));
   }
 
   function collect(node, incomingScope, functionBody = false) {
@@ -640,6 +741,19 @@ function buildLexicalModel(typescript, sourceFile) {
     effectsByRegion.set(region, effects);
   }
 
+  function executionPosition(node, region, sourcePosition) {
+    let current = node;
+    while (current !== region && current.parent !== undefined) {
+      const parent = current.parent;
+      if (parent.kind === typescript.SyntaxKind.ForStatement
+          && current === parent.incrementor) {
+        return parent.end;
+      }
+      current = parent;
+    }
+    return sourcePosition;
+  }
+
   for (const candidate of writeCandidates) {
     const specifier = requireSpecifier(candidate.expression, candidate.scope);
     addEffect(candidate.region, {
@@ -647,7 +761,8 @@ function buildLexicalModel(typescript, sourceFile) {
       kind: 'write',
       mode: executionMode(candidate.node, candidate.region),
       order: candidate.order,
-      position: candidate.position,
+      position: executionPosition(candidate.node, candidate.region, candidate.position),
+      sourcePosition: candidate.position,
       callableRegion: callableRegionForExpression(candidate.expression),
       specifier: isRouterApiSource(specifier) ? specifier : undefined,
     });
@@ -661,7 +776,8 @@ function buildLexicalModel(typescript, sourceFile) {
         kind: 'call',
         mode: executionMode(candidate.node, candidate.region),
         order: candidate.order,
-        position: candidate.position,
+        position: executionPosition(candidate.node, candidate.region, candidate.position),
+        sourcePosition: candidate.position,
         region: candidate.region,
       });
     }
@@ -669,6 +785,7 @@ function buildLexicalModel(typescript, sourceFile) {
 
   for (const effects of effectsByRegion.values()) {
     effects.sort((left, right) => left.position - right.position
+      || left.sourcePosition - right.sourcePosition
       || (left.kind === right.kind ? left.order - right.order : left.kind === 'call' ? -1 : 1));
   }
 
@@ -702,10 +819,28 @@ function buildLexicalModel(typescript, sourceFile) {
     return reachable;
   }
 
-  function callableTargetsAt(binding, region, position) {
+  function callableHomeStateAt(binding, position) {
+    let state = initialCallableState(binding);
+    for (const effect of effectsByRegion.get(binding.homeRegion) ?? []) {
+      if (effect.position >= position) break;
+      state = applyCallableWrite(binding, state, effect);
+    }
+    return state;
+  }
+
+  function callableTargetsAt(binding, region, position, callEnvironment) {
     let state = binding.homeRegion === region
       ? initialCallableState(binding)
-      : reachableCallableHomeState(binding);
+      : callEnvironment.has(binding.homeRegion)
+        ? callableHomeStateAt(binding, callEnvironment.get(binding.homeRegion))
+        : reachableCallableHomeState(binding);
+    for (const [callerRegion, callerPosition] of callEnvironment) {
+      if (callerRegion === binding.homeRegion || callerRegion === region) continue;
+      for (const effect of effectsByRegion.get(callerRegion) ?? []) {
+        if (effect.position >= callerPosition) break;
+        state = applyCallableWrite(binding, state, effect);
+      }
+    }
     for (const effect of effectsByRegion.get(region) ?? []) {
       if (effect.position >= position) break;
       state = applyCallableWrite(binding, state, effect);
@@ -713,17 +848,30 @@ function buildLexicalModel(typescript, sourceFile) {
     return state;
   }
 
-  function runFunction(calleeRegion, binding, inputState, activeFunctions) {
+  function runFunction(
+    calleeRegion,
+    binding,
+    inputState,
+    activeFunctions,
+    callEnvironment,
+  ) {
     if (activeFunctions.has(calleeRegion)) return new Set(inputState);
     activeFunctions.add(calleeRegion);
     try {
-      return runEffects(binding, calleeRegion, Infinity, inputState, activeFunctions);
+      return runEffects(
+        binding,
+        calleeRegion,
+        Infinity,
+        inputState,
+        activeFunctions,
+        callEnvironment,
+      );
     } finally {
       activeFunctions.delete(calleeRegion);
     }
   }
 
-  function applyEffect(binding, state, effect, activeFunctions) {
+  function applyEffect(binding, state, effect, activeFunctions, callEnvironment) {
     if (effect.mode === 'never') return state;
     let changedState;
     if (effect.kind === 'write') {
@@ -735,32 +883,48 @@ function buildLexicalModel(typescript, sourceFile) {
         effect.calleeBinding,
         effect.region,
         effect.position,
+        callEnvironment,
       )) {
+        const calleeEnvironment = new Map(callEnvironment);
+        calleeEnvironment.set(effect.region, effect.position);
         changedState = unionStates(
           changedState,
           calleeRegion === undefined
             ? state
-            : runFunction(calleeRegion, binding, state, activeFunctions),
+            : runFunction(
+              calleeRegion,
+              binding,
+              state,
+              activeFunctions,
+              calleeEnvironment,
+            ),
         );
       }
     }
     return effect.mode === 'maybe' ? unionStates(state, changedState) : changedState;
   }
 
-  function runEffects(binding, region, position, inputState, activeFunctions) {
+  function runEffects(
+    binding,
+    region,
+    position,
+    inputState,
+    activeFunctions,
+    callEnvironment,
+  ) {
     let state = new Set(inputState);
     for (const effect of effectsByRegion.get(region) ?? []) {
       if (effect.position > position) break;
-      state = applyEffect(binding, state, effect, activeFunctions);
+      state = applyEffect(binding, state, effect, activeFunctions, callEnvironment);
     }
     return state;
   }
 
-  function reachableHomeState(binding, activeFunctions) {
+  function reachableHomeState(binding, activeFunctions, callEnvironment) {
     let state = initialState(binding);
     let reachable = new Set(state);
     for (const effect of effectsByRegion.get(binding.homeRegion) ?? []) {
-      state = applyEffect(binding, state, effect, activeFunctions);
+      state = applyEffect(binding, state, effect, activeFunctions, callEnvironment);
       reachable = unionStates(reachable, state);
     }
     return reachable;
@@ -768,10 +932,18 @@ function buildLexicalModel(typescript, sourceFile) {
 
   function stateAt(binding, region, position) {
     const activeFunctions = new Set();
+    const callEnvironment = new Map([[region, position]]);
     const entryState = binding.homeRegion === region
       ? initialState(binding)
-      : reachableHomeState(binding, activeFunctions);
-    return runEffects(binding, region, position, entryState, activeFunctions);
+      : reachableHomeState(binding, activeFunctions, callEnvironment);
+    return runEffects(
+      binding,
+      region,
+      position,
+      entryState,
+      activeFunctions,
+      callEnvironment,
+    );
   }
 
   function routerSpecifier(state) {
@@ -786,16 +958,17 @@ function buildLexicalModel(typescript, sourceFile) {
 
   function liveNamespaceSpecifier(binding, region, position) {
     const activeFunctions = new Set();
+    const callEnvironment = new Map([[region, Infinity]]);
     const entryState = binding.homeRegion === region
       ? initialState(binding)
-      : reachableHomeState(binding, activeFunctions);
+      : reachableHomeState(binding, activeFunctions, callEnvironment);
     let state = new Set(entryState);
     let reachableAfterExport;
     for (const effect of effectsByRegion.get(region) ?? []) {
       if (effect.position > position && reachableAfterExport === undefined) {
         reachableAfterExport = new Set(state);
       }
-      state = applyEffect(binding, state, effect, activeFunctions);
+      state = applyEffect(binding, state, effect, activeFunctions, callEnvironment);
       if (effect.position > position) {
         reachableAfterExport = unionStates(reachableAfterExport, state);
       }
