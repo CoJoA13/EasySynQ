@@ -172,8 +172,9 @@ def test_active_guidance_tracks_both_frozen_npm_locks_and_mixed_policy() -> None
     assert "packages/contracts/package-lock.json" in dev_workflow
     assert "frozen" in dev_workflow
     assert "just security-npm" in dev_workflow
-    assert "npm high/critical findings are\n  gated" in dev_workflow
-    assert "pip-audit and Trivy findings are report-only" in dev_workflow
+    normalized_workflow = " ".join(dev_workflow.split())
+    assert "npm high/critical findings are gated" in normalized_workflow
+    assert "pip-audit and Trivy findings are report-only" in normalized_workflow
     assert "`security` is warn-only" not in dev_workflow
 
     for setup_guide in (readme, fresh_linux):

@@ -19,6 +19,16 @@ reason() {
   fi
 }
 
+declare -A RESIDUAL_FIELD_COUNTS=()
+validate_residual_record_fields() {
+  local field
+  for field in Status Owner Source Reason 'Closure contract' 'Last reviewed'; do
+    if [ "${RESIDUAL_FIELD_COUNTS[$field]:-0}" -ne 1 ]; then
+      reason AUTHORITY_RESIDUAL_LEDGER_SCHEMA
+    fi
+  done
+}
+
 if [ ! -d "$ROOT" ]; then
   printf 'AUTHORITY_INTERNAL_BAD_ROOT\n' >&2
   exit 2
@@ -134,8 +144,43 @@ if [ -f "$ROOT/docs/current-status.md" ] && grep -Eq '^##[[:space:]]+RES-' "$ROO
   reason AUTHORITY_STATUS_RESIDUAL_RECORD
 fi
 
-if [ -f "$ROOT/docs/open-residuals.md" ] && ! grep -Eq '^##[[:space:]]+RES-[A-Z][A-Z0-9-]*' "$ROOT/docs/open-residuals.md"; then
-  reason AUTHORITY_RESIDUAL_LEDGER_SCHEMA
+if [ -f "$ROOT/docs/open-residuals.md" ]; then
+  residual_record_open=0
+  residual_record_count=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" =~ ^##[[:space:]]+(RES-[A-Z][A-Z0-9-]*)$ ]]; then
+      if [ "$residual_record_open" -eq 1 ]; then
+        validate_residual_record_fields
+      fi
+      RESIDUAL_FIELD_COUNTS=()
+      residual_record_open=1
+      residual_record_count=$((residual_record_count + 1))
+      continue
+    fi
+
+    if [[ "$line" =~ ^(Status|Owner|Source|Reason|Closure[[:space:]]contract|Last[[:space:]]reviewed):[[:space:]] ]]; then
+      if [ "$residual_record_open" -eq 0 ]; then
+        reason AUTHORITY_RESIDUAL_LEDGER_SCHEMA
+        continue
+      fi
+      field="${BASH_REMATCH[1]}"
+      RESIDUAL_FIELD_COUNTS["$field"]=$(( ${RESIDUAL_FIELD_COUNTS[$field]:-0} + 1 ))
+      if [ "$field" = 'Status' ] && [ "$line" != 'Status: OPEN' ]; then
+        reason AUTHORITY_RESIDUAL_LEDGER_SCHEMA
+      fi
+    fi
+
+    if [[ "$line" =~ ^(easysynq_status_schema|as_of|baseline_commit|last_shipped_slice|migration_head|next_migration|api_unit_tests|web_test_files|web_tests|contract_tests|integration_passed|integration_skipped|ci_jobs|ci_checks): ]]; then
+      reason AUTHORITY_RESIDUAL_STATUS_FACT
+    fi
+  done <"$ROOT/docs/open-residuals.md"
+
+  if [ "$residual_record_open" -eq 1 ]; then
+    validate_residual_record_fields
+  fi
+  if [ "$residual_record_count" -eq 0 ]; then
+    reason AUTHORITY_RESIDUAL_LEDGER_SCHEMA
+  fi
 fi
 
 if [ -f "$ROOT/CLAUDE.md" ] && grep -Eqi '^#{1,6}[[:space:]].*(current[[:space:]]+status|recent[[:space:]]+learnings)' "$ROOT/CLAUDE.md"; then
@@ -144,6 +189,57 @@ fi
 
 if [ -f "$ROOT/CLAUDE.md" ] && grep -Eqi '(migration[[:space:]]+(head|snapshot)|next[[:space:]]+migration|baseline[[:space:]]+commit|last[[:space:]]+shipped[[:space:]]+slice|current[[:space:]]+slice|api[[:space:]]+unit[[:space:]]+tests|web[[:space:]]+(test[[:space:]]+files|tests)|contract[[:space:]]+tests|integration[[:space:]]+(passed|skipped)|ci[[:space:]]+(jobs|checks)|RES-[A-Z][A-Z0-9-]*|decision[[:space:]]+range|R[1-9][0-9]*[–-]R[1-9][0-9]*|permission[[:space:]]+(catalog|count|keys))' "$ROOT/CLAUDE.md"; then
   reason AUTHORITY_CLAUDE_MUTABLE_FACTS
+fi
+
+# Task 3's terminal compatibility file has an intentionally tiny allowlisted structure. Run this
+# only after legacy current/mutable ownership is gone so Task 2 diagnostics stay attributable to the
+# deliberately uncut boundary rather than acquiring a redundant structure reason.
+if [ -f "$ROOT/CLAUDE.md" ] && \
+    [ -z "${EMITTED[AUTHORITY_CLAUDE_CURRENT_OWNER]+x}" ] && \
+    [ -z "${EMITTED[AUTHORITY_CLAUDE_MUTABLE_FACTS]+x}" ]; then
+  mapfile -t claude_headings < <(grep -E '^#{1,6}[[:space:]]' "$ROOT/CLAUDE.md" || true)
+  claude_structure_ok=1
+  if [ "${#claude_headings[@]}" -ne 3 ] || \
+      [ "${claude_headings[0]:-}" != '# EasySynQ Claude compatibility' ] || \
+      [ "${claude_headings[1]:-}" != '## Claude hooks and commands' ] || \
+      [ "${claude_headings[2]:-}" != '## Claude memory behavior' ]; then
+    claude_structure_ok=0
+  fi
+
+  claude_pointer='Read AGENTS.md before work. Current execution state is in docs/current-status.md; current residuals are in docs/open-residuals.md.'
+  if [ "$(grep -Fxc "$claude_pointer" "$ROOT/CLAUDE.md" || true)" -ne 1 ]; then
+    claude_structure_ok=0
+  fi
+
+  claude_section=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      '# EasySynQ Claude compatibility'|'') continue ;;
+      'Read AGENTS.md before work. Current execution state is in docs/current-status.md; current residuals are in docs/open-residuals.md.') continue ;;
+      '## Claude hooks and commands') claude_section='hooks'; continue ;;
+      '## Claude memory behavior') claude_section='memory'; continue ;;
+    esac
+
+    if [ -z "$claude_section" ] || [[ ! "$line" =~ ^-[[:space:]] ]]; then
+      claude_structure_ok=0
+      continue
+    fi
+    case "$claude_section" in
+      hooks)
+        grep -Eqi '(\.claude/|hook|command|settings)' <<<"$line" || claude_structure_ok=0
+        ;;
+      memory)
+        grep -Eqi '(session|memory|MEMORY\.md|/effort|tool-specific)' <<<"$line" || claude_structure_ok=0
+        ;;
+    esac
+    if grep -Eqi '(self-hosted|single-org|vault|mirror|ISO[[:space:]]+9001|deny-by-default|deny-always-wins|RBAC|ABAC|WORM|append-only|source[[:space:]]+of[[:space:]]+truth|fixed[[:space:]]+stack|document[[:space:]]+lifecycle|permission[[:space:]]+key|persona|import[[:space:]]+default|off-host[[:space:]]+anchor)' <<<"$line"; then
+      claude_structure_ok=0
+    fi
+  done <"$ROOT/CLAUDE.md"
+
+  if [ "$claude_structure_ok" -ne 1 ]; then
+    reason AUTHORITY_CLAUDE_PRODUCT_RULES
+  fi
 fi
 
 if [ -f "$ROOT/docs/slice-history.md" ]; then
@@ -194,7 +290,16 @@ if [ "${#LIVE_TEXT_FILES[@]}" -gt 0 ]; then
   if grep -I -Eqi 'CLAUDE\.md.{0,160}(authoritative|owns|current[[:space:]]+status|migration[[:space:]]+head|residual|rules)|(authoritative|owns|current[[:space:]]+status|migration[[:space:]]+head|residual|rules).{0,160}CLAUDE\.md' "${LIVE_TEXT_FILES[@]}"; then
     reason AUTHORITY_LIVE_CLAUDE_OWNER
   fi
-  if grep -I -Eq 'R[1-9][0-9]*[–-]R[1-9][0-9]*' "${LIVE_TEXT_FILES[@]}"; then
+
+  # The register owns its canonical self-range. Exclude only that file from the mirror scan; it
+  # remains in LIVE_TEXT_FILES for every other authority and residual-reference check.
+  declare -a DECISION_RANGE_MIRROR_FILES=()
+  for absolute_path in "${LIVE_TEXT_FILES[@]}"; do
+    [ "$absolute_path" = "$ROOT/docs/decisions-register.md" ] && continue
+    DECISION_RANGE_MIRROR_FILES+=("$absolute_path")
+  done
+  if [ "${#DECISION_RANGE_MIRROR_FILES[@]}" -gt 0 ] && \
+      grep -I -Eq 'R[1-9][0-9]*[–-]R[1-9][0-9]*' "${DECISION_RANGE_MIRROR_FILES[@]}"; then
     reason AUTHORITY_DECISION_RANGE_MIRROR
   fi
 fi

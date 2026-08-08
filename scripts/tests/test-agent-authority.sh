@@ -50,6 +50,11 @@ EOF
 ## RES-EXAMPLE
 
 Status: OPEN
+Owner: Repository owner
+Source: Fixture
+Reason: Example deferred work.
+Closure contract: Ship the example.
+Last reviewed: 2026-08-08
 EOF
   cat >"$fixture/docs/slice-history.md" <<'EOF'
 # Shipped slice history
@@ -57,9 +62,17 @@ EOF
 Historical evidence only. Current residuals are in docs/open-residuals.md.
 EOF
   cat >"$fixture/CLAUDE.md" <<'EOF'
-# Claude compatibility
+# EasySynQ Claude compatibility
 
-Use AGENTS.md for repository authority.
+Read AGENTS.md before work. Current execution state is in docs/current-status.md; current residuals are in docs/open-residuals.md.
+
+## Claude hooks and commands
+
+- Active Claude hooks and commands live under `.claude/`.
+
+## Claude memory behavior
+
+- Claude session memory remains tool-specific.
 EOF
   cat >"$fixture/scripts/repo-authority-live-paths.txt" <<'EOF'
 AGENTS.md
@@ -87,7 +100,17 @@ mutate_fixture() {
       printf '\nCLAUDE.md owns current status and residuals.\n' >>"$fixture/AGENTS.md"
       ;;
     duplicate_residual_id)
-      printf '\n## RES-EXAMPLE\n\nStatus: OPEN\n' >>"$fixture/docs/open-residuals.md"
+      cat >>"$fixture/docs/open-residuals.md" <<'EOF'
+
+## RES-EXAMPLE
+
+Status: OPEN
+Owner: Repository owner
+Source: Duplicate fixture
+Reason: Duplicate deferred work.
+Closure contract: Ship the duplicate.
+Last reviewed: 2026-08-08
+EOF
       ;;
     unresolved_residual_ref)
       printf '\nSee RES-NOT-REGISTERED for the remaining work.\n' >>"$fixture/AGENTS.md"
@@ -115,6 +138,32 @@ mutate_fixture() {
       ;;
     claude_mutable_slice)
       printf '\nLast shipped slice: S-upload-identity.\n' >>"$fixture/CLAUDE.md"
+      ;;
+    claude_product_rule)
+      sed -i '/## Claude memory behavior/i - Every imported document requires approval before publication.\n' "$fixture/CLAUDE.md"
+      ;;
+    residual_cross_block_fields)
+      cat >"$fixture/docs/open-residuals.md" <<'EOF'
+# Open residuals
+
+## RES-EXAMPLE
+
+Status: OPEN
+Owner: Repository owner
+Owner: Duplicate owner
+Source: Fixture one
+Reason: First deferred work.
+Closure contract: Ship the first example.
+Last reviewed: 2026-08-08
+
+## RES-SECOND
+
+Status: OPEN
+Source: Fixture two
+Reason: Second deferred work.
+Closure contract: Ship the second example.
+Last reviewed: 2026-08-08
+EOF
       ;;
     *)
       printf 'unknown fixture mutation: %s\n' "$case_name" >&2
@@ -150,6 +199,40 @@ run_good() {
   else
     bad "$case_name (status=$status output=$output)"
   fi
+}
+
+run_bad_residual_status_keys() {
+  local key fixture output status
+  local -a status_keys=(
+    easysynq_status_schema
+    as_of
+    baseline_commit
+    last_shipped_slice
+    migration_head
+    next_migration
+    api_unit_tests
+    web_test_files
+    web_tests
+    contract_tests
+    integration_passed
+    integration_skipped
+    ci_jobs
+    ci_checks
+  )
+
+  for key in "${status_keys[@]}"; do
+    fixture="$(fixture_root)"
+    printf '\n%s: fixture\n' "$key" >>"$fixture/docs/open-residuals.md"
+    git -C "$fixture" add --all
+    output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
+    status=$?
+    rm -rf "$fixture"
+    if [ "$status" -eq 1 ] && [ "$output" = 'AUTHORITY_RESIDUAL_STATUS_FACT' ]; then
+      ok "residual status key $key emits AUTHORITY_RESIDUAL_STATUS_FACT"
+    else
+      bad "residual status key $key emits AUTHORITY_RESIDUAL_STATUS_FACT (status=$status output=$output)"
+    fi
+  done
 }
 
 run_good_fixture_payloads() {
@@ -190,6 +273,27 @@ run_good_untracked_payload() {
   fi
 }
 
+run_good_register_range() {
+  local fixture output status
+  fixture="$(fixture_root)"
+  cat >"$fixture/docs/decisions-register.md" <<'EOF'
+# Decisions register
+
+All registered decisions are canonical here.
+
+Bumps the resolutions range **R1–R63 → R1–R64**.
+EOF
+  git -C "$fixture" add --all
+  output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
+  status=$?
+  rm -rf "$fixture"
+  if [ "$status" -eq 0 ] && [ "$output" = 'AUTHORITY_OK' ]; then
+    ok 'canonical decision-register range is not a live mirror'
+  else
+    bad "canonical decision-register range is not a live mirror (status=$status output=$output)"
+  fi
+}
+
 require_live_text() {
   local path="$1" pattern="$2" label="$3"
   if [ -f "$ROOT/$path" ] && grep -Eq "$pattern" "$ROOT/$path"; then
@@ -208,20 +312,38 @@ reject_live_text() {
   fi
 }
 
-require_live_count() {
-  local path="$1" pattern="$2" expected="$3" label="$4" actual=0
-  if [ -f "$ROOT/$path" ]; then
-    actual="$(grep -Ec "$pattern" "$ROOT/$path" || true)"
-  fi
-  if [ "$actual" -eq "$expected" ]; then
-    ok "$label"
-  else
-    bad "$label (expected=$expected actual=$actual)"
-  fi
+validate_residual_blocks() {
+  local path="$1"
+  awk '
+    function finish_record() {
+      if (!in_record) return
+      if (status != 1 || owner != 1 || source != 1 || reason != 1 || closure != 1 || reviewed != 1) {
+        invalid = 1
+      }
+    }
+    /^## RES-[A-Z][A-Z0-9-]*$/ {
+      finish_record()
+      in_record = 1
+      records += 1
+      status = owner = source = reason = closure = reviewed = 0
+      next
+    }
+    /^Status: / { if (!in_record) invalid = 1; status += 1; if ($0 != "Status: OPEN") invalid = 1 }
+    /^Owner: / { if (!in_record) invalid = 1; owner += 1 }
+    /^Source: / { if (!in_record) invalid = 1; source += 1 }
+    /^Reason: / { if (!in_record) invalid = 1; reason += 1 }
+    /^Closure contract: / { if (!in_record) invalid = 1; closure += 1 }
+    /^Last reviewed: / { if (!in_record) invalid = 1; reviewed += 1 }
+    END {
+      finish_record()
+      if (records == 0) invalid = 1
+      exit invalid
+    }
+  ' "$path"
 }
 
 run_neutral_document_contract() {
-  local heading residual_id field
+  local heading residual_id
 
   printf '== neutral authority documents ==\n'
   for heading in \
@@ -270,13 +392,15 @@ run_neutral_document_contract() {
     require_live_text docs/open-residuals.md "^## ${residual_id}$" \
       "open residuals registers ${residual_id}"
   done
-  for field in Status Owner Source Reason 'Closure contract' 'Last reviewed'; do
-    require_live_count docs/open-residuals.md "^${field}:" 12 \
-      "every open residual includes ${field}"
-  done
+  if [ -f "$ROOT/docs/open-residuals.md" ] && \
+      validate_residual_blocks "$ROOT/docs/open-residuals.md"; then
+    ok 'every open residual independently has the exact record schema'
+  else
+    bad 'every open residual independently has the exact record schema'
+  fi
   reject_live_text docs/open-residuals.md \
-    '^(migration_head|api_unit_tests|web_tests|contract_tests|integration_passed|ci_jobs):' \
-    'open residuals contains no execution snapshot'
+    '^(easysynq_status_schema|as_of|baseline_commit|last_shipped_slice|migration_head|next_migration|api_unit_tests|web_test_files|web_tests|contract_tests|integration_passed|integration_skipped|ci_jobs|ci_checks):' \
+    'open residuals contains none of the execution-snapshot schema'
 
   require_live_text docs/slice-history.md 'docs/open-residuals\.md' \
     'slice history links the current residual ledger'
@@ -318,8 +442,12 @@ run_bad claude_mutable_ci AUTHORITY_CLAUDE_MUTABLE_FACTS
 run_bad claude_mutable_decision AUTHORITY_CLAUDE_MUTABLE_FACTS
 run_bad claude_mutable_permission AUTHORITY_CLAUDE_MUTABLE_FACTS
 run_bad claude_mutable_slice AUTHORITY_CLAUDE_MUTABLE_FACTS
+run_bad claude_product_rule AUTHORITY_CLAUDE_PRODUCT_RULES
+run_bad residual_cross_block_fields AUTHORITY_RESIDUAL_LEDGER_SCHEMA
+run_bad_residual_status_keys
 run_good_fixture_payloads
 run_good_untracked_payload
+run_good_register_range
 run_good neutral_authority_split
 
 if [ "${1:-}" != "--fixtures-only" ]; then
