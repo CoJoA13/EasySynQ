@@ -212,6 +212,11 @@ if [ -f "$ROOT/CLAUDE.md" ] && \
   fi
 
   claude_section=''
+  claude_hook_location=0
+  claude_command_location=0
+  claude_session_start=0
+  claude_memory_convention=0
+  declare -A CLAUDE_COMPATIBILITY_LINES=()
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       '# EasySynQ Claude compatibility'|'') continue ;;
@@ -224,18 +229,50 @@ if [ -f "$ROOT/CLAUDE.md" ] && \
       claude_structure_ok=0
       continue
     fi
+
+    line_key="$claude_section:$line"
+    if [ -n "${CLAUDE_COMPATIBILITY_LINES[$line_key]+x}" ]; then
+      claude_structure_ok=0
+      continue
+    fi
+    CLAUDE_COMPATIBILITY_LINES["$line_key"]=1
+
     case "$claude_section" in
       hooks)
-        grep -Eqi '(\.claude/|hook|command|settings)' <<<"$line" || claude_structure_ok=0
+        case "$line" in
+          '- Active Claude hooks live under `.claude/hooks/`.')
+            claude_hook_location=1
+            ;;
+          '- Active Claude commands live under `.claude/commands/`.')
+            claude_command_location=1
+            ;;
+          '- Claude hook wiring lives in `.claude/settings.json`.')
+            ;;
+          '- Claude session-start behavior is wired in `.claude/settings.json` and implemented by `.claude/hooks/test-baseline.sh`.')
+            claude_session_start=1
+            ;;
+          *) claude_structure_ok=0 ;;
+        esac
         ;;
       memory)
-        grep -Eqi '(session|memory|MEMORY\.md|/effort|tool-specific)' <<<"$line" || claude_structure_ok=0
+        case "$line" in
+          '- Claude session memory remains tool-specific.') claude_memory_convention=1 ;;
+          '- Claude `/effort` selection is per-session.') claude_memory_convention=1 ;;
+          '- Claude persistent memory lives outside the repository under `~/.claude/projects/<path-derived-key>/memory/`.') claude_memory_convention=1 ;;
+          '- `MEMORY.md` is the index for Claude persistent memory.') claude_memory_convention=1 ;;
+          '- Claude memory paths are machine- and OS-specific.') claude_memory_convention=1 ;;
+          *) claude_structure_ok=0 ;;
+        esac
         ;;
     esac
-    if grep -Eqi '(self-hosted|single-org|vault|mirror|ISO[[:space:]]+9001|deny-by-default|deny-always-wins|RBAC|ABAC|WORM|append-only|source[[:space:]]+of[[:space:]]+truth|fixed[[:space:]]+stack|document[[:space:]]+lifecycle|permission[[:space:]]+key|persona|import[[:space:]]+default|off-host[[:space:]]+anchor)' <<<"$line"; then
-      claude_structure_ok=0
-    fi
   done <"$ROOT/CLAUDE.md"
+
+  if [ "$claude_hook_location" -ne 1 ] || \
+      [ "$claude_command_location" -ne 1 ] || \
+      [ "$claude_session_start" -ne 1 ] || \
+      [ "$claude_memory_convention" -ne 1 ]; then
+    claude_structure_ok=0
+  fi
 
   if [ "$claude_structure_ok" -ne 1 ]; then
     reason AUTHORITY_CLAUDE_PRODUCT_RULES

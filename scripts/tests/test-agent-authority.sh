@@ -68,11 +68,18 @@ Read AGENTS.md before work. Current execution state is in docs/current-status.md
 
 ## Claude hooks and commands
 
-- Active Claude hooks and commands live under `.claude/`.
+- Active Claude hooks live under `.claude/hooks/`.
+- Active Claude commands live under `.claude/commands/`.
+- Claude hook wiring lives in `.claude/settings.json`.
+- Claude session-start behavior is wired in `.claude/settings.json` and implemented by `.claude/hooks/test-baseline.sh`.
 
 ## Claude memory behavior
 
 - Claude session memory remains tool-specific.
+- Claude `/effort` selection is per-session.
+- Claude persistent memory lives outside the repository under `~/.claude/projects/<path-derived-key>/memory/`.
+- `MEMORY.md` is the index for Claude persistent memory.
+- Claude memory paths are machine- and OS-specific.
 EOF
   cat >"$fixture/scripts/repo-authority-live-paths.txt" <<'EOF'
 AGENTS.md
@@ -141,6 +148,15 @@ EOF
       ;;
     claude_product_rule)
       sed -i '/## Claude memory behavior/i - Every imported document requires approval before publication.\n' "$fixture/CLAUDE.md"
+      ;;
+    claude_product_command_tail)
+      sed -i '/## Claude memory behavior/i - Claude commands require every record to be approved before release.\n' "$fixture/CLAUDE.md"
+      ;;
+    claude_product_hook_path_tail)
+      sed -i '/## Claude memory behavior/i - Active Claude hooks live under `.claude/hooks/`; every record requires approval before release.\n' "$fixture/CLAUDE.md"
+      ;;
+    claude_product_memory_tail)
+      printf '%s\n' '- Claude session memory requires every record to be approved before release.' >>"$fixture/CLAUDE.md"
       ;;
     residual_cross_block_fields)
       cat >"$fixture/docs/open-residuals.md" <<'EOF'
@@ -443,6 +459,9 @@ run_bad claude_mutable_decision AUTHORITY_CLAUDE_MUTABLE_FACTS
 run_bad claude_mutable_permission AUTHORITY_CLAUDE_MUTABLE_FACTS
 run_bad claude_mutable_slice AUTHORITY_CLAUDE_MUTABLE_FACTS
 run_bad claude_product_rule AUTHORITY_CLAUDE_PRODUCT_RULES
+run_bad claude_product_command_tail AUTHORITY_CLAUDE_PRODUCT_RULES
+run_bad claude_product_hook_path_tail AUTHORITY_CLAUDE_PRODUCT_RULES
+run_bad claude_product_memory_tail AUTHORITY_CLAUDE_PRODUCT_RULES
 run_bad residual_cross_block_fields AUTHORITY_RESIDUAL_LEDGER_SCHEMA
 run_bad_residual_status_keys
 run_good_fixture_payloads
