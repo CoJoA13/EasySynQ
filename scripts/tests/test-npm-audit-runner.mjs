@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import {
 
 const EXPECTED_TIMEOUT_MS = 120_000;
 const EXPECTED_MAX_BUFFER = 8 * 1024 * 1024;
+const SENTINEL_RANDOM_BYTES = 32;
 
 function withTempDirectory(prefix, callback) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -37,6 +39,180 @@ function assertExecutionError(code, callback) {
     assert.equal(error.code, code);
     return true;
   });
+}
+
+function auditRunnerOptions(cacheParent, spawnSyncImpl) {
+  return {
+    nodeExecutable: '/runtime/bin/node',
+    npmCliPath: '/runtime/npm-cli.js',
+    webDirectory: '/repo/apps/web',
+    cacheParent,
+    spawnSyncImpl,
+  };
+}
+
+function createCacheSibling(cacheParent) {
+  const sibling = path.join(cacheParent, 'npm-audit-sibling-preserve');
+  fs.writeFileSync(sibling, 'keep sibling');
+  return sibling;
+}
+
+function recordSuccessfulAudit(counter) {
+  counter.auditCalls += 1;
+  return { status: 0, signal: null, stdout: '{}', stderr: '' };
+}
+
+function withCacheLifecycleHarness(cacheParent, hooks, callback) {
+  const originals = {
+    randomBytes: crypto.randomBytes,
+    closeSync: fs.closeSync,
+    fstatSync: fs.fstatSync,
+    lstatSync: fs.lstatSync,
+    mkdtempSync: fs.mkdtempSync,
+    openSync: fs.openSync,
+    realpathSync: fs.realpathSync,
+    rmSync: fs.rmSync,
+  };
+  const realCacheParent = originals.realpathSync(cacheParent);
+  const state = {
+    cacheDirectory: undefined,
+    auditCalls: 0,
+    sentinelPath: undefined,
+    sentinelDescriptor: undefined,
+    directoryDescriptor: undefined,
+    randomCalls: [],
+    fstatAttempts: [],
+    removalAttempts: [],
+    closeAttempts: [],
+    removalReportedSuccess: false,
+  };
+
+  function pathKind(target) {
+    if (state.cacheDirectory !== undefined && target === state.cacheDirectory) return 'directory';
+    if (typeof target === 'string'
+        && state.cacheDirectory !== undefined
+        && path.dirname(target) === state.cacheDirectory) {
+      return 'sentinel';
+    }
+    return undefined;
+  }
+
+  function descriptorKind(descriptor) {
+    if (state.sentinelDescriptor !== undefined
+        && descriptor === state.sentinelDescriptor) return 'sentinel';
+    if (state.directoryDescriptor !== undefined
+        && descriptor === state.directoryDescriptor) return 'directory';
+    return undefined;
+  }
+
+  try {
+    crypto.randomBytes = (...args) => {
+      state.randomCalls.push(args);
+      const context = {
+        args,
+        state,
+        proceed: () => originals.randomBytes(...args),
+      };
+      return hooks.randomBytes === undefined
+        ? context.proceed()
+        : hooks.randomBytes(context);
+    };
+    fs.mkdtempSync = (...args) => {
+      const cacheDirectory = originals.mkdtempSync(...args);
+      state.cacheDirectory = cacheDirectory;
+      if (hooks.afterMkdtemp !== undefined) hooks.afterMkdtemp({ state, args });
+      return cacheDirectory;
+    };
+    fs.openSync = (target, flags, mode) => {
+      let kind = pathKind(target);
+      if (kind === 'sentinel') state.sentinelPath = target;
+      kind = pathKind(target);
+      const context = {
+        target,
+        flags,
+        mode,
+        kind,
+        state,
+        originals,
+        proceed: () => originals.openSync(target, flags, mode),
+      };
+      const descriptor = hooks.open === undefined
+        ? context.proceed()
+        : hooks.open(context);
+      if (kind === 'sentinel') state.sentinelDescriptor = descriptor;
+      if (kind === 'directory') state.directoryDescriptor = descriptor;
+      return descriptor;
+    };
+    fs.fstatSync = (descriptor, options) => {
+      const kind = descriptorKind(descriptor);
+      if (kind !== undefined) state.fstatAttempts.push(kind);
+      const context = {
+        descriptor,
+        options,
+        kind,
+        state,
+        originals,
+        proceed: () => originals.fstatSync(descriptor, options),
+      };
+      return hooks.fstat === undefined ? context.proceed() : hooks.fstat(context);
+    };
+    fs.lstatSync = (target, options) => {
+      const context = {
+        target,
+        options,
+        kind: pathKind(target),
+        state,
+        proceed: () => originals.lstatSync(target, options),
+      };
+      return hooks.lstat === undefined ? context.proceed() : hooks.lstat(context);
+    };
+    fs.realpathSync = (target, options) => {
+      const context = {
+        target,
+        options,
+        kind: pathKind(target),
+        state,
+        proceed: () => originals.realpathSync(target, options),
+      };
+      return hooks.realpath === undefined ? context.proceed() : hooks.realpath(context);
+    };
+    fs.rmSync = (target, options) => {
+      if (target !== state.cacheDirectory) return originals.rmSync(target, options);
+      state.removalAttempts.push({ target, options });
+      const context = {
+        target,
+        options,
+        state,
+        originals,
+        proceed: () => originals.rmSync(target, options),
+      };
+      const result = hooks.rm === undefined ? context.proceed() : hooks.rm(context);
+      state.removalReportedSuccess = true;
+      return result;
+    };
+    fs.closeSync = (descriptor) => {
+      const kind = descriptorKind(descriptor);
+      if (kind !== undefined) state.closeAttempts.push(kind);
+      const context = {
+        descriptor,
+        kind,
+        state,
+        proceed: () => originals.closeSync(descriptor),
+      };
+      return hooks.close === undefined ? context.proceed() : hooks.close(context);
+    };
+
+    return callback(state, originals, realCacheParent);
+  } finally {
+    crypto.randomBytes = originals.randomBytes;
+    fs.closeSync = originals.closeSync;
+    fs.fstatSync = originals.fstatSync;
+    fs.lstatSync = originals.lstatSync;
+    fs.mkdtempSync = originals.mkdtempSync;
+    fs.openSync = originals.openSync;
+    fs.realpathSync = originals.realpathSync;
+    fs.rmSync = originals.rmSync;
+  }
 }
 
 test('resolves npm from the real POSIX Node distribution rather than a PATH decoy', () => {
@@ -663,472 +839,791 @@ test('refuses a same-path directory substitution even when dev and ino are reuse
   });
 });
 
-test('removes only the verified cache child when directory-handle setup fails', async (t) => {
-  const isCacheChild = (target, cacheParent) => (
-    typeof target === 'string'
-    && path.dirname(target) === fs.realpathSync(cacheParent)
-    && path.basename(target).startsWith('npm-audit-')
-  );
-  const createSibling = (cacheParent) => {
-    const sibling = path.join(cacheParent, 'npm-audit-setup-sibling');
-    fs.writeFileSync(sibling, 'keep sibling');
-    return sibling;
-  };
-
-  await t.test('open failure after mkdtemp', () => {
-    withTempDirectory('npm-audit-runner-setup-open-', (cacheParent) => {
-      const sibling = createSibling(cacheParent);
-      const originalOpenSync = fs.openSync;
-      let cacheDirectory;
-      fs.openSync = (target, ...args) => {
-        if (isCacheChild(target, cacheParent)) {
-          cacheDirectory = target;
-          throw Object.assign(new Error('simulated open failure'), { code: 'EACCES' });
-        }
-        return originalOpenSync(target, ...args);
-      };
-      try {
-        assertExecutionError('E_CACHE_CREATE', () => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
+test('retains independent cache directory and sentinel identities through guarded cleanup', async (t) => {
+  await t.test('initial path validation failure preserves the untrusted child and sibling', () => {
+    withTempDirectory('npm-audit-runner-initial-validation-', (cacheParent) => {
+      const sibling = createCacheSibling(cacheParent);
+      withCacheLifecycleHarness(cacheParent, {
+        realpath({ kind, proceed }) {
+          if (kind === 'directory') {
+            throw Object.assign(new Error('simulated initial validation failure'), { code: 'EIO' });
+          }
+          return proceed();
+        },
+      }, (state, originals) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
           cacheParent,
-          spawnSyncImpl() {
-            assert.fail('audit must not run after cache setup failure');
-          },
-        }));
-        assert.equal(fs.existsSync(cacheDirectory), false);
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.equal(originals.lstatSync(state.cacheDirectory).isDirectory(), true);
         assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
-      } finally {
-        fs.openSync = originalOpenSync;
-      }
+      });
     });
   });
 
-  await t.test('fstat failure after the directory opens', () => {
-    withTempDirectory('npm-audit-runner-setup-fstat-', (cacheParent) => {
-      const sibling = createSibling(cacheParent);
-      const originalFstatSync = fs.fstatSync;
-      const originalOpenSync = fs.openSync;
-      let cacheDescriptor;
-      let cacheDirectory;
-      let fstatFailureArmed = true;
-      fs.openSync = (target, ...args) => {
-        const descriptor = originalOpenSync(target, ...args);
-        if (isCacheChild(target, cacheParent)) {
-          cacheDescriptor = descriptor;
-          cacheDirectory = target;
-        }
-        return descriptor;
-      };
-      fs.fstatSync = (descriptor, ...args) => {
-        if (fstatFailureArmed && descriptor === cacheDescriptor) {
-          fstatFailureArmed = false;
-          throw Object.assign(new Error('simulated fstat failure'), { code: 'EIO' });
-        }
-        return originalFstatSync(descriptor, ...args);
-      };
-      try {
-        assertExecutionError('E_CACHE_CREATE', () => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
+  await t.test('initial lstat failure preserves the untrusted child and sibling', () => {
+    withTempDirectory('npm-audit-runner-initial-lstat-', (cacheParent) => {
+      const sibling = createCacheSibling(cacheParent);
+      withCacheLifecycleHarness(cacheParent, {
+        lstat({ kind, proceed }) {
+          if (kind === 'directory') {
+            throw Object.assign(new Error('simulated initial lstat failure'), { code: 'EIO' });
+          }
+          return proceed();
+        },
+      }, (state, originals) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
           cacheParent,
-          spawnSyncImpl() {
-            assert.fail('audit must not run after cache setup failure');
-          },
-        }));
-        assert.equal(fs.existsSync(cacheDirectory), false);
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.equal(originals.lstatSync(state.cacheDirectory).isDirectory(), true);
         assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
-      } finally {
-        fs.fstatSync = originalFstatSync;
-        fs.openSync = originalOpenSync;
-      }
+      });
     });
   });
 
-  await t.test('descriptor close failure outranks the setup failure', () => {
-    withTempDirectory('npm-audit-runner-setup-close-', (cacheParent) => {
-      const sibling = createSibling(cacheParent);
-      const originalCloseSync = fs.closeSync;
-      const originalFstatSync = fs.fstatSync;
-      const originalOpenSync = fs.openSync;
-      let cacheDescriptor;
-      let cacheDirectory;
-      let closeCount = 0;
-      let fstatFailureArmed = true;
-      fs.openSync = (target, ...args) => {
-        const descriptor = originalOpenSync(target, ...args);
-        if (isCacheChild(target, cacheParent)) {
-          cacheDescriptor = descriptor;
-          cacheDirectory = target;
-        }
-        return descriptor;
-      };
-      fs.fstatSync = (descriptor, ...args) => {
-        if (fstatFailureArmed && descriptor === cacheDescriptor) {
-          fstatFailureArmed = false;
-          throw Object.assign(new Error('simulated fstat failure'), { code: 'EIO' });
-        }
-        return originalFstatSync(descriptor, ...args);
-      };
-      fs.closeSync = (descriptor) => {
-        if (descriptor === cacheDescriptor) {
-          closeCount += 1;
-          originalCloseSync(descriptor);
-          throw Object.assign(new Error('simulated close failure'), { code: 'EIO' });
-        }
-        return originalCloseSync(descriptor);
-      };
-      try {
-        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
+  await t.test('initial unstable filesystem identity preserves the untrusted child', () => {
+    withTempDirectory('npm-audit-runner-initial-identity-', (cacheParent) => {
+      const sibling = createCacheSibling(cacheParent);
+      withCacheLifecycleHarness(cacheParent, {
+        lstat({ kind, proceed }) {
+          const stat = proceed();
+          if (kind !== 'directory') return stat;
+          return {
+            ...stat,
+            ino: 0n,
+            isDirectory: () => true,
+            isSymbolicLink: () => false,
+          };
+        },
+      }, (state, originals) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
           cacheParent,
-          spawnSyncImpl() {
-            assert.fail('audit must not run after cache setup failure');
-          },
-        }));
-        assert.equal(closeCount, 1);
-        assert.equal(fs.existsSync(cacheDirectory), false);
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.equal(originals.lstatSync(state.cacheDirectory).isDirectory(), true);
         assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
-      } finally {
-        fs.closeSync = originalCloseSync;
-        fs.fstatSync = originalFstatSync;
-        fs.openSync = originalOpenSync;
-      }
+      });
     });
   });
 
-  await t.test('post-open path validation failure', () => {
-    withTempDirectory('npm-audit-runner-setup-validation-', (cacheParent) => {
-      const sibling = createSibling(cacheParent);
-      const originalOpenSync = fs.openSync;
-      const originalRealpathSync = fs.realpathSync;
-      let cacheDirectory;
-      let validationFailureArmed = false;
-      fs.openSync = (target, ...args) => {
-        const descriptor = originalOpenSync(target, ...args);
-        if (isCacheChild(target, cacheParent)) {
-          cacheDirectory = target;
-          validationFailureArmed = true;
-        }
-        return descriptor;
-      };
-      fs.realpathSync = (target, ...args) => {
-        if (validationFailureArmed && target === cacheDirectory) {
-          validationFailureArmed = false;
-          throw Object.assign(new Error('simulated validation failure'), { code: 'EIO' });
-        }
-        return originalRealpathSync(target, ...args);
-      };
-      try {
-        assertExecutionError('E_CACHE_CREATE', () => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
+  await t.test('random-name failure preserves the untrusted child without removal', () => {
+    withTempDirectory('npm-audit-runner-random-failure-', (cacheParent) => {
+      withCacheLifecycleHarness(cacheParent, {
+        randomBytes({ args }) {
+          assert.deepEqual(args, [SENTINEL_RANDOM_BYTES]);
+          throw Object.assign(new Error('simulated random failure'), { code: 'EIO' });
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
           cacheParent,
-          spawnSyncImpl() {
-            assert.fail('audit must not run after cache setup failure');
-          },
-        }));
-        assert.equal(fs.existsSync(cacheDirectory), false);
-        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
-      } finally {
-        fs.openSync = originalOpenSync;
-        fs.realpathSync = originalRealpathSync;
-      }
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.equal(state.randomCalls.length, 1);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual(state.closeAttempts, []);
+        assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
+      });
     });
   });
 
-  await t.test('replacement is preserved when setup loses the created identity', () => {
-    withTempDirectory('npm-audit-runner-setup-replacement-', (cacheParent) => {
-      const sibling = createSibling(cacheParent);
-      const replacementSource = path.join(cacheParent, 'npm-audit-setup-replacement-source');
-      const markerName = 'replacement-marker.txt';
-      fs.mkdirSync(replacementSource);
-      fs.writeFileSync(path.join(replacementSource, markerName), 'preserve setup replacement');
-      const replacementStat = fs.lstatSync(replacementSource, { bigint: true });
-      const replacementIdentity = [replacementStat.dev, replacementStat.ino];
-      const originalOpenSync = fs.openSync;
-      let cacheDirectory;
-      let createdIdentity;
-      fs.openSync = (target, ...args) => {
-        if (isCacheChild(target, cacheParent)) {
-          cacheDirectory = target;
-          const createdStat = fs.lstatSync(target, { bigint: true });
-          createdIdentity = [createdStat.dev, createdStat.ino];
-          assert.notDeepEqual(replacementIdentity, createdIdentity);
-          fs.rmSync(target, { recursive: true });
-          fs.renameSync(replacementSource, target);
-          throw Object.assign(new Error('simulated open failure'), { code: 'EACCES' });
-        }
-        return originalOpenSync(target, ...args);
-      };
-      try {
-        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
-          cacheParent,
-          spawnSyncImpl() {
-            assert.fail('audit must not run after cache setup failure');
+  for (const [name, randomMaterial] of [
+    ['wrong length', Buffer.alloc(SENTINEL_RANDOM_BYTES - 1)],
+    ['non-Buffer', new Uint8Array(SENTINEL_RANDOM_BYTES)],
+  ]) {
+    await t.test(`malformed random-name material (${name}) preserves the untrusted child`, () => {
+      withTempDirectory('npm-audit-runner-random-malformed-', (cacheParent) => {
+        withCacheLifecycleHarness(cacheParent, {
+          randomBytes() {
+            return randomMaterial;
           },
-        }));
-        assert.deepEqual(
-          [
-            fs.lstatSync(cacheDirectory, { bigint: true }).dev,
-            fs.lstatSync(cacheDirectory, { bigint: true }).ino,
-          ],
-          replacementIdentity,
-        );
-        assert.equal(
-          fs.readFileSync(path.join(cacheDirectory, markerName), 'utf8'),
-          'preserve setup replacement',
-        );
-        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
-      } finally {
-        fs.openSync = originalOpenSync;
-      }
-    });
-  });
-
-  await t.test('cleanup failure outranks the setup failure without retry', () => {
-    withTempDirectory('npm-audit-runner-setup-cleanup-', (cacheParent) => {
-      const sibling = createSibling(cacheParent);
-      const originalOpenSync = fs.openSync;
-      const originalRmSync = fs.rmSync;
-      let cacheDirectory;
-      let removalCount = 0;
-      fs.openSync = (target, ...args) => {
-        if (isCacheChild(target, cacheParent)) {
-          cacheDirectory = target;
-          throw Object.assign(new Error('simulated open failure'), { code: 'EACCES' });
-        }
-        return originalOpenSync(target, ...args);
-      };
-      fs.rmSync = (target, options) => {
-        if (target === cacheDirectory) {
-          removalCount += 1;
-          throw Object.assign(new Error('simulated cleanup failure'), { code: 'EACCES' });
-        }
-        return originalRmSync(target, options);
-      };
-      try {
-        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
-          cacheParent,
-          spawnSyncImpl() {
-            assert.fail('audit must not run after cache setup failure');
-          },
-        }));
-        assert.equal(removalCount, 1);
-        assert.equal(fs.lstatSync(cacheDirectory).isDirectory(), true);
-        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
-      } finally {
-        fs.openSync = originalOpenSync;
-        fs.rmSync = originalRmSync;
-      }
-    });
-  });
-});
-
-test('keeps the cache directory descriptor open through removal and reports lifecycle failures', async (t) => {
-  await t.test('successful removal precedes the single descriptor close', () => {
-    withTempDirectory('npm-audit-runner-handle-success-', (cacheParent) => {
-      const originalCloseSync = fs.closeSync;
-      let cacheDirectory;
-      const existedAtClose = [];
-      fs.closeSync = (descriptor) => {
-        existedAtClose.push(fs.existsSync(cacheDirectory));
-        return originalCloseSync(descriptor);
-      };
-      try {
-        const result = runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
-          cacheParent,
-          spawnSyncImpl(_command, _args, options) {
-            cacheDirectory = options.env.npm_config_cache;
-            return { status: 0, signal: null, stdout: '{}', stderr: '' };
-          },
+        }, (state) => {
+          assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+            cacheParent,
+            () => recordSuccessfulAudit(state),
+          )));
+          assert.equal(state.auditCalls, 0);
+          assert.deepEqual(state.removalAttempts, []);
+          assert.deepEqual(state.closeAttempts, []);
+          assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
         });
-        assert.equal(result.exitCode, 0);
-        assert.deepEqual(existedAtClose, [false]);
-      } finally {
-        fs.closeSync = originalCloseSync;
-      }
+      });
+    });
+  }
+
+  await t.test('sentinel open uses exact exclusive flags and mode, then fails without removal', () => {
+    withTempDirectory('npm-audit-runner-sentinel-open-', (cacheParent) => {
+      const randomMaterial = Buffer.alloc(SENTINEL_RANDOM_BYTES, 0xa5);
+      let observedSentinelOpen;
+      withCacheLifecycleHarness(cacheParent, {
+        randomBytes() {
+          return randomMaterial;
+        },
+        open({ kind, target, flags, mode, proceed }) {
+          if (kind !== 'sentinel') return proceed();
+          observedSentinelOpen = { target, flags, mode };
+          throw Object.assign(new Error('simulated sentinel open failure'), { code: 'EACCES' });
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.deepEqual(state.randomCalls, [[SENTINEL_RANDOM_BYTES]]);
+        let expectedFlags = fs.constants.O_RDWR
+          | fs.constants.O_CREAT
+          | fs.constants.O_EXCL;
+        if (Number.isInteger(fs.constants.O_NOFOLLOW)) {
+          expectedFlags |= fs.constants.O_NOFOLLOW;
+        }
+        assert.deepEqual(observedSentinelOpen, {
+          target: state.sentinelPath,
+          flags: expectedFlags,
+          mode: 0o600,
+        });
+        assert.equal(
+          path.basename(observedSentinelOpen.target).includes(randomMaterial.toString('hex')),
+          true,
+        );
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual(state.closeAttempts, []);
+        assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
+      });
     });
   });
 
-  await t.test('only ENOENT satisfies final removal verification', () => {
-    withTempDirectory('npm-audit-runner-handle-verify-', (cacheParent) => {
-      const originalCloseSync = fs.closeSync;
-      const originalLstatSync = fs.lstatSync;
-      let cacheDirectory;
-      let verificationArmed = false;
-      fs.closeSync = (descriptor) => {
-        const result = originalCloseSync(descriptor);
-        verificationArmed = true;
-        return result;
-      };
-      fs.lstatSync = (target, options) => {
-        if (verificationArmed && target === cacheDirectory) {
-          verificationArmed = false;
-          throw Object.assign(new Error('simulated inspection failure'), { code: 'EACCES' });
-        }
-        return originalLstatSync(target, options);
-      };
-      try {
-        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
+  await t.test('sentinel fstat failure closes it once and preserves the cache path', () => {
+    withTempDirectory('npm-audit-runner-sentinel-fstat-', (cacheParent) => {
+      let failureArmed = true;
+      withCacheLifecycleHarness(cacheParent, {
+        fstat({ kind, proceed }) {
+          if (kind === 'sentinel' && failureArmed) {
+            failureArmed = false;
+            throw Object.assign(new Error('simulated sentinel fstat failure'), { code: 'EIO' });
+          }
+          return proceed();
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
           cacheParent,
-          spawnSyncImpl(_command, _args, options) {
-            cacheDirectory = options.env.npm_config_cache;
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.equal(failureArmed, false);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual(state.closeAttempts, ['sentinel']);
+        assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
+        assert.equal(fs.lstatSync(state.sentinelPath).isFile(), true);
+      });
+    });
+  });
+
+  await t.test('sentinel path validation failure closes it once and does not remove', () => {
+    withTempDirectory('npm-audit-runner-sentinel-path-', (cacheParent) => {
+      let failureArmed = true;
+      withCacheLifecycleHarness(cacheParent, {
+        lstat({ kind, proceed }) {
+          if (kind === 'sentinel' && failureArmed) {
+            failureArmed = false;
+            throw Object.assign(new Error('simulated sentinel path failure'), { code: 'EIO' });
+          }
+          return proceed();
+        },
+      }, (state, originals) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.equal(failureArmed, false);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual(state.closeAttempts, ['sentinel']);
+        assert.equal(originals.lstatSync(state.cacheDirectory).isDirectory(), true);
+        assert.equal(originals.lstatSync(state.sentinelPath).isFile(), true);
+      });
+    });
+  });
+
+  await t.test('setup-time same-path replacement is rejected despite mocked directory identity reuse', () => {
+    withTempDirectory('npm-audit-runner-setup-aba-', (cacheParent) => {
+      const sibling = createCacheSibling(cacheParent);
+      const markerName = 'replacement-marker.txt';
+      let replacementInstalled = false;
+      let createdDirectoryStat;
+      let createdSentinelIdentity;
+      let replacementSentinelIdentity;
+      withCacheLifecycleHarness(cacheParent, {
+        open({ kind, state, originals, proceed }) {
+          if (kind !== 'directory') return proceed();
+          const descriptor = proceed();
+          createdDirectoryStat = fs.lstatSync(state.cacheDirectory, { bigint: true });
+          const replacementSentinel = state.sentinelPath
+            ?? path.join(state.cacheDirectory, '.replacement-sentinel');
+          if (state.sentinelDescriptor !== undefined) {
+            const createdSentinelStat = originals.fstatSync(
+              state.sentinelDescriptor,
+              { bigint: true },
+            );
+            createdSentinelIdentity = [createdSentinelStat.dev, createdSentinelStat.ino];
+          }
+          originals.rmSync(state.cacheDirectory, { recursive: true });
+          fs.mkdirSync(state.cacheDirectory);
+          fs.writeFileSync(replacementSentinel, '');
+          const replacementSentinelStat = originals.lstatSync(
+            replacementSentinel,
+            { bigint: true },
+          );
+          replacementSentinelIdentity = [
+            replacementSentinelStat.dev,
+            replacementSentinelStat.ino,
+          ];
+          if (createdSentinelIdentity !== undefined) {
+            assert.notDeepEqual(replacementSentinelIdentity, createdSentinelIdentity);
+          }
+          fs.writeFileSync(path.join(state.cacheDirectory, markerName), 'preserve replacement');
+          replacementInstalled = true;
+          return descriptor;
+        },
+        lstat({ kind, proceed }) {
+          if (replacementInstalled && kind === 'directory') return createdDirectoryStat;
+          return proceed();
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.equal(replacementInstalled, true);
+        assert.notEqual(replacementSentinelIdentity, undefined);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(
+          fs.readFileSync(path.join(state.cacheDirectory, markerName), 'utf8'),
+          'preserve replacement',
+        );
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      });
+    });
+  });
+
+  await t.test('directory open failure preserves the path because the complete identity is unavailable', () => {
+    withTempDirectory('npm-audit-runner-directory-open-', (cacheParent) => {
+      const sibling = createCacheSibling(cacheParent);
+      withCacheLifecycleHarness(cacheParent, {
+        open({ kind, proceed }) {
+          if (kind === 'directory') {
+            throw Object.assign(new Error('simulated directory open failure'), { code: 'EACCES' });
+          }
+          return proceed();
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual(state.closeAttempts, ['sentinel']);
+        assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
+        assert.equal(fs.lstatSync(state.sentinelPath).isFile(), true);
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      });
+    });
+  });
+
+  await t.test('movable sentinel cannot authorize cleanup without a directory handle', () => {
+    withTempDirectory('npm-audit-runner-directory-open-aba-', (cacheParent) => {
+      const sibling = createCacheSibling(cacheParent);
+      const relocatedOriginal = path.join(cacheParent, 'npm-audit-relocated-original');
+      const markerName = 'replacement-marker.txt';
+      let createdDirectoryStat;
+      let createdSentinelIdentity;
+      let replacementDirectoryIdentity;
+      let movedSentinelIdentity;
+      let replacementInstalled = false;
+      withCacheLifecycleHarness(cacheParent, {
+        open({ kind, state, originals, proceed }) {
+          if (kind !== 'directory') return proceed();
+          createdDirectoryStat = originals.lstatSync(state.cacheDirectory, { bigint: true });
+          const createdSentinelStat = originals.fstatSync(
+            state.sentinelDescriptor,
+            { bigint: true },
+          );
+          createdSentinelIdentity = [createdSentinelStat.dev, createdSentinelStat.ino];
+          const sentinelName = path.basename(state.sentinelPath);
+          fs.renameSync(state.cacheDirectory, relocatedOriginal);
+          fs.mkdirSync(state.cacheDirectory);
+          const replacementDirectoryStat = originals.lstatSync(
+            state.cacheDirectory,
+            { bigint: true },
+          );
+          replacementDirectoryIdentity = [
+            replacementDirectoryStat.dev,
+            replacementDirectoryStat.ino,
+          ];
+          fs.renameSync(
+            path.join(relocatedOriginal, sentinelName),
+            state.sentinelPath,
+          );
+          const movedSentinelStat = originals.lstatSync(state.sentinelPath, { bigint: true });
+          movedSentinelIdentity = [movedSentinelStat.dev, movedSentinelStat.ino];
+          fs.writeFileSync(path.join(state.cacheDirectory, markerName), 'preserve replacement');
+          replacementInstalled = true;
+          throw Object.assign(new Error('simulated directory open failure'), { code: 'EACCES' });
+        },
+        lstat({ kind, proceed }) {
+          if (replacementInstalled && kind === 'directory') return createdDirectoryStat;
+          return proceed();
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.equal(replacementInstalled, true);
+        assert.notEqual(createdDirectoryStat, undefined);
+        assert.notEqual(createdSentinelIdentity, undefined);
+        assert.notEqual(replacementDirectoryIdentity, undefined);
+        assert.notEqual(movedSentinelIdentity, undefined);
+        assert.notDeepEqual(
+          replacementDirectoryIdentity,
+          [createdDirectoryStat.dev, createdDirectoryStat.ino],
+        );
+        assert.deepEqual(movedSentinelIdentity, createdSentinelIdentity);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual(state.closeAttempts, ['sentinel']);
+        assert.equal(
+          fs.readFileSync(path.join(state.cacheDirectory, markerName), 'utf8'),
+          'preserve replacement',
+        );
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      });
+    });
+  });
+
+  await t.test('one-shot directory fstat failure is cleaned while both handles remain open', () => {
+    withTempDirectory('npm-audit-runner-directory-fstat-', (cacheParent) => {
+      let failureArmed = true;
+      withCacheLifecycleHarness(cacheParent, {
+        fstat({ kind, proceed }) {
+          if (kind === 'directory' && failureArmed) {
+            failureArmed = false;
+            throw Object.assign(new Error('simulated first directory fstat failure'), { code: 'EIO' });
+          }
+          return proceed();
+        },
+        rm({ state, originals, proceed }) {
+          assert.deepEqual(state.fstatAttempts.slice(-2), ['directory', 'sentinel']);
+          assert.doesNotThrow(() => originals.fstatSync(
+            state.directoryDescriptor,
+            { bigint: true },
+          ));
+          assert.doesNotThrow(() => originals.fstatSync(
+            state.sentinelDescriptor,
+            { bigint: true },
+          ));
+          return proceed();
+        },
+        close({ state, proceed }) {
+          assert.equal(state.removalReportedSuccess, true);
+          return proceed();
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CREATE', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.equal(failureArmed, false);
+        assert.equal(state.removalAttempts.length, 1);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(fs.existsSync(state.cacheDirectory), false);
+      });
+    });
+  });
+
+  await t.test('persistent directory fstat failure prevents removal and closes both handles', () => {
+    withTempDirectory('npm-audit-runner-directory-fstat-persistent-', (cacheParent) => {
+      let failureCount = 0;
+      withCacheLifecycleHarness(cacheParent, {
+        fstat({ kind, proceed }) {
+          if (kind === 'directory') {
+            failureCount += 1;
+            throw Object.assign(new Error('simulated persistent fstat failure'), { code: 'EIO' });
+          }
+          return proceed();
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.equal(failureCount >= 2, true);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
+      });
+    });
+  });
+
+  await t.test('post-open path validation failure is cleaned after a later successful revalidation', () => {
+    withTempDirectory('npm-audit-runner-directory-post-validation-', (cacheParent) => {
+      let failureArmed = true;
+      withCacheLifecycleHarness(cacheParent, {
+        realpath({ kind, state, proceed }) {
+          if (kind === 'directory'
+              && state.directoryDescriptor !== undefined
+              && failureArmed) {
+            failureArmed = false;
+            throw Object.assign(new Error('simulated post-open validation failure'), { code: 'EIO' });
+          }
+          return proceed();
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CREATE', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => recordSuccessfulAudit(state),
+        )));
+        assert.equal(state.auditCalls, 0);
+        assert.equal(failureArmed, false);
+        assert.equal(state.removalAttempts.length, 1);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(fs.existsSync(state.cacheDirectory), false);
+      });
+    });
+  });
+
+  await t.test('post-acquisition sentinel fstat failure prevents removal', () => {
+    withTempDirectory('npm-audit-runner-sentinel-late-fstat-', (cacheParent) => {
+      let failureArmed = false;
+      withCacheLifecycleHarness(cacheParent, {
+        fstat({ kind, proceed }) {
+          if (kind === 'sentinel' && failureArmed) {
+            throw Object.assign(new Error('simulated late sentinel fstat failure'), { code: 'EIO' });
+          }
+          return proceed();
+        },
+      }, (state) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => {
+            state.auditCalls += 1;
+            failureArmed = true;
             return { status: 0, signal: null, stdout: '{}', stderr: '' };
           },
-        }));
-        assert.equal(fs.existsSync(cacheDirectory), false);
-      } finally {
-        fs.closeSync = originalCloseSync;
-        fs.lstatSync = originalLstatSync;
-      }
+        )));
+        assert.equal(state.auditCalls, 1);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
+      });
     });
   });
 
-  await t.test('removal failure closes once without retry and outranks an audit failure', () => {
-    withTempDirectory('npm-audit-runner-handle-removal-', (cacheParent) => {
-      const originalCloseSync = fs.closeSync;
-      const originalRmSync = fs.rmSync;
-      let cacheDirectory;
-      let closeCount = 0;
-      let removalCount = 0;
-      fs.closeSync = (descriptor) => {
-        closeCount += 1;
-        return originalCloseSync(descriptor);
-      };
-      fs.rmSync = (target, options) => {
-        if (target === cacheDirectory) {
-          removalCount += 1;
-          throw Object.assign(new Error('simulated removal failure'), { code: 'EACCES' });
-        }
-        return originalRmSync(target, options);
-      };
-      try {
-        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
-          cacheParent,
-          spawnSyncImpl(_command, _args, options) {
-            cacheDirectory = options.env.npm_config_cache;
-            return {
-              error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }),
-              signal: 'SIGTERM', status: null, stdout: '', stderr: '',
-            };
-          },
+  await t.test('normal cleanup keeps both handles open, removes once, closes once, and verifies ENOENT', () => {
+    withTempDirectory('npm-audit-runner-two-handles-', (cacheParent) => {
+      const sibling = createCacheSibling(cacheParent);
+      const randomMaterial = Buffer.from(Array.from(
+        { length: SENTINEL_RANDOM_BYTES },
+        (_value, index) => index,
+      ));
+      let finalVerificationObserved = false;
+      withCacheLifecycleHarness(cacheParent, {
+        randomBytes({ args }) {
+          assert.deepEqual(args, [SENTINEL_RANDOM_BYTES]);
+          return randomMaterial;
+        },
+        rm({ options, state, originals, proceed }) {
+          assert.deepEqual(options, { recursive: true, force: false, maxRetries: 0 });
+          assert.deepEqual(state.fstatAttempts.slice(-2), ['directory', 'sentinel']);
+          assert.doesNotThrow(() => originals.fstatSync(
+            state.directoryDescriptor,
+            { bigint: true },
+          ));
+          assert.doesNotThrow(() => originals.fstatSync(
+            state.sentinelDescriptor,
+            { bigint: true },
+          ));
+          return proceed();
+        },
+        close({ state, proceed }) {
+          assert.equal(state.removalReportedSuccess, true);
+          assert.equal(fs.existsSync(state.cacheDirectory), false);
+          return proceed();
+        },
+        lstat({ kind, state, proceed }) {
+          if (kind === 'directory' && state.removalReportedSuccess) {
+            assert.equal(state.closeAttempts.length, 2);
+            finalVerificationObserved = true;
+          }
+          return proceed();
+        },
+      }, (state, originals) => {
+        const result = runNpmAudit(auditRunnerOptions(cacheParent, (_command, _args, options) => {
+          assert.equal(options.env.npm_config_cache, state.cacheDirectory);
+          assert.equal(path.dirname(state.sentinelPath), state.cacheDirectory);
+          assert.equal(
+            path.basename(state.sentinelPath).includes(randomMaterial.toString('hex')),
+            true,
+          );
+          const sentinelStat = originals.lstatSync(state.sentinelPath);
+          assert.equal(sentinelStat.isFile(), true);
+          assert.equal(sentinelStat.isSymbolicLink(), false);
+          assert.equal(sentinelStat.size, 0);
+          if (process.platform !== 'win32') {
+            assert.equal(sentinelStat.mode & 0o777, 0o600);
+          }
+          assert.doesNotThrow(() => originals.fstatSync(state.directoryDescriptor));
+          assert.doesNotThrow(() => originals.fstatSync(state.sentinelDescriptor));
+          return { status: 0, signal: null, stdout: '{}', stderr: '' };
         }));
-        assert.equal(removalCount, 1);
-        assert.equal(closeCount, 1);
-        assert.equal(fs.lstatSync(cacheDirectory).isDirectory(), true);
-      } finally {
-        fs.closeSync = originalCloseSync;
-        fs.rmSync = originalRmSync;
-      }
+        assert.deepEqual(result, { exitCode: 0, stdout: '{}', stderr: '' });
+        assert.equal(state.randomCalls.length, 1);
+        assert.equal(state.removalAttempts.length, 1);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(finalVerificationObserved, true);
+        assert.equal(fs.existsSync(state.cacheDirectory), false);
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      });
     });
   });
 
-  await t.test('removal failure remains primary when descriptor close also fails', () => {
-    withTempDirectory('npm-audit-runner-handle-dual-failure-', (cacheParent) => {
-      const originalCloseSync = fs.closeSync;
-      const originalRmSync = fs.rmSync;
-      let cacheDirectory;
-      let closeFailureArmed = false;
-      let closeCount = 0;
-      let heldDescriptor;
-      let removalCount = 0;
-      fs.closeSync = (descriptor) => {
-        if (closeFailureArmed) {
-          closeFailureArmed = false;
-          closeCount += 1;
-          heldDescriptor = descriptor;
-          throw Object.assign(new Error('simulated close failure'), { code: 'EIO' });
-        }
-        return originalCloseSync(descriptor);
-      };
-      fs.rmSync = (target, options) => {
-        if (target === cacheDirectory) {
-          removalCount += 1;
+  await t.test('removal failure outranks close and audit failures without a retry', () => {
+    withTempDirectory('npm-audit-runner-removal-precedence-', (cacheParent) => {
+      withCacheLifecycleHarness(cacheParent, {
+        rm({ options, state, originals }) {
+          assert.deepEqual(options, { recursive: true, force: false, maxRetries: 0 });
+          assert.deepEqual(state.fstatAttempts.slice(-2), ['directory', 'sentinel']);
+          assert.doesNotThrow(() => originals.fstatSync(
+            state.directoryDescriptor,
+            { bigint: true },
+          ));
+          assert.doesNotThrow(() => originals.fstatSync(
+            state.sentinelDescriptor,
+            { bigint: true },
+          ));
           throw Object.assign(new Error('simulated removal failure'), { code: 'EACCES' });
-        }
-        return originalRmSync(target, options);
-      };
-      try {
-        assert.throws(() => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
-          cacheParent,
-          spawnSyncImpl(_command, _args, options) {
-            cacheDirectory = options.env.npm_config_cache;
-            closeFailureArmed = true;
-            return { status: 0, signal: null, stdout: '{}', stderr: '' };
-          },
-        }), (error) => {
+        },
+        close({ kind, proceed }) {
+          const result = proceed();
+          if (kind === 'directory') {
+            throw Object.assign(new Error('simulated directory close failure'), { code: 'EIO' });
+          }
+          return result;
+        },
+      }, (state) => {
+        assert.throws(() => runNpmAudit(auditRunnerOptions(cacheParent, () => ({
+          error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }),
+          signal: 'SIGTERM',
+          status: null,
+          stdout: '',
+          stderr: '',
+        }))), (error) => {
           assert.ok(error instanceof NpmAuditExecutionError);
           assert.equal(error.code, 'E_CACHE_CLEANUP');
           assert.equal(error.message, 'the npm cache could not be removed');
           return true;
         });
-        assert.equal(removalCount, 1);
-        assert.equal(closeCount, 1);
-        assert.equal(fs.lstatSync(cacheDirectory).isDirectory(), true);
-      } finally {
-        fs.closeSync = originalCloseSync;
-        fs.rmSync = originalRmSync;
-        if (heldDescriptor !== undefined) originalCloseSync(heldDescriptor);
-      }
+        assert.equal(state.removalAttempts.length, 1);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
+      });
     });
   });
 
-  await t.test('descriptor close failure is operational after removal', () => {
-    withTempDirectory('npm-audit-runner-handle-close-', (cacheParent) => {
-      const originalCloseSync = fs.closeSync;
-      let cacheDirectory;
-      let closeFailureArmed = false;
-      let heldDescriptor;
-
-      fs.closeSync = (descriptor) => {
-        if (closeFailureArmed) {
-          closeFailureArmed = false;
-          heldDescriptor = descriptor;
-          throw Object.assign(new Error('simulated close failure'), { code: 'EIO' });
-        }
-        return originalCloseSync(descriptor);
-      };
-      try {
-        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
-          nodeExecutable: '/runtime/bin/node',
-          npmCliPath: '/runtime/npm-cli.js',
-          webDirectory: '/repo/apps/web',
+  await t.test('a reported removal success must end with the cache path absent', () => {
+    withTempDirectory('npm-audit-runner-removal-noop-', (cacheParent) => {
+      withCacheLifecycleHarness(cacheParent, {
+        rm({ options }) {
+          assert.deepEqual(options, { recursive: true, force: false, maxRetries: 0 });
+          return undefined;
+        },
+      }, (state) => {
+        assert.throws(() => runNpmAudit(auditRunnerOptions(
           cacheParent,
-          spawnSyncImpl(_command, _args, options) {
-            cacheDirectory = options.env.npm_config_cache;
-            closeFailureArmed = true;
+          () => ({ status: 0, signal: null, stdout: '{}', stderr: '' }),
+        )), (error) => {
+          assert.ok(error instanceof NpmAuditExecutionError);
+          assert.equal(error.code, 'E_CACHE_CLEANUP');
+          assert.equal(error.message, 'the npm cache still exists after cleanup');
+          return true;
+        });
+        assert.equal(state.removalAttempts.length, 1);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
+      });
+    });
+  });
+
+  await t.test('missing directory identity outranks sentinel close and setup failures', () => {
+    withTempDirectory('npm-audit-runner-setup-close-precedence-', (cacheParent) => {
+      withCacheLifecycleHarness(cacheParent, {
+        open({ kind, proceed }) {
+          if (kind === 'directory') {
+            throw Object.assign(new Error('simulated directory open failure'), { code: 'EACCES' });
+          }
+          return proceed();
+        },
+        close({ kind, proceed }) {
+          const result = proceed();
+          if (kind === 'sentinel') {
+            throw Object.assign(new Error('simulated sentinel close failure'), { code: 'EIO' });
+          }
+          return result;
+        },
+      }, (state) => {
+        assert.throws(() => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => recordSuccessfulAudit(state),
+        )), (error) => {
+          assert.ok(error instanceof NpmAuditExecutionError);
+          assert.equal(error.code, 'E_CACHE_CLEANUP');
+          assert.equal(error.message, 'the npm cache directory handle is unavailable');
+          return true;
+        });
+        assert.equal(state.auditCalls, 0);
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual(state.closeAttempts, ['sentinel']);
+        assert.equal(fs.lstatSync(state.cacheDirectory).isDirectory(), true);
+      });
+    });
+  });
+
+  await t.test('directory close failure outranks the original audit failure', () => {
+    withTempDirectory('npm-audit-runner-audit-close-precedence-', (cacheParent) => {
+      withCacheLifecycleHarness(cacheParent, {
+        close({ kind, proceed }) {
+          const result = proceed();
+          if (kind === 'directory') {
+            throw Object.assign(new Error('simulated directory close failure'), { code: 'EIO' });
+          }
+          return result;
+        },
+      }, (state) => {
+        assert.throws(() => runNpmAudit(auditRunnerOptions(cacheParent, () => ({
+          error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }),
+          signal: 'SIGTERM',
+          status: null,
+          stdout: '',
+          stderr: '',
+        }))), (error) => {
+          assert.ok(error instanceof NpmAuditExecutionError);
+          assert.equal(error.code, 'E_CACHE_CLEANUP');
+          assert.equal(error.message, 'the npm cache directory handle could not be closed');
+          return true;
+        });
+        assert.equal(state.removalAttempts.length, 1);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(fs.existsSync(state.cacheDirectory), false);
+      });
+    });
+  });
+
+  for (const failingKind of ['directory', 'sentinel']) {
+    await t.test(`${failingKind} close failure still attempts both closes once`, () => {
+      withTempDirectory(`npm-audit-runner-${failingKind}-close-`, (cacheParent) => {
+        let finalVerificationObserved = false;
+        withCacheLifecycleHarness(cacheParent, {
+          close({ kind, proceed }) {
+            const result = proceed();
+            if (kind === failingKind) {
+              throw Object.assign(new Error('simulated close failure'), { code: 'EIO' });
+            }
+            return result;
+          },
+          lstat({ kind, state, proceed }) {
+            if (kind === 'directory' && state.removalReportedSuccess) {
+              finalVerificationObserved = true;
+            }
+            return proceed();
+          },
+        }, (state) => {
+          assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+            cacheParent,
+            () => ({ status: 0, signal: null, stdout: '{}', stderr: '' }),
+          )));
+          assert.equal(state.removalAttempts.length, 1);
+          assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+          assert.equal(finalVerificationObserved, true);
+          assert.equal(fs.existsSync(state.cacheDirectory), false);
+        });
+      });
+    });
+  }
+
+  await t.test('final verification failure outranks a close failure', () => {
+    withTempDirectory('npm-audit-runner-final-verification-', (cacheParent) => {
+      withCacheLifecycleHarness(cacheParent, {
+        close({ kind, proceed }) {
+          const result = proceed();
+          if (kind === 'directory') {
+            throw Object.assign(new Error('simulated directory close failure'), { code: 'EIO' });
+          }
+          return result;
+        },
+        lstat({ kind, state, proceed }) {
+          if (kind === 'directory'
+              && state.removalReportedSuccess
+              && state.closeAttempts.length === 2) {
+            throw Object.assign(new Error('simulated final verification failure'), { code: 'EACCES' });
+          }
+          return proceed();
+        },
+      }, (state) => {
+        assert.throws(() => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => ({ status: 0, signal: null, stdout: '{}', stderr: '' }),
+        )), (error) => {
+          assert.ok(error instanceof NpmAuditExecutionError);
+          assert.equal(error.code, 'E_CACHE_CLEANUP');
+          assert.equal(error.message, 'the npm cache removal could not be verified');
+          return true;
+        });
+        assert.equal(state.removalAttempts.length, 1);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(fs.existsSync(state.cacheDirectory), false);
+      });
+    });
+  });
+
+  await t.test('sentinel path substitution during audit preserves the cache directory', () => {
+    withTempDirectory('npm-audit-runner-sentinel-substitution-', (cacheParent) => {
+      const sibling = createCacheSibling(cacheParent);
+      withCacheLifecycleHarness(cacheParent, {}, (state, originals) => {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit(auditRunnerOptions(
+          cacheParent,
+          () => {
+            originals.rmSync(state.sentinelPath);
+            fs.writeFileSync(state.sentinelPath, '');
+            fs.writeFileSync(
+              path.join(state.cacheDirectory, 'replacement-marker.txt'),
+              'preserve sentinel replacement',
+            );
             return { status: 0, signal: null, stdout: '{}', stderr: '' };
           },
-        }));
-        assert.equal(fs.existsSync(cacheDirectory), false);
-      } finally {
-        fs.closeSync = originalCloseSync;
-        if (heldDescriptor !== undefined) originalCloseSync(heldDescriptor);
-      }
+        )));
+        assert.deepEqual(state.removalAttempts, []);
+        assert.deepEqual([...state.closeAttempts].sort(), ['directory', 'sentinel']);
+        assert.equal(
+          fs.readFileSync(
+            path.join(state.cacheDirectory, 'replacement-marker.txt'),
+            'utf8',
+          ),
+          'preserve sentinel replacement',
+        );
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      });
     });
   });
 });
