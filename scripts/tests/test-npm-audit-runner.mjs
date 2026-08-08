@@ -663,6 +663,279 @@ test('refuses a same-path directory substitution even when dev and ino are reuse
   });
 });
 
+test('removes only the verified cache child when directory-handle setup fails', async (t) => {
+  const isCacheChild = (target, cacheParent) => (
+    typeof target === 'string'
+    && path.dirname(target) === fs.realpathSync(cacheParent)
+    && path.basename(target).startsWith('npm-audit-')
+  );
+  const createSibling = (cacheParent) => {
+    const sibling = path.join(cacheParent, 'npm-audit-setup-sibling');
+    fs.writeFileSync(sibling, 'keep sibling');
+    return sibling;
+  };
+
+  await t.test('open failure after mkdtemp', () => {
+    withTempDirectory('npm-audit-runner-setup-open-', (cacheParent) => {
+      const sibling = createSibling(cacheParent);
+      const originalOpenSync = fs.openSync;
+      let cacheDirectory;
+      fs.openSync = (target, ...args) => {
+        if (isCacheChild(target, cacheParent)) {
+          cacheDirectory = target;
+          throw Object.assign(new Error('simulated open failure'), { code: 'EACCES' });
+        }
+        return originalOpenSync(target, ...args);
+      };
+      try {
+        assertExecutionError('E_CACHE_CREATE', () => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl() {
+            assert.fail('audit must not run after cache setup failure');
+          },
+        }));
+        assert.equal(fs.existsSync(cacheDirectory), false);
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      } finally {
+        fs.openSync = originalOpenSync;
+      }
+    });
+  });
+
+  await t.test('fstat failure after the directory opens', () => {
+    withTempDirectory('npm-audit-runner-setup-fstat-', (cacheParent) => {
+      const sibling = createSibling(cacheParent);
+      const originalFstatSync = fs.fstatSync;
+      const originalOpenSync = fs.openSync;
+      let cacheDescriptor;
+      let cacheDirectory;
+      let fstatFailureArmed = true;
+      fs.openSync = (target, ...args) => {
+        const descriptor = originalOpenSync(target, ...args);
+        if (isCacheChild(target, cacheParent)) {
+          cacheDescriptor = descriptor;
+          cacheDirectory = target;
+        }
+        return descriptor;
+      };
+      fs.fstatSync = (descriptor, ...args) => {
+        if (fstatFailureArmed && descriptor === cacheDescriptor) {
+          fstatFailureArmed = false;
+          throw Object.assign(new Error('simulated fstat failure'), { code: 'EIO' });
+        }
+        return originalFstatSync(descriptor, ...args);
+      };
+      try {
+        assertExecutionError('E_CACHE_CREATE', () => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl() {
+            assert.fail('audit must not run after cache setup failure');
+          },
+        }));
+        assert.equal(fs.existsSync(cacheDirectory), false);
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      } finally {
+        fs.fstatSync = originalFstatSync;
+        fs.openSync = originalOpenSync;
+      }
+    });
+  });
+
+  await t.test('descriptor close failure outranks the setup failure', () => {
+    withTempDirectory('npm-audit-runner-setup-close-', (cacheParent) => {
+      const sibling = createSibling(cacheParent);
+      const originalCloseSync = fs.closeSync;
+      const originalFstatSync = fs.fstatSync;
+      const originalOpenSync = fs.openSync;
+      let cacheDescriptor;
+      let cacheDirectory;
+      let closeCount = 0;
+      let fstatFailureArmed = true;
+      fs.openSync = (target, ...args) => {
+        const descriptor = originalOpenSync(target, ...args);
+        if (isCacheChild(target, cacheParent)) {
+          cacheDescriptor = descriptor;
+          cacheDirectory = target;
+        }
+        return descriptor;
+      };
+      fs.fstatSync = (descriptor, ...args) => {
+        if (fstatFailureArmed && descriptor === cacheDescriptor) {
+          fstatFailureArmed = false;
+          throw Object.assign(new Error('simulated fstat failure'), { code: 'EIO' });
+        }
+        return originalFstatSync(descriptor, ...args);
+      };
+      fs.closeSync = (descriptor) => {
+        if (descriptor === cacheDescriptor) {
+          closeCount += 1;
+          originalCloseSync(descriptor);
+          throw Object.assign(new Error('simulated close failure'), { code: 'EIO' });
+        }
+        return originalCloseSync(descriptor);
+      };
+      try {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl() {
+            assert.fail('audit must not run after cache setup failure');
+          },
+        }));
+        assert.equal(closeCount, 1);
+        assert.equal(fs.existsSync(cacheDirectory), false);
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      } finally {
+        fs.closeSync = originalCloseSync;
+        fs.fstatSync = originalFstatSync;
+        fs.openSync = originalOpenSync;
+      }
+    });
+  });
+
+  await t.test('post-open path validation failure', () => {
+    withTempDirectory('npm-audit-runner-setup-validation-', (cacheParent) => {
+      const sibling = createSibling(cacheParent);
+      const originalOpenSync = fs.openSync;
+      const originalRealpathSync = fs.realpathSync;
+      let cacheDirectory;
+      let validationFailureArmed = false;
+      fs.openSync = (target, ...args) => {
+        const descriptor = originalOpenSync(target, ...args);
+        if (isCacheChild(target, cacheParent)) {
+          cacheDirectory = target;
+          validationFailureArmed = true;
+        }
+        return descriptor;
+      };
+      fs.realpathSync = (target, ...args) => {
+        if (validationFailureArmed && target === cacheDirectory) {
+          validationFailureArmed = false;
+          throw Object.assign(new Error('simulated validation failure'), { code: 'EIO' });
+        }
+        return originalRealpathSync(target, ...args);
+      };
+      try {
+        assertExecutionError('E_CACHE_CREATE', () => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl() {
+            assert.fail('audit must not run after cache setup failure');
+          },
+        }));
+        assert.equal(fs.existsSync(cacheDirectory), false);
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      } finally {
+        fs.openSync = originalOpenSync;
+        fs.realpathSync = originalRealpathSync;
+      }
+    });
+  });
+
+  await t.test('replacement is preserved when setup loses the created identity', () => {
+    withTempDirectory('npm-audit-runner-setup-replacement-', (cacheParent) => {
+      const sibling = createSibling(cacheParent);
+      const replacementSource = path.join(cacheParent, 'npm-audit-setup-replacement-source');
+      const markerName = 'replacement-marker.txt';
+      fs.mkdirSync(replacementSource);
+      fs.writeFileSync(path.join(replacementSource, markerName), 'preserve setup replacement');
+      const replacementStat = fs.lstatSync(replacementSource, { bigint: true });
+      const replacementIdentity = [replacementStat.dev, replacementStat.ino];
+      const originalOpenSync = fs.openSync;
+      let cacheDirectory;
+      let createdIdentity;
+      fs.openSync = (target, ...args) => {
+        if (isCacheChild(target, cacheParent)) {
+          cacheDirectory = target;
+          const createdStat = fs.lstatSync(target, { bigint: true });
+          createdIdentity = [createdStat.dev, createdStat.ino];
+          assert.notDeepEqual(replacementIdentity, createdIdentity);
+          fs.rmSync(target, { recursive: true });
+          fs.renameSync(replacementSource, target);
+          throw Object.assign(new Error('simulated open failure'), { code: 'EACCES' });
+        }
+        return originalOpenSync(target, ...args);
+      };
+      try {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl() {
+            assert.fail('audit must not run after cache setup failure');
+          },
+        }));
+        assert.deepEqual(
+          [
+            fs.lstatSync(cacheDirectory, { bigint: true }).dev,
+            fs.lstatSync(cacheDirectory, { bigint: true }).ino,
+          ],
+          replacementIdentity,
+        );
+        assert.equal(
+          fs.readFileSync(path.join(cacheDirectory, markerName), 'utf8'),
+          'preserve setup replacement',
+        );
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      } finally {
+        fs.openSync = originalOpenSync;
+      }
+    });
+  });
+
+  await t.test('cleanup failure outranks the setup failure without retry', () => {
+    withTempDirectory('npm-audit-runner-setup-cleanup-', (cacheParent) => {
+      const sibling = createSibling(cacheParent);
+      const originalOpenSync = fs.openSync;
+      const originalRmSync = fs.rmSync;
+      let cacheDirectory;
+      let removalCount = 0;
+      fs.openSync = (target, ...args) => {
+        if (isCacheChild(target, cacheParent)) {
+          cacheDirectory = target;
+          throw Object.assign(new Error('simulated open failure'), { code: 'EACCES' });
+        }
+        return originalOpenSync(target, ...args);
+      };
+      fs.rmSync = (target, options) => {
+        if (target === cacheDirectory) {
+          removalCount += 1;
+          throw Object.assign(new Error('simulated cleanup failure'), { code: 'EACCES' });
+        }
+        return originalRmSync(target, options);
+      };
+      try {
+        assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
+          nodeExecutable: '/runtime/bin/node',
+          npmCliPath: '/runtime/npm-cli.js',
+          webDirectory: '/repo/apps/web',
+          cacheParent,
+          spawnSyncImpl() {
+            assert.fail('audit must not run after cache setup failure');
+          },
+        }));
+        assert.equal(removalCount, 1);
+        assert.equal(fs.lstatSync(cacheDirectory).isDirectory(), true);
+        assert.equal(fs.readFileSync(sibling, 'utf8'), 'keep sibling');
+      } finally {
+        fs.openSync = originalOpenSync;
+        fs.rmSync = originalRmSync;
+      }
+    });
+  });
+});
+
 test('keeps the cache directory descriptor open through removal and reports lifecycle failures', async (t) => {
   await t.test('successful removal precedes the single descriptor close', () => {
     withTempDirectory('npm-audit-runner-handle-success-', (cacheParent) => {

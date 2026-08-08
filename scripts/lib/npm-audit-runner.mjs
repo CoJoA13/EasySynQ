@@ -247,7 +247,7 @@ function cacheDirectoryOpenFlags() {
   return flags;
 }
 
-function openCacheDirectory(cacheParent, cacheDirectory) {
+function openCacheDirectory(cacheParent, cacheDirectory, createdIdentity) {
   let descriptor;
   try {
     descriptor = fs.openSync(cacheDirectory, cacheDirectoryOpenFlags());
@@ -260,17 +260,23 @@ function openCacheDirectory(cacheParent, cacheDirectory) {
     const pathIdentity = validateCacheChild(cacheParent, cacheDirectory);
     if (!descriptorStat.isDirectory()
         || descriptorIdentity.device !== pathIdentity.device
-        || descriptorIdentity.inode !== pathIdentity.inode) {
+        || descriptorIdentity.inode !== pathIdentity.inode
+        || descriptorIdentity.device !== createdIdentity.device
+        || descriptorIdentity.inode !== createdIdentity.inode) {
       fail('E_CACHE_CREATE', 'the npm cache directory handle does not match its path');
     }
     return { descriptor, identity: descriptorIdentity };
   } catch {
+    let closeFailed = false;
     if (descriptor !== undefined) {
       try {
         fs.closeSync(descriptor);
       } catch {
-        // Opening already failed operationally; closing was attempted before reporting it.
+        closeFailed = true;
       }
+    }
+    if (closeFailed) {
+      fail('E_CACHE_CLEANUP', 'the npm cache directory handle could not be closed');
     }
     fail('E_CACHE_CREATE', 'the isolated npm cache directory could not be held open');
   }
@@ -305,6 +311,34 @@ function validateCacheDirectoryHandle(cacheHandle) {
   return descriptorIdentity;
 }
 
+function verifyCacheAbsent(cacheDirectory) {
+  let stillExists = false;
+  try {
+    fs.lstatSync(cacheDirectory);
+    stillExists = true;
+  } catch (error) {
+    if (error === null || typeof error !== 'object' || error.code !== 'ENOENT') {
+      fail('E_CACHE_CLEANUP', 'the npm cache removal could not be verified');
+    }
+  }
+  if (stillExists) fail('E_CACHE_CLEANUP', 'the npm cache still exists after cleanup');
+}
+
+function removeCacheChildWithoutHandle(cacheParent, cacheDirectory, createdIdentity) {
+  try {
+    const currentIdentity = validateCacheChild(cacheParent, cacheDirectory);
+    if (currentIdentity.device !== createdIdentity.device
+        || currentIdentity.inode !== createdIdentity.inode) {
+      fail('E_CACHE_CLEANUP', 'the npm cache cleanup target changed identity');
+    }
+    fs.rmSync(cacheDirectory, { recursive: true, force: false, maxRetries: 0 });
+  } catch (error) {
+    if (error instanceof NpmAuditExecutionError) throw error;
+    fail('E_CACHE_CLEANUP', 'the npm cache could not be removed');
+  }
+  verifyCacheAbsent(cacheDirectory);
+}
+
 function removeCacheChild(cacheParent, cacheDirectory, cacheHandle) {
   let cleanupError;
   try {
@@ -335,16 +369,7 @@ function removeCacheChild(cacheParent, cacheDirectory, cacheHandle) {
   if (cleanupError !== undefined) throw cleanupError;
   if (closeError !== undefined) throw closeError;
 
-  let stillExists = false;
-  try {
-    fs.lstatSync(cacheDirectory);
-    stillExists = true;
-  } catch (error) {
-    if (error === null || typeof error !== 'object' || error.code !== 'ENOENT') {
-      fail('E_CACHE_CLEANUP', 'the npm cache removal could not be verified');
-    }
-  }
-  if (stillExists) fail('E_CACHE_CLEANUP', 'the npm cache still exists after cleanup');
+  verifyCacheAbsent(cacheDirectory);
 }
 
 export function runNpmAudit({
@@ -356,13 +381,21 @@ export function runNpmAudit({
 } = {}) {
   const realCacheParent = resolveCacheParent(cacheParent);
   let cacheDirectory;
-  let cacheHandle;
+  let cacheIdentity;
   try {
     cacheDirectory = fs.mkdtempSync(path.join(realCacheParent, CACHE_PREFIX));
-    cacheHandle = openCacheDirectory(realCacheParent, cacheDirectory);
-  } catch (error) {
-    if (error instanceof NpmAuditExecutionError) throw error;
+    cacheIdentity = validateCacheChild(realCacheParent, cacheDirectory);
+  } catch {
     fail('E_CACHE_CREATE', 'the isolated npm cache could not be created');
+  }
+
+  let cacheHandle;
+  try {
+    cacheHandle = openCacheDirectory(realCacheParent, cacheDirectory, cacheIdentity);
+  } catch (setupError) {
+    removeCacheChildWithoutHandle(realCacheParent, cacheDirectory, cacheIdentity);
+    if (setupError instanceof NpmAuditExecutionError) throw setupError;
+    fail('E_CACHE_CREATE', 'the isolated npm cache could not be opened');
   }
 
   let auditResult;
