@@ -210,7 +210,7 @@ function validateCacheChild(cacheParent, cacheDirectory) {
   let childStat;
   let realChild;
   try {
-    childStat = fs.lstatSync(cacheDirectory);
+    childStat = fs.lstatSync(cacheDirectory, { bigint: true });
     realChild = fs.realpathSync(cacheDirectory);
   } catch {
     fail('E_CACHE_CLEANUP', 'the npm cache cleanup target could not be inspected');
@@ -220,10 +220,21 @@ function validateCacheChild(cacheParent, cacheDirectory) {
       || realChild !== cacheDirectory) {
     fail('E_CACHE_CLEANUP', 'the npm cache cleanup target is not a non-link directory');
   }
+  if (typeof childStat.dev !== 'bigint'
+      || typeof childStat.ino !== 'bigint'
+      || childStat.dev < 0n
+      || childStat.ino <= 0n) {
+    fail('E_CACHE_CLEANUP', 'the npm cache cleanup target has no stable filesystem identity');
+  }
+  return { device: childStat.dev, inode: childStat.ino };
 }
 
-function removeCacheChild(cacheParent, cacheDirectory) {
-  validateCacheChild(cacheParent, cacheDirectory);
+function removeCacheChild(cacheParent, cacheDirectory, createdIdentity) {
+  const currentIdentity = validateCacheChild(cacheParent, cacheDirectory);
+  if (currentIdentity.device !== createdIdentity.device
+      || currentIdentity.inode !== createdIdentity.inode) {
+    fail('E_CACHE_CLEANUP', 'the npm cache cleanup target changed identity');
+  }
   try {
     fs.rmSync(cacheDirectory, { recursive: true, force: false, maxRetries: 0 });
   } catch {
@@ -243,9 +254,10 @@ export function runNpmAudit({
 } = {}) {
   const realCacheParent = resolveCacheParent(cacheParent);
   let cacheDirectory;
+  let cacheIdentity;
   try {
     cacheDirectory = fs.mkdtempSync(path.join(realCacheParent, CACHE_PREFIX));
-    validateCacheChild(realCacheParent, cacheDirectory);
+    cacheIdentity = validateCacheChild(realCacheParent, cacheDirectory);
   } catch (error) {
     if (error instanceof NpmAuditExecutionError) throw error;
     fail('E_CACHE_CREATE', 'the isolated npm cache could not be created');
@@ -277,7 +289,7 @@ export function runNpmAudit({
     auditError = error;
   }
 
-  removeCacheChild(realCacheParent, cacheDirectory);
+  removeCacheChild(realCacheParent, cacheDirectory, cacheIdentity);
   if (auditError !== undefined) throw auditError;
   return auditResult;
 }

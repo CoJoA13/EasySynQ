@@ -540,6 +540,53 @@ test('treats a replaced or missing cleanup target as an operational failure with
   });
 });
 
+test('refuses to remove an ordinary-directory substitution at the exact cache path', () => {
+  withTempDirectory('npm-audit-runner-identity-', (cacheParent) => {
+    const replacementSource = path.join(cacheParent, 'npm-audit-sibling-directory');
+    const markerName = 'marker.txt';
+    let cacheDirectory;
+    let createdIdentity;
+    let replacementIdentity;
+
+    assertExecutionError('E_CACHE_CLEANUP', () => runNpmAudit({
+      nodeExecutable: '/runtime/bin/node',
+      npmCliPath: '/runtime/npm-cli.js',
+      webDirectory: '/repo/apps/web',
+      cacheParent,
+      spawnSyncImpl(_command, _args, options) {
+        cacheDirectory = options.env.npm_config_cache;
+        const createdStat = fs.lstatSync(cacheDirectory, { bigint: true });
+        createdIdentity = [createdStat.dev, createdStat.ino];
+
+        fs.mkdirSync(replacementSource);
+        fs.writeFileSync(path.join(replacementSource, markerName), 'preserve replacement');
+        const replacementStat = fs.lstatSync(replacementSource, { bigint: true });
+        replacementIdentity = [replacementStat.dev, replacementStat.ino];
+        assert.equal(replacementStat.isDirectory(), true);
+        assert.equal(replacementStat.isSymbolicLink(), false);
+        assert.notDeepEqual(replacementIdentity, createdIdentity);
+
+        fs.rmSync(cacheDirectory, { recursive: true });
+        fs.renameSync(replacementSource, cacheDirectory);
+        const substitutedStat = fs.lstatSync(cacheDirectory, { bigint: true });
+        assert.equal(substitutedStat.isDirectory(), true);
+        assert.equal(substitutedStat.isSymbolicLink(), false);
+        assert.deepEqual([substitutedStat.dev, substitutedStat.ino], replacementIdentity);
+        return { status: 0, signal: null, stdout: '{}', stderr: '' };
+      },
+    }));
+
+    assert.equal(fs.readFileSync(path.join(cacheDirectory, markerName), 'utf8'), 'preserve replacement');
+    assert.deepEqual(
+      [
+        fs.lstatSync(cacheDirectory, { bigint: true }).dev,
+        fs.lstatSync(cacheDirectory, { bigint: true }).ino,
+      ],
+      replacementIdentity,
+    );
+  });
+});
+
 test('executes a real npm-cli.js fixture through process.execPath without a shell', () => {
   withTempDirectory('npm-audit-real-boundary-', (directory) => {
     const npmCliPath = path.join(directory, 'npm-cli.js');
