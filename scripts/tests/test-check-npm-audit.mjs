@@ -758,9 +758,24 @@ moduleApi.syncBuiltinESMExports();
     assert.equal(result.status, 1, result.stderr);
     assert.equal(result.signal, null);
     assert.equal(result.stderr, '');
-    assert.equal(result.stdout.includes('ACCEPTED'), false);
-    assert.equal(result.stdout.match(/^BLOCKED /gm)?.length, 2);
-    assert.equal(result.stdout.endsWith('SUMMARY {"accepted":0,"blocked":2,"ignored":{"info":0,"low":0,"moderate":0}}\n'), true);
+    assert.equal(result.stdout, [
+      `BLOCKED ${JSON.stringify({
+        package: 'react-router',
+        version: '7.18.2',
+        severity: 'high',
+        advisoryIds: ['GHSA-qwww-vcr4-c8h2'],
+        reason: 'exception-expired',
+      })}`,
+      `BLOCKED ${JSON.stringify({
+        package: 'react-router-dom',
+        version: '7.18.2',
+        severity: 'high',
+        advisoryIds: ['GHSA-qwww-vcr4-c8h2'],
+        reason: 'exception-expired',
+      })}`,
+      'SUMMARY {"accepted":0,"blocked":2,"ignored":{"info":0,"low":0,"moderate":0}}',
+      '',
+    ].join('\n'));
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
