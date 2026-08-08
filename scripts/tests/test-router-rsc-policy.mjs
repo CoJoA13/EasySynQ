@@ -913,6 +913,130 @@ RouterUnknown.unstable_createCallServer;
   ]);
 });
 
+test('skips an outer loop update for a labeled break through a switch', () => {
+  const violations = inspect(`
+var Router = require('react-router');
+outer: for (; true; Router = {}) {
+  switch (0) {
+    default:
+      break outer;
+  }
+}
+Router.unstable_RSCHydratedRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_RSCHydratedRouter']);
+});
+
+test('routes labeled continue through inner loops to the outer do condition', () => {
+  const violations = inspect(`
+var RouterPreserved = require('react-router');
+preserveOuter: do {
+  preserveInner: do {
+    continue preserveOuter;
+    RouterPreserved = {};
+  } while (RouterPreserved = {});
+  RouterPreserved = {};
+} while (false);
+RouterPreserved.unstable_RSCStaticRouter;
+
+var RouterSet = {};
+setOuter: do {
+  setInner: do {
+    switch (0) {
+      default:
+        continue setOuter;
+    }
+  } while (false);
+} while ((RouterSet = require('react-router-dom')), false);
+RouterSet.unstable_createCallServer;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCStaticRouter',
+    'unstable_createCallServer',
+  ]);
+});
+
+test('consumes only loop-local and matching labeled completions', () => {
+  const violations = inspect(`
+var RouterUnlabeled = {};
+for (; true; RouterUnlabeled = require('react-router')) {
+  switch (0) {
+    default:
+      break;
+  }
+}
+RouterUnlabeled.unstable_getRSCStream;
+
+var RouterInnerLabel = {};
+outerCondition: do {
+  innerBlock: {
+    break innerBlock;
+  }
+} while ((RouterInnerLabel = require('react-router-dom')), false);
+RouterInnerLabel.unstable_matchRSCServerRequest;
+
+var RouterOuterBreak = require('react-router');
+outerBreak: for (; true; RouterOuterBreak = {}) {
+  innerLoop: do {
+    switch (0) {
+      default:
+        break outerBreak;
+    }
+  } while (false);
+}
+RouterOuterBreak.unstable_routeRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_getRSCStream',
+    'unstable_matchRSCServerRequest',
+    'unstable_routeRSCServerRequest',
+  ]);
+});
+
+test('treats a sole default switch as definite inside an explicit catch', () => {
+  const violations = inspect(`
+var RouterReset = require('react-router');
+try {
+  throw new Error('caught');
+} catch {
+  switch (unknownValue) {
+    default:
+      RouterReset = {};
+  }
+}
+RouterReset.unstable_RSCHydratedRouter;
+
+var RouterSet = {};
+try {
+  throw new Error('caught');
+} catch {
+  switch (unknownValue) {
+    default:
+      RouterSet = require('react-router-dom');
+  }
+}
+RouterSet.unstable_RSCStaticRouter;
+
+var RouterUncertain = require('react-router');
+try {
+  throw new Error('caught');
+} catch {
+  switch (unknownValue) {
+    case 0:
+      RouterUncertain = {};
+      break;
+    default:
+      break;
+  }
+}
+RouterUncertain.unstable_createCallServer;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCStaticRouter',
+    'unstable_createCallServer',
+  ]);
+});
+
 test('summarizes directly called arrow and function-expression setters', () => {
   const violations = inspect(`
 var RouterA = {};
@@ -1169,6 +1293,198 @@ outerVisible();
 RouterVisible.unstable_routeRSCServerRequest;
 `);
   assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_routeRSCServerRequest']);
+});
+
+test('threads callable targets through direct install and uninstall helpers', () => {
+  const violations = inspect(`
+var RouterInstalled = {};
+let installedTarget = () => {};
+function install() {
+  installedTarget = () => {
+    RouterInstalled = require('react-router');
+  };
+}
+install();
+installedTarget();
+RouterInstalled.unstable_RSCHydratedRouter;
+
+var RouterUninstalled = {};
+let uninstalledTarget = () => {
+  RouterUninstalled = require('react-router-dom');
+};
+function uninstall() {
+  uninstalledTarget = () => {};
+}
+uninstall();
+uninstalledTarget();
+RouterUninstalled.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_RSCHydratedRouter']);
+});
+
+test('unions callable targets after conditional direct helper calls', () => {
+  const violations = inspect(`
+var RouterMaybeInstall = {};
+let maybeInstalledTarget = () => {};
+function maybeInstall() {
+  maybeInstalledTarget = () => {
+    RouterMaybeInstall = require('react-router');
+  };
+}
+if (unknownCondition) maybeInstall();
+maybeInstalledTarget();
+RouterMaybeInstall.unstable_createCallServer;
+
+var RouterMaybeUninstall = {};
+let maybeUninstalledTarget = () => {
+  RouterMaybeUninstall = require('react-router-dom');
+};
+function maybeUninstall() {
+  maybeUninstalledTarget = () => {};
+}
+if (unknownCondition) maybeUninstall();
+maybeUninstalledTarget();
+RouterMaybeUninstall.unstable_getRSCStream;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_createCallServer',
+    'unstable_getRSCStream',
+  ]);
+});
+
+test('orders direct target writes around helper transformations', () => {
+  const violations = inspect(`
+var RouterInstallThenNoop = {};
+let installThenNoopTarget = () => {};
+function installThenNoop() {
+  installThenNoopTarget = () => {
+    RouterInstallThenNoop = require('react-router');
+  };
+}
+installThenNoop();
+installThenNoopTarget = () => {};
+installThenNoopTarget();
+RouterInstallThenNoop.unstable_matchRSCServerRequest;
+
+var RouterUninstallThenSetter = {};
+let uninstallThenSetterTarget = () => {};
+function uninstallThenSetter() {
+  uninstallThenSetterTarget = () => {};
+}
+uninstallThenSetter();
+uninstallThenSetterTarget = () => {
+  RouterUninstallThenSetter = require('react-router-dom');
+};
+uninstallThenSetterTarget();
+RouterUninstallThenSetter.unstable_routeRSCServerRequest;
+
+var RouterSetterThenUninstall = {};
+let setterThenUninstallTarget = () => {};
+function setterThenUninstall() {
+  setterThenUninstallTarget = () => {};
+}
+setterThenUninstallTarget = () => {
+  RouterSetterThenUninstall = require('react-router');
+};
+setterThenUninstall();
+setterThenUninstallTarget();
+RouterSetterThenUninstall.unstable_RSCStaticRouter;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_routeRSCServerRequest',
+  ]);
+});
+
+test('threads callable mutations through nested and recursive helpers only when called', () => {
+  const violations = inspect(`
+var RouterNested = {};
+let nestedHelperTarget = () => {};
+function installNestedTarget() {
+  nestedHelperTarget = () => {
+    RouterNested = require('react-router');
+  };
+}
+function configureNestedTarget() {
+  installNestedTarget();
+}
+configureNestedTarget();
+nestedHelperTarget();
+RouterNested.unstable_RSCHydratedRouter;
+
+var RouterRecursive = {};
+let recursiveHelperTarget = () => {};
+function installRecursively() {
+  recursiveHelperTarget = () => {
+    RouterRecursive = require('react-router-dom');
+  };
+  installRecursively();
+}
+installRecursively();
+recursiveHelperTarget();
+RouterRecursive.unstable_createCallServer;
+
+var RouterUncalled = {};
+let uncalledHelperTarget = () => {};
+function installWithoutCall() {
+  uncalledHelperTarget = () => {
+    RouterUncalled = require('react-router');
+  };
+}
+uncalledHelperTarget();
+RouterUncalled.unstable_getRSCStream;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), [
+    'unstable_RSCHydratedRouter',
+    'unstable_createCallServer',
+  ]);
+});
+
+test('replays helper transformations in source order within a loop update', () => {
+  const violations = inspect(`
+var Router = {};
+let updateTarget = () => {};
+function installUpdateTarget() {
+  updateTarget = () => {
+    Router = require('react-router');
+  };
+}
+for (; true; installUpdateTarget(), updateTarget()) {
+  continue;
+}
+Router.unstable_routeRSCServerRequest;
+`);
+  assert.deepEqual(violations.map(({ symbol }) => symbol), ['unstable_routeRSCServerRequest']);
+});
+
+test('does not replay a disconnected inspection region as a caller environment', () => {
+  assert.deepEqual(inspect(`
+var Local = {};
+function outer() {
+  const helper = () => {};
+  helper();
+  function nested() {
+    helper();
+    Local.unstable_RSCHydratedRouter;
+  }
+}
+`), []);
+});
+
+test('guards callable target resolution cycles across repeated helper calls', () => {
+  assert.deepEqual(inspect(`
+import { useState } from 'react';
+function Component() {
+  const [value, setValue] = useState(0);
+  const update = () => {
+    setValue((current) => current + 1);
+  };
+  const handleKey = (event) => {
+    if (event.key === 'ArrowLeft') update();
+    else if (event.key === 'ArrowRight') update();
+    else if (event.key === 'Home') event.preventDefault();
+  };
+}
+`), []);
 });
 
 test('does not expand direct-call summaries through aliases or higher-order calls', () => {
