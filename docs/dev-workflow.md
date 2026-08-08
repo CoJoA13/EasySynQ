@@ -20,6 +20,21 @@ Use `uv` with managed **Python 3.12**, Node 22 + npm, and a current supported Do
 depend on the system Python. Locks are committed at `apps/api/uv.lock`, `apps/web/package-lock.json`,
 and `packages/contracts/package-lock.json`; CI uses `uv sync --frozen` / `npm ci`, and `just setup`
 hydrates both frozen npm trees before generating contracts.
+
+Run the dependency-light, read-only doctor directly before setup so it can diagnose a missing `just`:
+
+```bash
+./scripts/doctor.sh contributor
+./scripts/doctor.sh test
+./scripts/doctor.sh stack
+```
+
+The default profile is `contributor`. `test` additionally requires hydrated API, web, and contract
+dependencies plus working Docker access; `stack` additionally validates `.env`, project ports, and
+SELinux bind labels. Each line includes a stable reason ID and the exact next command. The doctor never
+starts services, changes permissions, or prints configuration values. Once `just` is available,
+`just doctor` and `just doctor stack` are equivalent conveniences.
+
 - **Docker socket (Linux host):** verify `docker info` first. Use normal group membership and a fresh
   login; do not weaken socket permissions. If the current shell predates a group change, a reviewed
   `sg docker -c "…"` wrapper can refresh group membership for that command.

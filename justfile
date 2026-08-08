@@ -24,6 +24,9 @@ contracts-check:
 authority-check:
     ./scripts/check-repo-authority.sh
 
+doctor profile="contributor":
+    ./scripts/doctor.sh "{{ profile }}"
+
 security-npm:
     node --test scripts/tests/test-web-security-lock.mjs scripts/tests/test-npm-audit-runner.mjs scripts/tests/test-check-npm-audit.mjs scripts/tests/test-npm-audit-policy.mjs scripts/tests/test-router-rsc-policy.mjs
     node scripts/check-npm-audit.mjs
