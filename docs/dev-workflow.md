@@ -16,14 +16,15 @@ squash-merge. See `CLAUDE.md` for the current 10-job/14-check matrix.
 > tools and group membership.
 
 Use `uv` with managed **Python 3.12**, Node 22 + npm, and a current supported Docker/Compose. Do not
-depend on the system Python. Lockfiles are committed (`uv.lock`, `package-lock.json`); CI uses
-`uv sync --frozen` / `npm ci`.
+depend on the system Python. Locks are committed at `apps/api/uv.lock`, `apps/web/package-lock.json`,
+and `packages/contracts/package-lock.json`; CI uses `uv sync --frozen` / `npm ci`, and `just setup`
+hydrates both frozen npm trees before generating contracts.
 - **Docker socket (Linux host):** verify `docker info` first. Use normal group membership and a fresh
   login; do not weaken socket permissions. If the current shell predates a group change, a reviewed
   `sg docker -c "…"` wrapper can refresh group membership for that command.
-- **Fresh-clone contract generation:** `just setup` → `just contracts` creates the gitignored server
-  and web `_generated/` directories, lints/bundles `openapi.yaml`, and generates Pydantic models plus
-  TypeScript schema types. The required CI contract gate runs Redocly lint plus
+- **Fresh-clone contract generation:** `just setup` installs the web and separate contract-tool locks,
+  then creates the gitignored server and web `_generated/` directories, lints/bundles `openapi.yaml`,
+  and generates Pydantic models plus TypeScript schema types. The required CI contract gate runs Redocly lint plus
   `gen-contracts.sh --check`; pre-commit runs the matching lint step, and the authenticated
   `contract-responses` job separately checks mounted response schemas.
 
@@ -32,6 +33,8 @@ depend on the system Python. Lockfiles are committed (`uv.lock`, `package-lock.j
 - API: `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest` (unit always; `-m integration` needs Docker for testcontainers).
 - Web: `cd apps/web && npm run lint && npm run build && npm test` (or the `/check-web` skill; `build`
   already runs `tsc --noEmit`).
+- npm dependency policy: run `just security-npm` after `just setup` to execute the policy regressions
+  and then the live high/critical gate against the committed web lock.
 - **Docker-backed checks:** when `docker info` succeeds, run integration tests via testcontainers and
   migrations against a disposable PostgreSQL 16 instance. Backup/restore tests also require a
   version-matched PostgreSQL client (`pg_dump`/`pg_restore`). If group membership requires it, wrap

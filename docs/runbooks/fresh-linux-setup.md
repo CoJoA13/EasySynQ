@@ -50,9 +50,11 @@ gotchas apply:
 
 ```bash
 git clone https://github.com/CoJoA13/EasySynQ.git ~/Documents/EasySynQ && cd ~/Documents/EasySynQ
-(cd apps/api && uv sync)            # builds apps/api/.venv
-(cd apps/web && npm install)        # builds apps/web/node_modules
+just setup  # hydrates API/web deps plus packages/contracts/package-lock.json and installs hooks
 ```
+
+The contract toolchain has that separate committed npm lock; setup installs it with the same frozen
+`npm ci` path used by CI before generating the contract artifacts.
 
 ## 3. The gitignored repo-root `.env`
 

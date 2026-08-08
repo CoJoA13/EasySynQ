@@ -5,11 +5,9 @@
 # when a route module changes without openapi.yaml; this one nudges when openapi.yaml changes
 # without the bundled-hash lock.
 #
-# ⚠ Why this needs a hook at all: NO CI JOB RUNS scripts/gen-contracts.sh. The `contracts` job
-# runs redocly lint (plus the R61 backstop) and nothing else, so a stale .contract.lock never
-# goes red — the generated Pydantic server models and TypeScript types silently stop matching
-# the spec. Verified 2026-08-03 by grepping .github/workflows/: gen-contracts appears nowhere.
-# A stale lock shipped that same day and was caught only by hand.
+# This hook gives immediate local feedback before the `contracts` CI job runs
+# `scripts/gen-contracts.sh --check`. Regenerating here also leaves the generated Pydantic server
+# models and TypeScript types ready for local consumers instead of waiting for CI to report drift.
 #
 # Non-blocking: emits PostToolUse `additionalContext`, exit 0 (matches contract-drift.sh).
 # Regenerating is cheap and idempotent, so the nudge is safe to act on unconditionally.
@@ -35,5 +33,5 @@ if git status --porcelain packages/contracts/.contract.lock 2>/dev/null | grep -
   exit 0
 fi
 
-printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Contract-lock reminder: you edited packages/contracts/openapi.yaml but packages/contracts/.contract.lock has no pending change. NO CI job runs scripts/gen-contracts.sh — the contracts job is redocly lint only — so a stale lock will NOT go red and the generated Pydantic/TypeScript types will drift from the spec. Run `bash scripts/gen-contracts.sh` and commit the lock. Note redocly also cannot detect an OMITTED or factually WRONG status code or summary, so re-read the operation you changed against what the handler actually returns and raises."}}'
+printf '%s' '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Contract-lock reminder: you edited packages/contracts/openapi.yaml but packages/contracts/.contract.lock has no pending change. Run `bash scripts/gen-contracts.sh` and commit the lock; CI runs `scripts/gen-contracts.sh --check`, but regenerating now keeps the local Pydantic/TypeScript outputs current. Note redocly also cannot detect an OMITTED or factually WRONG status code or summary, so re-read the operation you changed against what the handler actually returns and raises."}}'
 exit 0

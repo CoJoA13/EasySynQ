@@ -10,7 +10,7 @@ the current hosting plan does not technically protect `main`).
 2. Run the full local gate before pushing:
    - `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest tests/unit -m unit`
    - `cd apps/web && npm run lint && npm run build && npm test`
-   - Redocly lint plus `bash scripts/gen-contracts.sh --check` if endpoints changed.
+   - `bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml` plus `bash scripts/gen-contracts.sh --check` if endpoints changed.
 3. If all green: push the branch and `gh pr create` with a concise title + body summarizing the slice.
    End the PR body with the Co-Authored-By / Generated-with trailers per the repo convention.
 4. Report the PR URL. Do NOT merge — wait for green CI.

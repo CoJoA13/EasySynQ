@@ -1,12 +1,12 @@
 ---
 description: Lint OpenAPI and verify its committed contract lock (mirrors the contracts CI job)
-allowed-tools: Bash(npx:*), Bash(bash:*)
+allowed-tools: Bash(bash:*)
 ---
 
 Reproduce the OpenAPI gates from the `contracts` CI job locally:
 
 ```
-npx --yes @redocly/cli lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
+bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
 bash scripts/gen-contracts.sh --check
 ```
 

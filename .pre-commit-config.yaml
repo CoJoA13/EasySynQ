@@ -53,7 +53,7 @@ repos:
       # Pydantic models + TypeScript schema types.
       - id: contracts-lint
         name: openapi contract lint (redocly --config, matches CI)
-        entry: npx --yes @redocly/cli lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
+        entry: bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
         language: system
         files: ^packages/contracts/
         pass_filenames: false

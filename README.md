@@ -106,11 +106,14 @@ OIDC_DISCOVERY_URL=http://keycloak:8080/realms/easysynq/.well-known/openid-confi
 Then run:
 
 ```bash
-just setup      # install deps, pre-commit hooks, generate the API contract
+just setup      # install API/web deps + packages/contracts/package-lock.json, hooks, and contracts
 just up s       # bring up the stack (S profile)
 just demo-user  # create the local demo login
 ./scripts/easysynq setup mint-bootstrap
 ```
+
+The contract tools use their own committed lock at `packages/contracts/package-lock.json`; `just setup`
+hydrates that separate toolchain as well as the API and web dependencies.
 
 Then open **http://localhost/setup**, sign in with the dev account `demo` /
 `Demo-Password-1`, paste the one-time secret, and complete the six setup screens. After finalization,

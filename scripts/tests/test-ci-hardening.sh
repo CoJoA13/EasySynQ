@@ -10,6 +10,7 @@ WEB_CONFIG="$ROOT/apps/web/vite.config.ts"
 WEB_PACKAGE="$ROOT/apps/web/package.json"
 JUSTFILE="$ROOT/justfile"
 SEMANTIC_TEST="$ROOT/apps/api/tests/unit/test_ci_workflow.py"
+PIP_AUDIT_RUNNER="$ROOT/scripts/run-pip-audit.sh"
 PASS=0
 FAIL=0
 
@@ -78,6 +79,7 @@ CONTRACTS_BLOCK="$(job_block contracts)"
 CONTRACT_RESPONSES_BLOCK="$(job_block contract-responses)"
 API_BLOCK="$(job_block api)"
 INTEGRATION_SHARDS_BLOCK="$(job_block integration-shards)"
+SECURITY_BLOCK="$(job_block security)"
 
 assert_text_contains \
   "web suite has exactly two hard-fail shards" \
@@ -182,9 +184,177 @@ assert_text_contains \
   "$CONTRACTS_BLOCK" \
   '      - name: CI workflow contract
         run: bash scripts/tests/test-ci-hardening.sh'
+assert_text_not_contains \
+  "contracts job does not run floating npx contract tools" \
+  "$CONTRACTS_BLOCK" \
+  "npx"
+assert_text_contains \
+  "contracts job pins Node and caches the contract lock" \
+  "$CONTRACTS_BLOCK" \
+  '      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/contracts/package-lock.json'
+assert_text_contains \
+  "contracts job installs locked tools without lifecycle scripts" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: install locked contract tools
+        run: npm ci --prefix packages/contracts --ignore-scripts'
+assert_text_contains \
+  "contracts job proves the locked toolchain before linting" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: contract toolchain regressions
+        run: |
+          bash scripts/tests/test-run-contract-tool.sh
+          node --test scripts/tests/test-contract-lock.mjs
+          bash scripts/tests/test-gen-contracts.sh'
+assert_text_contains \
+  "contracts job lints through the locked wrapper" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: lint OpenAPI
+        run: bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml'
+assert_text_contains \
+  "contracts job audits the locked dependency graph" \
+  "$CONTRACTS_BLOCK" \
+  '      - name: audit locked contract tools
+        run: npm --prefix packages/contracts audit --package-lock-only --audit-level=high'
+assert_before \
+  "R61 regression runs before contract tool hydration" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: R61 backstop regression harness" \
+  "      - uses: actions/setup-node@v7"
+assert_before \
+  "workflow regression runs before contract tool hydration" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: CI workflow contract" \
+  "      - uses: actions/setup-node@v7"
+assert_before \
+  "contract audit runs before generated-lock verification" \
+  "$CONTRACTS_BLOCK" \
+  "      - name: audit locked contract tools" \
+  "      - name: generated contract lock"
 assert_text_not_contains "Python gates cannot continue on error" "$API_BLOCK$INTEGRATION_SHARDS_BLOCK$CONTRACT_RESPONSES_BLOCK" "continue-on-error:"
 assert_text_not_contains "contract gates cannot continue on error" "$CONTRACTS_BLOCK" "continue-on-error:"
 assert_text_not_contains "Python and contract commands cannot suppress failures" "$API_BLOCK$INTEGRATION_SHARDS_BLOCK$CONTRACT_RESPONSES_BLOCK$CONTRACTS_BLOCK" "|| true"
+
+assert_contains \
+  "security preamble gates npm high/critical while keeping pip-audit and Trivy findings report-only" \
+  "$WORKFLOW" \
+  "npm high/critical findings are GATED; pip-audit and Trivy FINDINGS remain REPORT-ONLY."
+assert_not_contains \
+  "workflow guidance does not call the mixed security job warn-only" \
+  "$WORKFLOW" \
+  '`security` is warn-only'
+assert_text_contains \
+  "security job runs the pip-audit regression then the root-aware locked runner" \
+  "$SECURITY_BLOCK" \
+  '      - name: pip-audit runner regressions
+        run: bash scripts/tests/test-pip-audit-runner.sh
+      - name: pip-audit (Python deps, resolved from uv.lock)
+        run: bash scripts/run-pip-audit.sh'
+assert_before \
+  "security installs uv before its runner regression" \
+  "$SECURITY_BLOCK" \
+  "      - name: install uv" \
+  "      - name: pip-audit runner regressions"
+assert_before \
+  "security exercises the runner before its live audit" \
+  "$SECURITY_BLOCK" \
+  "      - name: pip-audit runner regressions" \
+  "      - name: pip-audit (Python deps, resolved from uv.lock)"
+assert_before \
+  "locked Python audit completes before Node audit setup" \
+  "$SECURITY_BLOCK" \
+  "      - name: pip-audit (Python deps, resolved from uv.lock)" \
+  "      - uses: actions/setup-node@v7"
+assert_text_contains \
+  "security pins Node 22 and caches the web lock" \
+  "$SECURITY_BLOCK" \
+  '      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json'
+assert_text_contains \
+  "security installs the frozen web tree without lifecycle scripts" \
+  "$SECURITY_BLOCK" \
+  '      - name: install frozen web dependencies for npm policy
+        working-directory: apps/web
+        run: npm ci --ignore-scripts'
+assert_text_contains \
+  "security runs the exact npm advisory regression matrix" \
+  "$SECURITY_BLOCK" \
+  '      - name: npm advisory policy regressions
+        run: |
+          node --test \
+            scripts/tests/test-web-security-lock.mjs \
+            scripts/tests/test-npm-audit-runner.mjs \
+            scripts/tests/test-check-npm-audit.mjs \
+            scripts/tests/test-npm-audit-policy.mjs \
+            scripts/tests/test-router-rsc-policy.mjs'
+assert_text_contains \
+  "security runs the live web-lock policy gate" \
+  "$SECURITY_BLOCK" \
+  '      - name: npm advisory policy (web lock)
+        run: node scripts/check-npm-audit.mjs'
+assert_before \
+  "security sets up Node before frozen web install" \
+  "$SECURITY_BLOCK" \
+  "      - uses: actions/setup-node@v7" \
+  "      - name: install frozen web dependencies for npm policy"
+assert_before \
+  "security installs the frozen web tree before npm regressions" \
+  "$SECURITY_BLOCK" \
+  "      - name: install frozen web dependencies for npm policy" \
+  "      - name: npm advisory policy regressions"
+assert_before \
+  "security runs npm regressions before the live policy gate" \
+  "$SECURITY_BLOCK" \
+  "      - name: npm advisory policy regressions" \
+  "      - name: npm advisory policy (web lock)"
+assert_before \
+  "security completes the live npm gate before the first Trivy scan" \
+  "$SECURITY_BLOCK" \
+  "      - name: npm advisory policy (web lock)" \
+  "      - name: trivy filesystem scan (vuln + secret + IaC misconfig; HIGH/CRITICAL)"
+assert_text_not_contains \
+  "security removes the old inline npm audit step" \
+  "$SECURITY_BLOCK" \
+  "      - name: npm audit (web deps, from package-lock.json)"
+assert_text_not_contains \
+  "security does not invoke raw npm audit" \
+  "$SECURITY_BLOCK" \
+  "npm audit "
+assert_text_not_contains \
+  "security does not write an npm audit report under RUNNER_TEMP" \
+  "$SECURITY_BLOCK" \
+  'RUNNER_TEMP/npm-audit.json'
+assert_text_not_contains "security npm policy does not use jq" "$SECURITY_BLOCK" "jq"
+assert_text_not_contains "security npm policy does not disable errexit" "$SECURITY_BLOCK" "set +e"
+assert_text_not_contains "security npm policy does not suppress failures" "$SECURITY_BLOCK" "|| true"
+assert_text_not_contains "security job does not run floating pip-audit" "$SECURITY_BLOCK" "uvx pip-audit"
+assert_text_not_contains "security job cannot continue on operational pip-audit failures" "$SECURITY_BLOCK" "continue-on-error:"
+assert_text_contains \
+  "Trivy findings remain report-only" \
+  "$SECURITY_BLOCK" \
+  '          exit-code: "0"'
+assert_contains \
+  "pip-audit runner exports the frozen default graph without its security tool group" \
+  "$PIP_AUDIT_RUNNER" \
+  'uv export --frozen --no-group security --no-emit-project \'
+assert_contains \
+  "pip-audit executes only through the frozen security group" \
+  "$PIP_AUDIT_RUNNER" \
+  'uv run --frozen --only-group security pip-audit \'
+assert_not_contains \
+  "active workflow rejects floating pip-audit" \
+  "$WORKFLOW" \
+  "uvx pip-audit"
+assert_not_contains \
+  "runner keeps uv lock validation enabled" \
+  "$PIP_AUDIT_RUNNER" \
+  "UV_SKIP_WHEEL_FILENAME_CHECK"
 
 assert_contains \
   "web shards retain deterministic one-worker isolation" \

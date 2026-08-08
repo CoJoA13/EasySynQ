@@ -9,9 +9,10 @@ default:
 # --- setup ---
 setup:
     cd apps/api && uv sync
-    cd apps/web && npm install
-    pre-commit install
+    npm ci --prefix apps/web
+    npm ci --prefix packages/contracts --ignore-scripts
     just contracts
+    pre-commit install
 
 # --- contracts (OpenAPI-first; the source of truth) ---
 contracts:
@@ -19,6 +20,10 @@ contracts:
 
 contracts-check:
     bash scripts/gen-contracts.sh --check
+
+security-npm:
+    node --test scripts/tests/test-web-security-lock.mjs scripts/tests/test-npm-audit-runner.mjs scripts/tests/test-check-npm-audit.mjs scripts/tests/test-npm-audit-policy.mjs scripts/tests/test-router-rsc-policy.mjs
+    node scripts/check-npm-audit.mjs
 
 # --- dev servers ---
 api-dev:
