@@ -1,81 +1,16 @@
 # Slice history — shipped work (read on demand)
 
-> The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
-> also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0085` (next `0086`).** Code: https://github.com/CoJoA13/EasySynQ (`main` unprotected —
-> free-plan private repo; the PR + green CI + squash flow is convention/discipline).
-> (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
-> cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
-> `0075` the audit `scope_ref` index; M5 added `0076`'s import-owner snapshot; M7 added `0077`'s
-> sealed-pack retention policy and `0078`'s record content-hash version; M9 added `0079`'s
-> operational-install coherence repair; M10 added `0080`'s dead-field removal and query-path
-> indexes; Issue #360 added `0081`'s pending-purge authority binding; Issue #361 added `0082`'s
-> Evidence Pack legal-erasure status and source-event lineage; Issue #363 added `0083`'s
-> Evidence Pack build-attempt principal and source-IP context; S-clause7-ia added `0084`'s
-> clause-7 PDCA flip to DO; S-user-create added `0085`'s `USER_CREDENTIAL_ISSUED` audit event.)
+> Historical evidence only: this file preserves the running per-slice changelog and deep rationale that
+> also lives in squash-merge commits. It does not own current execution facts or current deferred work.
+> See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
+> [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
-## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
+## Current residual index
 
-> Deferred work that is deliberately **not** silently dropped. Each names why it was deferred and what
-> closing it needs. Clear an entry only when the work actually ships (link its PR).
+Current residuals were migrated without reclassification to
+[`docs/open-residuals.md`](open-residuals.md). The closed records immediately below remain here as dated
+evidence; older `Named residuals` text inside shipped entries is likewise a historical snapshot.
 
-- **Ingestion reaper — long dedup/propose stages have no incremental progress signal** (Batch 10, PR
-  [#367](https://github.com/CoJoA13/EasySynQ/pull/367)). `reap_stalled_runs`' backstop is anchored on
-  `repo.max_stage_progress`, but only `import_file` (scan) / `import_extract` / `import_classification`
-  are written **per batch**. `import_dupe_cluster` and `import_proposal_node` are written **once at stage
-  completion** (`replace_dedup_groups` / `replace_proposals`), so a long-running `Deduping`/`Proposing`
-  computation still rides the last classify row and could in principle be reaped while alive. Bounded in
-  practice: the ~30-minute source-root lock TTL is the effective liveness signal against a 6-hour
-  backstop, so lock-liveness protects a genuinely live worker first. **Closing it needs** a
-  heartbeat-written progress stamp (a new column or a per-batch row write) + a migration — a slice, not a
-  remediation fix. Raised by both Codex and diff-critic on #367; documented at `max_stage_progress`.
-  ⚠ Same root cause, also unclosed: a **re-delivered `Scanning` run** re-walks existing paths via
-  `upsert_file`, whose conflict-update does NOT touch `created_at`, so the anchor does not advance on a
-  replay either. Every one of these needs the same fix — a timestamp that advances per BATCH, not per
-  first-insert or per stage-completion.
-- **Resuming a PartiallyCommitted run can retry a FAILED opted-in family member** (Batch 10, PR #367).
-  The R10 commit gate is start-only (gating resumes strands the run — see the R10 amendment), so if a run
-  went `PartiallyCommitted` *because the effective member itself failed*, a resume retries and commits it
-  without honoring the opt-in. Note this corrects the in-code rationale's assumption that the effective
-  member is always already in the vault by then (`claim_commit_result` lets a failed ledger row later
-  succeed, and `_finalize` marks PartiallyCommitted on ANY item failure). **Closing it needs** the same
-  partial-state clear/acknowledge operation the resume gate would require — a new endpoint + a
-  review-state decision. Raised by Codex on #367.
-- **Revision-chain reconstruction (R10) is unimplemented and now refused at commit** (Batch 10, PR #367;
-  R10 amended 2026-07-25, owner-approved). The per-family opt-in is still accepted and stored, but a run
-  carrying one is refused with `422 revision_chain_reconstruction_unsupported`. **Closing it needs** the
-  actual provenance materialization slice; until then the amendment, the contract and the SPA must keep
-  saying so.
-- **CAPA `reject`/`changes_requested` are untested, and a multi-approver stage wedges on a single reject**
-  (surfaced in Batch 9, PR [#366](https://github.com/CoJoA13/EasySynQ/pull/366)). An ANY quorum only FAILs
-  once no candidate remains undecided, so one reject leaves the instance PENDING and the CAPA in
-  `RootCause` with a live approval instance — which blocks re-propose until every approver rejects.
-  `decide_dcr_approval` force-terminates on a negative; `decide_capa_action_plan` does not. **Closing it
-  needs** an owner decision on whether CAPA should mirror DCR's decisive-negative behaviour, plus the
-  missing tests.
-- **Audit checkpoint lineage — only the NEWEST off-host checkpoint is verified** (Batch 7, PR
-  [#364](https://github.com/CoJoA13/EasySynQ/pull/364)). A DB owner who rewrites the chain and lets the
-  15-minute beat re-anchor over the rewritten head passes verification, while the older immutable objects
-  that would expose it are never read. **Closing it needs** a Merkle-chained anchor lineage (each
-  checkpoint commits to the prior anchor's hash) — a checkpoint payload/format change + a register entry.
-- **`_run_verify_chain` has no orchestrator-level test coverage** (Batch 11, PR
-  [#368](https://github.com/CoJoA13/EasySynQ/pull/368); owner-acknowledged, deferred). The nightly
-  chain-verify task has had **zero** tests since S6 — this is pre-existing, not introduced by Batch 11
-  — but Batch 11 added real logic to it that is therefore unverified at the orchestrator level:
-  (a) the `emitted` → **`dirty`** commit decision (the commit must now also fire for
-  `integrity.alarm` rows, which write no audit row by design — keying it on the audit rows alone
-  would silently discard the missing-verify-key notifications); (b) the **missing-verify-key alarm**
-  itself (an `integrity.alarm` per org + the out-of-band channel, deliberately writing NO
-  `CHAIN_VERIFY_FAIL` row); (c) the **engine-inside-`try`** move with its conditional `dispose()`
-  (Codex P2 — a malformed DSN otherwise exits without the promised "could not run" alarm).
-  The individual pieces *are* covered: `_should_alarm_offhost` has a unit decision table including
-  the new `witness_required` / `unanchored_overdue` cases, `unanchored_is_overdue` has a
-  mutation-verified boundary test, and `emit_integrity_alarm` has integration cover. It is only the
-  orchestration that is untested. **Why it is not just an oversight:** `_run_verify_chain` builds its
-  own engine from `settings.database_url`, while the integration harness (`app_under_test`) only
-  repoints `get_sessionmaker()` — so no existing fixture can reach it. **Closing it needs** an
-  orchestrator harness (inject the sessionmaker, or a settings override the task honours) — a slice,
-  not a remediation fix. Raised and named by Codex + this batch's own review on #368.
 - ~~**The advisory response-contract baseline has eight pre-existing violations** (Batch 12.5,
   [PR #371](https://github.com/CoJoA13/EasySynQ/pull/371)).~~ **CLOSED in CR1**
   ([PR #404](https://github.com/CoJoA13/EasySynQ/pull/404)). Request schemas now stop invalid SHA,
@@ -85,43 +20,6 @@
   `deferred` and excluded by exact asserted operation identity rather than being mistaken for a live
   route. The authenticated disposable sweep is green across all **281 mounted operations**, so
   `contract-responses` is now a required workflow and branch-protection check.
-- **Pre-cap audit rows for a document with a >512-char identifier are unreachable via the
-  per-document history endpoint** (Batch 12; a deliberate trade, not an oversight). Batch 12 caps
-  `audit_event.scope_ref` on write so it cannot break its new btree index, and
-  `api/audit.py::document_scope_match` searches the ONE canonical capped key. Rows written *before*
-  that cap, for a document whose `identifier` exceeds `_SCOPE_REF_MAX_CHARS`, are stored under the
-  raw value and no longer match. **Why the obvious fix is wrong:** an intermediate revision also
-  searched the raw identifier as a compatibility operand, and Codex round 4 showed that reopens a
-  cross-document merge — a capped key is exactly `_SCOPE_REF_CAPPED_CHARS` characters, and a raw
-  identifier of that length is itself capped on write, so such a value in `scope_ref` is
-  irreducibly ambiguous: EITHER this document's own pre-cap row OR another document's post-cap key.
-  Nothing in the row distinguishes them, so searching it can return a **different document's audit
-  events**. A completeness gap on a pathological identifier is strictly preferable to a
-  cross-document leak. **Blast radius is nil for normal documents** — below the threshold the cap is
-  the identity function, so every ordinary row is untouched; this reaches only documents carrying a
-  pathologically long *imported legacy* identifier. **Closing it properly needs** a discriminator
-  that separates legacy raw keys from capped keys (e.g. a one-off backfill re-keying pre-cap rows,
-  or a `scope_ref_kind` column) — a migration over append-only, hash-chained rows, so a slice with
-  its own decision, not a remediation fix. Pinned by
-  `test_history_query_never_searches_another_documents_key`.
-- **`easysynq upgrade` has no `lock_timeout`, so a migration can convoy the live write path**
-  (Batch 12; owner-acknowledged. It was initially earmarked as “Batch 13 territory,” but Batch 13's
-  approved checklist is the three live deploy findings and deliberately does not change Alembic's
-  global failure semantics; this remains open for a dedicated upgrade-safety slice). The in-place
-  upgrade runs on a one-off worker **while api/worker/beat stay up** (`scripts/easysynq:82` →
-  `cli/upgrade.py`), no `lock_timeout`/`statement_timeout` is set anywhere in the repo, and
-  `migrations/env.py:108` wraps the whole run in ONE transaction — so any migration that takes a
-  table lock and queues behind an open writer holds everything until the entire `upgrade head`
-  commits. Surfaced by `0075`, the first revision to index the hottest, largest, monotonically
-  growing table: its build takes `ShareLock` on `audit_event` and every partition, and since nearly
-  every mutating request writes an `audit_event` in the same transaction, the write path convoys
-  (reads are unaffected — `AccessShareLock` does not conflict). CI is structurally blind to this:
-  the `migrations` job round-trips an **empty, single-connection** DB, so there is neither data to
-  index nor a concurrent writer. **Mitigated for now, not closed:** `docs/runbooks/backup-restore.md`
-  § Upgrade documents stop/start steps and a row-count pre-check. **Closing it needs** a
-  `lock_timeout` on the alembic connection — deliberately NOT taken inside a contract-housekeeping
-  PR, since it changes *every* migration's failure mode from "wait" to "abort". Found by the
-  `migration-reviewer` pass on Batch 12.
 - ~~**Audit integrity alarm policy** (Batch 7 → Batch 11).~~ **CLOSED in Batch 11** (owner-approved,
   all three parts). (1) The `integrity.alarm` operator notification is wired end-to-end on the
   `CHAIN_VERIFY_FAIL` detection signal — in-app + email to System Administrators, CRITICAL class so it
@@ -136,9 +34,6 @@
   tamper signal. ⚠ `enabled_at` is a v1 approximation — it is set at row creation (there is no in-app
   create/enable surface; provisioning is a direct operator INSERT), so an operator who later toggles a
   sink `enabled` false→true should bump it, or the grace window is measured from creation.
-- **Audit checkpoint key rotation** (Batch 7, PR #364). v1 is single-key; restoring a pre-rotation backup
-  after a future rotation would verify the historical signature against the current key. **Closing it
-  needs** a key-id on the checkpoint + a retained public-key history.
 
 ### S-upload-identity — exact staged-source identity through WORM promotion
 

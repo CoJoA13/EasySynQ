@@ -13,8 +13,8 @@ lacks). Clustering is on **exact-Jaccard re-verification** of LSH candidate pair
 estimate (doc 09 §7.1) — so the 0.85 boundary is deterministic.
 
 ``detect_near`` is ``async`` and takes an optional ``heartbeat`` coroutine the worker passes to keep
-the source-root lock alive across a long build (the CLAUDE.md "heartbeat DURING compute" rule); the
-in-process impl is pure CPU but awaits it on a fixed cadence.
+the ingestion source-root lock alive across a long build; the in-process impl is pure CPU but awaits
+it on a fixed cadence.
 """
 
 from __future__ import annotations

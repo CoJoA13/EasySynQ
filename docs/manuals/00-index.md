@@ -23,7 +23,9 @@ Use this order when two documents appear to disagree:
 3. These manuals and the operator runbooks describe how to use that shipped behavior.
 4. Numbered docs 01–18 contain the intended architecture and design; explicit implementation-status
    notes identify designed-but-unshipped portions.
-5. [`slice-history.md`](../slice-history.md) records shipped slices and deliberate residuals.
+5. [`current-status.md`](../current-status.md) is the dated execution snapshot;
+   [`open-residuals.md`](../open-residuals.md) is the current residual ledger; and
+   [`slice-history.md`](../slice-history.md) preserves shipped evidence.
 
 ## Current packaging boundary
 

@@ -136,17 +136,9 @@ docs/                 the full specification + operator runbooks
 
 ## Project status
 
-The original **MVP foundation (S0–S11)** and the subsequent ISO 9001 workflow families are delivered on
-protected `main`. The React application has routed working surfaces for document control, tasks,
-notifications, search, compliance, reporting, CAPA/complaints/NCRs, audits, ingestion, drift,
-objectives, management review, DCRs, improvement, risks, context, and interested parties.
-
-Records, retention/disposition, and Evidence Packs are implemented as API/worker capabilities and
-feed routed workflows such as CAPA evidence linking, but they do **not** yet have dedicated browser
-management screens. “Shipped” in the slice history therefore does not always mean “available as a
-standalone page in the SPA.”
-
-For the per-slice history and the deliberate v1 / v1.x deferrals, see [`CLAUDE.md`](CLAUDE.md) and [`docs/slice-history.md`](docs/slice-history.md).
+Read the dated [current execution snapshot](docs/current-status.md) for the shipped boundary and fresh
+verification baseline, the [open-residual ledger](docs/open-residuals.md) for current deliberately
+deferred work, and the [slice history](docs/slice-history.md) for per-slice narrative and evidence.
 
 ## Documentation
 

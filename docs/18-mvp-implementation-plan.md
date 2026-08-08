@@ -2,7 +2,8 @@
 
 > **Historical build-plan note.** This file records the MVP slice plan and its completion evidence;
 > migration heads, route inventory, and deferred labels inside the snapshot are not current
-> operations guidance. Use `CLAUDE.md` and `slice-history.md` for shipped history, and the
+> operations guidance. Use `current-status.md` for the dated execution snapshot,
+> `open-residuals.md` for current deferred work, `slice-history.md` for shipped history, and the
 > [manuals](manuals/00-index.md) plus [runbooks](runbooks/00-index.md) for current procedures.
 
 > **Status: APPROVED (2026-05-31) and SHIPPED — MVP COMPLETE.** All 11 ordered slices **S0–S7 + S7b/c/d,
@@ -33,7 +34,7 @@
 >
 > This document is the build guide; the
 > Decisions Register remains authoritative where they differ, and a few canon reconciliations were made during the
-> build (see CLAUDE.md "Current status" and the per-slice memory for the exact decisions, e.g. `documented_information`
+> build (see `current-status.md` and the per-slice history for exact shipped evidence, e.g. `documented_information`
 > collapse, `role_grant`/`role_assignment` naming, the INV-1/R25 partial indexes (built in S4 with `::enum`-cast
 > predicates to keep `alembic check` clean), folder_path-as-text, the S4 permission-key reconciliation noted in §1,
 > and the **S6 DB role separation** — the app/worker/beat run as a non-owner `easysynq_app` role + a dedicated
@@ -42,8 +43,8 @@
 > repo/monorepo layout + tooling, the Docker Compose dev stack, the Alembic schema derived from
 > `14-data-model.md`, the FastAPI/OpenAPI surface from `15-api-design.md`, the ordered vertical
 > slices, and a definition-of-done per slice. It stays strictly inside the four locked decisions
-> (D1–D4) and the **Decisions Register** (R1–R37 at MVP-authoring time; now R1–R63 — see
-> `decisions-register.md`), which supersedes any conflicting section text.
+> (D1–D4) and all registered decisions in the **Decisions Register**, which supersede any conflicting
+> section text.
 >
 > **How it was produced.** A fan-out of deep readers over the MVP-critical sections (03/04/07/08/11/12,
 > plus first-hand reads of 14/15/16) → eight per-area sub-plans → three adversarial critics
@@ -308,7 +309,8 @@ S0 walking skeleton ─┬─ S1 AuthN ── S2 AuthZ[AC#3,4] ── S3 Vault �
 ```
 
 > **Note — this table is the *original* plan, not a live status board.** The as-built shipped-state lives
-> in the top **Status** header + `CLAUDE.md` "Current status". During the build, **S8** was decomposed into
+> in the top **Status** header; the dated current snapshot is `current-status.md`. During the build,
+> **S8** was decomposed into
 > **S8a–S8d** (the setup latch + bootstrap-of-trust + the five gates + Users & Roles admin) and **S9** was
 > built as a **backend** epic **S9/S9b/S9c/S9d** (clause + process IA + the clause-aligned/by-process mirror
 > trees) ahead of the original "S9" **web-UI** track (Library + Document UI), which now defers to v1 — so the
@@ -388,8 +390,8 @@ S0 walking skeleton ─┬─ S1 AuthN ── S2 AuthZ[AC#3,4] ── S3 Vault �
 ## 11. Decisions for the owner (flagged; recommendation in **bold**)
 
 Most build choices are settled by the Register/docs and are baked into this plan. The following are the genuinely
-open ones; **none contradict D1–D4 or the Decisions Register** (R1–R37 at MVP-authoring time; now R1–R63 —
-see `decisions-register.md`)**.** The first three are the strategic ones worth an explicit call.
+open ones; **none contradict D1–D4 or any registered decision** (see `decisions-register.md`)**.** The
+first three are the strategic ones worth an explicit call.
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|

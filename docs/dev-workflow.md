@@ -6,8 +6,9 @@
 ## Branch + PR flow
 
 `main` is not technically protected on the current hosting plan; no-direct-push and review are
-project conventions. Do slice work on a `feat/sN-*` branch → open a PR → all 14 CI checks green →
-squash-merge. See `CLAUDE.md` for the current 10-job/14-check matrix.
+project conventions. Do slice work on a scoped branch → open a PR → require the current checks →
+squash-merge. See `docs/current-status.md` for the dated CI topology snapshot and the workflow files for
+executable truth.
 
 ## Toolchain (Linux CI / a Linux dev host)
 
@@ -34,7 +35,8 @@ hydrates both frozen npm trees before generating contracts.
 - Web: `cd apps/web && npm run lint && npm run build && npm test` (or the `/check-web` skill; `build`
   already runs `tsc --noEmit`).
 - npm dependency policy: run `just security-npm` after `just setup` to execute the policy regressions
-  and then the live high/critical gate against the committed web lock.
+  and then the live high/critical gate against the committed web lock. npm high/critical findings are
+  gated; pip-audit and Trivy findings are report-only.
 - **Docker-backed checks:** when `docker info` succeeds, run integration tests via testcontainers and
   migrations against a disposable PostgreSQL 16 instance. Backup/restore tests also require a
   version-matched PostgreSQL client (`pg_dump`/`pg_restore`). If group membership requires it, wrap

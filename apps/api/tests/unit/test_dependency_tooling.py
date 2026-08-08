@@ -164,19 +164,17 @@ def test_local_npm_security_recipe_is_the_exact_ci_mirror() -> None:
 
 
 def test_active_guidance_tracks_both_frozen_npm_locks_and_mixed_policy() -> None:
-    claude = (_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     readme = (_ROOT / "README.md").read_text(encoding="utf-8")
     dev_workflow = (_ROOT / "docs" / "dev-workflow.md").read_text(encoding="utf-8")
     fresh_linux = (_ROOT / "docs" / "runbooks" / "fresh-linux-setup.md").read_text(encoding="utf-8")
-
-    assert "packages/contracts/package-lock.json" in claude
-    assert "npm high/critical gated; pip-audit and Trivy findings report-only" in claude
-    assert "`security` is warn-only" not in claude
 
     assert "apps/web/package-lock.json" in dev_workflow
     assert "packages/contracts/package-lock.json" in dev_workflow
     assert "frozen" in dev_workflow
     assert "just security-npm" in dev_workflow
+    assert "npm high/critical findings are\n  gated" in dev_workflow
+    assert "pip-audit and Trivy findings are report-only" in dev_workflow
+    assert "`security` is warn-only" not in dev_workflow
 
     for setup_guide in (readme, fresh_linux):
         assert "just setup" in setup_guide

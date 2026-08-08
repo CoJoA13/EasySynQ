@@ -190,6 +190,119 @@ run_good_untracked_payload() {
   fi
 }
 
+require_live_text() {
+  local path="$1" pattern="$2" label="$3"
+  if [ -f "$ROOT/$path" ] && grep -Eq "$pattern" "$ROOT/$path"; then
+    ok "$label"
+  else
+    bad "$label"
+  fi
+}
+
+reject_live_text() {
+  local path="$1" pattern="$2" label="$3"
+  if [ -f "$ROOT/$path" ] && ! grep -Eq "$pattern" "$ROOT/$path"; then
+    ok "$label"
+  else
+    bad "$label"
+  fi
+}
+
+require_live_count() {
+  local path="$1" pattern="$2" expected="$3" label="$4" actual=0
+  if [ -f "$ROOT/$path" ]; then
+    actual="$(grep -Ec "$pattern" "$ROOT/$path" || true)"
+  fi
+  if [ "$actual" -eq "$expected" ]; then
+    ok "$label"
+  else
+    bad "$label (expected=$expected actual=$actual)"
+  fi
+}
+
+run_neutral_document_contract() {
+  local heading residual_id field
+
+  printf '== neutral authority documents ==\n'
+  for heading in \
+    'Authority and precedence' \
+    'Repository map' \
+    'Supported contributor workflow' \
+    'Tests and evidence' \
+    'Security and site-data boundaries' \
+    'Migrations and generated files' \
+    'Documentation truth' \
+    'Change handoff' \
+    'Tool-specific compatibility'; do
+    require_live_text AGENTS.md "^## ${heading}$" "AGENTS.md declares ${heading}"
+  done
+  require_live_text AGENTS.md 'just (setup|check|authority-check)' \
+    'AGENTS.md names stable contributor commands'
+  require_live_text AGENTS.md 'docs/(12-security-and-audit|decisions-register)\.md' \
+    'AGENTS.md links security authority'
+  require_live_text AGENTS.md 'alembic heads' \
+    'AGENTS.md names the migration-head command'
+  require_live_text AGENTS.md '(generated|generation)' \
+    'AGENTS.md states generated-file rules'
+  require_live_text AGENTS.md '(handoff|commit)' \
+    'AGENTS.md states change-handoff rules'
+
+  require_live_text docs/current-status.md '^easysynq_status_schema: 1$' \
+    'current status has the structured schema'
+  require_live_text docs/current-status.md '^# Current execution snapshot$' \
+    'current status owns the execution snapshot'
+  reject_live_text docs/current-status.md '^##[[:space:]]+RES-' \
+    'current status contains no residual records'
+
+  for residual_id in \
+    RES-INGEST-PROGRESS \
+    RES-INGEST-PARTIAL-OPTIN \
+    RES-R10-RECONSTRUCTION \
+    RES-CAPA-REJECT \
+    RES-AUDIT-CHECKPOINT-LINEAGE \
+    RES-AUDIT-VERIFY-ORCHESTRATOR \
+    RES-AUDIT-LONG-SCOPE-REF \
+    RES-UPGRADE-LOCK-TIMEOUT \
+    RES-AUDIT-KEY-ROTATION \
+    RES-RISK-CLAUSE-PICKER \
+    RES-RESTORE-SCRATCH-WORM-GUARD \
+    RES-AUDIT-EXPORT; do
+    require_live_text docs/open-residuals.md "^## ${residual_id}$" \
+      "open residuals registers ${residual_id}"
+  done
+  for field in Status Owner Source Reason 'Closure contract' 'Last reviewed'; do
+    require_live_count docs/open-residuals.md "^${field}:" 12 \
+      "every open residual includes ${field}"
+  done
+  reject_live_text docs/open-residuals.md \
+    '^(migration_head|api_unit_tests|web_tests|contract_tests|integration_passed|ci_jobs):' \
+    'open residuals contains no execution snapshot'
+
+  require_live_text docs/slice-history.md 'docs/open-residuals\.md' \
+    'slice history links the current residual ledger'
+  reject_live_text docs/slice-history.md '^##[[:space:]].*OPEN RESIDUALS' \
+    'slice history has no current OPEN section'
+  if [ -f "$ROOT/docs/slice-history.md" ] && \
+      ! sed -n '1,20p' "$ROOT/docs/slice-history.md" | \
+        grep -Eqi 'migration[[:space:]]+head|current[[:space:]]+head'; then
+    ok 'slice history preamble is history-only'
+  else
+    bad 'slice history preamble is history-only'
+  fi
+}
+
+run_claude_compatibility_contract() {
+  printf '== Claude compatibility document ==\n'
+  require_live_text CLAUDE.md 'AGENTS\.md' \
+    'Claude compatibility points to the contributor guide'
+  require_live_text CLAUDE.md 'docs/current-status\.md' \
+    'Claude compatibility points to the execution snapshot'
+  require_live_text CLAUDE.md 'docs/open-residuals\.md' \
+    'Claude compatibility points to the residual ledger'
+  require_live_text CLAUDE.md '(Claude-specific|\.claude/)' \
+    'Claude compatibility documents only Claude integration behavior'
+}
+
 printf '== repository authority contract ==\n'
 run_bad duplicate_status_key AUTHORITY_DUPLICATE_STATUS_KEY
 run_bad claude_current_heading AUTHORITY_CLAUDE_CURRENT_OWNER
@@ -210,12 +323,17 @@ run_good_untracked_payload
 run_good neutral_authority_split
 
 if [ "${1:-}" != "--fixtures-only" ]; then
+  run_neutral_document_contract
+fi
+
+if [ "${1:-}" != "--fixtures-only" ] && [ "${1:-}" != "--neutral-docs-only" ]; then
+  run_claude_compatibility_contract
   live_output="$("$GUARD" 2>&1)"
   live_status=$?
-  if [ "$live_status" -eq 1 ]; then
-    ok 'live tree remains diagnostically red until the authority migration'
+  if [ "$live_status" -eq 0 ] && [ "$live_output" = 'AUTHORITY_OK' ]; then
+    ok 'live authority tree is fully migrated'
   else
-    bad "live tree remains diagnostically red until the authority migration (status=$live_status output=$live_output)"
+    bad "live authority tree is fully migrated (status=$live_status output=$live_output)"
   fi
 fi
 

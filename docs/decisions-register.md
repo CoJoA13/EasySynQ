@@ -1796,8 +1796,8 @@ remediation could only limit further exposure, not retract what had already been
 no gate objects — the document reads as unusually thorough. The cost lands entirely on the customer,
 possibly months later, and cannot be rolled back.
 
-**Back-propagation:** `CLAUDE.md` critical rules (the session-start guard), `docs/runbooks/install-ubuntu-server.md`,
-and the deployment spec/plan templates.
+**Back-propagation:** `AGENTS.md` security and site-data boundaries,
+`docs/runbooks/install-ubuntu-server.md`, and the deployment spec/plan templates.
 
 Bumps the resolutions range **R1–R60 → R1–R61**.
 

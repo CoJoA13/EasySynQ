@@ -119,7 +119,7 @@ cd apps/api && uv run alembic heads
 
 ⚠ Deliberately **not** hard-coded here. A head number written into prose goes stale on the next
 migration and has repeatedly misled a later session into numbering a new revision wrong — always read
-it from Alembic, never from a doc (CLAUDE.md *Current status* carries the same warning). ⚠ Do **not**
+it from Alembic, never from a doc (`docs/current-status.md` is only a dated snapshot). ⚠ Do **not**
 substitute `ls migrations/versions/ | tail -1`: `_` sorts after the digits, so it returns
 `__pycache__` on any box that has run alembic or pytest. `alembic heads` also reports the real
 revision id (not a filename) and stays correct if the tree ever branches.
