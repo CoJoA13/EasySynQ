@@ -75,9 +75,14 @@ export function App() {
 
   const verifyFinalization = async (): Promise<void> => {
     setFinalizationVerification("checking");
-    const result = await setupState.refetch({ cancelRefetch: false });
-    if (result.status === "success" && result.data.setup_state === "OPERATIONAL") {
-      setFinalizationVerification("idle");
+    try {
+      const result = await setupState.refetch({ cancelRefetch: false });
+      if (result.status === "success" && result.data.setup_state === "OPERATIONAL") {
+        setFinalizationVerification("idle");
+        return;
+      }
+    } catch {
+      setFinalizationVerification("error");
       return;
     }
     setFinalizationVerification("error");

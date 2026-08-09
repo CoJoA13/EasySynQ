@@ -1,4 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
+import { QueryObserver } from "@tanstack/query-core";
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -9,7 +10,10 @@ import { AuthContext, type AuthState } from "./lib/auth";
 import { server } from "./test/msw/server";
 import { renderWithProviders, TEST_AUTH } from "./test/render";
 
-afterEach(() => sessionStorage.removeItem("es_auth_redirect"));
+afterEach(() => {
+  sessionStorage.removeItem("es_auth_redirect");
+  vi.restoreAllMocks();
+});
 
 function AppWithAuth({ auth }: { auth: AuthState }) {
   return (
@@ -158,6 +162,36 @@ test("contradictory IN_SETUP after finalization keeps the wizard hidden", async 
   expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   expect(stateReads).toBe(2);
   expect(finalizeCalls).toBe(1);
+});
+
+test("finalization verification recovers when the state refetch rejects", async () => {
+  const user = userEvent.setup();
+  let rejectVerification: ((reason?: unknown) => void) | undefined;
+  server.use(
+    http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state: "IN_SETUP" })),
+    http.get("/api/v1/setup", () => HttpResponse.json(FINALIZATION_READY_DETAIL)),
+    http.post("/api/v1/setup/finalize", () => HttpResponse.json({})),
+  );
+  vi.spyOn(QueryObserver.prototype, "refetch").mockImplementationOnce(
+    () =>
+      new Promise<never>((_resolve, reject) => {
+        rejectVerification = reject;
+      }),
+  );
+
+  renderWithProviders(<App />, { route: "/setup" });
+
+  await user.click(await screen.findByRole("button", { name: "Finalize setup" }));
+
+  expect(await screen.findByRole("status", { name: "Verifying setup" })).toBeInTheDocument();
+  await act(async () => {
+    rejectVerification?.(new Error("state verification rejected"));
+  });
+  expect(
+    await screen.findByRole("heading", { name: "Setup was saved, but could not be verified" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Welcome to EasySynQ" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Finalize setup" })).not.toBeInTheDocument();
 });
 
 test.each(["/setup", "/library"])(
