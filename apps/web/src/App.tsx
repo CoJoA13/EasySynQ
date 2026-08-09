@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { SetupWizard } from "./SetupWizard";
 import { AppShell } from "./app/shell/AppShell";
@@ -48,6 +48,8 @@ import { NotificationSettingsPage } from "./features/notifications/NotificationS
 import { useAuth } from "./lib/auth";
 import { useRouteChrome } from "./lib/routeChrome";
 
+type FinalizationVerification = "idle" | "checking" | "error";
+
 export function LegacyImportRedirect() {
   const { runId } = useParams();
   const { search } = useLocation();
@@ -68,6 +70,18 @@ export function App() {
     refetchOnReconnect: false,
     refetchInterval: false,
   });
+  const [finalizationVerification, setFinalizationVerification] =
+    useState<FinalizationVerification>("idle");
+
+  const verifyFinalization = async (): Promise<void> => {
+    setFinalizationVerification("checking");
+    const result = await setupState.refetch({ cancelRefetch: false });
+    if (result.status === "success" && result.data.setup_state === "OPERATIONAL") {
+      setFinalizationVerification("idle");
+      return;
+    }
+    setFinalizationVerification("error");
+  };
 
   const setupValue = setupState.data?.setup_state;
   const operational = setupValue === "OPERATIONAL";
@@ -96,6 +110,26 @@ export function App() {
           sessionStorage.removeItem("es_auth_redirect");
           await retry();
         }}
+        onReload={() => window.location.reload()}
+      />
+    );
+  }
+
+  if (finalizationVerification === "checking") {
+    return (
+      <SetupStartupScreen
+        status={{ kind: "loading", phase: "post-finalization" }}
+        onRetry={verifyFinalization}
+        onReload={() => window.location.reload()}
+      />
+    );
+  }
+
+  if (finalizationVerification === "error") {
+    return (
+      <SetupStartupScreen
+        status={{ kind: "error", phase: "post-finalization" }}
+        onRetry={verifyFinalization}
         onReload={() => window.location.reload()}
       />
     );
@@ -156,7 +190,7 @@ export function App() {
             <SetupWizard
               token={token}
               login={login}
-              onFinalized={() => void setupState.refetch()}
+              onFinalized={verifyFinalization}
             />
           )
         }

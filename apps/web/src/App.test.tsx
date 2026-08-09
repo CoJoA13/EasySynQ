@@ -52,6 +52,114 @@ function noTokenAuth(login = vi.fn(async () => undefined)): AuthState {
   };
 }
 
+const FINALIZATION_READY_DETAIL = {
+  setup_state: "IN_SETUP",
+  gates: {
+    "G-A": true,
+    "G-E": true,
+    "G-B": true,
+    "G-C": true,
+    "G-D": true,
+  },
+  org_profile: {
+    legal_name: "Example Quality Organization",
+    short_code: "EXAMPLE",
+    timezone: "America/Chicago",
+  },
+  backup: {
+    configured: true,
+    destination: "/var/lib/easysynq/backups",
+    last_restore_test_at: "2026-08-09T12:00:00Z",
+    last_restore_test_result: "PASS",
+  },
+  auth: {
+    configured: true,
+    method: "LOCAL",
+    last_test_at: "2026-08-09T12:00:00Z",
+  },
+  tamper_evident: false,
+};
+
+test("finalization verification recovers from a failed state read without replaying finalize", async () => {
+  const user = userEvent.setup();
+  let stateReads = 0;
+  let finalizeCalls = 0;
+  let finishVerificationRead: ((response: Response) => void) | undefined;
+  server.use(
+    http.get("/api/v1/setup/state", () => {
+      stateReads += 1;
+      if (stateReads === 1) return HttpResponse.json({ setup_state: "IN_SETUP" });
+      if (stateReads === 2) {
+        return new Promise<Response>((resolve) => {
+          finishVerificationRead = resolve;
+        });
+      }
+      return HttpResponse.json({ setup_state: "OPERATIONAL" });
+    }),
+    http.get("/api/v1/setup", () => HttpResponse.json(FINALIZATION_READY_DETAIL)),
+    http.post("/api/v1/setup/finalize", () => {
+      finalizeCalls += 1;
+      return HttpResponse.json({});
+    }),
+  );
+
+  renderWithProviders(<App />, { route: "/setup" });
+
+  await user.click(await screen.findByRole("button", { name: "Finalize setup" }));
+
+  expect(await screen.findByRole("status", { name: "Verifying setup" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Welcome to EasySynQ" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Finalize setup" })).not.toBeInTheDocument();
+  expect(finalizeCalls).toBe(1);
+
+  await act(async () => {
+    finishVerificationRead?.(HttpResponse.json({ detail: "unavailable" }, { status: 503 }));
+  });
+
+  expect(
+    await screen.findByRole("heading", { name: "Setup was saved, but could not be verified" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Welcome to EasySynQ" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Finalize setup" })).not.toBeInTheDocument();
+  expect(finalizeCalls).toBe(1);
+
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+
+  expect(await screen.findByRole("heading", { name: "QMS health" })).toBeInTheDocument();
+  expect(stateReads).toBe(3);
+  expect(finalizeCalls).toBe(1);
+});
+
+test("contradictory IN_SETUP after finalization keeps the wizard hidden", async () => {
+  const user = userEvent.setup();
+  let stateReads = 0;
+  let finalizeCalls = 0;
+  server.use(
+    http.get("/api/v1/setup/state", () => {
+      stateReads += 1;
+      return HttpResponse.json({ setup_state: "IN_SETUP" });
+    }),
+    http.get("/api/v1/setup", () => HttpResponse.json(FINALIZATION_READY_DETAIL)),
+    http.post("/api/v1/setup/finalize", () => {
+      finalizeCalls += 1;
+      return HttpResponse.json({});
+    }),
+  );
+
+  renderWithProviders(<App />, { route: "/setup" });
+
+  await user.click(await screen.findByRole("button", { name: "Finalize setup" }));
+
+  expect(
+    await screen.findByRole("heading", { name: "Setup was saved, but could not be verified" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Welcome to EasySynQ" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Finalize setup" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  expect(stateReads).toBe(2);
+  expect(finalizeCalls).toBe(1);
+});
+
 test.each(["/setup", "/library"])(
   "setup state 503 at %s fails closed without mounting setup or the shell",
   async (route) => {
