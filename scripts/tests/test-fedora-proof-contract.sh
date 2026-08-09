@@ -213,6 +213,10 @@ if [[ -f $HOST_SCRIPT ]]; then
     'guest source is archived from the recorded evidence commit'
   osinfo_uses=$(grep -cF -- '--osinfo "$osinfo"' <<<"$host_source")
   assert_status 2 "$osinfo_uses" 'both libvirt phases use the one validated osinfo selection'
+  memory_uses=$(grep -cF -- '--memory 8192' <<<"$host_source")
+  assert_status 2 "$memory_uses" 'both libvirt phases assign the exact 8 GiB guest memory'
+  assert_not_contains "$host_source" '--memory 12288' \
+    'Fedora proof never retains the superseded 12 GiB guest allocation'
   readiness_call='fedora_proof_check_libvirt_ready /usr/bin/virsh'
   if [[ $host_source == *"$readiness_call"* \
       && $host_source == *"$readiness_call"*'fedora_proof_run_lifecycle \'* ]]; then
@@ -990,6 +994,22 @@ if [[ -f $RUNBOOK ]]; then
   assert_contains "$runbook" \
     'test "$(getfacl -cpn -- "$STAGED_MEDIA")" = "$EXPECTED_MEDIA_ACL"' \
     'retained-media cleanup asserts rather than prints the effective ACL'
+  assert_not_contains "$runbook" 'at least 16 GiB of available' \
+    'runbook no longer demands 16 GiB available solely for the proof guest'
+  assert_contains "$runbook" '16 GB-class host' \
+    'runbook describes the practical proof-host memory class'
+  assert_contains "$runbook" '8 GiB transient guest' \
+    'runbook documents the exact disposable guest allocation'
+  assert_contains "$runbook" 'reasonable headroom for the host and libvirt' \
+    'runbook preserves host memory headroom around the transient guest'
+  assert_contains "$runbook" 'released after each transient domain stops' \
+    'runbook explains that proof-guest RAM is temporary'
+  assert_contains "$runbook" 'Docker is the normal daily development isolation boundary' \
+    'runbook distinguishes daily Docker development from VM acceptance'
+  assert_contains "$runbook" 'one-time clean Fedora Workstation' \
+    'runbook scopes the VM to the clean Fedora acceptance boundary'
+  assert_contains "$runbook" 'shipped S profile and the default Hyper-V appliance' \
+    'runbook aligns the proof allocation with shipped deployment defaults'
 fi
 
 printf '%d Fedora proof contract checks passed; %d failed\n' "$passed" "$failed"

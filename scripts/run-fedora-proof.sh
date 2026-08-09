@@ -1033,7 +1033,7 @@ fedora_proof_run_lifecycle() (
       --connect "$FEDORA_PROOF_CONNECT" \
       --transient \
       --name "$vm_name" \
-      --memory 12288 \
+      --memory 8192 \
       --vcpus 4 \
       --cpu host-passthrough \
       --osinfo "$osinfo" \
@@ -1069,7 +1069,7 @@ fedora_proof_run_lifecycle() (
       --connect "$FEDORA_PROOF_CONNECT" \
       --transient \
       --name "$vm_name" \
-      --memory 12288 \
+      --memory 8192 \
       --vcpus 4 \
       --cpu host-passthrough \
       --osinfo "$osinfo" \

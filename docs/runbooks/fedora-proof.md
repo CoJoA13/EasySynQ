@@ -5,6 +5,11 @@ qcow2 disk, installs the official Fedora Workstation 44 live payload in a transi
 runs the repository acceptance contract with SELinux enforcing, and removes the exact VM and disk. It
 does not replace the fast structural tests.
 
+Docker is the normal daily development isolation boundary.
+This transient VM is only the one-time clean Fedora Workstation acceptance boundary for SELinux,
+systemd, bootstrap idempotence, system libvirt, and the complete repository gate; it is not a second
+everyday development environment.
+
 A structural-contract pass is not a Fedora proof pass. Record `PASS` only after this complete command
 finishes on the immutable evidence commit and its retained log has been reviewed. When the media or a
 usable libvirt host is unavailable, report the gate as `PENDING` or `BLOCKED`; do not invent a date,
@@ -26,9 +31,12 @@ The installed system must report `VARIANT_ID=workstation`, `VERSION_ID=44`, `x86
 
 ## Proof-host prerequisites
 
-Use a separate Fedora proof host with hardware virtualization enabled, at least 16 GiB of available
-RAM, 4 available CPUs, and roughly 100 GiB of free disk space. These virtualization packages are
-deliberately not installed by `scripts/bootstrap-fedora-dev.sh`:
+Use a separate Fedora proof host with hardware virtualization enabled: a 16 GB-class host (or larger),
+4 available CPUs, and roughly 100 GiB of free disk space. The harness assigns an exact
+8 GiB transient guest for both installation and runtime. This matches the shipped S profile and the default Hyper-V appliance.
+On a 16 GB-class host this leaves reasonable headroom for the host and libvirt, and the guest RAM is
+released after each transient domain stops. These virtualization packages are deliberately not
+installed by `scripts/bootstrap-fedora-dev.sh`:
 
 ```bash
 sudo dnf install libvirt-daemon-kvm libvirt-daemon-config-network libvirt-client \
