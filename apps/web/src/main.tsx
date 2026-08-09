@@ -5,6 +5,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
+import { ApplicationErrorBoundary } from "./app/errors/ApplicationErrorBoundary";
+import { ApplicationErrorScreen } from "./app/errors/ApplicationErrorScreen";
 import "./index.css";
 import { AuthProvider } from "./lib/auth";
 import { theme } from "./theme/mantine";
@@ -16,13 +18,15 @@ if (!root) throw new Error("#root not found");
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <MantineProvider theme={theme} defaultColorScheme="auto">
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <AuthProvider>
-            <App />
-          </AuthProvider>
-        </BrowserRouter>
-      </QueryClientProvider>
+      <ApplicationErrorBoundary fallback={() => <ApplicationErrorScreen />}>
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter>
+            <AuthProvider>
+              <App />
+            </AuthProvider>
+          </BrowserRouter>
+        </QueryClientProvider>
+      </ApplicationErrorBoundary>
     </MantineProvider>
   </React.StrictMode>,
 );
