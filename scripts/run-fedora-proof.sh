@@ -4,6 +4,7 @@
 FEDORA_PROOF_MARKER=easysynq-fedora-proof-v1
 FEDORA_PROOF_CONNECT=qemu:///system
 FEDORA_PROOF_ROOT=/var/tmp
+FEDORA_PROOF_INSTALL_DEADLINE_SECONDS=3600
 
 usage() {
   printf '%s\n' \
@@ -146,6 +147,52 @@ fedora_proof_validate_private_acl() {
   }
 }
 
+fedora_proof_validate_private_stream() {
+  local path=$1 kind=$2 canonical owner links actual expected
+  case "$kind" in
+    log) [[ -f $path ]] || return 1 ;;
+    fifo) [[ -p $path ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  [[ $path == /* && ! -L $path ]] || return 1
+  canonical=$(/usr/bin/readlink -e "$path") || return 1
+  owner=$(/usr/bin/stat -c '%u' "$path") || return 1
+  links=$(/usr/bin/stat -c '%h' "$path") || return 1
+  actual=$(/usr/bin/getfacl -cpn -- "$path") || return 1
+  expected=$'user::rw-\ngroup::---\nother::---'
+  [[ $canonical == "$path" && $owner == "$EUID" && $links == 1 && $actual == "$expected" ]] || {
+    printf 'fedora-proof: private %s stream identity or ACL mismatch: %s\n' "$kind" "$path" >&2
+    return 1
+  }
+}
+
+fedora_proof_launch_client_logged() {
+  local log_file=$1 console_fifo=$2 console_fd=$3 fd_target
+  shift 3
+  (( $# > 0 )) || return 1
+  [[ $console_fd =~ ^[0-9]+$ ]] || return 1
+  fedora_proof_validate_private_stream "$log_file" log || return 1
+  fedora_proof_validate_private_stream "$console_fifo" fifo || return 1
+  fd_target=$(/usr/bin/readlink -e "/proc/$BASHPID/fd/$console_fd") || return 1
+  [[ $fd_target == "$console_fifo" ]] || {
+    printf '%s\n' 'fedora-proof: console input fd does not identify the private FIFO' >&2
+    return 1
+  }
+  "$@" <&"$console_fd" >>"$log_file" 2>&1 &
+  FEDORA_PROOF_LAUNCHED_PID=$!
+}
+
+fedora_proof_media_owner_allowed() {
+  local actual=$1 caller_uid=$2 role=$3
+  [[ $actual =~ ^[0-9]+$ && $caller_uid =~ ^[0-9]+$ && $caller_uid == "$EUID" ]] || return 1
+  [[ $role == installer || $role == workstation ]] || return 1
+  [[ $actual == "$caller_uid" ]] || {
+    printf 'fedora-proof: retained %s owner drifted from the caller; refusing reuse or success\n' \
+      "$role" >&2
+    return 1
+  }
+}
+
 fedora_proof_validate_staged_media() {
   local root=$1 caller_uid=$2 path=$3 role=$4 expected_sha=${5,,} canonical owner links actual
   fedora_proof_validate_root "$root" || return 1
@@ -158,7 +205,8 @@ fedora_proof_validate_staged_media() {
   canonical=$(/usr/bin/readlink -e "$path") || return 1
   owner=$(/usr/bin/stat -c '%u' "$path") || return 1
   links=$(/usr/bin/stat -c '%h' "$path") || return 1
-  [[ $canonical == "$path" && $owner == "$caller_uid" && $links == 1 ]] || {
+  fedora_proof_media_owner_allowed "$owner" "$caller_uid" "$role" || return 1
+  [[ $canonical == "$path" && $links == 1 ]] || {
     printf 'fedora-proof: staged %s identity mismatch\n' "$role" >&2
     return 1
   }
@@ -361,6 +409,53 @@ fedora_proof_stop_client_exact() {
   return 1
 }
 
+fedora_proof_wait_client_deadline_exact() {
+  local client_pid=$1 client_starttime=$2 client_parent=$3
+  local timer_pid=$4 timer_starttime=$5 timer_parent=$6
+  local identity state parent starttime completed= wait_status identity_spec
+  local pid expected_start expected_parent label
+  FEDORA_PROOF_WAIT_CLIENT_FINISHED=0
+  FEDORA_PROOF_WAIT_TIMER_FINISHED=0
+  for identity_spec in \
+    "$client_pid $client_starttime $client_parent client" \
+    "$timer_pid $timer_starttime $timer_parent deadline"; do
+    read -r pid expected_start expected_parent label <<<"$identity_spec"
+    identity=$(fedora_proof_read_client_identity "$pid") || {
+      printf 'fedora-proof: %s identity is unreadable before bounded wait\n' "$label" >&2
+      return 1
+    }
+    read -r state parent starttime <<<"$identity"
+    [[ $parent == "$expected_parent" && $starttime == "$expected_start" ]] || {
+      printf 'fedora-proof: %s identity mismatch before bounded wait\n' "$label" >&2
+      return 1
+    }
+  done
+
+  if wait -n -p completed "$client_pid" "$timer_pid"; then
+    wait_status=0
+  else
+    wait_status=$?
+  fi
+  if [[ $completed == "$client_pid" ]]; then
+    FEDORA_PROOF_WAIT_CLIENT_FINISHED=1
+    fedora_proof_stop_client_exact \
+      "$timer_pid" "$timer_starttime" "$timer_parent" 20 || return 1
+    FEDORA_PROOF_WAIT_TIMER_FINISHED=1
+    return "$wait_status"
+  fi
+  if [[ $completed == "$timer_pid" ]]; then
+    FEDORA_PROOF_WAIT_TIMER_FINISHED=1
+    fedora_proof_stop_client_exact \
+      "$client_pid" "$client_starttime" "$client_parent" 100 || return 1
+    FEDORA_PROOF_WAIT_CLIENT_FINISHED=1
+    printf 'fedora-proof: exact %s-second installation deadline expired\n' \
+      "$FEDORA_PROOF_INSTALL_DEADLINE_SECONDS" >&2
+    return 124
+  fi
+  printf '%s\n' 'fedora-proof: bounded client wait was interrupted before an exact child completed' >&2
+  return 1
+}
+
 fedora_proof_reset_uuid_record() {
   local uuid_file=$1 qemu_uid=$2
   fedora_proof_validate_private_acl "$uuid_file" "$qemu_uid" || return 1
@@ -489,6 +584,23 @@ fedora_proof_remove_owned_file() {
   /usr/bin/rm -- "$path"
 }
 
+fedora_proof_remove_owned_fifo() {
+  local workdir=$1 path=$2 proof_root=$3 real
+  fedora_proof_validate_owned_workdir "$workdir" "$proof_root" || return 1
+  [[ $path == "$workdir/console-input" ]] || return 1
+  [[ -e $path || -L $path ]] || return 0
+  [[ -p $path && ! -L $path ]] || {
+    printf 'fedora-proof cleanup: refusing unsafe console FIFO %s\n' "$path" >&2
+    return 1
+  }
+  real=$(/usr/bin/readlink -e "$path") || return 1
+  [[ $real == "$path" && $(/usr/bin/stat -c '%u:%h' "$path") == "$EUID:1" ]] || {
+    printf 'fedora-proof cleanup: console FIFO identity mismatch %s\n' "$path" >&2
+    return 1
+  }
+  /usr/bin/rm -- "$path"
+}
+
 fedora_proof_destroy_domain_exact() {
   local workdir=$1 vm_name=$2 expected_uuid=$3 disk=$4 proof_root=$5 qemu_uid=$6 actual_uuid
   local type device target source found_disk=0
@@ -521,6 +633,63 @@ fedora_proof_destroy_domain_exact() {
   done
   printf '%s\n' 'fedora-proof cleanup: exact domain did not stop; refusing disk removal' >&2
   return 1
+}
+
+fedora_proof_append_diagnostic_command() {
+  local log_file=$1 label=$2 virsh_bin=$3
+  shift 3
+  printf 'FEDORA_PROOF_DIAGNOSTIC %s\n' "$label" >>"$log_file"
+  /usr/bin/timeout -s TERM -k 1 5 \
+    "$virsh_bin" --connect "$FEDORA_PROOF_CONNECT" "$@" 2>&1 \
+    | /usr/bin/head -n 40 >>"$log_file" || true
+}
+
+fedora_proof_capture_bounded_diagnostics() {
+  local workdir=$1 vm_name=$2 expected_uuid=$3 disk=$4 proof_root=$5 qemu_uid=$6
+  local log_file=$7 virsh_bin=${8:-/usr/bin/virsh} actual_uuid type device target source
+  local found_disk=0
+  fedora_proof_validate_private_stream "$log_file" log || return 1
+  [[ $virsh_bin == /* && -x $virsh_bin ]] || return 1
+  printf '%s\n' FEDORA_PROOF_DIAGNOSTICS_BEGIN >>"$log_file"
+  if [[ -z $expected_uuid ]] \
+      || ! fedora_proof_validate_cleanup_identity \
+        "$workdir" "$vm_name" "$disk" "$proof_root" "$qemu_uid" active \
+      || ! "$virsh_bin" --connect "$FEDORA_PROOF_CONNECT" dominfo "$vm_name" >/dev/null 2>&1; then
+    printf '%s\n' 'FEDORA_PROOF_DIAGNOSTIC domain-identity-unavailable' \
+      FEDORA_PROOF_DIAGNOSTICS_END >>"$log_file"
+    return 0
+  fi
+  actual_uuid=$("$virsh_bin" --connect "$FEDORA_PROOF_CONNECT" domuuid "$vm_name") || {
+    printf '%s\n' 'FEDORA_PROOF_DIAGNOSTIC domain-uuid-unavailable' \
+      FEDORA_PROOF_DIAGNOSTICS_END >>"$log_file"
+    return 1
+  }
+  [[ $actual_uuid == "$expected_uuid" ]] || {
+    printf '%s\n' 'FEDORA_PROOF_DIAGNOSTIC domain-uuid-mismatch' \
+      FEDORA_PROOF_DIAGNOSTICS_END >>"$log_file"
+    return 1
+  }
+  while read -r type device target source; do
+    [[ $type == Type || $type == ---* ]] && continue
+    if [[ $type == file && $device == disk && $source == "$disk" ]]; then
+      found_disk=1
+    fi
+  done < <("$virsh_bin" --connect "$FEDORA_PROOF_CONNECT" domblklist "$vm_name" --details)
+  if (( found_disk == 0 )); then
+    printf '%s\n' 'FEDORA_PROOF_DIAGNOSTIC domain-disk-mismatch' \
+      FEDORA_PROOF_DIAGNOSTICS_END >>"$log_file"
+    return 1
+  fi
+  fedora_proof_append_diagnostic_command "$log_file" domstate "$virsh_bin" domstate "$vm_name"
+  fedora_proof_append_diagnostic_command "$log_file" vda-block-stat "$virsh_bin" \
+    domblkstat "$vm_name" vda
+  fedora_proof_append_diagnostic_command "$log_file" sda-block-stat "$virsh_bin" \
+    domblkstat "$vm_name" sda
+  fedora_proof_append_diagnostic_command "$log_file" sdb-block-stat "$virsh_bin" \
+    domblkstat "$vm_name" sdb
+  fedora_proof_append_diagnostic_command "$log_file" memory-stat "$virsh_bin" dommemstat "$vm_name"
+  fedora_proof_append_diagnostic_command "$log_file" vcpu-info "$virsh_bin" vcpuinfo "$vm_name"
+  printf '%s\n' FEDORA_PROOF_DIAGNOSTICS_END >>"$log_file"
 }
 
 fedora_proof_grant_lifecycle_acls() {
@@ -666,6 +835,9 @@ require_host_tools() {
     /usr/bin/git \
     /usr/bin/tar \
     /usr/bin/flock \
+    /usr/bin/head \
+    /usr/bin/timeout \
+    /usr/bin/mkfifo \
     /usr/bin/openssl \
     /usr/bin/setfacl \
     /usr/bin/getfacl \
@@ -801,7 +973,8 @@ fedora_proof_run_lifecycle() (
   local qemu_uid=${10} proof_root=${11}
   local workdir= disk= rendered_ks= private_key= public_key= known_hosts= repo_files=
   local uuid_file= marker_file= vm_name_file= log_dir= log_file= vm_uuid= virt_pid= guest_ip=
-  local virt_starttime= virt_parent_pid= cleanup_failed=0
+  local console_fifo= console_input_fd= deadline_pid= deadline_starttime= deadline_parent_pid=
+  local virt_starttime= virt_parent_pid= cleanup_failed=0 lifecycle_status=0
 
   log_dir=$repo_root/.fedora-proof-logs
   if [[ -e $log_dir || -L $log_dir ]]; then
@@ -818,7 +991,9 @@ fedora_proof_run_lifecycle() (
     return 1
   }
   : >"$log_file"
+  /usr/bin/setfacl -b -- "$log_file"
   /usr/bin/chmod 0600 "$log_file"
+  fedora_proof_validate_private_stream "$log_file" log || return 1
 
   fedora_proof_validate_root "$proof_root" || return 1
   workdir=$(/usr/bin/mktemp -d "$proof_root/easysynq-fedora-proof.XXXXXX") || return 1
@@ -851,13 +1026,14 @@ fedora_proof_run_lifecycle() (
   public_key=$workdir/id_ed25519.pub
   known_hosts=$workdir/known_hosts
   repo_files=$workdir/repo-files
+  console_fifo=$workdir/console-input
   printf '%s\n' "$FEDORA_PROOF_MARKER" >"$marker_file"
   printf '%s\n' "$vm_name" >"$vm_name_file"
   /usr/bin/chmod 0600 "$marker_file" "$vm_name_file"
   fedora_proof_validate_owned_workdir "$workdir" "$proof_root" || return 1
 
   cleanup_all() {
-    local expected_uuid= file base
+    local failure_status=${1:-0} expected_uuid= file base
     trap - EXIT INT TERM
     if [[ -n ${virt_pid:-} ]]; then
       fedora_proof_stop_client_exact \
@@ -866,11 +1042,31 @@ fedora_proof_run_lifecycle() (
       virt_starttime=
       virt_parent_pid=
     fi
+    if [[ -n ${deadline_pid:-} ]]; then
+      fedora_proof_stop_client_exact \
+        "$deadline_pid" "$deadline_starttime" "$deadline_parent_pid" 20 || cleanup_failed=1
+      deadline_pid=
+      deadline_starttime=
+      deadline_parent_pid=
+    fi
+    if [[ -n ${console_input_fd:-} ]]; then
+      exec {console_input_fd}>&-
+      console_input_fd=
+    fi
     if [[ -n $workdir && -d $workdir ]]; then
       if [[ -f $uuid_file && ! -L $uuid_file ]]; then
         IFS= read -r expected_uuid <"$uuid_file" || expected_uuid=
       else
         expected_uuid=
+      fi
+      if (( failure_status != 0 )) && [[ -n $disk && -f $disk ]]; then
+        fedora_proof_capture_bounded_diagnostics \
+          "$workdir" "$vm_name" "$expected_uuid" "$disk" "$proof_root" "$qemu_uid" \
+          "$log_file" /usr/bin/virsh || {
+            printf '%s\n' \
+              'fedora-proof: bounded diagnostics were unavailable; continuing exact cleanup' \
+              >>"$log_file"
+          }
       fi
       if [[ -n $vm_name && -n $disk && -f $disk ]] \
           && /usr/bin/virsh --connect "$FEDORA_PROOF_CONNECT" dominfo "$vm_name" >/dev/null 2>&1; then
@@ -896,6 +1092,10 @@ fedora_proof_run_lifecycle() (
         done
       fi
       if (( cleanup_failed == 0 )); then
+        fedora_proof_remove_owned_fifo \
+          "$workdir" "$console_fifo" "$proof_root" || cleanup_failed=1
+      fi
+      if (( cleanup_failed == 0 )); then
         fedora_proof_remove_owned_file \
           "$workdir" "$vm_name_file" vm-name "$proof_root" || cleanup_failed=1
       fi
@@ -916,18 +1116,24 @@ fedora_proof_run_lifecycle() (
   finish() {
     local status=$?
     trap - EXIT INT TERM
-    cleanup_all || status=1
+    cleanup_all "$status" || status=1
     exit "$status"
   }
   interrupted() {
     local status=$1
     trap - EXIT INT TERM
-    cleanup_all || status=1
+    cleanup_all "$status" || status=1
     exit "$status"
   }
   trap finish EXIT
   trap 'interrupted 130' INT
   trap 'interrupted 143' TERM
+
+  /usr/bin/mkfifo -- "$console_fifo"
+  /usr/bin/setfacl -b -- "$console_fifo"
+  /usr/bin/chmod 0600 "$console_fifo"
+  fedora_proof_validate_private_stream "$console_fifo" fifo || return 1
+  exec {console_input_fd}<>"$console_fifo"
 
   printf 'Fedora proof VM: %s\nFedora proof disk: %s\nFedora proof log: %s\n' \
     "$vm_name" "$disk" "$log_file" | /usr/bin/tee -a "$log_file"
@@ -990,12 +1196,24 @@ fedora_proof_run_lifecycle() (
   done
 
   start_domain_and_record_uuid() {
-    local phase=$1
-    shift
+    local phase=$1 phase_deadline=$2
+    shift 2
     fedora_proof_reset_uuid_record "$uuid_file" "$qemu_uid" || return 1
     vm_uuid=
-    "$@" >>"$log_file" 2>&1 &
-    virt_pid=$!
+    deadline_pid=
+    deadline_starttime=
+    deadline_parent_pid=
+    if (( phase_deadline > 0 )); then
+      /usr/bin/sleep "$phase_deadline" &
+      deadline_pid=$!
+      deadline_parent_pid=$BASHPID
+      deadline_starttime=$(fedora_proof_capture_client_identity \
+        "$deadline_pid" "$deadline_parent_pid") || return 1
+    fi
+    FEDORA_PROOF_LAUNCHED_PID=
+    fedora_proof_launch_client_logged "$log_file" "$console_fifo" "$console_input_fd" "$@" \
+      || return 1
+    virt_pid=$FEDORA_PROOF_LAUNCHED_PID
     virt_parent_pid=$BASHPID
     virt_starttime=$(fedora_proof_capture_client_identity "$virt_pid" "$virt_parent_pid") || {
       if ! kill -0 "$virt_pid" 2>/dev/null; then
@@ -1028,7 +1246,7 @@ fedora_proof_run_lifecycle() (
     printf '%s\n' "$vm_uuid" >"$uuid_file"
   }
 
-  start_domain_and_record_uuid install \
+  start_domain_and_record_uuid install "$FEDORA_PROOF_INSTALL_DEADLINE_SECONDS" \
     /usr/bin/virt-install \
       --connect "$FEDORA_PROOF_CONNECT" \
       --transient \
@@ -1039,32 +1257,53 @@ fedora_proof_run_lifecycle() (
       --osinfo "$osinfo" \
       --network network=default,model=virtio \
       --disk "path=$disk,format=qcow2,bus=virtio" \
-      --disk "path=$staged_workstation_iso,device=cdrom,bus=sata,readonly=on" \
+      --disk "path=$staged_workstation_iso,device=cdrom,bus=sata,readonly=on,source.seclabel0.model=dac,source.seclabel0.relabel=no" \
       --location "$staged_installer_iso" \
       --initrd-inject "$rendered_ks" \
-      --extra-args "inst.ks=file:/ks.cfg inst.text console=ttyS0,115200n8" \
+      --extra-args "inst.ks=file:/ks.cfg inst.text inst.notmux console=ttyS0,115200n8" \
+      --xml './devices/disk[2]/source/seclabel/@model=dac' \
+      --xml './devices/disk[2]/source/seclabel/@relabel=no' \
+      --console pty,target.type=serial \
       --graphics none \
-      --noautoconsole \
-      --wait=-1
-  if ! wait "$virt_pid"; then
+      --autoconsole text \
+      --debug \
+      --wait=-1 || return 1
+  if fedora_proof_wait_client_deadline_exact \
+      "$virt_pid" "$virt_starttime" "$virt_parent_pid" \
+      "$deadline_pid" "$deadline_starttime" "$deadline_parent_pid"; then
+    lifecycle_status=0
+  else
+    lifecycle_status=$?
+  fi
+  if (( FEDORA_PROOF_WAIT_CLIENT_FINISHED == 1 )); then
     virt_pid=
     virt_starttime=
     virt_parent_pid=
-    printf 'fedora-proof: installation failed; see %s\n' "$log_file" >&2
-    return 1
   fi
-  virt_pid=
-  virt_starttime=
-  virt_parent_pid=
+  if (( FEDORA_PROOF_WAIT_TIMER_FINISHED == 1 )); then
+    deadline_pid=
+    deadline_starttime=
+    deadline_parent_pid=
+  fi
+  if (( lifecycle_status != 0 )); then
+    printf 'fedora-proof: installation failed; see %s\n' "$log_file" >&2
+    return "$lifecycle_status"
+  fi
   if /usr/bin/virsh --connect "$FEDORA_PROOF_CONNECT" dominfo "$vm_name" >/dev/null 2>&1; then
     printf '%s\n' 'fedora-proof: transient installer domain remained active after Kickstart shutdown' >&2
     return 1
   fi
+  fedora_proof_validate_staged_media \
+    "$proof_root" "$EUID" "$staged_installer_iso" installer "$installer_sha" || return 1
+  fedora_proof_validate_staged_media \
+    "$proof_root" "$EUID" "$staged_workstation_iso" workstation "$workstation_sha" || return 1
+  fedora_proof_validate_exact_acl "$staged_installer_iso" "$qemu_uid" media || return 1
+  fedora_proof_validate_exact_acl "$staged_workstation_iso" "$qemu_uid" media || return 1
   fedora_proof_validate_cleanup_identity \
     "$workdir" "$vm_name" "$disk" "$proof_root" "$qemu_uid" cleanup || return 1
   fedora_proof_validate_exact_acl "$disk" "$qemu_uid" disk || return 1
 
-  start_domain_and_record_uuid runtime \
+  start_domain_and_record_uuid runtime 0 \
     /usr/bin/virt-install \
       --connect "$FEDORA_PROOF_CONNECT" \
       --transient \
@@ -1076,9 +1315,11 @@ fedora_proof_run_lifecycle() (
       --network network=default,model=virtio \
       --disk "path=$disk,format=qcow2,bus=virtio" \
       --import \
+      --console pty,target.type=serial \
       --graphics none \
-      --noautoconsole \
-      --wait=-1
+      --autoconsole text \
+      --debug \
+      --wait=-1 || return 1
 
   for _ in {1..600}; do
     guest_ip=$(

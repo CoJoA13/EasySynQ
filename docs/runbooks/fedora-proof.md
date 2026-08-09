@@ -161,12 +161,17 @@ resolves the Fedora `qemu` service uid through both `getent` and `id`, resets ea
 caller-only base ACL, grants only that uid effective `r--`, and validates the full SHA-256 again. A
 different pre-existing file, symlink, hard link, owner, hash, or masked/extra ACL fails closed without
 being overwritten. The files remain after success or failure so a rerun can reuse the same verified
-bytes.
+bytes. For each retained ISO source, the domain XML disables only libvirt DAC ownership relabeling;
+SELinux/sVirt labeling remains enabled. This keeps the two direct files caller-owned after both
+transient domains without requiring `sudo`, `chown`, a home-directory grant, or broader permissions.
 
 Allow approximately 60–120 minutes, depending on network, CPU, storage, and container-image caches.
-The harness prints its unique VM name, exact temporary disk path, and retained evidence log before VM
-creation. Logs are written with mode `0600` under `.fedora-proof-logs/` and are ignored by Git through
-the repository's `*.log` rule.
+The installer has a hard 3600-second installation deadline; exceeding it is a proof failure, not an
+invitation to leave an unbounded guest running. The harness prints its unique VM name, exact temporary
+disk path, and retained evidence log before VM creation. Logs are written with mode `0600` under
+`.fedora-proof-logs/` and are ignored by Git through the repository's `*.log` rule. The detached
+launcher keeps a private no-input stream open while the serial text console and virt-install debug output
+append to that log, so Anaconda progress remains observable without a terminal or interactive stdin.
 
 Kickstart preserves the installed resolver target, replaces it with Anaconda's DHCP resolver state
 for the networked `%post`, and restores the original target afterward. Provisioning the SSH
@@ -197,6 +202,13 @@ exact domain is destroyed, cleanup requires libvirt to restore caller ownership 
 two lifecycle ACLs, takes the lock, runs `qemu-img check`, or deletes anything. A mismatch, unexpected
 file, unrestored owner, active lock, or failed domain stop makes cleanup fail closed and retains the
 exact target; it never escalates privileges or broadens the deletion.
+
+On a timeout, signal, or other failed run, the same `0600` log retains the serial/debug stream and
+Kickstart's deterministic phase or `%onerror` marker. Before destroying a safely identified active
+domain, cleanup also appends a bounded pre-delete diagnostic bundle containing only capped libvirt
+state, vCPU, memory, and exact disk statistics. It does not copy the rendered Kickstart, credentials,
+private key, qcow2, or unbounded guest logs. The diagnostic evidence therefore survives ordinary exact
+disk cleanup; an unsafe domain identity is recorded as unavailable and is never inspected by guess.
 
 An ordinary rerun always receives a new name and directory, so it does not reuse a failed guest. If a
 run reports a cleanup refusal, keep the printed log and inspect only the printed VM/disk:

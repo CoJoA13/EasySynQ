@@ -77,6 +77,10 @@ failure_workdir=
 storage_probe=$fixture_root/virsh-storage-probe
 acl_probe=$fixture_root/acl-probe
 client_probe=$fixture_root/client-probe
+console_fifo=$fixture_root/console-input
+console_log=$fixture_root/console.log
+diagnostic_probe=$fixture_root/virsh-diagnostic-probe
+diagnostic_log=$fixture_root/diagnostic.log
 acl_workdir=
 stage_temp=
 unsafe_stage_root=$fixture_root/unsafe-stage-root
@@ -89,6 +93,7 @@ test_qemu_uid=65534
 # proves qemu is a distinct non-root uid; these filesystem cases exercise the real ACL implementation.
 test_acl_uid=$EUID
 cleanup_fixture() {
+  local virt_log=$fixture_root/virt-cache/virt-manager/virt-install.log
   [[ $fixture_root == "${TMPDIR:-/tmp}"/easysynq-fedora-contract.* ]] || return 1
   [[ -d $fixture_root && ! -L $fixture_root ]] || return 1
   rm -f -- \
@@ -100,7 +105,8 @@ cleanup_fixture() {
     "$fixture_root/owned/vm-name" \
     "$fixture_root/owned/.easysynq-fedora-proof" 2>/dev/null || true
   rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" "$storage_probe" \
-    "$acl_probe" "$client_probe" "$staged_installer" "$staged_workstation" \
+    "$acl_probe" "$client_probe" "$console_fifo" "$console_log" "$diagnostic_probe" \
+    "$diagnostic_log" "$staged_installer" "$staged_workstation" \
     2>/dev/null || true
   if [[ -n $stage_temp \
       && $stage_temp == "$fixture_root"/easysynq-fedora-proof-media-*.part.* \
@@ -150,9 +156,8 @@ cleanup_fixture() {
   rmdir "$failure_tmp" 2>/dev/null || true
   rmdir "$fixture_root/Fedora-Workstation-Live-44-directory.x86_64.iso" 2>/dev/null || true
   rmdir "$fixture_root/owned" 2>/dev/null || true
-  rmdir "$fixture_root" 2>/dev/null || true
   if [[ -n $owned_cleanup \
-      && $owned_cleanup == "${TMPDIR:-/tmp}"/easysynq-fedora-proof.* \
+      && $owned_cleanup == "$fixture_root"/easysynq-fedora-proof.* \
       && -d $owned_cleanup \
       && ! -L $owned_cleanup ]]; then
     rm -f -- \
@@ -161,6 +166,16 @@ cleanup_fixture() {
       "$owned_cleanup/.easysynq-fedora-proof" 2>/dev/null || true
     rmdir "$owned_cleanup" 2>/dev/null || true
   fi
+  if [[ -e $virt_log || -L $virt_log ]]; then
+    [[ -f $virt_log && ! -L $virt_log \
+        && $(/usr/bin/readlink -e "$virt_log") == "$virt_log" \
+        && $(/usr/bin/stat -c '%u:%h' "$virt_log") == "$EUID:1" ]] || return 1
+    /usr/bin/rm -- "$virt_log" || return 1
+  fi
+  rmdir "$fixture_root/virt-cache/virt-manager/boot" 2>/dev/null || true
+  rmdir "$fixture_root/virt-cache/virt-manager" 2>/dev/null || true
+  rmdir "$fixture_root/virt-cache" 2>/dev/null || true
+  rmdir "$fixture_root" 2>/dev/null || true
 }
 trap cleanup_fixture EXIT
 
@@ -207,7 +222,7 @@ if [[ -f $HOST_SCRIPT ]]; then
   assert_contains "$host_source" '--location "$staged_installer_iso"' \
     'staged Fedora Everything media is the Anaconda location'
   assert_contains "$host_source" \
-    '--disk "path=$staged_workstation_iso,device=cdrom,bus=sata,readonly=on"' \
+    '--disk "path=$staged_workstation_iso,device=cdrom,bus=sata,readonly=on,source.seclabel0.model=dac,source.seclabel0.relabel=no"' \
     'staged Fedora Workstation media is attached read-only'
   assert_contains "$host_source" 'archive --format=tar "$evidence_commit"' \
     'guest source is archived from the recorded evidence commit'
@@ -248,6 +263,40 @@ if [[ -f $HOST_SCRIPT ]]; then
     'private stage creation is bounded by its own cleanup subshell'
   assert_contains "$host_source" 'trap cleanup_private_stage EXIT' \
     'private stage creation cleans a partial inode on every return path'
+  assert_contains "$host_source" 'FEDORA_PROOF_INSTALL_DEADLINE_SECONDS=3600' \
+    'installer deadline is exactly 3600 seconds'
+  assert_contains "$host_source" '--autoconsole text' \
+    'virt-install streams the explicit text console'
+  assert_not_contains "$host_source" '--noautoconsole' \
+    'Fedora proof has no blind no-autoconsole phase'
+  assert_contains "$host_source" '--debug' \
+    'virt-install debug output is retained with the serial console'
+  assert_contains "$host_source" 'inst.text inst.notmux console=ttyS0,115200n8' \
+    'Anaconda keeps ttyS0 and disables multiplexing for observable progress'
+  assert_contains "$host_source" 'source.seclabel0.model=dac,source.seclabel0.relabel=no' \
+    'the explicit Workstation source disables only libvirt DAC ownership relabel'
+  assert_contains "$host_source" "./devices/disk[2]/source/seclabel/@model=dac" \
+    'the location-generated installer source gets the exact DAC model override'
+  assert_contains "$host_source" "./devices/disk[2]/source/seclabel/@relabel=no" \
+    'the location-generated installer source cannot drift retained-media ownership'
+  assert_not_contains "$host_source" 'model=selinux' \
+    'media ownership stability never disables SELinux or sVirt relabeling'
+  postlaunch_installer_owner_checks=$(grep -cF -- \
+    '"$proof_root" "$EUID" "$staged_installer_iso" installer "$installer_sha"' \
+    <<<"$host_source")
+  postlaunch_workstation_owner_checks=$(grep -cF -- \
+    '"$proof_root" "$EUID" "$staged_workstation_iso" workstation "$workstation_sha"' \
+    <<<"$host_source")
+  assert_status 2 "$postlaunch_installer_owner_checks" \
+    'installer ownership/hash identity is revalidated after its transient domain stops'
+  assert_status 2 "$postlaunch_workstation_owner_checks" \
+    'Workstation-media ownership/hash identity is revalidated after its transient domain stops'
+  if [[ $host_source == *'fedora_proof_capture_bounded_diagnostics '* \
+      && $host_source == *'fedora_proof_capture_bounded_diagnostics '*'fedora_proof_destroy_domain_exact '* ]]; then
+    pass
+  else
+    fail 'bounded diagnostics run before exact domain destruction on failure'
+  fi
 
   output=$(
     "$HOST_SCRIPT" \
@@ -624,6 +673,19 @@ if [[ -f $HOST_SCRIPT ]]; then
     fail 'host script exposes active-versus-cleanup disk ownership policy'
   fi
 
+  if declare -F fedora_proof_media_owner_allowed >/dev/null; then
+    output=$(fedora_proof_media_owner_allowed "$EUID" "$EUID" installer 2>&1)
+    status=$?
+    assert_status 0 "$status" 'retained media accepts its exact caller owner'
+    output=$(fedora_proof_media_owner_allowed "$test_qemu_uid" "$EUID" workstation 2>&1)
+    status=$?
+    assert_status 1 "$status" 'reproduced qemu-owned retained media drift fails closed'
+    assert_contains "$output" 'retained workstation owner drifted from the caller' \
+      'retained-media ownership drift has an exact actionable diagnostic'
+  else
+    fail 'host script exposes retained-media owner stability policy'
+  fi
+
   client_pid=
   if declare -F fedora_proof_client_state_valid >/dev/null; then
     fedora_proof_client_state_valid t
@@ -701,6 +763,80 @@ if [[ -f $HOST_SCRIPT ]]; then
     fail 'host script exposes exact bounded launched-client cleanup seams'
   fi
 
+  if declare -F fedora_proof_wait_client_deadline_exact >/dev/null; then
+    deadline_parent=$BASHPID
+    /usr/bin/sleep 30 &
+    deadline_client_pid=$!
+    deadline_client_start=$(fedora_proof_capture_client_identity \
+      "$deadline_client_pid" "$deadline_parent")
+    /usr/bin/sleep 1 &
+    deadline_timer_pid=$!
+    deadline_timer_start=$(fedora_proof_capture_client_identity \
+      "$deadline_timer_pid" "$deadline_parent")
+    deadline_started=$SECONDS
+    fedora_proof_wait_client_deadline_exact \
+      "$deadline_client_pid" "$deadline_client_start" "$deadline_parent" \
+      "$deadline_timer_pid" "$deadline_timer_start" "$deadline_parent" \
+      >"$client_probe" 2>&1
+    status=$?
+    output=$(<"$client_probe")
+    deadline_elapsed=$((SECONDS - deadline_started))
+    assert_status 124 "$status" 'installer deadline returns the standard timeout status'
+    (( deadline_elapsed <= 3 )) \
+      && pass || fail "installer deadline behavior is bounded (elapsed=${deadline_elapsed}s)"
+    if [[ ! -e /proc/$deadline_client_pid && ! -e /proc/$deadline_timer_pid ]]; then
+      pass
+    else
+      fail 'deadline terminates and reaps only the exact client and exact timer children'
+      kill -TERM "$deadline_client_pid" "$deadline_timer_pid" 2>/dev/null || true
+      wait "$deadline_client_pid" "$deadline_timer_pid" 2>/dev/null || true
+    fi
+    assert_contains "$output" 'exact 3600-second installation deadline expired' \
+      'deadline failure names the production installation bound'
+  else
+    fail 'host script exposes behavior-level exact client deadline handling'
+  fi
+
+  if declare -F fedora_proof_launch_client_logged >/dev/null; then
+    /usr/bin/mkfifo -- "$console_fifo"
+    /usr/bin/chmod 0600 "$console_fifo"
+    : >"$console_log"
+    /usr/bin/chmod 0600 "$console_log"
+    exec {console_fd}<>"$console_fifo"
+    FEDORA_PROOF_LAUNCHED_PID=
+    fedora_proof_launch_client_logged "$console_log" "$console_fifo" "$console_fd" \
+      /usr/bin/bash -c '
+        if IFS= read -r -t 0.1 _; then
+          printf "%s\n" FEDORA_PROOF_TEST_UNEXPECTED_INPUT
+          exit 1
+        else
+          status=$?
+        fi
+        if (( status <= 128 )); then
+          printf "%s\n" FEDORA_PROOF_TEST_STDIN_EOF
+          exit 1
+        fi
+        printf "%s\n" FEDORA_PROOF_TEST_DETACHED_STDIN_SAFE
+        printf "%s\n" FEDORA_PROOF_TEST_SERIAL_MARKER
+      '
+    status=$?
+    assert_status 0 "$status" 'detached logged client launches through the private FIFO seam'
+    console_pid=$FEDORA_PROOF_LAUNCHED_PID
+    wait "$console_pid"
+    status=$?
+    exec {console_fd}>&-
+    assert_status 0 "$status" 'detached client keeps stdin open without consuming caller input'
+    console_output=$(<"$console_log")
+    assert_contains "$console_output" 'FEDORA_PROOF_TEST_DETACHED_STDIN_SAFE' \
+      'detached no-stdin execution does not disconnect the text console'
+    assert_contains "$console_output" 'FEDORA_PROOF_TEST_SERIAL_MARKER' \
+      'client stdout reaches the retained proof log'
+    assert_not_contains "$console_output" 'FEDORA_PROOF_TEST_STDIN_EOF' \
+      'private FIFO prevents an EOF-driven virsh console disconnect'
+  else
+    fail 'host script exposes behavior-level detached console logging'
+  fi
+
   if declare -F fedora_proof_reset_uuid_record >/dev/null; then
     printf '%s\n' 11111111-1111-1111-1111-111111111111 >"$acl_probe"
     /usr/bin/setfacl -b -- "$acl_probe"
@@ -745,6 +881,51 @@ if [[ -f $HOST_SCRIPT ]]; then
       : >"$disk"
     fi
     : >"$outside"
+
+    if declare -F fedora_proof_capture_bounded_diagnostics >/dev/null; then
+      diagnostic_uuid=11111111-2222-3333-4444-555555555555
+      : >"$diagnostic_log"
+      /usr/bin/chmod 0600 "$diagnostic_log"
+      printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'case "$*" in' \
+        '  *" dominfo $FEDORA_DIAG_VM") printf "%s\\n" "Id: 1" ;;' \
+        '  *" domuuid $FEDORA_DIAG_VM") printf "%s\\n" "$FEDORA_DIAG_UUID" ;;' \
+        '  *" domblklist $FEDORA_DIAG_VM --details")' \
+        '    printf "%s\\n" "Type Device Target Source" "file disk vda $FEDORA_DIAG_DISK" ;;' \
+        '  *" domstate $FEDORA_DIAG_VM") printf "%s\\n" running ;;' \
+        '  *" domblkstat $FEDORA_DIAG_VM "*)' \
+        '    for i in {1..80}; do printf "diag-line-%d\\n" "$i"; done ;;' \
+        '  *" dommemstat $FEDORA_DIAG_VM") printf "%s\\n" "actual 8388608" ;;' \
+        '  *" vcpuinfo $FEDORA_DIAG_VM") printf "%s\\n" "VCPU: 0" ;;' \
+        '  *) exit 2 ;;' \
+        'esac' >"$diagnostic_probe"
+      /usr/bin/chmod 0700 "$diagnostic_probe"
+      export FEDORA_DIAG_VM="$first_name" FEDORA_DIAG_UUID="$diagnostic_uuid" \
+        FEDORA_DIAG_DISK="$disk"
+      original_connect=$FEDORA_PROOF_CONNECT
+      FEDORA_PROOF_CONNECT=test:///default
+      fedora_proof_capture_bounded_diagnostics \
+        "$owned" "$first_name" "$diagnostic_uuid" "$disk" "$fixture_root" \
+        "$test_qemu_uid" "$diagnostic_log" "$diagnostic_probe"
+      status=$?
+      FEDORA_PROOF_CONNECT=$original_connect
+      unset FEDORA_DIAG_VM FEDORA_DIAG_UUID FEDORA_DIAG_DISK
+      assert_status 0 "$status" 'exact active domain produces a bounded diagnostic bundle'
+      diagnostic_output=$(<"$diagnostic_log")
+      assert_contains "$diagnostic_output" 'FEDORA_PROOF_DIAGNOSTICS_BEGIN' \
+        'diagnostic bundle has a deterministic begin marker'
+      assert_contains "$diagnostic_output" 'FEDORA_PROOF_DIAGNOSTICS_END' \
+        'diagnostic bundle has a deterministic end marker'
+      assert_contains "$diagnostic_output" 'diag-line-1' \
+        'diagnostic bundle retains bounded device progress'
+      assert_not_contains "$diagnostic_output" 'diag-line-41' \
+        'diagnostic command output is capped before retention'
+      assert_status 600 "$(/usr/bin/stat -c '%a' "$diagnostic_log")" \
+        'diagnostic retention preserves the 0600 log boundary'
+    else
+      fail 'host script exposes behavior-level bounded pre-delete diagnostics'
+    fi
 
     output=$(fedora_proof_validate_cleanup_identity \
       "$owned" "$first_name" "$outside" "$fixture_root" "$test_qemu_uid" cleanup 2>&1)
@@ -869,7 +1050,9 @@ if [[ -f $HOST_SCRIPT ]]; then
       lifecycle_workstation=$staged_workstation
     fi
     original_connect=$FEDORA_PROOF_CONNECT
+    original_install_deadline=$FEDORA_PROOF_INSTALL_DEADLINE_SECONDS
     FEDORA_PROOF_CONNECT=test:///default
+    FEDORA_PROOF_INSTALL_DEADLINE_SECONDS=1
     output=$(
       TMPDIR="$failure_tmp" XDG_CACHE_HOME="$fixture_root/virt-cache" \
         fedora_proof_run_lifecycle \
@@ -880,6 +1063,7 @@ if [[ -f $HOST_SCRIPT ]]; then
     )
     status=$?
     FEDORA_PROOF_CONNECT=$original_connect
+    FEDORA_PROOF_INSTALL_DEADLINE_SECONDS=$original_install_deadline
     failure_disk=${output#*Fedora proof disk: }
     failure_disk=${failure_disk%%$'\n'*}
     failure_workdir=${failure_disk%/root.qcow2}
@@ -902,10 +1086,23 @@ if [[ -f $HOST_SCRIPT ]]; then
     assert_not_exists "$failure_workdir/id_ed25519" 'failure cleanup removes the exact private key'
     assert_not_exists "$failure_workdir/.easysynq-fedora-proof" \
       'failure cleanup removes the exact ownership marker'
+    assert_not_exists "$failure_workdir/console-input" \
+      'failure cleanup removes the exact private console FIFO'
     [[ -f $staged_installer ]] \
       && pass || fail 'failure cleanup retains the exact staged installer'
     [[ -f $staged_workstation ]] \
       && pass || fail 'failure cleanup retains the exact staged Workstation media'
+    assert_status "$EUID" "$(/usr/bin/stat -c '%u' "$staged_installer")" \
+      'failed lifecycle leaves retained installer caller-owned'
+    assert_status "$EUID" "$(/usr/bin/stat -c '%u' "$staged_workstation")" \
+      'failed lifecycle leaves retained Workstation media caller-owned'
+    failure_log_output=$(<"$failure_log")
+    assert_contains "$failure_log_output" 'FEDORA_PROOF_DIAGNOSTICS_BEGIN' \
+      'failed lifecycle preserves a diagnostic begin marker before disk deletion'
+    assert_contains "$failure_log_output" 'FEDORA_PROOF_DIAGNOSTIC domain-identity-unavailable' \
+      'failed pre-domain lifecycle records bounded diagnostic unavailability'
+    assert_contains "$failure_log_output" 'FEDORA_PROOF_DIAGNOSTICS_END' \
+      'failed lifecycle preserves a diagnostic end marker after exact cleanup'
     if ! /usr/bin/virsh --connect test:///default dominfo "$failure_vm" >/dev/null 2>&1; then
       pass
     else
@@ -970,6 +1167,24 @@ if [[ -f $KICKSTART ]]; then
     'Kickstart restores the installed resolver target after networked post steps'
   assert_contains "$kickstart" 'selinux --enforcing' 'Kickstart requests enforcing SELinux'
   assert_contains "$kickstart" 'shutdown' 'Kickstart ends the transient install phase cleanly'
+  for phase_marker in \
+    'stage2-start' \
+    'cd-scan-start' \
+    'cd-selected device=' \
+    'payload-stat path=/run/install/workstation-payload/LiveOS/squashfs.img bytes=' \
+    'resolver-prep-start' \
+    'resolver-prep-end' \
+    'dnf-start' \
+    'dnf-end' \
+    'install-complete' \
+    'anaconda-error'; do
+    assert_contains "$kickstart" "EASYSYNQ_PROOF_PHASE $phase_marker" \
+      "Kickstart serial evidence includes bounded $phase_marker progress"
+  done
+  assert_contains "$kickstart" '%onerror --log=/tmp/easysynq-proof-onerror.log' \
+    'Kickstart emits an explicit bounded Anaconda error section'
+  assert_not_contains "$kickstart" 'cat /tmp/' \
+    'Kickstart diagnostics never dump an unbounded installer log'
 fi
 
 if [[ -f $RUNBOOK ]]; then
@@ -1010,6 +1225,16 @@ if [[ -f $RUNBOOK ]]; then
     'runbook scopes the VM to the clean Fedora acceptance boundary'
   assert_contains "$runbook" 'shipped S profile and the default Hyper-V appliance' \
     'runbook aligns the proof allocation with shipped deployment defaults'
+  assert_contains "$runbook" 'hard 3600-second installation deadline' \
+    'runbook documents the exact installer deadline'
+  assert_contains "$runbook" 'serial text console and virt-install debug output' \
+    'runbook explains the retained observable Anaconda progress'
+  assert_contains "$runbook" 'bounded pre-delete diagnostic bundle' \
+    'runbook explains failure diagnostics survive exact disk cleanup'
+  assert_contains "$runbook" 'disables only libvirt DAC ownership relabeling' \
+    'runbook documents retained-media ownership stability without weakening sVirt'
+  assert_contains "$runbook" 'SELinux/sVirt labeling remains enabled' \
+    'runbook preserves the SELinux media boundary explicitly'
 fi
 
 printf '%d Fedora proof contract checks passed; %d failed\n' "$passed" "$failed"
