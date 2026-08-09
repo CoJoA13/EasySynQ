@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type User, UserManager } from "oidc-client-ts";
+import { StrictMode } from "react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { AuthProvider, safeReturnTo, useAuth } from "./auth";
@@ -179,6 +180,38 @@ it("owns manager creation within each provider instance", async () => {
   expect(UserManager).toHaveBeenCalledTimes(2);
 });
 
+it("restarts an aborted Strict Mode bootstrap instead of reusing its manager promise", async () => {
+  vi.mocked(globalThis.fetch)
+    .mockImplementationOnce(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("aborted", "AbortError")),
+            { once: true },
+          );
+        }),
+    )
+    .mockImplementationOnce(async () =>
+      Response.json({ issuer: "https://id.test/strict", client_id: "web", audience: "api" }),
+    );
+
+  render(
+    <StrictMode>
+      <MemoryRouter initialEntries={["/"]}>
+        <AuthProvider>
+          <Probe />
+        </AuthProvider>
+      </MemoryRouter>
+    </StrictMode>,
+  );
+
+  await waitFor(() => expect(screen.getByText(/status:ready/)).toBeInTheDocument());
+  expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  expect(UserManager).toHaveBeenCalledTimes(1);
+  expect(getUser).toHaveBeenCalledTimes(1);
+});
+
 it.each([
   ["HTTP", new Response("", { status: 503 })],
   ["JSON", new Response("{", { status: 200 })],
@@ -328,6 +361,37 @@ it("redirect recovery waits for an explicit retry and never replays callback par
   });
 });
 
+it("treats an OIDC error callback as callback recovery and strips it before retry", async () => {
+  window.history.pushState(
+    {},
+    "",
+    "/settings/notifications?error=access_denied&state=callback-secret",
+  );
+  signinRedirectCallback.mockRejectedValueOnce(new Error("access_denied state=callback-secret"));
+  render(
+    <MemoryRouter initialEntries={["/settings/notifications"]}>
+      <AuthProvider>
+        <Probe />
+        <ActionsProbe />
+      </AuthProvider>
+    </MemoryRouter>,
+  );
+
+  await waitFor(() => expect(screen.getByText(/status:error/)).toBeInTheDocument());
+  expect(readFailure()).toEqual({ kind: "callback", recovery: "redirect" });
+  expect(getUser).not.toHaveBeenCalled();
+  expect(window.location.search).toBe("");
+  expect(document.body).not.toHaveTextContent("access_denied");
+  expect(document.body).not.toHaveTextContent("callback-secret");
+  expect(signinRedirect).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole("button", { name: "retry" }));
+  await waitFor(() => expect(signinRedirect).toHaveBeenCalledTimes(1));
+  expect(signinRedirect).toHaveBeenCalledWith({
+    state: { returnTo: "/settings/notifications" },
+  });
+});
+
 it("keeps retry single-flight when recovery is activated twice synchronously", async () => {
   const retryConfig = deferred<Response>();
   vi.mocked(globalThis.fetch)
@@ -386,15 +450,26 @@ it("does not let a timed-out manager creation replace a successful retry manager
   expect(signinRedirect).toHaveBeenCalledTimes(1);
 });
 
-it("deduplicates manager creation shared by bootstrap and a concurrent action", async () => {
-  const config = deferred<Response>();
-  vi.mocked(globalThis.fetch).mockReturnValueOnce(config.promise);
+it("a redirect superseding manager creation retires the aborted promise", async () => {
+  vi.mocked(globalThis.fetch)
+    .mockImplementationOnce(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("aborted", "AbortError")),
+            { once: true },
+          );
+        }),
+    )
+    .mockImplementationOnce(async () =>
+      Response.json({ issuer: "https://id.test/redirect", client_id: "web", audience: "api" }),
+    );
   renderAuthActions();
   fireEvent.click(screen.getByRole("button", { name: "login" }));
-  expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-
-  config.resolve(Response.json({ issuer: "https://id.test", client_id: "web", audience: "api" }));
   await waitFor(() => expect(signinRedirect).toHaveBeenCalledTimes(1));
+
+  expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   expect(UserManager).toHaveBeenCalledTimes(1);
 });
 
@@ -498,6 +573,28 @@ it("times out stored-session loading at the exact deadline and ignores a late us
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
+  expect(screen.getByText(/token:none/)).toBeInTheDocument();
+  expect(readFailure()).toEqual({ kind: "timeout", recovery: "bootstrap" });
+});
+
+it("ignores a userLoaded event emitted after bootstrap has timed out", async () => {
+  vi.useFakeTimers();
+  const stored = deferred<User | null>();
+  getUser.mockReturnValueOnce(stored.promise);
+  renderAuthProbe();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(addUserLoaded).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15_000);
+  });
+  expect(readFailure()).toEqual({ kind: "timeout", recovery: "bootstrap" });
+
+  act(() => emitUserLoaded({ access_token: "late-event-token" }));
+
   expect(screen.getByText(/token:none/)).toBeInTheDocument();
   expect(readFailure()).toEqual({ kind: "timeout", recovery: "bootstrap" });
 });

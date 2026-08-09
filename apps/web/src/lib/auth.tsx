@@ -133,6 +133,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const navRef = useRef(navigate);
   navRef.current = navigate;
 
+  const retireManagerCreation = useCallback(() => {
+    if (!managerPromiseRef.current) return;
+    managerEpochRef.current += 1;
+    managerPromiseRef.current = null;
+  }, []);
+
   // Manager ownership is provider-local: the real root retains one memory-only manager while every
   // test/provider render starts from an isolated cache. In-flight construction is shared.
   const loadManager = useCallback((signal: AbortSignal): Promise<UserManager> => {
@@ -170,6 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const generation = generationRef.current + 1;
       generationRef.current = generation;
       activeAttemptRef.current?.cancel();
+      retireManagerCreation();
       setStatus({ kind: "loading", operation: "bootstrap" });
 
       if (fresh) {
@@ -192,11 +199,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             unsubscribeRef.current?.();
             unsubscribeRef.current = manager.events.addUserLoaded((loadedUser: User) => {
-              if (managerRef.current === manager) setUser(loadedUser);
+              if (generationRef.current === generation && managerRef.current === manager) {
+                setUser(loadedUser);
+              }
             });
 
             const params = new URLSearchParams(window.location.search);
-            if (params.has("code") && params.has("state")) {
+            const hasCallback = params.has("state") && (params.has("code") || params.has("error"));
+            if (hasCallback) {
               stage.current = "callback";
               const callbackUser = await manager.signinRedirectCallback();
               return {
@@ -222,6 +232,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (stage.current === "callback") {
           window.history.replaceState({}, "", window.location.pathname);
         }
+        generationRef.current += 1;
+        unsubscribeRef.current?.();
+        unsubscribeRef.current = null;
         const failure: AuthFailure =
           error instanceof AuthAttemptTimedOut
             ? { kind: "timeout", recovery: "bootstrap" }
@@ -236,7 +249,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (activeAttemptRef.current === attempt) activeAttemptRef.current = null;
       }
     },
-    [loadManager],
+    [loadManager, retireManagerCreation],
   );
 
   useEffect(() => {
@@ -245,15 +258,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       generationRef.current += 1;
       activeAttemptRef.current?.cancel();
       activeAttemptRef.current = null;
+      retireManagerCreation();
       unsubscribeRef.current?.();
       unsubscribeRef.current = null;
     };
-  }, [runBootstrap]);
+  }, [retireManagerCreation, runBootstrap]);
 
   const login = useCallback(async (): Promise<void> => {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
     activeAttemptRef.current?.cancel();
+    retireManagerCreation();
     setStatus({ kind: "loading", operation: "redirect" });
 
     const attempt = createAttemptControl();
@@ -284,7 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       if (activeAttemptRef.current === attempt) activeAttemptRef.current = null;
     }
-  }, [loadManager]);
+  }, [loadManager, retireManagerCreation]);
 
   const retry = useCallback(async (): Promise<void> => {
     if (retryPromiseRef.current) return retryPromiseRef.current;
