@@ -1,34 +1,76 @@
 # Fresh Linux dev-box setup (developer dev-stack)
 
-> **Developer-facing**, not an operator/production runbook (for production see
-> [install-online.md](install-online.md) / [install-airgapped.md](install-airgapped.md)). These are the
-> hands-on steps to stand up the EasySynQ dev stack + test gates on a clean Linux workstation — e.g.
-> after a distro reinstall, when **no data carries over** (fresh DB / MinIO / Keycloak). Debian/Ubuntu
-> and rpm-ostree/Fedora-derived atomic environments need different package-management steps; those
-> differences are flagged inline (§1, §8). The repository is restored by `git clone`; only the
-> gitignored `.env` and Docker volumes are local state.
+> **Developer-facing**, not an operator/production runbook. The supported primary developer host is
+> standard **Fedora Workstation 44 on x86_64**. For production Ubuntu hosts, keep using
+> [install-online.md](install-online.md) / [install-airgapped.md](install-airgapped.md) and the linked
+> `scripts/bootstrap-ubuntu.sh` flow; the Fedora developer bootstrap does not replace or call it.
+> These steps create a fresh DB / MinIO / Keycloak state. Only the gitignored `.env` and Docker
+> volumes remain local after the repository is restored by `git clone`.
 
-## 1. Toolchain (native Linux — no WSL)
+## 1. Clone + Fedora Workstation toolchain
 
 ```bash
-# uv — manages Python 3.12 (the API pins >=3.12,<3.13; a distro python3 3.13+ is too new)
-curl -LsSf https://astral.sh/uv/install.sh | sh                       # → ~/.local/bin
-# Node 22 via nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-nvm install 22 && nvm alias default 22
-# Docker (engine + compose plugin), just, gh, git, and postgresql-client (pg_dump — see §6)
-sudo apt update && sudo apt install -y docker.io docker-compose-v2 just gh git postgresql-client
-sudo usermod -aG docker "$USER"        # log out/in so `docker` works without sudo
+git clone https://github.com/CoJoA13/EasySynQ.git ~/Documents/EasySynQ
+cd ~/Documents/EasySynQ
+
+# Read-only inventory first (the default is identical to --check).
+./scripts/bootstrap-fedora-dev.sh
+
+# Optional: preview every missing-package/repository transaction, then type literal `yes`.
+# Do not sudo the script itself. It asks before invoking sudo for the displayed commands.
+./scripts/bootstrap-fedora-dev.sh --apply
 ```
 
-Confirm: `docker --version` (need **v29.x**), `node -v` (22), `uv --version`, `just --version`.
+Both the default and `--check` are non-mutating and require `VARIANT_ID=workstation` exactly.
+`--apply` installs the exact Fedora package set, adds Docker's official Fedora repository only when
+absent, installs Docker Engine from that repository, runs `uv python install 3.12` as your
+unprivileged account, and finishes with
+`./scripts/doctor.sh contributor`. It does not install repository dependencies, start or enable a
+service, change group membership, change firewalld or SELinux, or edit `/etc` directly. When approved,
+DNF's `config-manager` writes the official repository definition to
+`/etc/yum.repos.d/docker-ce.repo`; the preview discloses that write before sudo.
 
-### 1a. rpm-ostree/Fedora-derived atomic Linux (no `apt`)
+The Fedora Node packages `nodejs22-bin` and `nodejs22-npm-bin` provide the ordinary `node` and `npm`
+commands. The tracked `.node-version` is `22`. If a shell manager puts an older Node before
+`/usr/bin/node`, the bootstrap reports `PATH_SHADOWED`; use `PATH=/usr/bin:$PATH` for that session or
+fix the shell-manager selection instead of reinstalling the already-present RPMs.
 
-On an rpm-ostree/atomic distribution the `apt` line above does not apply. If Homebrew is available,
-use `brew install uv node@22 just gh` and `brew install postgresql@16` (see §8 — the client version
-matters); otherwise use the distribution's documented toolbox/layering mechanism. Two common
-gotchas apply:
+Docker host policy remains an explicit operator decision. Review the printed commands, then run them
+separately if appropriate:
+
+```bash
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+```
+
+Membership in the `docker` group is root-equivalent. A full logout and login (or a reboot) is the
+reliable way to activate the new group in every process; `newgrp docker` only starts a transitional
+subshell. Docker also manages forwarding rules and firewalld integration for published container
+ports. Review the Compose host bindings and the resulting firewalld `docker` zone/policy rather than
+assuming a workstation zone alone blocks a published port. The bootstrap deliberately makes no
+firewall change.
+
+After starting Docker and entering a fresh group-aware login session, confirm the broader test-host
+profile:
+
+```bash
+./scripts/doctor.sh test
+```
+
+If a reason fails, use the reason-to-command table in
+[`docs/dev-workflow.md`](../dev-workflow.md#toolchain-linux-ci--a-linux-dev-host); do not guess at socket,
+SELinux, runtime, or package changes. A passing local doctor and fast structural tests are contributor
+readiness only. The PR/release acceptance artifact is the separate two-media
+[`Fedora Workstation proof`](fedora-proof.md), which must be executed on a suitable libvirt host.
+
+### 1a. Fedora Atomic variants (advanced and unsupported)
+
+Silverblue, Kinoite, and other rpm-ostree/Atomic variants are not the standard Fedora Workstation
+target and are not covered by `bootstrap-fedora-dev.sh`; it intentionally exits instead of layering
+host packages onto an unreviewed image. Treat an Atomic setup as an advanced, unsupported adaptation:
+keep development tools in a documented toolbox/container and manage the host Docker socket with the
+distribution's own guidance. The checks in §8 still describe the required outcomes. Two common
+gotchas remain:
 
 - **Some images ship Docker without a usable group.** If `docker-ce` exists but the `docker` group
   does not, adding the user alone cannot work and `systemctl enable docker.socket` can fail (the unit's
@@ -46,10 +88,9 @@ gotchas apply:
   `easysynq-postgres-1`** and any running **testcontainers**. (The `pgdata` is a named volume, so an
   accidental container kill is recoverable with `just up s`, but avoid the scare.)
 
-## 2. Clone + build deps
+## 2. Build project dependencies
 
 ```bash
-git clone https://github.com/CoJoA13/EasySynQ.git ~/Documents/EasySynQ && cd ~/Documents/EasySynQ
 just setup  # hydrates API/web deps plus packages/contracts/package-lock.json and installs hooks
 ```
 
@@ -119,7 +160,7 @@ cd apps/api && uv run alembic heads
 
 ⚠ Deliberately **not** hard-coded here. A head number written into prose goes stale on the next
 migration and has repeatedly misled a later session into numbering a new revision wrong — always read
-it from Alembic, never from a doc (CLAUDE.md *Current status* carries the same warning). ⚠ Do **not**
+it from Alembic, never from a doc (`docs/current-status.md` is only a dated snapshot). ⚠ Do **not**
 substitute `ls migrations/versions/ | tail -1`: `_` sorts after the digits, so it returns
 `__pycache__` on any box that has run alembic or pytest. `alembic heads` also reports the real
 revision id (not a filename) and stays correct if the tree ever branches.

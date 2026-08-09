@@ -22,8 +22,8 @@ const SCALE = MATRIX_AXIS.map((n) => String(n));
 // Create a risk row. requireProcess (a PROCESS-only `register.manage` holder) makes the process picker
 // required — a process-less submit would 403 at the server's SYSTEM-scope enforce, so we gate the
 // button on a pick rather than let it fail (the RaiseCapaModal idiom). Conditionally mounted by the
-// page so close discards the draft. No clause picker in v1 (a named residual — clause_id is an optional
-// per-risk tag the backend accepts but the FE doesn't surface yet).
+// page so close discards the draft. No clause picker in v1 (RES-RISK-CLAUSE-PICKER in
+// docs/open-residuals.md — clause_id is an optional per-risk tag the backend accepts but the FE omits).
 export function NewRiskModal({
   opened,
   onClose,

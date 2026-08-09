@@ -1,20 +1,20 @@
 ---
-description: Record a finished slice — slice-history narrative + CLAUDE.md learning + Current-status pointer + the memory resume note + test deltas, in one consistent pass
+description: Record a finished slice in the neutral history, execution snapshot, and residual ledger
 allowed-tools: Read, Edit, Write, Glob, Grep, Bash
 ---
 
-Record the slice just completed (named in $ARGUMENTS, e.g. "S-dcr-ui-2b"). Keep CLAUDE.md lean — the deep narrative lives in `docs/slice-history.md`; CLAUDE.md holds only the learning line + the Current-status pointer. Do all of the following consistently:
+Record the slice just completed (named in $ARGUMENTS, e.g. "S-dcr-ui-2b") in the neutral authority homes. Do all of the following consistently:
 
-1. **`docs/slice-history.md`** — add the full per-slice narrative under the right family section, **newest-first** (match the dense house style of the existing entries). Cover: what shipped, the migration/key/endpoint/contract delta (or "front-end-only"), the load-bearing decisions + traps, the named-not-faked deferrals, the test deltas, and the PR + squash SHA. Update the file's top "Migration head" line if it moved.
+1. **`docs/slice-history.md`** — append the full shipped narrative under the right family section, preserving its historical-evidence role. Cover what shipped, the migration/key/endpoint/contract delta (or "front-end-only"), load-bearing decisions and traps, honest deferrals, fresh test deltas, and the PR plus squash SHA. Do not revise historical snapshots to make them current.
 
-2. **`CLAUDE.md` → "Recent learnings"** — prepend ONE dense bullet (the section is **capped ~12, newest-first**; demote/drop the oldest if over cap, per the section's own comment). Convert relative dates to absolute. Lead with the slice's thesis + the ⚠ traps a future session must carry.
+2. **`docs/current-status.md`** — after fresh evidence, update the dated execution snapshot and its parseable baseline frontmatter. Keep it a current coordination snapshot, not a narrative history; migration truth still comes from `cd apps/api && uv run alembic heads`.
 
-3. **`CLAUDE.md` → "Current status"** — append a concise pointer for the slice (✅, the one-line what-it-did, PR link), and update the **migration-head note** (which slices added a migration vs none; the next free number).
+3. **`docs/open-residuals.md`** — close any shipped residual using its existing stable identifier, or add a new stable `RES-*` record for work deliberately deferred. Preserve the required record fields and closure contract.
 
-4. **The memory resume note** (`~/.claude/projects/<key>/memory/<track>-resume-point.md`) — if this slice belongs to a track with a resume note (e.g. `s-dcr-ui-resume-point`), UPDATE it (don't duplicate): mark this slice merged (PR + SHA), refresh the as-built anchors, and set the NEXT slice as the resume point with its named scope + any review insights to fold in. Update the one-line pointer in `MEMORY.md`.
+4. **Recurring traps** — promote a trap only when it recurs and belongs in `.claude/rules/engineering-patterns.md`; do not duplicate a one-off slice lesson into a tool-specific compatibility note.
 
-5. **Test deltas** — state the before→after counts (e.g. web 779→805; +N api). If you can, confirm them: `cd apps/web && npx vitest run --pool=forks --maxWorkers=1 2>&1 | tail -3` (the clean-signal full run; vitest 4 — the old `--poolOptions.forks.singleFork=true` was removed) and/or the api unit count.
+5. **Test deltas** — record before→after counts from actual commands (for example, the focused API or web suite) in the history narrative and current snapshot. Do not report a delta that was not measured.
 
-Then show a short diff summary of the doc files touched and stop — do NOT commit unless asked (the slice's PR/branch is usually already merged; these doc edits may belong on `main` via a follow-up or were part of the merged PR). If the slice's PR is still open, note that these belong in it.
+Then show a short diff summary of the authority homes touched and stop — do NOT commit unless asked (the slice's PR/branch is usually already merged; these doc edits may belong on `main` via a follow-up or were part of the merged PR). If the slice's PR is still open, note that these belong in it.
 
-Guardrails: pin every claim to what actually shipped (verify vs the diff/CI, not memory); name deferrals honestly ("not faked"); don't restate what the code/git already records.
+Guardrails: pin every claim to what actually shipped (verify against the diff/CI, not memory); name deferrals honestly ("not faked"); don't restate what code or Git already records.

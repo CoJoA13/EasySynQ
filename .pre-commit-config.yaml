@@ -47,6 +47,11 @@ repos:
 
   - repo: local
     hooks:
+      - id: repository-authority
+        name: repository authority and Claude compatibility contracts
+        entry: ./scripts/check-repo-authority.sh
+        language: system
+        pass_filenames: false
       # Match the Redocly step in CI's `contracts` job exactly (including its config, which sets
       # operation-4xx-response: off, etc.). This hook is lint-only; CI additionally runs
       # `gen-contracts.sh --check`, while `just contracts` bundles the spec and generates the

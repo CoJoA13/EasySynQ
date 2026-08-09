@@ -396,7 +396,8 @@ def run_restore(
 
             # 4. copy blobs under this run's unique prefix in the configured shared scratch bucket
             #    (source = a READ; the locked vault is never written). The documents bucket is
-            #    rejected below; rejecting every WORM bucket role remains open hardening work.
+            #    rejected below; rejecting every WORM bucket role is RES-RESTORE-SCRATCH-WORM-GUARD
+            #    in docs/open-residuals.md.
             if handle.scratch_bucket == settings.s3_bucket_documents:  # pragma: no cover - guard
                 return RestoreResult("FAIL", "refusing to restore into the WORM documents bucket")
             drill._copy_blobs(settings, blobs, handle.scratch_bucket, handle.object_prefix)

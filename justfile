@@ -21,6 +21,12 @@ contracts:
 contracts-check:
     bash scripts/gen-contracts.sh --check
 
+authority-check:
+    ./scripts/check-repo-authority.sh
+
+doctor profile="contributor":
+    ./scripts/doctor.sh "{{ profile }}"
+
 security-npm:
     node --test scripts/tests/test-web-security-lock.mjs scripts/tests/test-npm-audit-runner.mjs scripts/tests/test-check-npm-audit.mjs scripts/tests/test-npm-audit-policy.mjs scripts/tests/test-router-rsc-policy.mjs
     node scripts/check-npm-audit.mjs
@@ -72,12 +78,6 @@ up profile="s":
     bash scripts/ensure-keycloak-db-password.sh --env-file .env
     bash scripts/migrate-keycloak-h2.sh
     docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml -f infra/compose/compose.dev.yml up -d
-
-# `up` + a loopback Postgres publish (compose.mcp.yml) for the read-only PG MCP — opt-in; plain `up` keeps Postgres unexposed (D1). Restart Claude Code after first run; pgdata persists.
-up-mcp profile="s":
-    bash scripts/ensure-keycloak-db-password.sh --env-file .env
-    bash scripts/migrate-keycloak-h2.sh
-    docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml -f infra/compose/compose.dev.yml -f infra/compose/compose.mcp.yml up -d
 
 down:
     bash scripts/ensure-keycloak-db-password.sh --env-file .env

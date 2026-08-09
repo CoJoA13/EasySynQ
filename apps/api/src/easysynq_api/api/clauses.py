@@ -3,8 +3,9 @@
 ``GET /clauses`` returns the seeded clause catalog (4 → 4.4 → 4.4.1) as a flat list ordered by
 clause number, each row carrying its ``parent_id`` so the client rebuilds the tree. Gated on
 ``clauseMap.read`` (the seeded catalog key; doc 15 §8.4's shorthand ``clause.read`` is not in the
-closed 96-key catalog, so we wire the real key per CLAUDE.md §1 "doc-07 keys verbatim"). There is no
-write surface: clauses are INSERT-by-seed only (no ``clause.edit`` key, doc 07 §3.6).
+catalog, so we wire the real key from doc 07 §3 and its executable catalog assertion in
+``tests/unit/test_authz.py``). There is no write surface: clauses are INSERT-by-seed only (no
+``clause.edit`` key, doc 07 §3.6).
 
 The optional ``framework`` query param is the framework *code* (doc 15 writes ``framework_id=
 iso9001:2015`` but the value is the code, not a UUID); it defaults to the org's ``iso9001:2015``.

@@ -3,7 +3,8 @@
 > **Historical design-audit input.** This file preserves the adversarial review that fed the
 > Decisions Register; it is not the current implementation queue. Many statements intentionally
 > describe the pre-reconciliation specification. Read `decisions-register.md` for binding
-> resolutions, `slice-history.md` for deliberate implementation residuals, and
+> resolutions, `open-residuals.md` for current deliberate implementation residuals,
+> `slice-history.md` for historical implementation evidence, and
 > [the 2026-07-30 documentation audit](documentation-audit-2026-07-30.md) for current documentation
 > status.
 
@@ -199,7 +200,7 @@ The check-out/check-in + Redis lock model (`04` §5, `05` §4) guarantees single
 
 ## RESOLUTION STATUS — Post-Reconciliation Audit (appended; original findings above are unchanged)
 
-> **What this is.** A skeptical, line-by-line verification that the reconciliation pass actually edited sections `01`–`16` to satisfy the normative resolutions (R1–R37) in the **Decisions Register**. Each finding below is tagged **RESOLVED** (with the R-number and the file(s) that were actually changed and verified), **PARTIAL** (what still needs doing), or **DEFERRED** (intentionally out of v1). The original findings text in sections A–D above is **not modified** — this section annotates them.
+> **What this is.** A skeptical, line-by-line verification that the reconciliation pass actually edited sections `01`–`16` to satisfy the applicable normative resolutions in the **Decisions Register**. Each finding below is tagged **RESOLVED** (with the R-number and the file(s) that were actually changed and verified), **PARTIAL** (what still needs doing), or **DEFERRED** (intentionally out of v1). The original findings text in sections A–D above is **not modified** — this section annotates them.
 >
 > **Verification method.** I read the Decisions Register and every edited section file (`01`–`16`), confirmed the canonical tokens/enums/state-names/field-names appear character-for-character where required, and grep-scanned all section files for residual legacy spellings. The deep sections (`01`–`10`, `12`, `13`) were thoroughly back-propagated; the leakage scan was clean for `audit_qml`/`record.retire`/`import.initiate`/uppercase signature meanings across those.
 >

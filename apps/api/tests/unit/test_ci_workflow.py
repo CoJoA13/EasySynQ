@@ -103,8 +103,28 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
 
     contracts = jobs["contracts"]
     _assert_hard_fail(contracts)
+    authority_index, authority = _step(
+        contracts, "Agent authority and Claude compatibility contracts"
+    )
+    assert authority == {
+        "name": "Agent authority and Claude compatibility contracts",
+        "run": (
+            "bash scripts/tests/test-agent-authority.sh\n"
+            "bash scripts/tests/test-claude-hooks.sh\n"
+            "./scripts/check-repo-authority.sh\n"
+        ),
+    }
+    assert "|| true" not in authority["run"]
     expected_contract_steps = [
         {"uses": "actions/checkout@v7"},
+        {
+            "name": "Agent authority and Claude compatibility contracts",
+            "run": (
+                "bash scripts/tests/test-agent-authority.sh\n"
+                "bash scripts/tests/test-claude-hooks.sh\n"
+                "./scripts/check-repo-authority.sh\n"
+            ),
+        },
         {
             "name": "R61 backstop regression harness",
             "run": "bash scripts/tests/test-check-no-site-data.sh",
@@ -113,7 +133,14 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
             "name": "R61 site-data backstop (check-no-site-data)",
             "run": "./scripts/check-no-site-data.sh",
         },
-        {"name": "CI workflow contract", "run": "bash scripts/tests/test-ci-hardening.sh"},
+        {
+            "name": "Fedora/bootstrap/doctor shell contracts",
+            "run": (
+                "bash scripts/tests/test-bootstrap-fedora-dev.sh\n"
+                "bash scripts/tests/test-doctor.sh\n"
+                "bash scripts/tests/test-fedora-proof-contract.sh\n"
+            ),
+        },
         {
             "uses": "actions/setup-node@v7",
             "with": {
@@ -122,6 +149,11 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
                 "cache-dependency-path": "packages/contracts/package-lock.json",
             },
         },
+        {
+            "name": "PostgreSQL MCP disabled contract",
+            "run": "node --test scripts/tests/test-postgres-mcp-disabled.mjs",
+        },
+        {"name": "CI workflow contract", "run": "bash scripts/tests/test-ci-hardening.sh"},
         {
             "name": "install locked contract tools",
             "run": "npm ci --prefix packages/contracts --ignore-scripts",
@@ -148,6 +180,12 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
         {"name": "generated contract lock", "run": "bash scripts/gen-contracts.sh --check"},
     ]
     assert contracts["steps"] == expected_contract_steps
+    setup_index = next(
+        index
+        for index, step in enumerate(contracts["steps"])
+        if step.get("uses") == "actions/setup-node@v7"
+    )
+    assert authority_index < setup_index
 
     package = json.loads((_ROOT / "apps" / "web" / "package.json").read_text(encoding="utf-8"))
     assert package["scripts"]["test"] == "vitest run"

@@ -27,7 +27,7 @@ Seed a GLOBAL `notification_template` (no `org_id`) so the seed is exercised by 
 - `INSERT INTO notification_template (id, event_key, locale, version, is_effective, in_app_title, in_app_body, email_subject, email_body) VALUES (:id, '<key>', 'en', 1, TRUE, …) ON CONFLICT (event_key, locale) WHERE is_effective DO NOTHING` (idempotent).
 - `downgrade()`: `DELETE FROM notification_template WHERE event_key = '<key>' AND NOT EXISTS (SELECT 1 FROM notification n WHERE n.template_id = notification_template.id)` — `notification.template_id` is a **RESTRICT** FK; an unguarded delete aborts a *populated* downgrade (fresh-DB CI is blind to it).
 - ⚠ A per-org seed (`UPDATE sla_policy …` / `SELECT id FROM organization`) is **NOT** exercised by the `migrations` CI job (fresh DB = zero orgs) → it must be **live-smoked on a populated DB** (`docker cp` into `easysynq-api-1:/migrations/versions/` then `docker exec … alembic upgrade head`; DB-only, never a live sweep).
-- New migration: `down_revision` = current head (`alembic heads` / CLAUDE.md Current-status); head moves by exactly one. If it ALSO adds a column (a stamp/offset), mirror it in the ORM or `alembic check` phantom-DROPs it — run the `migration-reviewer` agent + `/check-migrations`.
+- New migration: `down_revision` = current head from `alembic heads`; head moves by exactly one. If it ALSO adds a column (a stamp/offset), mirror it in the ORM or `alembic check` phantom-DROPs it — run the `migration-reviewer` agent + `/check-migrations`.
 
 ### 5. The emit/dispatch + recipient resolution
 - Emit at the trigger site with `event_key=EVENT_<NAME>` (see the `escalation.py` `due_steps` dispatch loop, ~line 350+ — each step branch passes its own distinct key).

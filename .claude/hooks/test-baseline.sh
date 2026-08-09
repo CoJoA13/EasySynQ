@@ -1,40 +1,79 @@
 #!/usr/bin/env bash
-# SessionStart hook: surface the LAST slice's recorded test counts as this session's baseline.
+# SessionStart hook: surface the dated test baseline from the neutral execution snapshot.
 #
-# /finish-slice requires before→after deltas ("api unit 1254→1282; web 1433→1458"). Reconstructing
-# the "before" at slice end means re-running suites you have already changed — by then the baseline
-# is gone. But it is not actually unknown: the previous slice's *after* IS this slice's *before*,
-# and every Recent-learnings bullet in CLAUDE.md records it.
-#
-# ⚠ Deliberately does NOT run the suites. A full web run is ~5 minutes; paying that on every session
-# start to produce a number that is already written down would be a bad trade. This is a grep.
-#
-# Emits SessionStart `additionalContext`, exit 0. Silent if it cannot find a count rather than
-# guessing — a wrong baseline is worse than none, because it ships into the slice record.
+# It deliberately does not run suites. The snapshot is a measured prior baseline, while a new slice's
+# after-count still needs fresh execution evidence. Silent failure is intentional: an ambiguous
+# frontmatter value must never become a guessed baseline.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/../.." && pwd)"
 cd "$ROOT" || exit 0
-[ -f CLAUDE.md ] || exit 0
 
-# The newest Recent-learnings bullet is the most recent slice. Its trailing parenthetical carries
-# the counts, e.g. "(api unit 1254→1282; +20 integration; web 1433→1458; PR #429 squash `ec2e93e`.)"
-newest="$(grep -m1 '^- 20[0-9][0-9]-' CLAUDE.md || true)"
-[ -z "$newest" ] && exit 0
+status_file='docs/current-status.md'
+[ -f "$status_file" ] || exit 0
 
-api="$(printf '%s' "$newest" | sed -n 's/.*api unit [0-9]*→\([0-9]*\).*/\1/p')"
-web="$(printf '%s' "$newest" | sed -n 's/.*web [0-9]*→\([0-9]*\).*/\1/p')"
-[ -z "$api" ] && api="$(printf '%s' "$newest" | sed -n 's/.*api unit \([0-9]*\)[;,)].*/\1/p')"
-[ -z "$web" ] && web="$(printf '%s' "$newest" | sed -n 's/.*web \([0-9]*\)[;,)].*/\1/p')"
+in_frontmatter=0
+closed_frontmatter=0
+invalid=0
+api=''
+web=''
+declare -A status_keys=(
+  [easysynq_status_schema]=1 [as_of]=1 [baseline_commit]=1 [last_shipped_slice]=1
+  [migration_head]=1 [next_migration]=1 [api_unit_tests]=1 [web_test_files]=1 [web_tests]=1
+  [contract_tests]=1 [integration_passed]=1 [integration_skipped]=1 [ci_jobs]=1 [ci_checks]=1
+)
+declare -A numeric_keys=(
+  [easysynq_status_schema]=1 [api_unit_tests]=1 [web_test_files]=1 [web_tests]=1
+  [contract_tests]=1 [integration_passed]=1 [integration_skipped]=1 [ci_jobs]=1 [ci_checks]=1
+)
+declare -A status_counts=()
 
-# Nothing parseable → stay quiet.
-[ -z "$api" ] && [ -z "$web" ] && exit 0
+while IFS= read -r line || [ -n "$line" ]; do
+  if [ "$in_frontmatter" -eq 0 ]; then
+    if [ "$line" = '---' ]; then
+      in_frontmatter=1
+    elif [ -n "$line" ]; then
+      invalid=1
+      break
+    fi
+    continue
+  fi
 
-msg="Test-count baseline for this session, read from the newest CLAUDE.md Recent-learnings bullet (the previous slice's *after* is this slice's *before*):"
-[ -n "$api" ] && msg="$msg api unit = ${api}."
-[ -n "$web" ] && msg="$msg web = ${web}."
-msg="$msg Use these as the 'before' in /finish-slice rather than re-deriving them, but CONFIRM the 'after' by actually running the suites — do not report a delta you did not measure. If the working tree already differs from that slice, treat these as stale and re-measure both ends."
+  if [ "$line" = '---' ]; then
+    closed_frontmatter=1
+    break
+  fi
 
+  if [[ ! "$line" =~ ^([a-z_]+):[[:space:]](.+)$ ]]; then
+    invalid=1
+    continue
+  fi
+
+  key="${BASH_REMATCH[1]}"
+  value="${BASH_REMATCH[2]}"
+  if [ -z "${status_keys[$key]+x}" ]; then
+    invalid=1
+    continue
+  fi
+  status_counts["$key"]=$(( ${status_counts[$key]:-0} + 1 ))
+  [ "${status_counts[$key]}" -eq 1 ] || invalid=1
+  if [ -n "${numeric_keys[$key]+x}" ] && [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    invalid=1
+  fi
+  case "$key" in
+    api_unit_tests) api="$value" ;;
+    web_tests) web="$value" ;;
+  esac
+done <"$status_file"
+
+[ "$in_frontmatter" -eq 1 ] || exit 0
+[ "$closed_frontmatter" -eq 1 ] || exit 0
+[ "$invalid" -eq 0 ] || exit 0
+for key in "${!status_keys[@]}"; do
+  [ "${status_counts[$key]:-0}" -eq 1 ] || exit 0
+done
+[ "$invalid" -eq 0 ] || exit 0
+
+msg="Test-count baseline from docs/current-status.md: api=${api}; web=${web}. Use these as the before-counts for /finish-slice, then confirm every after-count with fresh suite evidence."
 printf '%s' "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"${msg}\"}}"
-exit 0

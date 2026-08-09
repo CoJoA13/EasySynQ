@@ -52,7 +52,7 @@
 
 Items the analysis flagged but couldn't confirm. Convert into real rules above, or delete.
 
-- Verify these rules don't duplicate `CLAUDE.md` (## Critical rules — NEVER violate) before relying on them.
+- Verify these rules do not duplicate the neutral product-authority documents before relying on them.
 - SSRF: all outbound HTTP today (Keycloak JWKS, Tika `TIKA_URL`, Gotenberg `GOTENBERG_URL`, readiness) targets fixed env-config hosts — no user-influenced URL reaches an outbound call. Keep the allowlist-wrapper rule advisory unless a user-supplied URL is ever passed to httpx.
 - Deserialization: only `yaml.safe_load` found (no `pickle.load` / `yaml.load()` / `torch.load`); the plugin's built-in layer-1 covers generic cases, so no project rule was emitted — re-check if an unsafe loader is added.
 - Scope: confirm against the installed plugin README whether the layer-3 agentic commit reviewer reads this file; the 2.0.6 README suggests these rules bind the Stop-hook LLM diff review.

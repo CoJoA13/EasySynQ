@@ -13,11 +13,25 @@ services:
     ports:
       - "127.0.0.1:${S3_PORT:-9000}:9000"
 
+  # Fedora developer hosts run SELinux enforcing. Restating only bind-backed targets here causes
+  # Compose's unique target-path merge to replace the base entry when this developer overlay is used.
+  # Named volumes and every production overlay remain unchanged.
+  minio-init:
+    volumes:
+      - ./minio:/init:ro,z
+
+  keycloak-init:
+    volumes:
+      - ./keycloak/keycloak-init.sh:/init/keycloak-init.sh:ro,z
+      - ./keycloak/realm-export.json:/seed/easysynq-realm.json:ro,z
+
   api:
     environment: *dev-browser-env
 
   worker:
     environment: *dev-browser-env
+    volumes:
+      - ${IMPORT_SOURCE_PATH:-../../.import-source}:/srv/import/source:ro,z
 
   beat:
     environment: *dev-browser-env
@@ -25,3 +39,5 @@ services:
   proxy:
     environment:
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:${S3_PORT:-9000}}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro,z

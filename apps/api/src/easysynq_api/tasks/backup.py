@@ -4,7 +4,7 @@
 backup→restore-into-scratch drill (gate G-C). Both follow the S6/S7 worker idiom — a thin
 ``@task`` over ``asyncio.run`` of an async coroutine with its own disposed engine. The drill
 needs the OWNER DB role for pg_dump/CREATE DATABASE; the worker container exposes it via
-``DATABASE_URL_SYNC`` (the same owner DSN Alembic uses) — see CLAUDE.md.
+``DATABASE_URL_SYNC`` (the same owner DSN Alembic uses) — see ``docs/runbooks/backup-restore.md``.
 
 The api enqueues ``backup_restore_test`` from ``POST /setup/run-restore-test``; the gate then reads
 the persisted ``backup_policy.last_restore_test_result`` — the drill is never run inline.

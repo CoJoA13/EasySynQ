@@ -6,7 +6,7 @@ The auditor's primary evidence surface over the append-only, hash-chained ``audi
 ``system.audit_log.read`` (the purpose-built SYSTEM-domain key seeded in 0004 — the catalog's name
 for the immutable trail; doc 15 §8.13's ``audit.read`` is the pre-catalog-split spelling). The
 export endpoint (doc 15 §8.13) is deferred — it needs the async-job pattern (D-9); its schema
-stays in ``openapi.yaml`` but is not mounted.
+stays in ``openapi.yaml`` but is not mounted (``RES-AUDIT-EXPORT`` in ``docs/open-residuals.md``).
 """
 
 from __future__ import annotations
@@ -222,11 +222,12 @@ def document_scope_match(identifier: str) -> ColumnElement[bool]:
     distinguishes them, so searching it can return a different document's audit events — a
     cross-document leak, strictly worse than the completeness gap below.
 
-    **Named residual:** audit rows written BEFORE the cap shipped, for a document whose identifier
-    exceeds ``_SCOPE_REF_MAX_CHARS``, are stored under the raw value and are therefore no longer
-    reachable here. This affects no document with a normal identifier (the helper is the identity
-    function below the threshold, so every ordinary row is unaffected) — only ones carrying a
-    pathologically long imported legacy identifier. Preferred deliberately over the leak.
+    **RES-AUDIT-LONG-SCOPE-REF:** audit rows written BEFORE the cap shipped, for a document whose
+    identifier exceeds ``_SCOPE_REF_MAX_CHARS``, are stored under the raw value and are therefore no
+    longer reachable here. This affects no document with a normal identifier (the helper is the
+    identity function below the threshold, so every ordinary row is unaffected) — only ones carrying
+    a pathologically long imported legacy identifier. Preferred deliberately over the leak; the
+    closure contract is in ``docs/open-residuals.md``.
 
     Extracted from the handler purely so this is unit-testable: a regression to raw equality is
     invisible in any test that only exercises short identifiers.

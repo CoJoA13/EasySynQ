@@ -321,7 +321,7 @@ def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     assert 'legs.realm_export = "present"' in restore_runbook
     assert "<compose-project>_keycloakimport" in restore_runbook
     assert "before the first Keycloak start" in restore_runbook
-    assert justfile.count("ensure-keycloak-db-password.sh --env-file .env") == 4
+    assert justfile.count("ensure-keycloak-db-password.sh --env-file .env") == 3
     assert justfile.index("ensure-keycloak-db-password.sh") < justfile.index(
         "migrate-keycloak-h2.sh"
     )
@@ -554,12 +554,19 @@ def test_keycloak_db_password_backfill_is_distinct_persistent_and_idempotent(
     assert f"KEYCLOAK_DB_PASSWORD={first_value}" in env_file.read_text()
 
 
-def test_dev_keycloak_hostname_tracks_nondefault_http_port() -> None:
+def test_dev_keycloak_hostname_tracks_nondefault_http_port(tmp_path: Path) -> None:
     browser_keys = {
         "HTTP_PORT",
         "KEYCLOAK_HOSTNAME",
         "KEYCLOAK_DB_PASSWORD",
     }
+
+    compose_dir = tmp_path / "infra" / "compose"
+    compose_dir.mkdir(parents=True)
+    for name in ("compose.yml", "compose.s.yml", "compose.dev.yml"):
+        shutil.copyfile(ROOT / "infra" / "compose" / name, compose_dir / name)
+    shutil.copyfile(ROOT / ".env.example", tmp_path / ".env")
+    shutil.copyfile(ROOT / ".env.example", tmp_path / ".env.example")
 
     def render(http_port: str | None) -> str:
         docker = shutil.which("docker")
@@ -573,18 +580,18 @@ def test_dev_keycloak_hostname_tracks_nondefault_http_port() -> None:
                 docker,
                 "compose",
                 "--env-file",
-                str(ROOT / ".env.example"),
+                str(tmp_path / ".env.example"),
                 "-f",
-                str(ROOT / "infra/compose/compose.yml"),
+                str(compose_dir / "compose.yml"),
                 "-f",
-                str(ROOT / "infra/compose/compose.s.yml"),
+                str(compose_dir / "compose.s.yml"),
                 "-f",
-                str(ROOT / "infra/compose/compose.dev.yml"),
+                str(compose_dir / "compose.dev.yml"),
                 "config",
                 "--format",
                 "json",
             ],
-            cwd=ROOT,
+            cwd=tmp_path,
             env=env,
             capture_output=True,
             text=True,
@@ -596,6 +603,120 @@ def test_dev_keycloak_hostname_tracks_nondefault_http_port() -> None:
 
     assert render(None) == "http://localhost"
     assert render("8088") == "http://localhost:8088"
+
+
+def test_dev_overlay_relabels_only_repository_bind_mounts_for_selinux() -> None:
+    docker = shutil.which("docker")
+    assert docker is not None
+
+    expected_dev_binds = {
+        "minio-init": {"/init": "./minio:/init:ro,z"},
+        "keycloak-init": {
+            "/init/keycloak-init.sh": "./keycloak/keycloak-init.sh:/init/keycloak-init.sh:ro,z",
+            "/seed/easysynq-realm.json": (
+                "./keycloak/realm-export.json:/seed/easysynq-realm.json:ro,z"
+            ),
+        },
+        "worker": {
+            "/srv/import/source": (
+                "${IMPORT_SOURCE_PATH:-../../.import-source}:/srv/import/source:ro,z"
+            )
+        },
+        "proxy": {"/etc/caddy/Caddyfile": "./caddy/Caddyfile:/etc/caddy/Caddyfile:ro,z"},
+    }
+    dev = yaml.safe_load(_read("infra/compose/compose.dev.yml"))
+    assert {
+        service: {entry.rsplit(":", 2)[1]: entry for entry in config["volumes"]}
+        for service, config in dev["services"].items()
+        if "volumes" in config
+    } == expected_dev_binds
+
+    clean_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {
+            "KEYCLOAK_DB_PASSWORD",
+            "SITE_ADDRESS",
+            "MINIO_SITE_ADDRESS",
+            "S3_PUBLIC_ENDPOINT",
+            "PUBLIC_BASE_URL",
+            "APP_BASE_URL",
+            "KEYCLOAK_HOSTNAME",
+        }
+    }
+    clean_env["KEYCLOAK_DB_PASSWORD"] = "proof-only-keycloak-secret"
+
+    def render(*overlays: str, production: bool = False) -> dict[str, object]:
+        env = dict(clean_env)
+        if production:
+            env.update(
+                {
+                    "SITE_ADDRESS": "https://qms.example.test",
+                    "MINIO_SITE_ADDRESS": "https://qms.example.test:9443",
+                    "S3_PUBLIC_ENDPOINT": "https://qms.example.test:9443",
+                    "PUBLIC_BASE_URL": "https://qms.example.test",
+                    "APP_BASE_URL": "https://qms.example.test",
+                    "KEYCLOAK_HOSTNAME": "https://qms.example.test",
+                }
+            )
+        command = [
+            docker,
+            "compose",
+            "--env-file",
+            str(ROOT / ".env.example"),
+            "-f",
+            str(ROOT / "infra/compose/compose.yml"),
+        ]
+        for overlay in overlays:
+            command.extend(["-f", str(ROOT / f"infra/compose/{overlay}")])
+        command.extend(["config", "--no-env-resolution", "--format", "json"])
+        result = subprocess.run(  # noqa: S603 - resolved Docker binary; config rendering only
+            command,
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    named_targets = {
+        "keycloak-init": {"/import": "keycloakimport"},
+        "worker": {
+            "/var/lib/easysynq/qms-mirror": "mirror",
+            "/run/secrets": "secrets",
+            "/var/lib/easysynq/backups": "backup",
+        },
+        "proxy": {"/data": "caddydata", "/config": "caddyconfig"},
+    }
+    for sizing in ("compose.s.yml", "compose.m.yml"):
+        rendered = render(sizing, "compose.dev.yml")
+        services = rendered["services"]
+        for service, targets in expected_dev_binds.items():
+            volumes = {volume["target"]: volume for volume in services[service]["volumes"]}
+            for target in targets:
+                assert volumes[target]["type"] == "bind"
+                assert volumes[target]["read_only"] is True
+                assert volumes[target]["bind"]["selinux"] == "z"
+        for service, targets in named_targets.items():
+            volumes = {volume["target"]: volume for volume in services[service]["volumes"]}
+            assert {
+                target: volumes[target]["source"]
+                for target in targets
+                if volumes[target]["type"] == "volume"
+            } == targets
+
+    production_source = _read("infra/compose/compose.production.yml")
+    assert ":z" not in production_source
+    assert ",z" not in production_source
+    for sizing in ("compose.s.yml", "compose.m.yml"):
+        production = render(sizing, "compose.production.yml", production=True)
+        for service in production["services"].values():
+            for volume in service.get("volumes", []):
+                if volume["type"] == "bind":
+                    assert "selinux" not in volume["bind"]
 
 
 def test_production_entrypoints_require_compose_2_24_4(tmp_path: Path) -> None:

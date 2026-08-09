@@ -6,8 +6,9 @@
 ## Branch + PR flow
 
 `main` is not technically protected on the current hosting plan; no-direct-push and review are
-project conventions. Do slice work on a `feat/sN-*` branch → open a PR → all 14 CI checks green →
-squash-merge. See `CLAUDE.md` for the current 10-job/14-check matrix.
+project conventions. Do slice work on a scoped branch → open a PR → require the current checks →
+squash-merge. See `docs/current-status.md` for the dated CI topology snapshot and the workflow files for
+executable truth.
 
 ## Toolchain (Linux CI / a Linux dev host)
 
@@ -19,6 +20,55 @@ Use `uv` with managed **Python 3.12**, Node 22 + npm, and a current supported Do
 depend on the system Python. Locks are committed at `apps/api/uv.lock`, `apps/web/package-lock.json`,
 and `packages/contracts/package-lock.json`; CI uses `uv sync --frozen` / `npm ci`, and `just setup`
 hydrates both frozen npm trees before generating contracts.
+
+Run the dependency-light, read-only doctor directly before setup so it can diagnose a missing `just`:
+
+```bash
+./scripts/doctor.sh contributor
+./scripts/doctor.sh test
+./scripts/doctor.sh stack
+```
+
+The default profile is `contributor`. `test` additionally requires hydrated API, web, and contract
+dependencies plus working Docker access; `stack` additionally validates `.env`, project ports, and
+SELinux bind labels. Each line includes a stable reason ID and the exact next command. The doctor never
+starts services, changes permissions, or prints configuration values. Once `just` is available,
+`just doctor` and `just doctor stack` are equivalent conveniences.
+
+Common Fedora doctor remediations are intentionally explicit. Run only the row matching the emitted
+reason, then re-run the same doctor profile:
+
+| Reason ID | Exact next action |
+|---|---|
+| `TOOL_MISSING_GIT`, `TOOL_MISSING_CURL`, `TOOL_MISSING_OPENSSL`, `JUST_MISSING`, `PRECOMMIT_MISSING`, `NODE_MISSING`, `NODE_UNSUPPORTED_VERSION`, `UV_MISSING`, `PG_DUMP_MISSING`, `PG_DUMP_UNSUPPORTED_VERSION`, `DOCKER_CLI_MISSING`, `DOCKER_COMPOSE_MISSING`, `DOCKER_COMPOSE_UNSUPPORTED_VERSION` | Run `./scripts/bootstrap-fedora-dev.sh --apply`, approve its displayed transaction, then run `./scripts/doctor.sh contributor` or `./scripts/doctor.sh test`. |
+| `NODE_PATH_SHADOWED` | Run `PATH=/usr/bin:$PATH ./scripts/doctor.sh contributor`; then fix the shell-manager selection permanently. |
+| `PYTHON_312_MISSING` | Run `uv python install 3.12`, then `./scripts/doctor.sh contributor`. |
+| `DOCKER_SOCKET_MISSING`, `DOCKER_DAEMON_STOPPED` | Run `sudo systemctl enable --now docker`, then `docker info`. |
+| `DOCKER_GROUP_SESSION_INACTIVE` | Log out and back in, then run `docker info`; do not loosen the socket mode. |
+| `DOCKER_SOCKET_PERMISSION`, `DOCKER_DAEMON_UNREACHABLE` | Run `stat -c "%a %U %G" /var/run/docker.sock` and `docker info`, correct the reviewed Docker service/group configuration, then re-run `./scripts/doctor.sh test`. |
+| `API_DEPS_MISSING` | Run `cd apps/api && uv sync --frozen`. |
+| `WEB_DEPS_MISSING` | Run `npm ci --prefix apps/web`. |
+| `CONTRACT_DEPS_MISSING` | Run `npm ci --prefix packages/contracts --ignore-scripts`. |
+| `ENV_MISSING` | Run `cp .env.example .env`, set mode `0600`, and replace every placeholder secret. |
+| `ENV_PLACEHOLDER_SECRET` | Edit `.env` at the key named in the doctor output; never paste its value into a ticket or log. |
+| `PORT_OCCUPIED` | Run the exact `ss -ltnp 'sport = :<reported-port>'` command printed by the doctor and resolve only that listener. |
+| `SELINUX_UNVERIFIED` | Install `policycoreutils`, run `getenforce`, and keep SELinux enforcing. |
+| `SELINUX_DISABLED` | Restore SELinux to `Enforcing` under the host's reviewed policy, then run `getenforce`; otherwise use a conforming proof host and do not claim Fedora acceptance. |
+| `SELINUX_LABEL_UNVERIFIED` | Start the development Compose stack with its committed `:z` labels, then run `./scripts/doctor.sh stack`. |
+
+Unsupported OS/architecture results require moving to the documented Fedora Workstation 44 x86_64
+developer path or the retained Ubuntu workflow; do not bypass those checks. Full clean-host acceptance is
+the manual two-media gate in [`runbooks/fedora-proof.md`](runbooks/fedora-proof.md), not a container-only CI
+job.
+
+## Local agent database boundary
+
+The repository intentionally exposes no PostgreSQL MCP server. `.mcp.json` is empty, and no developer
+command should fetch a PostgreSQL MCP package dynamically or connect an agent with application-owner
+credentials. Re-enablement is blocked by
+[`RES-POSTGRES-MCP-REPLACEMENT`](open-residuals.md#res-postgres-mcp-replacement) until a maintained,
+locked, audit-clean connector and a separately proven least-privilege development role both ship.
+
 - **Docker socket (Linux host):** verify `docker info` first. Use normal group membership and a fresh
   login; do not weaken socket permissions. If the current shell predates a group change, a reviewed
   `sg docker -c "…"` wrapper can refresh group membership for that command.
@@ -34,7 +84,8 @@ hydrates both frozen npm trees before generating contracts.
 - Web: `cd apps/web && npm run lint && npm run build && npm test` (or the `/check-web` skill; `build`
   already runs `tsc --noEmit`).
 - npm dependency policy: run `just security-npm` after `just setup` to execute the policy regressions
-  and then the live high/critical gate against the committed web lock.
+  and then the live high/critical gate against the committed web lock. npm high/critical findings are
+  gated; pip-audit and Trivy findings are report-only.
 - **Docker-backed checks:** when `docker info` succeeds, run integration tests via testcontainers and
   migrations against a disposable PostgreSQL 16 instance. Backup/restore tests also require a
   version-matched PostgreSQL client (`pg_dump`/`pg_restore`). If group membership requires it, wrap

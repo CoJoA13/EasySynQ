@@ -113,7 +113,7 @@ public no-auth token route needs its EXACT path in `main.py::_LATCH_EXEMPT_EXACT
   blocked path, or does its fixture (e.g. a non-★ clause) make the gate silently never fire?
 
 ## What NOT to flag
-- Locked decisions (D1–D4, R1–R46 — see decisions-register.md, the canonical 7-state doc FSM, the fixed stack). If the diff
+- Locked foundational decisions and normative register entries (see decisions-register.md, the canonical 7-state doc FSM, the fixed stack). If the diff
   contradicts one, that IS a finding; if it merely *follows* one, it is not.
 - Line-length/format/import-order — the ruff hook + CI own those.
 - Speculative "could in theory" risks with no reachable trigger in this codebase.

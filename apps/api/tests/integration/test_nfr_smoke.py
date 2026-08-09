@@ -1,7 +1,7 @@
 """S11 NFR P95 smoke (doc 03 §7 / doc 18 §7 [PROOF], doc 18 §8 'NFR P95 smoke').
 
-Server-side P95 latency over the in-process ASGI transport (no network/browser — the dev host has
-no headless browser; CLAUDE.md). The SPEC budgets are: metadata read P95 ≤300ms, interactive P95
+Server-side P95 latency over the in-process ASGI transport (no network/browser). The SPEC budgets
+are: metadata read P95 ≤300ms, interactive P95
 ≤1.5s, search P95 ≤800ms, cached-PDF first page ≤2s, Office→PDF 20pp ≤15s async (doc 03 §7).
 
 The cached-PDF + Office→PDF budgets need Gotenberg (not run in CI) → they are a MANUAL dev-stack

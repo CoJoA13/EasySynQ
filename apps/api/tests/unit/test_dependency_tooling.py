@@ -105,6 +105,25 @@ def test_dependabot_tracks_only_version_updates_for_the_locked_contract_toolchai
     )
 
 
+def test_vulnerable_postgres_mcp_connector_is_disabled() -> None:
+    mcp_config = _read_json(_ROOT / ".mcp.json")
+    dependabot = yaml.safe_load((_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    justfile = (_ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert mcp_config == {"mcpServers": {}}
+    assert "setup-mcp:" not in justfile
+    assert "up-mcp" not in justfile
+    assert not (_ROOT / "tools" / "mcp-postgres" / "package.json").exists()
+    assert not (_ROOT / "tools" / "mcp-postgres" / "package-lock.json").exists()
+    assert not (_ROOT / "scripts" / "run-postgres-mcp.sh").exists()
+    assert not (_ROOT / "infra" / "compose" / "compose.mcp.yml").exists()
+    assert not [
+        entry
+        for entry in dependabot["updates"]
+        if entry["package-ecosystem"] == "npm" and entry["directory"] == "/tools/mcp-postgres"
+    ]
+
+
 def test_local_contract_entry_points_use_the_locked_launcher() -> None:
     pre_commit = yaml.safe_load((_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
     contracts_hook = next(
@@ -164,19 +183,18 @@ def test_local_npm_security_recipe_is_the_exact_ci_mirror() -> None:
 
 
 def test_active_guidance_tracks_both_frozen_npm_locks_and_mixed_policy() -> None:
-    claude = (_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     readme = (_ROOT / "README.md").read_text(encoding="utf-8")
     dev_workflow = (_ROOT / "docs" / "dev-workflow.md").read_text(encoding="utf-8")
     fresh_linux = (_ROOT / "docs" / "runbooks" / "fresh-linux-setup.md").read_text(encoding="utf-8")
-
-    assert "packages/contracts/package-lock.json" in claude
-    assert "npm high/critical gated; pip-audit and Trivy findings report-only" in claude
-    assert "`security` is warn-only" not in claude
 
     assert "apps/web/package-lock.json" in dev_workflow
     assert "packages/contracts/package-lock.json" in dev_workflow
     assert "frozen" in dev_workflow
     assert "just security-npm" in dev_workflow
+    normalized_workflow = " ".join(dev_workflow.split())
+    assert "npm high/critical findings are gated" in normalized_workflow
+    assert "pip-audit and Trivy findings are report-only" in normalized_workflow
+    assert "`security` is warn-only" not in dev_workflow
 
     for setup_guide in (readme, fresh_linux):
         assert "just setup" in setup_guide

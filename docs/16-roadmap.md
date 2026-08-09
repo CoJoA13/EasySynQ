@@ -52,8 +52,8 @@ flowchart LR
 
 > **✅ SHIPPED (2026-06-03).** The MVP is complete — all 11 ordered slices (S0–S11) of
 > `docs/18-mvp-implementation-plan.md` §7 are on `main`, all six acceptance proofs are in, and the exit checklist
-> (doc 18 §12) is closed. This section is the original goal/scope statement; see `CLAUDE.md` for shipped detail and
-> the v1/v1.x deferrals. v1 (§4) is currently in progress (started 2026-06-03).
+> (doc 18 §12) is closed. This section is the original goal/scope statement; see `current-status.md` for the
+> dated shipped boundary and `open-residuals.md` for current v1/v1.x deferrals.
 
 **Goal:** deliver the *minimum that makes EasySynQ structurally better than a file share* — a controlled vault with a working document lifecycle, granular permissions, first-run setup, and a basic but tamper-evident audit trail. If the MVP works, document drift is already structurally prevented for documents under control.
 
@@ -128,8 +128,9 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 >   register-steward lifecycle console (**S-risk-5**; reopening rides the API in v1); the Context 4.1 / Interested Parties 4.2
 >   registers reuse this pattern.
 >
-> **This block is a point-in-time snapshot.** The authoritative live status is **`CLAUDE.md` "Current status"** + the per-slice
-> changelog **`docs/slice-history.md`** (named, not-faked deferrals live there); the web design specs/plans in
+> **This block is a point-in-time snapshot.** The dated execution snapshot is **`docs/current-status.md`**;
+> current named deferrals live only in **`docs/open-residuals.md`**, and the historical per-slice changelog is
+> **`docs/slice-history.md`**. The web design specs/plans are in
 > `docs/superpowers/{specs,plans}/`. Deferred to **v1.x**: OpenSearch full-text + currency/overdue + audit-log search; the
 > notification *delivery/escalation/digest* tail; reporting depth; and the items named per family in slice-history.
 

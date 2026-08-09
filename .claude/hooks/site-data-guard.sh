@@ -7,7 +7,7 @@
 # (scripts/check-no-site-data.sh) already existed, but nothing ran it on an edit — so a match
 # was only discovered at commit/CI time, by which point the content had already been written
 # and, at least once, already committed. It fired TWICE in a single session (2026-08-03):
-# docs/slice-history.md and CLAUDE.md, both times after the fact.
+# docs/slice-history.md and a tool-specific compatibility note, both times after the fact.
 #
 # Scope: prose files only (*.md). Code paths legitimately carry IPs/hostnames in fixtures and
 # config, and the repo-wide checker (which CI runs in the `contracts` job) already covers them

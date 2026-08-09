@@ -1,5 +1,6 @@
-"""S-mr-pack integration: ``GET /management-reviews/{review_id}/pack`` (CI-only on this Windows
-box — native ``-m integration`` does not run here; see CLAUDE.md).
+"""S-mr-pack integration: ``GET /management-reviews/{review_id}/pack``.
+
+The integration suite requires the repository's Docker/testcontainers environment.
 
 The pack renders the released MR's FROZEN ``metadata_snapshot["mgmt_review_minutes"]`` (NOT the live
 ``review_output`` rows), so a post-release mutation of a live output row must NOT change the bytes
