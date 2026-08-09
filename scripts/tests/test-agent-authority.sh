@@ -94,6 +94,53 @@ EOF
 mutate_fixture() {
   local fixture="$1" case_name="$2"
   case "$case_name" in
+    advanced_status_snapshot)
+      sed -i \
+        -e 's/as_of: "2026-08-08"/as_of: "2026-08-09"/' \
+        -e 's/baseline_commit: "c15541f"/baseline_commit: "3c2531f"/' \
+        -e 's/last_shipped_slice: "S-upload-identity"/last_shipped_slice: "S-auth-startup-boundary"/' \
+        -e 's/web_test_files: 249/web_test_files: 250/' \
+        -e 's/web_tests: 1468/web_tests: 1511/' \
+        "$fixture/docs/current-status.md"
+      ;;
+    missing_status_key)
+      sed -i '/^web_tests:/d' "$fixture/docs/current-status.md"
+      ;;
+    unknown_status_key)
+      sed -i '/^web_tests:/a extra_status_fact: 1' "$fixture/docs/current-status.md"
+      ;;
+    malformed_status_schema)
+      sed -i 's/easysynq_status_schema: 1/easysynq_status_schema: 2/' "$fixture/docs/current-status.md"
+      ;;
+    malformed_status_date)
+      sed -i 's/as_of: "2026-08-08"/as_of: "08-09-2026"/' "$fixture/docs/current-status.md"
+      ;;
+    malformed_status_commit)
+      sed -i 's/baseline_commit: "c15541f"/baseline_commit: "not-a-commit"/' "$fixture/docs/current-status.md"
+      ;;
+    malformed_status_slice)
+      sed -i 's/last_shipped_slice: "S-upload-identity"/last_shipped_slice: "auth startup"/' "$fixture/docs/current-status.md"
+      ;;
+    malformed_status_migration)
+      sed -i 's/migration_head: "0085"/migration_head: "85"/' "$fixture/docs/current-status.md"
+      ;;
+    malformed_status_count)
+      sed -i 's/web_tests: 1468/web_tests: 1,511/' "$fixture/docs/current-status.md"
+      ;;
+    non_ascii_status_count)
+      sed -i 's/web_tests: 1468/web_tests: ١٥١١/' "$fixture/docs/current-status.md"
+      ;;
+    duplicate_status_block)
+      cat >>"$fixture/docs/current-status.md" <<'EOF'
+
+---
+as_of: "2026-08-09"
+---
+EOF
+      ;;
+    missing_status_block_delimiter)
+      sed -i '0,/^---$/! { /^---$/d; }' "$fixture/docs/current-status.md"
+      ;;
     duplicate_status_key)
       sed -i '/easysynq_status_schema: 1/a easysynq_status_schema: 1' "$fixture/docs/current-status.md"
       ;;
@@ -211,6 +258,21 @@ run_good() {
   status=$?
   rm -rf "$fixture"
   if [ "$status" -eq 0 ] && grep -Fqx 'AUTHORITY_OK' <<<"$output"; then
+    ok "$case_name"
+  else
+    bad "$case_name (status=$status output=$output)"
+  fi
+}
+
+run_good_mutated() {
+  local case_name="$1" fixture output status
+  fixture="$(fixture_root)"
+  mutate_fixture "$fixture" "$case_name"
+  git -C "$fixture" add --all
+  output="$(AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
+  status=$?
+  rm -rf "$fixture"
+  if [ "$status" -eq 0 ] && [ "$output" = 'AUTHORITY_OK' ]; then
     ok "$case_name"
   else
     bad "$case_name (status=$status output=$output)"
@@ -495,6 +557,18 @@ run_claude_compatibility_contract() {
 }
 
 printf '== repository authority contract ==\n'
+run_good_mutated advanced_status_snapshot
+run_bad missing_status_key AUTHORITY_MISSING_STATUS_KEY
+run_bad unknown_status_key AUTHORITY_UNKNOWN_STATUS_KEY
+run_bad malformed_status_schema AUTHORITY_STATUS_VALUE
+run_bad malformed_status_date AUTHORITY_STATUS_VALUE
+run_bad malformed_status_commit AUTHORITY_STATUS_VALUE
+run_bad malformed_status_slice AUTHORITY_STATUS_VALUE
+run_bad malformed_status_migration AUTHORITY_STATUS_VALUE
+run_bad malformed_status_count AUTHORITY_STATUS_VALUE
+run_bad non_ascii_status_count AUTHORITY_STATUS_VALUE
+run_bad duplicate_status_block AUTHORITY_STATUS_FRONTMATTER
+run_bad missing_status_block_delimiter AUTHORITY_STATUS_FRONTMATTER
 run_bad duplicate_status_key AUTHORITY_DUPLICATE_STATUS_KEY
 run_bad claude_current_heading AUTHORITY_CLAUDE_CURRENT_OWNER
 run_bad slice_history_head AUTHORITY_HISTORY_MUTABLE_HEAD
