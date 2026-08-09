@@ -8,7 +8,8 @@ KICKSTART=$ROOT/infra/dev/fedora-proof/ks.cfg
 RUNBOOK=$ROOT/docs/runbooks/fedora-proof.md
 CONTRACT_VIRSH_BIN=${FEDORA_PROOF_CONTRACT_VIRSH_BIN:-/usr/bin/virsh}
 
-if [[ $CONTRACT_VIRSH_BIN != /* || ! -x $CONTRACT_VIRSH_BIN ]]; then
+if [[ ${FEDORA_PROOF_CONTRACT_VIRSH_BIN+x} == x \
+    && ( $CONTRACT_VIRSH_BIN != /* || ! -x $CONTRACT_VIRSH_BIN ) ]]; then
   printf 'FAIL invalid contract virsh probe: %s\n' "$CONTRACT_VIRSH_BIN" >&2
   exit 2
 fi
@@ -400,7 +401,8 @@ if [[ -f $HOST_SCRIPT ]]; then
     FEDORA_PROOF_CONNECT=test:///default
 
     real_libvirt_storage_ready=0
-    if fedora_proof_check_libvirt_ready "$CONTRACT_VIRSH_BIN" >/dev/null 2>&1; then
+    if [[ -x $CONTRACT_VIRSH_BIN ]] \
+        && fedora_proof_check_libvirt_ready "$CONTRACT_VIRSH_BIN" >/dev/null 2>&1; then
       real_libvirt_storage_ready=1
     fi
 
@@ -1297,11 +1299,15 @@ if [[ -f $HOST_SCRIPT ]]; then
       skip 'host libvirt test driver lacks storage; domain identity diagnostic is unavailable'
       skip 'host libvirt test driver lacks storage; pre-delete diagnostic end is unavailable'
     fi
-    if ! "$CONTRACT_VIRSH_BIN" --connect test:///default \
-        dominfo "$failure_vm" >/dev/null 2>&1; then
-      pass
+    if (( real_libvirt_storage_ready )); then
+      if ! "$CONTRACT_VIRSH_BIN" --connect test:///default \
+          dominfo "$failure_vm" >/dev/null 2>&1; then
+        pass
+      else
+        fail 'failure fixture leaves no libvirt test-driver domain'
+      fi
     else
-      fail 'failure fixture leaves no libvirt test-driver domain'
+      skip 'host libvirt test driver is unavailable; domain absence cannot be queried'
     fi
     rm -f -- "$failure_log" "$failure_repo/ks.cfg"
     rmdir "$failure_repo/.fedora-proof-logs" "$failure_repo" "$failure_tmp"
