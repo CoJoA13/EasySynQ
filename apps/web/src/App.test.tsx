@@ -1,10 +1,12 @@
 import { QueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, expect, test, vi } from "vitest";
 import { App, LegacyImportRedirect } from "./App";
 import { AuthContext, type AuthState } from "./lib/auth";
+import { server } from "./test/msw/server";
 import { renderWithProviders, TEST_AUTH } from "./test/render";
 
 afterEach(() => sessionStorage.removeItem("es_auth_redirect"));
@@ -16,6 +18,193 @@ function AppWithAuth({ auth }: { auth: AuthState }) {
     </AuthContext.Provider>
   );
 }
+
+const SETUP_MUTATION_PATHS = [
+  ["post", "/api/v1/setup/bootstrap"],
+  ["patch", "/api/v1/setup/org-profile"],
+  ["post", "/api/v1/setup/verify-storage"],
+  ["post", "/api/v1/setup/configure-backup"],
+  ["post", "/api/v1/setup/run-restore-test"],
+  ["post", "/api/v1/setup/configure-auth"],
+  ["post", "/api/v1/setup/finalize"],
+] as const;
+
+function watchSetupMutations() {
+  const setupMutation = vi.fn();
+  server.use(
+    ...SETUP_MUTATION_PATHS.map(([method, path]) =>
+      http[method](path, () => {
+        setupMutation();
+        return HttpResponse.json({});
+      }),
+    ),
+  );
+  return setupMutation;
+}
+
+function noTokenAuth(login = vi.fn(async () => undefined)): AuthState {
+  return {
+    ...TEST_AUTH,
+    status: { kind: "ready" },
+    user: null,
+    token: null,
+    login,
+  };
+}
+
+test.each(["/setup", "/library"])(
+  "setup state 503 at %s fails closed without mounting setup or the shell",
+  async (route) => {
+    const login = vi.fn(async () => undefined);
+    const setupMutation = watchSetupMutations();
+    server.use(
+      http.get("/api/v1/setup/state", () =>
+        HttpResponse.json({ detail: "unsafe database host" }, { status: 503 }),
+      ),
+    );
+
+    renderWithProviders(<App />, { route, auth: noTokenAuth(login) });
+
+    expect(
+      await screen.findByRole("heading", { name: "Setup status is unavailable" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Welcome to EasySynQ" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Document Library")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Home" })).not.toBeInTheDocument();
+    expect(login).not.toHaveBeenCalled();
+    expect(setupMutation).not.toHaveBeenCalled();
+    expect(document.body).not.toHaveTextContent("unsafe database host");
+  },
+);
+
+test.each(["/setup", "/library"])(
+  "setup state network failure at %s fails closed without mounting setup or the shell",
+  async (route) => {
+    const login = vi.fn(async () => undefined);
+    const setupMutation = watchSetupMutations();
+    server.use(http.get("/api/v1/setup/state", () => HttpResponse.error()));
+
+    renderWithProviders(<App />, { route, auth: noTokenAuth(login) });
+
+    expect(
+      await screen.findByRole("heading", { name: "Setup status is unavailable" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Welcome to EasySynQ" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Document Library")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Home" })).not.toBeInTheDocument();
+    expect(login).not.toHaveBeenCalled();
+    expect(setupMutation).not.toHaveBeenCalled();
+  },
+);
+
+test.each([
+  [
+    "invalid JSON",
+    new HttpResponse("not JSON", { status: 200, headers: { "Content-Type": "application/json" } }),
+  ],
+  ["missing setup state", HttpResponse.json({})],
+  ["null setup state", HttpResponse.json({ setup_state: null })],
+  ["unknown setup state", HttpResponse.json({ setup_state: "MYSTERY" })],
+] as const)("setup state %s fails closed", async (_label, response) => {
+  server.use(http.get("/api/v1/setup/state", () => response));
+
+  renderWithProviders(<App />, { route: "/setup" });
+
+  expect(
+    await screen.findByRole("heading", { name: "Setup status is unavailable" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Welcome to EasySynQ" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Document Library")).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Home" })).not.toBeInTheDocument();
+});
+
+test("OPERATIONAL with a token renders the Document Library", async () => {
+  server.use(
+    http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state: "OPERATIONAL" })),
+  );
+
+  renderWithProviders(<App />, { route: "/library" });
+
+  expect(await screen.findByText("Document Library")).toBeInTheDocument();
+});
+
+test("OPERATIONAL without a token preserves the sign-in redirect latch", async () => {
+  const login = vi.fn(async () => undefined);
+  server.use(
+    http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state: "OPERATIONAL" })),
+  );
+
+  renderWithProviders(<App />, { route: "/library", auth: noTokenAuth(login) });
+
+  await waitFor(() => expect(login).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole("status", { name: "Connecting to sign-in" })).toBeInTheDocument();
+  expect(sessionStorage.getItem("es_auth_redirect")).toBe("1");
+});
+
+test.each(["UNINITIALIZED", "IN_SETUP"] as const)(
+  "%s without a token redirects to the existing setup wizard",
+  async (setup_state) => {
+    const login = vi.fn(async () => undefined);
+    server.use(http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state })));
+
+    renderWithProviders(<App />, { route: "/library", auth: noTokenAuth(login) });
+
+    expect(await screen.findByRole("heading", { name: "Welcome to EasySynQ" })).toBeInTheDocument();
+    expect(login).not.toHaveBeenCalled();
+  },
+);
+
+test("setup state retry performs one additional read and recovers to the shell", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  server.use(
+    http.get("/api/v1/setup/state", () => {
+      reads += 1;
+      return reads === 1
+        ? HttpResponse.json({ detail: "unavailable" }, { status: 503 })
+        : HttpResponse.json({ setup_state: "OPERATIONAL" });
+    }),
+  );
+
+  renderWithProviders(<App />, { route: "/library" });
+
+  expect(
+    await screen.findByRole("heading", { name: "Setup status is unavailable" }),
+  ).toBeInTheDocument();
+  expect(reads).toBe(1);
+
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+
+  expect(await screen.findByText("Document Library")).toBeInTheDocument();
+  expect(reads).toBe(2);
+});
+
+test("rapid setup state retry activation starts one additional read", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  let resolveSecond: ((response: Response) => void) | undefined;
+  server.use(
+    http.get("/api/v1/setup/state", () => {
+      reads += 1;
+      if (reads === 1) return HttpResponse.json({ detail: "unavailable" }, { status: 503 });
+      return new Promise<Response>((resolve) => {
+        resolveSecond = resolve;
+      });
+    }),
+  );
+
+  renderWithProviders(<App />, { route: "/library" });
+
+  const retry = await screen.findByRole("button", { name: "Try again" });
+  await user.click(retry);
+  await waitFor(() => expect(reads).toBe(2));
+  expect(retry).toBeDisabled();
+  await user.click(retry);
+  expect(reads).toBe(2);
+
+  resolveSecond?.(HttpResponse.json({ setup_state: "OPERATIONAL" }));
+  expect(await screen.findByText("Document Library")).toBeInTheDocument();
+});
 
 test("auth loading renders the named startup boundary without shell or setup", async () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

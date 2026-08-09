@@ -1,10 +1,11 @@
-import { Container, Loader } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { SetupWizard } from "./SetupWizard";
 import { AppShell } from "./app/shell/AppShell";
 import { AuthStartupScreen } from "./app/startup/AuthStartupScreen";
+import { SetupStartupScreen } from "./app/startup/SetupStartupScreen";
+import { fetchSetupState } from "./app/startup/setupState";
 import { AdminShell } from "./admin/AdminShell";
 import { ConfigAdmin } from "./admin/ConfigAdmin";
 import { ProcessesAdmin } from "./admin/ProcessesAdmin";
@@ -44,7 +45,6 @@ import { ContextRegisterPage } from "./features/context/ContextRegisterPage";
 import { InterestedPartiesRegisterPage } from "./features/interested-parties/InterestedPartiesRegisterPage";
 import { NotificationsPage } from "./features/notifications/NotificationsPage";
 import { NotificationSettingsPage } from "./features/notifications/NotificationSettingsPage";
-import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 import { useRouteChrome } from "./lib/routeChrome";
 
@@ -59,20 +59,25 @@ export function App() {
   useRouteChrome();
   const { status, token, login, retry } = useAuth();
 
-  // The public setup-state probe decides wizard-vs-shell (S8a). The latch (423) protects the API
-  // regardless; this is just the SPA's routing signal.
   const setupState = useQuery({
     queryKey: ["setup-state"],
-    queryFn: () => apiGet<{ setup_state: string }>("/api/v1/setup/state"),
+    queryFn: ({ signal }) => fetchSetupState(signal),
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchInterval: false,
   });
 
-  const operational = setupState.data?.setup_state === "OPERATIONAL";
+  const setupValue = setupState.data?.setup_state;
+  const operational = setupValue === "OPERATIONAL";
+  const preOperational = setupValue === "UNINITIALIZED" || setupValue === "IN_SETUP";
 
   // Tokens live in memory only (lib/auth), so every reload starts logged-out. When the install is
   // operational and we hold no token, bounce through Keycloak to re-authenticate (seamless while the
   // SSO session is live). A one-shot sessionStorage flag stops a failed sign-in from looping.
   useEffect(() => {
-    if (status.kind !== "ready" || setupState.isLoading) return;
+    if (status.kind !== "ready" || setupState.status !== "success") return;
     if (operational && !token) {
       if (!sessionStorage.getItem("es_auth_redirect")) {
         sessionStorage.setItem("es_auth_redirect", "1");
@@ -81,7 +86,7 @@ export function App() {
     } else if (token) {
       sessionStorage.removeItem("es_auth_redirect");
     }
-  }, [status.kind, operational, token, login, setupState.isLoading]);
+  }, [status.kind, operational, token, login, setupState.status]);
 
   if (status.kind !== "ready") {
     return (
@@ -96,11 +101,27 @@ export function App() {
     );
   }
 
-  if (setupState.isLoading) {
+  if (setupState.isPending) {
     return (
-      <Container size="sm" py="xl">
-        <Loader />
-      </Container>
+      <SetupStartupScreen
+        status={{ kind: "loading", phase: "initial" }}
+        onRetry={async () => {
+          await setupState.refetch({ cancelRefetch: false });
+        }}
+        onReload={() => window.location.reload()}
+      />
+    );
+  }
+
+  if (setupState.isError || (!operational && !preOperational)) {
+    return (
+      <SetupStartupScreen
+        status={{ kind: "error", phase: "initial" }}
+        onRetry={async () => {
+          await setupState.refetch({ cancelRefetch: false });
+        }}
+        onReload={() => window.location.reload()}
+      />
     );
   }
 
