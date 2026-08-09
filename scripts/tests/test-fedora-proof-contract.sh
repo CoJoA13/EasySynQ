@@ -6,12 +6,24 @@ HOST_SCRIPT=$ROOT/scripts/run-fedora-proof.sh
 GUEST_SCRIPT=$ROOT/scripts/inside-fedora-proof.sh
 KICKSTART=$ROOT/infra/dev/fedora-proof/ks.cfg
 RUNBOOK=$ROOT/docs/runbooks/fedora-proof.md
+CONTRACT_VIRSH_BIN=${FEDORA_PROOF_CONTRACT_VIRSH_BIN:-/usr/bin/virsh}
+
+if [[ $CONTRACT_VIRSH_BIN != /* || ! -x $CONTRACT_VIRSH_BIN ]]; then
+  printf 'FAIL invalid contract virsh probe: %s\n' "$CONTRACT_VIRSH_BIN" >&2
+  exit 2
+fi
 
 passed=0
+skipped=0
 failed=0
 
 pass() {
   passed=$((passed + 1))
+}
+
+skip() {
+  printf 'SKIP %s\n' "$1"
+  skipped=$((skipped + 1))
 }
 
 fail() {
@@ -74,6 +86,7 @@ failure_tmp=$fixture_root/failure-tmp
 failure_vm=easysynq-fedora-proof-20000101T000000Z-99999-deadbeef
 failure_log=$failure_repo/.fedora-proof-logs/$failure_vm.log
 failure_workdir=
+storage_ready_probe=$fixture_root/virsh-storage-ready-probe
 storage_probe=$fixture_root/virsh-storage-probe
 acl_probe=$fixture_root/acl-probe
 client_probe=$fixture_root/client-probe
@@ -107,7 +120,8 @@ cleanup_fixture() {
     "$fixture_root/owned/root.qcow2" \
     "$fixture_root/owned/vm-name" \
     "$fixture_root/owned/.easysynq-fedora-proof" 2>/dev/null || true
-  rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" "$storage_probe" \
+  rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" \
+    "$storage_ready_probe" "$storage_probe" \
     "$acl_probe" "$client_probe" "$console_fifo" "$console_log" "$diagnostic_probe" \
     "$diagnostic_log" "$uuid_probe" "$uuid_virsh_probe" "$uuid_virsh_pid_file" \
     "$staged_installer" "$staged_workstation" \
@@ -384,9 +398,23 @@ if [[ -f $HOST_SCRIPT ]]; then
   if declare -F fedora_proof_check_libvirt_ready >/dev/null; then
     original_connect=$FEDORA_PROOF_CONNECT
     FEDORA_PROOF_CONNECT=test:///default
-    output=$(fedora_proof_check_libvirt_ready /usr/bin/virsh 2>&1)
+
+    real_libvirt_storage_ready=0
+    if fedora_proof_check_libvirt_ready "$CONTRACT_VIRSH_BIN" >/dev/null 2>&1; then
+      real_libvirt_storage_ready=1
+    fi
+
+    printf '%s\n' \
+      '#!/usr/bin/env bash' \
+      'case "$*" in' \
+      '  "--connect test:///default uri") printf "%s\\n" test:///default ;;' \
+      '  "--connect test:///default pool-list --all") exit 0 ;;' \
+      '  *) exit 2 ;;' \
+      'esac' >"$storage_ready_probe"
+    chmod 0700 "$storage_ready_probe"
+    output=$(fedora_proof_check_libvirt_ready "$storage_ready_probe" 2>&1)
     status=$?
-    assert_status 0 "$status" 'libvirt test driver satisfies compute and storage readiness'
+    assert_status 0 "$status" 'libvirt readiness accepts exact compute and storage capabilities'
 
     printf '%s\n' \
       '#!/usr/bin/env bash' \
@@ -402,7 +430,7 @@ if [[ -f $HOST_SCRIPT ]]; then
     assert_status 1 "$status" 'libvirt readiness rejects a missing storage capability'
     assert_contains "$output" 'storage capability' 'storage readiness failure names the missing boundary'
     assert_contains "$output" 'virtstoraged.socket' 'storage readiness failure gives the exact service remedy'
-    rm -f -- "$storage_probe"
+    rm -f -- "$storage_ready_probe" "$storage_probe"
   else
     fail 'host script exposes behavior-level libvirt storage readiness'
   fi
@@ -1235,8 +1263,12 @@ if [[ -f $HOST_SCRIPT ]]; then
     else
       fail 'failure cleanup never reads function locals after their scope ends'
     fi
-    assert_contains "$output" 'domain exited before identity capture' \
-      'fixture reaches the real post-trap virt-install failure path'
+    if (( real_libvirt_storage_ready )); then
+      assert_contains "$output" 'domain exited before identity capture' \
+        'fixture reaches the real post-trap virt-install failure path'
+    else
+      skip 'host libvirt test driver lacks storage; post-domain failure path is not available'
+    fi
     assert_not_exists "$failure_workdir" 'failure cleanup removes the exact owned work directory'
     assert_not_exists "$failure_disk" 'failure cleanup removes the exact qcow2 disk'
     assert_not_exists "$failure_workdir/id_ed25519" 'failure cleanup removes the exact private key'
@@ -1253,13 +1285,20 @@ if [[ -f $HOST_SCRIPT ]]; then
     assert_status "$EUID" "$(/usr/bin/stat -c '%u' "$staged_workstation")" \
       'failed lifecycle leaves retained Workstation media caller-owned'
     failure_log_output=$(<"$failure_log")
-    assert_contains "$failure_log_output" 'FEDORA_PROOF_DIAGNOSTICS_BEGIN' \
-      'failed lifecycle preserves a diagnostic begin marker before disk deletion'
-    assert_contains "$failure_log_output" 'FEDORA_PROOF_DIAGNOSTIC domain-identity-unavailable' \
-      'failed pre-domain lifecycle records bounded diagnostic unavailability'
-    assert_contains "$failure_log_output" 'FEDORA_PROOF_DIAGNOSTICS_END' \
-      'failed lifecycle preserves a diagnostic end marker after exact cleanup'
-    if ! /usr/bin/virsh --connect test:///default dominfo "$failure_vm" >/dev/null 2>&1; then
+    if (( real_libvirt_storage_ready )); then
+      assert_contains "$failure_log_output" 'FEDORA_PROOF_DIAGNOSTICS_BEGIN' \
+        'failed lifecycle preserves a diagnostic begin marker before disk deletion'
+      assert_contains "$failure_log_output" 'FEDORA_PROOF_DIAGNOSTIC domain-identity-unavailable' \
+        'failed pre-domain lifecycle records bounded diagnostic unavailability'
+      assert_contains "$failure_log_output" 'FEDORA_PROOF_DIAGNOSTICS_END' \
+        'failed lifecycle preserves a diagnostic end marker after exact cleanup'
+    else
+      skip 'host libvirt test driver lacks storage; pre-delete diagnostic begin is unavailable'
+      skip 'host libvirt test driver lacks storage; domain identity diagnostic is unavailable'
+      skip 'host libvirt test driver lacks storage; pre-delete diagnostic end is unavailable'
+    fi
+    if ! "$CONTRACT_VIRSH_BIN" --connect test:///default \
+        dominfo "$failure_vm" >/dev/null 2>&1; then
       pass
     else
       fail 'failure fixture leaves no libvirt test-driver domain'
@@ -1401,5 +1440,6 @@ if [[ -f $RUNBOOK ]]; then
     'runbook preserves the SELinux media boundary explicitly'
 fi
 
-printf '%d Fedora proof contract checks passed; %d failed\n' "$passed" "$failed"
+printf '%d Fedora proof contract checks passed; %d skipped; %d failed\n' \
+  "$passed" "$skipped" "$failed"
 (( failed == 0 ))

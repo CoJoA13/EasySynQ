@@ -120,8 +120,7 @@ def test_vulnerable_postgres_mcp_connector_is_disabled() -> None:
     assert not [
         entry
         for entry in dependabot["updates"]
-        if entry["package-ecosystem"] == "npm"
-        and entry["directory"] == "/tools/mcp-postgres"
+        if entry["package-ecosystem"] == "npm" and entry["directory"] == "/tools/mcp-postgres"
     ]
 
 

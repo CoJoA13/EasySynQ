@@ -417,8 +417,9 @@ async def start_import_commit(
     # resume needs a partial-state clear/ack op FIRST (a new endpoint + a review-state call).
     # ⚠ This does leave a real hole: a run can be PartiallyCommitted BECAUSE the effective member
     # failed (`claim_commit_result` lets a failed ledger row later succeed, and `_finalize` marks
-    # partial on ANY item failure), so a resume can commit it without honouring the opt-in. Tracked as
-    # RES-INGEST-PARTIAL-OPTIN in docs/open-residuals.md — do not assume the member is already vaulted.
+    # partial on ANY item failure), so a resume can commit it without honouring the opt-in.
+    # Tracked as RES-INGEST-PARTIAL-OPTIN in docs/open-residuals.md — do not assume the member is
+    # already vaulted.
     if run.status in _COMMIT_START:
         deferred = [
             f.family_key

@@ -103,7 +103,9 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
 
     contracts = jobs["contracts"]
     _assert_hard_fail(contracts)
-    authority_index, authority = _step(contracts, "Agent authority and Claude compatibility contracts")
+    authority_index, authority = _step(
+        contracts, "Agent authority and Claude compatibility contracts"
+    )
     assert authority == {
         "name": "Agent authority and Claude compatibility contracts",
         "run": (
