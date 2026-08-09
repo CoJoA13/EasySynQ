@@ -113,7 +113,9 @@ test("finalize waits for onFinalized after a successful response", async () => {
     }),
   );
 
-  renderWithProviders(<SetupWizard token="test-token" login={() => {}} onFinalized={onFinalized} />);
+  renderWithProviders(
+    <SetupWizard token="test-token" login={() => {}} onFinalized={onFinalized} />,
+  );
 
   const finalize = await screen.findByRole("button", { name: "Finalize setup" });
   await user.click(finalize);
@@ -150,7 +152,9 @@ test("finalize failure keeps the wizard error and does not call onFinalized", as
     ),
   );
 
-  renderWithProviders(<SetupWizard token="test-token" login={() => {}} onFinalized={onFinalized} />);
+  renderWithProviders(
+    <SetupWizard token="test-token" login={() => {}} onFinalized={onFinalized} />,
+  );
 
   await user.click(await screen.findByRole("button", { name: "Finalize setup" }));
 

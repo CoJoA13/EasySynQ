@@ -192,11 +192,7 @@ export function App() {
           operational ? (
             <Navigate to="/" replace />
           ) : (
-            <SetupWizard
-              token={token}
-              login={login}
-              onFinalized={verifyFinalization}
-            />
+            <SetupWizard token={token} login={login} onFinalized={verifyFinalization} />
           )
         }
       />

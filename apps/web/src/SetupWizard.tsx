@@ -289,8 +289,7 @@ export function SetupWizard({
               />
               <Text size="xs" c="dimmed">
                 GOVERNANCE (recommended) keeps privileged retention handling and future
-                role-preserving recovery design possible.
-                COMPLIANCE is immutable even to root.
+                role-preserving recovery design possible. COMPLIANCE is immutable even to root.
               </Text>
               <Group>
                 <Button onClick={() => void verifyStorage()} loading={busy}>
