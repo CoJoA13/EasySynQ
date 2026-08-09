@@ -1,6 +1,6 @@
 # S-auth-startup-boundary design
 
-**Status:** Pending owner review of the written specification  
+**Status:** Owner approved on 2026-08-09
 **Programme:** Programme 1 — frontend resilience and accessibility  
 **Slice:** 1 of 8 — startup/authentication boundary  
 **Date:** 2026-08-09  
