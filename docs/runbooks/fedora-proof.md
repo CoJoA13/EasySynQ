@@ -43,6 +43,7 @@ network:
 ```bash
 id -nG | tr ' ' '\n' | grep -Fx libvirt
 virsh --connect qemu:///system uri
+virt-install --osinfo list | grep -E '^fedora(44|43)$'
 sudo virsh --connect qemu:///system net-start default || true
 sudo virsh --connect qemu:///system net-autostart default
 virsh --connect qemu:///system net-info default
@@ -51,6 +52,11 @@ virsh --connect qemu:///system net-info default
 Do not weaken device, socket, ISO, or directory permissions to make libvirt work. Put both ISO files
 in a location the reviewed `qemu:///system` configuration can read, and fix the host's normal libvirt
 ACL/SELinux configuration if the preflight reports access denial.
+
+The harness prefers exact `fedora44` libosinfo metadata. Fedora 44 hosts whose packaged `osinfo-db`
+does not yet list that identifier may use `fedora43` as the nearest device-default metadata only. The
+Everything and Workstation media remain Fedora 44, and the installed guest must still pass every exact
+Fedora 44 Workstation assertion. A database without either identifier fails closed.
 
 ## Acquire and verify both ISO files
 
@@ -112,6 +118,11 @@ Run the acceptance proof by removing only `--validate-only`:
   --workstation-iso "$WORKSTATION_ISO" \
   --workstation-iso-sha256 "$WORKSTATION_SHA256"
 ```
+
+A fresh login after joining `libvirt` is preferred. If an operator deliberately uses `sg libvirt -c`
+instead, put any custom `TMPDIR=/absolute/owned/path` assignment inside the `sg` command string; do not
+assume an unexported caller variable crosses the new shell. The printed disk path is the authoritative
+cleanup target. This is invocation hygiene, not a way to bypass the harness's ownership checks.
 
 Allow approximately 60–120 minutes, depending on network, CPU, storage, and container-image caches.
 The harness prints its unique VM name, exact temporary disk path, and retained evidence log before VM

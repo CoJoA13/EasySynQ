@@ -200,6 +200,40 @@ validate_media() {
   printf 'fedora-proof: %s media: verified sha256:%s\n' "$label" "$actual"
 }
 
+fedora_proof_select_osinfo_from_list() {
+  local listing=$1 candidate fedora43_available=0
+  while IFS= read -r candidate; do
+    case "$candidate" in
+      fedora44)
+        printf '%s\n' fedora44
+        return 0
+        ;;
+      fedora43)
+        fedora43_available=1
+        ;;
+    esac
+  done <<<"$listing"
+  if (( fedora43_available )); then
+    printf '%s\n' \
+      'fedora-proof: host osinfo-db lacks fedora44; using fedora43 device metadata only.' \
+      'fedora-proof: the installed guest must still pass the Fedora Workstation 44 gates.' >&2
+    printf '%s\n' fedora43
+    return 0
+  fi
+  printf '%s\n' \
+    'fedora-proof: host osinfo-db must provide fedora44 or fedora43 metadata; update osinfo-db.' >&2
+  return 1
+}
+
+fedora_proof_select_osinfo() {
+  local listing
+  listing=$(/usr/bin/virt-install --osinfo list) || {
+    printf '%s\n' 'fedora-proof: could not query virt-install OS metadata' >&2
+    return 1
+  }
+  fedora_proof_select_osinfo_from_list "$listing"
+}
+
 require_host_tools() {
   local path missing=0
   for path in \
@@ -223,10 +257,8 @@ require_host_tools() {
 
 fedora_proof_main() {
   local installer_iso= installer_sha= workstation_iso= workstation_sha= validate_only=0
-  local repo_root script_path script_dir kickstart_template
-  local workdir= vm_name= disk= rendered_ks= private_key= public_key= known_hosts= repo_files=
-  local uuid_file= marker_file= vm_name_file= log_dir= log_file= vm_uuid= virt_pid= guest_ip=
-  local evidence_commit= cleanup_failed=0
+  local repo_root script_path script_dir kickstart_template osinfo
+  local vm_name= evidence_commit=
 
   while (( $# )); do
     case "$1" in
@@ -312,12 +344,25 @@ fedora_proof_main() {
     printf '%s\n' 'fedora-proof: qemu:///system is unavailable; see docs/runbooks/fedora-proof.md' >&2
     return 1
   }
+  osinfo=$(fedora_proof_select_osinfo) || return 1
 
   vm_name=$(fedora_proof_new_vm_name) || return 1
   if /usr/bin/virsh --connect "$FEDORA_PROOF_CONNECT" dominfo "$vm_name" >/dev/null 2>&1; then
     printf '%s\n' 'fedora-proof: generated VM name already exists; refusing reuse' >&2
     return 1
   fi
+  fedora_proof_run_lifecycle \
+    "$vm_name" "$installer_iso" "$installer_sha" "$workstation_iso" "$workstation_sha" \
+    "$repo_root" "$kickstart_template" "$evidence_commit" "$osinfo"
+}
+
+fedora_proof_run_lifecycle() (
+  local vm_name=$1 installer_iso=$2 installer_sha=$3 workstation_iso=$4 workstation_sha=$5
+  local repo_root=$6 kickstart_template=$7 evidence_commit=$8 osinfo=$9
+  local workdir= disk= rendered_ks= private_key= public_key= known_hosts= repo_files=
+  local uuid_file= marker_file= vm_name_file= log_dir= log_file= vm_uuid= virt_pid= guest_ip=
+  local cleanup_failed=0
+
   workdir=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/easysynq-fedora-proof.XXXXXX") || return 1
   marker_file=$workdir/.easysynq-fedora-proof
   vm_name_file=$workdir/vm-name
@@ -481,7 +526,7 @@ fedora_proof_main() {
       --memory 12288 \
       --vcpus 4 \
       --cpu host-passthrough \
-      --osinfo fedora44 \
+      --osinfo "$osinfo" \
       --network network=default,model=virtio \
       --disk "path=$disk,format=qcow2,bus=virtio" \
       --disk "path=$workstation_iso,device=cdrom,bus=sata,readonly=on" \
@@ -510,7 +555,7 @@ fedora_proof_main() {
       --memory 12288 \
       --vcpus 4 \
       --cpu host-passthrough \
-      --osinfo fedora44 \
+      --osinfo "$osinfo" \
       --network network=default,model=virtio \
       --disk "path=$disk,format=qcow2,bus=virtio" \
       --import \
@@ -579,7 +624,7 @@ fedora_proof_main() {
     return 1
   }
   printf 'fedora-proof: PASS; retained evidence log: %s\n' "$log_file"
-}
+)
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   set -euo pipefail

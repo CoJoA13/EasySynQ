@@ -60,6 +60,11 @@ assert_file "$RUNBOOK" 'Fedora proof runbook exists'
 
 fixture_root=$(mktemp -d "${TMPDIR:-/tmp}/easysynq-fedora-contract.XXXXXX") || exit 2
 owned_cleanup=
+failure_repo=$fixture_root/failure-repo
+failure_tmp=$fixture_root/failure-tmp
+failure_vm=easysynq-fedora-proof-20000101T000000Z-99999-deadbeef
+failure_log=$failure_repo/.fedora-proof-logs/$failure_vm.log
+failure_workdir=
 cleanup_fixture() {
   [[ $fixture_root == "${TMPDIR:-/tmp}"/easysynq-fedora-contract.* ]] || return 1
   [[ -d $fixture_root && ! -L $fixture_root ]] || return 1
@@ -72,6 +77,26 @@ cleanup_fixture() {
     "$fixture_root/owned/vm-name" \
     "$fixture_root/owned/.easysynq-fedora-proof" 2>/dev/null || true
   rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" 2>/dev/null || true
+  rm -f -- "$failure_log" "$failure_repo/ks.cfg" 2>/dev/null || true
+  rmdir "$failure_repo/.fedora-proof-logs" 2>/dev/null || true
+  rmdir "$failure_repo" 2>/dev/null || true
+  if [[ -n $failure_workdir \
+      && $failure_workdir == "$failure_tmp"/easysynq-fedora-proof.* \
+      && -d $failure_workdir \
+      && ! -L $failure_workdir ]]; then
+    rm -f -- \
+      "$failure_workdir/root.qcow2" \
+      "$failure_workdir/ks.cfg" \
+      "$failure_workdir/id_ed25519" \
+      "$failure_workdir/id_ed25519.pub" \
+      "$failure_workdir/known_hosts" \
+      "$failure_workdir/repo-files" \
+      "$failure_workdir/vm-uuid" \
+      "$failure_workdir/vm-name" \
+      "$failure_workdir/.easysynq-fedora-proof" 2>/dev/null || true
+    rmdir "$failure_workdir" 2>/dev/null || true
+  fi
+  rmdir "$failure_tmp" 2>/dev/null || true
   rmdir "$fixture_root/Fedora-Workstation-Live-44-directory.x86_64.iso" 2>/dev/null || true
   rmdir "$fixture_root/owned" 2>/dev/null || true
   rmdir "$fixture_root" 2>/dev/null || true
@@ -124,6 +149,8 @@ if [[ -f $HOST_SCRIPT ]]; then
     'Fedora Workstation media is attached read-only'
   assert_contains "$host_source" 'archive --format=tar "$evidence_commit"' \
     'guest source is archived from the recorded evidence commit'
+  osinfo_uses=$(grep -cF -- '--osinfo "$osinfo"' <<<"$host_source")
+  assert_status 2 "$osinfo_uses" 'both libvirt phases use the one validated osinfo selection'
   if [[ $host_source != *'rm -rf'* && $host_source != *'find '*'-delete'* ]]; then
     pass
   else
@@ -222,7 +249,11 @@ if [[ -f $HOST_SCRIPT ]]; then
     printf '%s\n' "$first_name" >"$owned/vm-name"
     disk=$owned/root.qcow2
     outside=$fixture_root/outside.qcow2
-    : >"$disk"
+    if [[ -x /usr/bin/qemu-img ]]; then
+      /usr/bin/qemu-img create -q -f qcow2 "$disk" 1M
+    else
+      : >"$disk"
+    fi
     : >"$outside"
 
     output=$(fedora_proof_validate_cleanup_identity "$owned" "$first_name" "$outside" 2>&1)
@@ -272,6 +303,79 @@ if [[ -f $HOST_SCRIPT ]]; then
     assert_not_exists "$disk" 'exact unlocked owned disk was removed'
   else
     fail 'host script exposes lifecycle safety seams'
+  fi
+
+  selected_fallback=
+  if declare -F fedora_proof_select_osinfo_from_list >/dev/null; then
+    output=$(fedora_proof_select_osinfo_from_list $'fedora43\nfedora44\nubuntu24.04' 2>&1)
+    status=$?
+    assert_status 0 "$status" 'osinfo selection accepts host metadata with Fedora 44'
+    assert_status fedora44 "$output" 'osinfo selection prefers exact Fedora 44 metadata'
+
+    osinfo_warning=$fixture_root/osinfo-warning
+    output=$(fedora_proof_select_osinfo_from_list $'fedora43\nfedora42\nubuntu24.04' \
+      2>"$osinfo_warning")
+    status=$?
+    assert_status 0 "$status" 'osinfo selection accepts the documented Fedora 43 metadata fallback'
+    assert_status fedora43 "$output" 'osinfo selection returns the Fedora 43 metadata fallback'
+    selected_fallback=$output
+    warning=$(<"$osinfo_warning")
+    assert_contains "$warning" 'metadata only' 'fallback diagnostic does not weaken the Fedora 44 guest gate'
+    rm -f -- "$osinfo_warning"
+
+    output=$(fedora_proof_select_osinfo_from_list $'fedora42\nubuntu24.04' 2>&1)
+    status=$?
+    assert_status 1 "$status" 'osinfo selection rejects a host database without a safe Fedora fallback'
+    assert_contains "$output" 'fedora44 or fedora43' 'unsupported osinfo database failure is actionable'
+  else
+    fail 'host script exposes behavior-level osinfo selection'
+  fi
+
+  if declare -F fedora_proof_run_lifecycle >/dev/null && [[ $selected_fallback == fedora43 ]]; then
+    mkdir "$failure_repo" "$failure_tmp"
+    cp "$KICKSTART" "$failure_repo/ks.cfg"
+    original_connect=$FEDORA_PROOF_CONNECT
+    FEDORA_PROOF_CONNECT=test:///default
+    output=$(
+      TMPDIR="$failure_tmp" XDG_CACHE_HOME="$fixture_root/virt-cache" \
+        fedora_proof_run_lifecycle \
+          "$failure_vm" "$installer" "$installer_sha" "$workstation" "$workstation_sha" \
+          "$failure_repo" "$failure_repo/ks.cfg" 0000000000000000000000000000000000000000 \
+          "$selected_fallback" 2>&1
+    )
+    status=$?
+    FEDORA_PROOF_CONNECT=$original_connect
+    failure_disk=${output#*Fedora proof disk: }
+    failure_disk=${failure_disk%%$'\n'*}
+    failure_workdir=${failure_disk%/root.qcow2}
+
+    assert_status 1 "$status" 'failure after cleanup trap installation remains a proof failure'
+    if [[ $failure_disk == "$failure_tmp"/easysynq-fedora-proof.*/root.qcow2 ]]; then
+      pass
+    else
+      fail "failure fixture reports one exact owned disk path (actual=$failure_disk)"
+    fi
+    if [[ $output != *'unbound variable'* ]]; then
+      pass
+    else
+      fail 'failure cleanup never reads function locals after their scope ends'
+    fi
+    assert_contains "$output" 'domain exited before identity capture' \
+      'fixture reaches the real post-trap virt-install failure path'
+    assert_not_exists "$failure_workdir" 'failure cleanup removes the exact owned work directory'
+    assert_not_exists "$failure_disk" 'failure cleanup removes the exact qcow2 disk'
+    assert_not_exists "$failure_workdir/id_ed25519" 'failure cleanup removes the exact private key'
+    assert_not_exists "$failure_workdir/.easysynq-fedora-proof" \
+      'failure cleanup removes the exact ownership marker'
+    if ! /usr/bin/virsh --connect test:///default dominfo "$failure_vm" >/dev/null 2>&1; then
+      pass
+    else
+      fail 'failure fixture leaves no libvirt test-driver domain'
+    fi
+    rm -f -- "$failure_log" "$failure_repo/ks.cfg"
+    rmdir "$failure_repo/.fedora-proof-logs" "$failure_repo" "$failure_tmp"
+  else
+    fail 'host script exposes the scoped real lifecycle for failure cleanup proof'
   fi
 fi
 
