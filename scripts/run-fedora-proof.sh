@@ -269,6 +269,10 @@ fedora_proof_stage_media() {
     "$root" "$caller_uid" "$qemu_uid" workstation "$workstation" "$workstation_sha"
 }
 
+fedora_proof_client_state_valid() {
+  [[ ${1-} =~ ^[RSDZTtXxKWPI]$ ]]
+}
+
 fedora_proof_read_client_identity() {
   local pid=$1 stat rest state parent starttime key values uid=
   local -a fields
@@ -287,8 +291,9 @@ fedora_proof_read_client_identity() {
       break
     fi
   done </proc/"$pid"/status
-  [[ $state =~ ^[A-Z]$ && $parent =~ ^[0-9]+$ && $starttime =~ ^[0-9]+$ \
+  [[ $parent =~ ^[0-9]+$ && $starttime =~ ^[0-9]+$ \
       && $uid == "$EUID" ]] || return 1
+  fedora_proof_client_state_valid "$state" || return 1
   printf '%s %s %s\n' "$state" "$parent" "$starttime"
 }
 
@@ -313,8 +318,13 @@ fedora_proof_stop_client_exact() {
   [[ $expected_starttime =~ ^[0-9]+$ && $expected_parent =~ ^[1-9][0-9]*$ \
       && $attempts =~ ^[1-9][0-9]*$ && $attempts -le 600 ]] || return 1
   identity=$(fedora_proof_read_client_identity "$pid") || {
-    wait "$pid" 2>/dev/null || true
-    return 0
+    if [[ ! -e /proc/$pid ]] && ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    printf '%s\n' \
+      'fedora-proof cleanup: launched client identity is unreadable; refusing wait or signal' >&2
+    return 1
   }
   read -r state parent starttime <<<"$identity"
   [[ $parent == "$expected_parent" && $starttime == "$expected_starttime" ]] || {
@@ -327,8 +337,13 @@ fedora_proof_stop_client_exact() {
   fi
   for (( _ = 0; _ < attempts; _++ )); do
     identity=$(fedora_proof_read_client_identity "$pid") || {
-      wait "$pid" 2>/dev/null || true
-      return 0
+      if [[ ! -e /proc/$pid ]] && ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid" 2>/dev/null || true
+        return 0
+      fi
+      printf '%s\n' \
+        'fedora-proof cleanup: launched client identity is unreadable; refusing wait or signal' >&2
+      return 1
     }
     read -r state parent starttime <<<"$identity"
     [[ $parent == "$expected_parent" && $starttime == "$expected_starttime" ]] || {

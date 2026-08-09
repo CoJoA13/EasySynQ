@@ -76,6 +76,7 @@ failure_log=$failure_repo/.fedora-proof-logs/$failure_vm.log
 failure_workdir=
 storage_probe=$fixture_root/virsh-storage-probe
 acl_probe=$fixture_root/acl-probe
+client_probe=$fixture_root/client-probe
 acl_workdir=
 stage_temp=
 unsafe_stage_root=$fixture_root/unsafe-stage-root
@@ -99,7 +100,7 @@ cleanup_fixture() {
     "$fixture_root/owned/vm-name" \
     "$fixture_root/owned/.easysynq-fedora-proof" 2>/dev/null || true
   rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" "$storage_probe" \
-    "$acl_probe" "$staged_installer" "$staged_workstation" \
+    "$acl_probe" "$client_probe" "$staged_installer" "$staged_workstation" \
     2>/dev/null || true
   if [[ -n $stage_temp \
       && $stage_temp == "$fixture_root"/easysynq-fedora-proof-media-*.part.* \
@@ -481,6 +482,36 @@ if [[ -f $HOST_SCRIPT ]]; then
     chmod 0600 "$staged_installer"
     /usr/bin/setfacl -m "u:$test_acl_uid:r--,m::r--" -- "$staged_installer"
 
+    partial_stage_root=$fixture_root/partial-stage-root
+    mkdir "$partial_stage_root"
+    wrong_stage_sha=${installer_sha%?}0
+    [[ $wrong_stage_sha == "$installer_sha" ]] && wrong_stage_sha=${installer_sha%?}1
+    output=$(fedora_proof_stage_one_media \
+      "$partial_stage_root" "$EUID" "$test_acl_uid" installer \
+      "$installer" "$wrong_stage_sha" 2>&1)
+    status=$?
+    assert_status 1 "$status" 'new retained media with a wrong post-copy hash fails closed'
+    assert_not_exists \
+      "$partial_stage_root/easysynq-fedora-proof-media-$EUID-installer.iso" \
+      'wrong post-copy hash publishes no final retained-media target'
+    mapfile -t leaked_stage_parts < <(
+      find "$partial_stage_root" -mindepth 1 -maxdepth 1 -type f \
+        -name "easysynq-fedora-proof-media-$EUID-installer.iso.part.*" -print
+    )
+    if (( ${#leaked_stage_parts[@]} == 0 )); then
+      pass
+    else
+      fail 'wrong post-copy hash leaves no exact private staging inode'
+      for leaked_stage_part in "${leaked_stage_parts[@]}"; do
+        if [[ $leaked_stage_part == "$partial_stage_root"/easysynq-fedora-proof-media-$EUID-installer.iso.part.* \
+            && -f $leaked_stage_part && ! -L $leaked_stage_part \
+            && $(stat -c '%u:%h' "$leaked_stage_part") == "$EUID:1" ]]; then
+          rm -- "$leaked_stage_part"
+        fi
+      done
+    fi
+    rmdir -- "$partial_stage_root"
+
     mkdir "$unsafe_stage_root"
     ln -s "$unsafe_stage_root" "$unsafe_stage_link"
     output=$(
@@ -590,8 +621,41 @@ if [[ -f $HOST_SCRIPT ]]; then
   fi
 
   client_pid=
+  if declare -F fedora_proof_client_state_valid >/dev/null; then
+    fedora_proof_client_state_valid t
+    status=$?
+    assert_status 0 "$status" 'Linux lowercase tracing-stop client state is recognized'
+    fedora_proof_client_state_valid '?'
+    status=$?
+    assert_status 1 "$status" 'unknown client state is rejected'
+  else
+    fail 'host script exposes documented Linux client-state validation'
+  fi
+
   if declare -F fedora_proof_capture_client_identity >/dev/null \
       && declare -F fedora_proof_stop_client_exact >/dev/null; then
+    output=$(
+      /usr/bin/timeout -s TERM -k 1 0.4 /usr/bin/bash -c '
+        source "$1"
+        fedora_proof_read_client_identity() { return 1; }
+        /usr/bin/sleep 30 &
+        child=$!
+        cleanup_probe() {
+          trap - EXIT INT TERM
+          kill -TERM "$child" 2>/dev/null || true
+          wait "$child" 2>/dev/null || true
+        }
+        trap cleanup_probe EXIT
+        trap "exit 143" TERM
+        fedora_proof_stop_client_exact "$child" 1 "$BASHPID" 1
+      ' _ "$HOST_SCRIPT" 2>&1
+    )
+    status=$?
+    assert_status 1 "$status" \
+      'unreadable live client identity fails closed without an unbounded wait'
+    assert_contains "$output" 'identity is unreadable; refusing wait or signal' \
+      'unreadable live-client refusal explains bounded retention'
+
     /usr/bin/sleep 30 &
     client_pid=$!
     client_parent=$BASHPID
@@ -604,9 +668,11 @@ if [[ -f $HOST_SCRIPT ]]; then
       fail "captured client start time is numeric (actual=$client_identity)"
     fi
 
-    output=$(fedora_proof_stop_client_exact \
-      "$client_pid" "$((client_identity + 1))" "$client_parent" 2 2>&1)
+    fedora_proof_stop_client_exact \
+      "$client_pid" "$((client_identity + 1))" "$client_parent" 2 \
+      >"$client_probe" 2>&1
     status=$?
+    output=$(<"$client_probe")
     assert_status 1 "$status" 'client cleanup refuses a mismatched process identity'
     assert_contains "$output" 'identity mismatch' 'client mismatch refusal is explicit'
     if kill -0 "$client_pid" 2>/dev/null; then
@@ -615,11 +681,13 @@ if [[ -f $HOST_SCRIPT ]]; then
       fail 'mismatched client identity is not signalled'
     fi
 
-    output=$(fedora_proof_stop_client_exact \
-      "$client_pid" "$client_identity" "$client_parent" 20 2>&1)
+    fedora_proof_stop_client_exact \
+      "$client_pid" "$client_identity" "$client_parent" 20 \
+      >"$client_probe" 2>&1
     status=$?
+    output=$(<"$client_probe")
     assert_status 0 "$status" 'exact launched client is terminated and reaped within a bound'
-    if kill -0 "$client_pid" 2>/dev/null; then
+    if [[ -e /proc/$client_pid ]] || kill -0 "$client_pid" 2>/dev/null; then
       fail 'bounded client cleanup leaves the exact launched process alive'
     else
       pass
