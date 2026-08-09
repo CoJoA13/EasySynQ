@@ -70,7 +70,7 @@ fedora_proof_require_acl_tools() {
 }
 
 fedora_proof_validate_root() {
-  local root=$1 canonical
+  local root=$1 canonical acl
   [[ $root == /* && -d $root && ! -L $root ]] || {
     printf '%s\n' 'fedora-proof: proof root is missing, non-absolute, or a symlink' >&2
     return 1
@@ -78,6 +78,15 @@ fedora_proof_validate_root() {
   canonical=$(/usr/bin/readlink -e "$root") || return 1
   [[ $canonical == "$root" ]] || {
     printf '%s\n' 'fedora-proof: proof root contains a symlink component' >&2
+    return 1
+  }
+  acl=$(/usr/bin/getfacl -cpn -- "$root") || {
+    printf '%s\n' 'fedora-proof: proof root ACL cannot be read' >&2
+    return 1
+  }
+  [[ $acl != *$'\ndefault:'* && $acl != default:* ]] || {
+    printf '%s\n' \
+      'fedora-proof: proof root has a default ACL; refusing artifact creation' >&2
     return 1
   }
 }
@@ -161,29 +170,95 @@ fedora_proof_validate_staged_media() {
   }
 }
 
-fedora_proof_stage_one_media() {
+fedora_proof_create_private_stage_file() (
+  local root=$1 base=$2 stage canonical owner links acl
+  cleanup_private_stage() {
+    local stage_owner
+    trap - EXIT INT TERM
+    if [[ -n $stage && $stage == "$root/$base.part."* && -f $stage && ! -L $stage ]]; then
+      stage_owner=$(/usr/bin/stat -c '%u' "$stage" 2>/dev/null || true)
+      [[ $stage_owner == "$EUID" ]] && /usr/bin/rm -- "$stage"
+    fi
+  }
+  trap cleanup_private_stage EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  fedora_proof_validate_root "$root" || return 1
+  [[ $base == "easysynq-fedora-proof-media-$EUID-installer.iso" \
+      || $base == "easysynq-fedora-proof-media-$EUID-workstation.iso" ]] || return 1
+  stage=$(/usr/bin/mktemp "$root/$base.part.XXXXXX") || return 1
+  canonical=$(/usr/bin/readlink -e "$stage") || return 1
+  owner=$(/usr/bin/stat -c '%u' "$stage") || return 1
+  links=$(/usr/bin/stat -c '%h' "$stage") || return 1
+  if [[ $stage != "$root/$base.part."* || $canonical != "$stage" \
+      || ! -f $stage || -L $stage || $owner != "$EUID" || $links != 1 ]] \
+      || ! /usr/bin/setfacl -b -- "$stage" \
+      || ! /usr/bin/chmod 0600 "$stage"; then
+    printf '%s\n' 'fedora-proof: private media staging inode is unsafe' >&2
+    if [[ $stage == "$root/$base.part."* && -f $stage && ! -L $stage \
+        && $(/usr/bin/stat -c '%u' "$stage" 2>/dev/null) == "$EUID" ]]; then
+      /usr/bin/rm -- "$stage" || true
+    fi
+    return 1
+  fi
+  acl=$(/usr/bin/getfacl -cpn -- "$stage") || return 1
+  if [[ $acl != $'user::rw-\ngroup::---\nother::---' ]]; then
+    printf '%s\n' 'fedora-proof: private media staging ACL could not be established' >&2
+    /usr/bin/rm -- "$stage" || true
+    return 1
+  fi
+  printf '%s\n' "$stage"
+  stage=
+)
+
+fedora_proof_stage_one_media() (
   local root=$1 caller_uid=$2 qemu_uid=$3 role=$4 source=$5 expected_sha=$6 target
+  local stage= actual=
+  cleanup_stage() {
+    local stage_owner
+    trap - EXIT INT TERM
+    if [[ -n $stage && $stage == "$root/easysynq-fedora-proof-media-$caller_uid-$role.iso.part."* \
+        && -f $stage && ! -L $stage ]]; then
+      stage_owner=$(/usr/bin/stat -c '%u' "$stage" 2>/dev/null || true)
+      [[ $stage_owner == "$EUID" ]] && /usr/bin/rm -- "$stage"
+    fi
+  }
+  trap cleanup_stage EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  fedora_proof_validate_root "$root" || return 1
   target=$root/easysynq-fedora-proof-media-$caller_uid-$role.iso
   [[ $source == /* && -f $source && ! -L $source ]] || {
     printf 'fedora-proof: %s source media is missing or unsafe\n' "$role" >&2
     return 1
   }
   if [[ ! -e $target && ! -L $target ]]; then
-    (umask 077; /usr/bin/dd if="$source" of="$target" bs=4M status=none conv=excl) || {
+    stage=$(fedora_proof_create_private_stage_file \
+      "$root" "easysynq-fedora-proof-media-$caller_uid-$role.iso") || return 1
+    /usr/bin/dd if="$source" of="$stage" bs=4M status=none conv=notrunc || {
       printf 'fedora-proof: could not copy exact staged %s media\n' "$role" >&2
       return 1
     }
+    actual=$(/usr/bin/sha256sum "$stage") || return 1
+    actual=${actual%% *}
+    [[ $actual == "${expected_sha,,}" ]] || {
+      printf 'fedora-proof: staged %s checksum mismatch\n' "$role" >&2
+      return 1
+    }
+    /usr/bin/setfacl -m "u:$qemu_uid:r--,m::r--" -- "$stage" || return 1
+    fedora_proof_validate_exact_acl "$stage" "$qemu_uid" media || return 1
+    /usr/bin/mv -n -T -- "$stage" "$target" || return 1
+    [[ ! -e $stage && ! -L $stage ]] || {
+      printf 'fedora-proof: exact staged %s target appeared concurrently\n' "$role" >&2
+      return 1
+    }
+    stage=
   fi
-  fedora_proof_validate_staged_media "$root" "$caller_uid" "$target" "$role" "$expected_sha" \
-    || return 1
-  /usr/bin/setfacl -b -- "$target" || return 1
-  /usr/bin/chmod 0600 "$target" || return 1
-  /usr/bin/setfacl -m "u:$qemu_uid:r--,m::r--" -- "$target" || return 1
   fedora_proof_validate_staged_media "$root" "$caller_uid" "$target" "$role" "$expected_sha" \
     || return 1
   fedora_proof_validate_exact_acl "$target" "$qemu_uid" media || return 1
   printf 'fedora-proof: retained staged %s: %s\n' "$role" "$target"
-}
+)
 
 fedora_proof_stage_media() {
   local root=$1 caller_uid=$2 qemu_uid=$3 installer=$4 installer_sha=$5
@@ -192,6 +267,91 @@ fedora_proof_stage_media() {
     "$root" "$caller_uid" "$qemu_uid" installer "$installer" "$installer_sha" || return 1
   fedora_proof_stage_one_media \
     "$root" "$caller_uid" "$qemu_uid" workstation "$workstation" "$workstation_sha"
+}
+
+fedora_proof_read_client_identity() {
+  local pid=$1 stat rest state parent starttime key values uid=
+  local -a fields
+  [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/stat && -r /proc/$pid/status ]] || return 1
+  IFS= read -r stat </proc/"$pid"/stat || return 1
+  [[ $stat == "$pid ("*') '* ]] || return 1
+  rest=${stat##*) }
+  read -r -a fields <<<"$rest"
+  (( ${#fields[@]} >= 20 )) || return 1
+  state=${fields[0]}
+  parent=${fields[1]}
+  starttime=${fields[19]}
+  while IFS=$'\t' read -r key values; do
+    if [[ $key == Uid: ]]; then
+      read -r uid _ <<<"$values"
+      break
+    fi
+  done </proc/"$pid"/status
+  [[ $state =~ ^[A-Z]$ && $parent =~ ^[0-9]+$ && $starttime =~ ^[0-9]+$ \
+      && $uid == "$EUID" ]] || return 1
+  printf '%s %s %s\n' "$state" "$parent" "$starttime"
+}
+
+fedora_proof_capture_client_identity() {
+  local pid=$1 expected_parent=$2 identity state parent starttime
+  [[ $expected_parent =~ ^[1-9][0-9]*$ ]] || return 1
+  identity=$(fedora_proof_read_client_identity "$pid") || {
+    printf '%s\n' 'fedora-proof: launched client identity could not be captured' >&2
+    return 1
+  }
+  read -r state parent starttime <<<"$identity"
+  [[ $state != Z && $parent == "$expected_parent" ]] || {
+    printf '%s\n' 'fedora-proof: launched client is not the expected direct child' >&2
+    return 1
+  }
+  printf '%s\n' "$starttime"
+}
+
+fedora_proof_stop_client_exact() {
+  local pid=$1 expected_starttime=$2 expected_parent=$3 attempts=${4:-100}
+  local identity state parent starttime
+  [[ $expected_starttime =~ ^[0-9]+$ && $expected_parent =~ ^[1-9][0-9]*$ \
+      && $attempts =~ ^[1-9][0-9]*$ && $attempts -le 600 ]] || return 1
+  identity=$(fedora_proof_read_client_identity "$pid") || {
+    wait "$pid" 2>/dev/null || true
+    return 0
+  }
+  read -r state parent starttime <<<"$identity"
+  [[ $parent == "$expected_parent" && $starttime == "$expected_starttime" ]] || {
+    printf '%s\n' 'fedora-proof cleanup: launched client identity mismatch; refusing signal' >&2
+    return 1
+  }
+  if [[ $state != Z ]] && ! kill -TERM "$pid" 2>/dev/null; then
+    printf '%s\n' 'fedora-proof cleanup: exact launched client could not be signalled' >&2
+    return 1
+  fi
+  for (( _ = 0; _ < attempts; _++ )); do
+    identity=$(fedora_proof_read_client_identity "$pid") || {
+      wait "$pid" 2>/dev/null || true
+      return 0
+    }
+    read -r state parent starttime <<<"$identity"
+    [[ $parent == "$expected_parent" && $starttime == "$expected_starttime" ]] || {
+      printf '%s\n' 'fedora-proof cleanup: launched client identity changed; refusing signal' >&2
+      return 1
+    }
+    if [[ $state == Z ]]; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    /usr/bin/sleep 0.1
+  done
+  printf '%s\n' \
+    'fedora-proof cleanup: exact launched client did not stop; retaining lifecycle artifacts' >&2
+  return 1
+}
+
+fedora_proof_reset_uuid_record() {
+  local uuid_file=$1 qemu_uid=$2
+  fedora_proof_validate_private_acl "$uuid_file" "$qemu_uid" || return 1
+  : >"$uuid_file" || return 1
+  fedora_proof_validate_private_acl "$uuid_file" "$qemu_uid" || return 1
+  [[ ! -s $uuid_file ]] || return 1
 }
 
 fedora_proof_disk_owner_allowed() {
@@ -496,7 +656,8 @@ require_host_tools() {
     /usr/bin/getfacl \
     /usr/bin/getent \
     /usr/bin/id \
-    /usr/bin/dd; do
+    /usr/bin/dd \
+    /usr/bin/mv; do
     if [[ ! -x $path ]]; then
       printf 'fedora-proof: required proof-host tool is missing: %s\n' "$path" >&2
       missing=1
@@ -625,7 +786,24 @@ fedora_proof_run_lifecycle() (
   local qemu_uid=${10} proof_root=${11}
   local workdir= disk= rendered_ks= private_key= public_key= known_hosts= repo_files=
   local uuid_file= marker_file= vm_name_file= log_dir= log_file= vm_uuid= virt_pid= guest_ip=
-  local cleanup_failed=0
+  local virt_starttime= virt_parent_pid= cleanup_failed=0
+
+  log_dir=$repo_root/.fedora-proof-logs
+  if [[ -e $log_dir || -L $log_dir ]]; then
+    [[ -d $log_dir && ! -L $log_dir && $(/usr/bin/stat -c '%u' "$log_dir") == "$EUID" ]] || {
+      printf '%s\n' 'fedora-proof: log directory exists but is not an owned regular directory' >&2
+      return 1
+    }
+  else
+    /usr/bin/mkdir -- "$log_dir"
+  fi
+  log_file=$log_dir/$vm_name.log
+  [[ ! -e $log_file && ! -L $log_file ]] || {
+    printf '%s\n' 'fedora-proof: unique log target already exists' >&2
+    return 1
+  }
+  : >"$log_file"
+  /usr/bin/chmod 0600 "$log_file"
 
   fedora_proof_validate_root "$proof_root" || return 1
   workdir=$(/usr/bin/mktemp -d "$proof_root/easysynq-fedora-proof.XXXXXX") || return 1
@@ -663,26 +841,16 @@ fedora_proof_run_lifecycle() (
   /usr/bin/chmod 0600 "$marker_file" "$vm_name_file"
   fedora_proof_validate_owned_workdir "$workdir" "$proof_root" || return 1
 
-  log_dir=$repo_root/.fedora-proof-logs
-  if [[ -e $log_dir || -L $log_dir ]]; then
-    [[ -d $log_dir && ! -L $log_dir && $(/usr/bin/stat -c '%u' "$log_dir") == "$EUID" ]] || {
-      printf '%s\n' 'fedora-proof: log directory exists but is not an owned regular directory' >&2
-      return 1
-    }
-  else
-    /usr/bin/mkdir -- "$log_dir"
-  fi
-  log_file=$log_dir/$vm_name.log
-  [[ ! -e $log_file && ! -L $log_file ]] || {
-    printf '%s\n' 'fedora-proof: unique log target already exists' >&2
-    return 1
-  }
-  : >"$log_file"
-  /usr/bin/chmod 0600 "$log_file"
-
   cleanup_all() {
     local expected_uuid= file base
     trap - EXIT INT TERM
+    if [[ -n ${virt_pid:-} ]]; then
+      fedora_proof_stop_client_exact \
+        "$virt_pid" "$virt_starttime" "$virt_parent_pid" 100 || cleanup_failed=1
+      virt_pid=
+      virt_starttime=
+      virt_parent_pid=
+    fi
     if [[ -n $workdir && -d $workdir ]]; then
       if [[ -f $uuid_file && ! -L $uuid_file ]]; then
         IFS= read -r expected_uuid <"$uuid_file" || expected_uuid=
@@ -694,10 +862,6 @@ fedora_proof_run_lifecycle() (
         fedora_proof_destroy_domain_exact \
           "$workdir" "$vm_name" "$expected_uuid" "$disk" "$proof_root" "$qemu_uid" \
           || cleanup_failed=1
-      fi
-      if [[ -n ${virt_pid:-} ]]; then
-        wait "$virt_pid" 2>/dev/null || true
-        virt_pid=
       fi
       if (( cleanup_failed == 0 )) && [[ -f $disk ]]; then
         fedora_proof_revoke_lifecycle_acls \
@@ -813,14 +977,29 @@ fedora_proof_run_lifecycle() (
   start_domain_and_record_uuid() {
     local phase=$1
     shift
+    fedora_proof_reset_uuid_record "$uuid_file" "$qemu_uid" || return 1
+    vm_uuid=
     "$@" >>"$log_file" 2>&1 &
     virt_pid=$!
-    vm_uuid=
+    virt_parent_pid=$BASHPID
+    virt_starttime=$(fedora_proof_capture_client_identity "$virt_pid" "$virt_parent_pid") || {
+      if ! kill -0 "$virt_pid" 2>/dev/null; then
+        wait "$virt_pid" || true
+        virt_pid=
+        virt_parent_pid=
+      fi
+      printf 'fedora-proof: %s client identity capture failed; see %s\n' \
+        "$phase" "$log_file" >&2
+      return 1
+    }
     for _ in {1..120}; do
       vm_uuid=$(/usr/bin/virsh --connect "$FEDORA_PROOF_CONNECT" domuuid "$vm_name" 2>/dev/null || true)
       [[ -n $vm_uuid ]] && break
       if ! kill -0 "$virt_pid" 2>/dev/null; then
         wait "$virt_pid" || true
+        virt_pid=
+        virt_starttime=
+        virt_parent_pid=
         printf 'fedora-proof: %s domain exited before identity capture; see %s\n' \
           "$phase" "$log_file" >&2
         return 1
@@ -854,10 +1033,14 @@ fedora_proof_run_lifecycle() (
       --wait=-1
   if ! wait "$virt_pid"; then
     virt_pid=
+    virt_starttime=
+    virt_parent_pid=
     printf 'fedora-proof: installation failed; see %s\n' "$log_file" >&2
     return 1
   fi
   virt_pid=
+  virt_starttime=
+  virt_parent_pid=
   if /usr/bin/virsh --connect "$FEDORA_PROOF_CONNECT" dominfo "$vm_name" >/dev/null 2>&1; then
     printf '%s\n' 'fedora-proof: transient installer domain remained active after Kickstart shutdown' >&2
     return 1

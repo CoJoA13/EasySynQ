@@ -77,6 +77,9 @@ failure_workdir=
 storage_probe=$fixture_root/virsh-storage-probe
 acl_probe=$fixture_root/acl-probe
 acl_workdir=
+stage_temp=
+unsafe_stage_root=$fixture_root/unsafe-stage-root
+unsafe_stage_link=$fixture_root/unsafe-stage-link
 staged_installer=$fixture_root/easysynq-fedora-proof-media-$EUID-installer.iso
 staged_workstation=$fixture_root/easysynq-fedora-proof-media-$EUID-workstation.iso
 test_qemu_uid=65534
@@ -98,6 +101,17 @@ cleanup_fixture() {
   rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" "$storage_probe" \
     "$acl_probe" "$staged_installer" "$staged_workstation" \
     2>/dev/null || true
+  if [[ -n $stage_temp \
+      && $stage_temp == "$fixture_root"/easysynq-fedora-proof-media-*.part.* \
+      && -f $stage_temp \
+      && ! -L $stage_temp ]]; then
+    rm -f -- "$stage_temp" 2>/dev/null || true
+  fi
+  rm -f -- \
+    "$unsafe_stage_root/easysynq-fedora-proof-media-$EUID-installer.iso" \
+    "$unsafe_stage_root/easysynq-fedora-proof-media-$EUID-workstation.iso" 2>/dev/null || true
+  [[ ! -L $unsafe_stage_link ]] || rm -f -- "$unsafe_stage_link" 2>/dev/null || true
+  rmdir "$unsafe_stage_root" 2>/dev/null || true
   rm -f -- "$failure_log" "$failure_repo/ks.cfg" 2>/dev/null || true
   rmdir "$failure_repo/.fedora-proof-logs" 2>/dev/null || true
   rmdir "$failure_repo" 2>/dev/null || true
@@ -217,6 +231,18 @@ if [[ -f $HOST_SCRIPT ]]; then
   else
     fail 'host lifecycle contains no recursive/default ACL or SELinux bypass'
   fi
+  assert_contains "$host_source" \
+    'fedora_proof_stop_client_exact \' \
+    'cleanup wires the exact bounded launched-client stop helper'
+  assert_contains "$host_source" \
+    'fedora_proof_reset_uuid_record "$uuid_file" "$qemu_uid"' \
+    'each launch phase clears stale UUID state before starting a client'
+  assert_not_contains "$host_source" 'wait "$virt_pid" 2>/dev/null' \
+    'cleanup contains no unbounded wait for a launched client'
+  assert_contains "$host_source" 'fedora_proof_create_private_stage_file() (' \
+    'private stage creation is bounded by its own cleanup subshell'
+  assert_contains "$host_source" 'trap cleanup_private_stage EXIT' \
+    'private stage creation cleans a partial inode on every return path'
 
   output=$(
     "$HOST_SCRIPT" \
@@ -380,6 +406,33 @@ if [[ -f $HOST_SCRIPT ]]; then
     fail 'host script exposes effective ACL text validation for a distinct qemu uid'
   fi
 
+  if declare -F fedora_proof_create_private_stage_file >/dev/null; then
+    /usr/bin/setfacl -m "d:u:$test_acl_uid:rwx,d:m::rwx" -- "$fixture_root"
+    output=$(fedora_proof_create_private_stage_file \
+      "$fixture_root" "easysynq-fedora-proof-media-$EUID-installer.iso" 2>&1)
+    status=$?
+    (( status != 0 )) || stage_temp=$output
+    assert_status 1 "$status" 'staging root with an inherited default ACL fails before inode creation'
+    if compgen -G \
+        "$fixture_root/easysynq-fedora-proof-media-$EUID-installer.iso.part.*" >/dev/null; then
+      fail 'default-ACL rejection leaves no observable staging inode'
+    else
+      pass
+    fi
+    /usr/bin/setfacl -k -- "$fixture_root"
+    stage_temp=$(fedora_proof_create_private_stage_file \
+      "$fixture_root" "easysynq-fedora-proof-media-$EUID-installer.iso" 2>/dev/null)
+    status=$?
+    assert_status 0 "$status" 'private staging inode is created only after root ACL validation'
+    stage_acl=$(/usr/bin/getfacl -cpn -- "$stage_temp" 2>/dev/null)
+    assert_status $'user::rw-\ngroup::---\nother::---' "$stage_acl" \
+      'inherited named/default ACL is removed before media bytes are copied'
+    rm -f -- "$stage_temp"
+    stage_temp=
+  else
+    fail 'host script exposes private pre-copy media staging'
+  fi
+
   if declare -F fedora_proof_stage_media >/dev/null \
       && declare -F fedora_proof_validate_exact_acl >/dev/null; then
     output=$(
@@ -416,6 +469,31 @@ if [[ -f $HOST_SCRIPT ]]; then
     source_acl=$(/usr/bin/getfacl -cpn -- "$installer")
     assert_not_contains "$source_acl" "user:$test_acl_uid:" \
       'caller source media receives no qemu ACL or home traversal dependency'
+
+    /usr/bin/setfacl -m "u:$test_acl_uid:rw-,m::rw-" -- "$staged_installer"
+    output=$(fedora_proof_stage_one_media \
+      "$fixture_root" "$EUID" "$test_acl_uid" installer "$installer" "$installer_sha" 2>&1)
+    status=$?
+    assert_status 1 "$status" 'pre-existing retained media with a broad ACL fails closed'
+    assert_contains "$output" 'ACL boundary failed' \
+      'pre-existing retained ACL mismatch is explicit and is never silently repaired'
+    /usr/bin/setfacl -b -- "$staged_installer"
+    chmod 0600 "$staged_installer"
+    /usr/bin/setfacl -m "u:$test_acl_uid:r--,m::r--" -- "$staged_installer"
+
+    mkdir "$unsafe_stage_root"
+    ln -s "$unsafe_stage_root" "$unsafe_stage_link"
+    output=$(
+      fedora_proof_stage_media \
+        "$unsafe_stage_link" "$EUID" "$test_acl_uid" \
+        "$installer" "$installer_sha" "$workstation" "$workstation_sha" 2>&1
+    )
+    status=$?
+    assert_status 1 "$status" 'symlink staging root fails closed'
+    assert_not_exists \
+      "$unsafe_stage_root/easysynq-fedora-proof-media-$EUID-installer.iso" \
+      'staging root is validated before any copied artifact is created'
+    rm -f -- "$unsafe_stage_link"
 
     printf 'wrong retained bytes\n' >"$acl_probe"
     bad_sha=$(sha256sum "$acl_probe" | awk '{print $1}')
@@ -509,6 +587,62 @@ if [[ -f $HOST_SCRIPT ]]; then
     assert_status 0 "$status" 'cleanup accepts caller ownership after domain stop'
   else
     fail 'host script exposes active-versus-cleanup disk ownership policy'
+  fi
+
+  client_pid=
+  if declare -F fedora_proof_capture_client_identity >/dev/null \
+      && declare -F fedora_proof_stop_client_exact >/dev/null; then
+    /usr/bin/sleep 30 &
+    client_pid=$!
+    client_parent=$BASHPID
+    client_identity=$(fedora_proof_capture_client_identity "$client_pid" "$client_parent" 2>&1)
+    status=$?
+    assert_status 0 "$status" 'launched client identity captures an exact direct-child start time'
+    if [[ $client_identity =~ ^[0-9]+$ ]]; then
+      pass
+    else
+      fail "captured client start time is numeric (actual=$client_identity)"
+    fi
+
+    output=$(fedora_proof_stop_client_exact \
+      "$client_pid" "$((client_identity + 1))" "$client_parent" 2 2>&1)
+    status=$?
+    assert_status 1 "$status" 'client cleanup refuses a mismatched process identity'
+    assert_contains "$output" 'identity mismatch' 'client mismatch refusal is explicit'
+    if kill -0 "$client_pid" 2>/dev/null; then
+      pass
+    else
+      fail 'mismatched client identity is not signalled'
+    fi
+
+    output=$(fedora_proof_stop_client_exact \
+      "$client_pid" "$client_identity" "$client_parent" 20 2>&1)
+    status=$?
+    assert_status 0 "$status" 'exact launched client is terminated and reaped within a bound'
+    if kill -0 "$client_pid" 2>/dev/null; then
+      fail 'bounded client cleanup leaves the exact launched process alive'
+    else
+      pass
+    fi
+    client_pid=
+  else
+    fail 'host script exposes exact bounded launched-client cleanup seams'
+  fi
+
+  if declare -F fedora_proof_reset_uuid_record >/dev/null; then
+    printf '%s\n' 11111111-1111-1111-1111-111111111111 >"$acl_probe"
+    /usr/bin/setfacl -b -- "$acl_probe"
+    chmod 0600 "$acl_probe"
+    output=$(fedora_proof_reset_uuid_record "$acl_probe" "$test_acl_uid" 2>&1)
+    status=$?
+    assert_status 0 "$status" 'each domain phase clears the prior UUID record safely'
+    if [[ ! -s $acl_probe ]]; then
+      pass
+    else
+      fail 'UUID reset leaves no stale installer identity for runtime cleanup'
+    fi
+  else
+    fail 'host script exposes safe per-phase UUID reset'
   fi
 
   if declare -F fedora_proof_new_vm_name >/dev/null \
@@ -620,6 +754,40 @@ if [[ -f $HOST_SCRIPT ]]; then
   fi
 
   if declare -F fedora_proof_run_lifecycle >/dev/null && [[ $selected_fallback == fedora43 ]]; then
+    unsafe_log_repo=$fixture_root/unsafe-log-repo
+    unsafe_log_root=$fixture_root/unsafe-log-root
+    mkdir "$unsafe_log_repo" "$unsafe_log_root"
+    ln -s "$fixture_root" "$unsafe_log_repo/.fedora-proof-logs"
+    output=$(
+      fedora_proof_run_lifecycle \
+        "$failure_vm" "$installer" "$installer_sha" "$workstation" "$workstation_sha" \
+        "$unsafe_log_repo" "$KICKSTART" 0000000000000000000000000000000000000000 \
+        "$selected_fallback" "$test_acl_uid" "$unsafe_log_root" 2>&1
+    )
+    status=$?
+    assert_status 1 "$status" 'unsafe log directory fails before lifecycle artifact creation'
+    assert_contains "$output" 'log directory exists but is not an owned regular directory' \
+      'unsafe log path refusal is explicit'
+    mapfile -t unsafe_log_workdirs < <(
+      find "$unsafe_log_root" -mindepth 1 -maxdepth 1 -type d \
+        -name 'easysynq-fedora-proof.*' -print
+    )
+    if (( ${#unsafe_log_workdirs[@]} == 0 )); then
+      pass
+    else
+      fail 'unsafe log path is rejected before mktemp workdir creation'
+      if (( ${#unsafe_log_workdirs[@]} == 1 )) \
+          && [[ ${unsafe_log_workdirs[0]} == "$unsafe_log_root"/easysynq-fedora-proof.* ]] \
+          && [[ -d ${unsafe_log_workdirs[0]} && ! -L ${unsafe_log_workdirs[0]} ]]; then
+        rm -f -- \
+          "${unsafe_log_workdirs[0]}/.easysynq-fedora-proof" \
+          "${unsafe_log_workdirs[0]}/vm-name"
+        rmdir -- "${unsafe_log_workdirs[0]}"
+      fi
+    fi
+    rm -f -- "$unsafe_log_repo/.fedora-proof-logs"
+    rmdir -- "$unsafe_log_repo" "$unsafe_log_root"
+
     mkdir "$failure_repo" "$failure_tmp"
     cp "$KICKSTART" "$failure_repo/ks.cfg"
     lifecycle_installer=$installer
@@ -630,7 +798,6 @@ if [[ -f $HOST_SCRIPT ]]; then
     fi
     original_connect=$FEDORA_PROOF_CONNECT
     FEDORA_PROOF_CONNECT=test:///default
-    /usr/bin/setfacl -m "d:u:$test_acl_uid:rwx,d:m::rwx" -- "$fixture_root"
     output=$(
       TMPDIR="$failure_tmp" XDG_CACHE_HOME="$fixture_root/virt-cache" \
         fedora_proof_run_lifecycle \
@@ -640,7 +807,6 @@ if [[ -f $HOST_SCRIPT ]]; then
           "$selected_fallback" "$test_acl_uid" "$fixture_root" 2>&1
     )
     status=$?
-    /usr/bin/setfacl -k -- "$fixture_root"
     FEDORA_PROOF_CONNECT=$original_connect
     failure_disk=${output#*Fedora proof disk: }
     failure_disk=${failure_disk%%$'\n'*}
@@ -749,6 +915,13 @@ if [[ -f $RUNBOOK ]]; then
     'runbook verifies exact retained-media ACLs'
   assert_contains "$runbook" 'rm -- "$STAGED_INSTALLER" "$STAGED_WORKSTATION"' \
     'runbook removes only the separately verified retained media targets'
+  assert_contains "$runbook" 'set -euo pipefail' \
+    'retained-media cleanup stops at the first failed identity check'
+  assert_contains "$runbook" 'EXPECTED_MEDIA_ACL=' \
+    'retained-media cleanup derives the exact expected qemu ACL'
+  assert_contains "$runbook" \
+    'test "$(getfacl -cpn -- "$STAGED_MEDIA")" = "$EXPECTED_MEDIA_ACL"' \
+    'retained-media cleanup asserts rather than prints the effective ACL'
 fi
 
 printf '%d Fedora proof contract checks passed; %d failed\n' "$passed" "$failed"

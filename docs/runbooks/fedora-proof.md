@@ -207,18 +207,25 @@ proof domains and workdirs for the caller are gone, and only after revalidating 
 owners, link counts, hashes, and ACLs:
 
 ```bash
-STAGED_INSTALLER="/var/tmp/easysynq-fedora-proof-media-$UID-installer.iso"
-STAGED_WORKSTATION="/var/tmp/easysynq-fedora-proof-media-$UID-workstation.iso"
-for STAGED_MEDIA in "$STAGED_INSTALLER" "$STAGED_WORKSTATION"; do
-  test -f "$STAGED_MEDIA"
-  test ! -L "$STAGED_MEDIA"
-  test "$(readlink -e "$STAGED_MEDIA")" = "$STAGED_MEDIA"
-  test "$(stat -c '%u:%h' "$STAGED_MEDIA")" = "$UID:1"
-done
-test "$(sha256sum "$STAGED_INSTALLER" | awk '{print $1}')" = "$INSTALLER_SHA256"
-test "$(sha256sum "$STAGED_WORKSTATION" | awk '{print $1}')" = "$WORKSTATION_SHA256"
-getfacl -cpn -- "$STAGED_INSTALLER" "$STAGED_WORKSTATION"
-rm -- "$STAGED_INSTALLER" "$STAGED_WORKSTATION"
+(
+  set -euo pipefail
+  STAGED_INSTALLER="/var/tmp/easysynq-fedora-proof-media-$UID-installer.iso"
+  STAGED_WORKSTATION="/var/tmp/easysynq-fedora-proof-media-$UID-workstation.iso"
+  QEMU_UID="$(id -u qemu)"
+  EXPECTED_MEDIA_ACL="$(printf \
+    'user::rw-\nuser:%s:r--\ngroup::---\nmask::r--\nother::---' "$QEMU_UID")"
+  for STAGED_MEDIA in "$STAGED_INSTALLER" "$STAGED_WORKSTATION"; do
+    test -f "$STAGED_MEDIA"
+    test ! -L "$STAGED_MEDIA"
+    test "$(readlink -e "$STAGED_MEDIA")" = "$STAGED_MEDIA"
+    test "$(stat -c '%u:%h' "$STAGED_MEDIA")" = "$UID:1"
+    test "$(getfacl -cpn -- "$STAGED_MEDIA")" = "$EXPECTED_MEDIA_ACL"
+  done
+  test "$(sha256sum "$STAGED_INSTALLER" | awk '{print $1}')" = "$INSTALLER_SHA256"
+  test "$(sha256sum "$STAGED_WORKSTATION" | awk '{print $1}')" = "$WORKSTATION_SHA256"
+  getfacl -cpn -- "$STAGED_INSTALLER" "$STAGED_WORKSTATION"
+  rm -- "$STAGED_INSTALLER" "$STAGED_WORKSTATION"
+)
 ```
 
 If any check fails, stop and retain both exact files for inspection. Do not substitute a glob,
