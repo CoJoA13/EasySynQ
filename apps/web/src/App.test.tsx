@@ -3,7 +3,7 @@ import { QueryObserver } from "@tanstack/query-core";
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, expect, test, vi } from "vitest";
 import { App, LegacyImportRedirect } from "./App";
 import { AuthContext, type AuthState } from "./lib/auth";
@@ -518,6 +518,11 @@ function LocationProbe() {
   return <div data-testid="location">{pathname + search}</div>;
 }
 
+function NavigateToUnknownRoute() {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate("/missing/private-segment")}>Open missing route</button>;
+}
+
 test("an unknown operational URL remains visible and renders a safe shell-contained 404", async () => {
   renderWithProviders(
     <>
@@ -536,6 +541,22 @@ test("an unknown operational URL remains visible and renders a safe shell-contai
   expect(screen.getByRole("main")).not.toHaveTextContent("private-segment");
   expect(screen.getByRole("main")).not.toHaveTextContent("view=private-segment");
   expect(document.title).toBe("EasySynQ — Page not found");
+});
+
+test("client-side navigation to an unknown route leaves focus on the 404 heading", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <App />
+      <NavigateToUnknownRoute />
+    </>,
+    { route: "/library" },
+  );
+
+  await screen.findByText("Document Library");
+  await user.click(screen.getByRole("button", { name: "Open missing route" }));
+  const heading = await screen.findByRole("heading", { name: "Page not found" });
+  await waitFor(() => expect(heading).toHaveFocus());
 });
 
 test.each(["UNINITIALIZED", "IN_SETUP"] as const)(

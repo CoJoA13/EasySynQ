@@ -43,11 +43,11 @@ const TITLES: readonly (readonly [string, string])[] = [
   ["/interested-parties", "Interested parties"],
 ];
 
-function labelFor(pathname: string): string {
+function labelFor(pathname: string): string | null {
   for (const [pattern, label] of TITLES) {
     if (matchPath({ path: pattern, end: true }, pathname)) return label;
   }
-  return "Page not found";
+  return null;
 }
 
 export function useRouteChrome(): void {
@@ -55,10 +55,11 @@ export function useRouteChrome(): void {
   const prevPathname = useRef<string | null>(null);
   useEffect(() => {
     const label = labelFor(pathname);
-    document.title = `EasySynQ — ${label}`;
+    document.title = `EasySynQ — ${label ?? "Page not found"}`;
     // Focus the main region only on a genuine route CHANGE — not on the initial mount, and not on
-    // React StrictMode's dev-only double-invoke of the mount effect (same pathname → no focus).
-    if (prevPathname.current !== null && prevPathname.current !== pathname) {
+    // React StrictMode's dev-only double-invoke of the mount effect (same pathname → no focus). An
+    // unmatched route owns its focus in NotFoundPage, so this must not override the 404 heading.
+    if (label !== null && prevPathname.current !== null && prevPathname.current !== pathname) {
       document.getElementById("main-content")?.focus();
     }
     prevPathname.current = pathname;
