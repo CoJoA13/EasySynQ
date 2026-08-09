@@ -51,19 +51,33 @@ The authenticated shell now stays unmounted behind a shared full-page loading/re
 owner-selected [EasySynQ — Recovery State](https://superdesign.dev/teams/81a47a41-fffd-47be-95bc-bbef545ae6b8/projects/6d7c21ea-07f0-442e-9f3b-bd90da61fa20?node=draft-variant-f3b43b85-78d4-414e-a5d3-50617431d73f)
 became a Mantine/EasySynQ-token panel with named polite loading, safe failure-specific copy, focused error
 heading, 44 px retry/reload actions, 320 px-safe geometry, reduced-motion inheritance, and axe coverage.
-The existing tab-scoped `es_auth_redirect` latch still permits one automatic redirect; rejection or
-timeout cannot loop, while an explicit single-flight retry clears the latch and permits one new attempt.
+The canvas uses the approved 24 px narrow/base horizontal padding. The existing tab-scoped
+`es_auth_redirect` latch still permits one automatic redirect; rejection or timeout cannot loop, while
+an explicit single-flight retry clears the latch and permits one new attempt.
 No generated Superdesign HTML, remote font, CDN asset, dependency, API, Keycloak, token-persistence,
 contract, or migration change shipped. The companion repository-authority correction stops mirroring
 mutable snapshot values in executable code while continuing to require one complete, uniquely keyed,
 shape-valid machine block; advanced, missing, duplicate, malformed, and non-ASCII count fixtures pin
 that boundary.
 
-Fresh completion evidence at implementation head `3c2531f` on 2026-08-09: the complete
-`npm --prefix apps/web run test` passed 250 files/1,511 tests; web typecheck and lint exited 0; the
-production build transformed 1,090 modules and exited 0 with its existing large-chunk advisory; the
-repository-authority fixture suite passed 91/91, the Claude hook compatibility script passed all seven
-assertions,
+#### Final whole-branch closure
+
+Implementation head `faf35b4` closes two redirect lifecycle gaps without changing provider ownership.
+A pre-existing latch in a ready, operational, tokenless tab now renders classified redirect recovery,
+because there is no active provider attempt or watchdog to justify loading; only **Try sign-in again**
+clears the latch and starts one login. A fresh tab still starts exactly one automatic redirect and shows
+named redirect loading while that provider attempt is active. If `signinRedirect()` resolves while the
+same document and generation survive, the provider now publishes terminal redirect recovery instead of
+clearing its watchdog while leaving loading forever; unload/unmount generation invalidation still
+suppresses stale completion. The recurring test-runner observation remains tracked only in
+[`RES-WEB-QUERY-TEARDOWN-NOTIFICATION`](open-residuals.md#res-web-query-teardown-notification).
+
+Fresh completion evidence at implementation head `faf35b4` on 2026-08-09: two complete
+`npm --prefix apps/web run test` runs each passed 250 files/1,513 tests; web typecheck and lint exited 0;
+the production build transformed 1,090 modules and exited 0 with its existing large-chunk advisory; the
+six authorized code/test files passed a scoped Prettier check while the honest whole-tree check retained
+82 pre-existing formatting findings; the repository-authority fixture suite passed 91/91, the Claude
+hook compatibility script passed all seven assertions,
 `check-repo-authority.sh` returned `AUTHORITY_OK`, the site-data guard suite passed 13/13, the direct
 site-data scan was clean, and `git diff --check` was clean. This front-end-only slice leaves migration
 head snapshot `0085` unchanged. Programme 0's real two-media Fedora/libvirt VM acceptance remains
