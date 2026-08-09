@@ -169,7 +169,9 @@ Allow approximately 60–120 minutes, depending on network, CPU, storage, and co
 The installer has a hard 3600-second installation deadline; exceeding it is a proof failure, not an
 invitation to leave an unbounded guest running. The harness prints its unique VM name, exact temporary
 disk path, and retained evidence log before VM creation. Logs are written with mode `0600` under
-`.fedora-proof-logs/` and are ignored by Git through the repository's `*.log` rule. The detached
+the caller-owned `0700` `.fedora-proof-logs/` directory, which must have no named or default ACL;
+each unique log is created atomically with no-clobber semantics and is ignored by Git through the
+repository's `*.log` rule. The detached
 launcher keeps a private no-input stream open while the serial text console and virt-install debug output
 append to that log, so Anaconda progress remains observable without a terminal or interactive stdin.
 

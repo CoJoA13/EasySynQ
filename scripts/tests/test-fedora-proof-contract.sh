@@ -81,6 +81,9 @@ console_fifo=$fixture_root/console-input
 console_log=$fixture_root/console.log
 diagnostic_probe=$fixture_root/virsh-diagnostic-probe
 diagnostic_log=$fixture_root/diagnostic.log
+uuid_probe=$fixture_root/uuid-probe
+uuid_virsh_probe=$fixture_root/uuid-virsh-probe
+uuid_virsh_pid_file=$fixture_root/uuid-virsh-pid
 acl_workdir=
 stage_temp=
 unsafe_stage_root=$fixture_root/unsafe-stage-root
@@ -106,7 +109,8 @@ cleanup_fixture() {
     "$fixture_root/owned/.easysynq-fedora-proof" 2>/dev/null || true
   rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" "$storage_probe" \
     "$acl_probe" "$client_probe" "$console_fifo" "$console_log" "$diagnostic_probe" \
-    "$diagnostic_log" "$staged_installer" "$staged_workstation" \
+    "$diagnostic_log" "$uuid_probe" "$uuid_virsh_probe" "$uuid_virsh_pid_file" \
+    "$staged_installer" "$staged_workstation" \
     2>/dev/null || true
   if [[ -n $stage_temp \
       && $stage_temp == "$fixture_root"/easysynq-fedora-proof-media-*.part.* \
@@ -297,6 +301,13 @@ if [[ -f $HOST_SCRIPT ]]; then
   else
     fail 'bounded diagnostics run before exact domain destruction on failure'
   fi
+  assert_contains "$host_source" \
+    'fedora_proof_query_uuid_before_deadline_exact \' \
+    'UUID discovery races every probe against the hard installer deadline'
+  assert_contains "$host_source" 'set -o noclobber' \
+    'retained proof logs use atomic no-clobber creation'
+  assert_contains "$host_source" 'umask 077' \
+    'retained proof logs are private from inode creation'
 
   output=$(
     "$HOST_SCRIPT" \
@@ -797,6 +808,70 @@ if [[ -f $HOST_SCRIPT ]]; then
     fail 'host script exposes behavior-level exact client deadline handling'
   fi
 
+  if declare -F fedora_proof_query_uuid_before_deadline_exact >/dev/null; then
+    original_uuid_query_timeout=$FEDORA_PROOF_UUID_QUERY_TIMEOUT_SECONDS
+    : >"$uuid_probe"
+    : >"$console_log"
+    /usr/bin/chmod 0600 "$uuid_probe" "$console_log"
+    printf '%s\n' \
+      '#!/usr/bin/env bash' \
+      'if [[ " $* " == *" domuuid "* ]]; then' \
+      '  printf "%s\n" "$BASHPID" >"$FEDORA_UUID_HANG_PID_FILE"' \
+      '  exec /usr/bin/sleep 30' \
+      'fi' \
+      'exit 2' >"$uuid_virsh_probe"
+    /usr/bin/chmod 0700 "$uuid_virsh_probe"
+    uuid_parent=$BASHPID
+    /usr/bin/sleep 30 &
+    uuid_client_pid=$!
+    uuid_client_start=$(fedora_proof_capture_client_identity \
+      "$uuid_client_pid" "$uuid_parent")
+    /usr/bin/sleep 1 &
+    uuid_timer_pid=$!
+    uuid_timer_start=$(fedora_proof_capture_client_identity \
+      "$uuid_timer_pid" "$uuid_parent")
+    uuid_started=$SECONDS
+    FEDORA_PROOF_UUID_QUERY_TIMEOUT_SECONDS=30
+    export FEDORA_UUID_HANG_PID_FILE="$uuid_virsh_pid_file"
+    fedora_proof_query_uuid_before_deadline_exact \
+      "$uuid_client_pid" "$uuid_client_start" "$uuid_parent" \
+      "$uuid_timer_pid" "$uuid_timer_start" "$uuid_parent" \
+      easysynq-fedora-proof-20000101T000000Z-1-deadbeef \
+      "$uuid_probe" "$console_log" "$uuid_virsh_probe" \
+      >"$client_probe" 2>&1
+    status=$?
+    uuid_elapsed=$((SECONDS - uuid_started))
+    output=$(<"$client_probe")
+    unset FEDORA_UUID_HANG_PID_FILE
+    assert_status 124 "$status" \
+      'a hanging UUID discovery returns the installer deadline status'
+    (( uuid_elapsed <= 3 )) \
+      && pass || fail "hanging UUID discovery is bounded by the same timer (elapsed=${uuid_elapsed}s)"
+    if [[ ! -e /proc/$uuid_client_pid && ! -e /proc/$uuid_timer_pid \
+        && -z ${FEDORA_PROOF_UUID_QUERY_PID:-} ]]; then
+      pass
+    else
+      fail 'UUID deadline reaps only the exact query, client, and timer children'
+      kill -TERM "$uuid_client_pid" "$uuid_timer_pid" \
+        "${FEDORA_PROOF_UUID_QUERY_PID:-}" 2>/dev/null || true
+      wait "$uuid_client_pid" "$uuid_timer_pid" \
+        "${FEDORA_PROOF_UUID_QUERY_PID:-}" 2>/dev/null || true
+    fi
+    uuid_query_child_pid=$(<"$uuid_virsh_pid_file")
+    if [[ $uuid_query_child_pid =~ ^[1-9][0-9]*$ \
+        && ! -e /proc/$uuid_query_child_pid ]] \
+        && ! kill -0 "$uuid_query_child_pid" 2>/dev/null; then
+      pass
+    else
+      fail 'UUID deadline leaves no hanging virsh descendant'
+    fi
+    assert_contains "$output" 'exact 3600-second installation deadline expired' \
+      'UUID discovery deadline names the production installation bound'
+    FEDORA_PROOF_UUID_QUERY_TIMEOUT_SECONDS=$original_uuid_query_timeout
+  else
+    fail 'host script exposes behavior-level bounded UUID discovery'
+  fi
+
   if declare -F fedora_proof_launch_client_logged >/dev/null; then
     /usr/bin/mkfifo -- "$console_fifo"
     /usr/bin/chmod 0600 "$console_fifo"
@@ -888,6 +963,9 @@ if [[ -f $HOST_SCRIPT ]]; then
       /usr/bin/chmod 0600 "$diagnostic_log"
       printf '%s\n' \
         '#!/usr/bin/env bash' \
+        'if [[ -n ${FEDORA_DIAG_HANG_COMMAND:-} && " $* " == *" $FEDORA_DIAG_HANG_COMMAND "* ]]; then' \
+        '  /usr/bin/sleep 30' \
+        'fi' \
         'case "$*" in' \
         '  *" dominfo $FEDORA_DIAG_VM") printf "%s\\n" "Id: 1" ;;' \
         '  *" domuuid $FEDORA_DIAG_VM") printf "%s\\n" "$FEDORA_DIAG_UUID" ;;' \
@@ -923,6 +1001,32 @@ if [[ -f $HOST_SCRIPT ]]; then
         'diagnostic command output is capped before retention'
       assert_status 600 "$(/usr/bin/stat -c '%a' "$diagnostic_log")" \
         'diagnostic retention preserves the 0600 log boundary'
+
+      for hanging_command in dominfo domuuid domblklist; do
+        : >"$diagnostic_log"
+        export FEDORA_DIAG_HANG_COMMAND="$hanging_command" \
+          FEDORA_DIAG_VM="$first_name" FEDORA_DIAG_UUID="$diagnostic_uuid" \
+          FEDORA_DIAG_DISK="$disk"
+        output=$(
+          /usr/bin/timeout -s TERM -k 1 4 /usr/bin/bash -c '
+            source "$1"
+            FEDORA_PROOF_CONNECT=test:///default
+            FEDORA_PROOF_DIAGNOSTIC_TIMEOUT_SECONDS=1
+            fedora_proof_capture_bounded_diagnostics \
+              "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9"
+          ' _ "$HOST_SCRIPT" "$owned" "$first_name" "$diagnostic_uuid" "$disk" \
+            "$fixture_root" "$test_qemu_uid" "$diagnostic_log" "$diagnostic_probe" 2>&1
+        )
+        status=$?
+        unset FEDORA_DIAG_HANG_COMMAND FEDORA_DIAG_VM FEDORA_DIAG_UUID FEDORA_DIAG_DISK
+        assert_status 0 "$status" \
+          "hanging diagnostic $hanging_command probe is bounded before exact cleanup"
+        diagnostic_output=$(<"$diagnostic_log")
+        assert_contains "$diagnostic_output" 'FEDORA_PROOF_DIAGNOSTICS_BEGIN' \
+          "bounded $hanging_command probe retains a diagnostic begin marker"
+        assert_contains "$diagnostic_output" 'FEDORA_PROOF_DIAGNOSTICS_END' \
+          "bounded $hanging_command probe retains a diagnostic end marker"
+      done
     else
       fail 'host script exposes behavior-level bounded pre-delete diagnostics'
     fi
@@ -1007,6 +1111,56 @@ if [[ -f $HOST_SCRIPT ]]; then
   fi
 
   if declare -F fedora_proof_run_lifecycle >/dev/null && [[ $selected_fallback == fedora43 ]]; then
+    if declare -F fedora_proof_create_private_log >/dev/null; then
+      private_log_repo=$fixture_root/private-log-repo
+      mkdir "$private_log_repo"
+      private_log=$(fedora_proof_create_private_log "$private_log_repo" "$failure_vm")
+      status=$?
+      assert_status 0 "$status" 'retained proof log is created through the private helper'
+      assert_status 700 "$(/usr/bin/stat -c '%a' "$private_log_repo/.fedora-proof-logs")" \
+        'retained proof log directory is private from creation'
+      assert_status 600 "$(/usr/bin/stat -c '%a' "$private_log")" \
+        'retained proof log inode is 0600 from creation'
+      assert_status $'user::rwx\ngroup::---\nother::---' \
+        "$(/usr/bin/getfacl -cpn -- "$private_log_repo/.fedora-proof-logs")" \
+        'retained proof log directory has no named or default ACL'
+      rm -f -- "$private_log"
+      rmdir -- "$private_log_repo/.fedora-proof-logs" "$private_log_repo"
+
+      unsafe_private_log_repo=$fixture_root/unsafe-private-log-repo
+      mkdir "$unsafe_private_log_repo"
+      mkdir -m 0770 "$unsafe_private_log_repo/.fedora-proof-logs"
+      output=$(fedora_proof_create_private_log "$unsafe_private_log_repo" "$failure_vm" 2>&1)
+      status=$?
+      assert_status 1 "$status" 'group-writable retained log directory is refused'
+      assert_not_exists "$unsafe_private_log_repo/.fedora-proof-logs/$failure_vm.log" \
+        'unsafe retained log directory is rejected before target creation'
+      chmod 0700 "$unsafe_private_log_repo/.fedora-proof-logs"
+      /usr/bin/setfacl -m "d:u:$EUID:rwx,d:m::rwx" -- \
+        "$unsafe_private_log_repo/.fedora-proof-logs"
+      output=$(fedora_proof_create_private_log "$unsafe_private_log_repo" "$failure_vm" 2>&1)
+      status=$?
+      assert_status 1 "$status" 'default-ACL retained log directory is refused'
+      assert_not_exists "$unsafe_private_log_repo/.fedora-proof-logs/$failure_vm.log" \
+        'default ACL is rejected before retained log target creation'
+      /usr/bin/setfacl -b -k -- "$unsafe_private_log_repo/.fedora-proof-logs"
+      chmod 0700 "$unsafe_private_log_repo/.fedora-proof-logs"
+      private_log_outside=$unsafe_private_log_repo/outside
+      printf '%s\n' do-not-truncate >"$private_log_outside"
+      ln -s "$private_log_outside" \
+        "$unsafe_private_log_repo/.fedora-proof-logs/$failure_vm.log"
+      output=$(fedora_proof_create_private_log "$unsafe_private_log_repo" "$failure_vm" 2>&1)
+      status=$?
+      assert_status 1 "$status" 'pre-existing retained log symlink is refused atomically'
+      assert_status do-not-truncate "$(<"$private_log_outside")" \
+        'retained log no-clobber creation never truncates a symlink target'
+      rm -f -- "$unsafe_private_log_repo/.fedora-proof-logs/$failure_vm.log" \
+        "$private_log_outside"
+      rmdir -- "$unsafe_private_log_repo/.fedora-proof-logs" "$unsafe_private_log_repo"
+    else
+      fail 'host script exposes behavior-level private retained-log creation'
+    fi
+
     unsafe_log_repo=$fixture_root/unsafe-log-repo
     unsafe_log_root=$fixture_root/unsafe-log-root
     mkdir "$unsafe_log_repo" "$unsafe_log_root"
@@ -1227,6 +1381,10 @@ if [[ -f $RUNBOOK ]]; then
     'runbook aligns the proof allocation with shipped deployment defaults'
   assert_contains "$runbook" 'hard 3600-second installation deadline' \
     'runbook documents the exact installer deadline'
+  assert_contains "$runbook" 'caller-owned `0700` `.fedora-proof-logs/` directory' \
+    'runbook documents the private retained-log directory boundary'
+  assert_contains "$runbook" 'created atomically with no-clobber semantics' \
+    'runbook documents atomic retained-log creation'
   assert_contains "$runbook" 'serial text console and virt-install debug output' \
     'runbook explains the retained observable Anaconda progress'
   assert_contains "$runbook" 'bounded pre-delete diagnostic bundle' \
