@@ -26,6 +26,24 @@ test("AppShell renders landmarks, skip-link, and child content", async () => {
   expect(await axe(container)).toHaveNoViolations();
 });
 
+test("not-found mode keeps the shell visible and replaces outlet content", () => {
+  renderWithProviders(
+    <Routes>
+      <Route path="/" element={<AppShell notFound />}>
+        <Route path="*" element={<h1>Unexpected route content</h1>} />
+      </Route>
+    </Routes>,
+    { route: "/missing/private-segment" },
+  );
+
+  expect(screen.getByRole("banner")).toBeInTheDocument();
+  expect(screen.getByRole("navigation")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Page not found" })).toBeInTheDocument();
+  expect(
+    screen.queryByRole("heading", { name: "Unexpected route content" }),
+  ).not.toBeInTheDocument();
+});
+
 test("⌘K opens the command palette", async () => {
   const user = userEvent.setup();
   renderWithProviders(<AppShell />, { route: "/" });

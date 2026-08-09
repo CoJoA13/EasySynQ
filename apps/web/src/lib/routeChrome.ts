@@ -1,43 +1,53 @@
 import { useEffect, useRef } from "react";
-import { useLocation } from "react-router-dom";
+import { matchPath, useLocation } from "react-router-dom";
 
-// path-prefix → tab-title. Longest prefix wins (sorted below), so a child path like
-// /settings/notifications resolves before a shorter sibling. Unmapped → the bare app name.
-// "/" is the dashboard: it sorts LAST (shortest) and its `prefix + "/"` guard is "//" (never a real
-// path), so it matches the root route exactly and can never shadow a deeper route.
 const TITLES: readonly (readonly [string, string])[] = [
   ["/", "Dashboard"],
-  ["/admin", "Administration"],
   ["/setup", "Setup"],
+  ["/admin", "Administration"],
+  ["/admin/users", "Administration"],
+  ["/admin/roles", "Administration"],
+  ["/admin/processes", "Administration"],
+  ["/admin/config", "Administration"],
   ["/library", "Library"],
-  ["/documents", "Document"],
+  ["/library/new", "New document"],
+  ["/documents/:id", "Document"],
   ["/tasks", "Tasks"],
+  ["/tasks/:id", "Task"],
   ["/settings/notifications", "Notification settings"],
   ["/notifications", "Notifications"],
   ["/search", "Search"],
   ["/compliance", "Compliance"],
+  ["/reports/document-control", "Document register"],
   ["/capa", "CAPA"],
+  ["/capa/complaints", "Complaints"],
+  ["/capa/ncrs", "NCRs"],
   ["/audits", "Audits"],
+  ["/audits/programme", "Audit programme"],
+  ["/audits/:id", "Audit"],
   ["/imports", "Import"],
+  ["/imports/:runId", "Import run"],
   ["/ingestion", "Import"],
+  ["/ingestion/:runId", "Import run"],
   ["/drift", "Drift"],
+  ["/drift/superseded-copies", "Superseded copies"],
   ["/objectives", "Objectives"],
+  ["/objectives/:id", "Objective"],
   ["/management-reviews", "Management reviews"],
+  ["/management-reviews/:id", "Management review"],
   ["/dcrs", "Document change requests"],
+  ["/dcrs/:id/diff", "Document change request"],
   ["/improvement", "Improvement"],
   ["/risks", "Risks"],
   ["/context", "Context"],
   ["/interested-parties", "Interested parties"],
-  ["/reports/document-control", "Document register"],
 ];
 
-const SORTED = [...TITLES].sort((a, b) => b[0].length - a[0].length);
-
 function labelFor(pathname: string): string {
-  for (const [prefix, label] of SORTED) {
-    if (pathname === prefix || pathname.startsWith(prefix + "/")) return label;
+  for (const [pattern, label] of TITLES) {
+    if (matchPath({ path: pattern, end: true }, pathname)) return label;
   }
-  return "";
+  return "Page not found";
 }
 
 export function useRouteChrome(): void {
@@ -45,7 +55,7 @@ export function useRouteChrome(): void {
   const prevPathname = useRef<string | null>(null);
   useEffect(() => {
     const label = labelFor(pathname);
-    document.title = label ? `EasySynQ — ${label}` : "EasySynQ";
+    document.title = `EasySynQ — ${label}`;
     // Focus the main region only on a genuine route CHANGE — not on the initial mount, and not on
     // React StrictMode's dev-only double-invoke of the mount effect (same pathname → no focus).
     if (prevPathname.current !== null && prevPathname.current !== pathname) {

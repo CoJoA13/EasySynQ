@@ -518,6 +518,47 @@ function LocationProbe() {
   return <div data-testid="location">{pathname + search}</div>;
 }
 
+test("an unknown operational URL remains visible and renders a safe shell-contained 404", async () => {
+  renderWithProviders(
+    <>
+      <App />
+      <LocationProbe />
+    </>,
+    { route: "/missing/private-segment?view=private-segment" },
+  );
+
+  expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
+  expect(screen.getByRole("banner")).toBeInTheDocument();
+  expect(screen.getByRole("navigation")).toBeInTheDocument();
+  expect(screen.getByTestId("location")).toHaveTextContent(
+    "/missing/private-segment?view=private-segment",
+  );
+  expect(screen.getByRole("main")).not.toHaveTextContent("private-segment");
+  expect(screen.getByRole("main")).not.toHaveTextContent("view=private-segment");
+  expect(document.title).toBe("EasySynQ — Page not found");
+});
+
+test.each(["UNINITIALIZED", "IN_SETUP"] as const)(
+  "unknown %s routes retain the setup authorization boundary",
+  async (setup_state) => {
+    server.use(http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state })));
+    renderWithProviders(<App />, {
+      route: "/missing/private-segment",
+      auth: noTokenAuth(),
+    });
+    expect(await screen.findByRole("heading", { name: "Welcome to EasySynQ" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Page not found" })).not.toBeInTheDocument();
+  },
+);
+
+test("404 recovery links reach dashboard and library without a browser-back escape", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<App />, { route: "/missing" });
+  await user.click(await screen.findByRole("link", { name: "Open document library" }));
+  expect(await screen.findByText("Document Library")).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /back/i })).not.toBeInTheDocument();
+});
+
 test("legacy ingestion bookmarks redirect to imports and preserve the query", async () => {
   const runId = "10000000-0000-0000-0000-000000000001";
   renderWithProviders(

@@ -247,7 +247,10 @@ export function App() {
         <Route path="context" element={<ContextRegisterPage />} />
         <Route path="interested-parties" element={<InterestedPartiesRegisterPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route
+        path="*"
+        element={operational ? <AppShell notFound /> : <Navigate to="/setup" replace />}
+      />
     </Routes>
   );
 }

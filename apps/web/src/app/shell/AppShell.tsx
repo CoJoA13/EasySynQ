@@ -2,13 +2,18 @@ import { AppShell as MantineAppShell, ScrollArea } from "@mantine/core";
 import { useDisclosure, useHotkeys } from "@mantine/hooks";
 import { Outlet, useLocation } from "react-router-dom";
 import { ApplicationErrorBoundary } from "../errors/ApplicationErrorBoundary";
+import { NotFoundPage } from "../errors/NotFoundPage";
 import { RouteErrorPage } from "../errors/RouteErrorPage";
 import { CommandPalette } from "../../features/search/CommandPalette";
 import { Breadcrumb } from "./Breadcrumb";
 import { LeftRail } from "./LeftRail";
 import { TopBar } from "./TopBar";
 
-export function AppShell() {
+export interface AppShellProps {
+  notFound?: boolean;
+}
+
+export function AppShell({ notFound = false }: AppShellProps) {
   const [navOpened, { toggle: toggleNav }] = useDisclosure(false);
   const [searchOpened, { open: openSearch, close: closeSearch }] = useDisclosure(false);
   const { pathname, search, hash } = useLocation();
@@ -53,12 +58,12 @@ export function AppShell() {
         </MantineAppShell.Section>
       </MantineAppShell.Navbar>
       <MantineAppShell.Main id="main-content" tabIndex={-1}>
-        <Breadcrumb />
+        <Breadcrumb notFound={notFound} />
         <ApplicationErrorBoundary
           resetKey={routeResetKey}
           fallback={({ onReset }) => <RouteErrorPage onRetry={onReset} />}
         >
-          <Outlet />
+          {notFound ? <NotFoundPage /> : <Outlet />}
         </ApplicationErrorBoundary>
       </MantineAppShell.Main>
       <CommandPalette opened={searchOpened} onClose={closeSearch} />
