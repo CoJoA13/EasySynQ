@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-08"
-baseline_commit: "c15541f"
-last_shipped_slice: "S-upload-identity"
+as_of: "2026-08-09"
+baseline_commit: "faf35b4"
+last_shipped_slice: "S-auth-startup-boundary"
 migration_head: "0085"
 next_migration: "0086"
 api_unit_tests: 1686
-web_test_files: 249
-web_tests: 1468
+web_test_files: 250
+web_tests: 1513
 contract_tests: 283
 integration_passed: 1051
 integration_skipped: 2
@@ -30,10 +30,13 @@ DCR, improvement, risk, context, interested-party, and identity-provisioning sur
 retention/disposition, and Evidence Packs are API/worker-complete but do not have dedicated SPA
 management routes.
 
-The last shipped slice binds every non-deduplicated staging promotion to one opaque, version-bound source
-identity across browser check-in, Record capture/correction, generated content, and import workers.
-Detailed shipped behavior, mutations, and evidence remain in
-[`slice-history.md`](slice-history.md#s-upload-identity--exact-staged-source-identity-through-worm-promotion).
+The last shipped slice replaces the unnamed, potentially indefinite authentication spinner with an
+explicit, 15-second-bounded startup state and a safe pre-shell recovery panel. Callback failures strip
+their query before recovery, stale asynchronous results cannot overwrite newer attempts, and the
+tab-scoped redirect latch permits another attempt only after explicit user recovery. A resolved redirect
+promise on a surviving document and a pre-existing latch with no active provider attempt both terminate
+in actionable recovery instead of actionless loading. Detailed shipped behavior and evidence remain in
+[`slice-history.md`](slice-history.md#s-auth-startup-boundary--bounded-explicit-authentication-startup-and-recovery).
 
 ## Runtime truth
 
@@ -52,9 +55,13 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 
 ## Verification baseline
 
-The numeric frontmatter records the fresh completion gates for the last shipped slice. It is consumed by
-repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates it
-only after fresh evidence; partial or unavailable checks must be reported as such.
+The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
+repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates
+only the facts it freshly verifies; partial or unavailable checks must be reported as such. At
+`faf35b4` on 2026-08-09, two complete web-suite runs each passed 250 files/1,513 tests, and web
+typecheck, lint, and production build also passed. API, contract, integration, migration, and CI values
+above retain their prior executable evidence because this front-end-only slice did not rerun or change
+them.
 
 ## CI topology
 
@@ -72,7 +79,7 @@ SELinux, libvirt, Docker, or a live application stack.
 - PostgreSQL MCP: **disabled** after the reviewed package failed the high-severity advisory gate. No
   connector, launcher, package lock, owner-database port overlay, or orphan database role ships. The sole
   re-enablement contract is [`RES-POSTGRES-MCP-REPLACEMENT`](open-residuals.md#res-postgres-mcp-replacement).
-- Disposable Fedora Workstation proof: **PENDING — not run on this checkout as of 2026-08-08**. No Fedora
+- Disposable Fedora Workstation proof: **PENDING — not run on this checkout as of 2026-08-09**. No Fedora
   media checksum, evidence commit, or PASS result is recorded because the required Fedora 44 Everything
   netinstall and Workstation Live media plus a usable `qemu:///system` proof host were not available.
   Completion requires the manual PR/release gate in [`runbooks/fedora-proof.md`](runbooks/fedora-proof.md).

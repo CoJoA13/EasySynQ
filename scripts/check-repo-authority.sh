@@ -70,23 +70,27 @@ else
 fi
 
 if [ -f "$ROOT/docs/current-status.md" ]; then
-  declare -A STATUS_VALUES=(
-    [easysynq_status_schema]='1'
-    [as_of]='"2026-08-08"'
-    [baseline_commit]='"c15541f"'
-    [last_shipped_slice]='"S-upload-identity"'
-    [migration_head]='"0085"'
-    [next_migration]='"0086"'
-    [api_unit_tests]='1686'
-    [web_test_files]='249'
-    [web_tests]='1468'
-    [contract_tests]='283'
-    [integration_passed]='1051'
-    [integration_skipped]='2'
-    [ci_jobs]='10'
-    [ci_checks]='14'
+  declare -A STATUS_KEYS=(
+    [easysynq_status_schema]=1
+    [as_of]=1
+    [baseline_commit]=1
+    [last_shipped_slice]=1
+    [migration_head]=1
+    [next_migration]=1
+    [api_unit_tests]=1
+    [web_test_files]=1
+    [web_tests]=1
+    [contract_tests]=1
+    [integration_passed]=1
+    [integration_skipped]=1
+    [ci_jobs]=1
+    [ci_checks]=1
   )
   declare -A STATUS_COUNTS=()
+  frontmatter_delimiters="$(awk '$0 == "---" { count += 1 } END { print count + 0 }' "$ROOT/docs/current-status.md")"
+  if [ "$frontmatter_delimiters" -ne 2 ]; then
+    reason AUTHORITY_STATUS_FRONTMATTER
+  fi
   in_frontmatter=0
   closed_frontmatter=0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -109,7 +113,7 @@ if [ -f "$ROOT/docs/current-status.md" ]; then
     fi
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
-    if [ -z "${STATUS_VALUES[$key]+x}" ]; then
+    if [ -z "${STATUS_KEYS[$key]+x}" ]; then
       reason AUTHORITY_UNKNOWN_STATUS_KEY
       continue
     fi
@@ -117,11 +121,23 @@ if [ -f "$ROOT/docs/current-status.md" ]; then
     if [ "${STATUS_COUNTS[$key]}" -gt 1 ]; then
       reason AUTHORITY_DUPLICATE_STATUS_KEY
     fi
-    if [ "$value" != "${STATUS_VALUES[$key]}" ]; then
-      reason AUTHORITY_STATUS_VALUE
-    fi
     case "$key" in
-      easysynq_status_schema|api_unit_tests|web_test_files|web_tests|contract_tests|integration_passed|integration_skipped|ci_jobs|ci_checks)
+      easysynq_status_schema)
+        [ "$value" = '1' ] || reason AUTHORITY_STATUS_VALUE
+        ;;
+      as_of)
+        [[ "$value" =~ ^\"[0-9]{4}-[0-9]{2}-[0-9]{2}\"$ ]] || reason AUTHORITY_STATUS_VALUE
+        ;;
+      baseline_commit)
+        [[ "$value" =~ ^\"([0-9a-f]{7}|[0-9a-f]{40})\"$ ]] || reason AUTHORITY_STATUS_VALUE
+        ;;
+      last_shipped_slice)
+        [[ "$value" =~ ^\"S-[a-z0-9]+(-[a-z0-9]+)*\"$ ]] || reason AUTHORITY_STATUS_VALUE
+        ;;
+      migration_head|next_migration)
+        [[ "$value" =~ ^\"[0-9]{4}\"$ ]] || reason AUTHORITY_STATUS_VALUE
+        ;;
+      api_unit_tests|web_test_files|web_tests|contract_tests|integration_passed|integration_skipped|ci_jobs|ci_checks)
         [[ "$value" =~ ^[0-9]+$ ]] || reason AUTHORITY_STATUS_VALUE
         ;;
     esac
@@ -129,7 +145,7 @@ if [ -f "$ROOT/docs/current-status.md" ]; then
   if [ "$in_frontmatter" -eq 0 ] || [ "$closed_frontmatter" -eq 0 ]; then
     reason AUTHORITY_STATUS_FRONTMATTER
   fi
-  for key in "${!STATUS_VALUES[@]}"; do
+  for key in "${!STATUS_KEYS[@]}"; do
     [ "${STATUS_COUNTS[$key]:-0}" -ne 0 ] || reason AUTHORITY_MISSING_STATUS_KEY
   done
 fi

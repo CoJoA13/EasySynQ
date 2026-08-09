@@ -1,9 +1,10 @@
-import { Button, Container, Loader, Stack, Text } from "@mantine/core";
+import { Container, Loader } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { SetupWizard } from "./SetupWizard";
 import { AppShell } from "./app/shell/AppShell";
+import { AuthStartupScreen } from "./app/startup/AuthStartupScreen";
 import { AdminShell } from "./admin/AdminShell";
 import { ConfigAdmin } from "./admin/ConfigAdmin";
 import { ProcessesAdmin } from "./admin/ProcessesAdmin";
@@ -56,7 +57,7 @@ export function LegacyImportRedirect() {
 
 export function App() {
   useRouteChrome();
-  const { ready, token, login } = useAuth();
+  const { status, token, login, retry } = useAuth();
 
   // The public setup-state probe decides wizard-vs-shell (S8a). The latch (423) protects the API
   // regardless; this is just the SPA's routing signal.
@@ -71,18 +72,31 @@ export function App() {
   // operational and we hold no token, bounce through Keycloak to re-authenticate (seamless while the
   // SSO session is live). A one-shot sessionStorage flag stops a failed sign-in from looping.
   useEffect(() => {
-    if (!ready || setupState.isLoading) return;
+    if (status.kind !== "ready" || setupState.isLoading) return;
     if (operational && !token) {
       if (!sessionStorage.getItem("es_auth_redirect")) {
         sessionStorage.setItem("es_auth_redirect", "1");
-        login();
+        void login();
       }
     } else if (token) {
       sessionStorage.removeItem("es_auth_redirect");
     }
-  }, [ready, operational, token, login, setupState.isLoading]);
+  }, [status.kind, operational, token, login, setupState.isLoading]);
 
-  if (!ready || setupState.isLoading) {
+  if (status.kind !== "ready") {
+    return (
+      <AuthStartupScreen
+        status={status}
+        onRetry={async () => {
+          sessionStorage.removeItem("es_auth_redirect");
+          await retry();
+        }}
+        onReload={() => window.location.reload()}
+      />
+    );
+  }
+
+  if (setupState.isLoading) {
     return (
       <Container size="sm" py="xl">
         <Loader />
@@ -90,26 +104,23 @@ export function App() {
     );
   }
 
-  // Operational but token-less → we're redirecting to Keycloak. Show a calm interstitial (not the
-  // shell, which would flash 401s) with a manual retry in case the auto-redirect was blocked.
+  // Operational but token-less → keep the shell hidden. A fresh attempt shows named redirect loading;
+  // a pre-existing latch has no active provider watchdog, so it must show actionable recovery instead.
   if (operational && !token) {
+    const redirectAlreadyAttempted = sessionStorage.getItem("es_auth_redirect") !== null;
     return (
-      <Container size="sm" py="xl">
-        <Stack align="center" gap="md">
-          <img src="/easysynq-mark.svg" alt="" aria-hidden="true" width={48} height={48} />
-          <Loader />
-          <Text c="dimmed">Signing in…</Text>
-          <Button
-            variant="subtle"
-            onClick={() => {
-              sessionStorage.removeItem("es_auth_redirect");
-              login();
-            }}
-          >
-            Sign in again
-          </Button>
-        </Stack>
-      </Container>
+      <AuthStartupScreen
+        status={
+          redirectAlreadyAttempted
+            ? { kind: "error", failure: { kind: "redirect", recovery: "redirect" } }
+            : { kind: "loading", operation: "redirect" }
+        }
+        onRetry={async () => {
+          sessionStorage.removeItem("es_auth_redirect");
+          await login();
+        }}
+        onReload={() => window.location.reload()}
+      />
     );
   }
 

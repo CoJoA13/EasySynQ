@@ -19,6 +19,19 @@ read-only login, and prove reads succeed while DML, DDL, role switching, sequenc
 functions, owner credentials, production data, and site data remain unavailable.
 Last reviewed: 2026-08-08
 
+## RES-WEB-QUERY-TEARDOWN-NOTIFICATION
+
+Status: OPEN
+Owner: Repository owner
+Source: S-auth-startup-boundary full-web verification, 2026-08-09
+Reason: A full Vitest run has nondeterministically emitted a post-jsdom `window is not defined` error
+from a queued TanStack Query notification after every test assertion had already passed. The observation
+is test-runner evidence only: production causality has not been reproduced or established.
+Closure contract: Produce a deterministic minimal reproduction, identify and fix the root cause at its
+owning boundary, and complete repeated clean full-suite runs without depending on reruns or retrying a
+failed gate.
+Last reviewed: 2026-08-09
+
 ## RES-INGEST-PROGRESS
 
 Status: OPEN
