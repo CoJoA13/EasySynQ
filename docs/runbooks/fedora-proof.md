@@ -32,7 +32,7 @@ deliberately not installed by `scripts/bootstrap-fedora-dev.sh`:
 
 ```bash
 sudo dnf install libvirt-daemon-kvm libvirt-daemon-config-network libvirt-client \
-  qemu-kvm virt-install guestfs-tools
+  qemu-kvm virt-install guestfs-tools acl
 sudo systemctl enable --now virtqemud.socket virtnetworkd.socket virtstoraged.socket
 sudo usermod -aG libvirt "$USER"
 ```
@@ -44,6 +44,8 @@ network:
 id -nG | tr ' ' '\n' | grep -Fx libvirt
 virsh --connect qemu:///system uri
 virsh --connect qemu:///system pool-list --all
+getent passwd qemu
+command -v setfacl getfacl
 virt-install --osinfo list | grep -E '^fedora(44|43)$'
 sudo virsh --connect qemu:///system net-start default || true
 sudo virsh --connect qemu:///system net-autostart default
@@ -54,9 +56,12 @@ The read-only pool listing exercises the modular libvirt storage service that `v
 to validate the install media and disk. The harness runs the same readiness check before it creates
 its temporary directory or disk; it does not start host services or weaken permissions.
 
-Do not weaken device, socket, ISO, or directory permissions to make libvirt work. Put both ISO files
-in a location the reviewed `qemu:///system` configuration can read, and fix the host's normal libvirt
-ACL/SELinux configuration if the preflight reports access denial.
+Do not weaken device, socket, ISO, or directory permissions to make libvirt work. The supplied ISO
+files may remain in a caller-readable location, including the caller's home directory: the harness
+copies them to two exact retained files directly under `/var/tmp` and never gives qemu an ACL on the
+source files or any home-directory component. Fix the host's normal libvirt/SELinux configuration if
+the preflight reports access denial; never use `chcon`, an `fcontext` override, `setenforce 0`, a broad
+mode change, or a recursive/default ACL for this proof.
 
 The harness prefers exact `fedora44` libosinfo metadata. Fedora 44 hosts whose packaged `osinfo-db`
 does not yet list that identifier may use `fedora43` as the nearest device-default metadata only. The
@@ -114,6 +119,13 @@ Checksum-only validation does not contact libvirt or create temporary files:
   --validate-only
 ```
 
+The real proof rejects a caller `TMPDIR` other than `/var/tmp`; unset an inherited value before the
+run. This is a fixed safety boundary, not a configurable location:
+
+```bash
+unset TMPDIR
+```
+
 Run the acceptance proof by removing only `--validate-only`:
 
 ```bash
@@ -125,9 +137,23 @@ Run the acceptance proof by removing only `--validate-only`:
 ```
 
 A fresh login after joining `libvirt` is preferred. If an operator deliberately uses `sg libvirt -c`
-instead, put any custom `TMPDIR=/absolute/owned/path` assignment inside the `sg` command string; do not
-assume an unexported caller variable crosses the new shell. The printed disk path is the authoritative
-cleanup target. This is invocation hygiene, not a way to bypass the harness's ownership checks.
+instead, unset `TMPDIR` inside that command string or set it to the literal `/var/tmp`; arbitrary
+temporary roots are rejected. The printed disk path is the authoritative ephemeral cleanup target.
+
+Before creating the VM workdir, the harness copies and re-hashes both verified inputs as these exact
+caller-owned, regular, non-symlink, single-link retained files:
+
+```bash
+STAGED_INSTALLER="/var/tmp/easysynq-fedora-proof-media-$UID-installer.iso"
+STAGED_WORKSTATION="/var/tmp/easysynq-fedora-proof-media-$UID-workstation.iso"
+```
+
+They are direct files, not a directory, so qemu needs no media-directory traversal grant. The harness
+resolves the Fedora `qemu` service uid through both `getent` and `id`, resets each retained file to a
+caller-only base ACL, grants only that uid effective `r--`, and validates the full SHA-256 again. A
+different pre-existing file, symlink, hard link, owner, hash, or masked/extra ACL fails closed without
+being overwritten. The files remain after success or failure so a rerun can reuse the same verified
+bytes.
 
 Allow approximately 60–120 minutes, depending on network, CPU, storage, and container-image caches.
 The harness prints its unique VM name, exact temporary disk path, and retained evidence log before VM
@@ -151,9 +177,18 @@ the disposable guest.
 
 The domain is transient. The cleanup trap will destroy a domain only when its exact generated name,
 captured UUID, and qcow2 source all match the marker files in its owned `mktemp` directory. It removes
-only its enumerated files and uses an exclusive lock plus `qemu-img check` before deleting the exact
-disk. A mismatch, unexpected file, active lock, or failed domain stop makes cleanup fail closed and
-leaves the target for inspection; it never broadens the deletion.
+only its enumerated files under `/var/tmp/easysynq-fedora-proof.XXXXXX` and uses an exclusive lock plus
+`qemu-img check` before deleting the exact disk. The workdir starts at `0700`; its only named ACL is
+qemu `--x`, and the qcow2's only named ACL is qemu `rw-`. POSIX ACL masks may make the group-class mode
+bits appear nonzero even though `group::---`; `getfacl -cpn` is the effective-access authority. No
+qemu ACL is placed on the SSH keys, rendered Kickstart, markers, UUID, known-hosts file, or repository
+manifest. Libvirt/sVirt labels the VM resources normally; the harness does not change SELinux labels.
+
+While a domain is active, the exact disk may temporarily be owned by the resolved qemu uid. After the
+exact domain is destroyed, cleanup requires libvirt to restore caller ownership before it revokes the
+two lifecycle ACLs, takes the lock, runs `qemu-img check`, or deletes anything. A mismatch, unexpected
+file, unrestored owner, active lock, or failed domain stop makes cleanup fail closed and retains the
+exact target; it never escalates privileges or broadens the deletion.
 
 An ordinary rerun always receives a new name and directory, so it does not reuse a failed guest. If a
 run reports a cleanup refusal, keep the printed log and inspect only the printed VM/disk:
@@ -166,6 +201,28 @@ qemu-img check '<printed-disk-path>'
 
 Do not run a recursive cleanup or delete a disk while it is locked. Resolve the identity/lock cause,
 then rerun the proof; ask for review before manually removing any retained artifact.
+
+The two staged ISO copies are intentionally outside lifecycle cleanup. Remove them only after all
+proof domains and workdirs for the caller are gone, and only after revalidating the two exact paths,
+owners, link counts, hashes, and ACLs:
+
+```bash
+STAGED_INSTALLER="/var/tmp/easysynq-fedora-proof-media-$UID-installer.iso"
+STAGED_WORKSTATION="/var/tmp/easysynq-fedora-proof-media-$UID-workstation.iso"
+for STAGED_MEDIA in "$STAGED_INSTALLER" "$STAGED_WORKSTATION"; do
+  test -f "$STAGED_MEDIA"
+  test ! -L "$STAGED_MEDIA"
+  test "$(readlink -e "$STAGED_MEDIA")" = "$STAGED_MEDIA"
+  test "$(stat -c '%u:%h' "$STAGED_MEDIA")" = "$UID:1"
+done
+test "$(sha256sum "$STAGED_INSTALLER" | awk '{print $1}')" = "$INSTALLER_SHA256"
+test "$(sha256sum "$STAGED_WORKSTATION" | awk '{print $1}')" = "$WORKSTATION_SHA256"
+getfacl -cpn -- "$STAGED_INSTALLER" "$STAGED_WORKSTATION"
+rm -- "$STAGED_INSTALLER" "$STAGED_WORKSTATION"
+```
+
+If any check fails, stop and retain both exact files for inspection. Do not substitute a glob,
+directory cleanup, recursive removal, sudo, or a broader path.
 
 ## PR evidence block
 

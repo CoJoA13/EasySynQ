@@ -45,6 +45,15 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local haystack=$1 needle=$2 label=$3
+  if [[ $haystack != *"$needle"* ]]; then
+    pass
+  else
+    fail "$label (unexpected=$needle)"
+  fi
+}
+
 assert_not_exists() {
   if [[ ! -e $1 && ! -L $1 ]]; then
     pass
@@ -66,6 +75,15 @@ failure_vm=easysynq-fedora-proof-20000101T000000Z-99999-deadbeef
 failure_log=$failure_repo/.fedora-proof-logs/$failure_vm.log
 failure_workdir=
 storage_probe=$fixture_root/virsh-storage-probe
+acl_probe=$fixture_root/acl-probe
+acl_workdir=
+staged_installer=$fixture_root/easysynq-fedora-proof-media-$EUID-installer.iso
+staged_workstation=$fixture_root/easysynq-fedora-proof-media-$EUID-workstation.iso
+test_qemu_uid=65534
+[[ $test_qemu_uid != "$EUID" ]] || test_qemu_uid=65533
+# The desktop sandbox maps only the caller uid for POSIX ACL writes. Production resolution separately
+# proves qemu is a distinct non-root uid; these filesystem cases exercise the real ACL implementation.
+test_acl_uid=$EUID
 cleanup_fixture() {
   [[ $fixture_root == "${TMPDIR:-/tmp}"/easysynq-fedora-contract.* ]] || return 1
   [[ -d $fixture_root && ! -L $fixture_root ]] || return 1
@@ -78,12 +96,13 @@ cleanup_fixture() {
     "$fixture_root/owned/vm-name" \
     "$fixture_root/owned/.easysynq-fedora-proof" 2>/dev/null || true
   rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" "$storage_probe" \
+    "$acl_probe" "$staged_installer" "$staged_workstation" \
     2>/dev/null || true
   rm -f -- "$failure_log" "$failure_repo/ks.cfg" 2>/dev/null || true
   rmdir "$failure_repo/.fedora-proof-logs" 2>/dev/null || true
   rmdir "$failure_repo" 2>/dev/null || true
   if [[ -n $failure_workdir \
-      && $failure_workdir == "$failure_tmp"/easysynq-fedora-proof.* \
+      && $failure_workdir == "$fixture_root"/easysynq-fedora-proof.* \
       && -d $failure_workdir \
       && ! -L $failure_workdir ]]; then
     rm -f -- \
@@ -97,6 +116,21 @@ cleanup_fixture() {
       "$failure_workdir/vm-name" \
       "$failure_workdir/.easysynq-fedora-proof" 2>/dev/null || true
     rmdir "$failure_workdir" 2>/dev/null || true
+  fi
+  if [[ -n $acl_workdir \
+      && $acl_workdir == "$fixture_root"/easysynq-fedora-proof.* \
+      && -d $acl_workdir \
+      && ! -L $acl_workdir ]]; then
+    rm -f -- \
+      "$acl_workdir/root.qcow2" \
+      "$acl_workdir/ks.cfg" \
+      "$acl_workdir/id_ed25519" \
+      "$acl_workdir/id_ed25519.pub" \
+      "$acl_workdir/repo-files" \
+      "$acl_workdir/vm-uuid" \
+      "$acl_workdir/vm-name" \
+      "$acl_workdir/.easysynq-fedora-proof" 2>/dev/null || true
+    rmdir "$acl_workdir" 2>/dev/null || true
   fi
   rmdir "$failure_tmp" 2>/dev/null || true
   rmdir "$fixture_root/Fedora-Workstation-Live-44-directory.x86_64.iso" 2>/dev/null || true
@@ -142,13 +176,24 @@ if [[ -f $HOST_SCRIPT ]]; then
   assert_contains "$output" 'installer media: verified' 'installer digest is reported verified'
   assert_contains "$output" 'Workstation media: verified' 'Workstation digest is reported verified'
 
+  output=$(TMPDIR="$fixture_root/home-tmp" "$HOST_SCRIPT" "${common[@]:0:8}" 2>&1)
+  status=$?
+  assert_status 2 "$status" 'real proof rejects a home or arbitrary TMPDIR'
+  assert_contains "$output" 'fixed /var/tmp namespace' \
+    'TMPDIR rejection explains the fixed proof namespace'
+  if compgen -G "$fixture_root/home-tmp/easysynq-fedora-proof.*" >/dev/null; then
+    fail 'TMPDIR rejection occurs before any lifecycle artifact'
+  else
+    pass
+  fi
+
   host_source=$(<"$HOST_SCRIPT")
   assert_contains "$host_source" '--transient' 'both libvirt phases are transient'
-  assert_contains "$host_source" '--location "$installer_iso"' \
-    'Fedora Everything media is the Anaconda location'
+  assert_contains "$host_source" '--location "$staged_installer_iso"' \
+    'staged Fedora Everything media is the Anaconda location'
   assert_contains "$host_source" \
-    '--disk "path=$workstation_iso,device=cdrom,bus=sata,readonly=on"' \
-    'Fedora Workstation media is attached read-only'
+    '--disk "path=$staged_workstation_iso,device=cdrom,bus=sata,readonly=on"' \
+    'staged Fedora Workstation media is attached read-only'
   assert_contains "$host_source" 'archive --format=tar "$evidence_commit"' \
     'guest source is archived from the recorded evidence commit'
   osinfo_uses=$(grep -cF -- '--osinfo "$osinfo"' <<<"$host_source")
@@ -164,6 +209,13 @@ if [[ -f $HOST_SCRIPT ]]; then
     pass
   else
     fail 'host lifecycle contains no recursive or enumerating deletion primitive'
+  fi
+  if [[ $host_source != *'setfacl -R'* && $host_source != *'setfacl -d'* \
+      && $host_source != *'chcon '* && $host_source != *'semanage fcontext'* \
+      && $host_source != *'setenforce 0'* ]]; then
+    pass
+  else
+    fail 'host lifecycle contains no recursive/default ACL or SELinux bypass'
   fi
 
   output=$(
@@ -262,6 +314,203 @@ if [[ -f $HOST_SCRIPT ]]; then
     fail 'host script exposes behavior-level libvirt storage readiness'
   fi
 
+  if declare -F fedora_proof_parse_qemu_passwd >/dev/null; then
+    output=$(fedora_proof_parse_qemu_passwd 'qemu:x:107:107:qemu user:/:/usr/sbin/nologin' 2>&1)
+    status=$?
+    assert_status 0 "$status" 'exact Fedora qemu service record is accepted'
+    assert_status 107 "$output" 'qemu service resolution returns the numeric uid'
+
+    output=$(fedora_proof_parse_qemu_passwd '' 2>&1)
+    status=$?
+    assert_status 1 "$status" 'missing qemu service record fails closed'
+    assert_contains "$output" 'qemu service account' 'missing qemu account diagnostic is explicit'
+
+    output=$(fedora_proof_parse_qemu_passwd \
+      $'qemu:x:107:107:qemu user:/:/usr/sbin/nologin\nqemu:x:108:108:duplicate:/:/sbin/nologin' \
+      2>&1)
+    status=$?
+    assert_status 1 "$status" 'ambiguous qemu service records fail closed'
+
+    output=$(fedora_proof_parse_qemu_passwd 'qemu:x:0:0:unsafe:/:/usr/sbin/nologin' 2>&1)
+    status=$?
+    assert_status 1 "$status" 'root is never accepted as the qemu service uid'
+
+    output=$(fedora_proof_parse_qemu_passwd 'qemu:x:107:107:interactive:/:/bin/bash' 2>&1)
+    status=$?
+    assert_status 1 "$status" 'interactive account is never accepted as the qemu service identity'
+  else
+    fail 'host script exposes strict qemu service uid parsing'
+  fi
+
+  if declare -F fedora_proof_require_acl_tools >/dev/null; then
+    output=$(fedora_proof_require_acl_tools /usr/bin/setfacl /usr/bin/getfacl 2>&1)
+    status=$?
+    assert_status 0 "$status" 'exact ACL tools satisfy the host boundary'
+
+    output=$(
+      fedora_proof_require_acl_tools "$fixture_root/missing-setfacl" /usr/bin/getfacl 2>&1
+    )
+    status=$?
+    assert_status 1 "$status" 'missing setfacl fails before staging or lifecycle artifacts'
+    assert_contains "$output" 'missing-setfacl' 'missing ACL tool diagnostic names the exact tool'
+  else
+    fail 'host script exposes behavior-level ACL tool validation'
+  fi
+
+  if declare -F fedora_proof_validate_acl_text >/dev/null; then
+    exact_media_acl=$(printf \
+      'user::rw-\nuser:%s:r--\ngroup::---\nmask::r--\nother::---' "$test_qemu_uid")
+    output=$(fedora_proof_validate_acl_text "$exact_media_acl" "$test_qemu_uid" media 2>&1)
+    status=$?
+    assert_status 0 "$status" 'distinct qemu uid has effective read-only media ACL semantics'
+
+    masked_media_acl=$(printf \
+      'user::rw-\nuser:%s:r--\t#effective:---\ngroup::---\nmask::---\nother::---' \
+      "$test_qemu_uid")
+    output=$(fedora_proof_validate_acl_text "$masked_media_acl" "$test_qemu_uid" media 2>&1)
+    status=$?
+    assert_status 1 "$status" 'distinct qemu ACL with a restrictive mask is rejected'
+
+    output=$(fedora_proof_validate_acl_text \
+      "$exact_media_acl"$'\ndefault:user:'"$test_qemu_uid"$':r--' \
+      "$test_qemu_uid" media 2>&1)
+    status=$?
+    assert_status 1 "$status" 'default ACL entries are rejected from exact media access'
+  else
+    fail 'host script exposes effective ACL text validation for a distinct qemu uid'
+  fi
+
+  if declare -F fedora_proof_stage_media >/dev/null \
+      && declare -F fedora_proof_validate_exact_acl >/dev/null; then
+    output=$(
+      fedora_proof_stage_media \
+        "$fixture_root" "$EUID" "$test_acl_uid" \
+        "$installer" "$installer_sha" "$workstation" "$workstation_sha" 2>&1
+    )
+    status=$?
+    assert_status 0 "$status" 'verified media stages as exact retained copies'
+    [[ -f $staged_installer && ! -L $staged_installer ]] \
+      && pass || fail 'staged installer is one exact regular non-symlink file'
+    [[ -f $staged_workstation && ! -L $staged_workstation ]] \
+      && pass || fail 'staged Workstation media is one exact regular non-symlink file'
+    assert_status "$EUID" "$(stat -c '%u' "$staged_installer" 2>/dev/null)" \
+      'staged installer remains caller-owned'
+    assert_status "$EUID" "$(stat -c '%u' "$staged_workstation" 2>/dev/null)" \
+      'staged Workstation media remains caller-owned'
+    assert_status "$installer_sha" "$(sha256sum "$staged_installer" | awk '{print $1}')" \
+      'staged installer full hash matches after copy'
+    assert_status "$workstation_sha" "$(sha256sum "$staged_workstation" | awk '{print $1}')" \
+      'staged Workstation full hash matches after copy'
+    assert_not_exists "$fixture_root/easysynq-fedora-proof-media-$EUID" \
+      'A1 staging creates no media directory needing a traversal ACL'
+
+    output=$(fedora_proof_validate_exact_acl \
+      "$staged_installer" "$test_acl_uid" media 2>&1)
+    status=$?
+    assert_status 0 "$status" 'installer ACL gives only qemu effective read access'
+    output=$(fedora_proof_validate_exact_acl \
+      "$staged_workstation" "$test_acl_uid" media 2>&1)
+    status=$?
+    assert_status 0 "$status" 'Workstation ACL gives only qemu effective read access'
+
+    source_acl=$(/usr/bin/getfacl -cpn -- "$installer")
+    assert_not_contains "$source_acl" "user:$test_acl_uid:" \
+      'caller source media receives no qemu ACL or home traversal dependency'
+
+    printf 'wrong retained bytes\n' >"$acl_probe"
+    bad_sha=$(sha256sum "$acl_probe" | awk '{print $1}')
+    output=$(
+      fedora_proof_stage_media \
+        "$fixture_root" "$EUID" "$test_acl_uid" \
+        "$installer" "$bad_sha" "$workstation" "$workstation_sha" 2>&1
+    )
+    status=$?
+    assert_status 1 "$status" 'post-copy retained-media hash mismatch fails closed'
+    assert_contains "$output" 'staged installer checksum mismatch' \
+      'post-copy hash failure identifies the exact staged medium'
+
+    printf 'acl-mask-probe\n' >"$acl_probe"
+    chmod 0600 "$acl_probe"
+    /usr/bin/setfacl -m "u:$test_acl_uid:r--,m::---" -- "$acl_probe"
+    output=$(fedora_proof_validate_exact_acl "$acl_probe" "$test_acl_uid" media 2>&1)
+    status=$?
+    assert_status 1 "$status" 'masked qemu media ACL is rejected as ineffective'
+    assert_contains "$output" 'effective ACL mismatch' 'masked ACL failure is explicit'
+  else
+    fail 'host script exposes exact retained-media staging and ACL validation'
+  fi
+
+  if declare -F fedora_proof_grant_lifecycle_acls >/dev/null \
+      && declare -F fedora_proof_validate_private_acl >/dev/null \
+      && declare -F fedora_proof_revoke_lifecycle_acls >/dev/null; then
+    acl_workdir=$(mktemp -d "$fixture_root/easysynq-fedora-proof.XXXXXX")
+    chmod 0700 "$acl_workdir"
+    printf '%s\n' easysynq-fedora-proof-v1 >"$acl_workdir/.easysynq-fedora-proof"
+    printf '%s\n' "$failure_vm" >"$acl_workdir/vm-name"
+    : >"$acl_workdir/root.qcow2"
+    for private in ks.cfg id_ed25519 id_ed25519.pub repo-files vm-uuid; do
+      : >"$acl_workdir/$private"
+      chmod 0600 "$acl_workdir/$private"
+    done
+    chmod 0600 "$acl_workdir/root.qcow2" "$acl_workdir/.easysynq-fedora-proof" \
+      "$acl_workdir/vm-name"
+
+    output=$(fedora_proof_grant_lifecycle_acls \
+      "$fixture_root" "$acl_workdir" "$acl_workdir/root.qcow2" "$test_acl_uid" 2>&1)
+    status=$?
+    assert_status 0 "$status" 'lifecycle grants only exact workdir and disk ACLs'
+    output=$(fedora_proof_validate_exact_acl "$acl_workdir" "$test_acl_uid" workdir 2>&1)
+    status=$?
+    assert_status 0 "$status" 'qemu has effective traverse-only access on the exact workdir'
+    output=$(fedora_proof_validate_exact_acl \
+      "$acl_workdir/root.qcow2" "$test_acl_uid" disk 2>&1)
+    status=$?
+    assert_status 0 "$status" 'qemu has effective read-write access on the exact qcow2'
+    for private in ks.cfg id_ed25519 id_ed25519.pub repo-files vm-uuid vm-name \
+      .easysynq-fedora-proof; do
+      output=$(fedora_proof_validate_private_acl \
+        "$acl_workdir/$private" "$test_acl_uid" 2>&1)
+      status=$?
+      assert_status 0 "$status" "$private remains inaccessible to qemu"
+    done
+
+    /usr/bin/setfacl -m "u:$test_acl_uid:r--" -- "$acl_workdir/id_ed25519"
+    output=$(fedora_proof_validate_private_acl \
+      "$acl_workdir/id_ed25519" "$test_acl_uid" 2>&1)
+    status=$?
+    assert_status 1 "$status" 'private-key qemu ACL fails the boundary validation'
+    /usr/bin/setfacl -b -- "$acl_workdir/id_ed25519"
+    chmod 0600 "$acl_workdir/id_ed25519"
+
+    output=$(fedora_proof_revoke_lifecycle_acls \
+      "$fixture_root" "$acl_workdir" "$acl_workdir/root.qcow2" "$test_acl_uid" 2>&1)
+    status=$?
+    assert_status 0 "$status" 'stopped lifecycle revokes exact qemu workdir and disk ACLs'
+    acl_after=$(/usr/bin/getfacl -cpn -- "$acl_workdir/root.qcow2" "$acl_workdir")
+    assert_not_contains "$acl_after" "user:$test_acl_uid:" \
+      'revoked lifecycle leaves no qemu ACL on disk or workdir'
+  else
+    fail 'host script exposes exact lifecycle ACL grant, validation, and revocation'
+  fi
+
+  if declare -F fedora_proof_disk_owner_allowed >/dev/null; then
+    output=$(fedora_proof_disk_owner_allowed \
+      "$test_qemu_uid" "$EUID" "$test_qemu_uid" active 2>&1)
+    status=$?
+    assert_status 0 "$status" 'active lifecycle permits temporary exact qemu disk ownership'
+    output=$(fedora_proof_disk_owner_allowed \
+      "$test_qemu_uid" "$EUID" "$test_qemu_uid" cleanup 2>&1)
+    status=$?
+    assert_status 1 "$status" 'cleanup refuses disk still owned by qemu'
+    assert_contains "$output" 'caller ownership was not restored' \
+      'ownership-restoration refusal explains exact retention'
+    output=$(fedora_proof_disk_owner_allowed "$EUID" "$EUID" "$test_qemu_uid" cleanup 2>&1)
+    status=$?
+    assert_status 0 "$status" 'cleanup accepts caller ownership after domain stop'
+  else
+    fail 'host script exposes active-versus-cleanup disk ownership policy'
+  fi
+
   if declare -F fedora_proof_new_vm_name >/dev/null \
       && declare -F fedora_proof_validate_cleanup_identity >/dev/null \
       && declare -F fedora_proof_remove_disk_exact >/dev/null; then
@@ -278,7 +527,7 @@ if [[ -f $HOST_SCRIPT ]]; then
       fail 'consecutive VM names are unique'
     fi
 
-    owned=$(mktemp -d "${TMPDIR:-/tmp}/easysynq-fedora-proof.XXXXXX")
+    owned=$(mktemp -d "$fixture_root/easysynq-fedora-proof.XXXXXX")
     owned_cleanup=$owned
     printf '%s\n' 'easysynq-fedora-proof-v1' >"$owned/.easysynq-fedora-proof"
     printf '%s\n' "$first_name" >"$owned/vm-name"
@@ -291,12 +540,14 @@ if [[ -f $HOST_SCRIPT ]]; then
     fi
     : >"$outside"
 
-    output=$(fedora_proof_validate_cleanup_identity "$owned" "$first_name" "$outside" 2>&1)
+    output=$(fedora_proof_validate_cleanup_identity \
+      "$owned" "$first_name" "$outside" "$fixture_root" "$test_qemu_uid" cleanup 2>&1)
     status=$?
     assert_status 1 "$status" 'cleanup rejects a disk outside its owned mktemp directory'
     assert_contains "$output" 'outside owned work directory' 'outside cleanup refusal is explicit'
 
-    output=$(fedora_proof_validate_cleanup_identity "$owned" 'unrelated-vm' "$disk" 2>&1)
+    output=$(fedora_proof_validate_cleanup_identity \
+      "$owned" 'unrelated-vm' "$disk" "$fixture_root" "$test_qemu_uid" cleanup 2>&1)
     status=$?
     assert_status 1 "$status" 'cleanup rejects a mismatched VM identity'
     assert_contains "$output" 'VM identity mismatch' 'VM mismatch refusal is explicit'
@@ -321,7 +572,8 @@ if [[ -f $HOST_SCRIPT ]]; then
       sleep 0.01
     done
     if (( lock_ready )); then
-      output=$(fedora_proof_remove_disk_exact "$owned" "$first_name" "$disk" 2>&1)
+      output=$(fedora_proof_remove_disk_exact \
+        "$owned" "$first_name" "$disk" "$fixture_root" "$test_qemu_uid" 2>&1)
       status=$?
       assert_status 1 "$status" 'cleanup stops on a locked disk'
       assert_contains "$output" 'disk is locked' 'locked disk refusal is explicit'
@@ -332,7 +584,8 @@ if [[ -f $HOST_SCRIPT ]]; then
     : >"$lock_release_file"
     wait "$lock_pid"
 
-    output=$(fedora_proof_remove_disk_exact "$owned" "$first_name" "$disk" 2>&1)
+    output=$(fedora_proof_remove_disk_exact \
+      "$owned" "$first_name" "$disk" "$fixture_root" "$test_qemu_uid" 2>&1)
     status=$?
     assert_status 0 "$status" 'cleanup removes the exact unlocked owned disk'
     assert_not_exists "$disk" 'exact unlocked owned disk was removed'
@@ -369,23 +622,32 @@ if [[ -f $HOST_SCRIPT ]]; then
   if declare -F fedora_proof_run_lifecycle >/dev/null && [[ $selected_fallback == fedora43 ]]; then
     mkdir "$failure_repo" "$failure_tmp"
     cp "$KICKSTART" "$failure_repo/ks.cfg"
+    lifecycle_installer=$installer
+    lifecycle_workstation=$workstation
+    if [[ -f $staged_installer && -f $staged_workstation ]]; then
+      lifecycle_installer=$staged_installer
+      lifecycle_workstation=$staged_workstation
+    fi
     original_connect=$FEDORA_PROOF_CONNECT
     FEDORA_PROOF_CONNECT=test:///default
+    /usr/bin/setfacl -m "d:u:$test_acl_uid:rwx,d:m::rwx" -- "$fixture_root"
     output=$(
       TMPDIR="$failure_tmp" XDG_CACHE_HOME="$fixture_root/virt-cache" \
         fedora_proof_run_lifecycle \
-          "$failure_vm" "$installer" "$installer_sha" "$workstation" "$workstation_sha" \
+          "$failure_vm" "$lifecycle_installer" "$installer_sha" \
+          "$lifecycle_workstation" "$workstation_sha" \
           "$failure_repo" "$failure_repo/ks.cfg" 0000000000000000000000000000000000000000 \
-          "$selected_fallback" 2>&1
+          "$selected_fallback" "$test_acl_uid" "$fixture_root" 2>&1
     )
     status=$?
+    /usr/bin/setfacl -k -- "$fixture_root"
     FEDORA_PROOF_CONNECT=$original_connect
     failure_disk=${output#*Fedora proof disk: }
     failure_disk=${failure_disk%%$'\n'*}
     failure_workdir=${failure_disk%/root.qcow2}
 
     assert_status 1 "$status" 'failure after cleanup trap installation remains a proof failure'
-    if [[ $failure_disk == "$failure_tmp"/easysynq-fedora-proof.*/root.qcow2 ]]; then
+    if [[ $failure_disk == "$fixture_root"/easysynq-fedora-proof.*/root.qcow2 ]]; then
       pass
     else
       fail "failure fixture reports one exact owned disk path (actual=$failure_disk)"
@@ -402,6 +664,10 @@ if [[ -f $HOST_SCRIPT ]]; then
     assert_not_exists "$failure_workdir/id_ed25519" 'failure cleanup removes the exact private key'
     assert_not_exists "$failure_workdir/.easysynq-fedora-proof" \
       'failure cleanup removes the exact ownership marker'
+    [[ -f $staged_installer ]] \
+      && pass || fail 'failure cleanup retains the exact staged installer'
+    [[ -f $staged_workstation ]] \
+      && pass || fail 'failure cleanup retains the exact staged Workstation media'
     if ! /usr/bin/virsh --connect test:///default dominfo "$failure_vm" >/dev/null 2>&1; then
       pass
     else
@@ -473,6 +739,16 @@ if [[ -f $RUNBOOK ]]; then
   assert_contains "$runbook" \
     'sudo systemctl enable --now virtqemud.socket virtnetworkd.socket virtstoraged.socket' \
     'clean proof-host setup enables the modular libvirt storage socket'
+  assert_contains "$runbook" \
+    '/var/tmp/easysynq-fedora-proof-media-$UID-installer.iso' \
+    'runbook names the exact retained installer path'
+  assert_contains "$runbook" \
+    '/var/tmp/easysynq-fedora-proof-media-$UID-workstation.iso' \
+    'runbook names the exact retained Workstation path'
+  assert_contains "$runbook" 'getfacl -cpn -- "$STAGED_INSTALLER" "$STAGED_WORKSTATION"' \
+    'runbook verifies exact retained-media ACLs'
+  assert_contains "$runbook" 'rm -- "$STAGED_INSTALLER" "$STAGED_WORKSTATION"' \
+    'runbook removes only the separately verified retained media targets'
 fi
 
 printf '%d Fedora proof contract checks passed; %d failed\n' "$passed" "$failed"

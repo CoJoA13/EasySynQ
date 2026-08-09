@@ -3,6 +3,7 @@
 
 FEDORA_PROOF_MARKER=easysynq-fedora-proof-v1
 FEDORA_PROOF_CONNECT=qemu:///system
+FEDORA_PROOF_ROOT=/var/tmp
 
 usage() {
   printf '%s\n' \
@@ -27,16 +28,202 @@ fedora_proof_new_vm_name() {
   printf 'easysynq-fedora-proof-%s-%d-%s\n' "$timestamp" "$$" "$token"
 }
 
+fedora_proof_parse_qemu_passwd() {
+  local record=$1 name password uid gid gecos home shell extra
+  [[ -n $record && $record != *$'\n'* ]] || {
+    printf '%s\n' 'fedora-proof: qemu service account is missing or ambiguous' >&2
+    return 1
+  }
+  IFS=: read -r name password uid gid gecos home shell extra <<<"$record"
+  [[ $name == qemu && -z ${extra:-} && $uid =~ ^[0-9]+$ && $gid =~ ^[0-9]+$ \
+      && $uid != 0 && $uid != "$EUID" && $home == / && $shell == */nologin ]] || {
+    printf '%s\n' 'fedora-proof: qemu service account identity is unsafe' >&2
+    return 1
+  }
+  printf '%s\n' "$uid"
+}
+
+fedora_proof_resolve_qemu_uid() {
+  local record uid id_uid
+  record=$(/usr/bin/getent passwd qemu) || {
+    printf '%s\n' 'fedora-proof: qemu service account is unavailable' >&2
+    return 1
+  }
+  uid=$(fedora_proof_parse_qemu_passwd "$record") || return 1
+  id_uid=$(/usr/bin/id -u qemu) || return 1
+  [[ $id_uid == "$uid" ]] || {
+    printf '%s\n' 'fedora-proof: qemu service uid resolution disagrees across host tools' >&2
+    return 1
+  }
+  printf '%s\n' "$uid"
+}
+
+fedora_proof_require_acl_tools() {
+  local setfacl_bin=$1 getfacl_bin=$2 missing=0 path
+  for path in "$setfacl_bin" "$getfacl_bin"; do
+    if [[ $path != /* || ! -x $path ]]; then
+      printf 'fedora-proof: required ACL tool is missing or unsafe: %s\n' "$path" >&2
+      missing=1
+    fi
+  done
+  (( missing == 0 ))
+}
+
+fedora_proof_validate_root() {
+  local root=$1 canonical
+  [[ $root == /* && -d $root && ! -L $root ]] || {
+    printf '%s\n' 'fedora-proof: proof root is missing, non-absolute, or a symlink' >&2
+    return 1
+  }
+  canonical=$(/usr/bin/readlink -e "$root") || return 1
+  [[ $canonical == "$root" ]] || {
+    printf '%s\n' 'fedora-proof: proof root contains a symlink component' >&2
+    return 1
+  }
+}
+
+fedora_proof_validate_acl_text() {
+  local actual=$1 qemu_uid=$2 kind=$3 expected
+  [[ $qemu_uid =~ ^[0-9]+$ && $qemu_uid != 0 ]] || return 1
+  case "$kind" in
+    workdir)
+      expected=$(printf 'user::rwx\nuser:%s:--x\ngroup::---\nmask::--x\nother::---' "$qemu_uid")
+      ;;
+    disk)
+      expected=$(printf 'user::rw-\nuser:%s:rw-\ngroup::---\nmask::rw-\nother::---' "$qemu_uid")
+      ;;
+    media)
+      expected=$(printf 'user::rw-\nuser:%s:r--\ngroup::---\nmask::r--\nother::---' "$qemu_uid")
+      ;;
+    *)
+      printf '%s\n' 'fedora-proof: unknown ACL contract' >&2
+      return 1
+      ;;
+  esac
+  [[ $actual == "$expected" ]] || {
+    printf '%s\n' 'fedora-proof: effective ACL mismatch' >&2
+    return 1
+  }
+}
+
+fedora_proof_validate_exact_acl() {
+  local path=$1 qemu_uid=$2 kind=$3 actual
+  actual=$(/usr/bin/getfacl -cpn -- "$path") || {
+    printf 'fedora-proof: cannot read effective ACL for %s\n' "$path" >&2
+    return 1
+  }
+  fedora_proof_validate_acl_text "$actual" "$qemu_uid" "$kind" || {
+    printf 'fedora-proof: ACL boundary failed for %s\n' "$path" >&2
+    return 1
+  }
+}
+
+fedora_proof_validate_private_acl() {
+  local path=$1 qemu_uid=$2 actual expected owner
+  [[ -f $path && ! -L $path ]] || {
+    printf 'fedora-proof: private artifact is missing or unsafe: %s\n' "$path" >&2
+    return 1
+  }
+  owner=$(/usr/bin/stat -c '%u' "$path") || return 1
+  [[ $owner == "$EUID" ]] || {
+    printf 'fedora-proof: private artifact owner mismatch: %s\n' "$path" >&2
+    return 1
+  }
+  actual=$(/usr/bin/getfacl -cpn -- "$path") || return 1
+  expected=$'user::rw-\ngroup::---\nother::---'
+  [[ $actual == "$expected" && $actual != *"user:$qemu_uid:"* ]] || {
+    printf 'fedora-proof: qemu or another principal can access private artifact: %s\n' "$path" >&2
+    return 1
+  }
+}
+
+fedora_proof_validate_staged_media() {
+  local root=$1 caller_uid=$2 path=$3 role=$4 expected_sha=${5,,} canonical owner links actual
+  fedora_proof_validate_root "$root" || return 1
+  [[ $caller_uid == "$EUID" && $caller_uid =~ ^[0-9]+$ \
+      && $path == "$root/easysynq-fedora-proof-media-$caller_uid-$role.iso" \
+      && -f $path && ! -L $path ]] || {
+    printf 'fedora-proof: staged %s path is missing or unsafe\n' "$role" >&2
+    return 1
+  }
+  canonical=$(/usr/bin/readlink -e "$path") || return 1
+  owner=$(/usr/bin/stat -c '%u' "$path") || return 1
+  links=$(/usr/bin/stat -c '%h' "$path") || return 1
+  [[ $canonical == "$path" && $owner == "$caller_uid" && $links == 1 ]] || {
+    printf 'fedora-proof: staged %s identity mismatch\n' "$role" >&2
+    return 1
+  }
+  actual=$(/usr/bin/sha256sum "$path") || return 1
+  actual=${actual%% *}
+  [[ $actual == "$expected_sha" ]] || {
+    printf 'fedora-proof: staged %s checksum mismatch\n' "$role" >&2
+    return 1
+  }
+}
+
+fedora_proof_stage_one_media() {
+  local root=$1 caller_uid=$2 qemu_uid=$3 role=$4 source=$5 expected_sha=$6 target
+  target=$root/easysynq-fedora-proof-media-$caller_uid-$role.iso
+  [[ $source == /* && -f $source && ! -L $source ]] || {
+    printf 'fedora-proof: %s source media is missing or unsafe\n' "$role" >&2
+    return 1
+  }
+  if [[ ! -e $target && ! -L $target ]]; then
+    (umask 077; /usr/bin/dd if="$source" of="$target" bs=4M status=none conv=excl) || {
+      printf 'fedora-proof: could not copy exact staged %s media\n' "$role" >&2
+      return 1
+    }
+  fi
+  fedora_proof_validate_staged_media "$root" "$caller_uid" "$target" "$role" "$expected_sha" \
+    || return 1
+  /usr/bin/setfacl -b -- "$target" || return 1
+  /usr/bin/chmod 0600 "$target" || return 1
+  /usr/bin/setfacl -m "u:$qemu_uid:r--,m::r--" -- "$target" || return 1
+  fedora_proof_validate_staged_media "$root" "$caller_uid" "$target" "$role" "$expected_sha" \
+    || return 1
+  fedora_proof_validate_exact_acl "$target" "$qemu_uid" media || return 1
+  printf 'fedora-proof: retained staged %s: %s\n' "$role" "$target"
+}
+
+fedora_proof_stage_media() {
+  local root=$1 caller_uid=$2 qemu_uid=$3 installer=$4 installer_sha=$5
+  local workstation=$6 workstation_sha=$7
+  fedora_proof_stage_one_media \
+    "$root" "$caller_uid" "$qemu_uid" installer "$installer" "$installer_sha" || return 1
+  fedora_proof_stage_one_media \
+    "$root" "$caller_uid" "$qemu_uid" workstation "$workstation" "$workstation_sha"
+}
+
+fedora_proof_disk_owner_allowed() {
+  local actual=$1 caller_uid=$2 qemu_uid=$3 phase=$4
+  case "$phase" in
+    active)
+      [[ $actual == "$caller_uid" || $actual == "$qemu_uid" ]] || {
+        printf '%s\n' 'fedora-proof cleanup: active disk owner is not caller or qemu' >&2
+        return 1
+      }
+      ;;
+    cleanup)
+      [[ $actual == "$caller_uid" ]] || {
+        printf '%s\n' \
+          'fedora-proof cleanup: caller ownership was not restored; retaining exact disk' >&2
+        return 1
+      }
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 fedora_proof_validate_owned_workdir() {
-  local workdir=$1 tmp_root work_real owner marker
+  local workdir=$1 proof_root=$2 work_real owner marker
   [[ $workdir == /* && -d $workdir && ! -L $workdir ]] || {
     printf '%s\n' 'fedora-proof cleanup: work directory is missing, non-absolute, or a symlink' >&2
     return 1
   }
-  tmp_root=$(/usr/bin/readlink -e "${TMPDIR:-/tmp}") || return 1
+  fedora_proof_validate_root "$proof_root" || return 1
   work_real=$(/usr/bin/readlink -e "$workdir") || return 1
-  [[ $work_real == "$workdir" && $work_real == "$tmp_root"/easysynq-fedora-proof.* \
-      && ${work_real#"$tmp_root"/} != */* ]] || {
+  [[ $work_real == "$workdir" && $work_real == "$proof_root"/easysynq-fedora-proof.* \
+      && ${work_real#"$proof_root"/} != */* ]] || {
     printf '%s\n' 'fedora-proof cleanup: work directory is outside the exact mktemp namespace' >&2
     return 1
   }
@@ -57,8 +244,9 @@ fedora_proof_validate_owned_workdir() {
 }
 
 fedora_proof_validate_cleanup_identity() {
-  local workdir=$1 vm_name=$2 disk=$3 disk_real recorded_vm
-  fedora_proof_validate_owned_workdir "$workdir" || return 1
+  local workdir=$1 vm_name=$2 disk=$3 proof_root=$4 qemu_uid=$5 phase=$6
+  local disk_real recorded_vm owner
+  fedora_proof_validate_owned_workdir "$workdir" "$proof_root" || return 1
   [[ $vm_name =~ ^easysynq-fedora-proof-[0-9]{8}T[0-9]{6}Z-[0-9]+-[0-9a-f]{8}$ ]] || {
     printf '%s\n' 'fedora-proof cleanup: VM identity mismatch' >&2
     return 1
@@ -81,15 +269,14 @@ fedora_proof_validate_cleanup_identity() {
     printf '%s\n' 'fedora-proof cleanup: disk target is outside owned work directory' >&2
     return 1
   }
-  [[ $(/usr/bin/stat -c '%u' "$disk") == "$EUID" ]] || {
-    printf '%s\n' 'fedora-proof cleanup: disk owner mismatch' >&2
-    return 1
-  }
+  owner=$(/usr/bin/stat -c '%u' "$disk") || return 1
+  fedora_proof_disk_owner_allowed "$owner" "$EUID" "$qemu_uid" "$phase"
 }
 
 fedora_proof_remove_disk_exact() {
-  local workdir=$1 vm_name=$2 disk=$3 disk_fd
-  fedora_proof_validate_cleanup_identity "$workdir" "$vm_name" "$disk" || return 1
+  local workdir=$1 vm_name=$2 disk=$3 proof_root=$4 qemu_uid=$5 disk_fd
+  fedora_proof_validate_cleanup_identity \
+    "$workdir" "$vm_name" "$disk" "$proof_root" "$qemu_uid" cleanup || return 1
   exec {disk_fd}<>"$disk" || return 1
   if ! /usr/bin/flock -n "$disk_fd"; then
     printf '%s\n' 'fedora-proof cleanup: disk is locked; refusing removal' >&2
@@ -108,8 +295,8 @@ fedora_proof_remove_disk_exact() {
 }
 
 fedora_proof_remove_owned_file() {
-  local workdir=$1 path=$2 allowed=$3 real
-  fedora_proof_validate_owned_workdir "$workdir" || return 1
+  local workdir=$1 path=$2 allowed=$3 proof_root=$4 real
+  fedora_proof_validate_owned_workdir "$workdir" "$proof_root" || return 1
   [[ ${path##*/} == "$allowed" && $path == "$workdir/$allowed" ]] || {
     printf 'fedora-proof cleanup: unexpected file target %s\n' "$path" >&2
     return 1
@@ -128,9 +315,10 @@ fedora_proof_remove_owned_file() {
 }
 
 fedora_proof_destroy_domain_exact() {
-  local workdir=$1 vm_name=$2 expected_uuid=$3 disk=$4 actual_uuid
+  local workdir=$1 vm_name=$2 expected_uuid=$3 disk=$4 proof_root=$5 qemu_uid=$6 actual_uuid
   local type device target source found_disk=0
-  fedora_proof_validate_cleanup_identity "$workdir" "$vm_name" "$disk" || return 1
+  fedora_proof_validate_cleanup_identity \
+    "$workdir" "$vm_name" "$disk" "$proof_root" "$qemu_uid" active || return 1
   if ! /usr/bin/virsh --connect "$FEDORA_PROOF_CONNECT" dominfo "$vm_name" >/dev/null 2>&1; then
     return 0
   fi
@@ -158,6 +346,44 @@ fedora_proof_destroy_domain_exact() {
   done
   printf '%s\n' 'fedora-proof cleanup: exact domain did not stop; refusing disk removal' >&2
   return 1
+}
+
+fedora_proof_grant_lifecycle_acls() {
+  local proof_root=$1 workdir=$2 disk=$3 qemu_uid=$4 disk_real owner
+  fedora_proof_validate_owned_workdir "$workdir" "$proof_root" || return 1
+  [[ -f $disk && ! -L $disk ]] || return 1
+  disk_real=$(/usr/bin/readlink -e "$disk") || return 1
+  owner=$(/usr/bin/stat -c '%u' "$disk") || return 1
+  [[ $disk_real == "$workdir/root.qcow2" && $owner == "$EUID" ]] || return 1
+
+  /usr/bin/setfacl -b -k -- "$workdir" || return 1
+  /usr/bin/chmod 0700 "$workdir" || return 1
+  /usr/bin/setfacl -m "u:$qemu_uid:--x,m::--x" -- "$workdir" || return 1
+  /usr/bin/setfacl -b -- "$disk" || return 1
+  /usr/bin/chmod 0600 "$disk" || return 1
+  /usr/bin/setfacl -m "u:$qemu_uid:rw-,m::rw-" -- "$disk" || return 1
+  fedora_proof_validate_exact_acl "$workdir" "$qemu_uid" workdir || return 1
+  fedora_proof_validate_exact_acl "$disk" "$qemu_uid" disk
+}
+
+fedora_proof_revoke_lifecycle_acls() {
+  local proof_root=$1 workdir=$2 disk=$3 qemu_uid=$4 disk_real owner
+  fedora_proof_validate_owned_workdir "$workdir" "$proof_root" || return 1
+  [[ -f $disk && ! -L $disk ]] || return 1
+  disk_real=$(/usr/bin/readlink -e "$disk") || return 1
+  owner=$(/usr/bin/stat -c '%u' "$disk") || return 1
+  [[ $disk_real == "$workdir/root.qcow2" ]] || return 1
+  fedora_proof_disk_owner_allowed "$owner" "$EUID" "$qemu_uid" cleanup || return 1
+
+  /usr/bin/setfacl -b -- "$disk" || return 1
+  /usr/bin/chmod 0600 "$disk" || return 1
+  /usr/bin/setfacl -b -k -- "$workdir" || return 1
+  /usr/bin/chmod 0700 "$workdir" || return 1
+  fedora_proof_validate_private_acl "$disk" "$qemu_uid" || return 1
+  [[ $(/usr/bin/getfacl -cpn -- "$workdir") == $'user::rwx\ngroup::---\nother::---' ]] || {
+    printf '%s\n' 'fedora-proof cleanup: workdir ACL revocation failed; retaining exact target' >&2
+    return 1
+  }
 }
 
 validate_sha256() {
@@ -265,7 +491,12 @@ require_host_tools() {
     /usr/bin/git \
     /usr/bin/tar \
     /usr/bin/flock \
-    /usr/bin/openssl; do
+    /usr/bin/openssl \
+    /usr/bin/setfacl \
+    /usr/bin/getfacl \
+    /usr/bin/getent \
+    /usr/bin/id \
+    /usr/bin/dd; do
     if [[ ! -x $path ]]; then
       printf 'fedora-proof: required proof-host tool is missing: %s\n' "$path" >&2
       missing=1
@@ -276,8 +507,8 @@ require_host_tools() {
 
 fedora_proof_main() {
   local installer_iso= installer_sha= workstation_iso= workstation_sha= validate_only=0
-  local repo_root script_path script_dir kickstart_template osinfo
-  local vm_name= evidence_commit=
+  local repo_root script_path script_dir kickstart_template osinfo qemu_uid
+  local vm_name= evidence_commit= staged_installer_iso staged_workstation_iso
 
   while (( $# )); do
     case "$1" in
@@ -335,7 +566,15 @@ fedora_proof_main() {
   }
   (( validate_only )) && return 0
 
+  if [[ ${TMPDIR+x} == x && ${TMPDIR:-} != "$FEDORA_PROOF_ROOT" ]]; then
+    printf '%s\n' \
+      'fedora-proof: real proof rejects TMPDIR; artifacts use the fixed /var/tmp namespace' >&2
+    return 2
+  fi
+
   require_host_tools || return 1
+  fedora_proof_require_acl_tools /usr/bin/setfacl /usr/bin/getfacl || return 1
+  qemu_uid=$(fedora_proof_resolve_qemu_uid) || return 1
   script_path=${BASH_SOURCE[0]}
   script_dir=${script_path%/*}
   [[ $script_dir == "$script_path" ]] && script_dir=.
@@ -367,19 +606,49 @@ fedora_proof_main() {
     printf '%s\n' 'fedora-proof: generated VM name already exists; refusing reuse' >&2
     return 1
   fi
+  fedora_proof_stage_media \
+    "$FEDORA_PROOF_ROOT" "$EUID" "$qemu_uid" \
+    "$installer_iso" "$installer_sha" "$workstation_iso" "$workstation_sha" || return 1
+  staged_installer_iso=$FEDORA_PROOF_ROOT/easysynq-fedora-proof-media-$EUID-installer.iso
+  staged_workstation_iso=$FEDORA_PROOF_ROOT/easysynq-fedora-proof-media-$EUID-workstation.iso
   fedora_proof_run_lifecycle \
-    "$vm_name" "$installer_iso" "$installer_sha" "$workstation_iso" "$workstation_sha" \
-    "$repo_root" "$kickstart_template" "$evidence_commit" "$osinfo"
+    "$vm_name" "$staged_installer_iso" "$installer_sha" \
+    "$staged_workstation_iso" "$workstation_sha" \
+    "$repo_root" "$kickstart_template" "$evidence_commit" "$osinfo" \
+    "$qemu_uid" "$FEDORA_PROOF_ROOT"
 }
 
 fedora_proof_run_lifecycle() (
-  local vm_name=$1 installer_iso=$2 installer_sha=$3 workstation_iso=$4 workstation_sha=$5
+  local vm_name=$1 staged_installer_iso=$2 installer_sha=$3
+  local staged_workstation_iso=$4 workstation_sha=$5
   local repo_root=$6 kickstart_template=$7 evidence_commit=$8 osinfo=$9
+  local qemu_uid=${10} proof_root=${11}
   local workdir= disk= rendered_ks= private_key= public_key= known_hosts= repo_files=
   local uuid_file= marker_file= vm_name_file= log_dir= log_file= vm_uuid= virt_pid= guest_ip=
   local cleanup_failed=0
 
-  workdir=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/easysynq-fedora-proof.XXXXXX") || return 1
+  fedora_proof_validate_root "$proof_root" || return 1
+  workdir=$(/usr/bin/mktemp -d "$proof_root/easysynq-fedora-proof.XXXXXX") || return 1
+  if [[ $workdir != "$proof_root"/easysynq-fedora-proof.* \
+      || ${workdir#"$proof_root"/} == */* \
+      || -L $workdir \
+      || $(/usr/bin/readlink -e "$workdir") != "$workdir" \
+      || $(/usr/bin/stat -c '%u' "$workdir") != "$EUID" ]] \
+      || ! /usr/bin/setfacl -b -k -- "$workdir" \
+      || ! /usr/bin/chmod 0700 "$workdir" \
+      || [[ $(/usr/bin/getfacl -cpn -- "$workdir") != $'user::rwx\ngroup::---\nother::---' ]]; then
+    printf '%s\n' 'fedora-proof: could not establish the private workdir ACL boundary' >&2
+    if [[ $workdir == "$proof_root"/easysynq-fedora-proof.* \
+        && ${workdir#"$proof_root"/} != */* \
+        && -d $workdir \
+        && ! -L $workdir \
+        && $(/usr/bin/stat -c '%u' "$workdir" 2>/dev/null) == "$EUID" ]]; then
+      /usr/bin/rmdir -- "$workdir" || {
+        printf '%s\n' 'fedora-proof: empty unsafe workdir could not be removed; retaining it' >&2
+      }
+    fi
+    return 1
+  fi
   marker_file=$workdir/.easysynq-fedora-proof
   vm_name_file=$workdir/vm-name
   uuid_file=$workdir/vm-uuid
@@ -391,7 +660,8 @@ fedora_proof_run_lifecycle() (
   repo_files=$workdir/repo-files
   printf '%s\n' "$FEDORA_PROOF_MARKER" >"$marker_file"
   printf '%s\n' "$vm_name" >"$vm_name_file"
-  fedora_proof_validate_owned_workdir "$workdir" || return 1
+  /usr/bin/chmod 0600 "$marker_file" "$vm_name_file"
+  fedora_proof_validate_owned_workdir "$workdir" "$proof_root" || return 1
 
   log_dir=$repo_root/.fedora-proof-logs
   if [[ -e $log_dir || -L $log_dir ]]; then
@@ -408,7 +678,7 @@ fedora_proof_run_lifecycle() (
     return 1
   }
   : >"$log_file"
-  chmod 0600 "$log_file"
+  /usr/bin/chmod 0600 "$log_file"
 
   cleanup_all() {
     local expected_uuid= file base
@@ -421,7 +691,8 @@ fedora_proof_run_lifecycle() (
       fi
       if [[ -n $vm_name && -n $disk && -f $disk ]] \
           && /usr/bin/virsh --connect "$FEDORA_PROOF_CONNECT" dominfo "$vm_name" >/dev/null 2>&1; then
-        fedora_proof_destroy_domain_exact "$workdir" "$vm_name" "$expected_uuid" "$disk" \
+        fedora_proof_destroy_domain_exact \
+          "$workdir" "$vm_name" "$expected_uuid" "$disk" "$proof_root" "$qemu_uid" \
           || cleanup_failed=1
       fi
       if [[ -n ${virt_pid:-} ]]; then
@@ -429,21 +700,29 @@ fedora_proof_run_lifecycle() (
         virt_pid=
       fi
       if (( cleanup_failed == 0 )) && [[ -f $disk ]]; then
-        fedora_proof_remove_disk_exact "$workdir" "$vm_name" "$disk" || cleanup_failed=1
+        fedora_proof_revoke_lifecycle_acls \
+          "$proof_root" "$workdir" "$disk" "$qemu_uid" || cleanup_failed=1
+      fi
+      if (( cleanup_failed == 0 )) && [[ -f $disk ]]; then
+        fedora_proof_remove_disk_exact \
+          "$workdir" "$vm_name" "$disk" "$proof_root" "$qemu_uid" || cleanup_failed=1
       fi
       if (( cleanup_failed == 0 )); then
         for file in "$rendered_ks" "$private_key" "$public_key" "$known_hosts" "$repo_files" \
           "$uuid_file"; do
           base=${file##*/}
-          fedora_proof_remove_owned_file "$workdir" "$file" "$base" || cleanup_failed=1
+          fedora_proof_remove_owned_file \
+            "$workdir" "$file" "$base" "$proof_root" || cleanup_failed=1
           (( cleanup_failed == 0 )) || break
         done
       fi
       if (( cleanup_failed == 0 )); then
-        fedora_proof_remove_owned_file "$workdir" "$vm_name_file" vm-name || cleanup_failed=1
+        fedora_proof_remove_owned_file \
+          "$workdir" "$vm_name_file" vm-name "$proof_root" || cleanup_failed=1
       fi
       if (( cleanup_failed == 0 )); then
-        fedora_proof_remove_owned_file "$workdir" "$marker_file" .easysynq-fedora-proof \
+        fedora_proof_remove_owned_file \
+          "$workdir" "$marker_file" .easysynq-fedora-proof "$proof_root" \
           || cleanup_failed=1
       fi
       if (( cleanup_failed == 0 )); then
@@ -473,6 +752,8 @@ fedora_proof_run_lifecycle() (
 
   printf 'Fedora proof VM: %s\nFedora proof disk: %s\nFedora proof log: %s\n' \
     "$vm_name" "$disk" "$log_file" | /usr/bin/tee -a "$log_file"
+  printf 'Retained installer: %s\nRetained Workstation media: %s\n' \
+    "$staged_installer_iso" "$staged_workstation_iso" | /usr/bin/tee -a "$log_file"
   printf 'Installer ISO SHA-256: %s\nWorkstation ISO SHA-256: %s\nEvidence commit: %s\n' \
     "${installer_sha,,}" "${workstation_sha,,}" \
     "$evidence_commit" >>"$log_file"
@@ -505,10 +786,29 @@ fedora_proof_run_lifecycle() (
   unset escaped_key escaped_password_hash
   [[ $(/usr/bin/grep -Ec '@@EASYSYNQ_(SSH_PUBLIC_KEY|PASSWORD_HASH)@@' "$rendered_ks") == 0 ]] \
     || return 1
-  chmod 0600 "$rendered_ks" "$private_key" "$public_key"
+  /usr/bin/chmod 0600 "$rendered_ks" "$private_key" "$public_key"
+  : >"$known_hosts"
+  : >"$repo_files"
+  : >"$uuid_file"
+  /usr/bin/chmod 0600 "$known_hosts" "$repo_files" "$uuid_file"
 
   /usr/bin/qemu-img create -q -f qcow2 "$disk" 80G
-  fedora_proof_validate_cleanup_identity "$workdir" "$vm_name" "$disk" || return 1
+  /usr/bin/chmod 0600 "$disk"
+  fedora_proof_validate_cleanup_identity \
+    "$workdir" "$vm_name" "$disk" "$proof_root" "$qemu_uid" cleanup || return 1
+  fedora_proof_grant_lifecycle_acls "$proof_root" "$workdir" "$disk" "$qemu_uid" || return 1
+  fedora_proof_validate_staged_media \
+    "$proof_root" "$EUID" "$staged_installer_iso" installer "$installer_sha" || return 1
+  fedora_proof_validate_staged_media \
+    "$proof_root" "$EUID" "$staged_workstation_iso" workstation "$workstation_sha" || return 1
+  fedora_proof_validate_exact_acl "$staged_installer_iso" "$qemu_uid" media || return 1
+  fedora_proof_validate_exact_acl "$staged_workstation_iso" "$qemu_uid" media || return 1
+  local private_artifact
+  for private_artifact in \
+    "$rendered_ks" "$private_key" "$public_key" "$known_hosts" "$repo_files" \
+    "$uuid_file" "$vm_name_file" "$marker_file"; do
+    fedora_proof_validate_private_acl "$private_artifact" "$qemu_uid" || return 1
+  done
 
   start_domain_and_record_uuid() {
     local phase=$1
@@ -545,8 +845,8 @@ fedora_proof_run_lifecycle() (
       --osinfo "$osinfo" \
       --network network=default,model=virtio \
       --disk "path=$disk,format=qcow2,bus=virtio" \
-      --disk "path=$workstation_iso,device=cdrom,bus=sata,readonly=on" \
-      --location "$installer_iso" \
+      --disk "path=$staged_workstation_iso,device=cdrom,bus=sata,readonly=on" \
+      --location "$staged_installer_iso" \
       --initrd-inject "$rendered_ks" \
       --extra-args "inst.ks=file:/ks.cfg inst.text console=ttyS0,115200n8" \
       --graphics none \
@@ -562,6 +862,9 @@ fedora_proof_run_lifecycle() (
     printf '%s\n' 'fedora-proof: transient installer domain remained active after Kickstart shutdown' >&2
     return 1
   fi
+  fedora_proof_validate_cleanup_identity \
+    "$workdir" "$vm_name" "$disk" "$proof_root" "$qemu_uid" cleanup || return 1
+  fedora_proof_validate_exact_acl "$disk" "$qemu_uid" disk || return 1
 
   start_domain_and_record_uuid runtime \
     /usr/bin/virt-install \
@@ -593,7 +896,6 @@ fedora_proof_run_lifecycle() (
     return 1
   }
 
-  : >"$known_hosts"
   for _ in {1..300}; do
     if /usr/bin/ssh-keyscan -T 3 -H "$guest_ip" >"$known_hosts" 2>/dev/null \
         && [[ -s $known_hosts ]]; then
@@ -618,6 +920,7 @@ fedora_proof_run_lifecycle() (
   /usr/bin/ssh "${ssh_args[@]}" true
 
   /usr/bin/git -C "$repo_root" ls-tree -r --name-only -z "$evidence_commit" >"$repo_files"
+  fedora_proof_validate_private_acl "$repo_files" "$qemu_uid" || return 1
   [[ -s $repo_files ]] || {
     printf '%s\n' 'fedora-proof: tracked repository file manifest is empty' >&2
     return 1
