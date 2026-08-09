@@ -11,7 +11,11 @@ import { AuthStartupScreen, type AuthStartupScreenProps } from "./AuthStartupScr
 const CASES = [
   ["configuration", "Sign-in is unavailable", "EasySynQ could not connect to its sign-in service."],
   ["callback", "Sign-in was not completed", "Your sign-in response could not be verified."],
-  ["session", "Your session could not be loaded", "EasySynQ could not restore your sign-in session."],
+  [
+    "session",
+    "Your session could not be loaded",
+    "EasySynQ could not restore your sign-in session.",
+  ],
   ["redirect", "Sign-in could not be opened", "EasySynQ could not open the sign-in page."],
   ["timeout", "Sign-in is taking too long", "The sign-in service did not respond in time."],
 ] as const satisfies ReadonlyArray<readonly [AuthFailureKind, string, string]>;
@@ -25,7 +29,10 @@ function loading(
 function failure(kind: AuthFailureKind): Exclude<AuthStatus, { kind: "ready" }> {
   return {
     kind: "error",
-    failure: { kind, recovery: kind === "callback" || kind === "redirect" ? "redirect" : "bootstrap" },
+    failure: {
+      kind,
+      recovery: kind === "callback" || kind === "redirect" ? "redirect" : "bootstrap",
+    },
   };
 }
 
@@ -63,12 +70,22 @@ test.each(["bootstrap", "redirect"] as const)(
   },
 );
 
+test("uses the approved 24px canvas padding at the narrow breakpoint", () => {
+  renderScreen(loading());
+
+  expect(screen.getByRole("main").parentElement).toHaveStyle({
+    paddingInline: "var(--mantine-spacing-lg)",
+  });
+});
+
 test.each(CASES)("renders only approved safe copy for %s failures", (kind, heading, guidance) => {
   const { container } = renderScreen(failure(kind));
 
   expect(screen.getByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
   expect(screen.getByText(guidance)).toBeInTheDocument();
-  expect(container).not.toHaveTextContent("unsafe provider response https://issuer.invalid/?state=secret");
+  expect(container).not.toHaveTextContent(
+    "unsafe provider response https://issuer.invalid/?state=secret",
+  );
 });
 
 test("does not allow raw errors or arbitrary details in the view interface", () => {

@@ -286,6 +286,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
         })(),
       );
+      if (generationRef.current !== generation) return;
+      setStatus({
+        kind: "error",
+        failure: { kind: "redirect", recovery: "redirect" },
+      });
     } catch (error) {
       if (error instanceof AuthAttemptCancelled || generationRef.current !== generation) return;
       const failure: AuthFailure =

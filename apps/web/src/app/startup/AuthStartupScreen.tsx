@@ -64,7 +64,13 @@ export function AuthStartupScreen({ status, onRetry, onReload }: AuthStartupScre
 
   const content =
     status.kind === "loading" ? (
-      <Stack align="center" gap="sm" role="status" aria-live="polite" aria-label="Connecting to sign-in">
+      <Stack
+        align="center"
+        gap="sm"
+        role="status"
+        aria-live="polite"
+        aria-label="Connecting to sign-in"
+      >
         <Loader color="indigo" aria-hidden="true" />
         <Text fw={600}>Connecting to sign-in…</Text>
         <Text c="var(--es-text-2)" size="sm" ta="center">
@@ -93,7 +99,13 @@ export function AuthStartupScreen({ status, onRetry, onReload }: AuthStartupScre
           >
             Try sign-in again
           </Button>
-          <Button fullWidth variant="subtle" color="gray" style={{ minHeight: 44 }} onClick={onReload}>
+          <Button
+            fullWidth
+            variant="subtle"
+            color="gray"
+            style={{ minHeight: 44 }}
+            onClick={onReload}
+          >
             Reload EasySynQ
           </Button>
         </Stack>
@@ -104,7 +116,7 @@ export function AuthStartupScreen({ status, onRetry, onReload }: AuthStartupScre
     );
 
   return (
-    <Center mih="100dvh" px={{ base: "xl", sm: "lg" }} py="lg" bg="var(--es-bg)">
+    <Center mih="100dvh" px="lg" py="lg" bg="var(--es-bg)">
       <Paper
         component="main"
         w="100%"

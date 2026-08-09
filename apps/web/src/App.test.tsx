@@ -139,7 +139,8 @@ test("one automatic redirect does not loop after error and explicit retry resets
   expect(login).toHaveBeenCalledTimes(1);
 });
 
-test("redirect loop latch suppresses an automatic tokenless login", async () => {
+test("a stale redirect latch requires explicit recovery before another login", async () => {
+  const user = userEvent.setup();
   sessionStorage.setItem("es_auth_redirect", "1");
   const login = vi.fn(async () => undefined);
   renderWithProviders(
@@ -155,10 +156,17 @@ test("redirect loop latch suppresses an automatic tokenless login", async () => 
     { route: "/library" },
   );
 
-  expect(await screen.findByText("Connecting to sign-in…")).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { name: "Sign-in could not be opened" }),
+  ).toBeInTheDocument();
   await act(async () => undefined);
   expect(login).not.toHaveBeenCalled();
   expect(screen.queryByText("Document Library")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Try sign-in again" }));
+
+  expect(sessionStorage.getItem("es_auth_redirect")).toBeNull();
+  expect(login).toHaveBeenCalledTimes(1);
 });
 
 test("the /imports route renders the runs landing", async () => {

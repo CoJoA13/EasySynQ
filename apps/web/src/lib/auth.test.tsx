@@ -291,6 +291,17 @@ it("classifies a redirect rejection without exposing raw details", async () => {
   expect(document.body).not.toHaveTextContent("secret=value");
 });
 
+it("classifies a resolved redirect when the current document survives", async () => {
+  renderAuthActions();
+  await waitFor(() => expect(screen.getByText(/status:ready/)).toBeInTheDocument());
+  signinRedirect.mockResolvedValueOnce(undefined);
+
+  await userEvent.click(screen.getByRole("button", { name: "login" }));
+  await waitFor(() => expect(screen.getByText(/status:error/)).toBeInTheDocument());
+
+  expect(readFailure()).toEqual({ kind: "redirect", recovery: "redirect" });
+});
+
 it("times out redirect startup at the exact deadline and ignores a late result", async () => {
   vi.useFakeTimers();
   const redirect = deferred<void>();

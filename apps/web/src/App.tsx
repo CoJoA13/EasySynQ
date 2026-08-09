@@ -104,12 +104,17 @@ export function App() {
     );
   }
 
-  // Operational but token-less → we're redirecting to Keycloak. Keep the named pre-shell loading
-  // boundary visible during the brief effect-before-provider-state frame so the shell cannot flash 401s.
+  // Operational but token-less → keep the shell hidden. A fresh attempt shows named redirect loading;
+  // a pre-existing latch has no active provider watchdog, so it must show actionable recovery instead.
   if (operational && !token) {
+    const redirectAlreadyAttempted = sessionStorage.getItem("es_auth_redirect") !== null;
     return (
       <AuthStartupScreen
-        status={{ kind: "loading", operation: "redirect" }}
+        status={
+          redirectAlreadyAttempted
+            ? { kind: "error", failure: { kind: "redirect", recovery: "redirect" } }
+            : { kind: "loading", operation: "redirect" }
+        }
         onRetry={async () => {
           sessionStorage.removeItem("es_auth_redirect");
           await login();
