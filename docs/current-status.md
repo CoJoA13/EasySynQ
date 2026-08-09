@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-08-09"
-baseline_commit: "faf35b4"
-last_shipped_slice: "S-auth-startup-boundary"
+baseline_commit: "62859e9"
+last_shipped_slice: "S-setup-state-boundary"
 migration_head: "0085"
 next_migration: "0086"
 api_unit_tests: 1686
-web_test_files: 250
-web_tests: 1513
+web_test_files: 252
+web_tests: 1562
 contract_tests: 283
 integration_passed: 1051
 integration_skipped: 2
@@ -30,13 +30,15 @@ DCR, improvement, risk, context, interested-party, and identity-provisioning sur
 retention/disposition, and Evidence Packs are API/worker-complete but do not have dedicated SPA
 management routes.
 
-The last shipped slice replaces the unnamed, potentially indefinite authentication spinner with an
-explicit, 15-second-bounded startup state and a safe pre-shell recovery panel. Callback failures strip
-their query before recovery, stale asynchronous results cannot overwrite newer attempts, and the
-tab-scoped redirect latch permits another attempt only after explicit user recovery. A resolved redirect
-promise on a surviving document and a pre-existing latch with no active provider attempt both terminate
-in actionable recovery instead of actionless loading. Detailed shipped behavior and evidence remain in
-[`slice-history.md`](slice-history.md#s-auth-startup-boundary--bounded-explicit-authentication-startup-and-recovery).
+The last shipped slice adds a setup-state trust boundary after the existing authentication startup
+boundary. A setup-state read is parsed against the closed published enum, bounded to 15 seconds, and
+never defaults an invalid or failed response to a pre-operational state. Pending and failed reads mount a
+named pre-shell loading or recovery screen instead of the shell or `SetupWizard`; validated states alone
+authorize the existing route families. Recovery is an explicit single-flight, read-only state retry with
+no automatic retries or incidental refetches. After reported finalization success, the wizard stays hidden
+while EasySynQ verifies state, and recovery cannot repeat finalization. Detailed shipped behavior and
+evidence remain in
+[`slice-history.md`](slice-history.md#s-setup-state-boundary--validated-bounded-setup-state-routing-and-recovery).
 
 ## Runtime truth
 
@@ -58,10 +60,10 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates
 only the facts it freshly verifies; partial or unavailable checks must be reported as such. At
-`faf35b4` on 2026-08-09, two complete web-suite runs each passed 250 files/1,513 tests, and web
-typecheck, lint, and production build also passed. API, contract, integration, migration, and CI values
-above retain their prior executable evidence because this front-end-only slice did not rerun or change
-them.
+`62859e9` on 2026-08-09, the complete web suite passed 252 files/1,562 tests, and web typecheck, lint,
+and production build also passed. The build transformed 1,092 modules and retained its existing
+large-chunk advisory. API, contract, integration, migration, and CI values above retain their prior
+executable evidence because this front-end-only slice did not rerun or change them.
 
 ## CI topology
 
