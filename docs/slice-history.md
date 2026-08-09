@@ -83,6 +83,63 @@ site-data scan was clean, and `git diff --check` was clean. This front-end-only 
 head snapshot `0085` unchanged. Programme 0's real two-media Fedora/libvirt VM acceptance remains
 **PENDING** and is not replaced by these local checks.
 
+### S-setup-state-boundary — validated, bounded setup-state routing and recovery
+
+The public `GET /api/v1/setup/state` boundary now accepts only the three published setup states:
+`UNINITIALIZED`, `IN_SETUP`, and `OPERATIONAL`. Its local parser rejects malformed JSON, null, arrays,
+missing or non-string fields, and unknown values without coercion or a pre-operational fallback. Every
+request composes the query cancellation signal with an exact 15,000 ms deadline and clears its timer on
+success, failure, cancellation, and unmount, so a late result cannot commit after timeout.
+
+The setup query has `retry: false`, `staleTime: Infinity`, and no focus, reconnect, or interval refetch.
+Initial load therefore has one state GET, and an explicit recovery activation has exactly one additional
+GET. The setup-specific pre-shell screen supplies named polite loading and safe recovery states, focuses
+the failure heading, keeps retry single-flight and busy while in flight, provides 44 px retry/reload
+actions, and preserves the 320 px, reduced-motion, forced-colors, and axe contracts without accepting or
+rendering raw failure detail.
+
+Authentication remains the first boundary. Once it is ready, only a validated setup state may route:
+query failure takes precedence over cached data, and failed, timed-out, malformed, or unknown reads mount
+neither the application shell nor `SetupWizard` and cannot start tokenless authentication redirect. The
+focused falsifiers prove those read failures issue no setup POST, PATCH, PUT, or DELETE. Valid
+`OPERATIONAL` retains the existing shell and tokenless redirect behavior; valid `UNINITIALIZED` and
+`IN_SETUP` retain the existing setup route family.
+
+After a successful finalization response, App records an acknowledgement synchronously, hides the wizard,
+and enters verification-only state reading. A failed, untrusted, or contradictory reread presents only
+read-only recovery; retrying makes a state GET and cannot replay finalization. The existing authentication
+loading, error, stale-latch, explicit-retry, and shell-hiding regressions remained green.
+
+Fresh completion evidence at formatting implementation head `62859e9` on 2026-08-09:
+
+```bash
+cd apps/web && npm exec prettier -- --write src/App.tsx src/App.test.tsx src/SetupWizard.tsx src/SetupWizard.test.tsx src/app/startup/setupState.ts src/app/startup/setupState.test.ts src/app/startup/SetupStartupScreen.tsx src/app/startup/SetupStartupScreen.test.tsx
+cd apps/web && npm exec prettier -- --check src/App.tsx src/App.test.tsx src/SetupWizard.tsx src/SetupWizard.test.tsx src/app/startup/setupState.ts src/app/startup/setupState.test.ts src/app/startup/SetupStartupScreen.tsx src/app/startup/SetupStartupScreen.test.tsx
+npm --prefix apps/web run test
+npm --prefix apps/web run typecheck
+npm --prefix apps/web run lint
+npm --prefix apps/web run build
+bash scripts/tests/test-agent-authority.sh
+bash scripts/tests/test-claude-hooks.sh
+bash scripts/check-repo-authority.sh
+bash scripts/tests/test-check-no-site-data.sh
+bash scripts/check-no-site-data.sh
+git diff --check
+git status --short
+```
+
+Prettier changed only layout in `apps/web/src/App.tsx`, `apps/web/src/SetupWizard.tsx`, and
+`apps/web/src/SetupWizard.test.tsx`; those three formatting-only changes are the separate
+`style: format setup state boundary` checkpoint. The scoped formatter check passed all eight touched web
+files. The complete web suite passed 252 files/1,562 tests in 283.46 seconds; typecheck and lint exited
+0; production build transformed 1,092 modules and exited 0 with the existing Vite large-chunk advisory.
+The repository-authority fixture suite passed 91/91; the Claude hook compatibility script passed all
+seven assertions; `check-repo-authority.sh` returned `AUTHORITY_OK`; the site-data guard suite passed
+13/13; the direct site-data scan was clean; and `git diff --check` was clean. The web-suite job also
+emitted Node's `localStorage` experimental warning repeatedly, but exited 0. No API, contract, migration,
+or deployment change shipped: the Alembic snapshot stays `0085`, and Programme 0's real two-media
+Fedora/libvirt VM acceptance remains **PENDING**.
+
 ### S-upload-identity — exact staged-source identity through WORM promotion
 
 Every non-dedup staging promotion binds to the exact source version selected by its producer. Browser

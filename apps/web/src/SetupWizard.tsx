@@ -59,7 +59,7 @@ export function SetupWizard({
 }: {
   token: string | null;
   login: () => void;
-  onFinalized: () => void;
+  onFinalized: () => Promise<void>;
 }) {
   const [testRunning, setTestRunning] = useState(false);
   const detail = useQuery({
@@ -113,12 +113,15 @@ export function SetupWizard({
     if (persistedName) setLegalName((cur) => cur || persistedName);
   }, [persistedName]);
 
-  const run = async (fn: () => Promise<unknown>, after?: () => void): Promise<void> => {
+  const run = async (
+    fn: () => Promise<unknown>,
+    after?: () => void | Promise<void>,
+  ): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
       await fn();
-      after?.();
+      await after?.();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -286,8 +289,7 @@ export function SetupWizard({
               />
               <Text size="xs" c="dimmed">
                 GOVERNANCE (recommended) keeps privileged retention handling and future
-                role-preserving recovery design possible.
-                COMPLIANCE is immutable even to root.
+                role-preserving recovery design possible. COMPLIANCE is immutable even to root.
               </Text>
               <Group>
                 <Button onClick={() => void verifyStorage()} loading={busy}>
