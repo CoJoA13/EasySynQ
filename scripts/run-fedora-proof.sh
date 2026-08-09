@@ -628,6 +628,17 @@ fedora_proof_query_uuid_bounded_once() {
   FEDORA_PROOF_QUERIED_UUID=$queried_uuid
 }
 
+fedora_proof_query_phase_uuid() {
+  local phase_deadline=$1
+  shift
+  [[ $phase_deadline =~ ^[0-9]+$ && $# == 10 ]] || return 1
+  if (( phase_deadline > 0 )); then
+    fedora_proof_query_uuid_before_deadline_exact "$@"
+    return $?
+  fi
+  fedora_proof_query_uuid_bounded_once "${7}" "${8}" "${9}" "${10}"
+}
+
 fedora_proof_reset_uuid_record() {
   local uuid_file=$1 qemu_uid=$2
   fedora_proof_validate_private_acl "$uuid_file" "$qemu_uid" || return 1
@@ -1404,14 +1415,10 @@ fedora_proof_run_lifecycle() (
       return 1
     }
     for _ in {1..120}; do
-      if (( phase_deadline > 0 )) && fedora_proof_query_uuid_before_deadline_exact \
-            "$virt_pid" "$virt_starttime" "$virt_parent_pid" \
-            "$deadline_pid" "$deadline_starttime" "$deadline_parent_pid" \
-            "$vm_name" "$uuid_probe" "$log_file" /usr/bin/virsh; then
-        vm_uuid=$FEDORA_PROOF_QUERIED_UUID
-      elif (( phase_deadline == 0 )) \
-          && fedora_proof_query_uuid_bounded_once \
-            "$vm_name" "$uuid_probe" "$log_file" /usr/bin/virsh; then
+      if fedora_proof_query_phase_uuid "$phase_deadline" \
+          "$virt_pid" "$virt_starttime" "$virt_parent_pid" \
+          "$deadline_pid" "$deadline_starttime" "$deadline_parent_pid" \
+          "$vm_name" "$uuid_probe" "$log_file" /usr/bin/virsh; then
         vm_uuid=$FEDORA_PROOF_QUERIED_UUID
       else
         query_status=$?
@@ -1457,7 +1464,7 @@ fedora_proof_run_lifecycle() (
     printf '%s\n' "$vm_uuid" >"$uuid_file"
   }
 
-  start_domain_and_record_uuid install "$FEDORA_PROOF_INSTALL_DEADLINE_SECONDS" \
+  if start_domain_and_record_uuid install "$FEDORA_PROOF_INSTALL_DEADLINE_SECONDS" \
     /usr/bin/virt-install \
       --connect "$FEDORA_PROOF_CONNECT" \
       --transient \
@@ -1478,7 +1485,12 @@ fedora_proof_run_lifecycle() (
       --graphics none \
       --autoconsole text \
       --debug \
-      --wait=-1 || return 1
+      --wait=-1; then
+    :
+  else
+    lifecycle_status=$?
+    return "$lifecycle_status"
+  fi
   if fedora_proof_wait_client_deadline_exact \
       "$virt_pid" "$virt_starttime" "$virt_parent_pid" \
       "$deadline_pid" "$deadline_starttime" "$deadline_parent_pid"; then
@@ -1514,7 +1526,7 @@ fedora_proof_run_lifecycle() (
     "$workdir" "$vm_name" "$disk" "$proof_root" "$qemu_uid" cleanup || return 1
   fedora_proof_validate_exact_acl "$disk" "$qemu_uid" disk || return 1
 
-  start_domain_and_record_uuid runtime 0 \
+  if start_domain_and_record_uuid runtime 0 \
     /usr/bin/virt-install \
       --connect "$FEDORA_PROOF_CONNECT" \
       --transient \
@@ -1530,7 +1542,12 @@ fedora_proof_run_lifecycle() (
       --graphics none \
       --autoconsole text \
       --debug \
-      --wait=-1 || return 1
+      --wait=-1; then
+    :
+  else
+    lifecycle_status=$?
+    return "$lifecycle_status"
+  fi
 
   for _ in {1..600}; do
     guest_ip=$(

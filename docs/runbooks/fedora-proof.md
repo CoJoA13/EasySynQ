@@ -175,6 +175,26 @@ repository's `*.log` rule. The detached
 launcher keeps a private no-input stream open while the serial text console and virt-install debug output
 append to that log, so Anaconda progress remains observable without a terminal or interactive stdin.
 
+Prior proof releases may have created this exact directory as `0755`. The hardened harness refuses
+that historical state before creating a VM. From the repository root, inspect the exact retained-log
+directory, confirm it is the caller-owned non-symlink directory shown, and then harden only that target
+without reading or removing any retained log:
+
+```bash
+(
+  set -euo pipefail
+  LOG_DIR="$(pwd -P)/.fedora-proof-logs"
+  [[ -d "$LOG_DIR" && ! -L "$LOG_DIR" ]]
+  [[ "$(readlink -e "$LOG_DIR")" == "$LOG_DIR" ]]
+  [[ "$(stat -c '%u' "$LOG_DIR")" == "$EUID" ]]
+  stat -c '%A %a %U:%G %n' -- "$LOG_DIR"
+  getfacl -cpn -- "$LOG_DIR"
+  setfacl -b -k -- "$LOG_DIR"
+  chmod 0700 -- "$LOG_DIR"
+  [[ "$(getfacl -cpn -- "$LOG_DIR")" == $'user::rwx\ngroup::---\nother::---' ]]
+)
+```
+
 Kickstart preserves the installed resolver target, replaces it with Anaconda's DHCP resolver state
 for the networked `%post`, and restores the original target afterward. Provisioning the SSH
 prerequisites therefore does not depend on an incomplete or dangling chroot `resolv.conf`, and the

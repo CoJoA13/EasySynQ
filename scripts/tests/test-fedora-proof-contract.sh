@@ -302,8 +302,10 @@ if [[ -f $HOST_SCRIPT ]]; then
     fail 'bounded diagnostics run before exact domain destruction on failure'
   fi
   assert_contains "$host_source" \
-    'fedora_proof_query_uuid_before_deadline_exact \' \
-    'UUID discovery races every probe against the hard installer deadline'
+    'fedora_proof_query_phase_uuid "$phase_deadline" \' \
+    'lifecycle UUID discovery dispatches through the hard installer deadline'
+  assert_not_contains "$host_source" '--wait=-1 || return 1' \
+    'installer launch preserves the exact UUID-timeout status'
   assert_contains "$host_source" 'set -o noclobber' \
     'retained proof logs use atomic no-clobber creation'
   assert_contains "$host_source" 'umask 077' \
@@ -808,7 +810,7 @@ if [[ -f $HOST_SCRIPT ]]; then
     fail 'host script exposes behavior-level exact client deadline handling'
   fi
 
-  if declare -F fedora_proof_query_uuid_before_deadline_exact >/dev/null; then
+  if declare -F fedora_proof_query_phase_uuid >/dev/null; then
     original_uuid_query_timeout=$FEDORA_PROOF_UUID_QUERY_TIMEOUT_SECONDS
     : >"$uuid_probe"
     : >"$console_log"
@@ -833,7 +835,7 @@ if [[ -f $HOST_SCRIPT ]]; then
     uuid_started=$SECONDS
     FEDORA_PROOF_UUID_QUERY_TIMEOUT_SECONDS=30
     export FEDORA_UUID_HANG_PID_FILE="$uuid_virsh_pid_file"
-    fedora_proof_query_uuid_before_deadline_exact \
+    fedora_proof_query_phase_uuid 1 \
       "$uuid_client_pid" "$uuid_client_start" "$uuid_parent" \
       "$uuid_timer_pid" "$uuid_timer_start" "$uuid_parent" \
       easysynq-fedora-proof-20000101T000000Z-1-deadbeef \
@@ -869,7 +871,7 @@ if [[ -f $HOST_SCRIPT ]]; then
       'UUID discovery deadline names the production installation bound'
     FEDORA_PROOF_UUID_QUERY_TIMEOUT_SECONDS=$original_uuid_query_timeout
   else
-    fail 'host script exposes behavior-level bounded UUID discovery'
+    fail 'host script exposes behavior-level lifecycle UUID-deadline dispatch'
   fi
 
   if declare -F fedora_proof_launch_client_logged >/dev/null; then
@@ -1385,6 +1387,10 @@ if [[ -f $RUNBOOK ]]; then
     'runbook documents the private retained-log directory boundary'
   assert_contains "$runbook" 'created atomically with no-clobber semantics' \
     'runbook documents atomic retained-log creation'
+  assert_contains "$runbook" 'Prior proof releases may have created this exact directory as `0755`' \
+    'runbook identifies the historical retained-log directory migration'
+  assert_contains "$runbook" 'LOG_DIR="$(pwd -P)/.fedora-proof-logs"' \
+    'runbook migration resolves only the exact repository retained-log directory'
   assert_contains "$runbook" 'serial text console and virt-install debug output' \
     'runbook explains the retained observable Anaconda progress'
   assert_contains "$runbook" 'bounded pre-delete diagnostic bundle' \
