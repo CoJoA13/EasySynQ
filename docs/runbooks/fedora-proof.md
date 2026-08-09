@@ -33,7 +33,7 @@ deliberately not installed by `scripts/bootstrap-fedora-dev.sh`:
 ```bash
 sudo dnf install libvirt-daemon-kvm libvirt-daemon-config-network libvirt-client \
   qemu-kvm virt-install guestfs-tools
-sudo systemctl enable --now virtqemud.socket virtnetworkd.socket
+sudo systemctl enable --now virtqemud.socket virtnetworkd.socket virtstoraged.socket
 sudo usermod -aG libvirt "$USER"
 ```
 
@@ -43,11 +43,16 @@ network:
 ```bash
 id -nG | tr ' ' '\n' | grep -Fx libvirt
 virsh --connect qemu:///system uri
+virsh --connect qemu:///system pool-list --all
 virt-install --osinfo list | grep -E '^fedora(44|43)$'
 sudo virsh --connect qemu:///system net-start default || true
 sudo virsh --connect qemu:///system net-autostart default
 virsh --connect qemu:///system net-info default
 ```
+
+The read-only pool listing exercises the modular libvirt storage service that `virt-install` needs
+to validate the install media and disk. The harness runs the same readiness check before it creates
+its temporary directory or disk; it does not start host services or weaken permissions.
 
 Do not weaken device, socket, ISO, or directory permissions to make libvirt work. Put both ISO files
 in a location the reviewed `qemu:///system` configuration can read, and fix the host's normal libvirt

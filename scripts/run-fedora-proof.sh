@@ -234,6 +234,25 @@ fedora_proof_select_osinfo() {
   fedora_proof_select_osinfo_from_list "$listing"
 }
 
+fedora_proof_check_libvirt_ready() {
+  local virsh_bin=${1:-/usr/bin/virsh}
+  [[ $virsh_bin == /* && -x $virsh_bin ]] || {
+    printf '%s\n' 'fedora-proof: invalid virsh readiness probe' >&2
+    return 1
+  }
+  "$virsh_bin" --connect "$FEDORA_PROOF_CONNECT" uri >/dev/null || {
+    printf '%s\n' 'fedora-proof: qemu:///system is unavailable; see docs/runbooks/fedora-proof.md' >&2
+    return 1
+  }
+  "$virsh_bin" --connect "$FEDORA_PROOF_CONNECT" pool-list --all >/dev/null || {
+    printf '%s\n' \
+      'fedora-proof: libvirt storage capability is unavailable.' \
+      'fedora-proof: run: sudo systemctl enable --now virtstoraged.socket' \
+      'fedora-proof: see docs/runbooks/fedora-proof.md' >&2
+    return 1
+  }
+}
+
 require_host_tools() {
   local path missing=0
   for path in \
@@ -340,10 +359,7 @@ fedora_proof_main() {
     printf '%s\n' 'fedora-proof: could not record an exact evidence commit' >&2
     return 2
   }
-  /usr/bin/virsh --connect "$FEDORA_PROOF_CONNECT" uri >/dev/null || {
-    printf '%s\n' 'fedora-proof: qemu:///system is unavailable; see docs/runbooks/fedora-proof.md' >&2
-    return 1
-  }
+  fedora_proof_check_libvirt_ready /usr/bin/virsh || return 1
   osinfo=$(fedora_proof_select_osinfo) || return 1
 
   vm_name=$(fedora_proof_new_vm_name) || return 1

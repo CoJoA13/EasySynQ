@@ -65,6 +65,7 @@ failure_tmp=$fixture_root/failure-tmp
 failure_vm=easysynq-fedora-proof-20000101T000000Z-99999-deadbeef
 failure_log=$failure_repo/.fedora-proof-logs/$failure_vm.log
 failure_workdir=
+storage_probe=$fixture_root/virsh-storage-probe
 cleanup_fixture() {
   [[ $fixture_root == "${TMPDIR:-/tmp}"/easysynq-fedora-contract.* ]] || return 1
   [[ -d $fixture_root && ! -L $fixture_root ]] || return 1
@@ -76,7 +77,8 @@ cleanup_fixture() {
     "$fixture_root/owned/root.qcow2" \
     "$fixture_root/owned/vm-name" \
     "$fixture_root/owned/.easysynq-fedora-proof" 2>/dev/null || true
-  rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" 2>/dev/null || true
+  rm -f -- "$fixture_root/lock-ready" "$fixture_root/lock-release" "$storage_probe" \
+    2>/dev/null || true
   rm -f -- "$failure_log" "$failure_repo/ks.cfg" 2>/dev/null || true
   rmdir "$failure_repo/.fedora-proof-logs" 2>/dev/null || true
   rmdir "$failure_repo" 2>/dev/null || true
@@ -151,6 +153,13 @@ if [[ -f $HOST_SCRIPT ]]; then
     'guest source is archived from the recorded evidence commit'
   osinfo_uses=$(grep -cF -- '--osinfo "$osinfo"' <<<"$host_source")
   assert_status 2 "$osinfo_uses" 'both libvirt phases use the one validated osinfo selection'
+  readiness_call='fedora_proof_check_libvirt_ready /usr/bin/virsh'
+  if [[ $host_source == *"$readiness_call"* \
+      && $host_source == *"$readiness_call"*'fedora_proof_run_lifecycle \'* ]]; then
+    pass
+  else
+    fail 'libvirt storage readiness runs before the artifact-owning lifecycle'
+  fi
   if [[ $host_source != *'rm -rf'* && $host_source != *'find '*'-delete'* ]]; then
     pass
   else
@@ -227,6 +236,32 @@ if [[ -f $HOST_SCRIPT ]]; then
   # create or address a libvirt domain.
   # shellcheck source=../run-fedora-proof.sh
   source "$HOST_SCRIPT"
+  if declare -F fedora_proof_check_libvirt_ready >/dev/null; then
+    original_connect=$FEDORA_PROOF_CONNECT
+    FEDORA_PROOF_CONNECT=test:///default
+    output=$(fedora_proof_check_libvirt_ready /usr/bin/virsh 2>&1)
+    status=$?
+    assert_status 0 "$status" 'libvirt test driver satisfies compute and storage readiness'
+
+    printf '%s\n' \
+      '#!/usr/bin/env bash' \
+      'case "$*" in' \
+      '  "--connect test:///default uri") printf "%s\\n" test:///default ;;' \
+      '  "--connect test:///default pool-list --all") exit 1 ;;' \
+      '  *) exit 2 ;;' \
+      'esac' >"$storage_probe"
+    chmod 0700 "$storage_probe"
+    output=$(fedora_proof_check_libvirt_ready "$storage_probe" 2>&1)
+    status=$?
+    FEDORA_PROOF_CONNECT=$original_connect
+    assert_status 1 "$status" 'libvirt readiness rejects a missing storage capability'
+    assert_contains "$output" 'storage capability' 'storage readiness failure names the missing boundary'
+    assert_contains "$output" 'virtstoraged.socket' 'storage readiness failure gives the exact service remedy'
+    rm -f -- "$storage_probe"
+  else
+    fail 'host script exposes behavior-level libvirt storage readiness'
+  fi
+
   if declare -F fedora_proof_new_vm_name >/dev/null \
       && declare -F fedora_proof_validate_cleanup_identity >/dev/null \
       && declare -F fedora_proof_remove_disk_exact >/dev/null; then
@@ -431,6 +466,13 @@ if [[ -f $KICKSTART ]]; then
     'Kickstart restores the installed resolver target after networked post steps'
   assert_contains "$kickstart" 'selinux --enforcing' 'Kickstart requests enforcing SELinux'
   assert_contains "$kickstart" 'shutdown' 'Kickstart ends the transient install phase cleanly'
+fi
+
+if [[ -f $RUNBOOK ]]; then
+  runbook=$(<"$RUNBOOK")
+  assert_contains "$runbook" \
+    'sudo systemctl enable --now virtqemud.socket virtnetworkd.socket virtstoraged.socket' \
+    'clean proof-host setup enables the modular libvirt storage socket'
 fi
 
 printf '%d Fedora proof contract checks passed; %d failed\n' "$passed" "$failed"
