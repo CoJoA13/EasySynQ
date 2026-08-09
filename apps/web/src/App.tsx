@@ -56,7 +56,8 @@ export function LegacyImportRedirect() {
 
 export function App() {
   useRouteChrome();
-  const { ready, token, login } = useAuth();
+  const { status, token, login } = useAuth();
+  const ready = status.kind === "ready";
 
   // The public setup-state probe decides wizard-vs-shell (S8a). The latch (423) protects the API
   // regardless; this is just the SPA's routing signal.

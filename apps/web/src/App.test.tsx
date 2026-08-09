@@ -22,10 +22,17 @@ test("the /compliance route renders the checklist", async () => {
 
 test("operational app with no token bounces to sign-in (in-memory tokens, post-reload)", async () => {
   sessionStorage.removeItem("es_auth_redirect");
-  const login = vi.fn();
+  const login = vi.fn(async () => undefined);
   renderWithProviders(<App />, {
     route: "/library",
-    auth: { ready: true, user: null, token: null, login, logout: () => {} },
+    auth: {
+      status: { kind: "ready" },
+      user: null,
+      token: null,
+      login,
+      retry: async () => undefined,
+      logout: async () => undefined,
+    },
   });
   await waitFor(() => expect(login).toHaveBeenCalledTimes(1)); // auto-redirect to Keycloak
   expect(screen.getByText(/signing in/i)).toBeInTheDocument(); // interstitial, not the 401-ing shell

@@ -7,11 +7,12 @@ import { AuthContext, type AuthState } from "../lib/auth";
 import { theme } from "../theme/mantine";
 
 export const TEST_AUTH: AuthState = {
-  ready: true,
+  status: { kind: "ready" },
   token: "test-token",
   user: { profile: { sub: "bbbb1111-1111-1111-1111-111111111111" } } as AuthState["user"],
-  login: () => {},
-  logout: () => {},
+  login: async () => undefined,
+  retry: async () => undefined,
+  logout: async () => undefined,
 };
 
 export function renderWithProviders(
