@@ -171,7 +171,8 @@ breadcrumb/title and safe targets, authentication/setup guards, known routes, le
 focus, native semantics, target size, narrow geometry, and axe. The route, global, and 404 presentation
 tests each include fresh axe assertions.
 
-Fresh evidence was collected at implementation head `33d0c2a` on 2026-08-09:
+Initial evidence was collected at implementation head `33d0c2a` on 2026-08-09; final accepted evidence was
+collected at shared-harness head `6f5676e` on 2026-08-10:
 
 ```bash
 cd apps/web && npm exec prettier -- --write src/App.tsx src/App.test.tsx src/app/errors/ApplicationErrorBoundary.tsx src/app/errors/ApplicationErrorBoundary.test.tsx src/app/errors/ApplicationErrorScreen.tsx src/app/errors/ApplicationErrorScreen.test.tsx src/app/errors/RouteErrorPage.tsx src/app/errors/RouteErrorPage.test.tsx src/app/errors/NotFoundPage.tsx src/app/errors/NotFoundPage.test.tsx src/app/shell/AppShell.tsx src/app/shell/AppShell.test.tsx src/app/shell/Breadcrumb.tsx src/app/shell/Breadcrumb.test.tsx src/lib/routeChrome.ts src/lib/routeChrome.test.tsx src/main.tsx
@@ -190,23 +191,37 @@ git diff --check
 git status --short
 ```
 
-The scoped Prettier write changed none of the 17 touched web files, and its scoped check passed. The complete
-web command ran 256 files and 1,583 passing tests but exited **1**, not 0: Vitest reported one unhandled
-post-teardown `ReferenceError: window is not defined` from TanStack Query notification scheduling, attributed
-to `src/features/capa/CapaTimeline.test.tsx`. The narrow CapaTimeline command then passed 1 file/7 tests.
-The test, component, evidence linker, render provider, Vitest config, and package files are byte-identical to
-baseline `ae84951`, so this timing-dependent teardown error is an unrelated limitation and does not establish
-a route-boundary defect; it is not converted into a full-suite pass. Typecheck and lint exited 0; production
-build exited 0 after transforming 1,096 modules, with the existing Vite large-chunk advisory. The full suite
-also emitted Node's repeated `localStorage` experimental warning. The authority fixture suite passed 91/91,
-the Claude hook compatibility suite passed all seven assertions, repository authority returned
-`AUTHORITY_OK`, the site-data fixture suite passed 13/13, the direct scan was clean, and `git diff --check`
-was clean. App-local Prettier still rejects the historical whole `slice-history.md` baseline and updated file;
-the historical file was not mass-formatted. No Playwright or live-browser visual run was performed, so the
-structural 320 px, reduced-motion, and forced-colors coverage is not independent browser evidence. No API,
-OpenAPI, migration, Keycloak, cache-policy, mutation-feedback, URL-state, telemetry, dependency, or
-deployment change shipped; the historical migration snapshot is unchanged, and the Programme 0 two-media
-Fedora/libvirt proof remains **PENDING**.
+The scoped Prettier write changed none of the 17 touched web files, and its scoped check passed. The initial
+complete web command ran 256 files and 1,583 passing tests but exited **1**, not 0: Vitest reported one
+post-teardown `ReferenceError: window is not defined` from TanStack Query notification scheduling, first
+attributed to `src/features/capa/CapaTimeline.test.tsx`. A second durable run after `b0b1c09` ran 256 files
+and 1,584 passing tests but again exited **1** with the same shared error, then attributed to
+`EditCommitmentModal.test.tsx`; clearing a query client on unmount remains useful cache/abort cleanup but
+cannot retract a callback already captured by TanStack. A synchronous scheduler eliminated that error but
+changed observable Audit detail timing, yielding **1 failed / 256 passed files** and **2 failed / 1,584
+passed tests**, so it was rejected rather than accommodated in UI tests.
+
+The final repair preserves TanStack's normal `setTimeout(0)` observer scheduling. The test-only shared
+harness records scheduled notifications through the supported `notifyManager` seam; after React Testing
+Library cleanup and MSW reset, it waits through event-loop turns until pending work is zero and the scheduling
+generation is stable. This prevents queued React observer callbacks from entering after jsdom teardown while
+preserving normal batching semantics, fake-timer compatibility, and observable callback failures. Its focused
+regressions cover query-client cleanup, the original queued observer reproduction, nested microtask chains,
+complete error draining, and fake-timer quiescence. The repair spans `b0b1c09` through final commit
+`6f5676e`; it is shared test infrastructure, not a production route behavior change.
+
+The final durable `npm --prefix apps/web run test` at `6f5676e` exited **0**: 257 files and 1,596 tests
+passed in 263.07 seconds, with no unhandled error. It emitted Node's repeated `localStorage` experimental
+warning. Typecheck and lint exited 0; production build exited 0 after transforming 1,096 modules, with the
+existing Vite large-chunk advisory. The authority fixture suite passed 91/91, the Claude hook compatibility
+suite passed all seven assertions, repository authority returned `AUTHORITY_OK`, the site-data fixture suite
+passed 13/13, the direct scan was clean, and `git diff --check` was clean. App-local Prettier still rejects
+the historical whole `slice-history.md` baseline and updated file; the historical file was not mass-formatted.
+No Playwright or live-browser visual run was performed, so the structural 320 px, reduced-motion, and
+forced-colors coverage is not independent browser evidence. No API, OpenAPI, migration, Keycloak,
+cache-policy, mutation-feedback, URL-state, telemetry, dependency, or deployment change shipped; the
+historical migration snapshot is unchanged, and the Programme 0 two-media Fedora/libvirt proof remains
+**PENDING**.
 
 ### S-upload-identity — exact staged-source identity through WORM promotion
 

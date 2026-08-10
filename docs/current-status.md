@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-09"
-baseline_commit: "33d0c2a"
+as_of: "2026-08-10"
+baseline_commit: "6f5676e"
 last_shipped_slice: "S-app-route-boundary"
 migration_head: "0085"
 next_migration: "0086"
 api_unit_tests: 1686
-web_test_files: 256
-web_tests: 1583
+web_test_files: 257
+web_tests: 1596
 contract_tests: 283
 integration_passed: 1051
 integration_skipped: 2
@@ -59,14 +59,17 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates
-only the facts it freshly verifies; partial or unavailable checks must be reported as such. At
-`33d0c2a` on 2026-08-09, the complete web command ran 256 files/1,583 passing tests but exited 1 because
-Vitest reported one post-environment-teardown `window is not defined` unhandled error attributed to the
-byte-identical pre-existing `CapaTimeline.test.tsx`; it is not recorded as a complete-suite pass. The exact
-narrow CapaTimeline command passed 1 file/7 tests, and web typecheck, lint, and production build passed.
-The build transformed 1,096 modules and retained its existing large-chunk advisory. API, contract,
-integration, migration, and CI values above retain their prior executable evidence because this front-end-only
-slice did not rerun or change them.
+only the facts it freshly verifies; partial or unavailable checks must be reported as such. At `6f5676e` on
+2026-08-10, the durable complete web command exited 0 with 257 files/1,596 tests passing in 263.07 seconds.
+The earlier TanStack Query post-teardown `window is not defined` failure was a shared test-harness issue, not
+a route-specific limitation: a queued observer callback could outlive React Testing Library cleanup and
+Vitest's jsdom teardown. The test-only harness now preserves TanStack's normal asynchronous scheduling while
+tracking notifications and draining them to stable event-loop quiescence after cleanup and MSW reset; it also
+preserves callback errors and supports fake timers. Node still emits repeated `localStorage` experimental
+warnings without affecting the green exit. Web typecheck, lint, and production build passed; the build
+transformed 1,096 modules and retained its existing large-chunk advisory. API, contract, integration,
+migration, and CI values above retain their prior executable evidence because this front-end-only slice did
+not rerun or change them.
 
 ## CI topology
 
