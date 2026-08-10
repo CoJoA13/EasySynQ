@@ -32,8 +32,11 @@ management routes.
 
 The last shipped slice adds a two-tier application render boundary and an operational 404 without changing
 authentication or setup ownership. A route-content boundary inside `AppShell` preserves the shell when a
-routed page fails; retry remounts only that content subtree and neither clears nor invalidates shared query
-data or issues a mutation. A global last-resort boundary sits outside the router, auth, and query providers
+routed page fails. The owner-approved 2026-08-10 clarification requires Retry to remount only that content
+subtree while preserving the original query provider, exact client identity, source-client lifecycle, and
+cached data. Retry explicitly calls no invalidation, refetch, reset, removal, clearing, equivalent cache
+operation, or mutation seam; a stale query observer may still perform TanStack Query's normal configured
+refetch when it remounts. A global last-resort boundary sits outside the router, auth, and query providers
 while remaining inside the theme provider, so provider, router, startup, or shell failures have a
 router-independent full-screen recovery. Unknown operational URLs remain visible and render a fixed,
 shell-contained `Page not found` state with safe Dashboard and Document Library links; pre-operational
@@ -61,6 +64,14 @@ The numeric frontmatter records the latest fresh completion evidence for each su
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates
 only the facts it freshly verifies; partial or unavailable checks must be reported as such. At `6f5676e` on
 2026-08-10, the durable complete web command exited 0 with 257 files/1,596 tests passing in 263.07 seconds.
+That complete-suite run predates the 2026-08-10 QueryClient provider clarification. The bounded
+clarification wave deliberately did not launch the complete web suite, so `6f5676e` and the frontmatter
+file/test counts remain the latest complete evidence rather than being replaced by focused or affected
+results. At clarification implementation checkpoint `8d285d7`, the 12-file affected selection passed
+126/126; web typecheck and lint exited 0; and the production build transformed 1,096 modules and exited 0
+with the existing large-chunk advisory. Repository-authority fixtures passed 91/91, Claude-hook
+compatibility passed all seven assertions, repository authority returned `AUTHORITY_OK`, site-data
+fixtures passed 13/13, and the direct site-data scan was clean.
 The earlier TanStack Query post-teardown `window is not defined` failure was a shared test-harness issue, not
 a route-specific limitation: a queued observer callback could outlive React Testing Library cleanup and
 Vitest's jsdom teardown. The test-only harness now preserves TanStack's normal asynchronous scheduling while

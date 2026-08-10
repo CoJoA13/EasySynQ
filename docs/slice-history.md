@@ -153,10 +153,12 @@ promises, query-state failures, existing authentication/setup boundary states, `
 missing static root remain outside the route boundary's ownership; a route-fallback failure promotes to the
 global boundary.
 
-Route retry clears only the boundary's captured boolean and remounts the failed page subtree. It has no
-query-client invalidation, cache clear, refetch, network request, mutation, router migration, or operator
-action replay. Its complete location reset key includes pathname, search, and hash, so navigation clears a
-stale failure; temporary route-title ownership restores when the fallback unmounts. The global recovery
+Route retry clears only the boundary's captured boolean and remounts the failed page subtree. It explicitly
+calls no query-client invalidation, refetch, reset, removal, clearing, equivalent cache operation, mutation,
+router migration, or operator-action replay. The original provider and exact query-client identity and
+lifecycle remain stable; TanStack Query may perform its normal configured stale-observer refetch when route
+content remounts. The complete location reset key includes pathname, search, and hash, so navigation clears
+a stale failure; temporary route-title ownership restores when the fallback unmounts. The global recovery
 does not attempt an in-place provider or router reset, and its Dashboard action is a plain same-origin link.
 
 An operational unknown URL no longer redirects to `/`: it remains visible in the address bar and renders a
@@ -222,6 +224,38 @@ forced-colors coverage is not independent browser evidence. No API, OpenAPI, mig
 cache-policy, mutation-feedback, URL-state, telemetry, dependency, or deployment change shipped; the
 historical migration snapshot is unchanged, and the Programme 0 two-media Fedora/libvirt proof remains
 **PENDING**.
+
+#### Owner-approved QueryClient provider clarification — 2026-08-10
+
+The complete-suite evidence immediately above remains the historical pre-clarification baseline. A later
+final-fix interpretation treated Retry as a zero-network boundary and introduced a temporary retry
+`QueryClient` proxy plus a nested provider in `50d81c8`. The owner clarified the binding behavior on
+2026-08-10: Retry never explicitly invalidates, clears, or refetches cached queries, while TanStack Query may
+perform its normal stale-query refetch when observers remount. The original provider/client identity and
+lifecycle must remain stable.
+
+Implementation checkpoint `8d285d7` removes the proxy and nested provider completely. Focused RED evidence
+against the superseded implementation observed three route-visible client identities, two source-client
+mounts before Retry, and six mounts/four unmounts after a repeated failure plus successful recovery; the
+explicit invalidation/refetch/reset/removal/cancel/clear spies all remained at zero, isolating provider
+switching as the defect. The independent stale-observer RED expected one request and observed zero. Both
+focused proofs then passed after the removal, the complete `AppShell.test.tsx` passed 7/7, and the 12-file
+affected route/startup/harness selection passed 126/126. The identity/lifecycle proof also pins one source
+mount, no Retry-owned unmount, one final provider unmount, exact `useQueryClient()` identity across failure
+and recovery, repeated-failure behavior, cache continuity, and zero explicit cache operations. The stale
+proof holds the response so cached data is visible during the one normal observer-driven refetch.
+
+Fresh bounded verification at `8d285d7` completed the 12-file affected selection with 126/126 passing;
+web typecheck and lint exited 0; and the production build transformed 1,096 modules and exited 0 with the
+existing large-chunk advisory. Scoped Prettier passed the two touched web files and the design, plan, and
+current-status documents. The historical whole `slice-history.md` remains rejected by Prettier, as the
+`67eac41` base is, and was not mass-formatted. Repository-authority fixtures passed 91/91, Claude-hook
+compatibility passed all seven assertions, repository authority returned `AUTHORITY_OK`, site-data
+fixtures passed 13/13, the direct site-data scan was clean, and `git diff --check` was clean.
+
+The clarification wave deliberately did not launch the complete web suite. Consequently `6f5676e`, 257
+files, and 1,596 tests remain the latest complete web evidence until a later complete run replaces them;
+the focused and affected clarification results are not presented as a new full-suite baseline.
 
 ### S-upload-identity — exact staged-source identity through WORM promotion
 

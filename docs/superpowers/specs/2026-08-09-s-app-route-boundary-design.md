@@ -1,6 +1,7 @@
 # S-app-route-boundary design
 
-**Status:** Owner approved on 2026-08-09
+**Status:** Owner approved on 2026-08-09; QueryClient provider contract clarified and approved on
+2026-08-10
 
 **Programme:** Programme 1 — frontend resilience and accessibility
 
@@ -9,6 +10,11 @@
 **Date:** 2026-08-09
 
 **Baseline:** `ae84951` (`main`, squash merge of `S-setup-state-boundary`)
+
+**Owner-approved clarification (2026-08-10):** Retry remounts only the failed route subtree and never
+explicitly invalidates, clears, or refetches cached queries. The original `QueryClientProvider`,
+`QueryClient` identity, and client mount/unmount lifecycle remain stable. TanStack Query may perform its
+normal stale-query refetch when observers remount.
 
 ## 1. Outcome
 
@@ -19,8 +25,9 @@ bounded recovery. A failure above that content boundary reaches a full-screen la
 instead of an empty root or an uncaught React crash.
 
 Recovery never displays raw exception, stack, URL, query-cache, API, or server details. Retrying a failed
-page remounts only that page subtree: it does not clear or invalidate shared query data, issue a mutation,
-or migrate the application to a different routing architecture.
+page remounts only that page subtree: it does not explicitly invalidate, clear, reset, remove, or refetch
+shared query data, issue a mutation, replace the query provider/client, or migrate the application to a
+different routing architecture. A stale query observer may refetch normally when that subtree remounts.
 
 ## 2. Current defect and evidence
 
@@ -53,7 +60,8 @@ This slice includes:
 - a shell-contained operational not-found page;
 - removal of the wildcard dashboard redirect;
 - fixed safe recovery copy and router-independent top-level actions;
-- deterministic retry and location-reset behavior without cache invalidation;
+- deterministic retry and location-reset behavior without explicit cache operations or query-provider
+  replacement;
 - not-found title and breadcrumb behavior that does not echo the unknown pathname;
 - focused render-failure, routing, recovery, focus, narrow-layout, and axe tests; and
 - fresh affected-suite evidence and authority-document updates.
@@ -85,7 +93,10 @@ accepts:
 - an optional reset key that clears a captured failure when its owning location changes.
 
 The reset callback clears the captured state. React has already unmounted the failed descendants, so the
-next render creates a fresh subtree. No query-client method, network call, or mutation is part of reset.
+next render creates a fresh subtree. Reset calls no query-client method and issues no mutation. The
+original `QueryClientProvider` and exact `QueryClient` remain mounted with unchanged identity and
+lifecycle; after the route observer remounts, TanStack Query may apply its normal stale-query
+`refetchOnMount` policy.
 
 The same mechanism has two placements and two presentations:
 
@@ -148,9 +159,11 @@ Actions appear in this order:
 2. secondary **Go to dashboard** — internal navigation to `/`; and
 3. tertiary **Reload EasySynQ** — performs a full browser reload.
 
-Retry does not invalidate or clear React Query, automatically refetch, or replay an operator action. A
-deterministic render failure may immediately return to the same fallback; dashboard and reload remain
-available.
+Retry does not call React Query invalidation, refetch, reset, remove, clear, or equivalent cache methods,
+replace the provider/client, issue a mutation, or replay an operator action. A deterministic render
+failure may immediately return to the same fallback; dashboard and reload remain available. When Retry
+successfully remounts a component with a stale query observer, that observer retains TanStack Query's
+normal refetch-on-mount behavior.
 
 ### 5.2 Global application error
 
@@ -229,7 +242,9 @@ No general shell, breadcrumb, or route-table refactor is authorized.
 - explicit reset remounts the failed subtree;
 - a changed location reset key clears the captured state;
 - an unchanged reset key does not create a render loop; and
-- reset does not call query invalidation, cache clearing, refetch, or mutation seams.
+- reset does not call query invalidation, refetch, reset, removal, clearing, equivalent cache operations,
+  or mutation seams; and
+- reset does not change the source `QueryClient` identity or add mount/unmount lifecycle calls.
 
 Use deterministic throwing fixtures and suppress expected React console noise only inside the relevant
 tests. Do not weaken global test logging.
@@ -244,7 +259,12 @@ tests. Do not weaken global test logging.
 - Dashboard navigation clears the failure and renders the dashboard;
 - Reload invokes the injected or spied browser seam once;
 - route navigation restores the prior document-title ownership;
-- shared query data remains present across retry; and
+- every route-side `useQueryClient()` read returns the original source client before and after Retry;
+- the source client has one provider-owned mount, no Retry-owned mount/unmount calls, and one unmount when
+  the application provider unmounts;
+- shared query data remains present across retry;
+- Retry invokes no explicit invalidation, refetch, reset, removal, clearing, or equivalent cache method;
+- a stale observer remounted by Retry performs its normal configured refetch-on-mount; and
 - axe reports no violations.
 
 ### 8.3 Global error integration
@@ -283,12 +303,20 @@ substitute the later documentation or squash commit mechanically. Preserve migra
 Prettier limitation, pending Fedora proof, and all open residuals unless fresh in-scope evidence changes
 one.
 
+The 2026-08-10 provider-contract clarification is a bounded correction wave. It runs the focused and
+complete affected route-boundary selection plus typecheck, lint, build, scoped formatting, authority,
+site-data, documentation, and diff guards, but deliberately does not launch the complete web suite. The
+`6f5676e` complete-suite evidence therefore remains explicitly pre-clarification until a later complete
+run replaces it; partial clarification evidence must not change the frontmatter suite counts or baseline.
+
 ## 10. Acceptance criteria
 
 1. A synchronous routed-page render failure preserves the operational application shell and renders a
    named, focused, actionable recovery state.
-2. Explicit route retry remounts only the failed page subtree and does not clear/invalidate query data,
-   automatically refetch, or replay a mutation.
+2. Explicit route retry remounts only the failed page subtree, preserves the original query
+   provider/client identity and lifecycle, and calls no invalidation, refetch, reset, removal, clearing,
+   equivalent cache operation, or mutation seam. A remounted stale observer may perform TanStack Query's
+   normal configured refetch-on-mount.
 3. Navigation after a route failure clears the captured state and restores normal title ownership.
 4. A synchronous failure above routed content reaches a full-screen recovery state that does not require
    a working router or auth provider.

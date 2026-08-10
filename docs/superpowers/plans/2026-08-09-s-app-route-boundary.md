@@ -14,12 +14,20 @@ operational routes render a fixed not-found mode inside `AppShell` without echoi
 **Tech Stack:** React 19, TypeScript strict mode, React Router 7 declarative routes, TanStack Query,
 Mantine, Vitest, Testing Library, MSW, jest-axe, Prettier, ESLint.
 
+> **Owner-approved QueryClient clarification (2026-08-10):** The original implementation-plan base and
+> Tasks 1–5 remain the historical slice record. For the bounded correction wave based on `67eac41`, Retry
+> must preserve the original `QueryClientProvider`, exact `QueryClient` identity, and source-client
+> mount/unmount lifecycle. Retry calls no invalidation, refetch, reset, removal, clearing, or equivalent
+> cache operation. TanStack Query may perform its normal stale-query refetch when route observers remount.
+> This clarification supersedes only the earlier zero-refetch/zero-network interpretation.
+
 ## Global Constraints
 
 - Work only in `/tmp/EasySynQ-app-route-boundary` on `codex/app-route-boundary`, based on `ae84951`.
 - Preserve the authentication and setup-state startup behavior shipped in PRs #453 and #454.
-- Route retry remounts only the failed page subtree; it must not clear or invalidate Query data, start a
-  refetch, issue a mutation, or change provider state.
+- Route retry remounts only the failed page subtree; it must not explicitly clear, invalidate, refetch,
+  reset, or remove Query data, issue a mutation, or change provider/client identity or lifecycle. Normal
+  stale-observer refetch-on-mount remains enabled.
 - Never render a raw exception, stack, component name, response detail, status, pathname, query, hash,
   host/database detail, or arbitrary diagnostic identifier.
 - Unknown operational URLs remain unchanged; pre-operational unknown URLs still authorize only setup.
@@ -53,8 +61,9 @@ Mantine, Vitest, Testing Library, MSW, jest-axe, Prettier, ESLint.
 - `apps/web/src/main.tsx` — global boundary placement inside Mantine and outside Query/Router/Auth/App.
 - `apps/web/src/app/shell/AppShell.tsx` — route boundary, full-location reset key, and explicit not-found
   content mode.
-- `apps/web/src/app/shell/AppShell.test.tsx` — shell-preservation, remount, navigation reset, cache
-  preservation, and deterministic-rethrow proofs.
+- `apps/web/src/app/shell/AppShell.test.tsx` — shell-preservation, remount, navigation reset, exact source
+  client identity/lifecycle, no-explicit-cache-operation, cache-continuity, normal stale-refetch, and
+  deterministic-rethrow proofs.
 - `apps/web/src/app/shell/Breadcrumb.tsx` / `.test.tsx` — exact `Home / Page not found` override.
 - `apps/web/src/lib/routeChrome.ts` / `.test.tsx` — exact route-pattern title matching and not-found title.
 - `apps/web/src/App.tsx` / `.test.tsx` — wildcard routing and auth/setup/known-route falsifiers.
@@ -1419,3 +1428,56 @@ git status --short --branch
 
 Expected: scoped commits only and a clean `codex/app-route-boundary`. Do not push or open a draft PR until
 the owner selects publication.
+
+---
+
+### Task 6: Apply the owner-approved QueryClient provider clarification
+
+**Clarification base:** `67eac41`
+
+**Files:**
+
+- Modify: `apps/web/src/app/shell/AppShell.tsx`
+- Modify: `apps/web/src/app/shell/AppShell.test.tsx`
+- Delete: `apps/web/src/app/errors/RouteRetryQueryClient.ts`
+- Modify: this plan, the approved design, `docs/current-status.md`, and `docs/slice-history.md`
+
+- [ ] **Step 1: Capture focused RED against the retry proxy**
+
+Prove in one integration regression that every route-side `useQueryClient()` read is the exact source
+client, the source client receives only its root-provider mount/unmount lifecycle, repeated failure and
+successful Retry remount only route content, cached data remains continuous, and Retry invokes none of
+`invalidateQueries`, `refetchQueries`, `resetQueries`, `removeQueries`, `cancelQueries`, or `clear`.
+
+In an independent regression, seed stale cached data under `refetchOnMount: "always"`, recover the route,
+hold the response so the cached value remains observable, and require exactly one normal observer-driven
+request. Against the superseded proxy implementation, the first proof must expose extra provider mounts,
+client identities, and lifecycle churn; the second must expose the suppressed request.
+
+- [ ] **Step 2: Remove provider/client switching**
+
+Render `ApplicationErrorBoundary` directly under the existing `AppShell` content seam and pass `onReset`
+directly to `RouteErrorPage`. Remove all retry QueryClient state/effects/imports and delete
+`RouteRetryQueryClient.ts` explicitly. Do not add a replacement provider, default-options mutation,
+timer, cache operation, or global side effect.
+
+- [ ] **Step 3: Prove focused and affected GREEN**
+
+Run each new falsifier independently, the complete `AppShell.test.tsx`, and the 12-file affected
+route/startup/test-harness selection from Task 5. Then run web typecheck and lint, the production build,
+and scoped Prettier checks for every touched web file.
+
+- [ ] **Step 4: Reconcile authority without replacing complete-suite evidence**
+
+Record the 2026-08-10 owner approval and current provider contract in the design, plan, current snapshot,
+and slice history. Preserve `6f5676e`, 257 files, and 1,596 tests as the latest complete web evidence and
+label it pre-clarification. Record correction-wave evidence separately; do not imply that a focused or
+affected selection was the complete suite.
+
+- [ ] **Step 5: Run correction-wave repository guards and hand off cleanly**
+
+Run the repository-authority fixture suite, Claude-hook compatibility checks, repository authority, both
+site-data guards, documentation/scoped formatting checks, build, `git diff --check`, and final branch
+scope/status inspection. The historical whole `slice-history.md` Prettier baseline may remain failing if
+it matches the known base limitation; do not mass-format it. Do not launch the complete web suite, push,
+or update evidence as though the complete suite reran.
