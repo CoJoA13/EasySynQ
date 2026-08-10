@@ -140,6 +140,74 @@ emitted Node's `localStorage` experimental warning repeatedly, but exited 0. No 
 or deployment change shipped: the Alembic snapshot stays `0085`, and Programme 0's real two-media
 Fedora/libvirt VM acceptance remains **PENDING**.
 
+### S-app-route-boundary — shell-preserving page recovery, global fallback, and safe operational 404
+
+EasySynQ now owns synchronous render failures at two deliberately separate boundaries. The global
+`ApplicationErrorBoundary` is inside `MantineProvider` but outside the query client, router, auth provider,
+and application tree; it owns provider, router, startup, shell, and route-fallback failures, then presents a
+router-independent full-screen recovery with only safe same-origin actions. The route-content boundary is
+inside `AppShell`, around the current outlet only. A failed routed page therefore keeps the header,
+navigation, breadcrumb, skip link, command palette trigger, and main shell mounted while displaying the
+focused, assertive `This page couldn't be displayed` recovery panel. Event-handler exceptions, rejected
+promises, query-state failures, existing authentication/setup boundary states, `MantineProvider`, and a
+missing static root remain outside the route boundary's ownership; a route-fallback failure promotes to the
+global boundary.
+
+Route retry clears only the boundary's captured boolean and remounts the failed page subtree. It has no
+query-client invalidation, cache clear, refetch, network request, mutation, router migration, or operator
+action replay. Its complete location reset key includes pathname, search, and hash, so navigation clears a
+stale failure; temporary route-title ownership restores when the fallback unmounts. The global recovery
+does not attempt an in-place provider or router reset, and its Dashboard action is a plain same-origin link.
+
+An operational unknown URL no longer redirects to `/`: it remains visible in the address bar and renders a
+shell-contained, fixed-copy `Page not found` state. The title and breadcrumb are exactly `EasySynQ — Page
+not found` and `Home / Page not found`, with no raw path, query, hash, decoded segment, referrer, exception,
+or service detail. Its only recovery links are Dashboard and Document Library. The pre-existing
+authentication and setup precedence is unchanged: unknown `UNINITIALIZED` and `IN_SETUP` routes still reach
+setup; known operational routes, authentication/setup startup states, and legacy ingestion redirects retain
+their established behavior. Focused tests exercise shell preservation, retry/remount and query-cache
+falsifiers, navigation/title restoration, global router independence, visible-URL 404 behavior, fixed
+breadcrumb/title and safe targets, authentication/setup guards, known routes, legacy redirects, heading
+focus, native semantics, target size, narrow geometry, and axe. The route, global, and 404 presentation
+tests each include fresh axe assertions.
+
+Fresh evidence was collected at implementation head `33d0c2a` on 2026-08-09:
+
+```bash
+cd apps/web && npm exec prettier -- --write src/App.tsx src/App.test.tsx src/app/errors/ApplicationErrorBoundary.tsx src/app/errors/ApplicationErrorBoundary.test.tsx src/app/errors/ApplicationErrorScreen.tsx src/app/errors/ApplicationErrorScreen.test.tsx src/app/errors/RouteErrorPage.tsx src/app/errors/RouteErrorPage.test.tsx src/app/errors/NotFoundPage.tsx src/app/errors/NotFoundPage.test.tsx src/app/shell/AppShell.tsx src/app/shell/AppShell.test.tsx src/app/shell/Breadcrumb.tsx src/app/shell/Breadcrumb.test.tsx src/lib/routeChrome.ts src/lib/routeChrome.test.tsx src/main.tsx
+cd apps/web && npm exec prettier -- --check src/App.tsx src/App.test.tsx src/app/errors/ApplicationErrorBoundary.tsx src/app/errors/ApplicationErrorBoundary.test.tsx src/app/errors/ApplicationErrorScreen.tsx src/app/errors/ApplicationErrorScreen.test.tsx src/app/errors/RouteErrorPage.tsx src/app/errors/RouteErrorPage.test.tsx src/app/errors/NotFoundPage.tsx src/app/errors/NotFoundPage.test.tsx src/app/shell/AppShell.tsx src/app/shell/AppShell.test.tsx src/app/shell/Breadcrumb.tsx src/app/shell/Breadcrumb.test.tsx src/lib/routeChrome.ts src/lib/routeChrome.test.tsx src/main.tsx
+npm --prefix apps/web run test
+npm --prefix apps/web run test -- src/features/capa/CapaTimeline.test.tsx
+npm --prefix apps/web run typecheck
+npm --prefix apps/web run lint
+npm --prefix apps/web run build
+bash scripts/tests/test-agent-authority.sh
+bash scripts/tests/test-claude-hooks.sh
+bash scripts/check-repo-authority.sh
+bash scripts/tests/test-check-no-site-data.sh
+bash scripts/check-no-site-data.sh
+git diff --check
+git status --short
+```
+
+The scoped Prettier write changed none of the 17 touched web files, and its scoped check passed. The complete
+web command ran 256 files and 1,583 passing tests but exited **1**, not 0: Vitest reported one unhandled
+post-teardown `ReferenceError: window is not defined` from TanStack Query notification scheduling, attributed
+to `src/features/capa/CapaTimeline.test.tsx`. The narrow CapaTimeline command then passed 1 file/7 tests.
+The test, component, evidence linker, render provider, Vitest config, and package files are byte-identical to
+baseline `ae84951`, so this timing-dependent teardown error is an unrelated limitation and does not establish
+a route-boundary defect; it is not converted into a full-suite pass. Typecheck and lint exited 0; production
+build exited 0 after transforming 1,096 modules, with the existing Vite large-chunk advisory. The full suite
+also emitted Node's repeated `localStorage` experimental warning. The authority fixture suite passed 91/91,
+the Claude hook compatibility suite passed all seven assertions, repository authority returned
+`AUTHORITY_OK`, the site-data fixture suite passed 13/13, the direct scan was clean, and `git diff --check`
+was clean. App-local Prettier still rejects the historical whole `slice-history.md` baseline and updated file;
+the historical file was not mass-formatted. No Playwright or live-browser visual run was performed, so the
+structural 320 px, reduced-motion, and forced-colors coverage is not independent browser evidence. No API,
+OpenAPI, migration, Keycloak, cache-policy, mutation-feedback, URL-state, telemetry, dependency, or
+deployment change shipped; the historical migration snapshot is unchanged, and the Programme 0 two-media
+Fedora/libvirt proof remains **PENDING**.
+
 ### S-upload-identity — exact staged-source identity through WORM promotion
 
 Every non-dedup staging promotion binds to the exact source version selected by its producer. Browser
