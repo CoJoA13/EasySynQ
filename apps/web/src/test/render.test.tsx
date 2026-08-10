@@ -102,6 +102,26 @@ test("the notification barrier waits for a callback microtask that schedules ano
   expect(calls).toEqual(["outer", "microtask-nested"]);
 });
 
+test("the notification barrier drains a six-deep callback microtask chain", async () => {
+  const calls: string[] = [];
+
+  notifyManager.schedule(() => {
+    calls.push("outer");
+    let scheduleNextNotification = () => {
+      notifyManager.schedule(() => calls.push("sixth-microtask-nested"));
+    };
+    for (let depth = 0; depth < 6; depth += 1) {
+      const next = scheduleNextNotification;
+      scheduleNextNotification = () => queueMicrotask(next);
+    }
+    scheduleNextNotification();
+  });
+
+  await flushTestQueryNotifications();
+
+  expect(calls).toEqual(["outer", "sixth-microtask-nested"]);
+});
+
 test("the notification barrier drains directly nested notifications", async () => {
   const calls: string[] = [];
 
@@ -125,6 +145,30 @@ test("the notification barrier has no leak after stable quiescence", async () =>
   expect(onNotification).toHaveBeenCalledTimes(1);
 });
 
+test("the notification barrier has no teardown hang with fake timers and no pending work", async () => {
+  vi.useFakeTimers();
+  try {
+    await flushTestQueryNotifications();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the notification barrier drains after fake-timer notification work advances", async () => {
+  const onNotification = vi.fn();
+
+  vi.useFakeTimers();
+  try {
+    notifyManager.schedule(onNotification);
+    await vi.advanceTimersByTimeAsync(0);
+    await flushTestQueryNotifications();
+  } finally {
+    vi.useRealTimers();
+  }
+
+  expect(onNotification).toHaveBeenCalledTimes(1);
+});
+
 test("a notification callback error rejects the barrier and later notifications still drain", async () => {
   const failure = new Error("scheduled callback failed");
   const onLaterNotification = vi.fn();
@@ -134,6 +178,46 @@ test("a notification callback error rejects the barrier and later notifications 
   });
 
   await expect(flushTestQueryNotifications()).rejects.toBe(failure);
+
+  notifyManager.schedule(onLaterNotification);
+  await flushTestQueryNotifications();
+
+  expect(onLaterNotification).toHaveBeenCalledTimes(1);
+});
+
+test("an undefined notification failure remains observable and later notifications drain", async () => {
+  const onLaterNotification = vi.fn();
+
+  notifyManager.schedule(() => {
+    throw undefined;
+  });
+
+  await expect(flushTestQueryNotifications()).rejects.toBeUndefined();
+
+  notifyManager.schedule(onLaterNotification);
+  await flushTestQueryNotifications();
+
+  expect(onLaterNotification).toHaveBeenCalledTimes(1);
+});
+
+test("multiple notification failures are consumed by one barrier drain", async () => {
+  const firstFailure = new Error("first scheduled failure");
+  const secondFailure = new Error("second scheduled failure");
+  const onLaterNotification = vi.fn();
+
+  notifyManager.schedule(() => {
+    throw firstFailure;
+  });
+  notifyManager.schedule(() => {
+    throw secondFailure;
+  });
+
+  const error = await flushTestQueryNotifications().then(
+    () => new Error("expected multiple notification failures"),
+    (reason: unknown) => reason,
+  );
+  expect(error).toBeInstanceOf(AggregateError);
+  expect((error as AggregateError).errors).toEqual([firstFailure, secondFailure]);
 
   notifyManager.schedule(onLaterNotification);
   await flushTestQueryNotifications();

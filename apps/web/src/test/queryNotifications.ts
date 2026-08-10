@@ -2,8 +2,9 @@ import { notifyManager } from "@tanstack/react-query";
 
 let pendingNotifications = 0;
 let schedulingGeneration = 0;
-const pendingErrors: unknown[] = [];
+const pendingErrors: Array<{ value: unknown }> = [];
 let zeroPendingWaiters: Array<() => void> = [];
+const nativeSetTimeout = globalThis.setTimeout;
 
 function resolveZeroPendingWaiters() {
   if (pendingNotifications !== 0) return;
@@ -19,6 +20,10 @@ function waitForZeroPendingNotifications(): Promise<void> {
   return new Promise((resolve) => zeroPendingWaiters.push(resolve));
 }
 
+function waitForNextEventLoopTurn(): Promise<void> {
+  return new Promise((resolve) => nativeSetTimeout(resolve, 0));
+}
+
 /** Keep TanStack's normal macrotask timing, but expose a stable teardown barrier for tests. */
 export function configureTestQueryNotifications() {
   notifyManager.setScheduler((callback) => {
@@ -28,7 +33,7 @@ export function configureTestQueryNotifications() {
       try {
         callback();
       } catch (error) {
-        pendingErrors.push(error);
+        pendingErrors.push({ value: error });
       } finally {
         pendingNotifications -= 1;
         resolveZeroPendingWaiters();
@@ -42,12 +47,21 @@ export async function flushTestQueryNotifications(): Promise<void> {
     await waitForZeroPendingNotifications();
 
     const generationAtCheckpoint = schedulingGeneration;
-    await Promise.resolve();
+    await waitForNextEventLoopTurn();
 
     if (pendingNotifications !== 0 || schedulingGeneration !== generationAtCheckpoint) continue;
 
-    const error = pendingErrors.shift();
-    if (error !== undefined) throw error;
+    const errors = pendingErrors.splice(0);
+    if (errors.length === 1) {
+      const [error] = errors;
+      if (error) throw error.value;
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(
+        errors.map(({ value }) => value),
+        "Multiple scheduled query notifications failed",
+      );
+    }
 
     return;
   }
