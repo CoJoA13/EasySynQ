@@ -61,12 +61,15 @@ describe("useRouteChrome", () => {
     expect(document.title).toBe("EasySynQ — Import");
   });
 
-  it("falls back to the bare app name for an unmapped route", () => {
-    render(
-      <MemoryRouter initialEntries={["/totally-unknown"]}>
-        <Harness />
-      </MemoryRouter>,
-    );
-    expect(document.title).toBe("EasySynQ");
-  });
+  it.each(["/totally-unknown", "/library/not-a-real-route"])(
+    "uses the not-found title for unmatched route %s",
+    (route) => {
+      render(
+        <MemoryRouter initialEntries={[route]}>
+          <Harness />
+        </MemoryRouter>,
+      );
+      expect(document.title).toBe("EasySynQ — Page not found");
+    },
+  );
 });

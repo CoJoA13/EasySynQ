@@ -46,7 +46,7 @@ import { InterestedPartiesRegisterPage } from "./features/interested-parties/Int
 import { NotificationsPage } from "./features/notifications/NotificationsPage";
 import { NotificationSettingsPage } from "./features/notifications/NotificationSettingsPage";
 import { useAuth } from "./lib/auth";
-import { useRouteChrome } from "./lib/routeChrome";
+import { RouteChromeProvider, useRouteChrome } from "./lib/routeChrome";
 
 type FinalizationVerification = "idle" | "checking" | "error";
 
@@ -58,6 +58,14 @@ export function LegacyImportRedirect() {
 }
 
 export function App() {
+  return (
+    <RouteChromeProvider>
+      <AppContent />
+    </RouteChromeProvider>
+  );
+}
+
+function AppContent() {
   useRouteChrome();
   const { status, token, login, retry } = useAuth();
 
@@ -247,7 +255,10 @@ export function App() {
         <Route path="context" element={<ContextRegisterPage />} />
         <Route path="interested-parties" element={<InterestedPartiesRegisterPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route
+        path="*"
+        element={operational ? <AppShell notFound /> : <Navigate to="/setup" replace />}
+      />
     </Routes>
   );
 }

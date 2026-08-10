@@ -59,7 +59,11 @@ function isRoutableCrumb(path: string): boolean {
   return !NON_ROUTE_CRUMBS.has(path) && !/^\/dcrs\/[^/]+$/.test(path);
 }
 
-export function Breadcrumb() {
+export interface BreadcrumbProps {
+  notFound?: boolean;
+}
+
+export function Breadcrumb({ notFound = false }: BreadcrumbProps) {
   const { pathname } = useLocation();
   const segments = pathname.split("/").filter(Boolean);
 
@@ -69,12 +73,24 @@ export function Breadcrumb() {
   // on the fallback — a fetch-less useQuery observer (enabled:false) on the same key is notified when
   // the page's useDocument fills the cache.
   const docIdx = segments.indexOf("documents");
-  const docId = docIdx >= 0 && docIdx + 1 < segments.length ? segments[docIdx + 1] : null;
+  const docId =
+    !notFound && docIdx >= 0 && docIdx + 1 < segments.length ? segments[docIdx + 1] : null;
   const { data: doc } = useQuery<DocumentSummary>({
     queryKey: ["document", docId],
     queryFn: () => Promise.reject(new Error("breadcrumb does not fetch")),
     enabled: false,
   });
+
+  if (notFound) {
+    return (
+      <Breadcrumbs aria-label="Breadcrumb">
+        <Anchor component={Link} to="/">
+          Home
+        </Anchor>
+        <Text c="dimmed">Page not found</Text>
+      </Breadcrumbs>
+    );
+  }
 
   const crumbs = [{ to: "/", label: "Home", linkable: true }].concat(
     segments.map((seg, i) => {

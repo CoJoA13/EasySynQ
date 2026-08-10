@@ -3,6 +3,7 @@ import { cleanup } from "@testing-library/react";
 import { toHaveNoViolations } from "jest-axe";
 import { afterAll, afterEach, beforeAll, expect } from "vitest";
 import { server } from "./msw/server";
+import { configureTestQueryNotifications, flushTestQueryNotifications } from "./queryNotifications";
 
 // jsdom does not implement window.matchMedia; Mantine requires it.
 Object.defineProperty(window, "matchMedia", {
@@ -57,9 +58,12 @@ if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !=
 
 expect.extend(toHaveNoViolations);
 
+configureTestQueryNotifications();
+
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   server.resetHandlers();
+  await flushTestQueryNotifications();
 });
 afterAll(() => server.close());

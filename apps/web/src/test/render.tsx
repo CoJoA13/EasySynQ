@@ -1,7 +1,7 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, type RenderOptions } from "@testing-library/react";
-import type { ReactElement, ReactNode } from "react";
+import { useEffect, type ReactElement, type ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { AuthContext, type AuthState } from "../lib/auth";
 import { theme } from "../theme/mantine";
@@ -29,6 +29,13 @@ export function renderWithProviders(
     ...rest
   } = opts;
   function Wrapper({ children }: { children: ReactNode }) {
+    useEffect(
+      () => () => {
+        queryClient.clear();
+      },
+      [queryClient],
+    );
+
     return (
       <MantineProvider theme={theme}>
         <QueryClientProvider client={queryClient}>

@@ -140,6 +140,131 @@ emitted Node's `localStorage` experimental warning repeatedly, but exited 0. No 
 or deployment change shipped: the Alembic snapshot stays `0085`, and Programme 0's real two-media
 Fedora/libvirt VM acceptance remains **PENDING**.
 
+### S-app-route-boundary — shell-preserving page recovery, global fallback, and safe operational 404
+
+EasySynQ now owns synchronous render failures at two deliberately separate boundaries. The global
+`ApplicationErrorBoundary` is inside `MantineProvider` but outside the query client, router, auth provider,
+and application tree; it owns provider, router, startup, shell, and route-fallback failures, then presents a
+router-independent full-screen recovery with only safe same-origin actions. The route-content boundary is
+inside `AppShell`, around the current outlet only. A failed routed page therefore keeps the header,
+navigation, breadcrumb, skip link, command palette trigger, and main shell mounted while displaying the
+focused, assertive `This page couldn't be displayed` recovery panel. Event-handler exceptions, rejected
+promises, query-state failures, existing authentication/setup boundary states, `MantineProvider`, and a
+missing static root remain outside the route boundary's ownership; a route-fallback failure promotes to the
+global boundary.
+
+Route retry clears only the boundary's captured boolean and remounts the failed page subtree. It explicitly
+calls no query-client invalidation, refetch, reset, removal, clearing, equivalent cache operation, mutation,
+router migration, or operator-action replay. The original provider and exact query-client identity and
+lifecycle remain stable; TanStack Query may perform its normal configured stale-observer refetch when route
+content remounts. The complete location reset key includes pathname, search, and hash, so navigation clears
+a stale failure; temporary route-title ownership restores when the fallback unmounts. The global recovery
+does not attempt an in-place provider or router reset, and its Dashboard action is a plain same-origin link.
+
+An operational unknown URL no longer redirects to `/`: it remains visible in the address bar and renders a
+shell-contained, fixed-copy `Page not found` state. The title and breadcrumb are exactly `EasySynQ — Page
+not found` and `Home / Page not found`, with no raw path, query, hash, decoded segment, referrer, exception,
+or service detail. Its only recovery links are Dashboard and Document Library. The pre-existing
+authentication and setup precedence is unchanged: unknown `UNINITIALIZED` and `IN_SETUP` routes still reach
+setup; known operational routes, authentication/setup startup states, and legacy ingestion redirects retain
+their established behavior. Focused tests exercise shell preservation, retry/remount and query-cache
+falsifiers, navigation/title restoration, global router independence, visible-URL 404 behavior, fixed
+breadcrumb/title and safe targets, authentication/setup guards, known routes, legacy redirects, heading
+focus, native semantics, target size, narrow geometry, and axe. The route, global, and 404 presentation
+tests each include fresh axe assertions.
+
+Initial evidence was collected at implementation head `33d0c2a` on 2026-08-09; final accepted evidence was
+collected at shared-harness head `6f5676e` on 2026-08-10:
+
+```bash
+cd apps/web && npm exec prettier -- --write src/App.tsx src/App.test.tsx src/app/errors/ApplicationErrorBoundary.tsx src/app/errors/ApplicationErrorBoundary.test.tsx src/app/errors/ApplicationErrorScreen.tsx src/app/errors/ApplicationErrorScreen.test.tsx src/app/errors/RouteErrorPage.tsx src/app/errors/RouteErrorPage.test.tsx src/app/errors/NotFoundPage.tsx src/app/errors/NotFoundPage.test.tsx src/app/shell/AppShell.tsx src/app/shell/AppShell.test.tsx src/app/shell/Breadcrumb.tsx src/app/shell/Breadcrumb.test.tsx src/lib/routeChrome.ts src/lib/routeChrome.test.tsx src/main.tsx
+cd apps/web && npm exec prettier -- --check src/App.tsx src/App.test.tsx src/app/errors/ApplicationErrorBoundary.tsx src/app/errors/ApplicationErrorBoundary.test.tsx src/app/errors/ApplicationErrorScreen.tsx src/app/errors/ApplicationErrorScreen.test.tsx src/app/errors/RouteErrorPage.tsx src/app/errors/RouteErrorPage.test.tsx src/app/errors/NotFoundPage.tsx src/app/errors/NotFoundPage.test.tsx src/app/shell/AppShell.tsx src/app/shell/AppShell.test.tsx src/app/shell/Breadcrumb.tsx src/app/shell/Breadcrumb.test.tsx src/lib/routeChrome.ts src/lib/routeChrome.test.tsx src/main.tsx
+npm --prefix apps/web run test
+npm --prefix apps/web run test -- src/features/capa/CapaTimeline.test.tsx
+npm --prefix apps/web run typecheck
+npm --prefix apps/web run lint
+npm --prefix apps/web run build
+bash scripts/tests/test-agent-authority.sh
+bash scripts/tests/test-claude-hooks.sh
+bash scripts/check-repo-authority.sh
+bash scripts/tests/test-check-no-site-data.sh
+bash scripts/check-no-site-data.sh
+git diff --check
+git status --short
+```
+
+The scoped Prettier write changed none of the 17 touched web files, and its scoped check passed. The initial
+complete web command ran 256 files and 1,583 passing tests but exited **1**, not 0: Vitest reported one
+post-teardown `ReferenceError: window is not defined` from TanStack Query notification scheduling, first
+attributed to `src/features/capa/CapaTimeline.test.tsx`. A second durable run after `b0b1c09` ran 256 files
+and 1,584 passing tests but again exited **1** with the same shared error, then attributed to
+`EditCommitmentModal.test.tsx`; clearing a query client on unmount remains useful cache/abort cleanup but
+cannot retract a callback already captured by TanStack. A synchronous scheduler eliminated that error but
+changed observable Audit detail timing, yielding **1 failed / 256 passed files** and **2 failed / 1,584
+passed tests**, so it was rejected rather than accommodated in UI tests.
+
+The final repair preserves TanStack's normal `setTimeout(0)` observer scheduling. The test-only shared
+harness records scheduled notifications through the supported `notifyManager` seam; after React Testing
+Library cleanup and MSW reset, it waits through event-loop turns until pending work is zero and the scheduling
+generation is stable. This prevents queued React observer callbacks from entering after jsdom teardown while
+preserving normal batching semantics, fake-timer compatibility, and observable callback failures. Its focused
+regressions cover query-client cleanup, the original queued observer reproduction, nested microtask chains,
+complete error draining, and fake-timer quiescence. The repair spans `b0b1c09` through final commit
+`6f5676e`; it is shared test infrastructure, not a production route behavior change.
+
+The final durable `npm --prefix apps/web run test` at `6f5676e` exited **0**: 257 files and 1,596 tests
+passed in 263.07 seconds, with no unhandled error. It emitted Node's repeated `localStorage` experimental
+warning. Typecheck and lint exited 0; production build exited 0 after transforming 1,096 modules, with the
+existing Vite large-chunk advisory. The authority fixture suite passed 91/91, the Claude hook compatibility
+suite passed all seven assertions, repository authority returned `AUTHORITY_OK`, the site-data fixture suite
+passed 13/13, the direct scan was clean, and `git diff --check` was clean. App-local Prettier still rejects
+the historical whole `slice-history.md` baseline and updated file; the historical file was not mass-formatted.
+No Playwright or live-browser visual run was performed, so the structural 320 px, reduced-motion, and
+forced-colors coverage is not independent browser evidence. No API, OpenAPI, migration, Keycloak,
+cache-policy, mutation-feedback, URL-state, telemetry, dependency, or deployment change shipped; the
+historical migration snapshot is unchanged, and the Programme 0 two-media Fedora/libvirt proof remains
+**PENDING**.
+
+#### Owner-approved QueryClient provider clarification — 2026-08-10
+
+The complete-suite evidence immediately above remains the historical pre-clarification baseline. A later
+final-fix interpretation treated Retry as a zero-network boundary and introduced a temporary retry
+`QueryClient` proxy plus a nested provider in `50d81c8`. The owner clarified the binding behavior on
+2026-08-10: Retry never explicitly invalidates, clears, or refetches cached queries, while TanStack Query may
+perform its normal stale-query refetch when observers remount. The original provider/client identity and
+lifecycle must remain stable.
+
+Implementation checkpoint `8d285d7` removes the proxy and nested provider completely. Focused RED evidence
+against the superseded implementation observed three route-visible client identities, two source-client
+mounts before Retry, and six mounts/four unmounts after a repeated failure plus successful recovery; the
+explicit invalidation/refetch/reset/removal/cancel/clear spies all remained at zero, isolating provider
+switching as the defect. The independent stale-observer RED expected one request and observed zero. Both
+focused proofs then passed after the removal, the complete `AppShell.test.tsx` passed 7/7, and the 12-file
+affected route/startup/harness selection passed 126/126. The identity/lifecycle proof also pins one source
+mount, no Retry-owned unmount, one final provider unmount, exact `useQueryClient()` identity across failure
+and recovery, repeated-failure behavior, cache continuity, and zero explicit cache operations. The stale
+proof holds the response so cached data is visible during the one normal observer-driven refetch.
+
+Fresh bounded verification at `8d285d7` completed the 12-file affected selection with 126/126 passing;
+web typecheck and lint exited 0; and the production build transformed 1,096 modules and exited 0 with the
+existing large-chunk advisory. Scoped Prettier passed the two touched web files and the design, plan, and
+current-status documents. The historical whole `slice-history.md` remains rejected by Prettier, as the
+`67eac41` base is, and was not mass-formatted. Repository-authority fixtures passed 91/91, Claude-hook
+compatibility passed all seven assertions, repository authority returned `AUTHORITY_OK`, site-data
+fixtures passed 13/13, the direct site-data scan was clean, and `git diff --check` was clean.
+
+The bounded clarification wave deliberately did not launch the complete web suite, so its focused and
+affected results were not presented as a new full-suite baseline. After the final clarification re-review
+reported no Critical, Important, or Minor findings, the owner authorized a complete acceptance run against
+clean implementation-and-authority head `cb6bdd6`. Durable job `job-msmr1u1i-0a8979f3` ran
+`npm --prefix apps/web run test` and exited **0**: all 257 files and 1,600 tests passed in 261.05 seconds,
+with no unhandled error and only Node's repeated existing `localStorage` experimental warning. This is the
+current post-clarification web baseline; the `6f5676e` 257-file/1,596-test run remains preserved above as
+the final pre-clarification evidence. Final evidence-document verification kept scoped current-status
+Prettier green; retained the known whole-history Prettier failure already present at `cb6bdd6` without mass
+formatting; passed repository-authority fixtures 91/91 and all seven Claude-hook assertions; returned
+`AUTHORITY_OK`; passed site-data fixtures 13/13 and the direct scan; and kept `git diff --check` clean.
+
 ### S-upload-identity — exact staged-source identity through WORM promotion
 
 Every non-dedup staging promotion binds to the exact source version selected by its producer. Browser

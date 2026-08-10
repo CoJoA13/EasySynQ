@@ -9,7 +9,7 @@ import { Breadcrumb } from "./Breadcrumb";
 
 const ID = "11111111-1111-1111-1111-111111111111";
 
-function renderCrumb(client: QueryClient, route: string) {
+function renderCrumb(client: QueryClient, route: string, notFound = false) {
   function Tree({ children }: { children: ReactNode }) {
     return (
       <MantineProvider theme={theme}>
@@ -19,8 +19,17 @@ function renderCrumb(client: QueryClient, route: string) {
       </MantineProvider>
     );
   }
-  return render(<Breadcrumb />, { wrapper: Tree });
+  return render(<Breadcrumb notFound={notFound} />, { wrapper: Tree });
 }
+
+test("not-found mode renders only the fixed safe breadcrumb", () => {
+  const client = new QueryClient();
+  renderCrumb(client, "/missing/private-segment", true);
+  const breadcrumb = screen.getByLabelText("Breadcrumb");
+  expect(within(breadcrumb).getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
+  expect(within(breadcrumb).getByText("Page not found")).toBeInTheDocument();
+  expect(within(breadcrumb).queryByText(/private-segment/i)).not.toBeInTheDocument();
+});
 
 test("Breadcrumb shows the document identifier (not the UUID) when cached", () => {
   const client = new QueryClient();
