@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { notifyManager } from "@tanstack/query-core";
 import { cleanup } from "@testing-library/react";
 import { toHaveNoViolations } from "jest-axe";
 import { afterAll, afterEach, beforeAll, expect } from "vitest";
@@ -56,6 +57,11 @@ if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !=
 }
 
 expect.extend(toHaveNoViolations);
+
+// TanStack Query normally delivers observer notifications through setTimeout(0). A queued React
+// subscription callback can otherwise outlive Vitest's per-file jsdom teardown and dereference the
+// removed window. Test notifications are synchronous so every callback settles in the live environment.
+notifyManager.setScheduler((callback) => callback());
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => {
