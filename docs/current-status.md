@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-08-10"
-baseline_commit: "6f5676e"
+baseline_commit: "cb6bdd6"
 last_shipped_slice: "S-app-route-boundary"
 migration_head: "0085"
 next_migration: "0086"
 api_unit_tests: 1686
 web_test_files: 257
-web_tests: 1596
+web_tests: 1600
 contract_tests: 283
 integration_passed: 1051
 integration_skipped: 2
@@ -62,16 +62,17 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates
-only the facts it freshly verifies; partial or unavailable checks must be reported as such. At `6f5676e` on
-2026-08-10, the durable complete web command exited 0 with 257 files/1,596 tests passing in 263.07 seconds.
-That complete-suite run predates the 2026-08-10 QueryClient provider clarification. The bounded
-clarification wave deliberately did not launch the complete web suite, so `6f5676e` and the frontmatter
-file/test counts remain the latest complete evidence rather than being replaced by focused or affected
-results. At clarification implementation checkpoint `8d285d7`, the 12-file affected selection passed
-126/126; web typecheck and lint exited 0; and the production build transformed 1,096 modules and exited 0
-with the existing large-chunk advisory. Repository-authority fixtures passed 91/91, Claude-hook
-compatibility passed all seven assertions, repository authority returned `AUTHORITY_OK`, site-data
-fixtures passed 13/13, and the direct site-data scan was clean.
+only the facts it freshly verifies; partial or unavailable checks must be reported as such. At `cb6bdd6`
+on 2026-08-10, the durable final post-clarification `npm --prefix apps/web run test` exited 0 with all 257
+files and 1,600 tests passing in 261.05 seconds. It emitted only Node's repeated existing `localStorage`
+experimental warning. This is the first complete web run after the owner-approved QueryClient provider
+clarification and replaces `6f5676e` as the current web baseline; the earlier 257-file/1,596-test run
+remains preserved in slice history as pre-clarification evidence. Before the final run, the clarification
+implementation checkpoint `8d285d7` passed the 12-file affected selection 126/126; web typecheck and lint
+exited 0; and the production build transformed 1,096 modules and exited 0 with the existing large-chunk
+advisory. Repository-authority fixtures passed 91/91, Claude-hook compatibility passed all seven
+assertions, repository authority returned `AUTHORITY_OK`, site-data fixtures passed 13/13, and the direct
+site-data scan was clean.
 The earlier TanStack Query post-teardown `window is not defined` failure was a shared test-harness issue, not
 a route-specific limitation: a queued observer callback could outlive React Testing Library cleanup and
 Vitest's jsdom teardown. The test-only harness now preserves TanStack's normal asynchronous scheduling while

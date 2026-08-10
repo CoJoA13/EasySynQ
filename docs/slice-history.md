@@ -253,9 +253,17 @@ current-status documents. The historical whole `slice-history.md` remains reject
 compatibility passed all seven assertions, repository authority returned `AUTHORITY_OK`, site-data
 fixtures passed 13/13, the direct site-data scan was clean, and `git diff --check` was clean.
 
-The clarification wave deliberately did not launch the complete web suite. Consequently `6f5676e`, 257
-files, and 1,596 tests remain the latest complete web evidence until a later complete run replaces them;
-the focused and affected clarification results are not presented as a new full-suite baseline.
+The bounded clarification wave deliberately did not launch the complete web suite, so its focused and
+affected results were not presented as a new full-suite baseline. After the final clarification re-review
+reported no Critical, Important, or Minor findings, the owner authorized a complete acceptance run against
+clean implementation-and-authority head `cb6bdd6`. Durable job `job-msmr1u1i-0a8979f3` ran
+`npm --prefix apps/web run test` and exited **0**: all 257 files and 1,600 tests passed in 261.05 seconds,
+with no unhandled error and only Node's repeated existing `localStorage` experimental warning. This is the
+current post-clarification web baseline; the `6f5676e` 257-file/1,596-test run remains preserved above as
+the final pre-clarification evidence. Final evidence-document verification kept scoped current-status
+Prettier green; retained the known whole-history Prettier failure already present at `cb6bdd6` without mass
+formatting; passed repository-authority fixtures 91/91 and all seven Claude-hook assertions; returned
+`AUTHORITY_OK`; passed site-data fixtures 13/13 and the direct scan; and kept `git diff --check` clean.
 
 ### S-upload-identity — exact staged-source identity through WORM promotion
 
