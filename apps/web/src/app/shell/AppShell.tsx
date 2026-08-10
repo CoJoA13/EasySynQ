@@ -1,15 +1,9 @@
 import { AppShell as MantineAppShell, ScrollArea } from "@mantine/core";
 import { useDisclosure, useHotkeys } from "@mantine/hooks";
-import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { ApplicationErrorBoundary } from "../errors/ApplicationErrorBoundary";
 import { NotFoundPage } from "../errors/NotFoundPage";
 import { RouteErrorPage } from "../errors/RouteErrorPage";
-import {
-  createRouteRetryQueryClientScope,
-  type RouteRetryQueryClientScope,
-} from "../errors/RouteRetryQueryClient";
 import { CommandPalette } from "../../features/search/CommandPalette";
 import { Breadcrumb } from "./Breadcrumb";
 import { LeftRail } from "./LeftRail";
@@ -20,20 +14,10 @@ export interface AppShellProps {
 }
 
 export function AppShell({ notFound = false }: AppShellProps) {
-  const queryClient = useQueryClient();
-  const [routeRetryQueryClient, setRouteRetryQueryClient] =
-    useState<RouteRetryQueryClientScope | null>(null);
   const [navOpened, { toggle: toggleNav }] = useDisclosure(false);
   const [searchOpened, { open: openSearch, close: closeSearch }] = useDisclosure(false);
   const { pathname, search, hash } = useLocation();
   const routeResetKey = `${pathname}${search}${hash}`;
-  useEffect(() => {
-    if (!routeRetryQueryClient) return;
-
-    routeRetryQueryClient.release();
-    setRouteRetryQueryClient((current) => (current === routeRetryQueryClient ? null : current));
-    return routeRetryQueryClient.release;
-  }, [routeRetryQueryClient]);
   // ⌘K / Ctrl-K must fire even while focus is in an input (empty tagsToIgnore); "/" must NOT hijack
   // typing (the default ignore-list covers INPUT/TEXTAREA/SELECT). Hence two separate bindings.
   useHotkeys([["mod+K", openSearch]], []);
@@ -75,22 +59,12 @@ export function AppShell({ notFound = false }: AppShellProps) {
       </MantineAppShell.Navbar>
       <MantineAppShell.Main id="main-content" tabIndex={-1}>
         <Breadcrumb notFound={notFound} />
-        <QueryClientProvider client={routeRetryQueryClient?.client ?? queryClient}>
-          <ApplicationErrorBoundary
-            resetKey={routeResetKey}
-            fallback={({ onReset }) => (
-              <RouteErrorPage
-                onRetry={() => {
-                  routeRetryQueryClient?.release();
-                  setRouteRetryQueryClient(createRouteRetryQueryClientScope(queryClient));
-                  onReset();
-                }}
-              />
-            )}
-          >
-            {notFound ? <NotFoundPage /> : <Outlet />}
-          </ApplicationErrorBoundary>
-        </QueryClientProvider>
+        <ApplicationErrorBoundary
+          resetKey={routeResetKey}
+          fallback={({ onReset }) => <RouteErrorPage onRetry={onReset} />}
+        >
+          {notFound ? <NotFoundPage /> : <Outlet />}
+        </ApplicationErrorBoundary>
       </MantineAppShell.Main>
       <CommandPalette opened={searchOpened} onClose={closeSearch} />
     </MantineAppShell>
