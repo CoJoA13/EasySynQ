@@ -169,6 +169,26 @@ test("the notification barrier drains after fake-timer notification work advance
   expect(onNotification).toHaveBeenCalledTimes(1);
 });
 
+test("the notification barrier drains its queued callback without advancing unrelated fake timers", async () => {
+  const onNotification = vi.fn();
+  const onUnrelatedTimer = vi.fn();
+
+  vi.useFakeTimers();
+  const unrelatedTimer = setTimeout(onUnrelatedTimer, 60_000);
+  try {
+    notifyManager.schedule(onNotification);
+
+    await flushTestQueryNotifications();
+
+    expect(onNotification).toHaveBeenCalledTimes(1);
+    expect(onUnrelatedTimer).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+  } finally {
+    clearTimeout(unrelatedTimer);
+    vi.useRealTimers();
+  }
+});
+
 test("a notification callback error rejects the barrier and later notifications still drain", async () => {
   const failure = new Error("scheduled callback failed");
   const onLaterNotification = vi.fn();
