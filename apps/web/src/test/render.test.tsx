@@ -2,6 +2,7 @@ import { QueryClient, useQuery } from "@tanstack/react-query";
 import { notifyManager } from "@tanstack/query-core";
 import { cleanup, waitFor } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
+import { configureTestQueryNotifications, flushTestQueryNotifications } from "./queryNotifications";
 import { renderWithProviders } from "./render";
 
 function PendingQuery({ onAbort }: { onAbort: () => void }) {
@@ -67,15 +68,17 @@ test("a queued query observer callback still reaches React after its render unmo
       if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
     }
   } finally {
-    notifyManager.setScheduler((callback) => callback());
+    configureTestQueryNotifications();
     cleanup();
   }
 });
 
-test("the test environment delivers TanStack Query notifications synchronously", () => {
+test("the test notification barrier drains queued callbacks before teardown", async () => {
   const onNotify = vi.fn();
 
   notifyManager.schedule(onNotify);
 
+  expect(onNotify).not.toHaveBeenCalled();
+  await flushTestQueryNotifications();
   expect(onNotify).toHaveBeenCalledTimes(1);
 });
