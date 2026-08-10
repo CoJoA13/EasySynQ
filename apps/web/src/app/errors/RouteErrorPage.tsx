@@ -1,6 +1,7 @@
 import { Button, Paper, Stack, Text, Title } from "@mantine/core";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
+import { useRouteErrorChromeOwnership } from "../../lib/routeChrome";
 
 export interface RouteErrorPageProps {
   onRetry: () => void;
@@ -12,6 +13,7 @@ export function RouteErrorPage({
   onReload = () => window.location.reload(),
 }: RouteErrorPageProps) {
   const headingRef = useRef<HTMLHeadingElement>(null);
+  useRouteErrorChromeOwnership();
 
   useEffect(() => {
     const previousTitle = document.title;

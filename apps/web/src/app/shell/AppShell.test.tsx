@@ -1,9 +1,11 @@
 import { axe } from "jest-axe";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, useQuery } from "@tanstack/react-query";
+import { http, HttpResponse } from "msw";
 import { afterEach, expect, test, vi } from "vitest";
-import { Routes, Route } from "react-router-dom";
+import { Link, Routes, Route } from "react-router-dom";
+import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { AppShell } from "./AppShell";
 
@@ -99,6 +101,110 @@ test("a routed-page render failure preserves shell chrome and retry remounts onl
     value: "still here",
   });
   expect(invalidate).not.toHaveBeenCalled();
+});
+
+test("route retry does not refetch stale cached queries or leak query defaults", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const user = userEvent.setup();
+  const retryRequests = vi.fn();
+  const ordinaryNavigationRequests = vi.fn();
+  server.use(
+    http.get("/api/v1/route-retry-probe", () => {
+      retryRequests();
+      return HttpResponse.json({ value: "network retry data" });
+    }),
+    http.get("/api/v1/ordinary-navigation-probe", () => {
+      ordinaryNavigationRequests();
+      return HttpResponse.json({ value: "network navigation data" });
+    }),
+  );
+
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, refetchOnMount: "always" },
+    },
+  });
+  const originalDefaults = queryClient.getDefaultOptions();
+  const originalQueryDefaults = originalDefaults.queries;
+  const retryKey = ["route-retry-stale-probe"] as const;
+  const navigationKey = ["ordinary-navigation-stale-probe"] as const;
+  queryClient.setQueryData(retryKey, { value: "cached retry data" }, { updatedAt: 1 });
+  queryClient.setQueryData(navigationKey, { value: "cached navigation data" }, { updatedAt: 1 });
+
+  let shouldThrow = true;
+  let useDefaultRefetchPolicy = false;
+
+  function RetryRoute() {
+    const query = useQuery({
+      queryKey: retryKey,
+      queryFn: async () => {
+        const response = await fetch("/api/v1/route-retry-probe");
+        return (await response.json()) as { value: string };
+      },
+      refetchOnMount: useDefaultRefetchPolicy ? undefined : false,
+    });
+    if (shouldThrow) throw new Error("retry route failed");
+    return (
+      <>
+        <h1>{query.data?.value}</h1>
+        <Link to="/">Continue to dashboard</Link>
+      </>
+    );
+  }
+
+  function OrdinaryNavigationRoute() {
+    const query = useQuery({
+      queryKey: navigationKey,
+      queryFn: async () => {
+        const response = await fetch("/api/v1/ordinary-navigation-probe");
+        return (await response.json()) as { value: string };
+      },
+    });
+    return <h1>{query.data?.value}</h1>;
+  }
+
+  const rendered = renderWithProviders(
+    <Routes>
+      <Route path="/" element={<AppShell />}>
+        <Route index element={<OrdinaryNavigationRoute />} />
+        <Route path="broken" element={<RetryRoute />} />
+      </Route>
+    </Routes>,
+    { route: "/broken", queryClient },
+  );
+
+  expect(
+    screen.getByRole("heading", { name: "This page couldn't be displayed" }),
+  ).toBeInTheDocument();
+  expect(retryRequests).not.toHaveBeenCalled();
+
+  useDefaultRefetchPolicy = true;
+  await user.click(screen.getByRole("button", { name: "Try this page again" }));
+  expect(
+    screen.getByRole("heading", { name: "This page couldn't be displayed" }),
+  ).toBeInTheDocument();
+  expect(queryClient.getDefaultOptions()).toBe(originalDefaults);
+  expect(queryClient.getDefaultOptions().queries).toBe(originalQueryDefaults);
+
+  shouldThrow = false;
+  await user.click(screen.getByRole("button", { name: "Try this page again" }));
+  expect(screen.getByRole("heading", { name: "cached retry data" })).toBeInTheDocument();
+  await waitFor(() => expect(queryClient.isFetching({ queryKey: retryKey })).toBe(0));
+  expect(retryRequests).not.toHaveBeenCalled();
+  expect(queryClient.getDefaultOptions()).toBe(originalDefaults);
+  expect(queryClient.getDefaultOptions().queries).toBe(originalQueryDefaults);
+
+  await user.click(screen.getByRole("link", { name: "Continue to dashboard" }));
+  expect(
+    await screen.findByRole("heading", { name: "network navigation data" }),
+  ).toBeInTheDocument();
+  expect(ordinaryNavigationRequests).toHaveBeenCalledTimes(1);
+  expect(queryClient.getDefaultOptions()).toBe(originalDefaults);
+  expect(queryClient.getDefaultOptions().queries).toBe(originalQueryDefaults);
+
+  rendered.unmount();
+  expect(queryClient.getDefaultOptions()).toBe(originalDefaults);
+  expect(queryClient.getDefaultOptions().queries).toBe(originalQueryDefaults);
 });
 
 test("dashboard navigation clears a deterministic route failure", async () => {

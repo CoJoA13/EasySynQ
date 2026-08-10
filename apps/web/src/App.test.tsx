@@ -10,7 +10,21 @@ import { AuthContext, type AuthState } from "./lib/auth";
 import { server } from "./test/msw/server";
 import { renderWithProviders, TEST_AUTH } from "./test/render";
 
+const routeCrash = vi.hoisted(() => ({ library: false }));
+
+vi.mock("./features/library/LibraryPage", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./features/library/LibraryPage")>();
+  return {
+    ...actual,
+    LibraryPage: function TestableLibraryPage() {
+      if (routeCrash.library) throw new Error("known route render failure");
+      return <actual.LibraryPage />;
+    },
+  };
+});
+
 afterEach(() => {
+  routeCrash.library = false;
   sessionStorage.removeItem("es_auth_redirect");
   vi.restoreAllMocks();
 });
@@ -523,6 +537,11 @@ function NavigateToUnknownRoute() {
   return <button onClick={() => navigate("/missing/private-segment")}>Open missing route</button>;
 }
 
+function NavigateToKnownRoute({ path, children }: { path: string; children: string }) {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(path)}>{children}</button>;
+}
+
 test("an unknown operational URL remains visible and renders a safe shell-contained 404", async () => {
   renderWithProviders(
     <>
@@ -559,6 +578,52 @@ test("client-side navigation to an unknown route leaves focus on the 404 heading
   await waitFor(() => expect(heading).toHaveFocus());
 });
 
+test("client-side navigation to a crashing known route leaves recovery chrome in control", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <App />
+      <NavigateToKnownRoute path="/library">Open library</NavigateToKnownRoute>
+      <NavigateToKnownRoute path="/">Open dashboard</NavigateToKnownRoute>
+    </>,
+    { route: "/" },
+  );
+
+  await screen.findByRole("heading", { name: "QMS health" });
+  routeCrash.library = true;
+  await user.click(screen.getByRole("button", { name: "Open library" }));
+
+  const recoveryHeading = await screen.findByRole("heading", {
+    name: "This page couldn't be displayed",
+  });
+  await waitFor(() => expect(recoveryHeading).toHaveFocus());
+  expect(document.title).toBe("EasySynQ — Page unavailable");
+
+  routeCrash.library = false;
+  await user.click(screen.getByRole("button", { name: "Try this page again" }));
+  expect(await screen.findByText("Document Library")).toBeInTheDocument();
+  expect(document.title).toBe("EasySynQ — Library");
+
+  await user.click(screen.getByRole("button", { name: "Open dashboard" }));
+  await screen.findByRole("heading", { name: "QMS health" });
+  await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+  expect(document.title).toBe("EasySynQ — Dashboard");
+
+  routeCrash.library = true;
+  await user.click(screen.getByRole("button", { name: "Open library" }));
+  const repeatedRecoveryHeading = await screen.findByRole("heading", {
+    name: "This page couldn't be displayed",
+  });
+  await waitFor(() => expect(repeatedRecoveryHeading).toHaveFocus());
+  expect(document.title).toBe("EasySynQ — Page unavailable");
+
+  await user.click(screen.getByRole("link", { name: "Go to dashboard" }));
+  await screen.findByRole("heading", { name: "QMS health" });
+  await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+  expect(document.title).toBe("EasySynQ — Dashboard");
+});
+
 test.each(["UNINITIALIZED", "IN_SETUP"] as const)(
   "unknown %s routes retain the setup authorization boundary",
   async (setup_state) => {
@@ -572,13 +637,22 @@ test.each(["UNINITIALIZED", "IN_SETUP"] as const)(
   },
 );
 
-test("404 recovery links reach dashboard and library without a browser-back escape", async () => {
-  const user = userEvent.setup();
-  renderWithProviders(<App />, { route: "/missing" });
-  await user.click(await screen.findByRole("link", { name: "Open document library" }));
-  expect(await screen.findByText("Document Library")).toBeInTheDocument();
-  expect(screen.queryByRole("link", { name: /back/i })).not.toBeInTheDocument();
-});
+test.each([
+  ["Go to dashboard", "QMS health"],
+  ["Open document library", "Document Library"],
+] as const)(
+  "404 recovery action %s reaches its safe destination without Back",
+  async (action, title) => {
+    const user = userEvent.setup();
+    renderWithProviders(<App />, { route: "/missing" });
+
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /back/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: action }));
+    expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
+  },
+);
 
 test("legacy ingestion bookmarks redirect to imports and preserve the query", async () => {
   const runId = "10000000-0000-0000-0000-000000000001";
