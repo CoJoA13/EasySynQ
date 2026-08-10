@@ -1,33 +1,54 @@
-import { notifyManager } from "@tanstack/query-core";
+import { notifyManager } from "@tanstack/react-query";
 
 let pendingNotifications = 0;
-let drainWaiters: Array<() => void> = [];
+let schedulingGeneration = 0;
+const pendingErrors: unknown[] = [];
+let zeroPendingWaiters: Array<() => void> = [];
 
-function resolveDrainWaiters() {
+function resolveZeroPendingWaiters() {
   if (pendingNotifications !== 0) return;
 
-  const waiters = drainWaiters;
-  drainWaiters = [];
+  const waiters = zeroPendingWaiters;
+  zeroPendingWaiters = [];
   waiters.forEach((resolve) => resolve());
 }
 
-/** Keep TanStack's normal macrotask timing, but expose a precise teardown barrier for tests. */
+function waitForZeroPendingNotifications(): Promise<void> {
+  if (pendingNotifications === 0) return Promise.resolve();
+
+  return new Promise((resolve) => zeroPendingWaiters.push(resolve));
+}
+
+/** Keep TanStack's normal macrotask timing, but expose a stable teardown barrier for tests. */
 export function configureTestQueryNotifications() {
   notifyManager.setScheduler((callback) => {
+    schedulingGeneration += 1;
     pendingNotifications += 1;
     setTimeout(() => {
       try {
         callback();
+      } catch (error) {
+        pendingErrors.push(error);
       } finally {
         pendingNotifications -= 1;
-        resolveDrainWaiters();
+        resolveZeroPendingWaiters();
       }
     }, 0);
   });
 }
 
-export function flushTestQueryNotifications(): Promise<void> {
-  if (pendingNotifications === 0) return Promise.resolve();
+export async function flushTestQueryNotifications(): Promise<void> {
+  while (true) {
+    await waitForZeroPendingNotifications();
 
-  return new Promise((resolve) => drainWaiters.push(resolve));
+    const generationAtCheckpoint = schedulingGeneration;
+    await Promise.resolve();
+
+    if (pendingNotifications !== 0 || schedulingGeneration !== generationAtCheckpoint) continue;
+
+    const error = pendingErrors.shift();
+    if (error !== undefined) throw error;
+
+    return;
+  }
 }
