@@ -4,6 +4,7 @@ import { render, type RenderOptions } from "@testing-library/react";
 import { useEffect, type ReactElement, type ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { AuthContext, type AuthState } from "../lib/auth";
+import { MutationFeedbackProvider } from "../lib/mutationFeedback";
 import { theme } from "../theme/mantine";
 
 export const TEST_AUTH: AuthState = {
@@ -40,7 +41,9 @@ export function renderWithProviders(
       <MantineProvider theme={theme}>
         <QueryClientProvider client={queryClient}>
           <AuthContext.Provider value={auth}>
-            <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
+            <MutationFeedbackProvider>
+              <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
+            </MutationFeedbackProvider>
           </AuthContext.Provider>
         </QueryClientProvider>
       </MantineProvider>
