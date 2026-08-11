@@ -1,5 +1,6 @@
 // apps/web/src/features/notifications/NotificationItem.tsx
 import { ActionIcon, Anchor, Box, Group, Stack, Text, VisuallyHidden } from "@mantine/core";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { isRetryableMutationError } from "../../lib/mutationFeedback";
 import { MutationErrorState } from "../../lib/states";
@@ -24,7 +25,18 @@ export function NotificationItem({
 }) {
   const markRead = useMarkRead();
   const markReadOnOpen = useMarkReadOnOpen(notification.title);
+  const [markReadFailure, setMarkReadFailure] = useState<{
+    error: unknown;
+    notificationId: string;
+  } | null>(null);
   const unread = notification.read_at === null;
+
+  function markExplicitlyRead(notificationId: string) {
+    markRead.mutate(notificationId, {
+      onError: (error) => setMarkReadFailure({ error, notificationId }),
+      onSuccess: () => setMarkReadFailure(null),
+    });
+  }
 
   function open() {
     if (unread) markReadOnOpen.mutate(notification.id);
@@ -76,7 +88,7 @@ export function NotificationItem({
           <ActionIcon
             variant="subtle"
             aria-label={`Mark read: ${notification.title}`}
-            onClick={() => markRead.mutate(notification.id)}
+            onClick={() => markExplicitlyRead(notification.id)}
             disabled={markRead.isPending}
             style={{ minWidth: 44, minHeight: 44 }}
           >
@@ -94,16 +106,17 @@ export function NotificationItem({
           </ActionIcon>
         )}
       </Group>
-      {markRead.isError && (
+      {markReadFailure && (
         <MutationErrorState
           title="Couldn't mark this notification read"
-          error={markRead.error}
+          error={markReadFailure.error}
           onRetry={
-            isRetryableMutationError(markRead.error)
-              ? () => markRead.mutate(markRead.variables ?? notification.id)
+            isRetryableMutationError(markReadFailure.error)
+              ? () => markExplicitlyRead(markReadFailure.notificationId)
               : undefined
           }
-          onDismiss={markRead.reset}
+          retrying={markRead.isPending}
+          onDismiss={() => setMarkReadFailure(null)}
           retryLabel="Try marking this notification read again"
         />
       )}

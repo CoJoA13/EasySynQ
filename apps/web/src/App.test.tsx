@@ -328,7 +328,7 @@ test("open-and-mark navigation owns focus while a late failure persists and retr
   });
 
   const alert = await screen.findByRole("alert");
-  expect(alert).toHaveTextContent("remains unread");
+  expect(alert).toHaveTextContent("This notification remains unread: Review requested: SOP-001");
   expect(main).toHaveFocus();
 
   await user.click(
@@ -338,7 +338,8 @@ test("open-and-mark navigation owns focus while a late failure persists and retr
   );
   await waitFor(() => expect(requestedIds).toEqual(["n1", "n1"]));
   await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-  expect(screen.getByText("Notification marked read")).toHaveAttribute("aria-live", "polite");
+  expect(screen.getByRole("status")).toHaveTextContent("Notification marked read");
+  expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
 });
 
 test("OPERATIONAL without a token preserves the sign-in redirect latch", async () => {

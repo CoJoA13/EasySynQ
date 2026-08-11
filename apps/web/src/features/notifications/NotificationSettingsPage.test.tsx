@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
@@ -133,6 +133,7 @@ describe("NotificationSettingsPage — cadence matrix", () => {
 
   it("preserves the failed working values and retries the exact failed partial body", async () => {
     const bodies: unknown[] = [];
+    let finishRetry: ((response: Response) => void) | undefined;
     server.use(
       getPrefs(),
       http.put("/api/v1/me/notification-preferences", async ({ request }) => {
@@ -140,7 +141,9 @@ describe("NotificationSettingsPage — cadence matrix", () => {
         if (bodies.length === 1) {
           return HttpResponse.json({ code: "unavailable", title: "Save failed" }, { status: 503 });
         }
-        return HttpResponse.json(FULL_PREFS);
+        return new Promise<Response>((resolve) => {
+          finishRetry = resolve;
+        });
       }),
     );
     const user = userEvent.setup();
@@ -193,6 +196,16 @@ describe("NotificationSettingsPage — cadence matrix", () => {
         { digest_modes: { action_required: "off" } },
         { digest_modes: { action_required: "off" } },
       ]),
+    );
+    expect(screen.getByText("Couldn't save your preferences")).toBeInTheDocument();
+    expect(retry).toBeDisabled();
+
+    await user.click(retry);
+    expect(bodies).toHaveLength(2);
+
+    await act(async () => finishRetry?.(HttpResponse.json(FULL_PREFS)));
+    await waitFor(() =>
+      expect(screen.queryByText("Couldn't save your preferences")).not.toBeInTheDocument(),
     );
   });
 

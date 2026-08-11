@@ -29,6 +29,14 @@ export function NotificationBell() {
   const { count, isError } = useNotificationCount();
   const list = useNotifications("recent", opened);
   const markAll = useMarkAllRead();
+  const [markAllFailure, setMarkAllFailure] = useState<{ error: unknown } | null>(null);
+
+  function markAllRead() {
+    markAll.mutate(undefined, {
+      onError: (error) => setMarkAllFailure({ error }),
+      onSuccess: () => setMarkAllFailure(null),
+    });
+  }
 
   const hasCount = !isError && count > 0;
   const label = isError
@@ -71,21 +79,19 @@ export function NotificationBell() {
                 variant="subtle"
                 size="compact-xs"
                 mih={44}
-                onClick={() => markAll.mutate()}
+                onClick={markAllRead}
                 disabled={markAll.isPending}
               >
                 Mark all read
               </Button>
             </Group>
-            {markAll.isError && (
+            {markAllFailure && (
               <MutationErrorState
                 title="Couldn't mark notifications read"
-                error={markAll.error}
-                onRetry={
-                  isRetryableMutationError(markAll.error) ? () => markAll.mutate() : undefined
-                }
+                error={markAllFailure.error}
+                onRetry={isRetryableMutationError(markAllFailure.error) ? markAllRead : undefined}
                 retrying={markAll.isPending}
-                onDismiss={markAll.reset}
+                onDismiss={() => setMarkAllFailure(null)}
                 retryLabel="Try marking all notifications read again"
                 dismissLabel="Dismiss mark-all error"
               />

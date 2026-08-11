@@ -1,5 +1,5 @@
 // apps/web/src/features/notifications/NotificationItem.test.tsx
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
@@ -62,28 +62,38 @@ describe("NotificationItem", () => {
   it("keeps a failed explicit mark-read local and retries the same notification", async () => {
     const user = userEvent.setup();
     const requestedIds: string[] = [];
+    let finishRetry: ((response: Response) => void) | undefined;
     server.use(
       http.post("/api/v1/notifications/:id/read", ({ params }) => {
         requestedIds.push(String(params.id));
-        return requestedIds.length === 1
-          ? HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 })
-          : HttpResponse.json({ status: "ok" });
+        if (requestedIds.length === 1) {
+          return HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 });
+        }
+        return new Promise<Response>((resolve) => {
+          finishRetry = resolve;
+        });
       }),
     );
 
     renderWithProviders(<NotificationItem notification={unread} />);
     await user.click(screen.getByLabelText("Mark read: Review requested: SOP-001"));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't mark this notification read",
-    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't mark this notification read");
     expect(screen.getByText("Unread")).toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", {
-        name: "Try marking this notification read again",
-      }),
-    );
+    const retry = screen.getByRole("button", {
+      name: "Try marking this notification read again",
+    });
+    await user.click(retry);
     await waitFor(() => expect(requestedIds).toEqual(["n1", "n1"]));
+    expect(alert).toBeInTheDocument();
+    expect(retry).toBeDisabled();
+
+    await user.click(retry);
+    expect(requestedIds).toEqual(["n1", "n1"]);
+
+    await act(async () => finishRetry?.(HttpResponse.json({ status: "ok" })));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
   it("offers Dismiss but no Retry after a non-retryable explicit mark-read failure", async () => {

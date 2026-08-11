@@ -151,6 +151,73 @@ test("retries one retained callback at a time, clears it on success, and announc
   expect(screen.getByRole("status")).toHaveTextContent("Notification marked read");
 });
 
+test("creates a new live-region event for identical success announcements", async () => {
+  const user = userEvent.setup();
+  const { feedback } = renderFeedbackHarness();
+  reportTwoFailures(feedback());
+  const status = screen.getByRole("status");
+  const announcementEvents: string[] = [];
+  const observer = new MutationObserver(() => {
+    const message = status.textContent?.trim();
+    if (message) announcementEvents.push(message);
+  });
+  observer.observe(status, { childList: true, characterData: true, subtree: true });
+
+  try {
+    await user.click(screen.getByRole("button", { name: "Try marking First read again" }));
+    await waitFor(() => expect(announcementEvents).toEqual(["Notification marked read"]));
+
+    await user.click(screen.getByRole("button", { name: "Try marking Second read again" }));
+    await waitFor(() =>
+      expect(announcementEvents).toEqual(["Notification marked read", "Notification marked read"]),
+    );
+  } finally {
+    observer.disconnect();
+  }
+});
+
+test("adds stable safe ordinal context when retained notification titles collide", () => {
+  const { feedback } = renderFeedbackHarness();
+
+  act(() => {
+    for (const key of ["mark-read:private-id-a", "mark-read:private-id-b"]) {
+      feedback().report({
+        key,
+        title: "This notification remains unread: Quarterly review",
+        error: new ApiError(503, "down", "Service unavailable"),
+        retry: vi.fn(async () => undefined),
+        retryLabel: "Try marking Quarterly review read again",
+        dismissLabel: "Dismiss mark-read error for Quarterly review",
+      });
+    }
+  });
+
+  expect(
+    screen.getByText("This notification remains unread: Quarterly review (1 of 2)"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("This notification remains unread: Quarterly review (2 of 2)"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Try marking Quarterly review read again (1 of 2)" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Try marking Quarterly review read again (2 of 2)" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", {
+      name: "Dismiss mark-read error for Quarterly review (1 of 2)",
+    }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", {
+      name: "Dismiss mark-read error for Quarterly review (2 of 2)",
+    }),
+  ).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent("private-id-a");
+  expect(document.body).not.toHaveTextContent("private-id-b");
+});
+
 test("removes retry after a non-retryable retry failure while keeping safe API copy", async () => {
   const user = userEvent.setup();
   const retry = vi.fn(async () => {

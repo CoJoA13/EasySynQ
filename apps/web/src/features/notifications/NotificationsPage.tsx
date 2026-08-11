@@ -1,5 +1,6 @@
 // apps/web/src/features/notifications/NotificationsPage.tsx
 import { Button, Container, Group, Stack, Text, Title } from "@mantine/core";
+import { useState } from "react";
 import { isRetryableMutationError } from "../../lib/mutationFeedback";
 import { EmptyState, ErrorState, LoadingState, MutationErrorState } from "../../lib/states";
 import { useNotifications } from "./hooks";
@@ -11,7 +12,15 @@ import { NotificationItem } from "./NotificationItem";
 export function NotificationsPage() {
   const list = useNotifications("all");
   const markAll = useMarkAllRead();
+  const [markAllFailure, setMarkAllFailure] = useState<{ error: unknown } | null>(null);
   const rows = list.data ?? [];
+
+  function markAllRead() {
+    markAll.mutate(undefined, {
+      onError: (error) => setMarkAllFailure({ error }),
+      onSuccess: () => setMarkAllFailure(null),
+    });
+  }
 
   return (
     <Container size="sm" py="xl">
@@ -22,19 +31,19 @@ export function NotificationsPage() {
             variant="light"
             size="compact-sm"
             mih={44}
-            onClick={() => markAll.mutate()}
+            onClick={markAllRead}
             disabled={markAll.isPending || rows.length === 0}
           >
             Mark all read
           </Button>
         </Group>
-        {markAll.isError && (
+        {markAllFailure && (
           <MutationErrorState
             title="Couldn't mark notifications read"
-            error={markAll.error}
-            onRetry={isRetryableMutationError(markAll.error) ? () => markAll.mutate() : undefined}
+            error={markAllFailure.error}
+            onRetry={isRetryableMutationError(markAllFailure.error) ? markAllRead : undefined}
             retrying={markAll.isPending}
-            onDismiss={markAll.reset}
+            onDismiss={() => setMarkAllFailure(null)}
             retryLabel="Try marking all notifications read again"
             dismissLabel="Dismiss mark-all error"
           />

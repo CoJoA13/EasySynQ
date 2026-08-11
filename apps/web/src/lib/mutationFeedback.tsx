@@ -27,9 +27,14 @@ type MutationFeedbackEntry = Omit<MutationFeedbackInput, "error" | "retry"> & {
   retrying: boolean;
 };
 
+type MutationFeedbackAnnouncement = {
+  id: number;
+  message: string;
+};
+
 type MutationFeedbackContextValue = {
   entries: MutationFeedbackEntry[];
-  announcement: string;
+  announcement: MutationFeedbackAnnouncement | null;
   report: (input: MutationFeedbackInput) => void;
   dismiss: (key: string) => void;
   retryEntry: (key: string) => Promise<void>;
@@ -53,7 +58,8 @@ function safeMessage(error: unknown): string {
 
 export function MutationFeedbackProvider({ children }: { children: ReactNode }) {
   const [entries, setEntries] = useState<MutationFeedbackEntry[]>([]);
-  const [announcement, setAnnouncement] = useState("");
+  const [announcement, setAnnouncement] = useState<MutationFeedbackAnnouncement | null>(null);
+  const announcementId = useRef(0);
   const entriesRef = useRef<MutationFeedbackEntry[]>([]);
   const inFlightKeys = useRef(new Set<string>());
 
@@ -112,7 +118,11 @@ export function MutationFeedbackProvider({ children }: { children: ReactNode }) 
       try {
         await entry.retry();
         dismiss(key);
-        setAnnouncement(entry.successMessage ?? "");
+        announcementId.current += 1;
+        setAnnouncement({
+          id: announcementId.current,
+          message: entry.successMessage ?? "",
+        });
       } catch (error) {
         updateEntries((current) =>
           current.map((candidate) =>
@@ -156,20 +166,33 @@ export function MutationFeedbackOutlet() {
 
   return (
     <>
-      {context.entries.map((entry) => (
-        <MutationErrorState
-          key={entry.key}
-          title={entry.title}
-          message={entry.message}
-          onRetry={entry.retry ? () => void context.retryEntry(entry.key) : undefined}
-          retrying={entry.retrying}
-          onDismiss={() => context.dismiss(entry.key)}
-          retryLabel={entry.retryLabel}
-          dismissLabel={entry.dismissLabel}
-        />
-      ))}
+      {context.entries.map((entry) => {
+        const matchingEntries = context.entries.filter(
+          (candidate) => candidate.title === entry.title,
+        );
+        const ordinal = matchingEntries.findIndex((candidate) => candidate.key === entry.key) + 1;
+        const contextSuffix =
+          matchingEntries.length > 1 ? ` (${ordinal} of ${matchingEntries.length})` : "";
+
+        return (
+          <MutationErrorState
+            key={entry.key}
+            title={`${entry.title}${contextSuffix}`}
+            message={entry.message}
+            onRetry={entry.retry ? () => void context.retryEntry(entry.key) : undefined}
+            retrying={entry.retrying}
+            onDismiss={() => context.dismiss(entry.key)}
+            retryLabel={
+              entry.retry ? `${entry.retryLabel ?? "Try again"}${contextSuffix}` : undefined
+            }
+            dismissLabel={`${entry.dismissLabel}${contextSuffix}`}
+          />
+        );
+      })}
       <VisuallyHidden role="status" aria-live="polite" aria-atomic="true">
-        {context.announcement}
+        {context.announcement?.message ? (
+          <span key={context.announcement.id}>{context.announcement.message}</span>
+        ) : null}
       </VisuallyHidden>
     </>
   );

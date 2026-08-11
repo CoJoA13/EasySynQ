@@ -104,9 +104,16 @@ export function NotificationSettingsPage() {
   const prefs = useNotificationPreferences();
   const update = useUpdateNotificationPreferences();
   const [working, setWorking] = useState<Working | null>(null);
+  const [saveFailure, setSaveFailure] = useState<{
+    error: unknown;
+    body: NotificationPreferencesUpdate;
+  } | null>(null);
 
   function editWorking(next: Working) {
-    if (update.isError) update.reset();
+    if (saveFailure) {
+      setSaveFailure(null);
+      update.reset();
+    }
     setWorking(next);
   }
 
@@ -134,9 +141,16 @@ export function NotificationSettingsPage() {
   const dirty = Object.keys(body).length > 0;
   const quietInvalid = !!working?.quietEnabled && (!working.quietStart || !working.quietEnd);
 
+  function submit(nextBody: NotificationPreferencesUpdate) {
+    update.mutate(nextBody, {
+      onError: (error) => setSaveFailure({ error, body: nextBody }),
+      onSuccess: () => setSaveFailure(null),
+    });
+  }
+
   function save() {
     if (!dirty || quietInvalid || !baseline) return;
-    update.mutate(body);
+    submit(body);
   }
 
   return (
@@ -296,17 +310,20 @@ export function NotificationSettingsPage() {
                 </Text>
               )}
             </Group>
-            {update.isError && (
+            {saveFailure && (
               <MutationErrorState
                 title="Couldn't save your preferences"
-                error={update.error}
+                error={saveFailure.error}
                 onRetry={
-                  update.variables && isRetryableMutationError(update.error)
-                    ? () => update.mutate(update.variables)
+                  isRetryableMutationError(saveFailure.error)
+                    ? () => submit(saveFailure.body)
                     : undefined
                 }
                 retrying={update.isPending}
-                onDismiss={update.reset}
+                onDismiss={() => {
+                  setSaveFailure(null);
+                  update.reset();
+                }}
                 retryLabel="Try saving these preferences again"
                 dismissLabel="Dismiss preference save error"
               />

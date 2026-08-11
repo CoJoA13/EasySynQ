@@ -1,5 +1,5 @@
 // apps/web/src/features/notifications/NotificationBell.test.tsx
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -115,13 +115,17 @@ describe("NotificationBell", () => {
   it("keeps a failed mark-all read in the bell and retries the same operation", async () => {
     const user = userEvent.setup();
     let requests = 0;
+    let finishRetry: ((response: Response) => void) | undefined;
     server.use(
       http.get("/api/v1/notifications", () => HttpResponse.json(unreadList(2))),
       http.post("/api/v1/notifications/read-all", () => {
         requests += 1;
-        return requests === 1
-          ? HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 })
-          : HttpResponse.json({ marked: 2 });
+        if (requests === 1) {
+          return HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 });
+        }
+        return new Promise<Response>((resolve) => {
+          finishRetry = resolve;
+        });
       }),
     );
 
@@ -143,10 +147,19 @@ describe("NotificationBell", () => {
       minHeight: "calc(2.75rem * var(--mantine-scale))",
     });
 
-    await user.click(
-      screen.getByRole("button", { name: "Try marking all notifications read again" }),
-    );
+    const retry = screen.getByRole("button", {
+      name: "Try marking all notifications read again",
+    });
+    await user.click(retry);
     await waitFor(() => expect(requests).toBe(2));
+    expect(alert).toBeInTheDocument();
+    expect(retry).toBeDisabled();
+
+    await user.click(retry);
+    expect(requests).toBe(2);
+
+    await act(async () => finishRetry?.(HttpResponse.json({ marked: 2 })));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
   it("shows safe server copy and Dismiss without Retry for a forbidden bell mark-all", async () => {

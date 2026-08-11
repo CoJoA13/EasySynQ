@@ -31,7 +31,7 @@ export function useMarkReadOnOpen(notificationTitle: string) {
     onError: (error, id) => {
       feedback.report({
         key: `mark-read:${id}`,
-        title: "This notification remains unread",
+        title: `This notification remains unread: ${notificationTitle}`,
         error,
         retry: async () => {
           await markNotificationRead(api, id);
