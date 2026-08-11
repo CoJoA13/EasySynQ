@@ -1,5 +1,6 @@
 // apps/web/src/features/notifications/NotificationBell.test.tsx
 import { screen, waitFor } from "@testing-library/react";
+import { axe } from "jest-axe";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
@@ -109,6 +110,68 @@ describe("NotificationBell", () => {
     await userEvent.click(await screen.findByRole("button", { name: /Notifications/ }));
     await userEvent.click(await screen.findByRole("button", { name: "Mark all read" }));
     await waitFor(() => expect(hit).toBe(true));
+  });
+
+  it("keeps a failed mark-all read in the bell and retries the same operation", async () => {
+    const user = userEvent.setup();
+    let requests = 0;
+    server.use(
+      http.get("/api/v1/notifications", () => HttpResponse.json(unreadList(2))),
+      http.post("/api/v1/notifications/read-all", () => {
+        requests += 1;
+        return requests === 1
+          ? HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 })
+          : HttpResponse.json({ marked: 2 });
+      }),
+    );
+
+    const { container } = renderWithProviders(<NotificationBell />);
+    await user.click(await screen.findByRole("button", { name: /Notifications/ }));
+    await user.click(await screen.findByRole("button", { name: "Mark all read" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't mark notifications read");
+    expect(alert.closest('[role="dialog"]')).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+    expect(screen.getByRole("button", { name: "Mark all read" })).toHaveStyle({
+      minHeight: "calc(2.75rem * var(--mantine-scale))",
+    });
+    expect(
+      screen.getByRole("button", { name: "Try marking all notifications read again" }),
+    ).toHaveStyle({ minHeight: "calc(2.75rem * var(--mantine-scale))" });
+    expect(screen.getByRole("button", { name: "Dismiss mark-all error" })).toHaveStyle({
+      minHeight: "calc(2.75rem * var(--mantine-scale))",
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: "Try marking all notifications read again" }),
+    );
+    await waitFor(() => expect(requests).toBe(2));
+  });
+
+  it("shows safe server copy and Dismiss without Retry for a forbidden bell mark-all", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/v1/notifications", () => HttpResponse.json(unreadList(2))),
+      http.post("/api/v1/notifications/read-all", () =>
+        HttpResponse.json(
+          { detail: "You don't have permission to mark notifications read." },
+          { status: 403 },
+        ),
+      ),
+    );
+
+    renderWithProviders(<NotificationBell />);
+    await user.click(await screen.findByRole("button", { name: /Notifications/ }));
+    await user.click(await screen.findByRole("button", { name: "Mark all read" }));
+
+    expect(
+      await screen.findByText("You don't have permission to mark notifications read."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss mark-all error" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Try marking all notifications read again" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the bell and mounts the notification stream", async () => {

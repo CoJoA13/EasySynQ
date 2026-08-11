@@ -1,6 +1,7 @@
 // apps/web/src/features/notifications/NotificationsPage.tsx
 import { Button, Container, Group, Stack, Text, Title } from "@mantine/core";
-import { EmptyState, ErrorState, LoadingState } from "../../lib/states";
+import { isRetryableMutationError } from "../../lib/mutationFeedback";
+import { EmptyState, ErrorState, LoadingState, MutationErrorState } from "../../lib/states";
 import { useNotifications } from "./hooks";
 import { useMarkAllRead } from "./mutations";
 import { NotificationItem } from "./NotificationItem";
@@ -20,12 +21,24 @@ export function NotificationsPage() {
           <Button
             variant="light"
             size="compact-sm"
+            mih={44}
             onClick={() => markAll.mutate()}
             disabled={markAll.isPending || rows.length === 0}
           >
             Mark all read
           </Button>
         </Group>
+        {markAll.isError && (
+          <MutationErrorState
+            title="Couldn't mark notifications read"
+            error={markAll.error}
+            onRetry={isRetryableMutationError(markAll.error) ? () => markAll.mutate() : undefined}
+            retrying={markAll.isPending}
+            onDismiss={markAll.reset}
+            retryLabel="Try marking all notifications read again"
+            dismissLabel="Dismiss mark-all error"
+          />
+        )}
         {list.isLoading ? (
           <LoadingState label="Loading notifications" />
         ) : list.isError ? (
