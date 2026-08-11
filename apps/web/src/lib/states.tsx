@@ -1,4 +1,4 @@
-import { Alert, Anchor, Button, Center, Loader, Skeleton, Stack, Text } from "@mantine/core";
+import { Alert, Anchor, Button, Center, Group, Loader, Skeleton, Stack, Text } from "@mantine/core";
 import type { ReactNode } from "react";
 import { ApiError } from "./api";
 
@@ -153,18 +153,65 @@ export function SkeletonList({
 // centrally and renders the calm red Alert. `error` is the mutation's `.error` (unknown); `fallback` is
 // shown when it isn't an ApiError. Distinct from ErrorState (a READ failure, with a retry button) — a
 // mutation error surfaces the server's reason and is retried by re-submitting the form.
-export function MutationErrorState({
-  title,
-  error,
-  fallback = "Please try again.",
-}: {
+type MutationErrorContent =
+  | { error: unknown; message?: never; fallback?: ReactNode }
+  | { error?: never; message: ReactNode; fallback?: never };
+
+type MutationErrorActions = {
+  onRetry?: () => void;
+  retrying?: boolean;
+  onDismiss?: () => void;
+  retryLabel?: string;
+  dismissLabel?: string;
+};
+
+export type MutationErrorStateProps = {
   title: string;
-  error: unknown;
-  fallback?: ReactNode;
-}) {
+} & MutationErrorContent &
+  MutationErrorActions;
+
+export function MutationErrorState(props: MutationErrorStateProps) {
+  const {
+    title,
+    onRetry,
+    retrying = false,
+    onDismiss,
+    retryLabel = "Try again",
+    dismissLabel = "Dismiss",
+  } = props;
+  const content =
+    "message" in props
+      ? props.message
+      : props.error instanceof ApiError
+        ? props.error.message
+        : (props.fallback ?? "Please try again.");
+
   return (
-    <Alert color="red" title={title}>
-      {error instanceof ApiError ? error.message : fallback}
+    <Alert color="red" title={title} role="alert" aria-atomic="true">
+      <Stack gap="sm" align="flex-start">
+        <Text size="sm">{content}</Text>
+        {(onRetry || onDismiss) && (
+          <Group gap="xs">
+            {onRetry && (
+              <Button
+                variant="light"
+                color="red"
+                mih={44}
+                loading={retrying}
+                disabled={retrying}
+                onClick={onRetry}
+              >
+                {retryLabel}
+              </Button>
+            )}
+            {onDismiss && (
+              <Button variant="subtle" color="gray" mih={44} onClick={onDismiss}>
+                {dismissLabel}
+              </Button>
+            )}
+          </Group>
+        )}
+      </Stack>
     </Alert>
   );
 }
