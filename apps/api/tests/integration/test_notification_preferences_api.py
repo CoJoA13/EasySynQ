@@ -136,6 +136,39 @@ async def test_put_partial_update_and_get_reflects_changes(
     assert data2["quiet_end"] == "06:00"
 
 
+async def test_repeated_partial_put_returns_same_view_and_preserves_absent_defaults(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """Repeating the same partial preference PUT is effective-state idempotent."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"repeat-partial-{salt}")
+    headers = _auth(token_factory, user.keycloak_subject)
+    body = {
+        "digest_modes": {"action_required": "immediate"},
+        "digest_hour": 6,
+    }
+
+    first = await app_client.put("/api/v1/me/notification-preferences", headers=headers, json=body)
+    assert first.status_code == 200, first.text
+    first_view = first.json()
+    second = await app_client.put("/api/v1/me/notification-preferences", headers=headers, json=body)
+    assert second.status_code == 200, second.text
+    second_view = second.json()
+    assert second_view == first_view
+
+    final = await app_client.get("/api/v1/me/notification-preferences", headers=headers)
+    assert final.status_code == 200, final.text
+    assert final.json() == second_view
+    assert second_view["digest_modes"]["action_required"] == "immediate"
+    assert (
+        second_view["digest_modes"]["awareness"] == _EXPECTED_DEFAULTS["digest_modes"]["awareness"]
+    )
+    assert second_view["timezone"] == _EXPECTED_DEFAULTS["timezone"]
+    assert second_view["quiet_start"] == _EXPECTED_DEFAULTS["quiet_start"]
+    assert second_view["quiet_end"] == _EXPECTED_DEFAULTS["quiet_end"]
+
+
 async def test_put_invalid_digest_hour_returns_422(
     app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
 ) -> None:

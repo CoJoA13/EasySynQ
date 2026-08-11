@@ -1,10 +1,12 @@
 """GET /notifications + mark-read + /me/notification-preferences — self-scope proofs.
 
-Four tests:
+Six tests:
 1. GET /notifications returns only the caller's rows (user B's rows are excluded).
 2. GET /notifications rejects a negative limit before it reaches PostgreSQL.
 3. User B cannot mark user A's notification read (404 + A's row stays unread).
-4. PUT /me/notification-preferences {email_enabled:false} upserts; GET round-trips the value.
+4. Repeating mark-one leaves the notification effectively read.
+5. Repeating mark-all reports zero on the second request and preserves caller isolation.
+6. PUT /me/notification-preferences {email_enabled:false} upserts; GET round-trips the value.
 
 Notifications are seeded directly (no dispatch) so the tests are self-contained.
 """
@@ -156,6 +158,59 @@ async def test_mark_read_cross_user_returns_404_and_row_stays_unread(
         notif = await s.get(Notification, notif_a_id)
         assert notif is not None
         assert notif.read_at is None, "A's notification was incorrectly marked read by B"
+
+
+async def test_mark_read_repeat_leaves_notification_effectively_read(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """Repeating mark-read succeeds and leaves the caller's notification read."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"repeat-one-{salt}")
+    notification_id = await _seed_notification(org_id, user.id)
+    headers = _auth(token_factory, user.keycloak_subject)
+
+    first = await app_client.post(f"/api/v1/notifications/{notification_id}/read", headers=headers)
+    assert first.status_code == 200, first.text
+    second = await app_client.post(f"/api/v1/notifications/{notification_id}/read", headers=headers)
+    assert second.status_code == 200, second.text
+
+    async with get_sessionmaker()() as s:
+        notification = await s.get(Notification, notification_id)
+        assert notification is not None
+        assert notification.read_at is not None
+
+
+async def test_mark_all_read_repeat_reports_zero_and_preserves_caller_isolation(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """A repeated mark-all only reads the caller's initially unread notifications."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user_a = await _seed_user(org_id, f"repeat-all-a-{salt}")
+    user_b = await _seed_user(org_id, f"repeat-all-b-{salt}")
+    notification_a_one_id = await _seed_notification(org_id, user_a.id)
+    notification_a_two_id = await _seed_notification(org_id, user_a.id)
+    notification_b_id = await _seed_notification(org_id, user_b.id)
+    headers_a = _auth(token_factory, user_a.keycloak_subject)
+
+    first = await app_client.post("/api/v1/notifications/read-all", headers=headers_a)
+    assert first.status_code == 200, first.text
+    assert first.json() == {"marked": 2}
+    second = await app_client.post("/api/v1/notifications/read-all", headers=headers_a)
+    assert second.status_code == 200, second.text
+    assert second.json() == {"marked": 0}
+
+    async with get_sessionmaker()() as s:
+        notification_a_one = await s.get(Notification, notification_a_one_id)
+        notification_a_two = await s.get(Notification, notification_a_two_id)
+        notification_b = await s.get(Notification, notification_b_id)
+        assert notification_a_one is not None
+        assert notification_a_two is not None
+        assert notification_b is not None
+        assert notification_a_one.read_at is not None
+        assert notification_a_two.read_at is not None
+        assert notification_b.read_at is None
 
 
 async def test_notification_preferences_upsert_and_roundtrip(
