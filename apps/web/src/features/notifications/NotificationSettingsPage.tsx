@@ -13,6 +13,7 @@ import {
 } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { isRetryableMutationError } from "../../lib/mutationFeedback";
 import { ErrorState, LoadingState, MutationErrorState } from "../../lib/states";
 import type {
   NotificationClass,
@@ -104,6 +105,11 @@ export function NotificationSettingsPage() {
   const update = useUpdateNotificationPreferences();
   const [working, setWorking] = useState<Working | null>(null);
 
+  function editWorking(next: Working) {
+    if (update.isError) update.reset();
+    setWorking(next);
+  }
+
   // Seed/refresh the working state from the loaded prefs (the only refetch is the post-save
   // invalidation, so syncing on data identity resets to the saved values after a Save).
   useEffect(() => {
@@ -159,7 +165,7 @@ export function NotificationSettingsPage() {
               aria-label="Email notifications"
               description="Emails carry only a summary and a link — never controlled content — and require your administrator to enable email delivery for the organization."
               checked={working.email_enabled}
-              onChange={(e) => setWorking({ ...working, email_enabled: e.currentTarget.checked })}
+              onChange={(e) => editWorking({ ...working, email_enabled: e.currentTarget.checked })}
             />
 
             <Stack gap="xs">
@@ -188,7 +194,7 @@ export function NotificationSettingsPage() {
                     aria-label={`Email cadence — ${c.label}`}
                     value={working.digest_modes[c.key]}
                     onChange={(v) =>
-                      setWorking({
+                      editWorking({
                         ...working,
                         digest_modes: {
                           ...working.digest_modes,
@@ -216,7 +222,7 @@ export function NotificationSettingsPage() {
                   label="Send the daily digest at"
                   data={HOUR_DATA}
                   value={String(working.digest_hour)}
-                  onChange={(v) => v && setWorking({ ...working, digest_hour: Number(v) })}
+                  onChange={(v) => v && editWorking({ ...working, digest_hour: Number(v) })}
                   allowDeselect={false}
                   comboboxProps={{ keepMounted: false }}
                 />
@@ -229,7 +235,7 @@ export function NotificationSettingsPage() {
                   onDropdownOpen={() => setTzSearch("")}
                   data={tzData}
                   value={working.timezone}
-                  onChange={(v) => v && setWorking({ ...working, timezone: v })}
+                  onChange={(v) => v && editWorking({ ...working, timezone: v })}
                   nothingFoundMessage="No matching zone"
                   limit={50}
                   allowDeselect={false}
@@ -242,7 +248,7 @@ export function NotificationSettingsPage() {
                 aria-label="Enable quiet hours"
                 description="Hold immediate emails until quiet hours end. Your daily digest still sends at the hour above."
                 checked={working.quietEnabled}
-                onChange={(e) => setWorking({ ...working, quietEnabled: e.currentTarget.checked })}
+                onChange={(e) => editWorking({ ...working, quietEnabled: e.currentTarget.checked })}
               />
               {working.quietEnabled && (
                 <Group grow align="flex-start">
@@ -252,7 +258,7 @@ export function NotificationSettingsPage() {
                     required
                     value={working.quietStart}
                     error={!working.quietStart ? "Required" : undefined}
-                    onChange={(e) => setWorking({ ...working, quietStart: e.currentTarget.value })}
+                    onChange={(e) => editWorking({ ...working, quietStart: e.currentTarget.value })}
                   />
                   <TextInput
                     type="time"
@@ -260,7 +266,7 @@ export function NotificationSettingsPage() {
                     required
                     value={working.quietEnd}
                     error={!working.quietEnd ? "Required" : undefined}
-                    onChange={(e) => setWorking({ ...working, quietEnd: e.currentTarget.value })}
+                    onChange={(e) => editWorking({ ...working, quietEnd: e.currentTarget.value })}
                   />
                 </Group>
               )}
@@ -276,7 +282,12 @@ export function NotificationSettingsPage() {
             </Stack>
 
             <Group>
-              <Button onClick={save} disabled={!dirty || quietInvalid} loading={update.isPending}>
+              <Button
+                onClick={save}
+                disabled={!dirty || quietInvalid}
+                loading={update.isPending}
+                mih={44}
+              >
                 Save changes
               </Button>
               {update.isSuccess && !dirty && (
@@ -286,7 +297,19 @@ export function NotificationSettingsPage() {
               )}
             </Group>
             {update.isError && (
-              <MutationErrorState title="Couldn't save your preferences" error={update.error} />
+              <MutationErrorState
+                title="Couldn't save your preferences"
+                error={update.error}
+                onRetry={
+                  update.variables && isRetryableMutationError(update.error)
+                    ? () => update.mutate(update.variables)
+                    : undefined
+                }
+                retrying={update.isPending}
+                onDismiss={update.reset}
+                retryLabel="Try saving these preferences again"
+                dismissLabel="Dismiss preference save error"
+              />
             )}
           </Stack>
         )}

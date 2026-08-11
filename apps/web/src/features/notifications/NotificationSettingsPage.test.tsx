@@ -131,6 +131,125 @@ describe("NotificationSettingsPage — cadence matrix", () => {
     expect(await screen.findByText("Couldn't save your preferences")).toBeInTheDocument();
   });
 
+  it("preserves the failed working values and retries the exact failed partial body", async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      getPrefs(),
+      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
+        bodies.push(await request.json());
+        if (bodies.length === 1) {
+          return HttpResponse.json({ code: "unavailable", title: "Save failed" }, { status: 503 });
+        }
+        return HttpResponse.json(FULL_PREFS);
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+
+    const actionRequired = await screen.findByRole("radiogroup", {
+      name: "Email cadence — Things you must act on",
+    });
+    await user.click(within(actionRequired).getByRole("radio", { name: "Off" }));
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await user.click(save);
+
+    expect(await screen.findByText("Couldn't save your preferences")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Email notifications" })).toBeChecked();
+    expect(within(actionRequired).getByRole("radio", { name: "Off" })).toBeChecked();
+    expect(
+      within(screen.getByRole("radiogroup", { name: "Email cadence — Awareness" })).getByRole(
+        "radio",
+        {
+          name: "Daily",
+        },
+      ),
+    ).toBeChecked();
+    expect(
+      within(screen.getByRole("radiogroup", { name: "Email cadence — Critical" })).getByRole(
+        "radio",
+        {
+          name: "Immediate",
+        },
+      ),
+    ).toBeChecked();
+    expect(
+      within(
+        screen.getByRole("radiogroup", { name: "Email cadence — Admin & operations" }),
+      ).getByRole("radio", { name: "Immediate" }),
+    ).toBeChecked();
+    expect(screen.getByLabelText("Send the daily digest at")).toHaveValue("08:00");
+    expect(screen.getByLabelText("Timezone")).toHaveValue("UTC");
+    expect(screen.getByRole("switch", { name: "Enable quiet hours" })).not.toBeChecked();
+    expect(screen.queryByLabelText("Quiet hours start")).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "Try saving these preferences again" });
+    const dismiss = screen.getByRole("button", { name: "Dismiss preference save error" });
+    expect(save).toHaveStyle({ minHeight: "calc(2.75rem * var(--mantine-scale))" });
+    expect(retry).toHaveStyle({ minHeight: "calc(2.75rem * var(--mantine-scale))" });
+    expect(dismiss).toHaveStyle({ minHeight: "calc(2.75rem * var(--mantine-scale))" });
+    await user.click(retry);
+
+    await waitFor(() =>
+      expect(bodies).toEqual([
+        { digest_modes: { action_required: "off" } },
+        { digest_modes: { action_required: "off" } },
+      ]),
+    );
+  });
+
+  it("replaces a failed save intent when the user edits preferences", async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      getPrefs(),
+      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
+        bodies.push(await request.json());
+        if (bodies.length === 1) {
+          return HttpResponse.json({ code: "unavailable", title: "Save failed" }, { status: 503 });
+        }
+        return HttpResponse.json(FULL_PREFS);
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+
+    await user.click(await screen.findByRole("switch", { name: "Email notifications" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText("Couldn't save your preferences")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Send the daily digest at"));
+    await user.click(await screen.findByText("06:00"));
+    expect(screen.queryByText("Couldn't save your preferences")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Try saving these preferences again" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(bodies).toEqual([{ email_enabled: false }, { email_enabled: false, digest_hour: 6 }]),
+    );
+  });
+
+  it("does not offer retry for a non-retryable save error", async () => {
+    server.use(
+      getPrefs(),
+      http.put("/api/v1/me/notification-preferences", () =>
+        HttpResponse.json({ code: "invalid", title: "Save failed" }, { status: 400 }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+
+    await user.click(await screen.findByRole("switch", { name: "Email notifications" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(await screen.findByText("Couldn't save your preferences")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Try saving these preferences again" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Dismiss preference save error" }),
+    ).toBeInTheDocument();
+  });
+
   it("disables Save until something changes", async () => {
     server.use(getPrefs());
     renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
