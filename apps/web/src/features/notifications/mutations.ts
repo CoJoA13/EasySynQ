@@ -1,18 +1,47 @@
 // apps/web/src/features/notifications/mutations.ts
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../lib/api";
+import { useMutationFeedback } from "../../lib/mutationFeedback";
 import type { NotificationPreferences, NotificationPreferencesUpdate } from "../../lib/types";
 
-// Mark one read. Self-scoped; a 404 (foreign/already-gone id) is fire-and-forget — `.mutate()` does not
-// throw to the caller and we navigate regardless; the 60 s poll backstops. onSuccess invalidates the
-// ["notifications"] prefix → the badge + every list refresh together.
-export function useMarkRead() {
+type NotificationWriteApi = ReturnType<typeof useApi>;
+
+export function markNotificationRead(api: NotificationWriteApi, notificationId: string) {
+  return api.send<{ status: string }>("POST", `/api/v1/notifications/${notificationId}/read`);
+}
+
+// Mark one read. The request and prefix invalidation are shared by explicit row actions and link-open
+// actions; callers choose whether the failure stays local or is retained across navigation.
+export function useMarkRead(options?: { onError?: (error: unknown, id: string) => void }) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) =>
-      api.send<{ status: string }>("POST", `/api/v1/notifications/${id}/read`),
+    mutationFn: (id: string) => markNotificationRead(api, id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["notifications"] }),
+    onError: options?.onError,
+  });
+}
+
+export function useMarkReadOnOpen(notificationTitle: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const feedback = useMutationFeedback();
+
+  return useMarkRead({
+    onError: (error, id) => {
+      feedback.report({
+        key: `mark-read:${id}`,
+        title: "This notification remains unread",
+        error,
+        retry: async () => {
+          await markNotificationRead(api, id);
+          await qc.invalidateQueries({ queryKey: ["notifications"] });
+        },
+        retryLabel: `Try marking ${notificationTitle} read again`,
+        dismissLabel: `Dismiss mark-read error for ${notificationTitle}`,
+        successMessage: "Notification marked read",
+      });
+    },
   });
 }
 

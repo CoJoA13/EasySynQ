@@ -284,6 +284,63 @@ test("OPERATIONAL with a token renders the Document Library", async () => {
   expect(await screen.findByText("Document Library")).toBeInTheDocument();
 });
 
+test("open-and-mark navigation owns focus while a late failure persists and retries its id", async () => {
+  const user = userEvent.setup();
+  const requestedIds: string[] = [];
+  let finishFirstRequest: ((response: Response) => void) | undefined;
+  server.use(
+    http.get("/api/v1/notifications", () =>
+      HttpResponse.json([
+        {
+          id: "n1",
+          event_key: "task.assigned",
+          subject_type: "DOCUMENT",
+          subject_id: "d1",
+          title: "Review requested: SOP-001",
+          body: "You have a review task.",
+          deep_link: "http://localhost/library",
+          created_at: "2026-06-22T09:00:00Z",
+          read_at: null,
+        },
+      ]),
+    ),
+    http.post("/api/v1/notifications/:id/read", ({ params }) => {
+      requestedIds.push(String(params.id));
+      if (requestedIds.length === 1) {
+        return new Promise<Response>((resolve) => {
+          finishFirstRequest = resolve;
+        });
+      }
+      return HttpResponse.json({ status: "ok" });
+    }),
+  );
+
+  renderWithProviders(<App />, { route: "/notifications" });
+  await user.click(await screen.findByRole("link", { name: /Review requested: SOP-001/ }));
+
+  expect(await screen.findByText("Document Library")).toBeInTheDocument();
+  await waitFor(() => expect(requestedIds).toEqual(["n1"]));
+  const main = screen.getByRole("main");
+  await waitFor(() => expect(main).toHaveFocus());
+
+  await act(async () => {
+    finishFirstRequest?.(HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 }));
+  });
+
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("remains unread");
+  expect(main).toHaveFocus();
+
+  await user.click(
+    screen.getByRole("button", {
+      name: "Try marking Review requested: SOP-001 read again",
+    }),
+  );
+  await waitFor(() => expect(requestedIds).toEqual(["n1", "n1"]));
+  await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  expect(screen.getByText("Notification marked read")).toHaveAttribute("aria-live", "polite");
+});
+
 test("OPERATIONAL without a token preserves the sign-in redirect latch", async () => {
   const login = vi.fn(async () => undefined);
   server.use(

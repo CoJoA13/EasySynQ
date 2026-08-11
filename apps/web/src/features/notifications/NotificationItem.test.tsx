@@ -59,6 +59,62 @@ describe("NotificationItem", () => {
     await waitFor(() => expect(marked).toBe("n1"));
   });
 
+  it("keeps a failed explicit mark-read local and retries the same notification", async () => {
+    const user = userEvent.setup();
+    const requestedIds: string[] = [];
+    server.use(
+      http.post("/api/v1/notifications/:id/read", ({ params }) => {
+        requestedIds.push(String(params.id));
+        return requestedIds.length === 1
+          ? HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 })
+          : HttpResponse.json({ status: "ok" });
+      }),
+    );
+
+    renderWithProviders(<NotificationItem notification={unread} />);
+    await user.click(screen.getByLabelText("Mark read: Review requested: SOP-001"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't mark this notification read",
+    );
+    expect(screen.getByText("Unread")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Try marking this notification read again",
+      }),
+    );
+    await waitFor(() => expect(requestedIds).toEqual(["n1", "n1"]));
+  });
+
+  it("offers Dismiss but no Retry after a non-retryable explicit mark-read failure", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("/api/v1/notifications/:id/read", () =>
+        HttpResponse.json({ detail: "notification not found" }, { status: 404 }),
+      ),
+    );
+
+    renderWithProviders(<NotificationItem notification={unread} />);
+    await user.click(screen.getByLabelText("Mark read: Review requested: SOP-001"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't mark this notification read",
+    );
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Try marking this notification read again" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("gives the explicit mark-read action a 44px minimum target", () => {
+    renderWithProviders(<NotificationItem notification={unread} />);
+
+    expect(screen.getByLabelText("Mark read: Review requested: SOP-001")).toHaveStyle({
+      minWidth: "44px",
+      minHeight: "44px",
+    });
+  });
+
   it("clicking the row marks read and fires onNavigate", async () => {
     let marked = "";
     server.use(

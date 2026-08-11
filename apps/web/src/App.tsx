@@ -46,6 +46,7 @@ import { InterestedPartiesRegisterPage } from "./features/interested-parties/Int
 import { NotificationsPage } from "./features/notifications/NotificationsPage";
 import { NotificationSettingsPage } from "./features/notifications/NotificationSettingsPage";
 import { useAuth } from "./lib/auth";
+import { MutationFeedbackProvider } from "./lib/mutationFeedback";
 import { RouteChromeProvider, useRouteChrome } from "./lib/routeChrome";
 
 type FinalizationVerification = "idle" | "checking" | "error";
@@ -193,72 +194,74 @@ function AppContent() {
   }
 
   return (
-    <Routes>
-      <Route
-        path="/setup"
-        element={
-          operational ? (
-            <Navigate to="/" replace />
-          ) : (
-            <SetupWizard token={token} login={login} onFinalized={verifyFinalization} />
-          )
-        }
-      />
-      <Route
-        path="/admin"
-        element={operational ? <AdminShell /> : <Navigate to="/setup" replace />}
-      >
-        <Route index element={<Navigate to="users" replace />} />
-        <Route path="users" element={<UsersAdmin token={token} />} />
-        <Route path="roles" element={<RolesAdmin token={token} />} />
-        <Route path="processes" element={<ProcessesAdmin token={token} />} />
-        <Route path="config" element={<ConfigAdmin />} />
-      </Route>
-      <Route path="/" element={operational ? <AppShell /> : <Navigate to="/setup" replace />}>
-        <Route index element={<HomePage />} />
-        <Route path="library" element={<LibraryPage />} />
-        <Route path="library/new" element={<NewDocumentWizard />} />
-        <Route path="documents/:id" element={<DocumentDetailPage />} />
-        <Route path="tasks" element={<TasksInbox />} />
-        <Route path="tasks/:id" element={<ReviewApprovePage />} />
-        <Route path="notifications" element={<NotificationsPage />} />
-        <Route path="settings/notifications" element={<NotificationSettingsPage />} />
-        <Route path="search" element={<SearchResultsPage />} />
-        <Route path="compliance" element={<CompliancePage />} />
-        <Route path="reports/document-control" element={<ReportsRegisterPage />} />
-        <Route path="capa" element={<CapaLayout />}>
-          <Route index element={<CapaBoardPage />} />
-          <Route path="complaints" element={<ComplaintsPage />} />
-          <Route path="ncrs" element={<NcrsPage />} />
+    <MutationFeedbackProvider>
+      <Routes>
+        <Route
+          path="/setup"
+          element={
+            operational ? (
+              <Navigate to="/" replace />
+            ) : (
+              <SetupWizard token={token} login={login} onFinalized={verifyFinalization} />
+            )
+          }
+        />
+        <Route
+          path="/admin"
+          element={operational ? <AdminShell /> : <Navigate to="/setup" replace />}
+        >
+          <Route index element={<Navigate to="users" replace />} />
+          <Route path="users" element={<UsersAdmin token={token} />} />
+          <Route path="roles" element={<RolesAdmin token={token} />} />
+          <Route path="processes" element={<ProcessesAdmin token={token} />} />
+          <Route path="config" element={<ConfigAdmin />} />
         </Route>
-        <Route path="audits" element={<AuditsLayout />}>
-          <Route index element={<AuditsListPage />} />
-          <Route path="programme" element={<ProgrammePage />} />
+        <Route path="/" element={operational ? <AppShell /> : <Navigate to="/setup" replace />}>
+          <Route index element={<HomePage />} />
+          <Route path="library" element={<LibraryPage />} />
+          <Route path="library/new" element={<NewDocumentWizard />} />
+          <Route path="documents/:id" element={<DocumentDetailPage />} />
+          <Route path="tasks" element={<TasksInbox />} />
+          <Route path="tasks/:id" element={<ReviewApprovePage />} />
+          <Route path="notifications" element={<NotificationsPage />} />
+          <Route path="settings/notifications" element={<NotificationSettingsPage />} />
+          <Route path="search" element={<SearchResultsPage />} />
+          <Route path="compliance" element={<CompliancePage />} />
+          <Route path="reports/document-control" element={<ReportsRegisterPage />} />
+          <Route path="capa" element={<CapaLayout />}>
+            <Route index element={<CapaBoardPage />} />
+            <Route path="complaints" element={<ComplaintsPage />} />
+            <Route path="ncrs" element={<NcrsPage />} />
+          </Route>
+          <Route path="audits" element={<AuditsLayout />}>
+            <Route index element={<AuditsListPage />} />
+            <Route path="programme" element={<ProgrammePage />} />
+          </Route>
+          <Route path="audits/:id" element={<AuditDetailPage />} />
+          <Route path="imports" element={<IngestionRunsPage />} />
+          <Route path="imports/:runId" element={<IngestionRunPage />} />
+          <Route path="ingestion" element={<LegacyImportRedirect />} />
+          <Route path="ingestion/:runId" element={<LegacyImportRedirect />} />
+          <Route path="drift" element={<DriftLayout />}>
+            <Route index element={<DriftStatusPage />} />
+            <Route path="superseded-copies" element={<SupersededCopiesPage />} />
+          </Route>
+          <Route path="objectives" element={<ObjectivesRegisterPage />} />
+          <Route path="objectives/:id" element={<ObjectiveDetailPage />} />
+          <Route path="management-reviews" element={<ManagementReviewsRegisterPage />} />
+          <Route path="management-reviews/:id" element={<ManagementReviewDetailPage />} />
+          <Route path="dcrs" element={<DcrsRegisterPage />} />
+          <Route path="dcrs/:id/diff" element={<DcrDiffPage />} />
+          <Route path="improvement" element={<ImprovementRegisterPage />} />
+          <Route path="risks" element={<RisksRegisterPage />} />
+          <Route path="context" element={<ContextRegisterPage />} />
+          <Route path="interested-parties" element={<InterestedPartiesRegisterPage />} />
         </Route>
-        <Route path="audits/:id" element={<AuditDetailPage />} />
-        <Route path="imports" element={<IngestionRunsPage />} />
-        <Route path="imports/:runId" element={<IngestionRunPage />} />
-        <Route path="ingestion" element={<LegacyImportRedirect />} />
-        <Route path="ingestion/:runId" element={<LegacyImportRedirect />} />
-        <Route path="drift" element={<DriftLayout />}>
-          <Route index element={<DriftStatusPage />} />
-          <Route path="superseded-copies" element={<SupersededCopiesPage />} />
-        </Route>
-        <Route path="objectives" element={<ObjectivesRegisterPage />} />
-        <Route path="objectives/:id" element={<ObjectiveDetailPage />} />
-        <Route path="management-reviews" element={<ManagementReviewsRegisterPage />} />
-        <Route path="management-reviews/:id" element={<ManagementReviewDetailPage />} />
-        <Route path="dcrs" element={<DcrsRegisterPage />} />
-        <Route path="dcrs/:id/diff" element={<DcrDiffPage />} />
-        <Route path="improvement" element={<ImprovementRegisterPage />} />
-        <Route path="risks" element={<RisksRegisterPage />} />
-        <Route path="context" element={<ContextRegisterPage />} />
-        <Route path="interested-parties" element={<InterestedPartiesRegisterPage />} />
-      </Route>
-      <Route
-        path="*"
-        element={operational ? <AppShell notFound /> : <Navigate to="/setup" replace />}
-      />
-    </Routes>
+        <Route
+          path="*"
+          element={operational ? <AppShell notFound /> : <Navigate to="/setup" replace />}
+        />
+      </Routes>
+    </MutationFeedbackProvider>
   );
 }
