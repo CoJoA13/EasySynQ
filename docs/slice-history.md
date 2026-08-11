@@ -265,6 +265,58 @@ Prettier green; retained the known whole-history Prettier failure already presen
 formatting; passed repository-authority fixtures 91/91 and all seven Claude-hook assertions; returned
 `AUTHORITY_OK`; passed site-data fixtures 13/13 and the direct scan; and kept `git diff --check` clean.
 
+### S-mutation-feedback — notification write failure feedback and explicit safe retry
+
+This slice makes the three notification-write families recoverable without hiding a failed operator action.
+An explicit mark-one failure remains directly beneath its notification row; bell and full-page mark-all
+failures remain in their respective local contexts; and a preference-save failure leaves the edited working
+values in place. Opening an unread notification remains immediate native-link navigation. If its background
+mark-read request fails after the row unmounts, a keyed operational-route alert persists in `AppShell` until
+the operator Dismisses it or an explicit retry succeeds. There is no timer, toast dependency, automatic
+retry, persistence, or cross-tab feedback state.
+
+The shared `MutationErrorState` now provides atomic alert semantics plus named Retry and Dismiss actions.
+The provider/outlet retains only normalized safe display text, feature-authorized retry closures, and
+transient pending state; raw exceptions, response details, URLs, tokens, and notification IDs are not
+rendered. Retry has two required gates: the feature opts in only for mark-one, mark-all, or the immutable
+failed notification-preferences body, and the error must be a fetch `TypeError`, HTTP 408, HTTP 429, or an
+HTTP 500–599 response. HTTP 400, 401, 403, 404, 409, and 422 show feedback without Retry. Retry is always
+explicit and shares a synchronous pending guard with its primary action. Preference edits abandon the old
+retry intent and compute a new partial body on the next Save.
+
+The existing server behavior is characterized as effective-repeat-safe only for these personal-state
+operations: repeated mark-one leaves the caller's row read, repeated mark-all returns zero after its first
+caller-scoped pass and leaves another caller's rows unread, and the same partial preference PUT preserves
+absent fields and returns the same effective view. Executable integration tests were added for all three.
+Their exact Docker-backed run was unavailable on this host: it exited 1 with 23 shared
+`PostgresContainer` setup errors caused by Docker-socket `PermissionError`, before any test body or
+assertion. This is recorded as unavailable evidence, not as a passing API integration proof.
+
+Focused RED tests drove the missing alert/action, route-lifetime, local retry, retained-intent, and
+repeat-safety seams; their corresponding GREEN tests passed. The first whole-branch review found three
+Important findings: local pending Retry presentation disappeared, consecutive identical persistent-success
+messages did not create distinct live-region events, and duplicate safe notification titles collided in
+retained action names. Commit `871de96` added retained local presentation, keyed success announcements, and
+safe ordinal collision context. Re-review then found one Important Dismiss/edit lifecycle race: an abandoned
+local callback could restore feedback or overwrite newer preference intent. Commit `e1d0802` adds
+generation and in-flight guards; its focused lifecycle regressions and the final re-review were clean with
+no Critical, Important, or Minor findings.
+
+Final acceptance evidence at implementation baseline `e1d0802` on 2026-08-11: the 11-file affected group
+passed 149/149 tests; typecheck, lint, scoped Prettier, and build passed; and durable job
+`job-mso9aheq-41b8fb9c` completed `npm --prefix apps/web run test` with 258/258 files and 1,637/1,637 tests
+passing in 270.42 seconds without unhandled errors. The job emitted only repeated Node
+`localStorage` experimental warnings. The production build transformed 1,097 modules and retained the
+existing Vite advisory for a chunk over 500 kB. API Ruff format/check and mypy passed. Authority fixtures
+passed 91/91, Claude-hook compatibility passed, `check-repo-authority.sh` returned `AUTHORITY_OK`, site-data
+fixtures passed 13/13, the direct site-data scan was clean, and `git diff --check` was clean.
+
+No production API handler, OpenAPI/generated artifact, dependency, migration, database schema, Keycloak or
+other authentication/setup ownership, notification delivery/SSE behavior, URL-state contract, responsive
+view, or deployment behavior changed. The exact Docker integration proof above remains unavailable. No
+Playwright or independent browser screen-reader, forced-colors, zoom, or live deployment proof ran; the
+separate two-media Fedora/libvirt acceptance remains pending and is not replaced by this slice.
+
 ### S-upload-identity — exact staged-source identity through WORM promotion
 
 Every non-dedup staging promotion binds to the exact source version selected by its producer. Browser
