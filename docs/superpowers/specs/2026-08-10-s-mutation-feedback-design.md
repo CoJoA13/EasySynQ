@@ -1,6 +1,6 @@
 # S-mutation-feedback design
 
-**Status:** Owner approved in conversation on 2026-08-10; written-spec review pending
+**Status:** Owner approved and written spec reviewed on 2026-08-10
 
 **Programme:** Programme 1 — frontend resilience and accessibility
 
