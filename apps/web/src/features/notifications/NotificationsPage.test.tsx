@@ -75,4 +75,44 @@ describe("NotificationsPage", () => {
     await act(async () => finishRetry?.(HttpResponse.json({ marked: 2 })));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
+
+  it("does not resurrect a dismissed page mark-all failure after its retry settles", async () => {
+    const user = userEvent.setup();
+    let requests = 0;
+    let finishRetry: ((response: Response) => void) | undefined;
+    server.use(
+      http.post("/api/v1/notifications/read-all", () => {
+        requests += 1;
+        if (requests === 1) {
+          return HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 });
+        }
+        if (requests === 2) {
+          return new Promise<Response>((resolve) => {
+            finishRetry = resolve;
+          });
+        }
+        return HttpResponse.json({ marked: 2 });
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, { route: "/notifications" });
+    const markAll = await screen.findByRole("button", { name: "Mark all read" });
+    await user.click(markAll);
+    await user.click(
+      await screen.findByRole("button", { name: "Try marking all notifications read again" }),
+    );
+    await waitFor(() => expect(requests).toBe(2));
+
+    await user.click(screen.getByRole("button", { name: "Dismiss mark-all error" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(markAll).toBeDisabled();
+    await user.click(markAll);
+    expect(requests).toBe(2);
+
+    await act(async () =>
+      finishRetry?.(HttpResponse.json({ detail: "still unavailable" }, { status: 503 })),
+    );
+    await waitFor(() => expect(markAll).toBeEnabled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });

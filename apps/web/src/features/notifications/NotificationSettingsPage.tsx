@@ -11,7 +11,7 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { isRetryableMutationError } from "../../lib/mutationFeedback";
 import { ErrorState, LoadingState, MutationErrorState } from "../../lib/states";
@@ -104,23 +104,30 @@ export function NotificationSettingsPage() {
   const prefs = useNotificationPreferences();
   const update = useUpdateNotificationPreferences();
   const [working, setWorking] = useState<Working | null>(null);
+  const [baseline, setBaseline] = useState<NotificationPreferences | null>(null);
   const [saveFailure, setSaveFailure] = useState<{
     error: unknown;
     body: NotificationPreferencesUpdate;
   } | null>(null);
+  const saveAttemptGeneration = useRef(0);
+  const saveInFlightRef = useRef(false);
+  const preserveWorkingRef = useRef(false);
+  const [saveInFlight, setSaveInFlight] = useState(false);
 
   function editWorking(next: Working) {
-    if (saveFailure) {
-      setSaveFailure(null);
-      update.reset();
-    }
+    saveAttemptGeneration.current += 1;
+    if (saveInFlightRef.current) preserveWorkingRef.current = true;
+    setSaveFailure(null);
     setWorking(next);
   }
 
-  // Seed/refresh the working state from the loaded prefs (the only refetch is the post-save
-  // invalidation, so syncing on data identity resets to the saved values after a Save).
+  // Refresh the authoritative diff baseline from the query. An edit made while an older Save settles
+  // keeps its local working values; the successful response/refetch may advance the baseline but must
+  // not overwrite that newer operator intent.
   useEffect(() => {
-    if (prefs.data) setWorking(toWorking(prefs.data));
+    if (!prefs.data) return;
+    setBaseline(prefs.data);
+    if (!preserveWorkingRef.current) setWorking(toWorking(prefs.data));
   }, [prefs.data]);
 
   const detected = useMemo(detectTimeZone, []);
@@ -135,17 +142,41 @@ export function NotificationSettingsPage() {
     return matches.includes(current) ? matches : [current, ...matches];
   }, [tzSearch, detected, working?.timezone]);
 
-  const baseline = prefs.data;
   const body: NotificationPreferencesUpdate =
     working && baseline ? buildUpdate(working, baseline) : {};
   const dirty = Object.keys(body).length > 0;
   const quietInvalid = !!working?.quietEnabled && (!working.quietStart || !working.quietEnd);
 
   function submit(nextBody: NotificationPreferencesUpdate) {
+    if (saveInFlightRef.current) return;
+
+    saveInFlightRef.current = true;
+    setSaveInFlight(true);
+    const attemptGeneration = ++saveAttemptGeneration.current;
     update.mutate(nextBody, {
-      onError: (error) => setSaveFailure({ error, body: nextBody }),
-      onSuccess: () => setSaveFailure(null),
+      onError: (error) => {
+        if (saveAttemptGeneration.current === attemptGeneration) {
+          setSaveFailure({ error, body: nextBody });
+        }
+      },
+      onSuccess: (saved) => {
+        setBaseline(saved);
+        if (saveAttemptGeneration.current === attemptGeneration) {
+          preserveWorkingRef.current = false;
+          setSaveFailure(null);
+          setWorking(toWorking(saved));
+        }
+      },
+      onSettled: () => {
+        saveInFlightRef.current = false;
+        setSaveInFlight(false);
+      },
     });
+  }
+
+  function dismissSaveFailure() {
+    saveAttemptGeneration.current += 1;
+    setSaveFailure(null);
   }
 
   function save() {
@@ -298,8 +329,8 @@ export function NotificationSettingsPage() {
             <Group>
               <Button
                 onClick={save}
-                disabled={!dirty || quietInvalid}
-                loading={update.isPending}
+                disabled={!dirty || quietInvalid || saveInFlight}
+                loading={saveInFlight}
                 mih={44}
               >
                 Save changes
@@ -319,11 +350,8 @@ export function NotificationSettingsPage() {
                     ? () => submit(saveFailure.body)
                     : undefined
                 }
-                retrying={update.isPending}
-                onDismiss={() => {
-                  setSaveFailure(null);
-                  update.reset();
-                }}
+                retrying={saveInFlight}
+                onDismiss={dismissSaveFailure}
                 retryLabel="Try saving these preferences again"
                 dismissLabel="Dismiss preference save error"
               />

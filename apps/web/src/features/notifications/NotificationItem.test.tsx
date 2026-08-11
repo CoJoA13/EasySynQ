@@ -96,6 +96,48 @@ describe("NotificationItem", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
+  it("does not resurrect a dismissed explicit mark-read failure after its retry settles", async () => {
+    const user = userEvent.setup();
+    let requests = 0;
+    let finishRetry: ((response: Response) => void) | undefined;
+    server.use(
+      http.post("/api/v1/notifications/:id/read", () => {
+        requests += 1;
+        if (requests === 1) {
+          return HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 });
+        }
+        if (requests === 2) {
+          return new Promise<Response>((resolve) => {
+            finishRetry = resolve;
+          });
+        }
+        return HttpResponse.json({ status: "ok" });
+      }),
+    );
+
+    renderWithProviders(<NotificationItem notification={unread} />);
+    const markRead = screen.getByLabelText("Mark read: Review requested: SOP-001");
+    await user.click(markRead);
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Try marking this notification read again",
+      }),
+    );
+    await waitFor(() => expect(requests).toBe(2));
+
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(markRead).toBeDisabled();
+    await user.click(markRead);
+    expect(requests).toBe(2);
+
+    await act(async () =>
+      finishRetry?.(HttpResponse.json({ detail: "still unavailable" }, { status: 503 })),
+    );
+    await waitFor(() => expect(markRead).toBeEnabled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("offers Dismiss but no Retry after a non-retryable explicit mark-read failure", async () => {
     const user = userEvent.setup();
     server.use(

@@ -10,7 +10,7 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { IconBell } from "../../lib/icons";
 import { isRetryableMutationError } from "../../lib/mutationFeedback";
@@ -30,12 +30,37 @@ export function NotificationBell() {
   const list = useNotifications("recent", opened);
   const markAll = useMarkAllRead();
   const [markAllFailure, setMarkAllFailure] = useState<{ error: unknown } | null>(null);
+  const markAllAttemptGeneration = useRef(0);
+  const markAllInFlightRef = useRef(false);
+  const [markAllInFlight, setMarkAllInFlight] = useState(false);
 
   function markAllRead() {
+    if (markAllInFlightRef.current) return;
+
+    markAllInFlightRef.current = true;
+    setMarkAllInFlight(true);
+    const attemptGeneration = ++markAllAttemptGeneration.current;
     markAll.mutate(undefined, {
-      onError: (error) => setMarkAllFailure({ error }),
-      onSuccess: () => setMarkAllFailure(null),
+      onError: (error) => {
+        if (markAllAttemptGeneration.current === attemptGeneration) {
+          setMarkAllFailure({ error });
+        }
+      },
+      onSuccess: () => {
+        if (markAllAttemptGeneration.current === attemptGeneration) {
+          setMarkAllFailure(null);
+        }
+      },
+      onSettled: () => {
+        markAllInFlightRef.current = false;
+        setMarkAllInFlight(false);
+      },
     });
+  }
+
+  function dismissMarkAllFailure() {
+    markAllAttemptGeneration.current += 1;
+    setMarkAllFailure(null);
   }
 
   const hasCount = !isError && count > 0;
@@ -80,7 +105,7 @@ export function NotificationBell() {
                 size="compact-xs"
                 mih={44}
                 onClick={markAllRead}
-                disabled={markAll.isPending}
+                disabled={markAllInFlight}
               >
                 Mark all read
               </Button>
@@ -90,8 +115,8 @@ export function NotificationBell() {
                 title="Couldn't mark notifications read"
                 error={markAllFailure.error}
                 onRetry={isRetryableMutationError(markAllFailure.error) ? markAllRead : undefined}
-                retrying={markAll.isPending}
-                onDismiss={() => setMarkAllFailure(null)}
+                retrying={markAllInFlight}
+                onDismiss={dismissMarkAllFailure}
                 retryLabel="Try marking all notifications read again"
                 dismissLabel="Dismiss mark-all error"
               />

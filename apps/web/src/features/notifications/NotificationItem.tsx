@@ -1,6 +1,6 @@
 // apps/web/src/features/notifications/NotificationItem.tsx
 import { ActionIcon, Anchor, Box, Group, Stack, Text, VisuallyHidden } from "@mantine/core";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { isRetryableMutationError } from "../../lib/mutationFeedback";
 import { MutationErrorState } from "../../lib/states";
@@ -29,13 +29,38 @@ export function NotificationItem({
     error: unknown;
     notificationId: string;
   } | null>(null);
+  const markReadAttemptGeneration = useRef(0);
+  const markReadInFlightRef = useRef(false);
+  const [markReadInFlight, setMarkReadInFlight] = useState(false);
   const unread = notification.read_at === null;
 
   function markExplicitlyRead(notificationId: string) {
+    if (markReadInFlightRef.current) return;
+
+    markReadInFlightRef.current = true;
+    setMarkReadInFlight(true);
+    const attemptGeneration = ++markReadAttemptGeneration.current;
     markRead.mutate(notificationId, {
-      onError: (error) => setMarkReadFailure({ error, notificationId }),
-      onSuccess: () => setMarkReadFailure(null),
+      onError: (error) => {
+        if (markReadAttemptGeneration.current === attemptGeneration) {
+          setMarkReadFailure({ error, notificationId });
+        }
+      },
+      onSuccess: () => {
+        if (markReadAttemptGeneration.current === attemptGeneration) {
+          setMarkReadFailure(null);
+        }
+      },
+      onSettled: () => {
+        markReadInFlightRef.current = false;
+        setMarkReadInFlight(false);
+      },
     });
+  }
+
+  function dismissMarkReadFailure() {
+    markReadAttemptGeneration.current += 1;
+    setMarkReadFailure(null);
   }
 
   function open() {
@@ -89,7 +114,7 @@ export function NotificationItem({
             variant="subtle"
             aria-label={`Mark read: ${notification.title}`}
             onClick={() => markExplicitlyRead(notification.id)}
-            disabled={markRead.isPending}
+            disabled={markReadInFlight}
             style={{ minWidth: 44, minHeight: 44 }}
           >
             <svg
@@ -115,8 +140,8 @@ export function NotificationItem({
               ? () => markExplicitlyRead(markReadFailure.notificationId)
               : undefined
           }
-          retrying={markRead.isPending}
-          onDismiss={() => setMarkReadFailure(null)}
+          retrying={markReadInFlight}
+          onDismiss={dismissMarkReadFailure}
           retryLabel="Try marking this notification read again"
         />
       )}
