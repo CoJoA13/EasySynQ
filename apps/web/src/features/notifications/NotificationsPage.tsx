@@ -1,6 +1,8 @@
 // apps/web/src/features/notifications/NotificationsPage.tsx
 import { Button, Container, Group, Stack, Text, Title } from "@mantine/core";
-import { EmptyState, ErrorState, LoadingState } from "../../lib/states";
+import { useRef, useState } from "react";
+import { isRetryableMutationError } from "../../lib/mutationFeedback";
+import { EmptyState, ErrorState, LoadingState, MutationErrorState } from "../../lib/states";
 import { useNotifications } from "./hooks";
 import { useMarkAllRead } from "./mutations";
 import { NotificationItem } from "./NotificationItem";
@@ -10,7 +12,40 @@ import { NotificationItem } from "./NotificationItem";
 export function NotificationsPage() {
   const list = useNotifications("all");
   const markAll = useMarkAllRead();
+  const [markAllFailure, setMarkAllFailure] = useState<{ error: unknown } | null>(null);
+  const markAllAttemptGeneration = useRef(0);
+  const markAllInFlightRef = useRef(false);
+  const [markAllInFlight, setMarkAllInFlight] = useState(false);
   const rows = list.data ?? [];
+
+  function markAllRead() {
+    if (markAllInFlightRef.current) return;
+
+    markAllInFlightRef.current = true;
+    setMarkAllInFlight(true);
+    const attemptGeneration = ++markAllAttemptGeneration.current;
+    markAll.mutate(undefined, {
+      onError: (error) => {
+        if (markAllAttemptGeneration.current === attemptGeneration) {
+          setMarkAllFailure({ error });
+        }
+      },
+      onSuccess: () => {
+        if (markAllAttemptGeneration.current === attemptGeneration) {
+          setMarkAllFailure(null);
+        }
+      },
+      onSettled: () => {
+        markAllInFlightRef.current = false;
+        setMarkAllInFlight(false);
+      },
+    });
+  }
+
+  function dismissMarkAllFailure() {
+    markAllAttemptGeneration.current += 1;
+    setMarkAllFailure(null);
+  }
 
   return (
     <Container size="sm" py="xl">
@@ -20,12 +55,24 @@ export function NotificationsPage() {
           <Button
             variant="light"
             size="compact-sm"
-            onClick={() => markAll.mutate()}
-            disabled={markAll.isPending || rows.length === 0}
+            mih={44}
+            onClick={markAllRead}
+            disabled={markAllInFlight || rows.length === 0}
           >
             Mark all read
           </Button>
         </Group>
+        {markAllFailure && (
+          <MutationErrorState
+            title="Couldn't mark notifications read"
+            error={markAllFailure.error}
+            onRetry={isRetryableMutationError(markAllFailure.error) ? markAllRead : undefined}
+            retrying={markAllInFlight}
+            onDismiss={dismissMarkAllFailure}
+            retryLabel="Try marking all notifications read again"
+            dismissLabel="Dismiss mark-all error"
+          />
+        )}
         {list.isLoading ? (
           <LoadingState label="Loading notifications" />
         ) : list.isError ? (

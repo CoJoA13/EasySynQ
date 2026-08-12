@@ -5,6 +5,7 @@ import { ApplicationErrorBoundary } from "../errors/ApplicationErrorBoundary";
 import { NotFoundPage } from "../errors/NotFoundPage";
 import { RouteErrorPage } from "../errors/RouteErrorPage";
 import { CommandPalette } from "../../features/search/CommandPalette";
+import { MutationFeedbackOutlet } from "../../lib/mutationFeedback";
 import { Breadcrumb } from "./Breadcrumb";
 import { LeftRail } from "./LeftRail";
 import { TopBar } from "./TopBar";
@@ -59,6 +60,7 @@ export function AppShell({ notFound = false }: AppShellProps) {
       </MantineAppShell.Navbar>
       <MantineAppShell.Main id="main-content" tabIndex={-1}>
         <Breadcrumb notFound={notFound} />
+        <MutationFeedbackOutlet />
         <ApplicationErrorBoundary
           resetKey={routeResetKey}
           fallback={({ onReset }) => <RouteErrorPage onRetry={onReset} />}

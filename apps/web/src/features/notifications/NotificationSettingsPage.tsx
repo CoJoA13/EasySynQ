@@ -11,8 +11,9 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { isRetryableMutationError } from "../../lib/mutationFeedback";
 import { ErrorState, LoadingState, MutationErrorState } from "../../lib/states";
 import type {
   NotificationClass,
@@ -103,11 +104,30 @@ export function NotificationSettingsPage() {
   const prefs = useNotificationPreferences();
   const update = useUpdateNotificationPreferences();
   const [working, setWorking] = useState<Working | null>(null);
+  const [baseline, setBaseline] = useState<NotificationPreferences | null>(null);
+  const [saveFailure, setSaveFailure] = useState<{
+    error: unknown;
+    body: NotificationPreferencesUpdate;
+  } | null>(null);
+  const saveAttemptGeneration = useRef(0);
+  const saveInFlightRef = useRef(false);
+  const preserveWorkingRef = useRef(false);
+  const [saveInFlight, setSaveInFlight] = useState(false);
 
-  // Seed/refresh the working state from the loaded prefs (the only refetch is the post-save
-  // invalidation, so syncing on data identity resets to the saved values after a Save).
+  function editWorking(next: Working) {
+    saveAttemptGeneration.current += 1;
+    if (saveInFlightRef.current) preserveWorkingRef.current = true;
+    setSaveFailure(null);
+    setWorking(next);
+  }
+
+  // Refresh the authoritative diff baseline from the query. An edit made while an older Save settles
+  // keeps its local working values; the successful response/refetch may advance the baseline but must
+  // not overwrite that newer operator intent.
   useEffect(() => {
-    if (prefs.data) setWorking(toWorking(prefs.data));
+    if (!prefs.data) return;
+    setBaseline(prefs.data);
+    if (!preserveWorkingRef.current) setWorking(toWorking(prefs.data));
   }, [prefs.data]);
 
   const detected = useMemo(detectTimeZone, []);
@@ -122,15 +142,46 @@ export function NotificationSettingsPage() {
     return matches.includes(current) ? matches : [current, ...matches];
   }, [tzSearch, detected, working?.timezone]);
 
-  const baseline = prefs.data;
   const body: NotificationPreferencesUpdate =
     working && baseline ? buildUpdate(working, baseline) : {};
   const dirty = Object.keys(body).length > 0;
   const quietInvalid = !!working?.quietEnabled && (!working.quietStart || !working.quietEnd);
 
+  function submit(nextBody: NotificationPreferencesUpdate) {
+    if (saveInFlightRef.current) return;
+
+    saveInFlightRef.current = true;
+    setSaveInFlight(true);
+    const attemptGeneration = ++saveAttemptGeneration.current;
+    update.mutate(nextBody, {
+      onError: (error) => {
+        if (saveAttemptGeneration.current === attemptGeneration) {
+          setSaveFailure({ error, body: nextBody });
+        }
+      },
+      onSuccess: (saved) => {
+        setBaseline(saved);
+        if (saveAttemptGeneration.current === attemptGeneration) {
+          preserveWorkingRef.current = false;
+          setSaveFailure(null);
+          setWorking(toWorking(saved));
+        }
+      },
+      onSettled: () => {
+        saveInFlightRef.current = false;
+        setSaveInFlight(false);
+      },
+    });
+  }
+
+  function dismissSaveFailure() {
+    saveAttemptGeneration.current += 1;
+    setSaveFailure(null);
+  }
+
   function save() {
     if (!dirty || quietInvalid || !baseline) return;
-    update.mutate(body);
+    submit(body);
   }
 
   return (
@@ -159,7 +210,7 @@ export function NotificationSettingsPage() {
               aria-label="Email notifications"
               description="Emails carry only a summary and a link — never controlled content — and require your administrator to enable email delivery for the organization."
               checked={working.email_enabled}
-              onChange={(e) => setWorking({ ...working, email_enabled: e.currentTarget.checked })}
+              onChange={(e) => editWorking({ ...working, email_enabled: e.currentTarget.checked })}
             />
 
             <Stack gap="xs">
@@ -188,7 +239,7 @@ export function NotificationSettingsPage() {
                     aria-label={`Email cadence — ${c.label}`}
                     value={working.digest_modes[c.key]}
                     onChange={(v) =>
-                      setWorking({
+                      editWorking({
                         ...working,
                         digest_modes: {
                           ...working.digest_modes,
@@ -216,7 +267,7 @@ export function NotificationSettingsPage() {
                   label="Send the daily digest at"
                   data={HOUR_DATA}
                   value={String(working.digest_hour)}
-                  onChange={(v) => v && setWorking({ ...working, digest_hour: Number(v) })}
+                  onChange={(v) => v && editWorking({ ...working, digest_hour: Number(v) })}
                   allowDeselect={false}
                   comboboxProps={{ keepMounted: false }}
                 />
@@ -229,7 +280,7 @@ export function NotificationSettingsPage() {
                   onDropdownOpen={() => setTzSearch("")}
                   data={tzData}
                   value={working.timezone}
-                  onChange={(v) => v && setWorking({ ...working, timezone: v })}
+                  onChange={(v) => v && editWorking({ ...working, timezone: v })}
                   nothingFoundMessage="No matching zone"
                   limit={50}
                   allowDeselect={false}
@@ -242,7 +293,7 @@ export function NotificationSettingsPage() {
                 aria-label="Enable quiet hours"
                 description="Hold immediate emails until quiet hours end. Your daily digest still sends at the hour above."
                 checked={working.quietEnabled}
-                onChange={(e) => setWorking({ ...working, quietEnabled: e.currentTarget.checked })}
+                onChange={(e) => editWorking({ ...working, quietEnabled: e.currentTarget.checked })}
               />
               {working.quietEnabled && (
                 <Group grow align="flex-start">
@@ -252,7 +303,7 @@ export function NotificationSettingsPage() {
                     required
                     value={working.quietStart}
                     error={!working.quietStart ? "Required" : undefined}
-                    onChange={(e) => setWorking({ ...working, quietStart: e.currentTarget.value })}
+                    onChange={(e) => editWorking({ ...working, quietStart: e.currentTarget.value })}
                   />
                   <TextInput
                     type="time"
@@ -260,7 +311,7 @@ export function NotificationSettingsPage() {
                     required
                     value={working.quietEnd}
                     error={!working.quietEnd ? "Required" : undefined}
-                    onChange={(e) => setWorking({ ...working, quietEnd: e.currentTarget.value })}
+                    onChange={(e) => editWorking({ ...working, quietEnd: e.currentTarget.value })}
                   />
                 </Group>
               )}
@@ -276,7 +327,12 @@ export function NotificationSettingsPage() {
             </Stack>
 
             <Group>
-              <Button onClick={save} disabled={!dirty || quietInvalid} loading={update.isPending}>
+              <Button
+                onClick={save}
+                disabled={!dirty || quietInvalid || saveInFlight}
+                loading={saveInFlight}
+                mih={44}
+              >
                 Save changes
               </Button>
               {update.isSuccess && !dirty && (
@@ -285,8 +341,20 @@ export function NotificationSettingsPage() {
                 </Text>
               )}
             </Group>
-            {update.isError && (
-              <MutationErrorState title="Couldn't save your preferences" error={update.error} />
+            {saveFailure && (
+              <MutationErrorState
+                title="Couldn't save your preferences"
+                error={saveFailure.error}
+                onRetry={
+                  isRetryableMutationError(saveFailure.error)
+                    ? () => submit(saveFailure.body)
+                    : undefined
+                }
+                retrying={saveInFlight}
+                onDismiss={dismissSaveFailure}
+                retryLabel="Try saving these preferences again"
+                dismissLabel="Dismiss preference save error"
+              />
             )}
           </Stack>
         )}

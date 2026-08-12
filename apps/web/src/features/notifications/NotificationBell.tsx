@@ -10,10 +10,11 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { IconBell } from "../../lib/icons";
-import { InlineState } from "../../lib/states";
+import { isRetryableMutationError } from "../../lib/mutationFeedback";
+import { InlineState, MutationErrorState } from "../../lib/states";
 import { useNotificationCount, useNotifications, useNotificationStream } from "./hooks";
 import { useMarkAllRead } from "./mutations";
 import { NotificationItem } from "./NotificationItem";
@@ -28,6 +29,39 @@ export function NotificationBell() {
   const { count, isError } = useNotificationCount();
   const list = useNotifications("recent", opened);
   const markAll = useMarkAllRead();
+  const [markAllFailure, setMarkAllFailure] = useState<{ error: unknown } | null>(null);
+  const markAllAttemptGeneration = useRef(0);
+  const markAllInFlightRef = useRef(false);
+  const [markAllInFlight, setMarkAllInFlight] = useState(false);
+
+  function markAllRead() {
+    if (markAllInFlightRef.current) return;
+
+    markAllInFlightRef.current = true;
+    setMarkAllInFlight(true);
+    const attemptGeneration = ++markAllAttemptGeneration.current;
+    markAll.mutate(undefined, {
+      onError: (error) => {
+        if (markAllAttemptGeneration.current === attemptGeneration) {
+          setMarkAllFailure({ error });
+        }
+      },
+      onSuccess: () => {
+        if (markAllAttemptGeneration.current === attemptGeneration) {
+          setMarkAllFailure(null);
+        }
+      },
+      onSettled: () => {
+        markAllInFlightRef.current = false;
+        setMarkAllInFlight(false);
+      },
+    });
+  }
+
+  function dismissMarkAllFailure() {
+    markAllAttemptGeneration.current += 1;
+    setMarkAllFailure(null);
+  }
 
   const hasCount = !isError && count > 0;
   const label = isError
@@ -69,12 +103,24 @@ export function NotificationBell() {
               <Button
                 variant="subtle"
                 size="compact-xs"
-                onClick={() => markAll.mutate()}
-                disabled={markAll.isPending}
+                mih={44}
+                onClick={markAllRead}
+                disabled={markAllInFlight}
               >
                 Mark all read
               </Button>
             </Group>
+            {markAllFailure && (
+              <MutationErrorState
+                title="Couldn't mark notifications read"
+                error={markAllFailure.error}
+                onRetry={isRetryableMutationError(markAllFailure.error) ? markAllRead : undefined}
+                retrying={markAllInFlight}
+                onDismiss={dismissMarkAllFailure}
+                retryLabel="Try marking all notifications read again"
+                dismissLabel="Dismiss mark-all error"
+              />
+            )}
             <ScrollArea.Autosize mah={360}>
               {list.isLoading ? (
                 <InlineState kind="loading">Loading notifications…</InlineState>

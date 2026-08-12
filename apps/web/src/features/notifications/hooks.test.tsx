@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../lib/auth";
 import { server } from "../../test/msw/server";
 import { TEST_AUTH } from "../../test/render";
@@ -61,6 +61,34 @@ describe("notification data layer", () => {
     const { result } = renderHook(() => useMarkRead(), { wrapper });
     result.current.mutate("abc-123");
     await waitFor(() => expect(marked).toBe("abc-123"));
+  });
+
+  it("useMarkRead delivers the error and exact id after its observer unmounts", async () => {
+    let requestedId = "";
+    let finishRequest: ((response: Response) => void) | undefined;
+    const onError = vi.fn();
+    server.use(
+      http.post("/api/v1/notifications/:id/read", ({ params }) => {
+        requestedId = String(params.id);
+        return new Promise<Response>((resolve) => {
+          finishRequest = resolve;
+        });
+      }),
+    );
+
+    const { result, unmount } = renderHook(() => useMarkRead({ onError }), { wrapper });
+    act(() => result.current.mutate("abc-123"));
+    await waitFor(() => expect(requestedId).toBe("abc-123"));
+
+    unmount();
+    await act(async () => {
+      finishRequest?.(HttpResponse.json({ detail: "temporarily unavailable" }, { status: 503 }));
+    });
+
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    const [error, id] = onError.mock.calls[0] as [unknown, unknown];
+    expect(error).toMatchObject({ status: 503 });
+    expect(id).toBe("abc-123");
   });
 
   it("useMarkAllRead POSTs read-all", async () => {

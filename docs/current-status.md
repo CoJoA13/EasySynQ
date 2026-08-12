@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-10"
-baseline_commit: "cb6bdd6"
-last_shipped_slice: "S-app-route-boundary"
+as_of: "2026-08-11"
+baseline_commit: "e1d0802"
+last_shipped_slice: "S-mutation-feedback"
 migration_head: "0085"
 next_migration: "0086"
 api_unit_tests: 1686
-web_test_files: 257
-web_tests: 1600
+web_test_files: 258
+web_tests: 1637
 contract_tests: 283
 integration_passed: 1051
 integration_skipped: 2
@@ -30,18 +30,18 @@ DCR, improvement, risk, context, interested-party, and identity-provisioning sur
 retention/disposition, and Evidence Packs are API/worker-complete but do not have dedicated SPA
 management routes.
 
-The last shipped slice adds a two-tier application render boundary and an operational 404 without changing
-authentication or setup ownership. A route-content boundary inside `AppShell` preserves the shell when a
-routed page fails. The owner-approved 2026-08-10 clarification requires Retry to remount only that content
-subtree while preserving the original query provider, exact client identity, source-client lifecycle, and
-cached data. Retry explicitly calls no invalidation, refetch, reset, removal, clearing, equivalent cache
-operation, or mutation seam; a stale query observer may still perform TanStack Query's normal configured
-refetch when it remounts. A global last-resort boundary sits outside the router, auth, and query providers
-while remaining inside the theme provider, so provider, router, startup, or shell failures have a
-router-independent full-screen recovery. Unknown operational URLs remain visible and render a fixed,
-shell-contained `Page not found` state with safe Dashboard and Document Library links; pre-operational
-unknown routes still go through setup. Detailed shipped behavior and evidence remain in
-[`slice-history.md`](slice-history.md#s-app-route-boundary--shell-preserving-page-recovery-global-fallback-and-safe-operational-404).
+The last shipped slice makes failed notification mutations visible, announced, and recoverable without
+discarding the operator's intent. Explicit mark-one, bell/page mark-all, and preference-save failures remain
+local to their controls; opening an unread notification still navigates immediately, while its late
+mark-read failure persists in the operational shell until Dismiss or a successful explicit retry. Retry is
+never automatic and is available only for these named personal-state operations under the approved
+effective-repeat-safety contract when the error is a fetch
+`TypeError`, HTTP 408, HTTP 429, or HTTP 500–599. Local pending/retry, Dismiss, and preference-edit
+lifecycle guards prevent abandoned callbacks from restoring stale feedback or overwriting newer preference
+intent. The slice does not change API handlers, OpenAPI/generated artifacts, database schema/migrations,
+authentication/setup gates, query-client identity, notification delivery, or URL semantics. Detailed
+shipped behavior and evidence remain in
+[`slice-history.md`](slice-history.md#s-mutation-feedback--notification-write-failure-feedback-and-explicit-safe-retry).
 
 ## Runtime truth
 
@@ -61,27 +61,19 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 ## Verification baseline
 
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
-repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates
-only the facts it freshly verifies; partial or unavailable checks must be reported as such. At `cb6bdd6`
-on 2026-08-10, the durable final post-clarification `npm --prefix apps/web run test` exited 0 with all 257
-files and 1,600 tests passing in 261.05 seconds. It emitted only Node's repeated existing `localStorage`
-experimental warning. This is the first complete web run after the owner-approved QueryClient provider
-clarification and replaces `6f5676e` as the current web baseline; the earlier 257-file/1,596-test run
-remains preserved in slice history as pre-clarification evidence. Before the final run, the clarification
-implementation checkpoint `8d285d7` passed the 12-file affected selection 126/126; web typecheck and lint
-exited 0; and the production build transformed 1,096 modules and exited 0 with the existing large-chunk
-advisory. Repository-authority fixtures passed 91/91, Claude-hook compatibility passed all seven
-assertions, repository authority returned `AUTHORITY_OK`, site-data fixtures passed 13/13, and the direct
-site-data scan was clean.
-The earlier TanStack Query post-teardown `window is not defined` failure was a shared test-harness issue, not
-a route-specific limitation: a queued observer callback could outlive React Testing Library cleanup and
-Vitest's jsdom teardown. The test-only harness now preserves TanStack's normal asynchronous scheduling while
-tracking notifications and draining them to stable event-loop quiescence after cleanup and MSW reset; it also
-preserves callback errors and supports fake timers. Node still emits repeated `localStorage` experimental
-warnings without affecting the green exit. Web typecheck, lint, and production build passed; the build
-transformed 1,096 modules and retained its existing large-chunk advisory. API, contract, integration,
-migration, and CI values above retain their prior executable evidence because this front-end-only slice did
-not rerun or change them.
+repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
+the facts it freshly verifies; partial or unavailable checks must be reported as such. At `e1d0802` on
+2026-08-11, durable job `job-mso9aheq-41b8fb9c` ran `npm --prefix apps/web run test` with 258 files and
+1,637 tests passing in 270.42 seconds, without unhandled errors. It emitted only Node's repeated
+`localStorage` experimental warning. The final 11-file affected selection passed 149 tests; web typecheck,
+lint, scoped Prettier, and production build passed. The build transformed 1,097 modules and retained its
+existing advisory for a chunk above 500 kB. API Ruff format/check and mypy passed, but the exact focused
+notification integration command exited 1 before any test body or assertion: all 23 shared
+`PostgresContainer` setups hit Docker-socket `PermissionError`. That repeat-safety integration proof is
+therefore unavailable on this host, not a pass. Authority fixtures passed 91/91, Claude-hook compatibility
+passed, repository authority returned `AUTHORITY_OK`, site-data fixtures passed 13/13, the direct site-data
+scan was clean, and `git diff --check` was clean. API, contract, integration, migration, and CI numeric
+values above retain their prior successful evidence unless refreshed by their own complete gate.
 
 ## CI topology
 

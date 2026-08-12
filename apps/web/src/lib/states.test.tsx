@@ -118,6 +118,46 @@ test("MutationErrorState falls back when the error isn't an ApiError", () => {
   expect(screen.getByText("Please try again.")).toBeInTheDocument();
 });
 
+test("MutationErrorState announces the error and wires named retry and dismiss actions", async () => {
+  const user = userEvent.setup();
+  const onRetry = vi.fn();
+  const onDismiss = vi.fn();
+  renderWithProviders(
+    <MutationErrorState
+      title="Couldn't mark notifications read"
+      message="The request didn't complete. Please try again."
+      onRetry={onRetry}
+      onDismiss={onDismiss}
+      retryLabel="Try marking all notifications read again"
+      dismissLabel="Dismiss mark-all error"
+    />,
+  );
+
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveAttribute("aria-atomic", "true");
+  expect(alert).toHaveTextContent("Couldn't mark notifications read");
+  await user.click(
+    screen.getByRole("button", {
+      name: "Try marking all notifications read again",
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "Dismiss mark-all error" }));
+  expect(onRetry).toHaveBeenCalledTimes(1);
+  expect(onDismiss).toHaveBeenCalledTimes(1);
+});
+
+test("MutationErrorState disables retry while the retained intent is running", () => {
+  renderWithProviders(
+    <MutationErrorState
+      title="Couldn't save"
+      error={new TypeError("network")}
+      onRetry={() => undefined}
+      retrying
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Try again" })).toBeDisabled();
+});
+
 test("the primitives have no axe violations", async () => {
   const { container } = renderWithProviders(
     <>
@@ -134,6 +174,8 @@ test("the primitives have no axe violations", async () => {
       <MutationErrorState
         title="Couldn't save"
         error={new ApiError(400, "bad", "Invalid input.")}
+        onRetry={() => {}}
+        onDismiss={() => {}}
       />
     </>,
   );
