@@ -37,6 +37,101 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## PROGRAMME 1 — frontend resilience and accessibility
 
+### S-keyboard-semantic-interaction — native primary table controls and structural rows
+
+Shipped 2026-08-13 at implementation evidence baseline `c32875c`. The owner accepted
+[`ADR 0002`](adr/0002-use-native-primary-controls-for-table-actions.md): table rows remain structural,
+and a visible native link or button in the identifying cell owns the primary action, focus, safe accessible
+name, and browser Enter/Space behavior. The owner rejected a new two-consumer row-action abstraction,
+stretched or overlaid whole-row controls, and interactive rows with ARIA plus synthetic keyboard handling.
+The direct pattern's prudent-deliberate debt record is
+[`20260813074918-native-row-control-pattern`](debt/20260813074918-native-row-control-pattern.md); its payoff
+trigger is a third table needing primary row interaction or a row-level activation regression, at which
+point a focused shared component or executable source guard should be evaluated without abandoning native
+controls or structural rows.
+
+The slice repairs two distinct baseline defects. CAPA List had made `Table.Tr` focusable and clickable and
+duplicated Enter/Space behavior by hand. Its identifier cell now exposes one button named
+`Open CAPA <identifier>: <title>`; ordinary cells are inert, Arrow movement is focus-only, and the existing
+local `setSelected` open remains URL-neutral. Audit Programme had made pointer-only row selection compete
+conceptually with a nested Edit action. Its identifier cell now exposes one button named
+`Select programme <identifier>: <title>` with boolean `aria-pressed`; native Enter/Space changes the selected
+programme and Plans content, Arrow movement never follows selection, ordinary cells do not select, and Edit
+remains an independent permission-gated action. The shared `useRowKeyboardNav` helper now accepts Arrow
+Up/Down only from the actively focused element directly marked `data-rownav`, so it neither activates the
+destination nor prevents arrows from Edit or another unmarked action. The final source-wide multiline guard
+found no production or test `Table.Tr` opening tag with `onClick`, `onKeyDown`, `tabIndex`, or `role`.
+
+CAPA card/List local opens, externally supplied `?capa=` synchronization, selector removal/conflict behavior,
+drawer close behavior, routing, loaded-state accessibility, and unchanged `DetailDrawer`/Mantine focus
+ownership remained in the focused preservation selection. URL-seeded drawer focus behavior was exercised,
+and the unchanged focus-owner path was inspected. No test directly asserts that closing a drawer opened from
+the new local CAPA List button restores focus specifically to that button, so that narrow restoration claim
+remains unverified rather than being described as passed. Final review classified this as an evidence gap,
+not a demonstrated production defect, and authorized an accurate disclaimer instead of a source/test change
+that would invalidate the completed full-suite evidence.
+
+Implementation followed focused RED/GREEN proofs and clean task reviews:
+
+- The helper RED, `npm --prefix apps/web test -- src/lib/useRowKeyboardNav.test.tsx`, exited 1 with the
+  intended Edit-origin assertion failing and 3 tests passing. Commit `5c0c86d` added the event-origin guard;
+  the four-file helper/consumer GREEN passed 4 files/36 tests, typecheck, scoped lint/format/diff checks, and
+  task review.
+- The CAPA RED, `npm --prefix apps/web test -- src/features/capa/CapaBoardPage.test.tsx`, exited 1 with the
+  intended 4 failures and 14 passes because the old focusable row remained and the named native button did
+  not exist. Commit `bbf6cd0` installed the structural row and native list action; the helper/CAPA preservation
+  GREEN passed 5 files/43 tests plus list axe, typecheck, scoped lint/format/diff checks, and task review.
+- The Audit Programme RED,
+  `npm --prefix apps/web test -- src/features/audits/ProgrammePage.test.tsx`, exited 1 with the intended 6
+  failures and 9 passes because named pressed selection controls did not exist and an ordinary Period cell
+  still selected through row bubbling. Commit `c32875c` installed the native selector; the helper/programme
+  preservation GREEN passed 3 files/25 tests plus axe, typecheck, scoped lint/format/diff checks, and task
+  review.
+
+Final whole-branch review of `f2d0b56..c32875c` found no Critical production issue. Its Important finding
+was incomplete Task 4 authority closure: current status still named the preceding slice and 1,834-test
+baseline, slice history lacked this entry, and final authority/site-data/diff guards were unrecorded. This
+evidence commit resolves that finding. Its sole Minor finding was the local list-opener focus-restoration
+evidence overclaim corrected above; no production or test edit was authorized. No new deferred material
+decision was introduced.
+
+Final acceptance evidence:
+
+- The exact 18-file semantic-interaction selection beginning with
+  `src/lib/useRowKeyboardNav.test.tsx` and ending with `src/features/review/TasksInbox.test.tsx` passed
+  18 files/213 tests in 47.17 seconds without an unhandled exception, hook-order warning, duplicate
+  activation, invalid nested interactive semantic, inaccessible-name failure, or axe violation. The exact
+  whole-source structural-row guard exited 0 with no match.
+- Web lint and `tsc --noEmit` exited 0. The production build transformed 1,098 modules in 892 ms and emitted
+  `index.html` at 0.77 kB (0.40 kB gzip), CSS at 211.40 kB (32.42 kB gzip), and JavaScript at 1,158.49 kB
+  (318.80 kB gzip). Its only advisory was the retained warning for a chunk above 500 kB.
+- Durable job `job-msrjnu84-05d66760` ran exact direct argv `npm --prefix apps/web test` from the isolated
+  worktree and exited 0: all 259 files and 1,845 tests passed in 330.83 seconds (transform 2.89 seconds,
+  setup 44.83 seconds, import 51.90 seconds, tests 131.56 seconds, environment 81.74 seconds), with clean
+  stdout and no unhandled error. Stderr contained repeated Node `ExperimentalWarning` messages that
+  `localStorage` was unavailable because `--localstorage-file` was not provided. Notification delivery
+  failed only because the owning Codex task already had an active writer; the test process completed
+  normally and its durable result remained available.
+- Before and after the evidence edits, `bash scripts/tests/test-agent-authority.sh` passed 91/91 fixtures,
+  `bash scripts/tests/test-claude-hooks.sh` passed all seven assertions,
+  `./scripts/check-repo-authority.sh` returned `AUTHORITY_OK`,
+  `bash scripts/tests/test-check-no-site-data.sh` passed 13/13 fixtures, and
+  `./scripts/check-no-site-data.sh` returned the clean mechanical-shapes verdict. The app-owned scoped
+  Prettier check passed the design, plan, ADR, debt, and current-status documents; range and
+  working-tree-inclusive diff guards were clean. The separate whole-file `docs/slice-history.md` Prettier
+  probe remains red exactly as the `c32875c` baseline was and was not mass-formatted; this is not presented
+  as a history formatting pass.
+
+This remains a frontend-only interaction and evidence slice. It changes no API handler,
+OpenAPI/generated contract, dependency or lock, database schema/migration, authentication/setup or Keycloak
+boundary, permission, QueryClient/provider identity, route, mutation-feedback lifetime, error boundary,
+deployment behavior, or responsive strategy. The API, contract, integration, migration, and CI totals are
+inherited rather than freshly verified. No Playwright, independent browser or screen-reader session,
+responsive viewport run, live deployment, Docker-backed integration, API/contract suite, or disposable
+Fedora/libvirt proof ran on this host. The contributor doctor had already reported non-Node-22 runtime,
+missing PostgreSQL client, and unavailable Docker runtime access; none of those unavailable layers is
+described as passed.
+
 ### S-url-state-correctness — effective URL view identity, history, recovery, and accessibility
 
 Shipped 2026-08-13 at implementation evidence baseline `76c2f72`. The owner selected one pure, typed
