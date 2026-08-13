@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { describe, expect, it } from "vitest";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { AppShell } from "../../app/shell/AppShell";
+import { RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { ReportsRegisterPage } from "./ReportsRegisterPage";
@@ -76,10 +78,17 @@ function HistoryControls() {
   const navigate = useNavigate();
   return (
     <>
-      <button onClick={() => navigate("/?sentinel=keep&checkpoint=1")}>Prepare history</button>
+      <button onClick={() => navigate("/?sentinel=keep&checkpoint=prepared")}>
+        Prepare history
+      </button>
       <button onClick={() => navigate(-1)}>Back</button>
     </>
   );
+}
+
+function ChromeOutlet() {
+  useRouteChrome();
+  return <Outlet />;
 }
 
 describe("ReportsRegisterPage", () => {
@@ -99,7 +108,7 @@ describe("ReportsRegisterPage", () => {
     await user.click(screen.getByRole("textbox", { name: "Status" }));
     await user.click(await screen.findByRole("option", { name: "Effective" }));
     expect(screen.getByLabelText("Current query")).toHaveTextContent("sentinel=keep");
-    expect(screen.getByLabelText("Current query")).toHaveTextContent("checkpoint=1");
+    expect(screen.getByLabelText("Current query")).toHaveTextContent("checkpoint=prepared");
     expect(screen.getByLabelText("Current query")).toHaveTextContent("state=Effective");
     await user.click(screen.getByRole("button", { name: "Clear all" }));
     await waitFor(() =>
@@ -110,8 +119,84 @@ describe("ReportsRegisterPage", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Current query")).toHaveTextContent("?sentinel=keep"),
     );
-    expect(screen.getByLabelText("Current query")).not.toHaveTextContent("checkpoint=1");
+    expect(screen.getByLabelText("Current query")).not.toHaveTextContent("checkpoint=prepared");
     expect(screen.getByLabelText("Current query")).not.toHaveTextContent("state=Effective");
+  });
+
+  it("replaces every report filter and clear action without dropping unrelated state", async () => {
+    const user = userEvent.setup();
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)));
+    renderWithProviders(
+      <>
+        <ReportsRegisterPage />
+        <HistoryControls />
+        <QueryProbe />
+      </>,
+      { route: "/?sentinel=keep&checkpoint=baseline" },
+    );
+    await screen.findByText("SOP-QA-001");
+
+    const cases = [
+      ["Status", "Effective", "state=Effective"],
+      ["Type", "Procedure", "type=aaaa1111-1111-1111-1111-111111111111"],
+      ["Owner", "Mara Quality", "owner=bbbb1111-1111-1111-1111-111111111111"],
+      ["Clause", "7.5.3", "clause=7.5.3"],
+      ["Effective date", "Last 30 days", "eff=30d"],
+      ["Process", "Purchasing", "process=pr000001-0001-0001-0001-000000000001"],
+    ] as const;
+
+    for (const [label, option, expected] of cases) {
+      await user.click(screen.getByRole("button", { name: "Prepare history" }));
+      await user.click(screen.getByRole("textbox", { name: label }));
+      await user.click(await screen.findByRole("option", { name: option }));
+      await waitFor(() =>
+        expect(screen.getByLabelText("Current query")).toHaveTextContent(expected),
+      );
+      expect(screen.getByLabelText("Current query")).toHaveTextContent("sentinel=keep");
+      expect(screen.getByLabelText("Current query")).toHaveTextContent("checkpoint=prepared");
+      await user.click(screen.getByRole("button", { name: "Back" }));
+      await waitFor(() =>
+        expect(screen.getByLabelText("Current query")).toHaveTextContent("checkpoint=baseline"),
+      );
+    }
+
+    await user.click(screen.getByRole("button", { name: "Prepare history" }));
+    await user.click(screen.getByRole("textbox", { name: "Status" }));
+    await user.click(await screen.findByRole("option", { name: "Effective" }));
+    await user.click(screen.getByRole("button", { name: "Clear all" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current query")).toHaveTextContent(
+        "?sentinel=keep&checkpoint=prepared",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current query")).toHaveTextContent("checkpoint=baseline"),
+    );
+  });
+
+  it("a report ordinary filter edit leaves route chrome and focus untouched", async () => {
+    const user = userEvent.setup();
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)));
+    renderWithProviders(
+      <RouteChromeProvider>
+        <Routes>
+          <Route element={<ChromeOutlet />}>
+            <Route element={<AppShell />}>
+              <Route path="reports/document-control" element={<ReportsRegisterPage />} />
+            </Route>
+          </Route>
+        </Routes>
+      </RouteChromeProvider>,
+      { route: "/reports/document-control" },
+    );
+    await screen.findByText("SOP-QA-001");
+    const sort = screen.getByRole("button", { name: "Sort by Identifier" });
+    await user.click(sort);
+
+    expect(document.title).toBe("EasySynQ — Document register");
+    expect(sort).toHaveFocus();
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
   });
 
   it("renders the provenance banner + a register row", async () => {

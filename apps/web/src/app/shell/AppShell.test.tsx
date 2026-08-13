@@ -9,6 +9,10 @@ import { Outlet, Route, Routes, useLocation, useNavigate } from "react-router-do
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
+import { LibraryPage } from "../../features/library/LibraryPage";
+import { ReportsRegisterPage } from "../../features/reports/ReportsRegisterPage";
+import { ReviewCockpit } from "../../features/ingestion/ReviewCockpit";
+import { ingestionRunFixture } from "../../test/msw/handlers";
 import { NotFoundPage } from "../errors/NotFoundPage";
 import { AppShell } from "./AppShell";
 
@@ -54,6 +58,24 @@ function FeatureOwnedDetail() {
   const focusTarget = useRef<HTMLButtonElement>(null);
   useEffect(() => focusTarget.current?.focus(), []);
   return <button ref={focusTarget}>Feature-owned detail focus</button>;
+}
+
+function PersistentFeatureWriter({ feature }: { feature: "library" | "reports" | "ingestion" }) {
+  useRouteChrome();
+  const content =
+    feature === "library" ? (
+      <LibraryPage />
+    ) : feature === "reports" ? (
+      <ReportsRegisterPage />
+    ) : (
+      <ReviewCockpit runId={ingestionRunFixture.id} run={ingestionRunFixture} />
+    );
+  return (
+    <>
+      {content}
+      <Outlet />
+    </>
+  );
 }
 
 test("AppShell renders landmarks, skip-link, and child content", async () => {
@@ -351,6 +373,52 @@ test.each([
       expect(screen.getByRole("button", { name: "change-effective-view" })).toHaveFocus();
     }
     observer.disconnect();
+  },
+);
+
+test.each([
+  ["Library", "library", "/library?state=Effective", "Clear all"],
+  ["Reports", "reports", "/reports/document-control", "Status"],
+  ["ingestion", "ingestion", "/imports/10000000-0000-0000-0000-000000000001?queue=high", "Medium"],
+] as const)(
+  "an ordinary %s feature URL write does not reset a captured route fallback",
+  async (_, feature, route, actionName) => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RouteChromeProvider>
+        <Routes>
+          <Route element={<PersistentFeatureWriter feature={feature} />}>
+            <Route element={<AppShell />}>
+              <Route path="library" element={<AlwaysBrokenRoute />} />
+              <Route path="reports/document-control" element={<AlwaysBrokenRoute />} />
+              <Route path="imports/:id" element={<AlwaysBrokenRoute />} />
+            </Route>
+          </Route>
+        </Routes>
+      </RouteChromeProvider>,
+      { route },
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "This page couldn't be displayed" }),
+    ).toBeInTheDocument();
+    if (feature === "reports") {
+      await user.click(screen.getByRole("textbox", { name: actionName }));
+      await user.click(await screen.findByRole("option", { name: "Effective" }));
+    } else {
+      const action =
+        feature === "ingestion"
+          ? screen.getByRole("tab", { name: new RegExp(actionName) })
+          : screen.getByRole("button", { name: actionName });
+      await user.click(action);
+    }
+
+    expect(
+      screen.getByRole("heading", { name: "This page couldn't be displayed" }),
+    ).toBeInTheDocument();
+    expect(document.title).toBe("EasySynQ — Page unavailable");
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
   },
 );
 

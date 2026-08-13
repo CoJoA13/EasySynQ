@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { AppShell } from "../../app/shell/AppShell";
+import { RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { server } from "../../test/msw/server";
 import {
   ingestionChecklistFixture,
@@ -19,13 +21,20 @@ function HistoryControls() {
   const navigate = useNavigate();
   return (
     <>
-      <button onClick={() => navigate(`/imports/${RID}?queue=high&sentinel=keep`)}>
+      <button
+        onClick={() => navigate(`/imports/${RID}?queue=high&sentinel=keep&checkpoint=prepared`)}
+      >
         Prepare history
       </button>
       <button onClick={() => navigate(-1)}>Back</button>
       <output aria-label="Current location">{useLocation().search}</output>
     </>
   );
+}
+
+function ChromeOutlet() {
+  useRouteChrome();
+  return <Outlet />;
 }
 
 function renderCockpit(route = `/imports/${RID}?queue=high`) {
@@ -59,7 +68,7 @@ test("queue and confidence changes replace history while preserving unrelated qu
       <ReviewCockpit runId={RID} run={ingestionRunFixture} />
       <HistoryControls />
     </>,
-    { route: `/imports/${RID}?queue=high&sentinel=keep` },
+    { route: `/imports/${RID}?queue=high&sentinel=keep&checkpoint=baseline` },
   );
   await screen.findByRole("table", { name: "Triage queue" });
   await user.click(screen.getByRole("button", { name: "Prepare history" }));
@@ -73,9 +82,35 @@ test("queue and confidence changes replace history while preserving unrelated qu
 
   await user.click(screen.getByRole("button", { name: "Back" }));
   await waitFor(() =>
-    expect(screen.getByLabelText("Current location")).toHaveTextContent("queue=high&sentinel=keep"),
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
   );
   expect(screen.getByLabelText("Current location")).not.toHaveTextContent("conf=HIGH");
+});
+
+test("an ingestion ordinary queue edit leaves route chrome and focused tab untouched", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <RouteChromeProvider>
+      <Routes>
+        <Route element={<ChromeOutlet />}>
+          <Route element={<AppShell />}>
+            <Route
+              path="imports/:id"
+              element={<ReviewCockpit runId={RID} run={ingestionRunFixture} />}
+            />
+          </Route>
+        </Route>
+      </Routes>
+    </RouteChromeProvider>,
+    { route: `/imports/${RID}?queue=high` },
+  );
+  await screen.findByRole("table", { name: "Triage queue" });
+  const medium = screen.getByRole("tab", { name: /Medium/ });
+  await user.click(medium);
+
+  expect(document.title).toBe("EasySynQ — Import run");
+  expect(medium).toHaveFocus();
+  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
 });
 
 test("a files-list failure renders as an error, not an empty queue", async () => {

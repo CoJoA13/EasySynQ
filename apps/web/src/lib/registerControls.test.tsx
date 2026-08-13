@@ -59,7 +59,12 @@ describe("ordinary register URL state", () => {
     }
 
     render(
-      <MemoryRouter initialEntries={["/dcrs?sentinel=keep", "/dcrs?sentinel=keep"]}>
+      <MemoryRouter
+        initialEntries={[
+          "/dcrs?sentinel=keep&checkpoint=baseline",
+          "/dcrs?sentinel=keep&checkpoint=prepared",
+        ]}
+      >
         <Harness />
       </MemoryRouter>,
     );
@@ -75,7 +80,9 @@ describe("ordinary register URL state", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "back" }));
     await waitFor(() =>
-      expect(screen.getByLabelText("location")).toHaveTextContent("/dcrs?sentinel=keep"),
+      expect(screen.getByLabelText("location")).toHaveTextContent(
+        "/dcrs?sentinel=keep&checkpoint=baseline",
+      ),
     );
     expect(screen.getByLabelText("location")).not.toHaveTextContent("q=needle");
 
