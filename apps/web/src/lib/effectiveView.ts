@@ -143,6 +143,12 @@ function hasOrdinaryState(searchParams: URLSearchParams): boolean {
   return Array.from(searchParams.keys()).some((key) => ORDINARY_KEYS.has(key));
 }
 
+function repeatedValue(searchParams: URLSearchParams, key: string): string | null {
+  const values = searchParams.getAll(key);
+  if (values.length === 0 || values.some((value) => value !== values[0])) return null;
+  return values[0] ?? null;
+}
+
 export function classifyEffectiveView(
   pathname: string,
   searchParams: URLSearchParams,
@@ -161,7 +167,7 @@ export function classifyEffectiveView(
   }
 
   const base = knownView(pathname, label);
-  if (pathname === "/tasks" && searchParams.get("type") === "DOC_ACK") {
+  if (pathname === "/tasks" && repeatedValue(searchParams, "type") === "DOC_ACK") {
     return {
       title: "EasySynQ — Acknowledgements",
       chromeKey: "route:/tasks:acknowledgements",
@@ -173,7 +179,7 @@ export function classifyEffectiveView(
   }
 
   for (const [route, selector, detailLabel] of DETAIL_RULES) {
-    const value = searchParams.get(selector);
+    const value = repeatedValue(searchParams, selector);
     if (pathname === route && value) {
       return {
         title: `EasySynQ — ${detailLabel}`,
@@ -187,10 +193,10 @@ export function classifyEffectiveView(
   }
 
   if (matchesPath("/documents/:id", pathname)) {
-    const tab = searchParams.get("tab");
-    const mode = searchParams.get("mode");
-    const from = searchParams.get("from");
-    const to = searchParams.get("to");
+    const tab = repeatedValue(searchParams, "tab");
+    const mode = repeatedValue(searchParams, "mode");
+    const from = repeatedValue(searchParams, "from");
+    const to = repeatedValue(searchParams, "to");
     const parts = [
       ...(tab && tab !== "overview" && DOCUMENT_TABS.has(tab) ? [keyPart("tab", tab)] : []),
       ...(mode === "visual" ? [keyPart("mode", mode)] : []),
@@ -200,7 +206,7 @@ export function classifyEffectiveView(
     if (parts.length > 0) return subview(pathname, base, parts);
   }
 
-  if (matchesPath("/dcrs/:id/diff", pathname) && searchParams.get("mode") === "visual") {
+  if (matchesPath("/dcrs/:id/diff", pathname) && repeatedValue(searchParams, "mode") === "visual") {
     return subview(pathname, base, [keyPart("mode", "visual")]);
   }
 

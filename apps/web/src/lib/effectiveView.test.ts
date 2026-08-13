@@ -153,6 +153,76 @@ describe("classifyEffectiveView", () => {
     expect(filtered.recoveryKey).toBe(unfiltered.recoveryKey);
   });
 
+  it.each([
+    ["material task type", "/tasks", "type=DOC_ACK", "type=DOC_ACK&type=DOC_ACK"],
+    ["library detail", "/library", "detail=document-a", "detail=document-a&detail=document-a"],
+    ["document tab", "/documents/doc-a", "tab=history", "tab=history&tab=history"],
+    ["document mode", "/documents/doc-a", "mode=visual", "mode=visual&mode=visual"],
+    [
+      "document comparison selectors",
+      "/documents/doc-a",
+      "from=version-a&to=version-b",
+      "from=version-a&from=version-a&to=version-b&to=version-b",
+    ],
+    ["DCR diff mode", "/dcrs/dcr-a/diff", "mode=visual", "mode=visual&mode=visual"],
+  ])("treats identical repeated %s values as one selector", (_name, pathname, single, repeated) => {
+    expect(view(pathname, repeated)).toEqual(view(pathname, single));
+  });
+
+  it.each([
+    [
+      "/tasks",
+      "type=DOC_ACK&type=not-a-view",
+      "type=not-a-view&type=DOC_ACK",
+      view("/tasks", "type=not-a-view"),
+    ],
+    [
+      "/library",
+      "detail=document-a&detail=document-b",
+      "detail=document-b&detail=document-a",
+      view("/library"),
+    ],
+    ["/dcrs", "dcr=dcr-a&dcr=dcr-b", "dcr=dcr-b&dcr=dcr-a", view("/dcrs")],
+    ["/capa", "capa=capa-a&capa=capa-b", "capa=capa-b&capa=capa-a", view("/capa")],
+    [
+      "/improvement",
+      "initiative=initiative-a&initiative=initiative-b",
+      "initiative=initiative-b&initiative=initiative-a",
+      view("/improvement"),
+    ],
+    ["/context", "issue=issue-a&issue=issue-b", "issue=issue-b&issue=issue-a", view("/context")],
+    [
+      "/interested-parties",
+      "party=party-a&party=party-b",
+      "party=party-b&party=party-a",
+      view("/interested-parties"),
+    ],
+    ["/risks", "risk=risk-a&risk=risk-b", "risk=risk-b&risk=risk-a", view("/risks")],
+  ])(
+    "resolves conflicting repeated detail and material selectors safely",
+    (pathname, first, reversed, expected) => {
+      expect(view(pathname, first)).toEqual(expected);
+      expect(view(pathname, reversed)).toEqual(expected);
+    },
+  );
+
+  it.each([
+    ["tab=history&tab=acks", "tab=acks&tab=history", ""],
+    ["mode=visual&mode=text", "mode=text&mode=visual", ""],
+    ["from=version-a&from=version-b", "from=version-b&from=version-a", ""],
+    ["to=version-a&to=version-b", "to=version-b&to=version-a", ""],
+  ])("resolves conflicting repeated document selectors safely", (first, reversed, expected) => {
+    expect(view("/documents/doc-a", first)).toEqual(view("/documents/doc-a", expected));
+    expect(view("/documents/doc-a", reversed)).toEqual(view("/documents/doc-a", expected));
+  });
+
+  it("resolves conflicting repeated DCR diff modes safely", () => {
+    const diff = view("/dcrs/dcr-a/diff");
+
+    expect(view("/dcrs/dcr-a/diff", "mode=visual&mode=text")).toEqual(diff);
+    expect(view("/dcrs/dcr-a/diff", "mode=text&mode=visual")).toEqual(diff);
+  });
+
   it("ignores unknown query state and query parameter order", () => {
     const originalOrder = view("/tasks", "q=needle&unknown=value&sort=title");
     const reordered = view("/tasks", "sort=title&unknown=value&q=needle");
