@@ -195,98 +195,100 @@ export function DcrsRegisterPage() {
               <EmptyState message="No change requests match your filters." />
             </Box>
           ) : (
-            <Table highlightOnHover mt="md">
-              <Table.Thead>
-                <Table.Tr>
-                  <SortableTh
-                    label="Identifier"
-                    sortKey="identifier"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Type"
-                    sortKey="type"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Significance"
-                    sortKey="significance"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Reason"
-                    sortKey="reason"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Target"
-                    sortKey="target"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="State"
-                    sortKey="state"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Created"
-                    sortKey="created"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
-                {visible.map((d) => (
-                  <Table.Tr key={d.id}>
-                    <Table.Td>
-                      <Anchor
-                        component="button"
-                        type="button"
-                        data-rownav
-                        onClick={() => setSelected(d.id)}
-                      >
-                        {d.identifier}
-                      </Anchor>
-                    </Table.Td>
-                    <Table.Td>{CHANGE_TYPE_LABEL[d.change_type]}</Table.Td>
-                    <Table.Td>{SIGNIFICANCE_LABEL[d.change_significance]}</Table.Td>
-                    <Table.Td>{REASON_LABEL[d.reason_class]}</Table.Td>
-                    <Table.Td>
-                      <SubjectCell
-                        identifier={d.target_identifier}
-                        title={d.target_title}
-                        fallback={d.change_type === "CREATE" ? "New document" : "—"}
-                      />
-                    </Table.Td>
-                    <Table.Td>
-                      <DcrStateBadge state={d.state} />
-                    </Table.Td>
-                    <Table.Td>{formatDate(d.created_at)}</Table.Td>
+            <Table.ScrollContainer minWidth={1040}>
+              <Table highlightOnHover mt="md">
+                <Table.Thead>
+                  <Table.Tr>
+                    <SortableTh
+                      label="Identifier"
+                      sortKey="identifier"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Type"
+                      sortKey="type"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Significance"
+                      sortKey="significance"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Reason"
+                      sortKey="reason"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Target"
+                      sortKey="target"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="State"
+                      sortKey="state"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Created"
+                      sortKey="created"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                </Table.Thead>
+                <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                  {visible.map((d) => (
+                    <Table.Tr key={d.id}>
+                      <Table.Td>
+                        <Anchor
+                          component="button"
+                          type="button"
+                          data-rownav
+                          onClick={() => setSelected(d.id)}
+                        >
+                          {d.identifier}
+                        </Anchor>
+                      </Table.Td>
+                      <Table.Td>{CHANGE_TYPE_LABEL[d.change_type]}</Table.Td>
+                      <Table.Td>{SIGNIFICANCE_LABEL[d.change_significance]}</Table.Td>
+                      <Table.Td>{REASON_LABEL[d.reason_class]}</Table.Td>
+                      <Table.Td>
+                        <SubjectCell
+                          identifier={d.target_identifier}
+                          title={d.target_title}
+                          fallback={d.change_type === "CREATE" ? "New document" : "—"}
+                        />
+                      </Table.Td>
+                      <Table.Td>
+                        <DcrStateBadge state={d.state} />
+                      </Table.Td>
+                      <Table.Td>{formatDate(d.created_at)}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
         </>
       )}

@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
@@ -7,6 +7,7 @@ import { expect, test } from "vitest";
 import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+import { expectResponsiveTable } from "../../test/responsiveTable";
 import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { ImprovementRegisterPage } from "./ImprovementRegisterPage";
 
@@ -79,6 +80,14 @@ test("keeps the loading and loaded register at the same xl width", async () => {
   expect(containerSizeFor(await screen.findByRole("heading", { name: "Improvement" }))).toBe(
     "var(--container-size-xl)",
   );
+});
+
+test("contains the complete improvement table in one 920 px scroll region", async () => {
+  renderWithProviders(<ImprovementRegisterPage />, { route: "/improvement" });
+  await screen.findByText("IMP-2026-0001");
+  const table = expectResponsiveTable(920);
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(6);
+  expect(within(table).getAllByRole("button", { name: "IMP-2026-0001" })).toHaveLength(1);
 });
 
 function grantManage() {

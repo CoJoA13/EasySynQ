@@ -176,83 +176,85 @@ export function ImprovementRegisterPage() {
               <EmptyState message="No initiatives match your filters." />
             </Box>
           ) : (
-            <Table highlightOnHover mt="md">
-              <Table.Thead>
-                <Table.Tr>
-                  <SortableTh
-                    label="Identifier"
-                    sortKey="identifier"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Title"
-                    sortKey="title"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Source"
-                    sortKey="source"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Owner"
-                    sortKey="owner"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Stage"
-                    sortKey="stage"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Opened"
-                    sortKey="opened"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
-                {visible.map((i) => (
-                  <Table.Tr key={i.id}>
-                    <Table.Td>
-                      <Anchor
-                        component="button"
-                        type="button"
-                        data-rownav
-                        onClick={() => setSelected(i.id)}
-                      >
-                        {i.identifier}
-                      </Anchor>
-                    </Table.Td>
-                    <Table.Td>{i.title}</Table.Td>
-                    <Table.Td>{SOURCE_LABEL[i.source]}</Table.Td>
-                    <Table.Td>{ownerLabel(i.owner_user_id)}</Table.Td>
-                    <Table.Td>
-                      <InitiativeStageBadge stage={i.stage} />
-                    </Table.Td>
-                    <Table.Td>{formatDate(i.opened_at)}</Table.Td>
+            <Table.ScrollContainer minWidth={920}>
+              <Table highlightOnHover mt="md">
+                <Table.Thead>
+                  <Table.Tr>
+                    <SortableTh
+                      label="Identifier"
+                      sortKey="identifier"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Title"
+                      sortKey="title"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Source"
+                      sortKey="source"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Owner"
+                      sortKey="owner"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Stage"
+                      sortKey="stage"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Opened"
+                      sortKey="opened"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                </Table.Thead>
+                <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                  {visible.map((i) => (
+                    <Table.Tr key={i.id}>
+                      <Table.Td>
+                        <Anchor
+                          component="button"
+                          type="button"
+                          data-rownav
+                          onClick={() => setSelected(i.id)}
+                        >
+                          {i.identifier}
+                        </Anchor>
+                      </Table.Td>
+                      <Table.Td>{i.title}</Table.Td>
+                      <Table.Td>{SOURCE_LABEL[i.source]}</Table.Td>
+                      <Table.Td>{ownerLabel(i.owner_user_id)}</Table.Td>
+                      <Table.Td>
+                        <InitiativeStageBadge stage={i.stage} />
+                      </Table.Td>
+                      <Table.Td>{formatDate(i.opened_at)}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
         </>
       )}

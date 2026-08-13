@@ -8,6 +8,7 @@ import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../li
 import { renderWithProviders } from "../../test/render";
 import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { server } from "../../test/msw/server";
+import { expectResponsiveTable } from "../../test/responsiveTable";
 import { DcrsRegisterPage } from "./DcrsRegisterPage";
 
 function LocationProbe() {
@@ -75,6 +76,14 @@ it("keeps the loading and loaded register at the same xl width", async () => {
   expect(containerSizeFor(await screen.findByRole("heading", { name: "Change requests" }))).toBe(
     "var(--container-size-xl)",
   );
+});
+
+it("contains the complete DCR table in one 1040 px scroll region", async () => {
+  renderWithProviders(<DcrsRegisterPage />, { route: "/dcrs" });
+  await screen.findByText("DCR-2026-0001");
+  const table = expectResponsiveTable(1040);
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(7);
+  expect(within(table).getAllByRole("button", { name: "DCR-2026-0001" })).toHaveLength(1);
 });
 
 it("lists change requests and opens the drawer when an identifier is clicked", async () => {

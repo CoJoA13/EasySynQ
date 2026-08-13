@@ -4,8 +4,10 @@ const sources = import.meta.glob(
   [
     "../features/review/TasksInbox.tsx",
     "../features/audits/AuditsListPage.tsx",
+    "../features/dcr/DcrsRegisterPage.tsx",
     "../features/objectives/ObjectivesRegisterPage.tsx",
     "../features/management-review/ManagementReviewsRegisterPage.tsx",
+    "../features/improvement/ImprovementRegisterPage.tsx",
   ],
   { eager: true, query: "?raw", import: "default" },
 ) as Record<string, string>;
@@ -13,8 +15,10 @@ const sources = import.meta.glob(
 const contracts = [
   ["features/review/TasksInbox.tsx", 720],
   ["features/audits/AuditsListPage.tsx", 800],
+  ["features/dcr/DcrsRegisterPage.tsx", 1040],
   ["features/objectives/ObjectivesRegisterPage.tsx", 720],
   ["features/management-review/ManagementReviewsRegisterPage.tsx", 800],
+  ["features/improvement/ImprovementRegisterPage.tsx", 920],
 ] as const;
 
 function sourceFor(path: string): string {
