@@ -13,7 +13,17 @@ import type { DocumentVersion } from "../../lib/types";
 const DOC = "11111111-1111-1111-1111-111111111111";
 const TO = "dddd1111-1111-1111-1111-111111111111";
 const FROM = "eeee1111-1111-1111-1111-111111111111";
+const OLDER = "ffff1111-1111-1111-1111-111111111111";
 const versions = versionFixture as unknown as DocumentVersion[];
+const selectorVersions: DocumentVersion[] = [
+  ...versions,
+  {
+    ...versions[1]!,
+    id: OLDER,
+    version_seq: 0,
+    revision_label: "Rev 0",
+  },
+];
 
 function LocationProbe() {
   const { pathname, search } = useLocation();
@@ -47,9 +57,16 @@ function CompareNavigation() {
 
 function CompareHistoryControls() {
   const navigate = useNavigate();
+  const { pathname, search } = useLocation();
   return (
     <>
-      <button onClick={() => navigate(`/documents/${DOC}?sentinel=keep&checkpoint=prepared`)}>
+      <button
+        onClick={() => {
+          const params = new URLSearchParams(search);
+          params.set("checkpoint", "prepared");
+          navigate(`${pathname}?${params}`);
+        }}
+      >
         Prepare history
       </button>
       <button onClick={() => navigate(-1)}>Back</button>
@@ -157,6 +174,38 @@ test("VersionCompare controls replace history and delete the default text mode",
     expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
   );
 });
+
+test.each([
+  ["Compare from", `${OLDER}&to=${TO}`, "Rev A · Superseded", `from=${FROM}&to=${TO}`],
+  ["to", `${FROM}&to=${OLDER}`, "Rev B · Effective", `from=${FROM}&to=${TO}`],
+] as const)(
+  "%s selection replaces history while preserving the current comparison state",
+  async (label, pair, option, expectedPair) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <VersionCompare documentId={DOC} versions={selectorVersions} />
+        <CompareHistoryControls />
+        <LocationProbe />
+      </>,
+      { route: `/documents/${DOC}?from=${pair}&sentinel=keep&checkpoint=baseline` },
+    );
+    expect(await screen.findByText(/Added weighted scoring/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Prepare history" }));
+    await user.click(screen.getByRole("textbox", { name: label }));
+    await user.click(await screen.findByRole("option", { name: option }));
+
+    expect(await screen.findByText(/Added weighted scoring/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent(expectedPair);
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
+    );
+    expect(screen.getByLabelText("Current location")).not.toHaveTextContent("checkpoint=prepared");
+  },
+);
 
 test("VersionCompare is hidden when there is nothing to compare (<2 versions)", () => {
   renderWithProviders(<VersionCompare documentId={DOC} versions={versions.slice(0, 1)} />, {
