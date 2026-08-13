@@ -131,6 +131,46 @@ test("VersionCompare defaults a cold pair with one missing side", async () => {
   expect(await screen.findByText(/Added weighted scoring/)).toBeInTheDocument();
 });
 
+test.each([`mode=visual&mode=unknown-sentinel`, `mode=unknown-sentinel&mode=visual`])(
+  "conflicting duplicate document modes resolve to the safe text viewer for %s",
+  async (search) => {
+    const { container } = renderWithProviders(
+      <VersionCompare documentId={DOC} versions={versions} />,
+      { route: `/documents/${DOC}?from=${FROM}&to=${TO}&${search}` },
+    );
+
+    expect(await screen.findByText(/Added weighted scoring/)).toBeInTheDocument();
+    expect(screen.queryByText("Page images")).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent("unknown-sentinel");
+  },
+);
+
+test.each([`from=${OLDER}&from=${FROM}&to=${TO}`, `from=${FROM}&from=${OLDER}&to=${TO}`])(
+  "conflicting duplicate comparison selectors use the safe default pair for %s",
+  async (search) => {
+    const requests: string[] = [];
+    server.use(
+      http.get("/api/v1/documents/:id/versions/:vid/diff", ({ request }) => {
+        requests.push(request.url);
+        return HttpResponse.json({
+          from: { revision_label: "Rev A" },
+          to: { revision_label: "Rev B", change_reason: null },
+          metadata_diff: [],
+          text_diff: { status: "ok", hunks: [] },
+        });
+      }),
+    );
+
+    renderWithProviders(<VersionCompare documentId={DOC} versions={selectorVersions} />, {
+      route: `/documents/${DOC}?${search}`,
+    });
+
+    expect(await screen.findByText("No text changes between these versions.")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Compare from" })).toHaveValue("Rev A · Superseded");
+    expect(requests).toEqual([expect.stringContaining(`/versions/${TO}/diff?from=${FROM}`)]);
+  },
+);
+
 test("VersionCompare changes to valid, fallback, equal, cleared, and visual live URL state", async () => {
   const user = userEvent.setup();
   renderWithProviders(<CompareNavigation />, { route: `/documents/${DOC}` });
@@ -199,6 +239,80 @@ test.each([
     expect(await screen.findByText(/Added weighted scoring/)).toBeInTheDocument();
     expect(screen.getByLabelText("Current location")).toHaveTextContent(expectedPair);
     expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
+    );
+    expect(screen.getByLabelText("Current location")).not.toHaveTextContent("checkpoint=prepared");
+  },
+);
+
+test.each([
+  ["absent", "Compare from", "", "from", OLDER, TO],
+  ["absent", "to", "", "to", FROM, OLDER],
+  ["one-sided", "Compare from", `to=${OLDER}`, "from", OLDER, TO],
+  ["one-sided", "to", `from=${OLDER}`, "to", FROM, OLDER],
+  ["invalid", "Compare from", `from=unknown-from-sentinel&to=${OLDER}`, "from", OLDER, TO],
+  ["invalid", "to", `from=${OLDER}&to=unknown-to-sentinel`, "to", FROM, OLDER],
+] as const)(
+  "a first %s URL edit through the %s Select writes a complete safe pair",
+  async (_, label, initialPair, direction, expectedFrom, expectedTo) => {
+    const user = userEvent.setup();
+    const requests: string[] = [];
+    server.use(
+      http.get("/api/v1/documents/:id/versions/:vid/diff", ({ request }) => {
+        requests.push(request.url);
+        return HttpResponse.json({
+          from: { revision_label: "Rev A" },
+          to: { revision_label: "Rev B", change_reason: null },
+          metadata_diff: [],
+          text_diff: { status: "ok", hunks: [] },
+        });
+      }),
+    );
+    const query = [initialPair, "sentinel=keep", "checkpoint=baseline"].filter(Boolean).join("&");
+    const { container } = renderWithProviders(
+      <>
+        <VersionCompare documentId={DOC} versions={selectorVersions} />
+        <CompareHistoryControls />
+        <LocationProbe />
+      </>,
+      { route: `/documents/${DOC}?${query}` },
+    );
+
+    expect(await screen.findByText("No text changes between these versions.")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Compare from" })).toHaveValue("Rev A · Superseded");
+    expect(screen.getByRole("textbox", { name: "to" })).toHaveValue("Rev B · Effective");
+    expect(requests).toEqual([expect.stringContaining(`/versions/${TO}/diff?from=${FROM}`)]);
+    if (initialPair) {
+      expect(screen.getByLabelText("Current location")).toHaveTextContent(initialPair);
+    } else {
+      expect(screen.getByLabelText("Current location")).not.toHaveTextContent("from=");
+      expect(screen.getByLabelText("Current location")).not.toHaveTextContent("to=");
+    }
+
+    await user.click(screen.getByRole("button", { name: "Prepare history" }));
+    await user.click(screen.getByRole("textbox", { name: label }));
+    await user.click(await screen.findByRole("option", { name: "Rev 0 · Superseded" }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current location")).toHaveTextContent(`from=${expectedFrom}`),
+    );
+    expect(screen.getByLabelText("Current location")).toHaveTextContent(`to=${expectedTo}`);
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("sentinel=keep");
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+    expect(screen.getByRole("textbox", { name: "Compare from" })).toHaveValue(
+      direction === "from" ? "Rev 0 · Superseded" : "Rev A · Superseded",
+    );
+    expect(screen.getByRole("textbox", { name: "to" })).toHaveValue(
+      direction === "to" ? "Rev 0 · Superseded" : "Rev B · Effective",
+    );
+    await waitFor(() =>
+      expect(requests.at(-1)).toContain(`/versions/${expectedTo}/diff?from=${expectedFrom}`),
+    );
+    expect(container).not.toHaveTextContent("unknown-from-sentinel");
+    expect(container).not.toHaveTextContent("unknown-to-sentinel");
+
     await user.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() =>
       expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),

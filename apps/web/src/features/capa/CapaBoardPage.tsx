@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { AsOf } from "../../lib/AsOf";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { Capa, CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 import { CapaCard } from "./CapaCard";
@@ -45,7 +46,7 @@ export function CapaBoardPage() {
   // other surfaces — e.g. Complaints' "View CAPA" — can link to it). Mirrors the S-web-4 ?from=&to=
   // redline pattern. Card/list/raise opens stay local-only (URL untouched) to keep the board unchanged.
   const [params, setParams] = useSearchParams();
-  const selectedCapaParam = params.get("capa");
+  const selectedCapaParam = getUniqueSearchParam(params, "capa");
   const [selected, setSelected] = useState<string | null>(selectedCapaParam);
   const [raiseOpen, setRaiseOpen] = useState(false);
   const perms = usePermissions();

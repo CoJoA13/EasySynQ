@@ -1,3 +1,5 @@
+import { matchPath } from "react-router-dom";
+
 export type QueryStateClass = "material-view" | "detail" | "subview" | "ordinary" | "ignored";
 
 export interface EffectiveView {
@@ -91,15 +93,7 @@ const ORDINARY_KEYS = new Set([
 ]);
 
 function matchesPath(pattern: string, pathname: string): boolean {
-  const patternSegments = pattern.split("/").filter(Boolean);
-  const pathSegments = pathname.split("/").filter(Boolean);
-
-  return (
-    patternSegments.length === pathSegments.length &&
-    patternSegments.every(
-      (segment, index) => segment.startsWith(":") || segment === pathSegments[index],
-    )
-  );
+  return matchPath(pattern, pathname) !== null;
 }
 
 function labelFor(pathname: string): string | null {
@@ -143,7 +137,7 @@ function hasOrdinaryState(searchParams: URLSearchParams): boolean {
   return Array.from(searchParams.keys()).some((key) => ORDINARY_KEYS.has(key));
 }
 
-function repeatedValue(searchParams: URLSearchParams, key: string): string | null {
+export function getUniqueSearchParam(searchParams: URLSearchParams, key: string): string | null {
   const values = searchParams.getAll(key);
   if (values.length === 0 || values.some((value) => value !== values[0])) return null;
   return values[0] ?? null;
@@ -167,7 +161,7 @@ export function classifyEffectiveView(
   }
 
   const base = knownView(pathname, label);
-  if (pathname === "/tasks" && repeatedValue(searchParams, "type") === "DOC_ACK") {
+  if (matchesPath("/tasks", pathname) && getUniqueSearchParam(searchParams, "type") === "DOC_ACK") {
     return {
       title: "EasySynQ — Acknowledgements",
       chromeKey: "route:/tasks:acknowledgements",
@@ -179,8 +173,8 @@ export function classifyEffectiveView(
   }
 
   for (const [route, selector, detailLabel] of DETAIL_RULES) {
-    const value = repeatedValue(searchParams, selector);
-    if (pathname === route && value) {
+    const value = getUniqueSearchParam(searchParams, selector);
+    if (matchesPath(route, pathname) && value) {
       return {
         title: `EasySynQ — ${detailLabel}`,
         chromeKey: `route:${pathname}:${selector}`,
@@ -193,10 +187,10 @@ export function classifyEffectiveView(
   }
 
   if (matchesPath("/documents/:id", pathname)) {
-    const tab = repeatedValue(searchParams, "tab");
-    const mode = repeatedValue(searchParams, "mode");
-    const from = repeatedValue(searchParams, "from");
-    const to = repeatedValue(searchParams, "to");
+    const tab = getUniqueSearchParam(searchParams, "tab");
+    const mode = getUniqueSearchParam(searchParams, "mode");
+    const from = getUniqueSearchParam(searchParams, "from");
+    const to = getUniqueSearchParam(searchParams, "to");
     const parts = [
       ...(tab && tab !== "overview" && DOCUMENT_TABS.has(tab) ? [keyPart("tab", tab)] : []),
       ...(mode === "visual" ? [keyPart("mode", mode)] : []),
@@ -206,7 +200,10 @@ export function classifyEffectiveView(
     if (parts.length > 0) return subview(pathname, base, parts);
   }
 
-  if (matchesPath("/dcrs/:id/diff", pathname) && repeatedValue(searchParams, "mode") === "visual") {
+  if (
+    matchesPath("/dcrs/:id/diff", pathname) &&
+    getUniqueSearchParam(searchParams, "mode") === "visual"
+  ) {
     return subview(pathname, base, [keyPart("mode", "visual")]);
   }
 

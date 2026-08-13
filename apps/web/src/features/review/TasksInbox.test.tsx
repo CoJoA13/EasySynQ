@@ -124,6 +124,21 @@ describe("TasksInbox routing", () => {
     expect(container).not.toHaveTextContent("unknown-sentinel");
   });
 
+  test.each(["type=DOC_ACK&type=unknown-sentinel", "type=unknown-sentinel&type=DOC_ACK"])(
+    "conflicting duplicate task selectors resolve to the same safe general view for %s",
+    async (search) => {
+      const { container } = renderTasksWithRouteChrome(`/tasks?${search}`);
+
+      expect(
+        await screen.findByRole("heading", { name: "Review and approve" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Acknowledgements" })).not.toBeInTheDocument();
+      expect(document.title).toBe("EasySynQ — Tasks");
+      expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+      expect(container).not.toHaveTextContent("unknown-sentinel");
+    },
+  );
+
   test.each([
     ["the general queue", "/tasks", "Review and approve"],
     ["the acknowledgement queue", "/tasks?type=DOC_ACK", "Acknowledgements"],

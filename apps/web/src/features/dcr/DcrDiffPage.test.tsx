@@ -147,6 +147,27 @@ it("treats unknown and removed modes as text and follows live mode changes", asy
   expect(await screen.findByText("Control-metadata changes")).toBeInTheDocument();
 });
 
+it.each(["mode=visual&mode=unknown-sentinel", "mode=unknown-sentinel&mode=visual"])(
+  "conflicting duplicate DCR modes resolve content and chrome to text for %s",
+  async (search) => {
+    serveDcr(reviseImplemented);
+    const { container } = renderWithProviders(
+      <RouteChromeProvider>
+        <Routes>
+          <Route path="/dcrs/:id/diff" element={<DcrExternalModeNavigation />} />
+        </Routes>
+      </RouteChromeProvider>,
+      { route: `/dcrs/${DCR_DIFF_ID}/diff?${search}` },
+    );
+
+    expect(await screen.findByText("Control-metadata changes")).toBeInTheDocument();
+    expect(screen.queryByText("Page images")).not.toBeInTheDocument();
+    expect(document.title).toBe("EasySynQ — Document change request");
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+    expect(container).not.toHaveTextContent("unknown-sentinel");
+  },
+);
+
 it("the mode control replaces history and removes the default text mode", async () => {
   serveDcr(reviseImplemented);
   const user = userEvent.setup();

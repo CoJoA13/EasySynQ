@@ -211,6 +211,34 @@ test("Library detail opening pushes but close replaces, and external detail chan
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });
 
+test("closing a detail URL restores the feature opener without publishing page navigation", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <RouteChromeProvider>
+      <Routes>
+        <Route element={<ChromeOutlet />}>
+          <Route element={<AppShell />}>
+            <Route path="library" element={<LibraryPage />} />
+          </Route>
+        </Route>
+      </Routes>
+    </RouteChromeProvider>,
+    { route: "/library" },
+  );
+
+  const opener = await screen.findByRole("button", {
+    name: "Open SOP-PUR-014: Supplier Selection & Evaluation",
+  });
+  await user.click(opener);
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Close" }));
+
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await waitFor(() => expect(opener).toHaveFocus());
+  expect(document.title).toBe("EasySynQ — Library");
+  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+});
+
 test("a cold ?detail= deep-link opens the drawer (fetches the doc)", async () => {
   renderWithProviders(<LibraryPage />, {
     route: "/library?detail=11111111-1111-1111-1111-111111111111",
@@ -221,6 +249,31 @@ test("a cold ?detail= deep-link opens the drawer (fetches the doc)", async () =>
     ).toBeInTheDocument(),
   );
 });
+
+test.each([`detail=${DOC_A.id}&detail=${DOC_B.id}`, `detail=${DOC_B.id}&detail=${DOC_A.id}`])(
+  "conflicting duplicate detail selectors keep Library content and chrome at the safe base view for %s",
+  async (search) => {
+    const { container } = renderWithProviders(
+      <RouteChromeProvider>
+        <Routes>
+          <Route element={<ChromeOutlet />}>
+            <Route element={<AppShell />}>
+              <Route path="library" element={<LibraryPage />} />
+            </Route>
+          </Route>
+        </Routes>
+      </RouteChromeProvider>,
+      { route: `/library?${search}` },
+    );
+
+    expect(await screen.findByText("SOP-PUR-014")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.title).toBe("EasySynQ — Library");
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+    expect(container).not.toHaveTextContent(DOC_A.id);
+    expect(container).not.toHaveTextContent(DOC_B.id);
+  },
+);
 
 test("filtering by a clause narrows the list and shows a removable chip", async () => {
   renderWithProviders(<LibraryPage />, { route: "/library" });

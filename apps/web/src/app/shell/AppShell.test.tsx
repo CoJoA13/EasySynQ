@@ -41,6 +41,14 @@ function BrokenTasksUntilAcknowledgements() {
   return <h1>Acknowledgements recovered</h1>;
 }
 
+function BrokenLibraryUntilDetailCloses() {
+  const { search } = useLocation();
+  if (new URLSearchParams(search).has("detail")) {
+    throw new Error("detail recovery probe");
+  }
+  return <FeatureOwnedDetail />;
+}
+
 function RecoverySequenceNavigation() {
   useRouteChrome();
   const navigate = useNavigate();
@@ -491,4 +499,62 @@ test("releases pending acknowledgement chrome only after route-error ownership c
   expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent(
     "Acknowledgements",
   );
+});
+
+test("route-error recovery to an ordinary pathname focuses main without publishing its label", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const user = userEvent.setup();
+
+  renderWithProviders(
+    <RouteChromeProvider>
+      <Routes>
+        <Route element={<RecoveryNavigation target="/library" />}>
+          <Route path="/" element={<AppShell />}>
+            <Route path="tasks" element={<AlwaysBrokenRoute />} />
+            <Route path="library" element={<h1>Recovered Library</h1>} />
+          </Route>
+        </Route>
+      </Routes>
+    </RouteChromeProvider>,
+    { route: "/tasks" },
+  );
+
+  expect(
+    await screen.findByRole("heading", { name: "This page couldn't be displayed" }),
+  ).toHaveFocus();
+  await user.click(screen.getByRole("button", { name: "change-effective-view" }));
+
+  expect(await screen.findByRole("heading", { name: "Recovered Library" })).toBeInTheDocument();
+  expect(document.title).toBe("EasySynQ — Library");
+  expect(document.getElementById("main-content")).toHaveFocus();
+  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+});
+
+test("route-error recovery after detail close leaves focus with the recovered feature", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const user = userEvent.setup();
+
+  renderWithProviders(
+    <RouteChromeProvider>
+      <Routes>
+        <Route element={<RecoveryNavigation target="/library" />}>
+          <Route path="/" element={<AppShell />}>
+            <Route path="library" element={<BrokenLibraryUntilDetailCloses />} />
+          </Route>
+        </Route>
+      </Routes>
+    </RouteChromeProvider>,
+    { route: "/library?detail=doc-a" },
+  );
+
+  expect(
+    await screen.findByRole("heading", { name: "This page couldn't be displayed" }),
+  ).toHaveFocus();
+  await user.click(screen.getByRole("button", { name: "change-effective-view" }));
+
+  const featureFocus = await screen.findByRole("button", { name: "Feature-owned detail focus" });
+  await waitFor(() => expect(featureFocus).toHaveFocus());
+  expect(document.getElementById("main-content")).not.toHaveFocus();
+  expect(document.title).toBe("EasySynQ — Library");
+  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
 });

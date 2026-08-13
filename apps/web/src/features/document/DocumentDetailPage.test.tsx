@@ -214,6 +214,26 @@ describe("DocumentDetailPage URL-backed tabs", () => {
     expect(container).not.toHaveTextContent("unknown-sentinel");
   });
 
+  test.each(["tab=history&tab=unknown-sentinel", "tab=unknown-sentinel&tab=history"])(
+    "conflicting duplicate document tabs resolve content and chrome to Overview for %s",
+    async (search) => {
+      const { container } = renderWithProviders(
+        <RouteChromeProvider>
+          <Routes>
+            <Route path="documents/:id" element={<DocumentWithRouteChrome />} />
+          </Routes>
+        </RouteChromeProvider>,
+        { route: `/documents/${ID}?${search}` },
+      );
+
+      expect(await screen.findByText("Control metadata")).toBeInTheDocument();
+      expect(screen.queryByText("Version history")).not.toBeInTheDocument();
+      expect(document.title).toBe("EasySynQ — Document");
+      expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+      expect(container).not.toHaveTextContent("unknown-sentinel");
+    },
+  );
+
   test("live external tab changes and removal update the active panel", async () => {
     const user = userEvent.setup();
     renderWithProviders(

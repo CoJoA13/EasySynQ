@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "react-router-dom";
-import { classifyEffectiveView } from "./effectiveView";
+import { classifyEffectiveView, type QueryStateClass } from "./effectiveView";
 
 const RouteErrorChromeActiveContext = createContext(false);
 const RouteErrorChromeRegistrationContext = createContext<(() => () => void) | null>(null);
@@ -73,6 +73,21 @@ interface PreviousRouteView {
   pathname: string;
   chromeKey: string;
   recoveryKey: string;
+  queryStateClass: QueryStateClass;
+}
+
+function isSamePathMaterialTransition(
+  previousView: PreviousRouteView | null,
+  pathname: string,
+  chromeKey: string,
+  queryStateClass: QueryStateClass,
+): boolean {
+  return (
+    previousView !== null &&
+    previousView.pathname === pathname &&
+    previousView.chromeKey !== chromeKey &&
+    (previousView.queryStateClass === "material-view" || queryStateClass === "material-view")
+  );
 }
 
 export function useRouteChrome(): void {
@@ -93,19 +108,26 @@ export function useRouteChrome(): void {
     const chromeChanged = previousView !== null && previousView.chromeKey !== view.chromeKey;
     const recoveryChanged = previousView !== null && previousView.recoveryKey !== view.recoveryKey;
     const effectiveTransition = pathnameChanged || chromeChanged || recoveryChanged;
+    const materialTransition = isSamePathMaterialTransition(
+      previousView,
+      pathname,
+      view.chromeKey,
+      view.queryStateClass,
+    );
 
     if (routeErrorOwnsChrome) {
       if (pathnameChanged) publishAnnouncement?.(null);
       if (effectiveTransition) {
         pendingRouteMain.current =
-          view.focusOwner === "route-main"
-            ? { announcement: chromeChanged ? view.announcement : null }
+          (pathnameChanged && view.focusOwner === "route-main") || materialTransition
+            ? { announcement: materialTransition ? view.announcement : null }
             : null;
       }
       previous.current = {
         pathname,
         chromeKey: view.chromeKey,
         recoveryKey: view.recoveryKey,
+        queryStateClass: view.queryStateClass,
       };
       document.title = "EasySynQ — Page unavailable";
       if (!previousRouteErrorOwnership.current || effectiveTransition) {
@@ -125,16 +147,17 @@ export function useRouteChrome(): void {
         publishAnnouncement?.(pendingRouteMain.current.announcement);
       }
       pendingRouteMain.current = null;
-    } else if (view.focusOwner === "route-main" && (pathnameChanged || chromeChanged)) {
+    } else if (view.focusOwner === "route-main" && (pathnameChanged || materialTransition)) {
       // Initial deep links and StrictMode's second mount-effect pass leave previousView null or
       // unchanged. Detail and subview owners retain their own focus behavior.
       document.getElementById("main-content")?.focus();
-      if (chromeChanged) publishAnnouncement?.(view.announcement);
+      if (materialTransition) publishAnnouncement?.(view.announcement);
     }
     previous.current = {
       pathname,
       chromeKey: view.chromeKey,
       recoveryKey: view.recoveryKey,
+      queryStateClass: view.queryStateClass,
     };
   }, [hash, pathname, publishAnnouncement, routeErrorOwnsChrome, search, view]);
 }

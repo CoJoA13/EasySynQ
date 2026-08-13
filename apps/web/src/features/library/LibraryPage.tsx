@@ -13,6 +13,7 @@ import {
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ClauseBadge } from "../../lib/ClauseBadge";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { SkeletonList } from "../../lib/states";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useMe } from "../../app/shell/useMe";
@@ -40,7 +41,7 @@ export function LibraryPage() {
   const uf = parseUrlFilters(params);
   const offset = parseOffset(params);
   const size = parsePageSize(params);
-  const detailId = params.get("detail");
+  const detailId = getUniqueSearchParam(params, "detail");
 
   const { data: me, isError: meError } = useMe();
   const effectiveFilterReady = !uf.eff || Boolean(me?.org_timezone);

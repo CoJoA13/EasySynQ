@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { ErrorState } from "../../lib/states";
 import { AuthorActions } from "../authoring/AuthorActions";
 import { AcknowledgementsTab } from "./AcknowledgementsTab";
@@ -64,7 +65,7 @@ function Tile({
 export function DocumentDetailPage() {
   const { id = null } = useParams();
   const [sp, setSp] = useSearchParams();
-  const tab = parseDocumentTab(sp.get("tab"));
+  const tab = parseDocumentTab(getUniqueSearchParam(sp, "tab"));
   const setTab = (v: string | null) =>
     setSp(
       (prev) => {

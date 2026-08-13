@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import type { Dcr, DcrChangeType, DcrReasonClass, DcrState } from "../../lib/types";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { RegisterToolbar, SortableTh, SubjectCell } from "../../lib/RegisterToolbar";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import {
   sortRows,
   useDebouncedSearch,
@@ -57,7 +58,7 @@ function formatDate(iso: string): string {
 export function DcrsRegisterPage() {
   const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useDcrs();
   const [params, setParams] = useSearchParams();
-  const selectedDcrParam = params.get("dcr");
+  const selectedDcrParam = getUniqueSearchParam(params, "dcr");
   const [selected, setSelected] = useState<string | null>(selectedDcrParam);
   // URL-backed enum filters (critique #5): they survive navigation + are shareable. Distinct keys
   // (state / ctype / reason) — none collide with the `dcr` drawer deep-link seam below.

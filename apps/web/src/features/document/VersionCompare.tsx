@@ -1,5 +1,6 @@
 import { Group, SegmentedControl, Select, Stack, Text } from "@mantine/core";
 import { useSearchParams } from "react-router-dom";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import type { DocumentVersion } from "../../lib/types";
 import { RedlineViewer } from "./RedlineViewer";
 import { VisualDiffViewer } from "./VisualDiffViewer";
@@ -26,13 +27,13 @@ export function VersionCompare({
   const validIds = new Set(ordered.map((version) => version.id));
   const defaultFrom = ordered[1]?.id ?? null;
   const defaultTo = ordered[0]?.id ?? null;
-  const rawFrom = params.get("from");
-  const rawTo = params.get("to");
+  const rawFrom = getUniqueSearchParam(params, "from");
+  const rawTo = getUniqueSearchParam(params, "to");
   const pairIsValid =
     rawFrom !== null && rawTo !== null && validIds.has(rawFrom) && validIds.has(rawTo);
   const from = pairIsValid ? rawFrom : defaultFrom;
   const to = pairIsValid ? rawTo : defaultTo;
-  const mode = params.get("mode") === "visual" ? "visual" : "text";
+  const mode = getUniqueSearchParam(params, "mode") === "visual" ? "visual" : "text";
 
   const options = ordered.map((v) => ({
     value: v.id,
@@ -42,8 +43,17 @@ export function VersionCompare({
   function set(key: "from" | "to" | "mode", value: string | null) {
     setParams(
       (p) => {
-        if (!value || (key === "mode" && value === "text")) p.delete(key);
-        else p.set(key, value);
+        if ((key === "from" || key === "to") && value) {
+          const counterpartKey = key === "from" ? "to" : "from";
+          const counterpartValue = key === "from" ? to : from;
+          p.set(key, value);
+          if (counterpartValue) p.set(counterpartKey, counterpartValue);
+          else p.delete(counterpartKey);
+        } else if (!value || (key === "mode" && value === "text")) {
+          p.delete(key);
+        } else {
+          p.set(key, value);
+        }
         return p;
       },
       { replace: true },

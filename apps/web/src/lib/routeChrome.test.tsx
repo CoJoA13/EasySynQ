@@ -109,6 +109,21 @@ describe("useRouteChrome", () => {
     expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("Tasks");
   });
 
+  it("clears a stale material announcement without publishing an ordinary pathname destination", async () => {
+    const user = userEvent.setup();
+    renderChrome("/tasks");
+
+    await user.click(screen.getByRole("button", { name: "go-acknowledgements" }));
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent(
+      "Acknowledgements",
+    );
+
+    await user.click(screen.getByRole("button", { name: "go-library" }));
+    expect(document.title).toBe("EasySynQ — Library");
+    expect(document.getElementById("main-content")).toHaveFocus();
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+  });
+
   it.each([
     "change-search",
     "change-sort",

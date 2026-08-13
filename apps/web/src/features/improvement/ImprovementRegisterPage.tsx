@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { AsOf } from "../../lib/AsOf";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import {
@@ -34,7 +35,7 @@ export function ImprovementRegisterPage() {
   const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useInitiatives();
   const { data: directory } = useUserDirectory();
   const [params, setParams] = useSearchParams();
-  const selectedInitiativeParam = params.get("initiative");
+  const selectedInitiativeParam = getUniqueSearchParam(params, "initiative");
   const [selected, setSelected] = useState<string | null>(selectedInitiativeParam);
   // URL-backed enum filters (distinct keys; neither collides with the `initiative` drawer deep-link).
   const [stage, setStage] = useUrlParam("stage");

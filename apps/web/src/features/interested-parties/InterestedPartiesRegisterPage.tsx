@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { InterestedParty, InterestedPartyInfluence } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { StatusBadge } from "../../lib/StatusBadge";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
@@ -113,7 +114,7 @@ export function InterestedPartiesRegisterPage() {
   // back/forward that drops ?party closes the drawer, while a change to another param (the filters)
   // leaves a locally-opened drawer untouched (the S-context-fe Codex P3 lesson).
   const [params, setParams] = useSearchParams();
-  const partyParam = params.get("party");
+  const partyParam = getUniqueSearchParam(params, "party");
   const [selected, setSelected] = useState<string | null>(partyParam);
   useEffect(() => {
     setSelected(partyParam);

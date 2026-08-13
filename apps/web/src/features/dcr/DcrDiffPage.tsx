@@ -2,6 +2,7 @@ import { Anchor, Group, Loader, SegmentedControl, Stack, Text, Title } from "@ma
 import { useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { ErrorState, LoadingState } from "../../lib/states";
 import { RedlineViewer } from "../document/RedlineViewer";
 import { VisualDiffViewer } from "../document/VisualDiffViewer";
@@ -21,7 +22,7 @@ export function DcrDiffPage() {
   const dcrId = id ?? null;
   const { data: dcr, isLoading, isError, refetch } = useDcr(dcrId);
   const [params, setParams] = useSearchParams();
-  const mode = params.get("mode") === "visual" ? "visual" : "text";
+  const mode = getUniqueSearchParam(params, "mode") === "visual" ? "visual" : "text";
 
   const eligible =
     !!dcr &&

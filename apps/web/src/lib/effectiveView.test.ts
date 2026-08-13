@@ -235,6 +235,65 @@ describe("classifyEffectiveView", () => {
   });
 
   it.each([
+    ["/LiBrArY", "Library"],
+    ["/DoCuMeNtS/doc-a", "Document"],
+    ["/DcRs/dcr-a/DiFf", "Document change request"],
+  ])("matches the mixed-case known route %s with React Router semantics", (pathname, label) => {
+    expect(view(pathname)).toMatchObject({
+      title: `EasySynQ — ${label}`,
+      focusOwner: "route-main",
+    });
+  });
+
+  it("applies material, detail, document, and DCR query rules to mixed-case route matches", () => {
+    const material = view("/TaSkS", "type=DOC_ACK");
+    const detail = view("/LiBrArY", "detail=secret-document-id");
+    const document = view("/DoCuMeNtS/doc-a", "tab=history");
+    const dcr = view("/DcRs/dcr-a/DiFf", "mode=visual");
+
+    expect(material).toMatchObject({
+      title: "EasySynQ — Acknowledgements",
+      queryStateClass: "material-view",
+    });
+    expect(detail).toMatchObject({
+      title: "EasySynQ — Document details",
+      queryStateClass: "detail",
+    });
+    expect(document).toMatchObject({
+      title: "EasySynQ — Document",
+      queryStateClass: "subview",
+    });
+    expect(dcr).toMatchObject({
+      title: "EasySynQ — Document change request",
+      queryStateClass: "subview",
+    });
+    expect(
+      [material, detail, document, dcr]
+        .map(({ title, announcement }) => `${title}${announcement ?? ""}`)
+        .join(" "),
+    ).not.toContain("secret-document-id");
+  });
+
+  it.each(["//library", "/documents//doc-a", "/dcrs//diff"])(
+    "treats repeated-slash path %s as the same 404 React Router renders",
+    (pathname) => {
+      expect(view(pathname, "detail=secret-document-id&mode=visual")).toMatchObject({
+        title: "EasySynQ — Page not found",
+        queryStateClass: "ignored",
+        focusOwner: "feature",
+        announcement: null,
+      });
+    },
+  );
+
+  it.each(["/library/", "/library//", "/documents/doc-a//"])(
+    "retains React Router's trailing-slash match for %s",
+    (pathname) => {
+      expect(view(pathname).title).not.toBe("EasySynQ — Page not found");
+    },
+  );
+
+  it.each([
     ["/", "Dashboard"],
     ["/setup", "Setup"],
     ["/admin", "Administration"],
