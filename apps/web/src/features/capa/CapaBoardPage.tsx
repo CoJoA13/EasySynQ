@@ -1,4 +1,5 @@
 import {
+  Anchor,
   Badge,
   Box,
   Button,
@@ -19,6 +20,7 @@ import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { AsOf } from "../../lib/AsOf";
 import { readSearchParamState } from "../../lib/effectiveView";
+import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { Capa, CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 import { CapaCard } from "./CapaCard";
@@ -38,6 +40,7 @@ const TERMINAL: CapaCloseState[] = ["Closed", "Rejected"];
 
 export function CapaBoardPage() {
   const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useCapas();
+  const nav = useRowKeyboardNav<HTMLTableSectionElement>();
   const [view, setView] = useState<"board" | "list">("board");
   const [source, setSource] = useState<CapaSource | "">("");
   const [severity, setSeverity] = useState<NcSeverity | "">("");
@@ -254,29 +257,30 @@ export function CapaBoardPage() {
               <Table.Th>State</Table.Th>
             </Table.Tr>
           </Table.Thead>
-          <Table.Tbody>
-            {filtered.map((c: Capa) => (
-              <Table.Tr
-                key={c.id}
-                tabIndex={0}
-                style={{ cursor: "pointer" }}
-                onClick={() => setSelected(c.id)}
-                onKeyDown={(e) => {
-                  // Keyboard parity with the board's CapaCard buttons: a clickable row must be
-                  // focusable + Enter/Space activatable, not mouse-only.
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setSelected(c.id);
-                  }
-                }}
-              >
-                <Table.Td>{c.identifier ?? "—"}</Table.Td>
-                <Table.Td>{c.title ?? "(untitled)"}</Table.Td>
-                <Table.Td>{SEVERITY_LABEL[c.severity]}</Table.Td>
-                <Table.Td>{SOURCE_LABEL[c.source]}</Table.Td>
-                <Table.Td>{CLOSE_STATE_LABEL[c.close_state]}</Table.Td>
-              </Table.Tr>
-            ))}
+          <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+            {filtered.map((c: Capa) => {
+              const identifier = c.identifier ?? "—";
+              const title = c.title ?? "(untitled)";
+              return (
+                <Table.Tr key={c.id}>
+                  <Table.Td>
+                    <Anchor
+                      component="button"
+                      type="button"
+                      data-rownav
+                      onClick={() => setSelected(c.id)}
+                      aria-label={`Open CAPA ${identifier}: ${title}`}
+                    >
+                      {identifier}
+                    </Anchor>
+                  </Table.Td>
+                  <Table.Td>{title}</Table.Td>
+                  <Table.Td>{SEVERITY_LABEL[c.severity]}</Table.Td>
+                  <Table.Td>{SOURCE_LABEL[c.source]}</Table.Td>
+                  <Table.Td>{CLOSE_STATE_LABEL[c.close_state]}</Table.Td>
+                </Table.Tr>
+              );
+            })}
           </Table.Tbody>
         </Table>
       )}
