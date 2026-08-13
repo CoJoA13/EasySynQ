@@ -228,7 +228,11 @@ export function ObjectivesRegisterPage() {
                       </Table.Td>
                       <Table.Td>{currentOverTarget(o)}</Table.Td>
                       <Table.Td>
-                        <StatusBadge tone={RAG_TONE[o.rag]} label={RAG_LABEL[o.rag]} kind="Status" />
+                        <StatusBadge
+                          tone={RAG_TONE[o.rag]}
+                          label={RAG_LABEL[o.rag]}
+                          kind="Status"
+                        />
                       </Table.Td>
                       <Table.Td>{o.due_date}</Table.Td>
                     </Table.Tr>
