@@ -169,8 +169,8 @@ In List view:
 1. the row renders as structural table content;
 2. the identifier cell renders the primary Open CAPA button;
 3. activating that button calls the existing `setSelected(capa.id)` path;
-4. the existing selected-state effect writes the `capa` query selector with the shipped URL-state
-   semantics; and
+4. the list open remains local-only and leaves the URL untouched, while externally supplied `?capa=`
+   state retains the shipped live synchronization and removal semantics; and
 5. `CapaDrawer` retains its existing dialog focus, Escape close, selector-removal, conflict, and focus
    restoration ownership.
 
