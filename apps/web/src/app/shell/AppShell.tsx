@@ -5,7 +5,9 @@ import { ApplicationErrorBoundary } from "../errors/ApplicationErrorBoundary";
 import { NotFoundPage } from "../errors/NotFoundPage";
 import { RouteErrorPage } from "../errors/RouteErrorPage";
 import { CommandPalette } from "../../features/search/CommandPalette";
+import { classifyEffectiveView } from "../../lib/effectiveView";
 import { MutationFeedbackOutlet } from "../../lib/mutationFeedback";
+import { RouteAnnouncement } from "../../lib/routeChrome";
 import { Breadcrumb } from "./Breadcrumb";
 import { LeftRail } from "./LeftRail";
 import { TopBar } from "./TopBar";
@@ -17,8 +19,8 @@ export interface AppShellProps {
 export function AppShell({ notFound = false }: AppShellProps) {
   const [navOpened, { toggle: toggleNav }] = useDisclosure(false);
   const [searchOpened, { open: openSearch, close: closeSearch }] = useDisclosure(false);
-  const { pathname, search, hash } = useLocation();
-  const routeResetKey = `${pathname}${search}${hash}`;
+  const { pathname, search } = useLocation();
+  const routeResetKey = classifyEffectiveView(pathname, new URLSearchParams(search)).recoveryKey;
   // ⌘K / Ctrl-K must fire even while focus is in an input (empty tagsToIgnore); "/" must NOT hijack
   // typing (the default ignore-list covers INPUT/TEXTAREA/SELECT). Hence two separate bindings.
   useHotkeys([["mod+K", openSearch]], []);
@@ -61,6 +63,7 @@ export function AppShell({ notFound = false }: AppShellProps) {
       <MantineAppShell.Main id="main-content" tabIndex={-1}>
         <Breadcrumb notFound={notFound} />
         <MutationFeedbackOutlet />
+        <RouteAnnouncement />
         <ApplicationErrorBoundary
           resetKey={routeResetKey}
           fallback={({ onReset }) => <RouteErrorPage onRetry={onReset} />}
