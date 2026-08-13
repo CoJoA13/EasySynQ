@@ -1,6 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { MemoryRouter, useLocation, useSearchParams } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import {
   type SortDir,
@@ -26,6 +26,64 @@ describe("useUrlParam", () => {
     expect(result.current[0]).toBe("Closed");
     act(() => result.current[1](""));
     expect(result.current[0]).toBe("");
+  });
+});
+
+describe("ordinary register URL state", () => {
+  it("replaces ordinary edits and adopts a later URL entry without replaying stale local search", async () => {
+    function Harness() {
+      const { q, setQ } = useDebouncedSearch("q", 10);
+      const [, setState] = useUrlParam("state");
+      const { sort, dir, toggleSort } = useTableSort({
+        keys: ["identifier", "due"] as const,
+        defaultSort: "identifier",
+      });
+      const loc = useLocation();
+      const navigate = useNavigate();
+      return (
+        <>
+          <input
+            aria-label="search"
+            value={q}
+            onChange={(event) => setQ(event.currentTarget.value)}
+          />
+          <button onClick={() => toggleSort("due")}>
+            sort {sort} {dir}
+          </button>
+          <button onClick={() => setState("Open")}>state</button>
+          <button onClick={() => navigate(-1)}>back</button>
+          <button onClick={() => navigate("/dcrs?sentinel=keep&q=external")}>external</button>
+          <output aria-label="location">{loc.pathname + loc.search}</output>
+        </>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={["/dcrs?sentinel=keep", "/dcrs?sentinel=keep"]}>
+        <Harness />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByLabelText("search"), { target: { value: "needle" } });
+    await waitFor(() => expect(screen.getByLabelText("location")).toHaveTextContent("q=needle"));
+    fireEvent.click(screen.getByRole("button", { name: /sort/ }));
+    fireEvent.click(screen.getByRole("button", { name: "state" }));
+    expect(screen.getByLabelText("location")).toHaveTextContent("sentinel=keep");
+    expect(screen.getByLabelText("location")).toHaveTextContent("sort=due");
+    expect(screen.getByLabelText("location")).toHaveTextContent("dir=asc");
+    expect(screen.getByLabelText("location")).toHaveTextContent("state=Open");
+
+    fireEvent.click(screen.getByRole("button", { name: "back" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("location")).toHaveTextContent("/dcrs?sentinel=keep"),
+    );
+    expect(screen.getByLabelText("location")).not.toHaveTextContent("q=needle");
+
+    fireEvent.click(screen.getByRole("button", { name: "external" }));
+    await waitFor(() => expect(screen.getByLabelText("search")).toHaveValue("external"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(screen.getByLabelText("location")).toHaveTextContent("q=external");
+    expect(screen.getByLabelText("location")).not.toHaveTextContent("q=needle");
   });
 });
 

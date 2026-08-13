@@ -70,46 +70,61 @@ export function LibraryPage() {
   const hasFilters = FILTER_KEYS.some((k) => uf[k]);
 
   function patchFilters(patch: Partial<UrlFilters>) {
-    setParams((p) => {
-      for (const k of FILTER_KEYS) {
-        if (k in patch) {
-          const v = patch[k];
-          if (v) p.set(k, v);
-          else p.delete(k);
+    setParams(
+      (p) => {
+        for (const k of FILTER_KEYS) {
+          if (k in patch) {
+            const v = patch[k];
+            if (v) p.set(k, v);
+            else p.delete(k);
+          }
         }
-      }
-      p.delete("offset"); // a facet change returns to page 1
-      return p;
-    });
+        p.delete("offset"); // a facet change returns to page 1
+        return p;
+      },
+      { replace: true },
+    );
   }
   const clearFilters = () =>
-    setParams((p) => {
-      for (const k of FILTER_KEYS) p.delete(k);
-      p.delete("offset");
-      return p;
-    });
+    setParams(
+      (p) => {
+        for (const k of FILTER_KEYS) p.delete(k);
+        p.delete("offset");
+        return p;
+      },
+      { replace: true },
+    );
   const setOffset = (o: number) =>
-    setParams((p) => {
-      if (o > 0) p.set("offset", String(o));
-      else p.delete("offset");
-      return p;
-    });
+    setParams(
+      (p) => {
+        if (o > 0) p.set("offset", String(o));
+        else p.delete("offset");
+        return p;
+      },
+      { replace: true },
+    );
   const setSize = (s: number) =>
-    setParams((p) => {
-      p.set("size", String(s));
-      p.delete("offset");
-      return p;
-    });
+    setParams(
+      (p) => {
+        p.set("size", String(s));
+        p.delete("offset");
+        return p;
+      },
+      { replace: true },
+    );
   const openDetail = (id: string) =>
     setParams((p) => {
       p.set("detail", id);
       return p;
     });
   const closeDetail = () =>
-    setParams((p) => {
-      p.delete("detail");
-      return p;
-    });
+    setParams(
+      (p) => {
+        p.delete("detail");
+        return p;
+      },
+      { replace: true },
+    );
 
   return (
     <Stack gap="md">

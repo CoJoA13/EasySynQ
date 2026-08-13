@@ -1,14 +1,32 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
+import { useLocation, useNavigate } from "react-router-dom";
 import { server } from "../../test/msw/server";
-import { ingestionChecklistFixture, ingestionRunFixture } from "../../test/msw/handlers";
+import {
+  ingestionChecklistFixture,
+  ingestionFilesFixture,
+  ingestionRunFixture,
+} from "../../test/msw/handlers";
 import { renderWithProviders } from "../../test/render";
 import { ReviewCockpit } from "./ReviewCockpit";
 
 const RID = ingestionRunFixture.id;
+
+function HistoryControls() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate(`/imports/${RID}?queue=high&sentinel=keep`)}>
+        Prepare history
+      </button>
+      <button onClick={() => navigate(-1)}>Back</button>
+      <output aria-label="Current location">{useLocation().search}</output>
+    </>
+  );
+}
 
 function renderCockpit(route = `/imports/${RID}?queue=high`) {
   return renderWithProviders(<ReviewCockpit runId={RID} run={ingestionRunFixture} />, { route });
@@ -21,6 +39,43 @@ test("the High tab shows the 2 high-band rows", async () => {
   expect(await within(table).findByText("SOP-PUR-014 Purchasing.docx")).toBeInTheDocument();
   expect(within(table).getByText("SOP-PUR v2 FINAL.docx")).toBeInTheDocument();
   expect(within(table).queryByText("Final Inspection WI rev1.docx")).not.toBeInTheDocument();
+});
+
+test("queue and confidence changes replace history while preserving unrelated query state", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.get("/api/v1/admin/imports/:id/files", () =>
+      HttpResponse.json({
+        run_id: RID,
+        files: Array.from({ length: 100 }, (_, index) => ({
+          ...ingestionFilesFixture[0],
+          id: `history-file-${index}`,
+        })),
+      }),
+    ),
+  );
+  renderWithProviders(
+    <>
+      <ReviewCockpit runId={RID} run={ingestionRunFixture} />
+      <HistoryControls />
+    </>,
+    { route: `/imports/${RID}?queue=high&sentinel=keep` },
+  );
+  await screen.findByRole("table", { name: "Triage queue" });
+  await user.click(screen.getByRole("button", { name: "Prepare history" }));
+  await user.click(screen.getByRole("tab", { name: /Medium/ }));
+  await user.click(screen.getByRole("radio", { name: "High" }));
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("sentinel=keep");
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("queue=medium");
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("conf=HIGH");
+  await user.click(screen.getByRole("button", { name: "Next ›" }));
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("offset=100");
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("queue=high&sentinel=keep"),
+  );
+  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("conf=HIGH");
 });
 
 test("a files-list failure renders as an error, not an empty queue", async () => {

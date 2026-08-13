@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { describe, expect, it } from "vitest";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { ReportsRegisterPage } from "./ReportsRegisterPage";
@@ -72,7 +72,48 @@ function QueryProbe() {
   return <output aria-label="Current query">{useLocation().search}</output>;
 }
 
+function HistoryControls() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate("/?sentinel=keep&checkpoint=1")}>Prepare history</button>
+      <button onClick={() => navigate(-1)}>Back</button>
+    </>
+  );
+}
+
 describe("ReportsRegisterPage", () => {
+  it("replaces report facet and clear history while preserving unrelated query state", async () => {
+    const user = userEvent.setup();
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)));
+    renderWithProviders(
+      <>
+        <ReportsRegisterPage />
+        <HistoryControls />
+        <QueryProbe />
+      </>,
+      { route: "/?sentinel=keep" },
+    );
+    await screen.findByText("SOP-QA-001");
+    await user.click(screen.getByRole("button", { name: "Prepare history" }));
+    await user.click(screen.getByRole("textbox", { name: "Status" }));
+    await user.click(await screen.findByRole("option", { name: "Effective" }));
+    expect(screen.getByLabelText("Current query")).toHaveTextContent("sentinel=keep");
+    expect(screen.getByLabelText("Current query")).toHaveTextContent("checkpoint=1");
+    expect(screen.getByLabelText("Current query")).toHaveTextContent("state=Effective");
+    await user.click(screen.getByRole("button", { name: "Clear all" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current query")).toHaveTextContent("?sentinel=keep"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current query")).toHaveTextContent("?sentinel=keep"),
+    );
+    expect(screen.getByLabelText("Current query")).not.toHaveTextContent("checkpoint=1");
+    expect(screen.getByLabelText("Current query")).not.toHaveTextContent("state=Effective");
+  });
+
   it("renders the provenance banner + a register row", async () => {
     server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)));
     renderWithProviders(<ReportsRegisterPage />);
