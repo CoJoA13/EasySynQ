@@ -34,6 +34,71 @@ test("lists programmes with canonical status badges; write affordances hidden wi
   expect(screen.queryByRole("button", { name: /Edit/ })).toBeNull();
 });
 
+test("programme rows are structural and expose one pressed native selection control", async () => {
+  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  const firstRow = await screen.findByRole("row", { name: /AUDPROG-000001/ });
+  const secondRow = screen.getByRole("row", { name: /AUDPROG-000002/ });
+  expect(firstRow).not.toHaveAttribute("tabindex");
+  expect(
+    within(firstRow).getByRole("button", {
+      name: "Select programme AUDPROG-000001: 2026 Internal Audit Programme",
+      pressed: true,
+    }),
+  ).toBeInTheDocument();
+  expect(
+    within(secondRow).getByRole("button", {
+      name: "Select programme AUDPROG-000002: 2025 Programme",
+      pressed: false,
+    }),
+  ).toBeInTheDocument();
+});
+
+test("programme arrow navigation changes focus without changing selection", async () => {
+  const u = userEvent.setup();
+  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  const first = await screen.findByRole("button", {
+    name: /^Select programme AUDPROG-000001:/,
+  });
+  const second = screen.getByRole("button", {
+    name: /^Select programme AUDPROG-000002:/,
+  });
+  first.focus();
+  await u.keyboard("{ArrowDown}");
+  expect(second).toHaveFocus();
+  expect(first).toHaveAttribute("aria-pressed", "true");
+  expect(second).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByText("Plans — AUDPROG-000001")).toBeInTheDocument();
+});
+
+test.each(["{Enter}", " "])("the native programme control selects with %s", async (key) => {
+  const u = userEvent.setup();
+  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  const second = await screen.findByRole("button", {
+    name: /^Select programme AUDPROG-000002:/,
+  });
+  second.focus();
+  await u.keyboard(key);
+  expect(second).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText("Plans — AUDPROG-000002")).toBeInTheDocument();
+});
+
+test("ordinary cells and Edit do not change programme selection", async () => {
+  grant(["audit.plan"]);
+  const u = userEvent.setup();
+  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  const secondRow = await screen.findByRole("row", { name: /AUDPROG-000002/ });
+  await u.click(within(secondRow).getByText("2025"));
+  expect(screen.getByText("Plans — AUDPROG-000001")).toBeInTheDocument();
+
+  const edit = within(secondRow).getByRole("button", { name: "Edit" });
+  edit.focus();
+  await u.keyboard("{ArrowUp}");
+  expect(edit).toHaveFocus();
+  await u.click(edit);
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  expect(screen.getByText("Plans — AUDPROG-000001")).toBeInTheDocument();
+});
+
 test("creating a programme POSTs title + period", async () => {
   grant(["audit.plan"]);
   let body: { title?: string; period?: string } | null = null;
@@ -41,7 +106,15 @@ test("creating a programme POSTs title + period", async () => {
     http.post("/api/v1/audit-programs", async ({ request }) => {
       body = (await request.json()) as typeof body;
       return HttpResponse.json(
-        { id: "ap-new-00-0000-0000-0000-000000000000", identifier: "AUDPROG-000003", title: body!.title!, period: body!.period ?? null, coverage: null, archived: false, created_at: "2026-06-09T09:00:00+00:00" },
+        {
+          id: "ap-new-00-0000-0000-0000-000000000000",
+          identifier: "AUDPROG-000003",
+          title: body!.title!,
+          period: body!.period ?? null,
+          coverage: null,
+          archived: false,
+          created_at: "2026-06-09T09:00:00+00:00",
+        },
         { status: 201 },
       );
     }),
@@ -64,7 +137,15 @@ test("editing pre-fills and PATCHes; the archive toggle rides the same form", as
   server.use(
     http.patch("/api/v1/audit-programs/:id", async ({ request, params }) => {
       body = (await request.json()) as typeof body;
-      return HttpResponse.json({ id: String(params.id), identifier: "AUDPROG-000001", title: "2026 Internal Audit Programme", period: "2026", coverage: null, archived: true, created_at: "2026-01-05T09:00:00+00:00" });
+      return HttpResponse.json({
+        id: String(params.id),
+        identifier: "AUDPROG-000001",
+        title: "2026 Internal Audit Programme",
+        period: "2026",
+        coverage: null,
+        archived: true,
+        created_at: "2026-01-05T09:00:00+00:00",
+      });
     }),
   );
   const u = userEvent.setup();
@@ -115,7 +196,15 @@ test("Add plan POSTs to the selected programme (date + process + checklist ref)"
       target = String(params.id);
       body = (await request.json()) as typeof body;
       return HttpResponse.json(
-        { id: "pl-new-00-0000-0000-0000-000000000000", program_id: target, auditee_process_id: null, lead_auditor_user_id: null, scheduled_date: "2026-11-01", checklist_ref: "FRM-AUD-002", created_at: "2026-06-09T09:00:00+00:00" },
+        {
+          id: "pl-new-00-0000-0000-0000-000000000000",
+          program_id: target,
+          auditee_process_id: null,
+          lead_auditor_user_id: null,
+          scheduled_date: "2026-11-01",
+          checklist_ref: "FRM-AUD-002",
+          created_at: "2026-06-09T09:00:00+00:00",
+        },
         { status: 201 },
       );
     }),
@@ -141,10 +230,10 @@ test("an archived selected programme hides Add plan; a racing 409 surfaces calml
   const u = userEvent.setup();
   renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
   // Select the archived programme → no Add plan.
-  await u.click(await screen.findByText("AUDPROG-000002"));
+  await u.click(await screen.findByRole("button", { name: /^Select programme AUDPROG-000002:/ }));
   expect(screen.queryByRole("button", { name: /Add plan/ })).toBeNull();
   // Back on the active one, a server 409 (race: archived elsewhere) renders calmly in the modal.
-  await u.click(screen.getByText("AUDPROG-000001"));
+  await u.click(screen.getByRole("button", { name: /^Select programme AUDPROG-000001:/ }));
   server.use(
     http.post("/api/v1/audit-programs/:id/plans", () =>
       HttpResponse.json(
@@ -183,7 +272,15 @@ test("clearing a pre-filled Period sends an explicit empty string on save", asyn
   server.use(
     http.patch("/api/v1/audit-programs/:id", async ({ request, params }) => {
       body = (await request.json()) as typeof body;
-      return HttpResponse.json({ id: String(params.id), identifier: "AUDPROG-000001", title: "2026 Internal Audit Programme", period: null, coverage: null, archived: false, created_at: "2026-01-05T09:00:00+00:00" });
+      return HttpResponse.json({
+        id: String(params.id),
+        identifier: "AUDPROG-000001",
+        title: "2026 Internal Audit Programme",
+        period: null,
+        coverage: null,
+        archived: false,
+        created_at: "2026-01-05T09:00:00+00:00",
+      });
     }),
   );
   const u = userEvent.setup();

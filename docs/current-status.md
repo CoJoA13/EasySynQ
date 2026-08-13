@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-08-13"
-baseline_commit: "76c2f72"
-last_shipped_slice: "S-url-state-correctness"
+baseline_commit: "c32875c"
+last_shipped_slice: "S-keyboard-semantic-interaction"
 migration_head: "0085"
 next_migration: "0086"
 api_unit_tests: 1686
 web_test_files: 259
-web_tests: 1834
+web_tests: 1845
 contract_tests: 283
 integration_passed: 1051
 integration_skipped: 2
@@ -30,19 +30,19 @@ DCR, improvement, risk, context, interested-party, and identity-provisioning sur
 retention/disposition, and Evidence Packs are API/worker-complete but do not have dedicated SPA
 management routes.
 
-The last shipped slice classifies query-backed operational state by product meaning. The Tasks and
-Acknowledgements material views now have distinct fixed titles and intentional live focus/announcement
-behavior; recognized detail selectors and subviews participate in safe route recovery without stealing
-feature-owned focus; and ordinary filters, search, sort, pagination, tabs, modes, and comparison controls
-retain compact replacement history. Browser Back/Forward remains authoritative, every URL-backed drawer
-follows live selector change, removal, and conflict, and loaded comparison IDs are validated before viewer
-work. Unknown or conflicting selector values resolve to safe defaults without entering visible copy.
+The last shipped slice removes the final two row-level table interactions. CAPA List and Audit Programme
+rows remain structural, while visible identifier-cell buttons own safe accessible names and native
+Enter/Space activation. Audit Programme exposes pressed selection independently from Arrow focus movement;
+ordinary cells and Edit stay inert or independent. The shared row-navigation helper now handles arrows only
+from the actively focused marked primary control, and a source-wide guard finds no interactive `Table.Tr`
+opening tag. CAPA local opens remain URL-neutral while externally supplied selectors retain their shipped
+drawer synchronization and removal behavior.
 
 The slice preserves the operational QueryClient/provider identity, cached state, route-persistent mutation
 feedback, authentication/setup gates, route-error and 404 ownership, API handlers, OpenAPI/generated
 artifacts, database schema/migrations, Keycloak, dependencies, and deployment behavior. Detailed shipped
 behavior and evidence remain in
-[`slice-history.md`](slice-history.md#s-url-state-correctness--effective-url-view-identity-history-recovery-and-accessibility).
+[`slice-history.md`](slice-history.md#s-keyboard-semantic-interaction--native-primary-table-controls-and-structural-rows).
 
 ## Runtime truth
 
@@ -64,18 +64,21 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
 the facts it freshly verifies; partial or unavailable checks must be reported as such. At implementation
-baseline `76c2f72` on 2026-08-13, durable job `job-msr2j5ez-6c010aaa` ran
-`npm --prefix apps/web test` and exited 0 with 259 files and 1,834 tests passing in 275.10 seconds, without
-unhandled errors. It emitted only Node's repeated `localStorage` experimental warning. The exact 21-file
-URL-state selection passed 467 tests in 57.92 seconds; web typecheck, lint, scoped documentation Prettier,
-and production build passed. The build transformed 1,098 modules and retained its existing advisory for a
-chunk above 500 kB; the JavaScript asset was 1,158.15 kB (318.75 kB gzip). Independent broad review drove
-two focused fix waves, and the final scoped re-review reported no actionable findings; its seven-file
-selection passed 211 tests, web typecheck passed, and its scoped diff was clean. API, contract, integration,
-migration, and CI numeric values above retain their prior successful evidence because their complete gates
-were not refreshed for this front-end-only slice. After the evidence edits, authority fixtures passed 91/91,
-all seven Claude-hook compatibility assertions passed, repository authority returned `AUTHORITY_OK`,
-site-data fixtures passed 13/13, the direct site-data scan was clean, and the diff guards were clean.
+baseline `c32875c` on 2026-08-13, durable job `job-msrjnu84-05d66760` ran
+`npm --prefix apps/web test` and exited 0 with 259 files and 1,845 tests passing in 330.83 seconds, without
+unhandled errors. Its stderr contained Node's repeated `localStorage` experimental warning because no
+`--localstorage-file` was provided. The exact 18-file semantic-interaction selection passed 213 tests in
+47.17 seconds; web lint, typecheck, scoped documentation Prettier, and production build passed. The build
+transformed 1,098 modules and retained the advisory for a chunk above 500 kB; its JavaScript asset was
+1,158.49 kB (318.80 kB gzip). Task-level reviews were clean. Final review identified the missing authority
+closure and one evidence overclaim; this evidence commit closes the authority gap and records that direct
+focus restoration specifically to the new local CAPA list opener remains unverified, while URL-seeded drawer
+focus behavior and unchanged feature-owned focus ownership were exercised or inspected as applicable. API,
+contract, integration, migration, and CI numeric values above retain their prior successful evidence because
+their complete gates were not refreshed for this front-end-only slice. After the evidence edits, authority
+fixtures passed 91/91, all seven Claude-hook compatibility assertions passed, repository authority returned
+`AUTHORITY_OK`, site-data fixtures passed 13/13, the direct site-data scan was clean, and the diff guards were
+clean.
 
 ## CI topology
 

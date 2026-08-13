@@ -46,14 +46,47 @@ test("opening a card shows the detail drawer", async () => {
   expect(await screen.findByText("Closed-loop thread")).toBeInTheDocument();
 });
 
-test("a list-view row opens the drawer via keyboard (Enter), not mouse-only", async () => {
+test("CAPA list rows are structural and expose a named native primary button", async () => {
+  const u = userEvent.setup();
   renderWithProviders(<CapaBoardPage />, { route: "/capa" });
-  await screen.findByText(/Supplier re-evaluation/);
-  await userEvent.click(screen.getByRole("radio", { name: "List" }));
-  const row = await screen.findByRole("row", { name: /REC-000031/ });
-  row.focus();
-  await userEvent.keyboard("{Enter}");
+  await u.click(await screen.findByRole("radio", { name: "List" }));
+  const row = screen.getByRole("row", { name: /REC-000031/ });
+  expect(row).not.toHaveAttribute("tabindex");
+  expect(
+    within(row).getByRole("button", {
+      name: "Open CAPA REC-000031: Supplier re-evaluation overdue for 2 vendors",
+    }),
+  ).toBeInTheDocument();
+});
+
+test.each(["{Enter}", " "])("the native CAPA control opens the drawer with %s", async (key) => {
+  const u = userEvent.setup();
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  await u.click(await screen.findByRole("radio", { name: "List" }));
+  const open = screen.getByRole("button", { name: /^Open CAPA REC-000031:/ });
+  open.focus();
+  await u.keyboard(key);
   expect(await screen.findByText("Closed-loop thread")).toBeInTheDocument();
+});
+
+test("ArrowDown moves to the next CAPA control without opening it", async () => {
+  const u = userEvent.setup();
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  await u.click(await screen.findByRole("radio", { name: "List" }));
+  const controls = screen.getAllByRole("button", { name: /^Open CAPA / });
+  controls[0]!.focus();
+  await u.keyboard("{ArrowDown}");
+  expect(controls[1]).toHaveFocus();
+  expect(screen.queryByText("Closed-loop thread")).toBeNull();
+});
+
+test("clicking ordinary CAPA cell content does not open the drawer", async () => {
+  const u = userEvent.setup();
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  await u.click(await screen.findByRole("radio", { name: "List" }));
+  const row = screen.getByRole("row", { name: /REC-000031/ });
+  await u.click(within(row).getByText("Audit"));
+  expect(screen.queryByText("Closed-loop thread")).toBeNull();
 });
 
 test("deep-links the detail drawer open from ?capa=<id> on mount", async () => {
@@ -93,9 +126,10 @@ test("renders a calm no-access panel on a 403", async () => {
   expect(await screen.findByText(/don't have access/)).toBeInTheDocument();
 });
 
-test("no axe violations", async () => {
+test("no axe violations in List view", async () => {
+  const u = userEvent.setup();
   const { container } = renderWithProviders(<CapaBoardPage />, { route: "/capa" });
-  await screen.findByText(/Supplier re-evaluation/);
+  await u.click(await screen.findByRole("radio", { name: "List" }));
   expect(await axe(container)).toHaveNoViolations();
 });
 
