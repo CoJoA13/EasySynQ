@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMe } from "../../app/shell/useMe";
 import { ApiError } from "../../lib/api";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { humanizeStageKey, humanizeToken } from "../../lib/labels";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
@@ -27,7 +28,7 @@ import { useTasks } from "./hooks";
 // throw "Rendered fewer hooks than expected" on the bell→inbox navigation).
 export function TasksInbox() {
   const [sp] = useSearchParams();
-  if (sp.get("type") === "DOC_ACK") return <AckInbox />;
+  if (getUniqueSearchParam(sp, "type") === "DOC_ACK") return <AckInbox />;
   return <GeneralTasksInbox />;
 }
 

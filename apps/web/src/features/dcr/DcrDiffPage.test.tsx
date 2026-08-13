@@ -3,8 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { DcrDetail, DocumentVersion } from "../../lib/types";
+import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { DcrDiffPage } from "./DcrDiffPage";
@@ -38,12 +39,32 @@ function serveDcr(dcr: DcrDetail) {
   server.use(http.get("/api/v1/dcrs/:id", () => HttpResponse.json(dcr)));
 }
 
-function renderAt(id: string) {
+function renderAt(id: string, search = "") {
   return renderWithProviders(
     <Routes>
       <Route path="/dcrs/:id/diff" element={<DcrDiffPage />} />
     </Routes>,
-    { route: `/dcrs/${id}/diff` },
+    { route: `/dcrs/${id}/diff${search}` },
+  );
+}
+
+function DcrExternalModeNavigation() {
+  useRouteChrome();
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate(`/dcrs/${DCR_DIFF_ID}/diff?mode=visual`)}>
+        External visual mode
+      </button>
+      <button onClick={() => navigate(`/dcrs/${DCR_DIFF_ID}/diff`)}>External default mode</button>
+      <button onClick={() => navigate(`/dcrs/${DCR_DIFF_ID}/diff?mode=unknown-sentinel`)}>
+        External unknown mode
+      </button>
+      <main id="main-content" tabIndex={-1}>
+        <RouteAnnouncement />
+        <DcrDiffPage />
+      </main>
+    </>
   );
 }
 
@@ -70,6 +91,119 @@ it("toggles to the visual page-image diff", async () => {
   // (VisualDiffViewer.test clicks getByText("After") on its layer SegmentedControl).
   await user.click(screen.getByText("Visual"));
   await screen.findByAltText("Page 2 of 3 — Diff layer (changed)");
+});
+
+it("follows mounted external DCR mode navigation without changing global route chrome", async () => {
+  serveDcr(reviseImplemented);
+  const user = userEvent.setup();
+  renderWithProviders(
+    <RouteChromeProvider>
+      <Routes>
+        <Route path="/dcrs/:id/diff" element={<DcrExternalModeNavigation />} />
+      </Routes>
+    </RouteChromeProvider>,
+    { route: `/dcrs/${DCR_DIFF_ID}/diff` },
+  );
+  const main = document.getElementById("main-content");
+  const expectNeutralChrome = () => {
+    expect(document.title).toBe("EasySynQ — Document change request");
+    expect(document.activeElement).not.toBe(main);
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+  };
+
+  expect(await screen.findByText("Control-metadata changes")).toBeInTheDocument();
+  expect(screen.getByLabelText("Diff mode")).toBeInTheDocument();
+  expectNeutralChrome();
+
+  await user.click(screen.getByRole("button", { name: "External visual mode" }));
+  expect(await screen.findByText("Page images")).toBeInTheDocument();
+  expect(screen.getByLabelText("Diff mode")).toBeInTheDocument();
+  expectNeutralChrome();
+
+  await user.click(screen.getByRole("button", { name: "External default mode" }));
+  expect(await screen.findByText("Control-metadata changes")).toBeInTheDocument();
+  expectNeutralChrome();
+
+  await user.click(screen.getByRole("button", { name: "External unknown mode" }));
+  expect(await screen.findByText("Control-metadata changes")).toBeInTheDocument();
+  expect(screen.queryByText("unknown-sentinel")).not.toBeInTheDocument();
+  expectNeutralChrome();
+});
+
+it("treats unknown and removed modes as text and follows live mode changes", async () => {
+  serveDcr(reviseImplemented);
+  const user = userEvent.setup();
+  renderWithProviders(
+    <Routes>
+      <Route path="/dcrs/:id/diff" element={<DcrDiffPage />} />
+    </Routes>,
+    { route: `/dcrs/${DCR_DIFF_ID}/diff?mode=unknown-sentinel` },
+  );
+  expect(await screen.findByText("Control-metadata changes")).toBeInTheDocument();
+  expect(screen.queryByText("unknown-sentinel")).not.toBeInTheDocument();
+  await user.click(screen.getByText("Visual"));
+  expect(await screen.findByText("Page images")).toBeInTheDocument();
+  await user.click(screen.getByText("Text"));
+  expect(await screen.findByText("Control-metadata changes")).toBeInTheDocument();
+});
+
+it.each(["mode=visual&mode=unknown-sentinel", "mode=unknown-sentinel&mode=visual"])(
+  "conflicting duplicate DCR modes resolve content and chrome to text for %s",
+  async (search) => {
+    serveDcr(reviseImplemented);
+    const { container } = renderWithProviders(
+      <RouteChromeProvider>
+        <Routes>
+          <Route path="/dcrs/:id/diff" element={<DcrExternalModeNavigation />} />
+        </Routes>
+      </RouteChromeProvider>,
+      { route: `/dcrs/${DCR_DIFF_ID}/diff?${search}` },
+    );
+
+    expect(await screen.findByText("Control-metadata changes")).toBeInTheDocument();
+    expect(screen.queryByText("Page images")).not.toBeInTheDocument();
+    expect(document.title).toBe("EasySynQ — Document change request");
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+    expect(container).not.toHaveTextContent("unknown-sentinel");
+  },
+);
+
+it("the mode control replaces history and removes the default text mode", async () => {
+  serveDcr(reviseImplemented);
+  const user = userEvent.setup();
+  function DcrHistoryControls() {
+    const navigate = useNavigate();
+    return (
+      <>
+        <button
+          onClick={() => navigate(`/dcrs/${DCR_DIFF_ID}/diff?sentinel=keep&checkpoint=prepared`)}
+        >
+          Prepare history
+        </button>
+        <button onClick={() => navigate(-1)}>Back</button>
+      </>
+    );
+  }
+  renderWithProviders(
+    <>
+      <Routes>
+        <Route path="/dcrs/:id/diff" element={<DcrDiffPage />} />
+      </Routes>
+      <DcrHistoryControls />
+      <LocationProbe />
+    </>,
+    { route: `/dcrs/${DCR_DIFF_ID}/diff?sentinel=keep&checkpoint=baseline` },
+  );
+  await screen.findByText("Control-metadata changes");
+  await user.click(screen.getByRole("button", { name: "Prepare history" }));
+  await user.click(screen.getByText("Visual"));
+  expect(await screen.findByText("Page images")).toBeInTheDocument();
+  expect(screen.getByTestId("loc")).toHaveTextContent("mode=visual");
+  await user.click(screen.getByText("Text"));
+  expect(await screen.findByText("Control-metadata changes")).toBeInTheDocument();
+  expect(screen.getByTestId("loc")).not.toHaveTextContent("mode=");
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("checkpoint=baseline"));
 });
 
 const CREATE_DCR = {

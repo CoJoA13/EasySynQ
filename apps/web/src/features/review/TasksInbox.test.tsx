@@ -1,11 +1,32 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { useNavigate } from "react-router-dom";
 import { describe, expect, test, vi } from "vitest";
+import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { TasksInbox } from "./TasksInbox";
+
+function TasksWithRouteChrome() {
+  useRouteChrome();
+  return (
+    <main id="main-content" tabIndex={-1}>
+      <RouteAnnouncement />
+      <TasksInbox />
+    </main>
+  );
+}
+
+function renderTasksWithRouteChrome(route: string) {
+  return renderWithProviders(
+    <RouteChromeProvider>
+      <TasksWithRouteChrome />
+    </RouteChromeProvider>,
+    { route },
+  );
+}
 
 test("names the subject and links each row to the review page", async () => {
   // S-optimize-1: the row's primary link is now the subject identifier (not the action verb).
@@ -91,6 +112,41 @@ describe("TasksInbox routing", () => {
   test("no type param renders the default review queue", async () => {
     renderWithProviders(<TasksInbox />, { route: "/tasks" });
     expect(await screen.findByText("Review and approve")).toBeInTheDocument();
+  });
+
+  test("an unknown task type stays in the general queue without leaking into accessible chrome", async () => {
+    const { container } = renderTasksWithRouteChrome("/tasks?type=unknown-sentinel");
+
+    expect(await screen.findByRole("heading", { name: "Review and approve" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /unknown-sentinel/i })).not.toBeInTheDocument();
+    expect(document.title).toBe("EasySynQ — Tasks");
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+    expect(container).not.toHaveTextContent("unknown-sentinel");
+  });
+
+  test.each(["type=DOC_ACK&type=unknown-sentinel", "type=unknown-sentinel&type=DOC_ACK"])(
+    "conflicting duplicate task selectors resolve to the same safe general view for %s",
+    async (search) => {
+      const { container } = renderTasksWithRouteChrome(`/tasks?${search}`);
+
+      expect(
+        await screen.findByRole("heading", { name: "Review and approve" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Acknowledgements" })).not.toBeInTheDocument();
+      expect(document.title).toBe("EasySynQ — Tasks");
+      expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+      expect(container).not.toHaveTextContent("unknown-sentinel");
+    },
+  );
+
+  test.each([
+    ["the general queue", "/tasks", "Review and approve"],
+    ["the acknowledgement queue", "/tasks?type=DOC_ACK", "Acknowledgements"],
+    ["an unknown task type fallback", "/tasks?type=unknown-sentinel", "Review and approve"],
+  ])("has no axe violations for %s", async (_, route, heading) => {
+    const { container } = renderTasksWithRouteChrome(route);
+    expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   // Regression: `/tasks` and `/tasks?type=DOC_ACK` are the SAME route element, so the bell→inbox

@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { ContextIssue } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
+import { readSearchParamState } from "../../lib/effectiveView";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { StatusBadge } from "../../lib/StatusBadge";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
@@ -103,11 +104,12 @@ export function ContextRegisterPage() {
   // back/forward that drops ?issue closes the drawer, while a change to another param (the filters)
   // leaves a locally-opened drawer untouched (Codex P3).
   const [params, setParams] = useSearchParams();
-  const issueParam = params.get("issue");
+  const issueSelectorState = readSearchParamState(params, "issue");
+  const issueParam = issueSelectorState.kind === "unique" ? issueSelectorState.value : null;
   const [selected, setSelected] = useState<string | null>(issueParam);
   useEffect(() => {
     setSelected(issueParam);
-  }, [issueParam]);
+  }, [issueSelectorState.kind, issueParam]);
   function closeDrawer() {
     setSelected(null);
     if (params.has("issue")) {

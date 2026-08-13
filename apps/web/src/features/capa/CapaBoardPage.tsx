@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { AsOf } from "../../lib/AsOf";
+import { readSearchParamState } from "../../lib/effectiveView";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { Capa, CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 import { CapaCard } from "./CapaCard";
@@ -45,7 +46,9 @@ export function CapaBoardPage() {
   // other surfaces — e.g. Complaints' "View CAPA" — can link to it). Mirrors the S-web-4 ?from=&to=
   // redline pattern. Card/list/raise opens stay local-only (URL untouched) to keep the board unchanged.
   const [params, setParams] = useSearchParams();
-  const [selected, setSelected] = useState<string | null>(() => params.get("capa"));
+  const capaSelectorState = readSearchParamState(params, "capa");
+  const selectedCapaParam = capaSelectorState.kind === "unique" ? capaSelectorState.value : null;
+  const [selected, setSelected] = useState<string | null>(selectedCapaParam);
   const [raiseOpen, setRaiseOpen] = useState(false);
   const perms = usePermissions();
   // The Raise affordance must reach a bound Process-Owner, who holds capa.create only at their owned
@@ -61,12 +64,11 @@ export function CapaBoardPage() {
   const systemCanCreate = perms.can("capa.create");
   const canRaiseCapa = systemCanCreate || (!!firstProcessId && processPerms.can("capa.create"));
 
-  // Open the drawer for ?capa=<id> on mount + whenever the param changes (a deep-link while mounted).
-  // Guarded on a non-null id so clearing the param on close never re-opens the drawer.
+  // Keep URL-seeded ?capa=<id> selection in sync, including removal, without overwriting local opens
+  // when another search param changes.
   useEffect(() => {
-    const capa = params.get("capa");
-    if (capa) setSelected(capa);
-  }, [params]);
+    setSelected(selectedCapaParam);
+  }, [capaSelectorState.kind, selectedCapaParam]);
 
   function closeDrawer() {
     setSelected(null);

@@ -37,6 +37,110 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## PROGRAMME 1 — frontend resilience and accessibility
 
+### S-url-state-correctness — effective URL view identity, history, recovery, and accessibility
+
+Shipped 2026-08-13 at implementation evidence baseline `76c2f72`. The owner selected one pure, typed
+`classifyEffectiveView(pathname, searchParams)` policy at the router boundary; the decision and rejected
+page-owned/migrated-path alternatives are preserved in
+[`ADR 0001`](adr/0001-centralize-effective-url-view-classification.md). Fixed application labels,
+`chromeKey`, `recoveryKey`, query-state class, focus ownership, and announcement policy now derive from one
+effective identity. Recognized repeated selectors are order-independent: identical duplicates behave as one
+value, while conflicting duplicates resolve to the safe base/default state. Opaque values may participate
+only in internal recovery identity and never become a title, heading, announcement, accessible name, or
+error message.
+
+`/tasks` and `/tasks?type=DOC_ACK` are the only base/material same-path pair. An initial deep link renders
+the right content and fixed title without stealing focus or announcing navigation. A live transition to
+Acknowledgements sets `EasySynQ — Acknowledgements`, focuses `#main-content` once, and publishes one polite,
+atomic `Acknowledgements` update; Back restores Tasks with the corresponding title, one focus transition,
+and one `Tasks` update. Unknown task types safely render the general queue without disclosing the raw value.
+Whole-app tests preserve the same QueryClient identity/cache and route-persistent mutation feedback through
+the transition and Back.
+
+Recognized detail selectors change fixed title and recovery identity while each drawer/dialog retains focus
+and restoration ownership. Library identifier open pushes a detail URL, Back closes it, and explicit Close
+replaces the current entry. DCR, CAPA, Improvement, Context, Interested Party, and Risk drawers follow live
+selector replacement and removal. The final duplicate-selector repair additionally distinguishes absent,
+unique, and conflicting states so an absent-to-conflict navigation closes a locally opened drawer, while an
+unrelated absent-to-absent filter edit leaves that local drawer open. Ordinary search, facets, sort,
+pagination, and ingestion review controls replace history, preserve unrelated parameters, adopt external
+navigation, and do not change base title, global focus/announcement, or route recovery.
+
+Document tabs, document comparison mode/pairs, and DCR diff mode are recovery-significant subviews but keep
+global chrome neutral and use replacement history. Unsupported tabs and modes render fixed defaults without
+rewriting cold URLs. Comparison IDs are validated against loaded versions before viewer props or requests;
+invalid, incomplete, or equal pairs cannot leak or issue invalid viewer work. The first explicit comparison
+Select edit writes a complete safe pair in one replacement update. Route matching now follows React Router
+case-insensitive, end-exact semantics, and route-error ownership remains authoritative until a meaningful
+effective transition releases it.
+
+The implementation was driven by exact focused RED/GREEN evidence:
+
+- `npm --prefix apps/web test -- src/lib/effectiveView.test.ts` first exited 1 because the classifier module
+  did not exist; the classifier plus route-chrome GREEN passed 2 files/68 tests. Repeated-selector RED then
+  failed 13 of 81 classifier tests, and the corrected two-file GREEN passed 87 tests.
+- `npm --prefix apps/web test -- src/lib/routeChrome.test.tsx src/app/shell/AppShell.test.tsx` first failed 19
+  of 31 tests; the corrected focused run passed 31/31 and the six-file compatibility selection ultimately
+  passed 139/139 after its route-error ownership review fix.
+- The whole-app Tasks characterization required no production dispatcher change. Its initial run exposed one
+  ambiguous pre-existing status query after the persistent route announcer was added; the corrected four-file
+  lifecycle/provider selection passed 87/87, and a `MutationObserver` pins exactly one non-empty destination
+  update per live material transition.
+- The four-file ordinary-history RED failed the expected Library and ingestion Back outcomes; the adjacent
+  seven-file GREEN passed 99 tests. Strengthened mutation-sensitive Back, feature chrome/recovery, Reports
+  filter-matrix, and isolated ingestion-write proofs ended with the controller's seven-file selection passing
+  108 tests.
+- The three-file drawer RED failed 6 of 43 tests because selector removal left DCR, CAPA, and Improvement
+  drawers open; its GREEN passed 43/43, and the seven-route regression selection passed 120/120.
+- The three-file document-subview RED failed 5 of 50 tests for unsafe/default/history behavior; the final
+  six-file subview/recovery selection passed 172/172.
+
+The independent whole-branch review found five Important issues: recognized duplicate selectors could make
+feature content disagree with classifier chrome; detail close and ordinary pathname changes could take the
+wrong focus/announcement ownership; route matching diverged from React Router; and the first comparison edit
+could leave an incomplete pair. Commit `35014a2` fixed them through focused failing proofs: duplicate-selector
+RED failed 7 cases with 82 passing before a 5-file/89-test GREEN; route-chrome RED failed 4 cases with 50
+passing before a 3-file/54-test GREEN; matcher RED failed 6 cases with 85 passing before a 91-test GREEN; and
+comparison first-edit RED failed 6 cases before its six-case GREEN and 25-test file regression.
+
+Scoped re-review then found one remaining Important absent-to-conflict gap in the six local-state drawers.
+The owner approved a second bounded fix wave. Before commit `76c2f72`, the pure-reader RED failed 4 of 95
+tests and the six-drawer RED failed 12 cases with 104 passing; the shared-reader and six-feature GREEN passed
+7 files/211 tests. Final scoped re-review of `35014a2..76c2f72` reported no Critical, Important, Minor, or
+other actionable finding and independently repeated the 7-file/211-test selection, web typecheck, and scoped
+diff check successfully.
+
+Final acceptance evidence:
+
+- The exact Task 7 command beginning `npm --prefix apps/web test -- src/lib/effectiveView.test.ts` and ending
+  `src/app/errors/NotFoundPage.test.tsx` passed 21 files/467 tests in 57.92 seconds, with no unhandled error,
+  hook-order warning, duplicate-announcement diagnostic, raw-value leakage diagnostic, or axe violation.
+  A controller supporting selection separately passed 15 files/385 tests in 46.78 seconds.
+- `npm --prefix apps/web run typecheck` and `npm --prefix apps/web run lint` exited 0. The production
+  `npm --prefix apps/web run build` exited 0 after transforming 1,098 modules; its JavaScript asset was
+  1,158.15 kB (318.75 kB gzip), and the only build warning was the existing advisory for a chunk above
+  500 kB.
+- Durable job `job-msr2j5ez-6c010aaa` ran the exact `npm --prefix apps/web test` command and exited 0: all
+  259 files and 1,834 tests passed in 275.10 seconds, with no unhandled error and only Node's repeated
+  existing `localStorage` experimental warning.
+- `apps/web/node_modules/.bin/prettier --check` passed the design, plan, ADR, debt inventory, and current
+  status documents after app-owned Prettier formatted only the new design and plan. The separate whole-file
+  `docs/slice-history.md` check remains red exactly as its `76c2f72` historical baseline is and was not
+  mass-formatted; this is not presented as a formatting pass for the history file.
+- After the evidence edits, `bash scripts/tests/test-agent-authority.sh` passed 91/91 fixtures,
+  `bash scripts/tests/test-claude-hooks.sh` passed all seven assertions,
+  `./scripts/check-repo-authority.sh` returned `AUTHORITY_OK`,
+  `bash scripts/tests/test-check-no-site-data.sh` passed 13/13 fixtures, and
+  `./scripts/check-no-site-data.sh` returned the clean mechanical-shapes verdict. Both the exact range guard
+  `git diff --check 88f5fb0..HEAD` and the working-tree-inclusive `git diff --check` were clean.
+
+This is a front-end-only slice. It changes no API handler, OpenAPI/generated contract, dependency or lock,
+migration/database schema, Keycloak/authentication/setup gate, permission, QueryClient/provider lifecycle,
+mutation-feedback lifetime or policy, notification delivery, telemetry, or deployment behavior. The API,
+contract, integration, migration, and CI numeric baselines therefore remain inherited rather than freshly
+verified. No Playwright, independent browser/screen-reader, live deployment, or disposable two-media
+Fedora/libvirt proof ran; those unavailable layers are not described as passed.
+
 ### S-auth-startup-boundary — bounded, explicit authentication startup and recovery
 
 Authentication startup now has an explicit loading/ready/error contract instead of a boolean that could

@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
+import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { ErrorState } from "../../lib/states";
 import { AuthorActions } from "../authoring/AuthorActions";
 import { AcknowledgementsTab } from "./AcknowledgementsTab";
@@ -20,6 +21,13 @@ import { useDistribution } from "./ackHooks";
 import { daysUntil } from "./reviewDates";
 import { useDocument } from "./useDocument";
 import { useDocumentVersions } from "./useDocumentVersions";
+
+const DOCUMENT_TABS = ["overview", "history", "approvals", "where-used", "acks"] as const;
+type DocumentTab = (typeof DOCUMENT_TABS)[number];
+
+function parseDocumentTab(value: string | null): DocumentTab {
+  return DOCUMENT_TABS.includes(value as DocumentTab) ? (value as DocumentTab) : "overview";
+}
 
 function Tile({
   label,
@@ -57,11 +65,12 @@ function Tile({
 export function DocumentDetailPage() {
   const { id = null } = useParams();
   const [sp, setSp] = useSearchParams();
-  const tab = sp.get("tab") ?? "overview";
+  const tab = parseDocumentTab(getUniqueSearchParam(sp, "tab"));
   const setTab = (v: string | null) =>
     setSp(
       (prev) => {
-        prev.set("tab", v ?? "overview");
+        if (!v || v === "overview") prev.delete("tab");
+        else prev.set("tab", v);
         return prev;
       },
       { replace: true },

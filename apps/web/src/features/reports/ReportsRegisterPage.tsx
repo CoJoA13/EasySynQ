@@ -158,22 +158,28 @@ export function ReportsRegisterPage() {
   });
 
   function patchFilters(patch: Partial<UrlFilters>) {
-    setParams((p) => {
-      for (const k of FILTER_KEYS) {
-        if (k in patch) {
-          const v = patch[k];
-          if (v) p.set(k, v);
-          else p.delete(k);
+    setParams(
+      (p) => {
+        for (const k of FILTER_KEYS) {
+          if (k in patch) {
+            const v = patch[k];
+            if (v) p.set(k, v);
+            else p.delete(k);
+          }
         }
-      }
-      return p;
-    });
+        return p;
+      },
+      { replace: true },
+    );
   }
   const clearFilters = () =>
-    setParams((p) => {
-      for (const k of FILTER_KEYS) p.delete(k);
-      return p;
-    });
+    setParams(
+      (p) => {
+        for (const k of FILTER_KEYS) p.delete(k);
+        return p;
+      },
+      { replace: true },
+    );
   const hasFilters = FILTER_KEYS.some((k) => uf[k]);
 
   const rows = useMemo(() => {

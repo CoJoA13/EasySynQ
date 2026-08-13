@@ -338,8 +338,12 @@ test("open-and-mark navigation owns focus while a late failure persists and retr
   );
   await waitFor(() => expect(requestedIds).toEqual(["n1", "n1"]));
   await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-  expect(screen.getByRole("status")).toHaveTextContent("Notification marked read");
-  expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+  const mutationStatus = screen
+    .getAllByRole("status")
+    .find((status) => status.textContent === "Notification marked read");
+  expect(mutationStatus).toBeDefined();
+  expect(mutationStatus).toHaveTextContent("Notification marked read");
+  expect(mutationStatus).toHaveAttribute("aria-live", "polite");
 });
 
 test("OPERATIONAL without a token preserves the sign-in redirect latch", async () => {
@@ -599,6 +603,128 @@ function NavigateToKnownRoute({ path, children }: { path: string; children: stri
   const navigate = useNavigate();
   return <button onClick={() => navigate(path)}>{children}</button>;
 }
+
+function TaskMaterialViewNavigation() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate("/tasks?type=DOC_ACK")}>Open acknowledgements</button>
+      <button onClick={() => navigate(-1)}>Back to tasks</button>
+    </>
+  );
+}
+
+test("live Tasks material-view navigation updates chrome once and preserves operational providers", async () => {
+  const user = userEvent.setup();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const cacheKey = ["task-material-view", "persistent-cache-value"] as const;
+  const cacheValue = { marker: "persists-through-task-view-history" };
+  let markReadRequests = 0;
+
+  queryClient.setQueryData(cacheKey, cacheValue);
+  server.use(
+    http.get("/api/v1/notifications", () =>
+      HttpResponse.json([
+        {
+          id: "notification-persist-1111-1111-1111-111111111111",
+          event_key: "task.assigned",
+          subject_type: "DOCUMENT",
+          subject_id: "document-persist-1111-1111-1111-111111111111",
+          title: "Persistent task feedback",
+          body: "This notification proves the feedback outlet survives navigation.",
+          deep_link: "http://localhost/tasks",
+          created_at: "2026-08-11T12:00:00Z",
+          read_at: null,
+        },
+      ]),
+    ),
+    http.post("/api/v1/notifications/:id/read", () => {
+      markReadRequests += 1;
+      return HttpResponse.json({ detail: "unavailable" }, { status: 503 });
+    }),
+  );
+
+  const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+  renderWithProviders(
+    <>
+      <App />
+      <TaskMaterialViewNavigation />
+    </>,
+    { route: "/tasks", queryClient },
+  );
+
+  await screen.findByRole("heading", { name: "Review and approve" });
+  await user.click(screen.getByRole("button", { name: /Notifications/ }));
+  await user.click(await screen.findByRole("link", { name: /Persistent task feedback/ }));
+  expect(
+    await screen.findByText("This notification remains unread: Persistent task feedback"),
+  ).toBeInTheDocument();
+  expect(queryClient.getQueryData(cacheKey)).toBe(cacheValue);
+  expect(markReadRequests).toBe(1);
+
+  const pageNavigation = screen.getByRole("status", { name: "Page navigation" });
+  const destinations: string[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      const candidates =
+        record.type === "characterData"
+          ? [record.target.textContent]
+          : Array.from(record.addedNodes, (node) => node.textContent);
+      for (const candidate of candidates) {
+        const destination = candidate?.trim();
+        if (destination) destinations.push(destination);
+      }
+    }
+  });
+  observer.observe(pageNavigation, { childList: true, characterData: true, subtree: true });
+
+  try {
+    await user.click(screen.getByRole("button", { name: "Open acknowledgements" }));
+    expect(await screen.findByRole("heading", { name: "Acknowledgements" })).toBeInTheDocument();
+    await waitFor(() => expect(document.title).toBe("EasySynQ — Acknowledgements"));
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+    expect(pageNavigation).toHaveTextContent("Acknowledgements");
+    await waitFor(() => expect(destinations).toEqual(["Acknowledgements"]));
+    expect(
+      focusSpy.mock.contexts.filter((context) => context === screen.getByRole("main")),
+    ).toHaveLength(1);
+    expect(queryClient.getQueryData(cacheKey)).toBe(cacheValue);
+    expect(
+      screen.getByText("This notification remains unread: Persistent task feedback"),
+    ).toBeInTheDocument();
+    expect(markReadRequests).toBe(1);
+
+    await user.click(screen.getByRole("button", { name: "Back to tasks" }));
+    expect(await screen.findByRole("heading", { name: "Review and approve" })).toBeInTheDocument();
+    await waitFor(() => expect(document.title).toBe("EasySynQ — Tasks"));
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+    expect(pageNavigation).toHaveTextContent("Tasks");
+    await waitFor(() => expect(destinations).toEqual(["Acknowledgements", "Tasks"]));
+    expect(
+      focusSpy.mock.contexts.filter((context) => context === screen.getByRole("main")),
+    ).toHaveLength(2);
+    expect(queryClient.getQueryData(cacheKey)).toBe(cacheValue);
+    expect(
+      screen.getByText("This notification remains unread: Persistent task feedback"),
+    ).toBeInTheDocument();
+    expect(markReadRequests).toBe(1);
+  } finally {
+    observer.disconnect();
+  }
+});
+
+test("an acknowledgement deep link sets content and title without route-navigation focus or announcement", async () => {
+  const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+  renderWithProviders(<App />, { route: "/tasks?type=DOC_ACK" });
+
+  expect(await screen.findByRole("heading", { name: "Acknowledgements" })).toBeInTheDocument();
+  expect(document.title).toBe("EasySynQ — Acknowledgements");
+  expect(screen.getByRole("main")).not.toHaveFocus();
+  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+  expect(
+    focusSpy.mock.contexts.filter((context) => context === screen.getByRole("main")),
+  ).toHaveLength(0);
+});
 
 test("an unknown operational URL remains visible and renders a safe shell-contained 404", async () => {
   renderWithProviders(

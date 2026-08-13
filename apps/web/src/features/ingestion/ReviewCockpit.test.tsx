@@ -1,14 +1,42 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
+import { Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { AppShell } from "../../app/shell/AppShell";
+import { RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { server } from "../../test/msw/server";
 import { ingestionChecklistFixture, ingestionRunFixture } from "../../test/msw/handlers";
 import { renderWithProviders } from "../../test/render";
 import { ReviewCockpit } from "./ReviewCockpit";
 
 const RID = ingestionRunFixture.id;
+
+function HistoryControls() {
+  const navigate = useNavigate();
+  const { pathname, search } = useLocation();
+  return (
+    <>
+      <button
+        onClick={() => {
+          const params = new URLSearchParams(search);
+          params.set("checkpoint", "prepared");
+          navigate(`${pathname}?${params.toString()}`);
+        }}
+      >
+        Prepare history
+      </button>
+      <button onClick={() => navigate(-1)}>Back</button>
+      <output aria-label="Current location">{useLocation().search}</output>
+    </>
+  );
+}
+
+function ChromeOutlet() {
+  useRouteChrome();
+  return <Outlet />;
+}
 
 function renderCockpit(route = `/imports/${RID}?queue=high`) {
   return renderWithProviders(<ReviewCockpit runId={RID} run={ingestionRunFixture} />, { route });
@@ -21,6 +49,99 @@ test("the High tab shows the 2 high-band rows", async () => {
   expect(await within(table).findByText("SOP-PUR-014 Purchasing.docx")).toBeInTheDocument();
   expect(within(table).getByText("SOP-PUR v2 FINAL.docx")).toBeInTheDocument();
   expect(within(table).queryByText("Final Inspection WI rev1.docx")).not.toBeInTheDocument();
+});
+
+test("queue default removal replaces history while preserving unrelated query state", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <ReviewCockpit runId={RID} run={ingestionRunFixture} />
+      <HistoryControls />
+    </>,
+    { route: `/imports/${RID}?queue=high&sentinel=keep&checkpoint=baseline` },
+  );
+  await screen.findByRole("table", { name: "Triage queue" });
+  await user.click(screen.getByRole("button", { name: "Prepare history" }));
+  await user.click(screen.getByRole("tab", { name: /Needs decision/ }));
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("sentinel=keep");
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("queue=");
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
+  );
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("queue=high");
+});
+
+test("confidence default removal replaces history while preserving unrelated query state", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <ReviewCockpit runId={RID} run={ingestionRunFixture} />
+      <HistoryControls />
+    </>,
+    { route: `/imports/${RID}?queue=high&conf=HIGH&sentinel=keep&checkpoint=baseline` },
+  );
+  await screen.findByRole("table", { name: "Triage queue" });
+  await user.click(screen.getByRole("button", { name: "Prepare history" }));
+  await user.click(screen.getByRole("radio", { name: "All" }));
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("conf=");
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
+  );
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("conf=HIGH");
+});
+
+test("offset default removal replaces history while preserving unrelated query state", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <ReviewCockpit runId={RID} run={ingestionRunFixture} />
+      <HistoryControls />
+    </>,
+    { route: `/imports/${RID}?queue=high&offset=100&sentinel=keep&checkpoint=baseline` },
+  );
+  await screen.findByRole("table", { name: "Triage queue" });
+  await user.click(screen.getByRole("button", { name: "Prepare history" }));
+  await user.click(screen.getByRole("button", { name: "‹ Prev" }));
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("offset=");
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
+  );
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("offset=100");
+});
+
+test("an ingestion ordinary queue edit leaves route chrome and focused tab untouched", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <RouteChromeProvider>
+      <Routes>
+        <Route element={<ChromeOutlet />}>
+          <Route element={<AppShell />}>
+            <Route
+              path="imports/:id"
+              element={<ReviewCockpit runId={RID} run={ingestionRunFixture} />}
+            />
+          </Route>
+        </Route>
+      </Routes>
+    </RouteChromeProvider>,
+    { route: `/imports/${RID}?queue=high` },
+  );
+  await screen.findByRole("table", { name: "Triage queue" });
+  const medium = screen.getByRole("tab", { name: /Medium/ });
+  await user.click(medium);
+
+  expect(document.title).toBe("EasySynQ — Import run");
+  expect(medium).toHaveFocus();
+  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
 });
 
 test("a files-list failure renders as an error, not an empty queue", async () => {

@@ -3,10 +3,41 @@ import { expect, test } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
+import { Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { AppShell } from "../../app/shell/AppShell";
+import { RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { docFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { LibraryPage } from "./LibraryPage";
+
+const DOC_A = docFixture[0]!;
+const DOC_B = docFixture[1]!;
+
+function LocationProbe() {
+  const { pathname, search } = useLocation();
+  return <output aria-label="Current location">{pathname + search}</output>;
+}
+
+function HistoryControls() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate("/library?sentinel=keep&checkpoint=prepared")}>
+        Prepare history
+      </button>
+      <button onClick={() => navigate(-1)}>Back</button>
+      <button onClick={() => navigate(`/library?detail=${DOC_A.id}`)}>External doc a</button>
+      <button onClick={() => navigate(`/library?detail=${DOC_B.id}`)}>External doc b</button>
+      <button onClick={() => navigate("/library?sentinel=keep")}>External close</button>
+    </>
+  );
+}
+
+function ChromeOutlet() {
+  useRouteChrome();
+  return <Outlet />;
+}
 
 test("lists documents with resolved Type/Owner and is accessible", async () => {
   const { container } = renderWithProviders(<LibraryPage />, { route: "/library" });
@@ -66,6 +97,148 @@ test("the named identifier action opens the deep-linkable detail drawer", async 
   );
 });
 
+test("ordinary facets and pagination replace history while preserving unrelated parameters", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.get("/api/v1/documents", () =>
+      HttpResponse.json({
+        data: docFixture,
+        page: { limit: 50, offset: 0, returned: docFixture.length, has_more: true },
+      }),
+    ),
+  );
+  renderWithProviders(
+    <>
+      <LibraryPage />
+      <HistoryControls />
+      <LocationProbe />
+    </>,
+    { route: "/library?sentinel=keep&checkpoint=baseline" },
+  );
+  await screen.findByText("SOP-PUR-014");
+  await user.click(screen.getByRole("button", { name: "Prepare history" }));
+
+  await user.click(screen.getByRole("textbox", { name: "Status" }));
+  await user.click(await screen.findByRole("option", { name: "Effective" }));
+  await user.click(screen.getByRole("button", { name: "Clear all" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Current location")).not.toHaveTextContent("state=Effective"),
+  );
+  await user.click(screen.getByRole("textbox", { name: "Status" }));
+  await user.click(await screen.findByRole("option", { name: "Effective" }));
+  await user.click(screen.getByRole("button", { name: "Next ›" }));
+  await user.click(screen.getByRole("button", { name: "‹ Prev" }));
+  await user.click(screen.getByRole("button", { name: "Next ›" }));
+  await user.click(screen.getByRole("textbox", { name: "Page size" }));
+  await user.click(await screen.findByRole("option", { name: "50 / page" }));
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("sentinel=keep");
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("state=Effective");
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("size=50");
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Current location")).toHaveTextContent(
+      "/library?sentinel=keep&checkpoint=baseline",
+    ),
+  );
+  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("state=Effective");
+  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("size=50");
+});
+
+test("a Library ordinary filter edit leaves route chrome and focus untouched", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <RouteChromeProvider>
+      <Routes>
+        <Route element={<ChromeOutlet />}>
+          <Route element={<AppShell />}>
+            <Route path="library" element={<LibraryPage />} />
+          </Route>
+        </Route>
+      </Routes>
+    </RouteChromeProvider>,
+    { route: "/library" },
+  );
+  await screen.findByText("SOP-PUR-014");
+  const status = screen.getByRole("textbox", { name: "Status" });
+  await user.click(status);
+  await user.keyboard("{ArrowDown}{Enter}");
+
+  expect(document.title).toBe("EasySynQ — Library");
+  expect(status).toHaveFocus();
+  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+});
+
+test("Library detail opening pushes but close replaces, and external detail changes control the drawer", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <LibraryPage />
+      <HistoryControls />
+      <LocationProbe />
+    </>,
+    { route: "/library?sentinel=keep&checkpoint=baseline" },
+  );
+  await screen.findByText("SOP-PUR-014");
+  await user.click(screen.getByRole("button", { name: "Prepare history" }));
+  await user.click(
+    screen.getByRole("button", { name: "Open SOP-PUR-014: Supplier Selection & Evaluation" }),
+  );
+  await screen.findByRole("heading", { name: "Supplier Selection & Evaluation" });
+  expect(screen.getByLabelText("Current location")).toHaveTextContent(
+    "detail=11111111-1111-1111-1111-111111111111",
+  );
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+
+  await user.click(
+    screen.getByRole("button", { name: "Open SOP-PUR-014: Supplier Selection & Evaluation" }),
+  );
+  await screen.findByRole("dialog");
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+
+  await user.click(screen.getByRole("button", { name: "External doc a" }));
+  expect(await screen.findByRole("heading", { name: DOC_A.title })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "External doc b" }));
+  expect(await screen.findByRole("heading", { name: DOC_B.title })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "External close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+});
+
+test("closing a detail URL restores the feature opener without publishing page navigation", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <RouteChromeProvider>
+      <Routes>
+        <Route element={<ChromeOutlet />}>
+          <Route element={<AppShell />}>
+            <Route path="library" element={<LibraryPage />} />
+          </Route>
+        </Route>
+      </Routes>
+    </RouteChromeProvider>,
+    { route: "/library" },
+  );
+
+  const opener = await screen.findByRole("button", {
+    name: "Open SOP-PUR-014: Supplier Selection & Evaluation",
+  });
+  await user.click(opener);
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Close" }));
+
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await waitFor(() => expect(opener).toHaveFocus());
+  expect(document.title).toBe("EasySynQ — Library");
+  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+});
+
 test("a cold ?detail= deep-link opens the drawer (fetches the doc)", async () => {
   renderWithProviders(<LibraryPage />, {
     route: "/library?detail=11111111-1111-1111-1111-111111111111",
@@ -76,6 +249,31 @@ test("a cold ?detail= deep-link opens the drawer (fetches the doc)", async () =>
     ).toBeInTheDocument(),
   );
 });
+
+test.each([`detail=${DOC_A.id}&detail=${DOC_B.id}`, `detail=${DOC_B.id}&detail=${DOC_A.id}`])(
+  "conflicting duplicate detail selectors keep Library content and chrome at the safe base view for %s",
+  async (search) => {
+    const { container } = renderWithProviders(
+      <RouteChromeProvider>
+        <Routes>
+          <Route element={<ChromeOutlet />}>
+            <Route element={<AppShell />}>
+              <Route path="library" element={<LibraryPage />} />
+            </Route>
+          </Route>
+        </Routes>
+      </RouteChromeProvider>,
+      { route: `/library?${search}` },
+    );
+
+    expect(await screen.findByText("SOP-PUR-014")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.title).toBe("EasySynQ — Library");
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+    expect(container).not.toHaveTextContent(DOC_A.id);
+    expect(container).not.toHaveTextContent(DOC_B.id);
+  },
+);
 
 test("filtering by a clause narrows the list and shows a removable chip", async () => {
   renderWithProviders(<LibraryPage />, { route: "/library" });

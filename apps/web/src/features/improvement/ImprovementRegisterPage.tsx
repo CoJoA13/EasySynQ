@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { AsOf } from "../../lib/AsOf";
+import { readSearchParamState } from "../../lib/effectiveView";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import {
@@ -34,7 +35,10 @@ export function ImprovementRegisterPage() {
   const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useInitiatives();
   const { data: directory } = useUserDirectory();
   const [params, setParams] = useSearchParams();
-  const [selected, setSelected] = useState<string | null>(() => params.get("initiative"));
+  const initiativeSelectorState = readSearchParamState(params, "initiative");
+  const selectedInitiativeParam =
+    initiativeSelectorState.kind === "unique" ? initiativeSelectorState.value : null;
+  const [selected, setSelected] = useState<string | null>(selectedInitiativeParam);
   // URL-backed enum filters (distinct keys; neither collides with the `initiative` drawer deep-link).
   const [stage, setStage] = useUrlParam("stage");
   const [source, setSource] = useUrlParam("source");
@@ -48,12 +52,11 @@ export function ImprovementRegisterPage() {
   const { can } = usePermissions();
   const [raising, setRaising] = useState(false);
 
-  // Open the drawer for ?initiative=<id> on mount + whenever the param changes (a deep-link while
-  // mounted). Guarded on a non-null id so clearing the param on close never re-opens the drawer.
+  // Keep URL-seeded ?initiative=<id> selection in sync, including removal, without overwriting local
+  // opens when an unrelated filter changes the search-params object.
   useEffect(() => {
-    const id = params.get("initiative");
-    if (id) setSelected(id);
-  }, [params]);
+    setSelected(selectedInitiativeParam);
+  }, [initiativeSelectorState.kind, selectedInitiativeParam]);
 
   function closeDrawer() {
     setSelected(null);

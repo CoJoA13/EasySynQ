@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { expect, it } from "vitest";
+import { RouteChromeProvider } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
+import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { server } from "../../test/msw/server";
 import { RisksRegisterPage } from "./RisksRegisterPage";
 
@@ -203,6 +205,43 @@ it("a filter change does not close a locally-opened drawer (the ?risk-keyed sync
   await user.click(screen.getByRole("radio", { name: "Medium" }));
   expect(screen.getByRole("dialog")).toBeInTheDocument();
 });
+
+it.each([
+  ["ab000001-0001-0001-0001-000000000001", "ab000002-0002-0002-0002-000000000002"],
+  ["ab000002-0002-0002-0002-000000000002", "ab000001-0001-0001-0001-000000000001"],
+] as const)(
+  "closes a locally opened risk drawer for conflicting selectors %s then %s",
+  async (first, second) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RouteChromeProvider>
+        <ConflictingSelectorNavigation
+          route="/risks"
+          selector="risk"
+          values={[first, second]}
+          unrelated={["band", "Medium"]}
+        >
+          <RisksRegisterPage />
+        </ConflictingSelectorNavigation>
+      </RouteChromeProvider>,
+      { route: "/risks" },
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Untrained operators on the new line")).toBeInTheDocument(),
+    );
+    await user.click(screen.getByText("Untrained operators on the new line"));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "navigate to conflicting selectors" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("status", { name: "Page navigation" })).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("band=Medium");
+    expect(screen.getByLabelText("Current location").textContent?.match(/risk=/g)).toHaveLength(2);
+    expect(screen.getByLabelText("Effective recovery key")).toHaveTextContent(/^route:\/risks$/);
+    expect(document.title).toBe("EasySynQ — Risks");
+  },
+);
 
 it("shows an empty state when there are no risks", async () => {
   server.use(http.get("/api/v1/risks", () => HttpResponse.json({ data: [] })));

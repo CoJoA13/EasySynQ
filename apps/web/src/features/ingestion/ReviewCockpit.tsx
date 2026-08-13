@@ -179,34 +179,43 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   const onQueue = useCallback(
     (q: IngestionQueue) => {
       setSelected(new Set()); // a queue change drops a stale cross-queue selection
-      setParams((p) => {
-        if (q === "needs") p.delete("queue");
-        else p.set("queue", q);
-        p.delete("offset");
-        return p;
-      });
+      setParams(
+        (p) => {
+          if (q === "needs") p.delete("queue");
+          else p.set("queue", q);
+          p.delete("offset");
+          return p;
+        },
+        { replace: true },
+      );
     },
     [setParams],
   );
   const onConf = useCallback(
     (c: ConfidenceChoice) => {
       setSelected(new Set()); // a confidence change can hide selected rows — drop the stale selection
-      setParams((p) => {
-        if (c === "ALL") p.delete("conf");
-        else p.set("conf", c);
-        p.delete("offset");
-        return p;
-      });
+      setParams(
+        (p) => {
+          if (c === "ALL") p.delete("conf");
+          else p.set("conf", c);
+          p.delete("offset");
+          return p;
+        },
+        { replace: true },
+      );
     },
     [setParams],
   );
   const onOffset = useCallback(
     (o: number) => {
-      setParams((p) => {
-        if (o > 0) p.set("offset", String(o));
-        else p.delete("offset");
-        return p;
-      });
+      setParams(
+        (p) => {
+          if (o > 0) p.set("offset", String(o));
+          else p.delete("offset");
+          return p;
+        },
+        { replace: true },
+      );
     },
     [setParams],
   );

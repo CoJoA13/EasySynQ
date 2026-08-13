@@ -1,21 +1,29 @@
+import { VisuallyHidden } from "@mantine/core";
 import {
   createContext,
   createElement,
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { matchPath, useLocation } from "react-router-dom";
+import { useLocation } from "react-router-dom";
+import { classifyEffectiveView, type QueryStateClass } from "./effectiveView";
 
 const RouteErrorChromeActiveContext = createContext(false);
 const RouteErrorChromeRegistrationContext = createContext<(() => () => void) | null>(null);
+const RouteAnnouncementValueContext = createContext<string | null>(null);
+const RouteAnnouncementPublisherContext = createContext<((message: string | null) => void) | null>(
+  null,
+);
 
 export function RouteChromeProvider({ children }: { children: ReactNode }) {
   const owners = useRef(new Set<symbol>());
   const [ownerCount, setOwnerCount] = useState(0);
+  const [announcement, setAnnouncement] = useState<string | null>(null);
   const acquireRouteErrorChrome = useCallback(() => {
     const owner = Symbol("route-error-chrome-owner");
     owners.current.add(owner);
@@ -30,7 +38,29 @@ export function RouteChromeProvider({ children }: { children: ReactNode }) {
   return createElement(
     RouteErrorChromeRegistrationContext.Provider,
     { value: acquireRouteErrorChrome },
-    createElement(RouteErrorChromeActiveContext.Provider, { value: ownerCount > 0 }, children),
+    createElement(
+      RouteErrorChromeActiveContext.Provider,
+      { value: ownerCount > 0 },
+      createElement(
+        RouteAnnouncementPublisherContext.Provider,
+        { value: setAnnouncement },
+        createElement(RouteAnnouncementValueContext.Provider, { value: announcement }, children),
+      ),
+    ),
+  );
+}
+
+export function RouteAnnouncement() {
+  const message = useContext(RouteAnnouncementValueContext);
+  return createElement(
+    VisuallyHidden,
+    {
+      role: "status",
+      "aria-live": "polite",
+      "aria-atomic": "true",
+      "aria-label": "Page navigation",
+    },
+    message ?? "",
   );
 }
 
@@ -39,80 +69,95 @@ export function useRouteErrorChromeOwnership(): void {
   useEffect(() => acquireRouteErrorChrome?.(), [acquireRouteErrorChrome]);
 }
 
-const TITLES: readonly (readonly [string, string])[] = [
-  ["/", "Dashboard"],
-  ["/setup", "Setup"],
-  ["/admin", "Administration"],
-  ["/admin/users", "Administration"],
-  ["/admin/roles", "Administration"],
-  ["/admin/processes", "Administration"],
-  ["/admin/config", "Administration"],
-  ["/library", "Library"],
-  ["/library/new", "New document"],
-  ["/documents/:id", "Document"],
-  ["/tasks", "Tasks"],
-  ["/tasks/:id", "Task"],
-  ["/settings/notifications", "Notification settings"],
-  ["/notifications", "Notifications"],
-  ["/search", "Search"],
-  ["/compliance", "Compliance"],
-  ["/reports/document-control", "Document register"],
-  ["/capa", "CAPA"],
-  ["/capa/complaints", "Complaints"],
-  ["/capa/ncrs", "NCRs"],
-  ["/audits", "Audits"],
-  ["/audits/programme", "Audit programme"],
-  ["/audits/:id", "Audit"],
-  ["/imports", "Import"],
-  ["/imports/:runId", "Import run"],
-  ["/ingestion", "Import"],
-  ["/ingestion/:runId", "Import run"],
-  ["/drift", "Drift"],
-  ["/drift/superseded-copies", "Superseded copies"],
-  ["/objectives", "Objectives"],
-  ["/objectives/:id", "Objective"],
-  ["/management-reviews", "Management reviews"],
-  ["/management-reviews/:id", "Management review"],
-  ["/dcrs", "Document change requests"],
-  ["/dcrs/:id/diff", "Document change request"],
-  ["/improvement", "Improvement"],
-  ["/risks", "Risks"],
-  ["/context", "Context"],
-  ["/interested-parties", "Interested parties"],
-];
+interface PreviousRouteView {
+  pathname: string;
+  chromeKey: string;
+  recoveryKey: string;
+  queryStateClass: QueryStateClass;
+}
 
-function labelFor(pathname: string): string | null {
-  for (const [pattern, label] of TITLES) {
-    if (matchPath({ path: pattern, end: true }, pathname)) return label;
-  }
-  return null;
+function isSamePathMaterialTransition(
+  previousView: PreviousRouteView | null,
+  pathname: string,
+  chromeKey: string,
+  queryStateClass: QueryStateClass,
+): boolean {
+  return (
+    previousView !== null &&
+    previousView.pathname === pathname &&
+    previousView.chromeKey !== chromeKey &&
+    (previousView.queryStateClass === "material-view" || queryStateClass === "material-view")
+  );
 }
 
 export function useRouteChrome(): void {
-  const { pathname } = useLocation();
+  const { pathname, search, hash } = useLocation();
   const routeErrorOwnsChrome = useContext(RouteErrorChromeActiveContext);
-  const prevPathname = useRef<string | null>(null);
-  const focusKnownRouteWhenAvailable = useRef(false);
+  const publishAnnouncement = useContext(RouteAnnouncementPublisherContext);
+  const view = useMemo(
+    () => classifyEffectiveView(pathname, new URLSearchParams(search)),
+    [pathname, search],
+  );
+  const previous = useRef<PreviousRouteView | null>(null);
+  const previousRouteErrorOwnership = useRef(false);
+  const pendingRouteMain = useRef<{ announcement: string | null } | null>(null);
+
   useEffect(() => {
-    const label = labelFor(pathname);
-    const pathnameChanged = prevPathname.current !== null && prevPathname.current !== pathname;
+    const previousView = previous.current;
+    const pathnameChanged = previousView !== null && previousView.pathname !== pathname;
+    const chromeChanged = previousView !== null && previousView.chromeKey !== view.chromeKey;
+    const recoveryChanged = previousView !== null && previousView.recoveryKey !== view.recoveryKey;
+    const effectiveTransition = pathnameChanged || chromeChanged || recoveryChanged;
+    const materialTransition = isSamePathMaterialTransition(
+      previousView,
+      pathname,
+      view.chromeKey,
+      view.queryStateClass,
+    );
 
     if (routeErrorOwnsChrome) {
-      if (pathnameChanged) focusKnownRouteWhenAvailable.current = true;
-      prevPathname.current = pathname;
+      if (pathnameChanged) publishAnnouncement?.(null);
+      if (effectiveTransition) {
+        pendingRouteMain.current =
+          (pathnameChanged && view.focusOwner === "route-main") || materialTransition
+            ? { announcement: materialTransition ? view.announcement : null }
+            : null;
+      }
+      previous.current = {
+        pathname,
+        chromeKey: view.chromeKey,
+        recoveryKey: view.recoveryKey,
+        queryStateClass: view.queryStateClass,
+      };
       document.title = "EasySynQ — Page unavailable";
-      document.getElementById("route-error-heading")?.focus();
+      if (!previousRouteErrorOwnership.current || effectiveTransition) {
+        document.getElementById("route-error-heading")?.focus();
+      }
+      previousRouteErrorOwnership.current = true;
       return;
     }
 
-    document.title = `EasySynQ — ${label ?? "Page not found"}`;
-    // Focus the main region only on a genuine route CHANGE — not on the initial mount, and not on
-    // React StrictMode's dev-only double-invoke of the mount effect (same pathname → no focus). An
-    // unmatched route owns its focus in NotFoundPage, so this must not override the 404 heading.
-    if (label !== null && (pathnameChanged || focusKnownRouteWhenAvailable.current)) {
+    previousRouteErrorOwnership.current = false;
+    document.title = view.title;
+    if (pathnameChanged) publishAnnouncement?.(null);
+
+    if (pendingRouteMain.current) {
       document.getElementById("main-content")?.focus();
+      if (pendingRouteMain.current.announcement) {
+        publishAnnouncement?.(pendingRouteMain.current.announcement);
+      }
+      pendingRouteMain.current = null;
+    } else if (view.focusOwner === "route-main" && (pathnameChanged || materialTransition)) {
+      // Initial deep links and StrictMode's second mount-effect pass leave previousView null or
+      // unchanged. Detail and subview owners retain their own focus behavior.
+      document.getElementById("main-content")?.focus();
+      if (materialTransition) publishAnnouncement?.(view.announcement);
     }
-    focusKnownRouteWhenAvailable.current = false;
-    prevPathname.current = pathname;
-  }, [pathname, routeErrorOwnsChrome]);
+    previous.current = {
+      pathname,
+      chromeKey: view.chromeKey,
+      recoveryKey: view.recoveryKey,
+      queryStateClass: view.queryStateClass,
+    };
+  }, [hash, pathname, publishAnnouncement, routeErrorOwnsChrome, search, view]);
 }

@@ -2,15 +2,55 @@ import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { expect, test } from "vitest";
+import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { ImprovementRegisterPage } from "./ImprovementRegisterPage";
 
 function LocationProbe() {
   const loc = useLocation();
   return <div data-testid="loc">{loc.pathname + loc.search}</div>;
+}
+
+const INITIATIVE_A = "10000000-0000-0000-0000-000000000001";
+const INITIATIVE_B = "10000000-0000-0000-0000-000000000002";
+
+function InitiativeUrlControls() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate(`/improvement?stage=Open&initiative=${INITIATIVE_B}`)}>
+        replace initiative
+      </button>
+      <button onClick={() => navigate("/improvement?stage=Open")}>remove initiative</button>
+      <button onClick={() => navigate(-1)}>back</button>
+    </>
+  );
+}
+
+function InitiativeDetailChrome({ children }: { children: React.ReactNode }) {
+  useRouteChrome();
+  return (
+    <>
+      {children}
+      <RouteAnnouncement />
+    </>
+  );
+}
+
+function recordInitiativeDetailRequests() {
+  const ids: string[] = [];
+  const listener = ({ request }: { request: Request }) => {
+    const id = new URL(request.url).pathname.match(
+      /^\/api\/v1\/improvement-initiatives\/([^/]+)$/,
+    )?.[1];
+    if (id) ids.push(id);
+  };
+  server.events.on("request:match", listener);
+  return { ids, stop: () => server.events.removeListener("request:match", listener) };
 }
 
 function containerSizeFor(element: HTMLElement) {
@@ -71,20 +111,129 @@ test("deep-links the drawer open from ?initiative=<id> on mount", async () => {
   expect(await screen.findByText("Kicking off the work.")).toBeInTheDocument();
 });
 
-test("closing the deep-linked drawer clears the ?initiative param", async () => {
+test("synchronizes a URL-seeded improvement drawer across selector replacement and removal", async () => {
+  const user = userEvent.setup();
+  const requests = recordInitiativeDetailRequests();
+  renderWithProviders(
+    <RouteChromeProvider>
+      <InitiativeDetailChrome>
+        <ImprovementRegisterPage />
+        <InitiativeUrlControls />
+      </InitiativeDetailChrome>
+    </RouteChromeProvider>,
+    { route: `/improvement?stage=Open&initiative=${INITIATIVE_A}` },
+  );
+
+  const dialog = await screen.findByRole("dialog");
+  await waitFor(() => expect(requests.ids).toContain(INITIATIVE_A));
+  expect(await screen.findByText("Kicking off the work.")).toBeInTheDocument();
+  expect(document.title).toBe("EasySynQ — Improvement details");
+  expect(document.title).not.toContain(INITIATIVE_A);
+  expect(screen.getByRole("status", { name: "Page navigation" })).not.toHaveTextContent(
+    INITIATIVE_A,
+  );
+  await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+
+  await user.click(screen.getByRole("button", { name: "replace initiative" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  await waitFor(() => expect(requests.ids).toContain(INITIATIVE_B));
+  expect(document.title).not.toContain(INITIATIVE_B);
+
+  await user.click(screen.getByRole("button", { name: "remove initiative" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(document.title).toBe("EasySynQ — Improvement");
+  requests.stop();
+});
+
+test("keeps a locally opened improvement drawer open when a filter updates the URL", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <ImprovementRegisterPage />
+      <LocationProbe />
+    </>,
+    { route: "/improvement" },
+  );
+  await user.click(await screen.findByRole("button", { name: "IMP-2026-0001" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  expect(screen.getByTestId("loc")).not.toHaveTextContent("initiative=");
+
+  const [stageInput] = screen.getAllByLabelText("Stage");
+  await user.click(stageInput!);
+  await user.click(await screen.findByRole("option", { name: "Closed" }));
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(screen.getByTestId("loc")).toHaveTextContent("stage=Closed");
+});
+
+test.each([
+  [INITIATIVE_A, INITIATIVE_B],
+  [INITIATIVE_B, INITIATIVE_A],
+] as const)(
+  "closes a locally opened improvement drawer for conflicting selectors %s then %s",
+  async (first, second) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RouteChromeProvider>
+        <ConflictingSelectorNavigation
+          route="/improvement"
+          selector="initiative"
+          values={[first, second]}
+          unrelated={["stage", "Open"]}
+        >
+          <ImprovementRegisterPage />
+        </ConflictingSelectorNavigation>
+      </RouteChromeProvider>,
+      { route: "/improvement" },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "IMP-2026-0001" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "navigate to conflicting selectors" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("status", { name: "Page navigation" })).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("stage=Open");
+    expect(
+      screen.getByLabelText("Current location").textContent?.match(/initiative=/g),
+    ).toHaveLength(2);
+    expect(screen.getByLabelText("Effective recovery key")).toHaveTextContent(
+      /^route:\/improvement$/,
+    );
+    expect(document.title).toBe("EasySynQ — Improvement");
+  },
+);
+
+test("closing the deep-linked drawer replaces only ?initiative and preserves filters", async () => {
   const u = userEvent.setup();
   renderWithProviders(
     <>
       <ImprovementRegisterPage />
       <LocationProbe />
     </>,
-    { route: "/improvement?initiative=10000000-0000-0000-0000-000000000002" },
+    { route: "/improvement?stage=Open&initiative=10000000-0000-0000-0000-000000000002" },
   );
   await screen.findByText("Kicking off the work.");
   expect(screen.getByTestId("loc")).toHaveTextContent("initiative=10000000");
   await u.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByText("Kicking off the work.")).toBeNull());
   expect(screen.getByTestId("loc")).not.toHaveTextContent("initiative=");
+  expect(screen.getByTestId("loc")).toHaveTextContent("stage=Open");
+});
+
+test("Back closes an improvement drawer opened by an external pushed URL", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <ImprovementRegisterPage />
+      <InitiativeUrlControls />
+    </>,
+    { route: "/improvement" },
+  );
+  await screen.findByText("IMP-2026-0001");
+  await user.click(screen.getByRole("button", { name: "replace initiative" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "back" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });
 
 test("filtering by stage narrows the rows", async () => {
