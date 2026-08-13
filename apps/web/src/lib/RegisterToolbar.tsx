@@ -2,7 +2,7 @@
 // sortable column header, and the subject (identifier + short title) cell. Paired with the hooks in
 // ./registerControls and the row-nav hook in ./useRowKeyboardNav.
 
-import { Group, Table, Text, TextInput, UnstyledButton } from "@mantine/core";
+import { Box, Group, Table, Text, TextInput, UnstyledButton } from "@mantine/core";
 import type { ComponentProps, ReactNode } from "react";
 import { IconChevronDown, IconChevronSort, IconChevronUp, IconSearch } from "./icons";
 import type { SortDir } from "./registerControls";
@@ -28,16 +28,29 @@ export function RegisterToolbar({
 }) {
   return (
     <Group justify="space-between" align="flex-end" wrap="wrap" gap="sm">
-      <Group align="flex-end" wrap="wrap" gap="sm">
+      <Group
+        align="flex-end"
+        wrap="wrap"
+        gap="sm"
+        w={{ base: "100%", sm: "auto" }}
+        style={{ flex: "1 1 auto", minWidth: 0, maxWidth: "100%" }}
+      >
         <TextInput
           value={q}
           onChange={(e) => onQ(e.currentTarget.value)}
           placeholder={placeholder ?? "Search…"}
           aria-label="Search"
           leftSection={<IconSearch size={16} />}
-          w={searchWidth}
+          w={{ base: "100%", sm: searchWidth }}
+          miw={0}
         />
-        {children}
+        {children && (
+          <Box maw="100%" miw={0} style={{ overflowX: "auto" }}>
+            <Group align="flex-end" wrap="wrap" gap="sm">
+              {children}
+            </Group>
+          </Box>
+        )}
       </Group>
       {count !== undefined && (
         <Text size="sm" c="dimmed" aria-live="polite">
