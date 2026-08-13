@@ -14,6 +14,10 @@ export function useRowKeyboardNav<E extends HTMLElement = HTMLTableSectionElemen
   const ref = useRef<E>(null);
   const onKeyDown = useCallback((e: KeyboardEvent<E>) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    if (target === null || target !== document.activeElement || !target.matches("[data-rownav]")) {
+      return;
+    }
     const container = ref.current;
     if (!container) return;
     const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-rownav]"));
