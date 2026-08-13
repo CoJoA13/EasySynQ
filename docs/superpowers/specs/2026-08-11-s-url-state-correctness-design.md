@@ -98,11 +98,7 @@ The public shape is intentionally small:
 
 ```ts
 export type QueryStateClass =
-  | "material-view"
-  | "detail"
-  | "subview"
-  | "ordinary"
-  | "ignored";
+  "material-view" | "detail" | "subview" | "ordinary" | "ignored";
 
 export interface EffectiveView {
   title: string;
@@ -159,10 +155,10 @@ or replaced.
 
 Only the recognized task selector is a material query-selected page view in this slice:
 
-| Location | Effective title | Live focus owner | Live announcement |
-|---|---|---|---|
-| `/tasks` | `EasySynQ — Tasks` | route main | `Tasks` |
-| `/tasks?type=DOC_ACK` | `EasySynQ — Acknowledgements` | route main | `Acknowledgements` |
+| Location              | Effective title               | Live focus owner | Live announcement  |
+| --------------------- | ----------------------------- | ---------------- | ------------------ |
+| `/tasks`              | `EasySynQ — Tasks`            | route main       | `Tasks`            |
+| `/tasks?type=DOC_ACK` | `EasySynQ — Acknowledgements` | route main       | `Acknowledgements` |
 
 An absent or unknown `type` resolves to the general Tasks view. Unknown values are left in the address
 bar for forward compatibility but do not enter any visible copy or effective key.
@@ -172,15 +168,15 @@ bar for forward compatibility but do not enter any visible copy or effective key
 The following non-empty selectors identify a detail surface and contribute their opaque value to the
 internal recovery key:
 
-| Route | Parameter | Safe title |
-|---|---|---|
-| `/library` | `detail` | `EasySynQ — Document details` |
-| `/dcrs` | `dcr` | `EasySynQ — Change request details` |
-| `/capa` | `capa` | `EasySynQ — CAPA details` |
-| `/improvement` | `initiative` | `EasySynQ — Improvement details` |
-| `/context` | `issue` | `EasySynQ — Context issue details` |
-| `/interested-parties` | `party` | `EasySynQ — Interested party details` |
-| `/risks` | `risk` | `EasySynQ — Risk details` |
+| Route                 | Parameter    | Safe title                            |
+| --------------------- | ------------ | ------------------------------------- |
+| `/library`            | `detail`     | `EasySynQ — Document details`         |
+| `/dcrs`               | `dcr`        | `EasySynQ — Change request details`   |
+| `/capa`               | `capa`       | `EasySynQ — CAPA details`             |
+| `/improvement`        | `initiative` | `EasySynQ — Improvement details`      |
+| `/context`            | `issue`      | `EasySynQ — Context issue details`    |
+| `/interested-parties` | `party`      | `EasySynQ — Interested party details` |
+| `/risks`              | `risk`       | `EasySynQ — Risk details`             |
 
 The feature validates or loads the opaque ID through its existing safe API state. The classifier neither
 guesses ID syntax nor deletes the value before authoritative feature data is available. Missing,

@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-11"
-baseline_commit: "e1d0802"
-last_shipped_slice: "S-mutation-feedback"
+as_of: "2026-08-13"
+baseline_commit: "76c2f72"
+last_shipped_slice: "S-url-state-correctness"
 migration_head: "0085"
 next_migration: "0086"
 api_unit_tests: 1686
-web_test_files: 258
-web_tests: 1637
+web_test_files: 259
+web_tests: 1834
 contract_tests: 283
 integration_passed: 1051
 integration_skipped: 2
@@ -30,18 +30,19 @@ DCR, improvement, risk, context, interested-party, and identity-provisioning sur
 retention/disposition, and Evidence Packs are API/worker-complete but do not have dedicated SPA
 management routes.
 
-The last shipped slice makes failed notification mutations visible, announced, and recoverable without
-discarding the operator's intent. Explicit mark-one, bell/page mark-all, and preference-save failures remain
-local to their controls; opening an unread notification still navigates immediately, while its late
-mark-read failure persists in the operational shell until Dismiss or a successful explicit retry. Retry is
-never automatic and is available only for these named personal-state operations under the approved
-effective-repeat-safety contract when the error is a fetch
-`TypeError`, HTTP 408, HTTP 429, or HTTP 500–599. Local pending/retry, Dismiss, and preference-edit
-lifecycle guards prevent abandoned callbacks from restoring stale feedback or overwriting newer preference
-intent. The slice does not change API handlers, OpenAPI/generated artifacts, database schema/migrations,
-authentication/setup gates, query-client identity, notification delivery, or URL semantics. Detailed
-shipped behavior and evidence remain in
-[`slice-history.md`](slice-history.md#s-mutation-feedback--notification-write-failure-feedback-and-explicit-safe-retry).
+The last shipped slice classifies query-backed operational state by product meaning. The Tasks and
+Acknowledgements material views now have distinct fixed titles and intentional live focus/announcement
+behavior; recognized detail selectors and subviews participate in safe route recovery without stealing
+feature-owned focus; and ordinary filters, search, sort, pagination, tabs, modes, and comparison controls
+retain compact replacement history. Browser Back/Forward remains authoritative, every URL-backed drawer
+follows live selector change, removal, and conflict, and loaded comparison IDs are validated before viewer
+work. Unknown or conflicting selector values resolve to safe defaults without entering visible copy.
+
+The slice preserves the operational QueryClient/provider identity, cached state, route-persistent mutation
+feedback, authentication/setup gates, route-error and 404 ownership, API handlers, OpenAPI/generated
+artifacts, database schema/migrations, Keycloak, dependencies, and deployment behavior. Detailed shipped
+behavior and evidence remain in
+[`slice-history.md`](slice-history.md#s-url-state-correctness--effective-url-view-identity-history-recovery-and-accessibility).
 
 ## Runtime truth
 
@@ -62,18 +63,19 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
-the facts it freshly verifies; partial or unavailable checks must be reported as such. At `e1d0802` on
-2026-08-11, durable job `job-mso9aheq-41b8fb9c` ran `npm --prefix apps/web run test` with 258 files and
-1,637 tests passing in 270.42 seconds, without unhandled errors. It emitted only Node's repeated
-`localStorage` experimental warning. The final 11-file affected selection passed 149 tests; web typecheck,
-lint, scoped Prettier, and production build passed. The build transformed 1,097 modules and retained its
-existing advisory for a chunk above 500 kB. API Ruff format/check and mypy passed, but the exact focused
-notification integration command exited 1 before any test body or assertion: all 23 shared
-`PostgresContainer` setups hit Docker-socket `PermissionError`. That repeat-safety integration proof is
-therefore unavailable on this host, not a pass. Authority fixtures passed 91/91, Claude-hook compatibility
-passed, repository authority returned `AUTHORITY_OK`, site-data fixtures passed 13/13, the direct site-data
-scan was clean, and `git diff --check` was clean. API, contract, integration, migration, and CI numeric
-values above retain their prior successful evidence unless refreshed by their own complete gate.
+the facts it freshly verifies; partial or unavailable checks must be reported as such. At implementation
+baseline `76c2f72` on 2026-08-13, durable job `job-msr2j5ez-6c010aaa` ran
+`npm --prefix apps/web test` and exited 0 with 259 files and 1,834 tests passing in 275.10 seconds, without
+unhandled errors. It emitted only Node's repeated `localStorage` experimental warning. The exact 21-file
+URL-state selection passed 467 tests in 57.92 seconds; web typecheck, lint, scoped documentation Prettier,
+and production build passed. The build transformed 1,098 modules and retained its existing advisory for a
+chunk above 500 kB; the JavaScript asset was 1,158.15 kB (318.75 kB gzip). Independent broad review drove
+two focused fix waves, and the final scoped re-review reported no actionable findings; its seven-file
+selection passed 211 tests, web typecheck passed, and its scoped diff was clean. API, contract, integration,
+migration, and CI numeric values above retain their prior successful evidence because their complete gates
+were not refreshed for this front-end-only slice. After the evidence edits, authority fixtures passed 91/91,
+all seven Claude-hook compatibility assertions passed, repository authority returned `AUTHORITY_OK`,
+site-data fixtures passed 13/13, the direct site-data scan was clean, and the diff guards were clean.
 
 ## CI topology
 

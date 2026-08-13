@@ -60,14 +60,18 @@ Expected: the existing route-chrome, recovery, and shared control baseline passe
 Create table-driven tests for:
 
 ```ts
-expect(classifyEffectiveView("/tasks", new URLSearchParams("type=DOC_ACK"))).toMatchObject({
+expect(
+  classifyEffectiveView("/tasks", new URLSearchParams("type=DOC_ACK")),
+).toMatchObject({
   title: "EasySynQ — Acknowledgements",
   queryStateClass: "material-view",
   focusOwner: "route-main",
   announcement: "Acknowledgements",
 });
 
-expect(classifyEffectiveView("/library", new URLSearchParams("detail=doc-a"))).toMatchObject({
+expect(
+  classifyEffectiveView("/library", new URLSearchParams("detail=doc-a")),
+).toMatchObject({
   title: "EasySynQ — Document details",
   queryStateClass: "detail",
   focusOwner: "feature",
@@ -75,7 +79,10 @@ expect(classifyEffectiveView("/library", new URLSearchParams("detail=doc-a"))).t
 });
 
 expect(
-  classifyEffectiveView("/tasks", new URLSearchParams("type=not-a-view&q=needle")),
+  classifyEffectiveView(
+    "/tasks",
+    new URLSearchParams("type=not-a-view&q=needle"),
+  ),
 ).toMatchObject({
   title: "EasySynQ — Tasks",
   queryStateClass: "ordinary",
@@ -118,11 +125,7 @@ Create the public types exactly:
 
 ```ts
 export type QueryStateClass =
-  | "material-view"
-  | "detail"
-  | "subview"
-  | "ordinary"
-  | "ignored";
+  "material-view" | "detail" | "subview" | "ordinary" | "ignored";
 
 export interface EffectiveView {
   title: string;
@@ -152,7 +155,13 @@ const DETAIL_RULES = [
   ["/risks", "risk", "Risk details"],
 ] as const;
 
-const DOCUMENT_TABS = new Set(["overview", "history", "approvals", "where-used", "acks"]);
+const DOCUMENT_TABS = new Set([
+  "overview",
+  "history",
+  "approvals",
+  "where-used",
+  "acks",
+]);
 const ORDINARY_KEYS = new Set([
   "q",
   "sort",
@@ -269,7 +278,12 @@ Nest both providers inside `RouteChromeProvider`, using the stable `setAnnouncem
 export function RouteAnnouncement() {
   const message = useContext(RouteAnnouncementValueContext);
   return (
-    <VisuallyHidden role="status" aria-live="polite" aria-atomic="true" aria-label="Page navigation">
+    <VisuallyHidden
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      aria-label="Page navigation"
+    >
       {message ?? ""}
     </VisuallyHidden>
   );
@@ -630,11 +644,19 @@ Expected: unknown document tabs can select no panel, raw unknown version IDs rea
 Add a local parser:
 
 ```ts
-const DOCUMENT_TABS = ["overview", "history", "approvals", "where-used", "acks"] as const;
+const DOCUMENT_TABS = [
+  "overview",
+  "history",
+  "approvals",
+  "where-used",
+  "acks",
+] as const;
 type DocumentTab = (typeof DOCUMENT_TABS)[number];
 
 function parseDocumentTab(value: string | null): DocumentTab {
-  return DOCUMENT_TABS.includes(value as DocumentTab) ? (value as DocumentTab) : "overview";
+  return DOCUMENT_TABS.includes(value as DocumentTab)
+    ? (value as DocumentTab)
+    : "overview";
 }
 ```
 
@@ -655,7 +677,10 @@ const defaultTo = ordered[0]?.id ?? null;
 const rawFrom = params.get("from");
 const rawTo = params.get("to");
 const pairIsValid =
-  rawFrom !== null && rawTo !== null && validIds.has(rawFrom) && validIds.has(rawTo);
+  rawFrom !== null &&
+  rawTo !== null &&
+  validIds.has(rawFrom) &&
+  validIds.has(rawTo);
 const from = pairIsValid ? rawFrom : defaultFrom;
 const to = pairIsValid ? rawTo : defaultTo;
 ```
