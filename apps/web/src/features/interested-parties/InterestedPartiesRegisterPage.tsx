@@ -259,102 +259,104 @@ export function InterestedPartiesRegisterPage() {
               Try clearing the search or the party-type / influence / status filter.
             </Alert>
           ) : (
-            <Table striped highlightOnHover mt="md">
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th scope="col">Party</Table.Th>
-                  <SortableTh
-                    label="Type"
-                    sortKey="party_type"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Influence"
-                    sortKey="influence"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Status"
-                    sortKey="status"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Last reviewed"
-                    sortKey="reviewed"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
-                {tableRows.map((r) => (
-                  <Table.Tr key={r.id}>
-                    <Table.Td>
-                      <Anchor
-                        component="button"
-                        type="button"
-                        onClick={() => setSelected(r.id)}
-                        data-rownav
-                        ta="left"
-                      >
-                        <Text lineClamp={1}>{r.party_name}</Text>
-                      </Anchor>
-                      <Text size="xs" c="dimmed" lineClamp={1}>
-                        {r.needs_expectations}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <StatusBadge
-                        tone={PARTY_TYPE_TONE[r.party_type]}
-                        label={PARTY_TYPE_SINGULAR[r.party_type]}
-                        kind="Party type"
-                      />
-                    </Table.Td>
-                    <Table.Td>
-                      {r.influence ? (
-                        <StatusBadge
-                          tone={INFLUENCE_TONE[r.influence]}
-                          glyph={INFLUENCE_GLYPH[r.influence]}
-                          label={INFLUENCE_LABEL[r.influence]}
-                          kind="Influence"
-                        />
-                      ) : (
-                        <Text size="sm" c="dimmed">
-                          Unspecified
-                        </Text>
-                      )}
-                    </Table.Td>
-                    <Table.Td>
-                      <StatusBadge
-                        tone={STATUS_TONE[r.status]}
-                        label={STATUS_LABEL[r.status]}
-                        kind="Status"
-                      />
-                    </Table.Td>
-                    <Table.Td>
-                      {r.last_reviewed_at ? (
-                        <Text size="sm">{r.last_reviewed_at.slice(0, 10)}</Text>
-                      ) : (
-                        <Text size="sm" c="dimmed">
-                          Never
-                        </Text>
-                      )}
-                    </Table.Td>
+            <Table.ScrollContainer minWidth={880}>
+              <Table striped highlightOnHover mt="md">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th scope="col">Party</Table.Th>
+                    <SortableTh
+                      label="Type"
+                      sortKey="party_type"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Influence"
+                      sortKey="influence"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Status"
+                      sortKey="status"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Last reviewed"
+                      sortKey="reviewed"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                </Table.Thead>
+                <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                  {tableRows.map((r) => (
+                    <Table.Tr key={r.id}>
+                      <Table.Td>
+                        <Anchor
+                          component="button"
+                          type="button"
+                          onClick={() => setSelected(r.id)}
+                          data-rownav
+                          ta="left"
+                        >
+                          <Text lineClamp={1}>{r.party_name}</Text>
+                        </Anchor>
+                        <Text size="xs" c="dimmed" lineClamp={1}>
+                          {r.needs_expectations}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <StatusBadge
+                          tone={PARTY_TYPE_TONE[r.party_type]}
+                          label={PARTY_TYPE_SINGULAR[r.party_type]}
+                          kind="Party type"
+                        />
+                      </Table.Td>
+                      <Table.Td>
+                        {r.influence ? (
+                          <StatusBadge
+                            tone={INFLUENCE_TONE[r.influence]}
+                            glyph={INFLUENCE_GLYPH[r.influence]}
+                            label={INFLUENCE_LABEL[r.influence]}
+                            kind="Influence"
+                          />
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            Unspecified
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td>
+                        <StatusBadge
+                          tone={STATUS_TONE[r.status]}
+                          label={STATUS_LABEL[r.status]}
+                          kind="Status"
+                        />
+                      </Table.Td>
+                      <Table.Td>
+                        {r.last_reviewed_at ? (
+                          <Text size="sm">{r.last_reviewed_at.slice(0, 10)}</Text>
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            Never
+                          </Text>
+                        )}
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
         </>
       )}

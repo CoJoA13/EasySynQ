@@ -8,6 +8,9 @@ const sources = import.meta.glob(
     "../features/objectives/ObjectivesRegisterPage.tsx",
     "../features/management-review/ManagementReviewsRegisterPage.tsx",
     "../features/improvement/ImprovementRegisterPage.tsx",
+    "../features/risk/RisksRegisterPage.tsx",
+    "../features/context/ContextRegisterPage.tsx",
+    "../features/interested-parties/InterestedPartiesRegisterPage.tsx",
   ],
   { eager: true, query: "?raw", import: "default" },
 ) as Record<string, string>;
@@ -19,6 +22,9 @@ const contracts = [
   ["features/objectives/ObjectivesRegisterPage.tsx", 720],
   ["features/management-review/ManagementReviewsRegisterPage.tsx", 800],
   ["features/improvement/ImprovementRegisterPage.tsx", 920],
+  ["features/risk/RisksRegisterPage.tsx", 720],
+  ["features/context/ContextRegisterPage.tsx", 880],
+  ["features/interested-parties/InterestedPartiesRegisterPage.tsx", 880],
 ] as const;
 
 function sourceFor(path: string): string {
@@ -28,6 +34,10 @@ function sourceFor(path: string): string {
 }
 
 describe("responsive shared-register source contract", () => {
+  it("covers the exact owner-approved nine-route cohort", () => {
+    expect(contracts).toHaveLength(9);
+  });
+
   it.each(contracts)("keeps one %s table in its %i px owner", (path, minWidth) => {
     const source = sourceFor(path);
     expect(source.match(/<Table\.ScrollContainer/g)).toHaveLength(1);

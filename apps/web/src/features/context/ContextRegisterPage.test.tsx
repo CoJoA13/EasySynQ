@@ -7,6 +7,7 @@ import { RouteChromeProvider } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
 import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { server } from "../../test/msw/server";
+import { expectResponsiveTable } from "../../test/responsiveTable";
 import { ContextRegisterPage } from "./ContextRegisterPage";
 
 // Flip the register head's state + the SERVER-computed caps (the gating source — context gates on the
@@ -45,6 +46,18 @@ it("renders the SWOT board, scorecard, and a table row per issue", async () => {
   const table = screen.getByRole("table");
   expect(within(table).getByText("Skilled and certified QA team")).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
+});
+
+it("contains the complete context table in one 880 px scroll region", async () => {
+  renderWithProviders(<ContextRegisterPage />, { route: "/context" });
+  await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+  const table = expectResponsiveTable(880);
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(5);
+  expect(
+    within(table).getAllByRole("button", {
+      name: "Skilled and certified QA team",
+    }),
+  ).toHaveLength(1);
 });
 
 it("shows the read-only banner and hides New when the register is Effective", async () => {

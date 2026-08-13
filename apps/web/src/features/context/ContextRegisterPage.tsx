@@ -245,99 +245,101 @@ export function ContextRegisterPage() {
               Try clearing the search or the classification / category / status filter.
             </Alert>
           ) : (
-            <Table striped highlightOnHover mt="md">
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th scope="col">Issue</Table.Th>
-                  <SortableTh
-                    label="Classification"
-                    sortKey="classification"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Category"
-                    sortKey="category"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Status"
-                    sortKey="status"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Last reviewed"
-                    sortKey="reviewed"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
-                {tableRows.map((r) => (
-                  <Table.Tr key={r.id}>
-                    <Table.Td>
-                      <Anchor
-                        component="button"
-                        type="button"
-                        onClick={() => setSelected(r.id)}
-                        data-rownav
-                        ta="left"
-                      >
-                        <Text lineClamp={1}>{r.description}</Text>
-                      </Anchor>
-                    </Table.Td>
-                    <Table.Td>
-                      <StatusBadge
-                        tone={CLASSIFICATION_TONE[r.classification]}
-                        glyph={CLASSIFICATION_GLYPH[r.classification]}
-                        label={CLASSIFICATION_LABEL[r.classification]}
-                        kind="Classification"
-                      />
-                    </Table.Td>
-                    <Table.Td>
-                      {r.category ? (
-                        <StatusBadge
-                          tone={CATEGORY_TONE[r.category]}
-                          label={CATEGORY_LABEL[r.category]}
-                          kind="SWOT"
-                        />
-                      ) : (
-                        <Text size="sm" c="dimmed">
-                          —
-                        </Text>
-                      )}
-                    </Table.Td>
-                    <Table.Td>
-                      <StatusBadge
-                        tone={STATUS_TONE[r.status]}
-                        label={STATUS_LABEL[r.status]}
-                        kind="Status"
-                      />
-                    </Table.Td>
-                    <Table.Td>
-                      {r.last_reviewed_at ? (
-                        <Text size="sm">{r.last_reviewed_at.slice(0, 10)}</Text>
-                      ) : (
-                        <Text size="sm" c="dimmed">
-                          Never
-                        </Text>
-                      )}
-                    </Table.Td>
+            <Table.ScrollContainer minWidth={880}>
+              <Table striped highlightOnHover mt="md">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th scope="col">Issue</Table.Th>
+                    <SortableTh
+                      label="Classification"
+                      sortKey="classification"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Category"
+                      sortKey="category"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Status"
+                      sortKey="status"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Last reviewed"
+                      sortKey="reviewed"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                </Table.Thead>
+                <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                  {tableRows.map((r) => (
+                    <Table.Tr key={r.id}>
+                      <Table.Td>
+                        <Anchor
+                          component="button"
+                          type="button"
+                          onClick={() => setSelected(r.id)}
+                          data-rownav
+                          ta="left"
+                        >
+                          <Text lineClamp={1}>{r.description}</Text>
+                        </Anchor>
+                      </Table.Td>
+                      <Table.Td>
+                        <StatusBadge
+                          tone={CLASSIFICATION_TONE[r.classification]}
+                          glyph={CLASSIFICATION_GLYPH[r.classification]}
+                          label={CLASSIFICATION_LABEL[r.classification]}
+                          kind="Classification"
+                        />
+                      </Table.Td>
+                      <Table.Td>
+                        {r.category ? (
+                          <StatusBadge
+                            tone={CATEGORY_TONE[r.category]}
+                            label={CATEGORY_LABEL[r.category]}
+                            kind="SWOT"
+                          />
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            —
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td>
+                        <StatusBadge
+                          tone={STATUS_TONE[r.status]}
+                          label={STATUS_LABEL[r.status]}
+                          kind="Status"
+                        />
+                      </Table.Td>
+                      <Table.Td>
+                        {r.last_reviewed_at ? (
+                          <Text size="sm">{r.last_reviewed_at.slice(0, 10)}</Text>
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            Never
+                          </Text>
+                        )}
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
         </>
       )}
