@@ -1,9 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { classifyEffectiveView } from "./effectiveView";
+import { classifyEffectiveView, readSearchParamState } from "./effectiveView";
 
 function view(pathname: string, search = "") {
   return classifyEffectiveView(pathname, new URLSearchParams(search));
 }
+
+describe("readSearchParamState", () => {
+  it("distinguishes an absent selector from a unique selector", () => {
+    expect(readSearchParamState(new URLSearchParams("ordinary=keep"), "detail")).toEqual({
+      kind: "absent",
+      value: null,
+    });
+    expect(readSearchParamState(new URLSearchParams("detail=document-a"), "detail")).toEqual({
+      kind: "unique",
+      value: "document-a",
+    });
+  });
+
+  it("treats identical duplicate selectors as one unique value", () => {
+    expect(
+      readSearchParamState(new URLSearchParams("detail=document-a&detail=document-a"), "detail"),
+    ).toEqual({ kind: "unique", value: "document-a" });
+  });
+
+  it.each(["detail=document-a&detail=document-b", "detail=document-b&detail=document-a"])(
+    "reports conflicting duplicate selectors independently of order for %s",
+    (search) => {
+      expect(readSearchParamState(new URLSearchParams(search), "detail")).toEqual({
+        kind: "conflicting",
+        value: null,
+      });
+    },
+  );
+});
 
 describe("classifyEffectiveView", () => {
   it("classifies the Acknowledgements task selector as a distinct material view", () => {

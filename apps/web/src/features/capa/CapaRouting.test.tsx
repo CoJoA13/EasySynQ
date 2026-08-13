@@ -4,6 +4,7 @@ import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { expect, test } from "vitest";
 import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
+import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { server } from "../../test/msw/server";
 import { CapaBoardPage } from "./CapaBoardPage";
 import { CapaLayout } from "./CapaLayout";
@@ -130,6 +131,40 @@ test("keeps a locally opened CAPA drawer open across an unrelated URL update", a
   });
   expect(screen.getByRole("dialog")).toBeInTheDocument();
 });
+
+test.each([
+  [CAPA_A, CAPA_B],
+  [CAPA_B, CAPA_A],
+] as const)(
+  "closes a locally opened CAPA drawer for conflicting selectors %s then %s",
+  async (first, second) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RouteChromeProvider>
+        <ConflictingSelectorNavigation
+          route="/capa"
+          selector="capa"
+          values={[first, second]}
+          unrelated={["source", "audit"]}
+        >
+          <CapaBoardPage />
+        </ConflictingSelectorNavigation>
+      </RouteChromeProvider>,
+      { route: "/capa" },
+    );
+
+    await user.click(await screen.findByRole("button", { name: /REC-000031/ }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "navigate to conflicting selectors" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("status", { name: "Page navigation" })).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("source=audit");
+    expect(screen.getByLabelText("Current location").textContent?.match(/capa=/g)).toHaveLength(2);
+    expect(screen.getByLabelText("Effective recovery key")).toHaveTextContent(/^route:\/capa$/);
+    expect(document.title).toBe("EasySynQ — CAPA");
+  },
+);
 
 test("closing a deep-linked CAPA drawer replaces only ?capa and Back restores the register", async () => {
   const user = userEvent.setup();

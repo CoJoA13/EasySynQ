@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { expect, it } from "vitest";
+import { RouteChromeProvider } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
+import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { server } from "../../test/msw/server";
 import { InterestedPartiesRegisterPage } from "./InterestedPartiesRegisterPage";
 
@@ -146,6 +148,43 @@ it("a filter change does not close a locally-opened drawer (the ?party-keyed syn
   await user.click(screen.getByRole("radio", { name: "High" }));
   expect(screen.getByRole("dialog")).toBeInTheDocument();
 });
+
+it.each([
+  ["ee000001-0001-0001-0001-000000000001", "ee000002-0002-0002-0002-000000000002"],
+  ["ee000002-0002-0002-0002-000000000002", "ee000001-0001-0001-0001-000000000001"],
+] as const)(
+  "closes a locally opened interested-party drawer for conflicting selectors %s then %s",
+  async (first, second) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RouteChromeProvider>
+        <ConflictingSelectorNavigation
+          route="/interested-parties"
+          selector="party"
+          values={[first, second]}
+          unrelated={["influence", "High"]}
+        >
+          <InterestedPartiesRegisterPage />
+        </ConflictingSelectorNavigation>
+      </RouteChromeProvider>,
+      { route: ROUTE },
+    );
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    await user.click(within(screen.getByRole("table")).getByText("Beta Retail Group"));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "navigate to conflicting selectors" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("status", { name: "Page navigation" })).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("influence=High");
+    expect(screen.getByLabelText("Current location").textContent?.match(/party=/g)).toHaveLength(2);
+    expect(screen.getByLabelText("Effective recovery key")).toHaveTextContent(
+      /^route:\/interested-parties$/,
+    );
+    expect(document.title).toBe("EasySynQ — Interested parties");
+  },
+);
 
 it("shows an empty state when there are no interested parties", async () => {
   server.use(http.get("/api/v1/interested-parties", () => HttpResponse.json({ data: [] })));

@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { expect, it } from "vitest";
+import { RouteChromeProvider } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
+import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { server } from "../../test/msw/server";
 import { ContextRegisterPage } from "./ContextRegisterPage";
 
@@ -148,6 +150,41 @@ it("a filter change does not close a locally-opened drawer (the ?issue-keyed syn
   await user.click(screen.getByRole("radio", { name: "External" }));
   expect(screen.getByRole("dialog")).toBeInTheDocument();
 });
+
+it.each([
+  ["cc000001-0001-0001-0001-000000000001", "cc000002-0002-0002-0002-000000000002"],
+  ["cc000002-0002-0002-0002-000000000002", "cc000001-0001-0001-0001-000000000001"],
+] as const)(
+  "closes a locally opened context drawer for conflicting selectors %s then %s",
+  async (first, second) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RouteChromeProvider>
+        <ConflictingSelectorNavigation
+          route="/context"
+          selector="issue"
+          values={[first, second]}
+          unrelated={["classification", "External"]}
+        >
+          <ContextRegisterPage />
+        </ConflictingSelectorNavigation>
+      </RouteChromeProvider>,
+      { route: "/context" },
+    );
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    await user.click(within(screen.getByRole("table")).getByText("Skilled and certified QA team"));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "navigate to conflicting selectors" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("status", { name: "Page navigation" })).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("classification=External");
+    expect(screen.getByLabelText("Current location").textContent?.match(/issue=/g)).toHaveLength(2);
+    expect(screen.getByLabelText("Effective recovery key")).toHaveTextContent(/^route:\/context$/);
+    expect(document.title).toBe("EasySynQ — Context");
+  },
+);
 
 it("shows an empty state when there are no context issues", async () => {
   server.use(http.get("/api/v1/context", () => HttpResponse.json({ data: [] })));

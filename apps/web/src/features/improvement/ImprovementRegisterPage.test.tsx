@@ -7,6 +7,7 @@ import { expect, test } from "vitest";
 import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { ImprovementRegisterPage } from "./ImprovementRegisterPage";
 
 function LocationProbe() {
@@ -163,6 +164,44 @@ test("keeps a locally opened improvement drawer open when a filter updates the U
   expect(screen.getByRole("dialog")).toBeInTheDocument();
   expect(screen.getByTestId("loc")).toHaveTextContent("stage=Closed");
 });
+
+test.each([
+  [INITIATIVE_A, INITIATIVE_B],
+  [INITIATIVE_B, INITIATIVE_A],
+] as const)(
+  "closes a locally opened improvement drawer for conflicting selectors %s then %s",
+  async (first, second) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RouteChromeProvider>
+        <ConflictingSelectorNavigation
+          route="/improvement"
+          selector="initiative"
+          values={[first, second]}
+          unrelated={["stage", "Open"]}
+        >
+          <ImprovementRegisterPage />
+        </ConflictingSelectorNavigation>
+      </RouteChromeProvider>,
+      { route: "/improvement" },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "IMP-2026-0001" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "navigate to conflicting selectors" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("status", { name: "Page navigation" })).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("stage=Open");
+    expect(
+      screen.getByLabelText("Current location").textContent?.match(/initiative=/g),
+    ).toHaveLength(2);
+    expect(screen.getByLabelText("Effective recovery key")).toHaveTextContent(
+      /^route:\/improvement$/,
+    );
+    expect(document.title).toBe("EasySynQ — Improvement");
+  },
+);
 
 test("closing the deep-linked drawer replaces only ?initiative and preserves filters", async () => {
   const u = userEvent.setup();

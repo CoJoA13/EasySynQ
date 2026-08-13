@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { useLocation, useNavigate } from "react-router-dom";
 import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
+import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { server } from "../../test/msw/server";
 import { DcrsRegisterPage } from "./DcrsRegisterPage";
 
@@ -143,6 +144,40 @@ it("keeps a locally opened DCR drawer open when a filter changes", async () => {
   expect(screen.getByRole("dialog")).toBeInTheDocument();
   expect(screen.getByTestId("loc")).toHaveTextContent("state=Cancelled");
 });
+
+it.each([
+  [DCR_A, DCR_B],
+  [DCR_B, DCR_A],
+] as const)(
+  "closes a locally opened DCR drawer for conflicting selectors %s then %s",
+  async (first, second) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RouteChromeProvider>
+        <ConflictingSelectorNavigation
+          route="/dcrs"
+          selector="dcr"
+          values={[first, second]}
+          unrelated={["state", "Open"]}
+        >
+          <DcrsRegisterPage />
+        </ConflictingSelectorNavigation>
+      </RouteChromeProvider>,
+      { route: "/dcrs" },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "DCR-2026-0001" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "navigate to conflicting selectors" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("status", { name: "Page navigation" })).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("state=Open");
+    expect(screen.getByLabelText("Current location").textContent?.match(/dcr=/g)).toHaveLength(2);
+    expect(screen.getByLabelText("Effective recovery key")).toHaveTextContent(/^route:\/dcrs$/);
+    expect(document.title).toBe("EasySynQ — Document change requests");
+  },
+);
 
 it("closing the deep-linked drawer replaces only ?dcr and preserves filters", async () => {
   const u = userEvent.setup();

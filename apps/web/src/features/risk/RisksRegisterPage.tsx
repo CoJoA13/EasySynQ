@@ -13,7 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { RiskBand, RiskRow } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
-import { getUniqueSearchParam } from "../../lib/effectiveView";
+import { readSearchParamState } from "../../lib/effectiveView";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { StatusBadge } from "../../lib/StatusBadge";
@@ -111,11 +111,12 @@ export function RisksRegisterPage() {
   // INCLUDING its removal — so back/forward that drops ?risk closes the drawer, while a change to
   // another param (the band/type filters) leaves a locally-opened drawer untouched (Codex P3).
   const [params, setParams] = useSearchParams();
-  const riskParam = getUniqueSearchParam(params, "risk");
+  const riskSelectorState = readSearchParamState(params, "risk");
+  const riskParam = riskSelectorState.kind === "unique" ? riskSelectorState.value : null;
   const [selected, setSelected] = useState<string | null>(riskParam);
   useEffect(() => {
     setSelected(riskParam);
-  }, [riskParam]);
+  }, [riskSelectorState.kind, riskParam]);
   function closeDrawer() {
     setSelected(null);
     if (params.has("risk")) {

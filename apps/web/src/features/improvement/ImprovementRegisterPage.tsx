@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { AsOf } from "../../lib/AsOf";
-import { getUniqueSearchParam } from "../../lib/effectiveView";
+import { readSearchParamState } from "../../lib/effectiveView";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import {
@@ -35,7 +35,9 @@ export function ImprovementRegisterPage() {
   const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useInitiatives();
   const { data: directory } = useUserDirectory();
   const [params, setParams] = useSearchParams();
-  const selectedInitiativeParam = getUniqueSearchParam(params, "initiative");
+  const initiativeSelectorState = readSearchParamState(params, "initiative");
+  const selectedInitiativeParam =
+    initiativeSelectorState.kind === "unique" ? initiativeSelectorState.value : null;
   const [selected, setSelected] = useState<string | null>(selectedInitiativeParam);
   // URL-backed enum filters (distinct keys; neither collides with the `initiative` drawer deep-link).
   const [stage, setStage] = useUrlParam("stage");
@@ -54,7 +56,7 @@ export function ImprovementRegisterPage() {
   // opens when an unrelated filter changes the search-params object.
   useEffect(() => {
     setSelected(selectedInitiativeParam);
-  }, [selectedInitiativeParam]);
+  }, [initiativeSelectorState.kind, selectedInitiativeParam]);
 
   function closeDrawer() {
     setSelected(null);

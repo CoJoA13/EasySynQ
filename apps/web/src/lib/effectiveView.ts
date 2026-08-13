@@ -11,6 +11,11 @@ export interface EffectiveView {
   announcement: string | null;
 }
 
+export type SearchParamState =
+  | { kind: "absent"; value: null }
+  | { kind: "unique"; value: string }
+  | { kind: "conflicting"; value: null };
+
 const TITLES = [
   ["/", "Dashboard"],
   ["/setup", "Setup"],
@@ -137,10 +142,18 @@ function hasOrdinaryState(searchParams: URLSearchParams): boolean {
   return Array.from(searchParams.keys()).some((key) => ORDINARY_KEYS.has(key));
 }
 
-export function getUniqueSearchParam(searchParams: URLSearchParams, key: string): string | null {
+export function readSearchParamState(searchParams: URLSearchParams, key: string): SearchParamState {
   const values = searchParams.getAll(key);
-  if (values.length === 0 || values.some((value) => value !== values[0])) return null;
-  return values[0] ?? null;
+  if (values.length === 0) return { kind: "absent", value: null };
+  if (values.some((value) => value !== values[0])) {
+    return { kind: "conflicting", value: null };
+  }
+  return { kind: "unique", value: values[0] ?? "" };
+}
+
+export function getUniqueSearchParam(searchParams: URLSearchParams, key: string): string | null {
+  const state = readSearchParamState(searchParams, key);
+  return state.kind === "unique" ? state.value : null;
 }
 
 export function classifyEffectiveView(
