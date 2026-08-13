@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { Route, Routes, useParams } from "react-router-dom";
 import { expect, it, describe } from "vitest";
@@ -39,13 +40,14 @@ describe("ManagementReviewsRegisterPage", () => {
   });
 
   it("contains the complete management-review table in one 800 px scroll region", async () => {
-    renderWithProviders(<ManagementReviewsRegisterPage />, {
+    const { container } = renderWithProviders(<ManagementReviewsRegisterPage />, {
       route: "/management-reviews",
     });
     await waitFor(() => expect(screen.getByText("MR-001")).toBeInTheDocument());
     const table = expectResponsiveTable(800);
     expect(within(table).getAllByRole("columnheader")).toHaveLength(5);
     expect(within(table).getAllByRole("link", { name: "MR-001" })).toHaveLength(1);
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("hides the create button without mgmtReview.create", async () => {
