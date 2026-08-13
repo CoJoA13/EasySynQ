@@ -7,11 +7,7 @@ import { Outlet, Route, Routes, useLocation, useNavigate } from "react-router-do
 import { AppShell } from "../../app/shell/AppShell";
 import { RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { server } from "../../test/msw/server";
-import {
-  ingestionChecklistFixture,
-  ingestionFilesFixture,
-  ingestionRunFixture,
-} from "../../test/msw/handlers";
+import { ingestionChecklistFixture, ingestionRunFixture } from "../../test/msw/handlers";
 import { renderWithProviders } from "../../test/render";
 import { ReviewCockpit } from "./ReviewCockpit";
 
@@ -19,10 +15,15 @@ const RID = ingestionRunFixture.id;
 
 function HistoryControls() {
   const navigate = useNavigate();
+  const { pathname, search } = useLocation();
   return (
     <>
       <button
-        onClick={() => navigate(`/imports/${RID}?queue=high&sentinel=keep&checkpoint=prepared`)}
+        onClick={() => {
+          const params = new URLSearchParams(search);
+          params.set("checkpoint", "prepared");
+          navigate(`${pathname}?${params.toString()}`);
+        }}
       >
         Prepare history
       </button>
@@ -50,19 +51,8 @@ test("the High tab shows the 2 high-band rows", async () => {
   expect(within(table).queryByText("Final Inspection WI rev1.docx")).not.toBeInTheDocument();
 });
 
-test("queue and confidence changes replace history while preserving unrelated query state", async () => {
+test("queue default removal replaces history while preserving unrelated query state", async () => {
   const user = userEvent.setup();
-  server.use(
-    http.get("/api/v1/admin/imports/:id/files", () =>
-      HttpResponse.json({
-        run_id: RID,
-        files: Array.from({ length: 100 }, (_, index) => ({
-          ...ingestionFilesFixture[0],
-          id: `history-file-${index}`,
-        })),
-      }),
-    ),
-  );
   renderWithProviders(
     <>
       <ReviewCockpit runId={RID} run={ingestionRunFixture} />
@@ -72,19 +62,60 @@ test("queue and confidence changes replace history while preserving unrelated qu
   );
   await screen.findByRole("table", { name: "Triage queue" });
   await user.click(screen.getByRole("button", { name: "Prepare history" }));
-  await user.click(screen.getByRole("tab", { name: /Medium/ }));
-  await user.click(screen.getByRole("radio", { name: "High" }));
+  await user.click(screen.getByRole("tab", { name: /Needs decision/ }));
   expect(screen.getByLabelText("Current location")).toHaveTextContent("sentinel=keep");
-  expect(screen.getByLabelText("Current location")).toHaveTextContent("queue=medium");
-  expect(screen.getByLabelText("Current location")).toHaveTextContent("conf=HIGH");
-  await user.click(screen.getByRole("button", { name: "Next ›" }));
-  expect(screen.getByLabelText("Current location")).toHaveTextContent("offset=100");
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("queue=");
 
   await user.click(screen.getByRole("button", { name: "Back" }));
   await waitFor(() =>
     expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
   );
-  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("conf=HIGH");
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("queue=high");
+});
+
+test("confidence default removal replaces history while preserving unrelated query state", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <ReviewCockpit runId={RID} run={ingestionRunFixture} />
+      <HistoryControls />
+    </>,
+    { route: `/imports/${RID}?queue=high&conf=HIGH&sentinel=keep&checkpoint=baseline` },
+  );
+  await screen.findByRole("table", { name: "Triage queue" });
+  await user.click(screen.getByRole("button", { name: "Prepare history" }));
+  await user.click(screen.getByRole("radio", { name: "All" }));
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("conf=");
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
+  );
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("conf=HIGH");
+});
+
+test("offset default removal replaces history while preserving unrelated query state", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <ReviewCockpit runId={RID} run={ingestionRunFixture} />
+      <HistoryControls />
+    </>,
+    { route: `/imports/${RID}?queue=high&offset=100&sentinel=keep&checkpoint=baseline` },
+  );
+  await screen.findByRole("table", { name: "Triage queue" });
+  await user.click(screen.getByRole("button", { name: "Prepare history" }));
+  await user.click(screen.getByRole("button", { name: "‹ Prev" }));
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=prepared");
+  expect(screen.getByLabelText("Current location")).not.toHaveTextContent("offset=");
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
+  );
+  expect(screen.getByLabelText("Current location")).toHaveTextContent("offset=100");
 });
 
 test("an ingestion ordinary queue edit leaves route chrome and focused tab untouched", async () => {
