@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { Route, Routes, useParams } from "react-router-dom";
 import { expect, it, describe } from "vitest";
 import { renderWithProviders } from "../../test/render";
+import { expectResponsiveTable } from "../../test/responsiveTable";
 import { TONE_GLYPH } from "../../lib/status";
 import type { MgmtReviewListResponse } from "../../lib/types";
 import { server } from "../../test/msw/server";
@@ -35,6 +36,16 @@ describe("ManagementReviewsRegisterPage", () => {
     expect(within(row).getByText("2026 Annual Management Review")).toBeInTheDocument();
     expect(within(row).getByText("2026 Annual")).toBeInTheDocument();
     expect(within(row).getByText("2026-06-12")).toBeInTheDocument();
+  });
+
+  it("contains the complete management-review table in one 800 px scroll region", async () => {
+    renderWithProviders(<ManagementReviewsRegisterPage />, {
+      route: "/management-reviews",
+    });
+    await waitFor(() => expect(screen.getByText("MR-001")).toBeInTheDocument());
+    const table = expectResponsiveTable(800);
+    expect(within(table).getAllByRole("columnheader")).toHaveLength(5);
+    expect(within(table).getAllByRole("link", { name: "MR-001" })).toHaveLength(1);
   });
 
   it("hides the create button without mgmtReview.create", async () => {

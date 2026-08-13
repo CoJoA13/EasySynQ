@@ -183,72 +183,74 @@ export function AuditsListPage() {
           <EmptyState message="No audits match your filters." />
         </Box>
       ) : (
-        <Table striped highlightOnHover mt="md">
-          <Table.Thead>
-            <Table.Tr>
-              <SortableTh
-                label="Audit"
-                sortKey="identifier"
-                sort={sort}
-                dir={dir}
-                onSort={toggleSort}
-                scope="col"
-              />
-              <SortableTh
-                label="Title"
-                sortKey="title"
-                sort={sort}
-                dir={dir}
-                onSort={toggleSort}
-                scope="col"
-              />
-              <SortableTh
-                label="Lead auditor"
-                sortKey="lead"
-                sort={sort}
-                dir={dir}
-                onSort={toggleSort}
-                scope="col"
-              />
-              <SortableTh
-                label="State"
-                sortKey="state"
-                sort={sort}
-                dir={dir}
-                onSort={toggleSort}
-                scope="col"
-              />
-              <SortableTh
-                label="Started"
-                sortKey="started"
-                sort={sort}
-                dir={dir}
-                onSort={toggleSort}
-                scope="col"
-              />
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
-            {rows.map((a) => (
-              <Table.Tr key={a.id}>
-                <Table.Td>
-                  <Anchor component={Link} to={`/audits/${a.id}`} data-rownav>
-                    {a.identifier ?? a.id.slice(0, 8)}
-                  </Anchor>
-                </Table.Td>
-                <Table.Td>
-                  <Text lineClamp={1}>{a.title ?? "—"}</Text>
-                </Table.Td>
-                <Table.Td>{leadLabel(a.lead_auditor_user_id, dir0)}</Table.Td>
-                <Table.Td>
-                  <AuditStateBadge state={a.state} />
-                </Table.Td>
-                {/* "—" for an unstarted audit — a created_at fallback would mislabel it as started. */}
-                <Table.Td>{a.started_at ?? "—"}</Table.Td>
+        <Table.ScrollContainer minWidth={800}>
+          <Table striped highlightOnHover mt="md">
+            <Table.Thead>
+              <Table.Tr>
+                <SortableTh
+                  label="Audit"
+                  sortKey="identifier"
+                  sort={sort}
+                  dir={dir}
+                  onSort={toggleSort}
+                  scope="col"
+                />
+                <SortableTh
+                  label="Title"
+                  sortKey="title"
+                  sort={sort}
+                  dir={dir}
+                  onSort={toggleSort}
+                  scope="col"
+                />
+                <SortableTh
+                  label="Lead auditor"
+                  sortKey="lead"
+                  sort={sort}
+                  dir={dir}
+                  onSort={toggleSort}
+                  scope="col"
+                />
+                <SortableTh
+                  label="State"
+                  sortKey="state"
+                  sort={sort}
+                  dir={dir}
+                  onSort={toggleSort}
+                  scope="col"
+                />
+                <SortableTh
+                  label="Started"
+                  sortKey="started"
+                  sort={sort}
+                  dir={dir}
+                  onSort={toggleSort}
+                  scope="col"
+                />
               </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
+            </Table.Thead>
+            <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+              {rows.map((a) => (
+                <Table.Tr key={a.id}>
+                  <Table.Td>
+                    <Anchor component={Link} to={`/audits/${a.id}`} data-rownav>
+                      {a.identifier ?? a.id.slice(0, 8)}
+                    </Anchor>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text lineClamp={1}>{a.title ?? "—"}</Text>
+                  </Table.Td>
+                  <Table.Td>{leadLabel(a.lead_auditor_user_id, dir0)}</Table.Td>
+                  <Table.Td>
+                    <AuditStateBadge state={a.state} />
+                  </Table.Td>
+                  {/* "—" for an unstarted audit — a created_at fallback would mislabel it as started. */}
+                  <Table.Td>{a.started_at ?? "—"}</Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
       )}
       <NewAuditModal opened={newOpen} onClose={() => setNewOpen(false)} />
     </Container>

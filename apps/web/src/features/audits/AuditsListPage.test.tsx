@@ -5,6 +5,7 @@ import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+import { expectResponsiveTable } from "../../test/responsiveTable";
 import { AuditsListPage } from "./AuditsListPage";
 
 function grant(keys: string[]) {
@@ -49,6 +50,14 @@ test("table renders identifier/title/lead/state/date, newest-first; identifier l
     "href",
     "/audits/au000001-0001-0001-0001-000000000001",
   );
+});
+
+test("contains the complete audit table in one 800 px scroll region", async () => {
+  renderWithProviders(<AuditsListPage />, { route: "/audits" });
+  await screen.findByText("REC-000061");
+  const table = expectResponsiveTable(800);
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(5);
+  expect(within(table).getAllByRole("link", { name: "REC-000061" })).toHaveLength(1);
 });
 
 test("the Active/Closed segmented filter slices client-side", async () => {
