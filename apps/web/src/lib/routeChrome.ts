@@ -84,6 +84,7 @@ export function useRouteChrome(): void {
     [pathname, search],
   );
   const previous = useRef<PreviousRouteView | null>(null);
+  const previousRouteErrorOwnership = useRef(false);
   const pendingRouteMain = useRef<{ announcement: string | null } | null>(null);
 
   useEffect(() => {
@@ -95,10 +96,11 @@ export function useRouteChrome(): void {
 
     if (routeErrorOwnsChrome) {
       if (pathnameChanged) publishAnnouncement?.(null);
-      if (effectiveTransition && view.focusOwner === "route-main") {
-        pendingRouteMain.current = {
-          announcement: chromeChanged ? view.announcement : null,
-        };
+      if (effectiveTransition) {
+        pendingRouteMain.current =
+          view.focusOwner === "route-main"
+            ? { announcement: chromeChanged ? view.announcement : null }
+            : null;
       }
       previous.current = {
         pathname,
@@ -106,10 +108,14 @@ export function useRouteChrome(): void {
         recoveryKey: view.recoveryKey,
       };
       document.title = "EasySynQ — Page unavailable";
-      document.getElementById("route-error-heading")?.focus();
+      if (!previousRouteErrorOwnership.current || effectiveTransition) {
+        document.getElementById("route-error-heading")?.focus();
+      }
+      previousRouteErrorOwnership.current = true;
       return;
     }
 
+    previousRouteErrorOwnership.current = false;
     document.title = view.title;
     if (pathnameChanged) publishAnnouncement?.(null);
 

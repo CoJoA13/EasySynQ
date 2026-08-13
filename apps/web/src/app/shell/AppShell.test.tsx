@@ -3,11 +3,13 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
+import { useEffect, useRef } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
+import { NotFoundPage } from "../errors/NotFoundPage";
 import { AppShell } from "./AppShell";
 
 afterEach(() => vi.restoreAllMocks());
@@ -33,6 +35,25 @@ function BrokenTasksUntilAcknowledgements() {
     throw new Error("task view recovery probe");
   }
   return <h1>Acknowledgements recovered</h1>;
+}
+
+function RecoverySequenceNavigation() {
+  useRouteChrome();
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate("/tasks?type=DOC_ACK")}>go-acknowledgements</button>
+      <button onClick={() => navigate("/library?detail=doc-a")}>go-feature-detail</button>
+      <button onClick={() => navigate("/missing")}>go-not-found</button>
+      <Outlet />
+    </>
+  );
+}
+
+function FeatureOwnedDetail() {
+  const focusTarget = useRef<HTMLButtonElement>(null);
+  useEffect(() => focusTarget.current?.focus(), []);
+  return <button ref={focusTarget}>Feature-owned detail focus</button>;
 }
 
 test("AppShell renders landmarks, skip-link, and child content", async () => {
@@ -322,8 +343,55 @@ test.each([
       expect(fallbackAppearances).toHaveBeenCalledTimes(resets ? 1 : 0);
     });
     expect(document.title).toBe("EasySynQ — Page unavailable");
-    expect(screen.getByRole("heading", { name: "This page couldn't be displayed" })).toHaveFocus();
+    if (resets) {
+      expect(
+        screen.getByRole("heading", { name: "This page couldn't be displayed" }),
+      ).toHaveFocus();
+    } else {
+      expect(screen.getByRole("button", { name: "change-effective-view" })).toHaveFocus();
+    }
     observer.disconnect();
+  },
+);
+
+test.each([
+  ["feature-owned detail", "go-feature-detail", "Feature-owned detail focus"],
+  ["not-found", "go-not-found", "Page not found"],
+] as const)(
+  "does not replay pending acknowledgement chrome over the final %s destination",
+  async (_, destinationButton, destinationFocus) => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+
+    renderWithProviders(
+      <RouteChromeProvider>
+        <Routes>
+          <Route element={<RecoverySequenceNavigation />}>
+            <Route path="/" element={<AppShell />}>
+              <Route path="tasks" element={<AlwaysBrokenRoute />} />
+              <Route path="library" element={<FeatureOwnedDetail />} />
+              <Route path="missing" element={<NotFoundPage />} />
+            </Route>
+          </Route>
+        </Routes>
+      </RouteChromeProvider>,
+      { route: "/tasks" },
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "This page couldn't be displayed" }),
+    ).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "go-acknowledgements" }));
+    expect(screen.getByRole("heading", { name: "This page couldn't be displayed" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: destinationButton }));
+    const destination =
+      destinationButton === "go-feature-detail"
+        ? await screen.findByRole("button", { name: destinationFocus })
+        : await screen.findByRole("heading", { name: destinationFocus });
+    expect(destination).toHaveFocus();
+    expect(document.getElementById("main-content")).not.toHaveFocus();
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
   },
 );
 
