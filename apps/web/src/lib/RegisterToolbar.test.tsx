@@ -26,7 +26,9 @@ describe("RegisterToolbar", () => {
     wrap(<RegisterToolbar q="" onQ={onQ} count={3} countNoun="DCRs" />);
     fireEvent.change(screen.getByLabelText("Search"), { target: { value: "abc" } });
     expect(onQ).toHaveBeenCalledWith("abc");
-    expect(screen.getByText("3 DCRs")).toBeInTheDocument();
+    const count = screen.getByText("3 DCRs");
+    expect(count).toBeInTheDocument();
+    expect(count).toHaveAttribute("aria-live", "polite");
   });
 
   it("keeps one ordered search and filter tree inside the narrow toolbar", () => {
