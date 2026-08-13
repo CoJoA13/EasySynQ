@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { expect, test } from "vitest";
@@ -36,6 +36,7 @@ function CapaUrlControls() {
     <>
       <button onClick={() => navigate(`/capa?capa=${CAPA_B}`)}>replace capa</button>
       <button onClick={() => navigate("/capa")}>remove capa</button>
+      <button onClick={() => navigate("/capa?source=audit")}>set unrelated source</button>
       <button onClick={() => navigate(-1)}>back</button>
     </>
   );
@@ -103,11 +104,12 @@ test("synchronizes a URL-seeded CAPA drawer across selector replacement and remo
   requests.stop();
 });
 
-test("keeps a locally opened CAPA drawer open while the board filter changes", async () => {
+test("keeps a locally opened CAPA drawer open across an unrelated URL update", async () => {
   const user = userEvent.setup();
   renderWithProviders(
     <>
       <CapaBoardPage />
+      <CapaUrlControls />
       <LocationProbe />
     </>,
     { route: "/capa" },
@@ -116,11 +118,17 @@ test("keeps a locally opened CAPA drawer open while the board filter changes", a
   expect(await screen.findByRole("dialog")).toBeInTheDocument();
   expect(screen.getByTestId("loc")).toHaveTextContent("/capa");
 
-  const [severityInput] = screen.getAllByLabelText("Severity");
-  await user.click(severityInput!);
-  await user.click(await screen.findByRole("option", { name: "Critical" }));
+  await user.click(screen.getByRole("button", { name: "set unrelated source" }));
+  await waitFor(() => {
+    expect(screen.getByTestId("loc")).toHaveTextContent("source=audit");
+    expect(screen.getByTestId("loc")).not.toHaveTextContent("capa=");
+  });
+  // Mantine retains a closing drawer during its 250 ms transition. Observe beyond that boundary so a
+  // whole-search-params effect cannot pass merely because its close animation is still mounted.
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 300));
+  });
   expect(screen.getByRole("dialog")).toBeInTheDocument();
-  expect(screen.getByTestId("loc")).toHaveTextContent("/capa");
 });
 
 test("closing a deep-linked CAPA drawer replaces only ?capa and Back restores the register", async () => {
