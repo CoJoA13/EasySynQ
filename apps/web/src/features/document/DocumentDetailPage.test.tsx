@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { screen, waitFor, within } from "@testing-library/react";
 import { QueryClient } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
@@ -16,6 +16,7 @@ import {
   docFixture,
 } from "../../test/msw/handlers";
 import { DocumentDetailPage } from "./DocumentDetailPage";
+import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 
 const ID = "11111111-1111-1111-1111-111111111111";
 
@@ -25,6 +26,52 @@ function renderPage(route = `/documents/${ID}`) {
       <Route path="documents/:id" element={<DocumentDetailPage />} />
     </Routes>,
     { route },
+  );
+}
+
+function LocationProbe() {
+  const { pathname, search } = useLocation();
+  return <output aria-label="Current location">{pathname + search}</output>;
+}
+
+function DocumentTabNavigation() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate(`/documents/${ID}?tab=history`)}>external history</button>
+      <button onClick={() => navigate(`/documents/${ID}?tab=approvals`)}>external approvals</button>
+      <button onClick={() => navigate(`/documents/${ID}?tab=where-used`)}>
+        external where-used
+      </button>
+      <button onClick={() => navigate(`/documents/${ID}?tab=acks`)}>external acks</button>
+      <button onClick={() => navigate(`/documents/${ID}?tab=unknown-sentinel`)}>
+        external unknown
+      </button>
+      <button onClick={() => navigate(`/documents/${ID}`)}>external overview</button>
+      <DocumentDetailPage />
+    </>
+  );
+}
+
+function DocumentWithRouteChrome() {
+  useRouteChrome();
+  return (
+    <main id="main-content" tabIndex={-1}>
+      <RouteAnnouncement />
+      <DocumentDetailPage />
+    </main>
+  );
+}
+
+function DocumentHistoryControls() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate(`/documents/${ID}?sentinel=keep&checkpoint=prepared`)}>
+        Prepare history
+      </button>
+      <button onClick={() => navigate(-1)}>Back</button>
+    </>
   );
 }
 
@@ -147,6 +194,88 @@ test("DocumentDetailPage has no a11y violations (with author actions)", async ()
   const { container } = renderPage();
   await screen.findByRole("button", { name: /Start revision/ });
   expect(await axe(container)).toHaveNoViolations();
+});
+
+describe("DocumentDetailPage URL-backed tabs", () => {
+  test.each([
+    ["overview", "Control metadata"],
+    ["history", "Version history"],
+    ["approvals", "Quality approval"],
+    ["where-used", "Records produced under"],
+    ["acks", "Acknowledgement coverage"],
+  ] as const)("cold ?tab=%s renders the %s panel", async (tab, panelText) => {
+    renderPage(`/documents/${ID}?tab=${tab}`);
+    expect(await screen.findByText(panelText)).toBeInTheDocument();
+  });
+
+  test("an unknown or removed tab renders Overview without leaking raw URL text", async () => {
+    const { container } = renderPage(`/documents/${ID}?tab=unknown-sentinel`);
+    expect(await screen.findByText("Control metadata")).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("unknown-sentinel");
+  });
+
+  test("live external tab changes and removal update the active panel", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route path="documents/:id" element={<DocumentTabNavigation />} />
+      </Routes>,
+      { route: `/documents/${ID}` },
+    );
+    expect(await screen.findByText("Control metadata")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "external history" }));
+    expect(await screen.findByText("Version history")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "external approvals" }));
+    expect(await screen.findByText("Quality approval")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "external where-used" }));
+    expect(await screen.findByText("Records produced under")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "external acks" }));
+    expect(await screen.findByText("Acknowledgement coverage")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "external unknown" }));
+    expect(await screen.findByText("Control metadata")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "external overview" }));
+    expect(await screen.findByText("Control metadata")).toBeInTheDocument();
+  });
+
+  test("tab controls replace history, delete the default tab, and leave route chrome neutral", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RouteChromeProvider>
+        <Routes>
+          <Route path="documents/:id" element={<DocumentWithRouteChrome />} />
+        </Routes>
+        <DocumentHistoryControls />
+        <LocationProbe />
+      </RouteChromeProvider>,
+      { route: `/documents/${ID}?sentinel=keep&checkpoint=baseline` },
+    );
+    await screen.findByText("Control metadata");
+    await user.click(screen.getByRole("button", { name: "Prepare history" }));
+    const historyTab = screen.getByRole("tab", { name: "History" });
+    await user.click(historyTab);
+    expect(await screen.findByText("Version history")).toBeInTheDocument();
+    expect(screen.getByLabelText("Current location")).toHaveTextContent("tab=history");
+    expect(document.title).toBe("EasySynQ — Document");
+    expect(historyTab).toHaveFocus();
+    expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
+
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(await screen.findByText("Control metadata")).toBeInTheDocument();
+    expect(screen.getByLabelText("Current location")).not.toHaveTextContent("tab=");
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current location")).toHaveTextContent("checkpoint=baseline"),
+    );
+    expect(screen.getByLabelText("Current location")).not.toHaveTextContent("tab=");
+  });
+
+  test("DocumentDetailPage has no a11y violations for the History tab", async () => {
+    const { container } = renderPage(`/documents/${ID}?tab=history`);
+    await screen.findByText("Version history");
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });
 
 // S-web-8 review surfaces — the Next-review tile + the manage_metadata-gated edit modal.

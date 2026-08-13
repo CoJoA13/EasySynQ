@@ -42,10 +42,14 @@ export function DcrDiffPage() {
   const versionsForbidden = versionsQ.error instanceof ApiError && versionsQ.error.status === 403;
 
   function setMode(value: string) {
-    setParams((p) => {
-      p.set("mode", value);
-      return p;
-    });
+    setParams(
+      (p) => {
+        if (value === "text") p.delete("mode");
+        else p.set("mode", value);
+        return p;
+      },
+      { replace: true },
+    );
   }
 
   const back = dcrId ? `/dcrs?dcr=${dcrId}` : "/dcrs";

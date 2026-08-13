@@ -21,6 +21,13 @@ import { daysUntil } from "./reviewDates";
 import { useDocument } from "./useDocument";
 import { useDocumentVersions } from "./useDocumentVersions";
 
+const DOCUMENT_TABS = ["overview", "history", "approvals", "where-used", "acks"] as const;
+type DocumentTab = (typeof DOCUMENT_TABS)[number];
+
+function parseDocumentTab(value: string | null): DocumentTab {
+  return DOCUMENT_TABS.includes(value as DocumentTab) ? (value as DocumentTab) : "overview";
+}
+
 function Tile({
   label,
   value,
@@ -57,11 +64,12 @@ function Tile({
 export function DocumentDetailPage() {
   const { id = null } = useParams();
   const [sp, setSp] = useSearchParams();
-  const tab = sp.get("tab") ?? "overview";
+  const tab = parseDocumentTab(sp.get("tab"));
   const setTab = (v: string | null) =>
     setSp(
       (prev) => {
-        prev.set("tab", v ?? "overview");
+        if (!v || v === "overview") prev.delete("tab");
+        else prev.set("tab", v);
         return prev;
       },
       { replace: true },

@@ -23,8 +23,15 @@ export function VersionCompare({
 
   // Newest first → [0] = newest (governing candidate), [1] = the prior revision (the default pair).
   const ordered = [...versions].sort((a, b) => b.version_seq - a.version_seq);
-  const from = params.get("from") ?? ordered[1]?.id ?? null;
-  const to = params.get("to") ?? ordered[0]?.id ?? null;
+  const validIds = new Set(ordered.map((version) => version.id));
+  const defaultFrom = ordered[1]?.id ?? null;
+  const defaultTo = ordered[0]?.id ?? null;
+  const rawFrom = params.get("from");
+  const rawTo = params.get("to");
+  const pairIsValid =
+    rawFrom !== null && rawTo !== null && validIds.has(rawFrom) && validIds.has(rawTo);
+  const from = pairIsValid ? rawFrom : defaultFrom;
+  const to = pairIsValid ? rawTo : defaultTo;
   const mode = params.get("mode") === "visual" ? "visual" : "text";
 
   const options = ordered.map((v) => ({
@@ -33,11 +40,14 @@ export function VersionCompare({
   }));
 
   function set(key: "from" | "to" | "mode", value: string | null) {
-    setParams((p) => {
-      if (value) p.set(key, value);
-      else p.delete(key);
-      return p;
-    });
+    setParams(
+      (p) => {
+        if (!value || (key === "mode" && value === "text")) p.delete(key);
+        else p.set(key, value);
+        return p;
+      },
+      { replace: true },
+    );
   }
 
   const showViewer = !!from && !!to && from !== to;
