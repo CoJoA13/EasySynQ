@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-08-13"
-baseline_commit: "c32875c"
-last_shipped_slice: "S-keyboard-semantic-interaction"
+baseline_commit: "02f6c56"
+last_shipped_slice: "S-responsive-data-heavy-views"
 migration_head: "0085"
 next_migration: "0086"
 api_unit_tests: 1686
-web_test_files: 259
-web_tests: 1845
+web_test_files: 260
+web_tests: 1865
 contract_tests: 283
 integration_passed: 1051
 integration_skipped: 2
@@ -30,19 +30,20 @@ DCR, improvement, risk, context, interested-party, and identity-provisioning sur
 retention/disposition, and Evidence Packs are API/worker-complete but do not have dedicated SPA
 management routes.
 
-The last shipped slice removes the final two row-level table interactions. CAPA List and Audit Programme
-rows remain structural, while visible identifier-cell buttons own safe accessible names and native
-Enter/Space activation. Audit Programme exposes pressed selection independently from Arrow focus movement;
-ordinary cells and Edit stay inert or independent. The shared row-navigation helper now handles arrows only
-from the actively focused marked primary control, and a source-wide guard finds no interactive `Table.Tr`
-opening tag. CAPA local opens remain URL-neutral while externally supplied selectors retain their shipped
-drawer synchronization and removal behavior.
+The last shipped slice gives the nine shared-register routes localized horizontal table containment:
+Tasks, Audits, DCRs, Objectives, Management Reviews, Improvement, Risks, Context, and Interested Parties.
+Each route retains one complete semantic table and its original native actions at a route-owned content
+floor, while the shared toolbar gives its search the available sub-`sm` width and bounds oversized filters
+in one following lane. At `sm` and above, the source/style contract preserves the existing 260 px search
+width, columns, control order, and desktop presentation. No card alternative, hidden column, duplicate
+mobile tree, custom breakpoint, global overflow suppression, or shared responsive-table abstraction was
+introduced.
 
 The slice preserves the operational QueryClient/provider identity, cached state, route-persistent mutation
 feedback, authentication/setup gates, route-error and 404 ownership, API handlers, OpenAPI/generated
 artifacts, database schema/migrations, Keycloak, dependencies, and deployment behavior. Detailed shipped
 behavior and evidence remain in
-[`slice-history.md`](slice-history.md#s-keyboard-semantic-interaction--native-primary-table-controls-and-structural-rows).
+[`slice-history.md`](slice-history.md#s-responsive-data-heavy-views--localized-shared-register-containment).
 
 ## Runtime truth
 
@@ -64,21 +65,31 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
 the facts it freshly verifies; partial or unavailable checks must be reported as such. At implementation
-baseline `c32875c` on 2026-08-13, durable job `job-msrjnu84-05d66760` ran
-`npm --prefix apps/web test` and exited 0 with 259 files and 1,845 tests passing in 330.83 seconds, without
-unhandled errors. Its stderr contained Node's repeated `localStorage` experimental warning because no
-`--localstorage-file` was provided. The exact 18-file semantic-interaction selection passed 213 tests in
-47.17 seconds; web lint, typecheck, scoped documentation Prettier, and production build passed. The build
-transformed 1,098 modules and retained the advisory for a chunk above 500 kB; its JavaScript asset was
-1,158.49 kB (318.80 kB gzip). Task-level reviews were clean. Final review identified the missing authority
-closure and one evidence overclaim; this evidence commit closes the authority gap and records that direct
-focus restoration specifically to the new local CAPA list opener remains unverified, while URL-seeded drawer
-focus behavior and unchanged feature-owned focus ownership were exercised or inspected as applicable. API,
-contract, integration, migration, and CI numeric values above retain their prior successful evidence because
-their complete gates were not refreshed for this front-end-only slice. After the evidence edits, authority
+evidence baseline `02f6c56` on 2026-08-13, on a branch based on main squash `082ba310`, durable job
+`job-mss1id7k-9a7297cb` ran exact direct argv `npm --prefix apps/web test` from the isolated worktree and
+exited 0 with all 260 files and 1,865 tests passing in 278.64 seconds (transform 2.49 seconds, setup 37.81
+seconds, import 40.32 seconds, tests 115.95 seconds, environment 66.34 seconds), with no unhandled error.
+Its stderr contained Node's repeated `ExperimentalWarning` that `localStorage` was unavailable because
+`--localstorage-file` was not provided.
+
+The exact 16-file affected selection passed 238 tests in 43.53 seconds on the reviewed implementation head.
+Web lint, `tsc --noEmit`, the app-owned Prettier check over all 22 changed TypeScript/TSX files, and the
+production build passed. Vite 8.1.5 transformed 1,098 modules and built in 561 ms; it emitted 0.77 kB HTML,
+211.40 kB CSS, and 1,159.20 kB JavaScript and retained only the existing advisory for a chunk above 500 kB.
+Range and working-tree diff guards were clean, and the structural-row ripgrep guard returned the expected
+no-match status. Final review added loaded-state axe preservation coverage for Management Reviews and
+required repository-neutral plan history from first introduction; both fixes are included in `02f6c56`
+and the rewritten ancestry, with real browser claims explicitly excluded.
+
+The history closure made the plan repository-neutral from its first introduction and retained recoverability
+through reflog without creating a publishable backup branch. Scoped documentation Prettier passed; authority
 fixtures passed 91/91, all seven Claude-hook compatibility assertions passed, repository authority returned
-`AUTHORITY_OK`, site-data fixtures passed 13/13, the direct site-data scan was clean, and the diff guards were
-clean.
+`AUTHORITY_OK`, site-data fixtures passed 13/13, the direct site-data scan was clean, and range plus
+working-tree diff guards were clean. API, contract, integration, migration, and CI numeric values above
+retain their prior successful evidence because their complete gates were not refreshed for this front-end-only
+slice. Playwright, real
+viewport/clipping/scroll-reachability, request-intercepted failure, focus-ring/forced-colors, screen-reader,
+Docker-backed, deployment, and Fedora proofs did not run and remain outside this evidence.
 
 ## CI topology
 

@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Work only in the isolated worktree for `codex/responsive-data-heavy-views`.
-- The implementation baseline is design commit `027e205`; preserve primary-checkout `.superdesign/` and both named prunable registrations.
+- The implementation baseline is design commit `5bced6c`; preserve primary-checkout `.superdesign/` and both named prunable registrations.
 - The responsive contract is usable at 320 CSS pixels and uses Mantine's existing `sm` breakpoint at 48 em; add no custom breakpoint.
 - At `sm` and above, preserve the current 260 px default search width, table columns, toolbar order, and desktop presentation.
 - Keep every record field and action available exactly once in its current DOM and keyboard order; add no cards, hidden columns, duplicated mobile tree, sticky action overlay, or global overflow suppression.
@@ -530,7 +530,7 @@ Expected: all 16 files pass without unhandled errors, hook-order warnings, dupli
 npm --prefix apps/web run lint
 npm --prefix apps/web run typecheck
 npm --prefix apps/web run build
-git diff --check 027e205..HEAD
+git diff --check 5bced6c..HEAD
 git diff --check
 rg -n -U '<Table\.Tr[^>]*(onClick|onKeyDown|tabIndex|role=)' apps/web/src --glob '*.tsx'
 ```
