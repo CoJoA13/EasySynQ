@@ -662,35 +662,55 @@ test("live Tasks material-view navigation updates chrome once and preserves oper
   expect(queryClient.getQueryData(cacheKey)).toBe(cacheValue);
   expect(markReadRequests).toBe(1);
 
-  await user.click(screen.getByRole("button", { name: "Open acknowledgements" }));
-  expect(await screen.findByRole("heading", { name: "Acknowledgements" })).toBeInTheDocument();
-  await waitFor(() => expect(document.title).toBe("EasySynQ — Acknowledgements"));
-  await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
-  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent(
-    "Acknowledgements",
-  );
-  expect(
-    focusSpy.mock.contexts.filter((context) => context === screen.getByRole("main")),
-  ).toHaveLength(1);
-  expect(queryClient.getQueryData(cacheKey)).toBe(cacheValue);
-  expect(
-    screen.getByText("This notification remains unread: Persistent task feedback"),
-  ).toBeInTheDocument();
-  expect(markReadRequests).toBe(1);
+  const pageNavigation = screen.getByRole("status", { name: "Page navigation" });
+  const destinations: string[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      const candidates =
+        record.type === "characterData"
+          ? [record.target.textContent]
+          : Array.from(record.addedNodes, (node) => node.textContent);
+      for (const candidate of candidates) {
+        const destination = candidate?.trim();
+        if (destination) destinations.push(destination);
+      }
+    }
+  });
+  observer.observe(pageNavigation, { childList: true, characterData: true, subtree: true });
 
-  await user.click(screen.getByRole("button", { name: "Back to tasks" }));
-  expect(await screen.findByRole("heading", { name: "Review and approve" })).toBeInTheDocument();
-  await waitFor(() => expect(document.title).toBe("EasySynQ — Tasks"));
-  await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
-  expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("Tasks");
-  expect(
-    focusSpy.mock.contexts.filter((context) => context === screen.getByRole("main")),
-  ).toHaveLength(2);
-  expect(queryClient.getQueryData(cacheKey)).toBe(cacheValue);
-  expect(
-    screen.getByText("This notification remains unread: Persistent task feedback"),
-  ).toBeInTheDocument();
-  expect(markReadRequests).toBe(1);
+  try {
+    await user.click(screen.getByRole("button", { name: "Open acknowledgements" }));
+    expect(await screen.findByRole("heading", { name: "Acknowledgements" })).toBeInTheDocument();
+    await waitFor(() => expect(document.title).toBe("EasySynQ — Acknowledgements"));
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+    expect(pageNavigation).toHaveTextContent("Acknowledgements");
+    await waitFor(() => expect(destinations).toEqual(["Acknowledgements"]));
+    expect(
+      focusSpy.mock.contexts.filter((context) => context === screen.getByRole("main")),
+    ).toHaveLength(1);
+    expect(queryClient.getQueryData(cacheKey)).toBe(cacheValue);
+    expect(
+      screen.getByText("This notification remains unread: Persistent task feedback"),
+    ).toBeInTheDocument();
+    expect(markReadRequests).toBe(1);
+
+    await user.click(screen.getByRole("button", { name: "Back to tasks" }));
+    expect(await screen.findByRole("heading", { name: "Review and approve" })).toBeInTheDocument();
+    await waitFor(() => expect(document.title).toBe("EasySynQ — Tasks"));
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+    expect(pageNavigation).toHaveTextContent("Tasks");
+    await waitFor(() => expect(destinations).toEqual(["Acknowledgements", "Tasks"]));
+    expect(
+      focusSpy.mock.contexts.filter((context) => context === screen.getByRole("main")),
+    ).toHaveLength(2);
+    expect(queryClient.getQueryData(cacheKey)).toBe(cacheValue);
+    expect(
+      screen.getByText("This notification remains unread: Persistent task feedback"),
+    ).toBeInTheDocument();
+    expect(markReadRequests).toBe(1);
+  } finally {
+    observer.disconnect();
+  }
 });
 
 test("an acknowledgement deep link sets content and title without route-navigation focus or announcement", async () => {
