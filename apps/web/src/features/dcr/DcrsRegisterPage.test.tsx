@@ -3,7 +3,8 @@ import { axe } from "jest-axe";
 import { expect, it } from "vitest";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { DcrsRegisterPage } from "./DcrsRegisterPage";
@@ -11,6 +12,40 @@ import { DcrsRegisterPage } from "./DcrsRegisterPage";
 function LocationProbe() {
   const loc = useLocation();
   return <div data-testid="loc">{loc.pathname + loc.search}</div>;
+}
+
+const DCR_A = "dcr00001-0001-0001-0001-000000000001";
+const DCR_B = "dcr00002-0002-0002-0002-000000000002";
+
+function DcrUrlControls() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate(`/dcrs?state=Open&dcr=${DCR_B}`)}>replace dcr</button>
+      <button onClick={() => navigate("/dcrs?state=Open")}>remove dcr</button>
+      <button onClick={() => navigate(-1)}>back</button>
+    </>
+  );
+}
+
+function DcrDetailChrome({ children }: { children: React.ReactNode }) {
+  useRouteChrome();
+  return (
+    <>
+      {children}
+      <RouteAnnouncement />
+    </>
+  );
+}
+
+function recordDcrDetailRequests() {
+  const ids: string[] = [];
+  const listener = ({ request }: { request: Request }) => {
+    const id = new URL(request.url).pathname.match(/^\/api\/v1\/dcrs\/([^/]+)$/)?.[1];
+    if (id) ids.push(id);
+  };
+  server.events.on("request:match", listener);
+  return { ids, stop: () => server.events.removeListener("request:match", listener) };
 }
 
 function containerSizeFor(element: HTMLElement) {
@@ -56,14 +91,67 @@ it("opens the drawer on a ?dcr=<id> deep-link", async () => {
   expect(await screen.findByText(/Corrective action requires/)).toBeInTheDocument();
 });
 
-it("closing the deep-linked drawer clears the ?dcr param", async () => {
+it("synchronizes a URL-seeded DCR drawer across selector replacement and removal", async () => {
+  const user = userEvent.setup();
+  const requests = recordDcrDetailRequests();
+  renderWithProviders(
+    <RouteChromeProvider>
+      <DcrDetailChrome>
+        <DcrsRegisterPage />
+        <DcrUrlControls />
+      </DcrDetailChrome>
+    </RouteChromeProvider>,
+    { route: `/dcrs?state=Open&dcr=${DCR_A}` },
+  );
+
+  const dialog = await screen.findByRole("dialog");
+  await waitFor(() => expect(requests.ids).toContain(DCR_A));
+  expect(await within(dialog).findByText(/Corrective action requires/)).toBeInTheDocument();
+  expect(document.title).toBe("EasySynQ — Change request details");
+  expect(document.title).not.toContain(DCR_A);
+  expect(screen.getByRole("status", { name: "Page navigation" })).not.toHaveTextContent(DCR_A);
+  await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+
+  await user.click(screen.getByRole("button", { name: "replace dcr" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  await waitFor(() => expect(requests.ids).toContain(DCR_B));
+  expect(document.title).toBe("EasySynQ — Change request details");
+  expect(document.title).not.toContain(DCR_B);
+
+  await user.click(screen.getByRole("button", { name: "remove dcr" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(document.title).toBe("EasySynQ — Document change requests");
+  requests.stop();
+});
+
+it("keeps a locally opened DCR drawer open when a filter changes", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <DcrsRegisterPage />
+      <LocationProbe />
+    </>,
+    { route: "/dcrs" },
+  );
+  await user.click(await screen.findByRole("button", { name: "DCR-2026-0001" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  expect(screen.getByTestId("loc")).not.toHaveTextContent("dcr=");
+
+  const [stateInput] = screen.getAllByLabelText("State");
+  await user.click(stateInput!);
+  await user.click(await screen.findByRole("option", { name: "Cancelled" }));
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(screen.getByTestId("loc")).toHaveTextContent("state=Cancelled");
+});
+
+it("closing the deep-linked drawer replaces only ?dcr and preserves filters", async () => {
   const u = userEvent.setup();
   renderWithProviders(
     <>
       <DcrsRegisterPage />
       <LocationProbe />
     </>,
-    { route: "/dcrs?dcr=dcr00001-0001-0001-0001-000000000001" },
+    { route: "/dcrs?state=Open&dcr=dcr00001-0001-0001-0001-000000000001" },
   );
   await screen.findByText(/Corrective action requires/);
   expect(screen.getByTestId("loc")).toHaveTextContent("dcr=dcr00001");
@@ -71,6 +159,23 @@ it("closing the deep-linked drawer clears the ?dcr param", async () => {
   await u.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByText(/Corrective action requires/)).toBeNull());
   expect(screen.getByTestId("loc")).not.toHaveTextContent("dcr=");
+  expect(screen.getByTestId("loc")).toHaveTextContent("state=Open");
+});
+
+it("Back closes a DCR drawer opened by an external pushed URL", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <>
+      <DcrsRegisterPage />
+      <DcrUrlControls />
+    </>,
+    { route: "/dcrs" },
+  );
+  await screen.findByText("DCR-2026-0001");
+  await user.click(screen.getByRole("button", { name: "replace dcr" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "back" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });
 
 it("filters by state", async () => {
