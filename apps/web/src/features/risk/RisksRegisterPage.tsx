@@ -242,75 +242,81 @@ export function RisksRegisterPage() {
               Try clearing the search or the band/type filter.
             </Alert>
           ) : (
-            <Table striped highlightOnHover mt="md">
-              <Table.Thead>
-                <Table.Tr>
-                  <SortableTh
-                    label="Type"
-                    sortKey="type"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <Table.Th scope="col">Risk / opportunity</Table.Th>
-                  <SortableTh
-                    label="Score"
-                    sortKey="rating"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Band"
-                    sortKey="band"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <Table.Th scope="col">Treatment</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
-                {tableRows.map((r) => (
-                  <Table.Tr key={r.id}>
-                    <Table.Td>
-                      <Text size="sm">{RISK_TYPE_LABEL[r.type]}</Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Anchor
-                        component="button"
-                        type="button"
-                        onClick={() => setSelected(r.id)}
-                        data-rownav
-                        ta="left"
-                      >
-                        <Text lineClamp={1}>{r.description}</Text>
-                      </Anchor>
-                    </Table.Td>
-                    <Table.Td>
-                      {r.likelihood} × {r.severity} = {r.risk_rating}
-                    </Table.Td>
-                    <Table.Td>
-                      <StatusBadge tone={r.band_tone} label={RISK_BAND_LABEL[r.band]} kind="Band" />
-                    </Table.Td>
-                    <Table.Td>
-                      {r.linked_capa_id ? (
-                        <StatusBadge tone="info" label="CAPA raised" kind="Treatment" />
-                      ) : r.treatment ? (
-                        <StatusBadge tone="success" label="Treated" kind="Treatment" />
-                      ) : (
-                        <Text size="sm" c="dimmed">
-                          —
-                        </Text>
-                      )}
-                    </Table.Td>
+            <Table.ScrollContainer minWidth={720}>
+              <Table striped highlightOnHover mt="md">
+                <Table.Thead>
+                  <Table.Tr>
+                    <SortableTh
+                      label="Type"
+                      sortKey="type"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <Table.Th scope="col">Risk / opportunity</Table.Th>
+                    <SortableTh
+                      label="Score"
+                      sortKey="rating"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Band"
+                      sortKey="band"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <Table.Th scope="col">Treatment</Table.Th>
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                </Table.Thead>
+                <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                  {tableRows.map((r) => (
+                    <Table.Tr key={r.id}>
+                      <Table.Td>
+                        <Text size="sm">{RISK_TYPE_LABEL[r.type]}</Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Anchor
+                          component="button"
+                          type="button"
+                          onClick={() => setSelected(r.id)}
+                          data-rownav
+                          ta="left"
+                        >
+                          <Text lineClamp={1}>{r.description}</Text>
+                        </Anchor>
+                      </Table.Td>
+                      <Table.Td>
+                        {r.likelihood} × {r.severity} = {r.risk_rating}
+                      </Table.Td>
+                      <Table.Td>
+                        <StatusBadge
+                          tone={r.band_tone}
+                          label={RISK_BAND_LABEL[r.band]}
+                          kind="Band"
+                        />
+                      </Table.Td>
+                      <Table.Td>
+                        {r.linked_capa_id ? (
+                          <StatusBadge tone="info" label="CAPA raised" kind="Treatment" />
+                        ) : r.treatment ? (
+                          <StatusBadge tone="success" label="Treated" kind="Treatment" />
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            —
+                          </Text>
+                        )}
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
         </>
       )}

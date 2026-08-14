@@ -7,6 +7,7 @@ import { RouteChromeProvider } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
 import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { server } from "../../test/msw/server";
+import { expectResponsiveTable } from "../../test/responsiveTable";
 import { InterestedPartiesRegisterPage } from "./InterestedPartiesRegisterPage";
 
 // Flip the register head's state + the SERVER-computed caps (the gating source — the page gates on the
@@ -47,6 +48,16 @@ it("renders the party-type board, scorecard, and a table row per party", async (
   const table = screen.getByRole("table");
   expect(within(table).getByText("Acme Manufacturing")).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
+});
+
+it("contains the complete interested-party table in one 880 px scroll region", async () => {
+  renderWithProviders(<InterestedPartiesRegisterPage />, {
+    route: "/interested-parties",
+  });
+  await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+  const table = expectResponsiveTable(880);
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(5);
+  expect(within(table).getAllByRole("button", { name: "Acme Manufacturing" })).toHaveLength(1);
 });
 
 it("shows the read-only banner and hides New when the register is Effective", async () => {

@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
@@ -7,6 +7,7 @@ import { describe, expect, test, vi } from "vitest";
 import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+import { expectResponsiveTable } from "../../test/responsiveTable";
 import { TasksInbox } from "./TasksInbox";
 
 function TasksWithRouteChrome() {
@@ -33,6 +34,14 @@ test("names the subject and links each row to the review page", async () => {
   const { findByRole } = renderWithProviders(<TasksInbox />, { route: "/tasks" });
   const link = await findByRole("link", { name: /SOP-PUR-014/ });
   expect(link).toHaveAttribute("href", "/tasks/task1111-1111-1111-1111-111111111111");
+});
+
+test("contains the complete task table in one 720 px scroll region", async () => {
+  renderWithProviders(<TasksInbox />, { route: "/tasks" });
+  await screen.findByRole("link", { name: /SOP-PUR-014/ });
+  const table = expectResponsiveTable(720);
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(5);
+  expect(within(table).getAllByRole("link", { name: /SOP-PUR-014/ })).toHaveLength(1);
 });
 
 test("renders due dates on the organization calendar day", async () => {

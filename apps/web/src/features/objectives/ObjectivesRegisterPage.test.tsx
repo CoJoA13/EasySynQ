@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { expect, it } from "vitest";
 import { renderWithProviders } from "../../test/render";
+import { expectResponsiveTable } from "../../test/responsiveTable";
 import { server } from "../../test/msw/server";
 import { objectiveFixtures } from "../../test/msw/handlers";
 import { TONE_GLYPH } from "../../lib/status";
@@ -26,6 +27,14 @@ it("renders the band and a row per objective with a RAG status badge", async () 
   const unmeasured = screen.getByText("Supplier defect rate").closest("tr")!;
   expect(within(unmeasured).getByText("— / 2 %")).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
+});
+
+it("contains the complete objective table in one 720 px scroll region", async () => {
+  renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
+  await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
+  const table = expectResponsiveTable(720);
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(5);
+  expect(within(table).getAllByRole("link", { name: "OBJ-001" })).toHaveLength(1);
 });
 
 it("shows a calm no-access panel on a 403", async () => {

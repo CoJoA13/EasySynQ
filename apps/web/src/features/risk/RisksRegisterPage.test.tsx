@@ -7,6 +7,7 @@ import { RouteChromeProvider } from "../../lib/routeChrome";
 import { renderWithProviders } from "../../test/render";
 import { ConflictingSelectorNavigation } from "../../test/ConflictingSelectorNavigation";
 import { server } from "../../test/msw/server";
+import { expectResponsiveTable } from "../../test/responsiveTable";
 import { RisksRegisterPage } from "./RisksRegisterPage";
 
 function grant(...keys: string[]) {
@@ -58,6 +59,20 @@ it("renders the matrix, scorecard, and a row per risk with a band badge", async 
   const row = screen.getByText("Untrained operators on the new line").closest("tr")!;
   expect(within(row).getByText("High")).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
+});
+
+it("contains the complete risk table in one 720 px scroll region", async () => {
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() =>
+    expect(screen.getByText("Supplier single point of failure")).toBeInTheDocument(),
+  );
+  const table = expectResponsiveTable(720);
+  expect(within(table).getAllByRole("columnheader")).toHaveLength(5);
+  expect(
+    within(table).getAllByRole("button", {
+      name: "Supplier single point of failure",
+    }),
+  ).toHaveLength(1);
 });
 
 it("shows the read-only banner and hides New when the register is Effective", async () => {

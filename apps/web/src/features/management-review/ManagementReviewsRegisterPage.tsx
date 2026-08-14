@@ -123,85 +123,87 @@ export function ManagementReviewsRegisterPage() {
               <EmptyState message="No management reviews match your search." />
             </Box>
           ) : (
-            <Table striped highlightOnHover mt="md">
-              <Table.Thead>
-                <Table.Tr>
-                  <SortableTh
-                    label="Ref"
-                    sortKey="identifier"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Review"
-                    sortKey="title"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Period"
-                    sortKey="period"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Review date"
-                    sortKey="review_date"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Status"
-                    sortKey="status"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
-                {visible.map((mr) => (
-                  <Table.Tr key={mr.id}>
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
-                        <Anchor component={Link} to={`/management-reviews/${mr.id}`} data-rownav>
-                          {mr.identifier}
-                        </Anchor>
-                        {/* The steady state (Effective) stays unmarked; every other state gets the chip. */}
-                        {mr.current_state !== "Effective" && (
-                          <StateBadge state={mr.current_state} size="xs" />
-                        )}
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text lineClamp={1}>{mr.title}</Text>
-                    </Table.Td>
-                    <Table.Td>{mr.period_label ?? "—"}</Table.Td>
-                    <Table.Td>{mr.review_date ?? "—"}</Table.Td>
-                    <Table.Td>
-                      {mr.close_state ? (
-                        <StatusBadge
-                          tone={CLOSE_STATE_META[mr.close_state].tone}
-                          label={CLOSE_STATE_META[mr.close_state].label}
-                          kind="Status"
-                        />
-                      ) : (
-                        "—"
-                      )}
-                    </Table.Td>
+            <Table.ScrollContainer minWidth={800}>
+              <Table striped highlightOnHover mt="md">
+                <Table.Thead>
+                  <Table.Tr>
+                    <SortableTh
+                      label="Ref"
+                      sortKey="identifier"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Review"
+                      sortKey="title"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Period"
+                      sortKey="period"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Review date"
+                      sortKey="review_date"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Status"
+                      sortKey="status"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                </Table.Thead>
+                <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                  {visible.map((mr) => (
+                    <Table.Tr key={mr.id}>
+                      <Table.Td>
+                        <Group gap="xs" wrap="nowrap">
+                          <Anchor component={Link} to={`/management-reviews/${mr.id}`} data-rownav>
+                            {mr.identifier}
+                          </Anchor>
+                          {/* The steady state (Effective) stays unmarked; every other state gets the chip. */}
+                          {mr.current_state !== "Effective" && (
+                            <StateBadge state={mr.current_state} size="xs" />
+                          )}
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text lineClamp={1}>{mr.title}</Text>
+                      </Table.Td>
+                      <Table.Td>{mr.period_label ?? "—"}</Table.Td>
+                      <Table.Td>{mr.review_date ?? "—"}</Table.Td>
+                      <Table.Td>
+                        {mr.close_state ? (
+                          <StatusBadge
+                            tone={CLOSE_STATE_META[mr.close_state].tone}
+                            label={CLOSE_STATE_META[mr.close_state].label}
+                            kind="Status"
+                          />
+                        ) : (
+                          "—"
+                        )}
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
         </>
       )}

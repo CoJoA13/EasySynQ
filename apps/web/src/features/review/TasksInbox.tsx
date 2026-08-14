@@ -107,76 +107,78 @@ function GeneralTasksInbox() {
           {visible.length === 0 ? (
             <EmptyState message="No tasks match your search." />
           ) : (
-            <Table aria-label="My tasks" striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <SortableTh
-                    label="Subject"
-                    sortKey="subject"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Action"
-                    sortKey="action"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Stage"
-                    sortKey="stage"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="State"
-                    sortKey="state"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Due"
-                    sortKey="due"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
-                {visible.map((t) => (
-                  <Table.Tr key={t.id}>
-                    <Table.Td>
-                      <Link to={`/tasks/${t.id}`} data-rownav>
-                        {t.subject_identifier ?? actionLabel(t)}
-                      </Link>
-                      {t.subject_title && (
-                        <Text size="sm" c="dimmed" lineClamp={1}>
-                          {t.subject_title}
-                        </Text>
-                      )}
-                    </Table.Td>
-                    <Table.Td>{actionLabel(t)}</Table.Td>
-                    <Table.Td>{humanizeStageKey(t.stage_key)}</Table.Td>
-                    <Table.Td>
-                      <TaskStateBadge state={t.state} />
-                    </Table.Td>
-                    <Table.Td>
-                      {t.due_at ? formatDateInTimeZone(t.due_at, me?.org_timezone) : "—"}
-                    </Table.Td>
+            <Table.ScrollContainer minWidth={720}>
+              <Table aria-label="My tasks" striped highlightOnHover>
+                <Table.Thead>
+                  <Table.Tr>
+                    <SortableTh
+                      label="Subject"
+                      sortKey="subject"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Action"
+                      sortKey="action"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Stage"
+                      sortKey="stage"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="State"
+                      sortKey="state"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Due"
+                      sortKey="due"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                </Table.Thead>
+                <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                  {visible.map((t) => (
+                    <Table.Tr key={t.id}>
+                      <Table.Td>
+                        <Link to={`/tasks/${t.id}`} data-rownav>
+                          {t.subject_identifier ?? actionLabel(t)}
+                        </Link>
+                        {t.subject_title && (
+                          <Text size="sm" c="dimmed" lineClamp={1}>
+                            {t.subject_title}
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td>{actionLabel(t)}</Table.Td>
+                      <Table.Td>{humanizeStageKey(t.stage_key)}</Table.Td>
+                      <Table.Td>
+                        <TaskStateBadge state={t.state} />
+                      </Table.Td>
+                      <Table.Td>
+                        {t.due_at ? formatDateInTimeZone(t.due_at, me?.org_timezone) : "—"}
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
         </>
       )}

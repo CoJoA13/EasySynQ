@@ -162,78 +162,84 @@ export function ObjectivesRegisterPage() {
               Try clearing the search or RAG filter.
             </Alert>
           ) : (
-            <Table striped highlightOnHover mt="md">
-              <Table.Thead>
-                <Table.Tr>
-                  <SortableTh
-                    label="Ref"
-                    sortKey="identifier"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Objective"
-                    sortKey="title"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Current / target"
-                    sortKey="current"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Status"
-                    sortKey="status"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                  <SortableTh
-                    label="Due"
-                    sortKey="due"
-                    sort={sort}
-                    dir={dir}
-                    onSort={toggleSort}
-                    scope="col"
-                  />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
-                {rows.map((o) => (
-                  <Table.Tr key={o.id}>
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
-                        <Anchor component={Link} to={`/objectives/${o.id}`} data-rownav>
-                          {o.identifier}
-                        </Anchor>
-                        {/* O-6c: exception-marking — the steady state (Effective) stays unmarked;
-                            Draft/InReview/UnderRevision/... get the shared StateBadge. */}
-                        {o.current_state !== "Effective" && (
-                          <StateBadge state={o.current_state} size="xs" />
-                        )}
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text lineClamp={1}>{o.title}</Text>
-                    </Table.Td>
-                    <Table.Td>{currentOverTarget(o)}</Table.Td>
-                    <Table.Td>
-                      <StatusBadge tone={RAG_TONE[o.rag]} label={RAG_LABEL[o.rag]} kind="Status" />
-                    </Table.Td>
-                    <Table.Td>{o.due_date}</Table.Td>
+            <Table.ScrollContainer minWidth={720}>
+              <Table striped highlightOnHover mt="md">
+                <Table.Thead>
+                  <Table.Tr>
+                    <SortableTh
+                      label="Ref"
+                      sortKey="identifier"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Objective"
+                      sortKey="title"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Current / target"
+                      sortKey="current"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Status"
+                      sortKey="status"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
+                    <SortableTh
+                      label="Due"
+                      sortKey="due"
+                      sort={sort}
+                      dir={dir}
+                      onSort={toggleSort}
+                      scope="col"
+                    />
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                </Table.Thead>
+                <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                  {rows.map((o) => (
+                    <Table.Tr key={o.id}>
+                      <Table.Td>
+                        <Group gap="xs" wrap="nowrap">
+                          <Anchor component={Link} to={`/objectives/${o.id}`} data-rownav>
+                            {o.identifier}
+                          </Anchor>
+                          {/* O-6c: exception-marking — the steady state (Effective) stays unmarked;
+                            Draft/InReview/UnderRevision/... get the shared StateBadge. */}
+                          {o.current_state !== "Effective" && (
+                            <StateBadge state={o.current_state} size="xs" />
+                          )}
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text lineClamp={1}>{o.title}</Text>
+                      </Table.Td>
+                      <Table.Td>{currentOverTarget(o)}</Table.Td>
+                      <Table.Td>
+                        <StatusBadge
+                          tone={RAG_TONE[o.rag]}
+                          label={RAG_LABEL[o.rag]}
+                          kind="Status"
+                        />
+                      </Table.Td>
+                      <Table.Td>{o.due_date}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
           )}
         </>
       )}

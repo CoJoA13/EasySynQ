@@ -37,6 +37,79 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## PROGRAMME 1 — frontend resilience and accessibility
 
+### S-responsive-data-heavy-views — localized shared-register containment
+
+Shipped 2026-08-13 at implementation evidence baseline `02f6c56`, on a branch based on main squash
+`082ba310`. The owner-approved
+[`design`](superpowers/specs/2026-08-13-s-responsive-data-heavy-views-design.md) and
+[`plan`](superpowers/plans/2026-08-13-s-responsive-data-heavy-views.md) define one responsive cohort rather
+than a universal table retrofit. `/tasks`, `/objectives`, and `/risks` now own 720 px table floors;
+`/audits` and `/management-reviews` own 800 px floors; `/context` and `/interested-parties` own 880 px
+floors; `/improvement` owns a 920 px floor; and `/dcrs` owns a 1040 px floor. Each existing semantic table
+is directly contained by one page-owned `Table.ScrollContainer` without moving its toolbar, drawer, modal,
+board, matrix, scorecard, lifecycle panel, body ref, keyboard handler, or state owner.
+
+`RegisterToolbar` keeps its public API and one ordered control tree. Below Mantine's existing `sm` breakpoint,
+the search input uses the available width with a zero minimum width and one following filter lane bounds
+oversized controls. At source/style level, the configured search width remains 260 px by default at `sm`
+and above. Search and filter controls, complete columns, native primary links/buttons, accessible names,
+sorting, URL/history behavior, drawer ownership, `data-rownav`, and the polite count live region remain
+available exactly once in their original DOM and keyboard order. No cards, hidden columns, duplicated mobile
+tree, sticky overlay, custom breakpoint, global overflow suppression, or shared responsive-table abstraction
+ships. The direct implementation and its payoff trigger are recorded in
+[`20260813144730-responsive-register-cohort`](debt/20260813144730-responsive-register-cohort.md).
+
+Implementation followed focused RED/GREEN proofs and task reviews:
+
+- The toolbar RED exited 1 on the missing zero-minimum-width contract; the minimal GREEN passed 1 file/6
+  tests. A later preservation-only assertion pinned the already-shipped polite live region without
+  fabricating a RED, and commits `1e654a4` and `a27884b` record the production and test changes.
+- The four linked-register RED ran 5 files/50 tests with the intended eight new failures and 42 passes. After
+  correcting the test helper to Mantine's scaled minimum-width serialization and its proven table type, the
+  final GREEN passed 7 files/60 tests; commit `1a871ce` records the direct wrappers and focused guards.
+- The DCR/Improvement RED had the intended four failures and 47 passes; its GREEN passed 5 files/61 tests in
+  12.27 seconds. Commit `2da20db` records those two wrappers.
+- The Risk/Context/Interested Parties RED had the intended six failures and 74 passes while all prior route
+  contracts remained green; its GREEN passed 6 files/90 tests in 14.79 seconds. Commit `ac795cc` completes
+  the exact nine-route inventory.
+- The app-owned formatter exposed one scoped `ObjectivesRegisterPage` reflow as a genuine formatting RED.
+  The minimal GREEN and the full 22-file TypeScript/TSX Prettier check passed; rewritten commit `6a5a53c`
+  records only that correction. Final review then added a loaded Management Reviews axe assertion, which
+  passed immediately against the existing behavior without a fabricated RED; `02f6c56` is the resulting
+  implementation evidence head.
+
+Final integrated evidence remained green after review. The exact 16-file affected selection passed 238/238
+tests in 43.53 seconds, including shared toolbar/row navigation, all nine edited route suites, and the four
+existing Library, Compliance, NCR, and Document Control Report scroll-container preservation suites. Web
+lint and `tsc --noEmit` passed. Vite 8.1.5 transformed 1,098 modules and built in 561 ms, emitting 0.77 kB
+HTML (0.40 kB gzip), 211.40 kB CSS (32.42 kB gzip), and 1,159.20 kB JavaScript (318.92 kB gzip); the existing
+advisory for a chunk above 500 kB remains. Range and working-tree diff guards were clean. The whole-source
+structural-row ripgrep guard returned its expected no-match exit 1, confirming no `Table.Tr` opening tag with
+`onClick`, `onKeyDown`, `tabIndex`, or `role` under `apps/web/src`.
+
+Durable job `job-mss1id7k-9a7297cb` ran exact direct argv `npm --prefix apps/web test` from the isolated
+worktree and exited 0: Vitest 4.1.10 passed all 260 files and 1,865 tests in 278.64 seconds (transform 2.49
+seconds, setup 37.81 seconds, import 40.32 seconds, tests 115.95 seconds, environment 66.34 seconds), with no
+unhandled error. Stderr retained repeated Node `ExperimentalWarning` messages that `localStorage` was
+unavailable because `--localstorage-file` was not provided.
+
+The history closure made the plan repo-neutral from its first introduction and retained recoverability
+through reflog without creating a publishable backup branch. Scoped app-owned documentation Prettier passed.
+Authority fixtures passed 91/91, all seven Claude-hook compatibility assertions passed, repository authority
+returned `AUTHORITY_OK`, site-data fixtures passed 13/13, the direct site-data scan was clean, and range plus
+working-tree diff guards were clean. No current residual was created: specialized responsive decisions and
+real-browser evidence remain the approved Programme 1 slice-8 boundary, not an unresolved slice-7 defect.
+
+This remains a frontend-only responsive structure and unit-evidence slice. It changes no API,
+OpenAPI/generated contract, migration/database, dependency/lockfile, authentication/setup, permission,
+QueryClient/provider, mutation-feedback, notification, telemetry, deployment, or Fedora behavior. API,
+contract, integration, migration, and CI totals are inherited rather than freshly verified. Playwright,
+actual 320 px or desktop viewport measurement, real clipping and localized-scroll reachability,
+request-intercepted failures, focus-ring/forced-colors inspection, screen-reader-oriented evidence,
+Docker-backed checks, API/contract/integration/migration suites, deployment, and disposable Fedora proof did
+not run. Those unavailable layers are not described as passed and remain owned by slice 8 or their existing
+acceptance gates.
+
 ### S-keyboard-semantic-interaction — native primary table controls and structural rows
 
 Shipped 2026-08-13 at implementation evidence baseline `c32875c`. The owner accepted
