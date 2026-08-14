@@ -74,6 +74,7 @@ assert_before() {
 printf '== ci hardening contract ==\n'
 
 WEB_SHARDS_BLOCK="$(job_block web-shards)"
+WEB_BROWSER_BLOCK="$(job_block web-browser)"
 WEB_GATE_BLOCK="$(job_block web)"
 CONTRACTS_BLOCK="$(job_block contracts)"
 CONTRACT_RESPONSES_BLOCK="$(job_block contract-responses)"
@@ -99,21 +100,88 @@ assert_text_contains \
   '      - name: Vitest shard ${{ matrix.shard }}/2
         working-directory: apps/web
         run: npm test -- --shard=${{ matrix.shard }}/2'
+
 assert_text_contains \
-  "stable named web gate runs after every shard result" \
+  "browser job preserves its stable Chromium display name" \
+  "$WEB_BROWSER_BLOCK" \
+  '  web-browser:
+    name: web browser (Chromium)
+    runs-on: ubuntu-latest'
+assert_text_contains \
+  "browser job checks out before selecting cached Node 22" \
+  "$WEB_BROWSER_BLOCK" \
+  '      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json'
+assert_text_contains \
+  "browser job installs the frozen web dependency tree" \
+  "$WEB_BROWSER_BLOCK" \
+  '      - working-directory: apps/web
+        run: npm ci'
+assert_text_contains \
+  "browser job installs Chromium and required Linux packages" \
+  "$WEB_BROWSER_BLOCK" \
+  '      - name: install Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium'
+assert_text_contains \
+  "browser job runs the locked browser suite unconditionally" \
+  "$WEB_BROWSER_BLOCK" \
+  '      - name: responsive browser evidence
+        working-directory: apps/web
+        run: npm run test:browser'
+assert_text_not_contains \
+  "browser job cannot continue on error" \
+  "$WEB_BROWSER_BLOCK" \
+  "continue-on-error:"
+assert_text_not_contains \
+  "browser job commands cannot suppress failures" \
+  "$WEB_BROWSER_BLOCK" \
+  "|| true"
+assert_text_not_contains \
+  "browser job cannot select changed files only" \
+  "$WEB_BROWSER_BLOCK" \
+  "--changed"
+assert_text_not_contains \
+  "browser job cannot override the locked zero-retry policy" \
+  "$WEB_BROWSER_BLOCK" \
+  "--retries"
+assert_text_not_contains \
+  "browser job cannot add workflow-level test retries" \
+  "$WEB_BROWSER_BLOCK" \
+  "retries:"
+assert_text_contains \
+  "browser diagnostics upload only on failure" \
+  "$WEB_BROWSER_BLOCK" \
+  '      - name: upload browser diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 7'
+assert_text_contains \
+  "stable named web gate runs after every unit and browser result" \
   "$WEB_GATE_BLOCK" \
   '  web:
     name: web
-    needs: web-shards
+    needs: [web-shards, web-browser]
     if: ${{ always() }}
     runs-on: ubuntu-latest'
 assert_text_not_contains "stable web gate cannot continue on error" "$WEB_GATE_BLOCK" "continue-on-error:"
 assert_text_contains \
   "stable web gate rejects every non-success result with a failing exit" \
   "$WEB_GATE_BLOCK" \
-  '          result='"'"'${{ needs.web-shards.result }}'"'"'
-          if [ "$result" != "success" ]; then
-            echo "web shards did not all pass (result=$result)"
+  '          shards_result='"'"'${{ needs.web-shards.result }}'"'"'
+          browser_result='"'"'${{ needs.web-browser.result }}'"'"'
+          if [ "$shards_result" != "success" ] || [ "$browser_result" != "success" ]; then
+            echo "web checks did not all pass (web-shards=$shards_result, web-browser=$browser_result)"
             exit 1
           fi'
 assert_text_contains \
@@ -144,6 +212,10 @@ assert_contains \
   "local CI mirror keeps one TypeScript pass before web tests" \
   "$JUSTFILE" \
   "npm run lint && npm run build && npm test"
+assert_contains \
+  "local browser command invokes the locked web script" \
+  "$JUSTFILE" \
+  $'test-browser:\n    cd apps/web && npm run test:browser'
 assert_contains \
   "dependency-free gate retains the parsed workflow regression" \
   "$SEMANTIC_TEST" \

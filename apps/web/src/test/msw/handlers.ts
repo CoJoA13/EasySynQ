@@ -1904,7 +1904,7 @@ const measurementFixtures: Measurement[] = [
 ] satisfies Measurement[];
 
 // ---- S-mr-2 management review fixtures ----
-const mgmtReviewListFixture = {
+export const mgmtReviewListFixture = {
   data: [
     {
       id: "mr-0001-0001-0001-000000000001",
@@ -2015,7 +2015,7 @@ export const DCR_IMPL_ID = "dcr00003-0003-0003-0003-000000000003";
 export const DCR_CANCELLED_ID = "dcr00004-0004-0004-0004-000000000004";
 const TARGET_DOC_ID = "doc00001-0001-0001-0001-000000000001";
 
-const dcrListFixture = {
+export const dcrListFixture = {
   data: [
     {
       id: DCR_REVISE_ID,

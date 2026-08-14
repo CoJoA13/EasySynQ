@@ -85,6 +85,9 @@ export function SortableTh<K extends string>({
     >
       <UnstyledButton
         onClick={() => onSort(sortKey)}
+        onFocus={(event) =>
+          event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })
+        }
         aria-label={`Sort by ${label}`}
         style={{ display: "inline-flex", alignItems: "center", gap: 4, font: "inherit" }}
       >

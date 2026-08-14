@@ -55,6 +55,9 @@ test:
 test-contract:
     cd apps/api && uv run pytest tests/integration/test_contract_response_schemas.py -m contract
 
+test-browser:
+    cd apps/web && npm run test:browser
+
 # Local CI: the full api + web fast loops (uv/node toolchain; no Docker). Mirror of the green gates.
 check:
     cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest tests/unit -m unit
