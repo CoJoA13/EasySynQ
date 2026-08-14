@@ -21,7 +21,18 @@ import type { RegisterCase } from "./registers";
 
 export interface RegisterScenario {
   route: RegisterCase["key"];
+  override?: RegisterRequestOverride;
 }
+
+export type RegisterRequestOutcome = "http-503" | "network-error" | "loaded";
+
+export interface RegisterRequestOverride {
+  readonly method: string;
+  readonly pathname: string;
+  readonly outcomes: readonly RegisterRequestOutcome[];
+}
+
+export type RequestCount = (method: string, pathname: string) => number;
 
 const HARNESS_ORIGIN = "http://127.0.0.1:4174";
 const currentDirectoryUser = directoryFixture[0];
@@ -78,11 +89,24 @@ async function fulfillJson(route: Route, body: unknown): Promise<void> {
   });
 }
 
-export async function installRegisterApi(page: Page, scenario: RegisterScenario): Promise<void> {
+function requestKey(method: string, pathname: string): string {
+  return `${method.toUpperCase()} ${pathname}`;
+}
+
+export async function installRegisterApi(
+  page: Page,
+  scenario: RegisterScenario,
+): Promise<RequestCount> {
+  const requestCounts = new Map<string, number>();
+  const overrideKey = scenario.override
+    ? requestKey(scenario.override.method, scenario.override.pathname)
+    : null;
+  const overrideOutcomes = [...(scenario.override?.outcomes ?? [])];
+
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    const method = request.method();
+    const method = request.method().toUpperCase();
 
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       await route.continue();
@@ -97,6 +121,30 @@ export async function installRegisterApi(page: Page, scenario: RegisterScenario)
     if (!url.pathname.startsWith("/api/")) {
       await route.continue();
       return;
+    }
+
+    const key = requestKey(method, url.pathname);
+    requestCounts.set(key, (requestCounts.get(key) ?? 0) + 1);
+
+    if (key === overrideKey) {
+      const outcome = overrideOutcomes.shift();
+      if (outcome === "http-503") {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({
+            code: "service_unavailable",
+            title: "Service unavailable",
+            detail: "The synthetic register request is temporarily unavailable.",
+          }),
+        });
+        return;
+      }
+      if (outcome === "network-error") {
+        await route.abort("failed");
+        return;
+      }
+      // `loaded` (or an exhausted queue) delegates to the normal exact route response below.
     }
 
     if (method === "GET" && url.pathname === "/api/v1/setup/state" && url.search === "") {
@@ -299,4 +347,6 @@ export async function installRegisterApi(page: Page, scenario: RegisterScenario)
     await route.abort("failed");
     throw new Error(`Unexpected API request: ${method} ${request.url()}`);
   });
+
+  return (method, pathname) => requestCounts.get(requestKey(method, pathname)) ?? 0;
 }
