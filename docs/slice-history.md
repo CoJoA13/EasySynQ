@@ -50,6 +50,9 @@ are recorded in
 Review also recorded the two non-blocking child-probe/Docker-normalization mutation gaps in
 [`20260814022608-browser-probe-hardening`](debt/20260814022608-browser-probe-hardening.md), with the next
 browser-harness or Docker-context change as their closure trigger.
+Final whole-branch review recorded the non-blocking forced-colors containment-proof gap in
+[`20260814035922-forced-colors-containment-proof`](debt/20260814035922-forced-colors-containment-proof.md),
+with the next forced-colors keyboard-focus or accessibility-evidence change as its closure trigger.
 
 A dedicated test-only Vite entry mounts the production `App`, route tree, shell, Mantine theme, query
 provider, browser router, error boundary, and production components while substituting only a deterministic
@@ -114,7 +117,7 @@ documentation formatting, authority and compatibility suites, repository authori
 direct scan, high-severity npm lock audit, range and working-tree diff checks, and the structural-row
 no-match guard passed before the evidence commit. Known green diagnostics remain the Vite large-chunk
 advisory, repeated Node `localStorage` warning, and the preview child's `NO_COLOR`/`FORCE_COLOR` warning.
-No current owner-visible residual was created; the two debt records above own deliberate future harness
+No current owner-visible residual was created; the three debt records above own deliberate future harness
 reassessment without duplicating `docs/open-residuals.md`.
 
 Fix round 1's scoped Task 8 re-review found the corrected authority set clean. This closes Programme 1
