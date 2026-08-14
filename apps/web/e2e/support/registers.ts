@@ -1,0 +1,194 @@
+import type { Page } from "@playwright/test";
+
+export interface RegisterCase {
+  key:
+    | "tasks"
+    | "audits"
+    | "objectives"
+    | "management-reviews"
+    | "dcrs"
+    | "improvement"
+    | "risks"
+    | "context"
+    | "interested-parties";
+  path: string;
+  floor: number;
+  headers: readonly string[];
+  finalHeader: string;
+  searchPlaceholder: string;
+  firstFilter?: {
+    role: "radiogroup" | "textbox";
+    name?: string;
+  };
+  primaryAction: {
+    role: "link" | "button";
+    name: string;
+  };
+}
+
+export const REGISTER_CASES = [
+  {
+    key: "tasks",
+    path: "/tasks",
+    floor: 720,
+    headers: ["Subject", "Action", "Stage", "State", "Due"],
+    finalHeader: "Due",
+    searchPlaceholder: "Search tasks…",
+    primaryAction: { role: "link", name: "SOP-PUR-014" },
+  },
+  {
+    key: "audits",
+    path: "/audits",
+    floor: 800,
+    headers: ["Audit", "Title", "Lead auditor", "State", "Started"],
+    finalHeader: "Started",
+    searchPlaceholder: "Search audits…",
+    firstFilter: { role: "radiogroup" },
+    primaryAction: { role: "link", name: "REC-000061" },
+  },
+  {
+    key: "objectives",
+    path: "/objectives",
+    floor: 720,
+    headers: ["Ref", "Objective", "Current / target", "Status", "Due"],
+    finalHeader: "Due",
+    searchPlaceholder: "Search objectives…",
+    firstFilter: { role: "radiogroup", name: "Filter by RAG status" },
+    primaryAction: { role: "link", name: "OBJ-001" },
+  },
+  {
+    key: "management-reviews",
+    path: "/management-reviews",
+    floor: 800,
+    headers: ["Ref", "Review", "Period", "Review date", "Status"],
+    finalHeader: "Status",
+    searchPlaceholder: "Search reviews…",
+    primaryAction: { role: "link", name: "MR-001" },
+  },
+  {
+    key: "dcrs",
+    path: "/dcrs",
+    floor: 1040,
+    headers: ["Identifier", "Type", "Significance", "Reason", "Target", "State", "Created"],
+    finalHeader: "Created",
+    searchPlaceholder: "Search change requests…",
+    firstFilter: { role: "textbox", name: "State" },
+    primaryAction: { role: "button", name: "DCR-2026-0001" },
+  },
+  {
+    key: "improvement",
+    path: "/improvement",
+    floor: 920,
+    headers: ["Identifier", "Title", "Source", "Owner", "Stage", "Opened"],
+    finalHeader: "Opened",
+    searchPlaceholder: "Search initiatives…",
+    firstFilter: { role: "textbox", name: "Stage" },
+    primaryAction: { role: "button", name: "IMP-2026-0001" },
+  },
+  {
+    key: "risks",
+    path: "/risks",
+    floor: 720,
+    headers: ["Type", "Risk / opportunity", "Score", "Band", "Treatment"],
+    finalHeader: "Treatment",
+    searchPlaceholder: "Search risks…",
+    firstFilter: { role: "radiogroup", name: "Filter by band" },
+    primaryAction: { role: "button", name: "Supplier single point of failure" },
+  },
+  {
+    key: "context",
+    path: "/context",
+    floor: 880,
+    headers: ["Issue", "Classification", "Category", "Status", "Last reviewed"],
+    finalHeader: "Last reviewed",
+    searchPlaceholder: "Search issues…",
+    firstFilter: { role: "radiogroup", name: "Filter by classification" },
+    primaryAction: { role: "button", name: "Skilled and certified QA team" },
+  },
+  {
+    key: "interested-parties",
+    path: "/interested-parties",
+    floor: 880,
+    headers: ["Party", "Type", "Influence", "Status", "Last reviewed"],
+    finalHeader: "Last reviewed",
+    searchPlaceholder: "Search parties…",
+    firstFilter: { role: "textbox", name: "Filter by party type" },
+    primaryAction: { role: "button", name: "Acme Manufacturing" },
+  },
+] as const satisfies readonly RegisterCase[];
+
+export interface RegisterGeometry {
+  documentClientWidth: number;
+  documentScrollWidth: number;
+  containerClientWidth: number;
+  containerScrollWidth: number;
+  tableWidth: number;
+  searchWidth: number;
+  farEdgeInsideAfterScroll: boolean;
+}
+
+export async function measureRegister(
+  page: Page,
+  registerCase: RegisterCase,
+): Promise<RegisterGeometry> {
+  const visibleTables = page.locator("table:visible");
+  const tableCount = await visibleTables.count();
+  if (tableCount !== 1) {
+    throw new Error(`Expected one visible table for ${registerCase.key}, found ${tableCount}`);
+  }
+
+  return visibleTables.evaluate(
+    (table, { finalHeader, searchPlaceholder, key }) => {
+      let container = table.parentElement;
+      while (container) {
+        const overflowX = getComputedStyle(container).overflowX;
+        if (overflowX === "auto" || overflowX === "scroll") break;
+        container = container.parentElement;
+      }
+      if (!container) {
+        throw new Error(`No localized horizontal overflow container found for ${key}`);
+      }
+
+      const headers = Array.from(table.querySelectorAll("th"));
+      const farEdgeHeaders = headers.filter(
+        (header) => header.textContent?.replace(/\s+/g, " ").trim() === finalHeader,
+      );
+      if (farEdgeHeaders.length !== 1) {
+        throw new Error(
+          `Expected one ${JSON.stringify(finalHeader)} header for ${key}, found ${farEdgeHeaders.length}`,
+        );
+      }
+
+      const searchInputs = Array.from(document.querySelectorAll("input")).filter(
+        (input) => input.placeholder === searchPlaceholder,
+      );
+      if (searchInputs.length !== 1) {
+        throw new Error(
+          `Expected one ${JSON.stringify(searchPlaceholder)} search input for ${key}, found ${searchInputs.length}`,
+        );
+      }
+
+      container.scrollLeft = container.scrollWidth;
+      const containerRect = container.getBoundingClientRect();
+      const farEdgeRect = farEdgeHeaders[0]!.getBoundingClientRect();
+      const root = document.documentElement;
+
+      return {
+        documentClientWidth: root.clientWidth,
+        documentScrollWidth: root.scrollWidth,
+        containerClientWidth: container.clientWidth,
+        containerScrollWidth: container.scrollWidth,
+        tableWidth: table.getBoundingClientRect().width,
+        searchWidth: searchInputs[0]!.getBoundingClientRect().width,
+        farEdgeInsideAfterScroll:
+          farEdgeRect.left >= containerRect.left - 1 &&
+          farEdgeRect.right <= containerRect.right + 1,
+      };
+    },
+    {
+      finalHeader: registerCase.finalHeader,
+      searchPlaceholder: registerCase.searchPlaceholder,
+      key: registerCase.key,
+    },
+  );
+}

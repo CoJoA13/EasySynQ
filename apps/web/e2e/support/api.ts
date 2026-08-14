@@ -1,17 +1,37 @@
 import type { Page, Route } from "@playwright/test";
-import { directoryFixture, notificationFixtures, taskFixture } from "../../src/test/msw/handlers";
+import {
+  auditListFixture,
+  auditProgramsFixture,
+  contextListFixture,
+  contextRegisterStatusFixture,
+  dcrListFixture,
+  directoryFixture,
+  initiativeFixtures,
+  interestedPartyListFixture,
+  interestedPartyRegisterStatusFixture,
+  mgmtReviewListFixture,
+  notificationFixtures,
+  objectiveFixtures,
+  processesFixture,
+  riskListFixture,
+  riskRegisterStatusFixture,
+  taskFixture,
+} from "../../src/test/msw/handlers";
+import type { RegisterCase } from "./registers";
 
 export interface RegisterScenario {
-  route: "tasks";
+  route: RegisterCase["key"];
 }
 
 const HARNESS_ORIGIN = "http://127.0.0.1:4174";
 const currentDirectoryUser = directoryFixture[0];
 const primaryTask = taskFixture[0];
+const primaryProcess = processesFixture[0];
 
-if (!currentDirectoryUser || !primaryTask) {
-  throw new Error("browser fixtures require a synthetic user and task");
+if (!currentDirectoryUser || !primaryTask || !primaryProcess) {
+  throw new Error("browser fixtures require a synthetic user, task, and process");
 }
+const primaryProcessId = primaryProcess.id;
 
 const currentUser = {
   ...currentDirectoryUser,
@@ -33,6 +53,14 @@ const tasks = [
     subject_title: "Production Control",
   },
 ];
+const objectiveByRag = { green: 0, amber: 0, red: 0, unmeasured: 0 };
+for (const objective of objectiveFixtures) objectiveByRag[objective.rag] += 1;
+const objectiveScorecard = {
+  total: objectiveFixtures.length,
+  on_target: objectiveByRag.green,
+  by_rag: objectiveByRag,
+  objectives: objectiveFixtures,
+};
 
 function hasOnlySearchParams(url: URL, expected: Record<string, string>): boolean {
   const entries = Object.entries(expected);
@@ -100,6 +128,161 @@ export async function installRegisterApi(page: Page, scenario: RegisterScenario)
 
     if (method === "GET" && url.pathname === "/api/v1/notifications/stream" && url.search === "") {
       await route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+      return;
+    }
+
+    if (
+      scenario.route === "audits" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/audits" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, auditListFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "audits" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/audit-programs" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, auditProgramsFixture);
+      return;
+    }
+
+    if (
+      (scenario.route === "audits" ||
+        scenario.route === "dcrs" ||
+        scenario.route === "improvement") &&
+      method === "GET" &&
+      url.pathname === "/api/v1/directory/users" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, directoryFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "objectives" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/objectives/scorecard" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, objectiveScorecard);
+      return;
+    }
+
+    if (
+      scenario.route === "management-reviews" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/management-reviews" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, mgmtReviewListFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "dcrs" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/dcrs" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, dcrListFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "improvement" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/improvement-initiatives" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, { data: initiativeFixtures });
+      return;
+    }
+
+    if (
+      scenario.route === "risks" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/risks" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, riskListFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "risks" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/risks/register" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, riskRegisterStatusFixture);
+      return;
+    }
+
+    if (
+      (scenario.route === "improvement" || scenario.route === "risks") &&
+      method === "GET" &&
+      url.pathname === "/api/v1/processes" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, processesFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "risks" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/me/permissions" &&
+      hasOnlySearchParams(url, { scope_level: "PROCESS", scope_id: primaryProcessId })
+    ) {
+      await fulfillJson(route, {
+        scope: { level: "PROCESS", selector: { process_ids: [primaryProcessId] } },
+        permissions: [],
+      });
+      return;
+    }
+
+    if (
+      scenario.route === "context" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/context" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, contextListFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "context" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/context/register" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, contextRegisterStatusFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "interested-parties" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/interested-parties" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, interestedPartyListFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "interested-parties" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/interested-parties/register" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, interestedPartyRegisterStatusFixture);
       return;
     }
 
