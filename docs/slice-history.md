@@ -37,6 +37,90 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## PROGRAMME 1 — frontend resilience and accessibility
 
+### S-responsive-browser-evidence — required Chromium register proof
+
+Shipped 2026-08-14 at reviewed implementation evidence baseline
+`1dcbc2bc12b14e11f037a657d44659412a7a39c0`, on a branch based on main squash `323fb179`. The
+owner-approved [`design`](superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md),
+[`plan`](superpowers/plans/2026-08-13-s-responsive-browser-evidence.md), and
+[`ADR 0003`](adr/0003-use-playwright-for-responsive-browser-evidence.md) define a deterministic first
+real-browser gate for the slice-7 responsive cohort. The primary deliberate boundary and payoff trigger
+are recorded in
+[`20260813234519-playwright-responsive-browser-harness`](debt/20260813234519-playwright-responsive-browser-harness.md).
+Review also recorded the two non-blocking child-probe/Docker-normalization mutation gaps in
+[`20260814022608-browser-probe-hardening`](debt/20260814022608-browser-probe-hardening.md), with the next
+browser-harness or Docker-context change as their closure trigger.
+
+A dedicated test-only Vite entry mounts the production `App`, route tree, shell, Mantine theme, query
+provider, browser router, error boundary, and production components while substituting only a deterministic
+authenticated context. Its centrally owned synthetic fixture router intercepts traffic before navigation,
+fulfills exact method/path/query contracts, and aborts every undeclared API or external HTTP(S) request.
+The production entry, OIDC provider, normal Vite build, container route, and Compose inputs receive no
+browser-test authentication branch or fixture payload. Browser outputs, traces, screenshots, reports, and
+binaries remain ignored.
+
+The final ordinary suite passed exactly 26 tests in Chromium with one worker and zero retries. Eighteen
+geometry cases cover `/tasks`, `/audits`, `/objectives`, `/management-reviews`, `/dcrs`, `/improvement`,
+`/risks`, `/context`, and `/interested-parties` at 320 by 800 and 1280 by 900. Narrow cases numerically pin
+document containment, one page-owned horizontally overflowing container, the approved content floor,
+search/filter reachability, and the far edge after scrolling only that container. Desktop cases retain the
+260 px search contract, ordered headers, complete table, and one native primary action without duplicate
+presentation.
+
+The other eight ordinary cases prove behavior at the browser boundary. DCR keyboard traversal reaches the
+far-edge Created sort control and keeps it inside the localized container with visible normal focus and the
+two-pixel system-color forced-colors outline. Tasks retain two native subject links, ordinary tab order,
+ArrowDown row navigation, structural rows, exact destinations, and reviewed browser ARIA table semantics.
+Context retains named search and three filter groups, checked state, a debounced one-result table, and a
+polite `1 issues` live-region update. One HTTP 503 and one network abort each render a localized error with
+one retry, no stale table or duplicate control, then recover after exactly two target requests. The routed
+shell smoke remains green. One normal meta-spec runs two isolated, deliberately failing child probes and
+requires their exact browser abort markers plus sole method/full-URL fatal diagnostics, so removing an
+abort or fatal throw fails the ordinary suite without using `test.fail`.
+
+The required CI job `web-browser` installs the locked web tree, Chromium, and Linux dependencies, then runs
+the complete suite and uploads diagnostics only on failure. Stable check `web` retains its name, depends on
+both `web-shards` and `web-browser`, runs under `always()`, and explicitly rejects either non-success result.
+Shell contracts passed 85/85 assertions and parsed workflow tests passed 2/2; the executable topology is
+eleven jobs and fifteen checks. Local setup deliberately does not download a browser; contributors use one
+explicit Chromium install and `npm run test:browser` or `just test-browser`.
+
+Implementation followed focused RED/GREEN proofs and two whole-branch review fix rounds. The smoke, exact
+nine-route fixture/geometry map, 18-case matrix, two recovery cases, four accessibility/interaction cases,
+and fail-closed parent/child proof were each introduced through focused browser failures. Adjacent Vitest
+preservation selections, lint, strict browser and production TypeScript, scoped Prettier, both builds, CI
+contracts, production-marker and tracked-artifact guards, authority checks, and site-data scans remained
+green. Review added a three-line shared sortable-header focus-scroll correction, six production Docker
+context exclusions plus one-layer Playwright removal, direct interceptor negative evidence, the
+regression-safe child-probe meta-spec, stricter negated-reinclusion checks, and recovered-error-copy
+assertions. Fix-round mutation probes proved that removing either fail-closed fatal throw, changing either
+abort code, or weakening protected Docker-root matching is detected.
+
+Task 8's first complete-suite durable job, `job-mssmmw65-bdd6b919`, is retained as honest RED evidence. It
+exited 1 after 285.70 seconds with all 1,865 intended tests passing because Vitest also discovered six
+Playwright `e2e/*.spec.ts` files and rejected their top-level Playwright `test()` calls. The focused static
+discovery probe listed the same six files. Commit `1dcbc2b` preserves Vitest's own default exclusions while
+adding `e2e/**`; the probe then returned no file, one intended source suite passed 10/10, lint and both
+builds passed, and Chromium remained 26/26. Final durable job `job-mssng14k-588252b8` then ran exact direct
+argv `npm --prefix apps/web test` from the isolated worktree and exited 0: all 260 Vitest files and 1,865
+tests passed in 311.95 seconds (transform 3.39 seconds, setup 41.58 seconds, import 45.23 seconds, tests
+133.02 seconds, environment 72.59 seconds), with no failed suite, failed test, retry, or unhandled error.
+Node's repeated `localStorage` experimental warning remained visible.
+
+The final exact browser command rebuilt the isolated entry and passed 26/26 in 11.0 seconds. Scoped
+documentation formatting, authority and compatibility suites, repository authority, site-data fixtures and
+direct scan, high-severity npm lock audit, range and working-tree diff checks, and the structural-row
+no-match guard passed before the evidence commit. Known green diagnostics remain the Vite large-chunk
+advisory, repeated Node `localStorage` warning, and the preview child's `NO_COLOR`/`FORCE_COLOR` warning.
+No current owner-visible residual was created; the two debt records above own deliberate future harness
+reassessment without duplicating `docs/open-residuals.md`.
+
+This closes Programme 1 only. It does not select or authorize the next programme and makes no Firefox,
+WebKit, NVDA, JAWS, VoiceOver, Orca, or other actual assistive-technology claim. It also does not claim a
+live API, database, object store, Keycloak, Docker-backed application, deployment, migration round trip, or
+disposable Fedora acceptance. API, contract, integration, and migration totals remain inherited rather
+than freshly verified.
+
 ### S-responsive-data-heavy-views — localized shared-register containment
 
 Shipped 2026-08-13 at implementation evidence baseline `02f6c56`, on a branch based on main squash

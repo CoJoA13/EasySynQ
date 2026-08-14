@@ -1,8 +1,8 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-13"
-baseline_commit: "02f6c56"
-last_shipped_slice: "S-responsive-data-heavy-views"
+as_of: "2026-08-14"
+baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
+last_shipped_slice: "S-responsive-browser-evidence"
 migration_head: "0085"
 next_migration: "0086"
 api_unit_tests: 1686
@@ -11,8 +11,8 @@ web_tests: 1865
 contract_tests: 283
 integration_passed: 1051
 integration_skipped: 2
-ci_jobs: 10
-ci_checks: 14
+ci_jobs: 11
+ci_checks: 15
 ---
 
 # Current execution snapshot
@@ -30,20 +30,24 @@ DCR, improvement, risk, context, interested-party, and identity-provisioning sur
 retention/disposition, and Evidence Packs are API/worker-complete but do not have dedicated SPA
 management routes.
 
-The last shipped slice gives the nine shared-register routes localized horizontal table containment:
-Tasks, Audits, DCRs, Objectives, Management Reviews, Improvement, Risks, Context, and Interested Parties.
-Each route retains one complete semantic table and its original native actions at a route-owned content
-floor, while the shared toolbar gives its search the available sub-`sm` width and bounds oversized filters
-in one following lane. At `sm` and above, the source/style contract preserves the existing 260 px search
-width, columns, control order, and desktop presentation. No card alternative, hidden column, duplicate
-mobile tree, custom breakpoint, global overflow suppression, or shared responsive-table abstraction was
-introduced.
+The last shipped slice makes the nine shared-register responsive contract a required Chromium gate for
+Tasks, Audits, Objectives, Management Reviews, DCRs, Improvement, Risks, Context, and Interested Parties.
+A separate test-only Vite entry mounts the real application route tree, shell, theme, query provider, and
+production components with deterministic authenticated context. Playwright centrally fulfills synthetic
+API fixtures and fails closed on undeclared API or external HTTP(S) traffic; no browser-test authentication
+path or fixture enters the production bundle.
 
-The slice preserves the operational QueryClient/provider identity, cached state, route-persistent mutation
-feedback, authentication/setup gates, route-error and 404 ownership, API handlers, OpenAPI/generated
-artifacts, database schema/migrations, Keycloak, dependencies, and deployment behavior. Detailed shipped
-behavior and evidence remain in
-[`slice-history.md`](slice-history.md#s-responsive-data-heavy-views--localized-shared-register-containment).
+At 320 by 800 and 1280 by 900, the browser suite measures document, localized container, table, toolbar,
+and far-edge geometry while retaining one semantic table and one native action tree. It also proves one
+HTTP 503 recovery, one network-abort recovery, DCR keyboard focus in normal and forced-colors rendering,
+Tasks native-link and row-keyboard semantics, Context named filters and live result-count announcement,
+and the fail-closed interceptor through isolated negative child probes. The stable `web` CI aggregate now
+requires both Vitest shards and the dedicated `web-browser` Chromium job.
+
+The slice retains Chromium-only, one-worker, zero-retry evidence and preserves production OIDC, provider
+lifetime, API/OpenAPI, migrations, database, specialized tables, Compose, and deployment behavior. Detailed
+shipped behavior and evidence remain in
+[`slice-history.md`](slice-history.md#s-responsive-browser-evidence--required-chromium-register-proof).
 
 ## Runtime truth
 
@@ -64,32 +68,41 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
-the facts it freshly verifies; partial or unavailable checks must be reported as such. At implementation
-evidence baseline `02f6c56` on 2026-08-13, on a branch based on main squash `082ba310`, durable job
-`job-mss1id7k-9a7297cb` ran exact direct argv `npm --prefix apps/web test` from the isolated worktree and
-exited 0 with all 260 files and 1,865 tests passing in 278.64 seconds (transform 2.49 seconds, setup 37.81
-seconds, import 40.32 seconds, tests 115.95 seconds, environment 66.34 seconds), with no unhandled error.
-Its stderr contained Node's repeated `ExperimentalWarning` that `localStorage` was unavailable because
-`--localstorage-file` was not provided.
+the facts it freshly verifies; partial or unavailable checks must be reported as such. At reviewed
+implementation baseline `1dcbc2bc12b14e11f037a657d44659412a7a39c0` on 2026-08-14, durable job
+`job-mssng14k-588252b8` ran exact direct argv `npm --prefix apps/web test` from the isolated worktree and
+exited 0 with all 260 Vitest files and 1,865 tests passing in 311.95 seconds (transform 3.39 seconds, setup
+41.58 seconds, import 45.23 seconds, tests 133.02 seconds, environment 72.59 seconds), with no failed suite,
+failed test, retry, or unhandled error. Its stderr retained Node's repeated `ExperimentalWarning` that
+`localStorage` was unavailable because `--localstorage-file` was not provided.
 
-The exact 16-file affected selection passed 238 tests in 43.53 seconds on the reviewed implementation head.
-Web lint, `tsc --noEmit`, the app-owned Prettier check over all 22 changed TypeScript/TSX files, and the
-production build passed. Vite 8.1.5 transformed 1,098 modules and built in 561 ms; it emitted 0.77 kB HTML,
-211.40 kB CSS, and 1,159.20 kB JavaScript and retained only the existing advisory for a chunk above 500 kB.
-Range and working-tree diff guards were clean, and the structural-row ripgrep guard returned the expected
-no-match status. Final review added loaded-state axe preservation coverage for Management Reviews and
-required repository-neutral plan history from first introduction; both fixes are included in `02f6c56`
-and the rewritten ancestry, with real browser claims explicitly excluded.
+The preceding required run, durable job `job-mssmmw65-bdd6b919`, honestly exited 1 after 285.70 seconds:
+all 1,865 intended Vitest assertions passed, but Vitest's default `*.spec.ts` discovery also collected six
+Playwright files under `e2e/`, whose top-level Playwright `test()` calls failed as foreign suites. The
+focused discovery RED listed those six files. Commit `1dcbc2b` extends `configDefaults.exclude` with
+`e2e/**`, preserving Vitest's default exclusions; the same discovery probe then returned no file, one
+intended source suite passed 10/10, and lint, browser build, production build, and the complete Chromium
+suite remained green before the final durable rerun.
 
-The history closure made the plan repository-neutral from its first introduction and retained recoverability
-through reflog without creating a publishable backup branch. Scoped documentation Prettier passed; authority
-fixtures passed 91/91, all seven Claude-hook compatibility assertions passed, repository authority returned
-`AUTHORITY_OK`, site-data fixtures passed 13/13, the direct site-data scan was clean, and range plus
-working-tree diff guards were clean. API, contract, integration, migration, and CI numeric values above
-retain their prior successful evidence because their complete gates were not refreshed for this front-end-only
-slice. Playwright, real
-viewport/clipping/scroll-reachability, request-intercepted failure, focus-ring/forced-colors, screen-reader,
-Docker-backed, deployment, and Fedora proofs did not run and remain outside this evidence.
+The final exact `npm --prefix apps/web run test:browser` command typechecked and built the isolated entry,
+then passed 26 Chromium tests in 11.0 seconds with one worker and zero retries. The count is separate from
+Vitest: eighteen route-and-viewport geometry cases cover all nine routes at 320 by 800 and 1280 by 900;
+four focused cases cover DCR focus and forced colors, Tasks native semantics and row navigation, and Context
+filter/live-region semantics; two cases cover HTTP and network recovery; one mounts the routed shell; and
+one meta-spec validates the fail-closed request interceptor through two isolated deliberately failing child
+probes. Diagnostic output retained Vite's existing large-chunk advisory plus Node's `localStorage` and
+`NO_COLOR`/`FORCE_COLOR` warnings.
+
+Implementation review added the shared sortable-header focus scroll correction, browser-only Docker-context
+exclusions and one-layer Playwright removal, regression-safe fail-closed negative evidence, stricter Docker
+reinclusion guards, and restored-error-copy recovery assertions. The final implementation and CI contract
+checks passed before authority closure. Scoped documentation formatting, authority and Claude compatibility
+fixtures, repository authority, site-data fixtures and direct scan, high-severity lock audit, range and
+working-tree diff guards, and the structural-row no-match guard all passed at handoff. API, contract,
+integration, and migration numeric values above retain their prior successful evidence because their full
+authoritative gates were not refreshed for this frontend browser-evidence slice. Firefox, WebKit, actual
+assistive-technology sessions, live backend integration, Docker-backed application acceptance, deployment,
+migration round-trip, and disposable Fedora proof did not run and are not described as passed.
 
 ## CI topology
 
@@ -101,6 +114,11 @@ The dependency-light `contracts` job runs repository-authority and R61 protectio
 bootstrap/doctor/proof structural contracts and the disabled PostgreSQL MCP contract before dependency
 hydration. These checks prove tracked interfaces and failure propagation; they do not emulate Fedora,
 SELinux, libvirt, Docker, or a live application stack.
+
+The dedicated `web-browser` job installs the locked web tree and Chromium with its Linux dependencies,
+runs the complete browser suite, and uploads ignored diagnostics only on failure. Stable check `web` uses
+`always()` and explicitly rejects a non-success result from either `web-shards` or `web-browser`; the
+workflow now exposes eleven jobs and fifteen aggregate/leaf checks.
 
 ## Programme 0 acceptance status
 

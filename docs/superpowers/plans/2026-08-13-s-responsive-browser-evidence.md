@@ -881,8 +881,8 @@ State that this closes Programme 1 only; do not select or claim the next program
 - [ ] **Step 5: Format scoped documentation**
 
 ```bash
-(cd apps/web && node_modules/.bin/prettier --write ../../docs/current-status.md ../../docs/dev-workflow.md ../../docs/superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md ../../docs/superpowers/plans/2026-08-13-s-responsive-browser-evidence.md ../../docs/adr/0003-use-playwright-for-responsive-browser-evidence.md ../../docs/debt/20260813234519-playwright-responsive-browser-harness.md)
-(cd apps/web && node_modules/.bin/prettier --check ../../docs/current-status.md ../../docs/dev-workflow.md ../../docs/superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md ../../docs/superpowers/plans/2026-08-13-s-responsive-browser-evidence.md ../../docs/adr/0003-use-playwright-for-responsive-browser-evidence.md ../../docs/debt/20260813234519-playwright-responsive-browser-harness.md)
+(cd apps/web && node_modules/.bin/prettier --write ../../docs/current-status.md ../../docs/dev-workflow.md ../../docs/superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md ../../docs/superpowers/plans/2026-08-13-s-responsive-browser-evidence.md ../../docs/adr/0003-use-playwright-for-responsive-browser-evidence.md ../../docs/debt/20260813234519-playwright-responsive-browser-harness.md ../../docs/debt/20260814022608-browser-probe-hardening.md)
+(cd apps/web && node_modules/.bin/prettier --check ../../docs/current-status.md ../../docs/dev-workflow.md ../../docs/superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md ../../docs/superpowers/plans/2026-08-13-s-responsive-browser-evidence.md ../../docs/adr/0003-use-playwright-for-responsive-browser-evidence.md ../../docs/debt/20260813234519-playwright-responsive-browser-harness.md ../../docs/debt/20260814022608-browser-probe-hardening.md)
 ```
 
 Do not whole-file format `docs/slice-history.md`; inspect only the inserted block.
