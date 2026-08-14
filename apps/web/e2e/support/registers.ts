@@ -16,10 +16,16 @@ export interface RegisterCase {
   headers: readonly string[];
   finalHeader: string;
   searchPlaceholder: string;
-  firstFilter?: {
-    role: "radiogroup" | "textbox";
-    name?: string;
-  };
+  firstFilter?:
+    | {
+        role: "radiogroup";
+        name?: string;
+        firstOptionName: string;
+      }
+    | {
+        role: "textbox";
+        name: string;
+      };
   primaryAction: {
     role: "link" | "button";
     name: string;
@@ -43,7 +49,7 @@ export const REGISTER_CASES = [
     headers: ["Audit", "Title", "Lead auditor", "State", "Started"],
     finalHeader: "Started",
     searchPlaceholder: "Search audits…",
-    firstFilter: { role: "radiogroup" },
+    firstFilter: { role: "radiogroup", firstOptionName: "All" },
     primaryAction: { role: "link", name: "REC-000061" },
   },
   {
@@ -53,7 +59,11 @@ export const REGISTER_CASES = [
     headers: ["Ref", "Objective", "Current / target", "Status", "Due"],
     finalHeader: "Due",
     searchPlaceholder: "Search objectives…",
-    firstFilter: { role: "radiogroup", name: "Filter by RAG status" },
+    firstFilter: {
+      role: "radiogroup",
+      name: "Filter by RAG status",
+      firstOptionName: "All",
+    },
     primaryAction: { role: "link", name: "OBJ-001" },
   },
   {
@@ -92,7 +102,7 @@ export const REGISTER_CASES = [
     headers: ["Type", "Risk / opportunity", "Score", "Band", "Treatment"],
     finalHeader: "Treatment",
     searchPlaceholder: "Search risks…",
-    firstFilter: { role: "radiogroup", name: "Filter by band" },
+    firstFilter: { role: "radiogroup", name: "Filter by band", firstOptionName: "All" },
     primaryAction: { role: "button", name: "Supplier single point of failure" },
   },
   {
@@ -102,7 +112,11 @@ export const REGISTER_CASES = [
     headers: ["Issue", "Classification", "Category", "Status", "Last reviewed"],
     finalHeader: "Last reviewed",
     searchPlaceholder: "Search issues…",
-    firstFilter: { role: "radiogroup", name: "Filter by classification" },
+    firstFilter: {
+      role: "radiogroup",
+      name: "Filter by classification",
+      firstOptionName: "All",
+    },
     primaryAction: { role: "button", name: "Skilled and certified QA team" },
   },
   {
@@ -139,15 +153,29 @@ export async function measureRegister(
 
   return visibleTables.evaluate(
     (table, { finalHeader, searchPlaceholder, key }) => {
-      let container = table.parentElement;
-      while (container) {
-        const overflowX = getComputedStyle(container).overflowX;
-        if (overflowX === "auto" || overflowX === "scroll") break;
-        container = container.parentElement;
+      const overflowCandidates: HTMLElement[] = [];
+      let ancestor = table.parentElement;
+      while (ancestor) {
+        const overflowX = getComputedStyle(ancestor).overflowX;
+        if (overflowX === "auto" || overflowX === "scroll") overflowCandidates.push(ancestor);
+        ancestor = ancestor.parentElement;
       }
-      if (!container) {
-        throw new Error(`No localized horizontal overflow container found for ${key}`);
+      // Mantine's ScrollArea root computes to overflow-x:auto because Table.ScrollContainer's
+      // custom-property declaration overrides the root's hidden shorthand at computed-value time.
+      // It is only a second owner when it has its own horizontal scroll extent. The nearest computed
+      // candidate is the table's designated owner even at desktop widths where no scrolling is needed.
+      const overflowOwners = overflowCandidates.filter(
+        (candidate, index) => index === 0 || candidate.scrollWidth > candidate.clientWidth + 1,
+      );
+      if (overflowOwners.length !== 1) {
+        const ownerDetails = overflowOwners
+          .map((owner) => `${owner.tagName.toLowerCase()}.${owner.className}`)
+          .join(", ");
+        throw new Error(
+          `Expected exactly one localized horizontal overflow container for ${key}, found ${overflowOwners.length}: ${ownerDetails}`,
+        );
       }
+      const container = overflowOwners[0]!;
 
       const headers = Array.from(table.querySelectorAll("th"));
       const farEdgeHeaders = headers.filter(
