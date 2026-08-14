@@ -216,6 +216,38 @@ def test_web_image_uses_lockfile_and_excludes_host_artifacts() -> None:
     assert {"node_modules", "dist", "coverage", ".vite"}.issubset(dockerignore)
 
 
+def test_web_image_excludes_browser_harness_and_removes_playwright_from_runtime() -> None:
+    dockerfile = _read("apps/web/Dockerfile")
+    dockerignore = _read("apps/web/.dockerignore").splitlines()
+    browser_only_context_roots = {
+        "e2e",
+        "playwright.config.ts",
+        "tsconfig.browser.json",
+        ".playwright-dist",
+        "playwright-report",
+        "test-results",
+    }
+
+    # These exact app-root patterns are interpreted by Docker before the broad `COPY . .`.
+    assert browser_only_context_roots.issubset(dockerignore)
+    assert not any(
+        pattern.startswith("!") and pattern.removeprefix("!") in browser_only_context_roots
+        for pattern in dockerignore
+    )
+    assert "COPY . ." in dockerfile
+
+    install_build_cleanup = """RUN npm ci \\
+    && npm run build \\
+    && npm uninstall --no-save @playwright/test \\
+    && npm cache clean --force"""
+    assert install_build_cleanup in dockerfile
+    assert dockerfile.index("COPY . .") < dockerfile.index(install_build_cleanup)
+    assert dockerfile.count("RUN npm ci") == 1
+    assert (
+        'CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]' in dockerfile
+    )
+
+
 def test_production_requires_one_consistent_browser_edge() -> None:
     production = _read("infra/compose/compose.production.yml")
     caddy = _read("infra/compose/caddy/Caddyfile.production")

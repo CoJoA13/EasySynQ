@@ -2,6 +2,12 @@ node_modules
 dist
 coverage
 .vite
+e2e
+playwright.config.ts
+tsconfig.browser.json
+.playwright-dist
+playwright-report
+test-results
 .eslintcache
 *.log
 .env
