@@ -38,23 +38,23 @@ starts services, changes permissions, or prints configuration values. Once `just
 Common Fedora doctor remediations are intentionally explicit. Run only the row matching the emitted
 reason, then re-run the same doctor profile:
 
-| Reason ID | Exact next action |
-|---|---|
-| `TOOL_MISSING_GIT`, `TOOL_MISSING_CURL`, `TOOL_MISSING_OPENSSL`, `JUST_MISSING`, `PRECOMMIT_MISSING`, `NODE_MISSING`, `NODE_UNSUPPORTED_VERSION`, `UV_MISSING`, `PG_DUMP_MISSING`, `PG_DUMP_UNSUPPORTED_VERSION`, `DOCKER_CLI_MISSING`, `DOCKER_COMPOSE_MISSING`, `DOCKER_COMPOSE_UNSUPPORTED_VERSION` | Run `./scripts/bootstrap-fedora-dev.sh --apply`, approve its displayed transaction, then run `./scripts/doctor.sh contributor` or `./scripts/doctor.sh test`. |
-| `NODE_PATH_SHADOWED` | Run `PATH=/usr/bin:$PATH ./scripts/doctor.sh contributor`; then fix the shell-manager selection permanently. |
-| `PYTHON_312_MISSING` | Run `uv python install 3.12`, then `./scripts/doctor.sh contributor`. |
-| `DOCKER_SOCKET_MISSING`, `DOCKER_DAEMON_STOPPED` | Run `sudo systemctl enable --now docker`, then `docker info`. |
-| `DOCKER_GROUP_SESSION_INACTIVE` | Log out and back in, then run `docker info`; do not loosen the socket mode. |
-| `DOCKER_SOCKET_PERMISSION`, `DOCKER_DAEMON_UNREACHABLE` | Run `stat -c "%a %U %G" /var/run/docker.sock` and `docker info`, correct the reviewed Docker service/group configuration, then re-run `./scripts/doctor.sh test`. |
-| `API_DEPS_MISSING` | Run `cd apps/api && uv sync --frozen`. |
-| `WEB_DEPS_MISSING` | Run `npm ci --prefix apps/web`. |
-| `CONTRACT_DEPS_MISSING` | Run `npm ci --prefix packages/contracts --ignore-scripts`. |
-| `ENV_MISSING` | Run `cp .env.example .env`, set mode `0600`, and replace every placeholder secret. |
-| `ENV_PLACEHOLDER_SECRET` | Edit `.env` at the key named in the doctor output; never paste its value into a ticket or log. |
-| `PORT_OCCUPIED` | Run the exact `ss -ltnp 'sport = :<reported-port>'` command printed by the doctor and resolve only that listener. |
-| `SELINUX_UNVERIFIED` | Install `policycoreutils`, run `getenforce`, and keep SELinux enforcing. |
-| `SELINUX_DISABLED` | Restore SELinux to `Enforcing` under the host's reviewed policy, then run `getenforce`; otherwise use a conforming proof host and do not claim Fedora acceptance. |
-| `SELINUX_LABEL_UNVERIFIED` | Start the development Compose stack with its committed `:z` labels, then run `./scripts/doctor.sh stack`. |
+| Reason ID                                                                                                                                                                                                                                                                                              | Exact next action                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TOOL_MISSING_GIT`, `TOOL_MISSING_CURL`, `TOOL_MISSING_OPENSSL`, `JUST_MISSING`, `PRECOMMIT_MISSING`, `NODE_MISSING`, `NODE_UNSUPPORTED_VERSION`, `UV_MISSING`, `PG_DUMP_MISSING`, `PG_DUMP_UNSUPPORTED_VERSION`, `DOCKER_CLI_MISSING`, `DOCKER_COMPOSE_MISSING`, `DOCKER_COMPOSE_UNSUPPORTED_VERSION` | Run `./scripts/bootstrap-fedora-dev.sh --apply`, approve its displayed transaction, then run `./scripts/doctor.sh contributor` or `./scripts/doctor.sh test`.     |
+| `NODE_PATH_SHADOWED`                                                                                                                                                                                                                                                                                   | Run `PATH=/usr/bin:$PATH ./scripts/doctor.sh contributor`; then fix the shell-manager selection permanently.                                                      |
+| `PYTHON_312_MISSING`                                                                                                                                                                                                                                                                                   | Run `uv python install 3.12`, then `./scripts/doctor.sh contributor`.                                                                                             |
+| `DOCKER_SOCKET_MISSING`, `DOCKER_DAEMON_STOPPED`                                                                                                                                                                                                                                                       | Run `sudo systemctl enable --now docker`, then `docker info`.                                                                                                     |
+| `DOCKER_GROUP_SESSION_INACTIVE`                                                                                                                                                                                                                                                                        | Log out and back in, then run `docker info`; do not loosen the socket mode.                                                                                       |
+| `DOCKER_SOCKET_PERMISSION`, `DOCKER_DAEMON_UNREACHABLE`                                                                                                                                                                                                                                                | Run `stat -c "%a %U %G" /var/run/docker.sock` and `docker info`, correct the reviewed Docker service/group configuration, then re-run `./scripts/doctor.sh test`. |
+| `API_DEPS_MISSING`                                                                                                                                                                                                                                                                                     | Run `cd apps/api && uv sync --frozen`.                                                                                                                            |
+| `WEB_DEPS_MISSING`                                                                                                                                                                                                                                                                                     | Run `npm ci --prefix apps/web`.                                                                                                                                   |
+| `CONTRACT_DEPS_MISSING`                                                                                                                                                                                                                                                                                | Run `npm ci --prefix packages/contracts --ignore-scripts`.                                                                                                        |
+| `ENV_MISSING`                                                                                                                                                                                                                                                                                          | Run `cp .env.example .env`, set mode `0600`, and replace every placeholder secret.                                                                                |
+| `ENV_PLACEHOLDER_SECRET`                                                                                                                                                                                                                                                                               | Edit `.env` at the key named in the doctor output; never paste its value into a ticket or log.                                                                    |
+| `PORT_OCCUPIED`                                                                                                                                                                                                                                                                                        | Run the exact `ss -ltnp 'sport = :<reported-port>'` command printed by the doctor and resolve only that listener.                                                 |
+| `SELINUX_UNVERIFIED`                                                                                                                                                                                                                                                                                   | Install `policycoreutils`, run `getenforce`, and keep SELinux enforcing.                                                                                          |
+| `SELINUX_DISABLED`                                                                                                                                                                                                                                                                                     | Restore SELinux to `Enforcing` under the host's reviewed policy, then run `getenforce`; otherwise use a conforming proof host and do not claim Fedora acceptance. |
+| `SELINUX_LABEL_UNVERIFIED`                                                                                                                                                                                                                                                                             | Start the development Compose stack with its committed `:z` labels, then run `./scripts/doctor.sh stack`.                                                         |
 
 Unsupported OS/architecture results require moving to the documented Fedora Workstation 44 x86_64
 developer path or the retained Ubuntu workflow; do not bypass those checks. Full clean-host acceptance is
@@ -95,6 +95,24 @@ locked, audit-clean connector and a separately proven least-privilege developmen
   same four isolated shards as CI with a version-matched client. Treat a failure as evidence to
   diagnose, not as a permanent machine-specific baseline.
 
+### Responsive browser evidence
+
+After `just setup`, install Chromium once and run the backend-free browser suite from the web package:
+
+```bash
+cd apps/web
+npx playwright install chromium   # one-time browser download
+npm run test:browser
+# or from the repository root:
+just test-browser
+```
+
+Ordinary local setup hydrates the committed packages but does not download a browser. CI installs
+Chromium and its required Linux dependencies before running the same Chromium-only suite. Generated
+browser builds, reports, traces, and screenshots are ignored diagnostics. The suite exercises browser
+geometry and ARIA/browser-exposed semantics without a live backend; that semantic evidence is not a
+claim of testing with an actual screen reader.
+
 ## Run the stack
 
 `just up s` (or `docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml -f infra/compose/compose.dev.yml up -d --build`). Open **http://localhost**. Stop with `just down`. A gitignored `.env` holds dev secrets + `OIDC_ISSUER=http://localhost/realms/easysynq`. gotenberg (`renderer`) runs (S7b rendering is live); shipped S and M profiles use **PostgreSQL FTS** and do not deploy OpenSearch (R34).
@@ -112,6 +130,7 @@ locked, audit-clean connector and a separately proven least-privilege developmen
 
 The `worker` writes the read-only mirror to the `mirror` volume **rw**; `api` mounts it **`:ro`** — the whole R11 contract for the single-host MVP (Caddy must NOT `file_server` it; the in-app view route stays the presigned-MinIO `GET /documents/{id}/download`, while **S7d**'s `GET /documents/{id}/export` (gate `document.export`) + `GET /documents/{id}/print` (gate `document.print_controlled`) **stream** a fresh per-request stamped PDF from the api — `document.export` is granted to no seeded role, so grant it with an explicit per-user override; the current Roles UI does not create custom bundles).
 On a network share, validate `root_squash`/UID mapping (runbook caveat). The mirror is **regenerable, never backup-critical**, rebuilt on every release/obsolete (post-commit) + a nightly Beat reconcile. Browse it at `${MIRROR_PATH}/current/` — **S9b** organizes it as the doc 04 §10.3 **`{PLAN|DO|CHECK|ACT}/{NN-Name}/`** clause tree (a doc lives once under its numerically-lowest mapped clause + a relative symlink from every other mapped clause folder; a zero-mapping upgrade artifact lands in `_unmapped/`). Plain `sync` rebuilds the whole tree, so the flat→tree migration needs no `rebuild` (which only forces re-render). The files are **watermarked controlled-copy PDFs** (S7b: gotenberg `renderer` is live; office→PDF + the §11.3 band + a verify QR) with each footer carrying a signed verify token.
+
 - **S7c `.env` additions (already in `.env.example`):** `VERIFY_TOKEN_SIGNING_KEY_PATH=/run/secrets/verify_token_key` + `PUBLIC_BASE_URL=http://localhost`; the verify key is **shared api↔worker via the `secrets` volume** (worker mints, api verifies). The public verify page is `GET /api/v1/verify?t=…` → CURRENT/SUPERSEDED/UNKNOWN.
 - **After upgrading an existing stack** (so S7b/S7c renditions carry the new template/QR), force a full re-render: `docker compose … exec worker python -m easysynq_api.cli.mirror rebuild` (clears `rendition_blob_sha256` + re-renders; plain `sync` keeps the cache). The `renderer` (gotenberg:8.34) must be up for real rendering (a renderer outage degrades to `render_status:"pending"` and self-heals on the next reconcile).
 

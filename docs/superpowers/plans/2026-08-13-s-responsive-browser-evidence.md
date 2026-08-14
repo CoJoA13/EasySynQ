@@ -93,29 +93,37 @@ Use Nygard format with this exact structure:
 **Status:** Accepted
 
 ## Context
+
 ...
 
 ## Decision
+
 ...
 
 ## Consequences
+
 ...
 
 ## Alternatives
 
 ### Production entry with emulated OIDC
+
 ...
 
 ### Playwright component testing
+
 ...
 
 ### Live Docker and Keycloak stack
+
 ...
 
 ### Multi-engine or manual-only evidence
+
 ...
 
 ## Payoff trigger
+
 ...
 ```
 
@@ -193,12 +201,16 @@ Create `apps/web/e2e/smoke.spec.ts`:
 import { expect, test } from "@playwright/test";
 import { installRegisterApi } from "./support/api";
 
-test("mounts the real routed shell with deterministic authenticated data", async ({ page }) => {
+test("mounts the real routed shell with deterministic authenticated data", async ({
+  page,
+}) => {
   await installRegisterApi(page, { route: "tasks" });
   await page.goto("/tasks");
 
   await expect(page).toHaveTitle(/Tasks/);
-  await expect(page.getByRole("heading", { name: "Review and approve" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Review and approve" }),
+  ).toBeVisible();
   await expect(page.getByRole("table", { name: "My tasks" })).toHaveCount(1);
   await expect(page.getByRole("link", { name: /SOP-PUR-014/ })).toHaveCount(1);
 });
@@ -262,13 +274,18 @@ HTML plus line reporters, and a web server command of `npm run preview:browser`.
 const auth: AuthState = {
   status: { kind: "ready" },
   token: "browser-test-token",
-  user: { access_token: "browser-test-token", profile: { sub: TEST_USER_ID } } as AuthState["user"],
+  user: {
+    access_token: "browser-test-token",
+    profile: { sub: TEST_USER_ID },
+  } as AuthState["user"],
   login: async () => undefined,
   retry: async () => undefined,
   logout: async () => undefined,
 };
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false } },
+});
 ```
 
 Mount `MantineProvider`, `ApplicationErrorBoundary`, `QueryClientProvider`, `BrowserRouter`,
@@ -309,8 +326,8 @@ contain the browser entry; only ignored browser outputs are generated.
 - [ ] **Step 8: Format, inspect, and commit**
 
 ```bash
-apps/web/node_modules/.bin/prettier --write apps/web/playwright.config.ts apps/web/tsconfig.browser.json apps/web/e2e
-apps/web/node_modules/.bin/prettier --check apps/web/playwright.config.ts apps/web/tsconfig.browser.json apps/web/e2e
+(cd apps/web && node_modules/.bin/prettier --write playwright.config.ts tsconfig.browser.json e2e)
+(cd apps/web && node_modules/.bin/prettier --check playwright.config.ts tsconfig.browser.json e2e)
 npm --prefix apps/web run lint
 npm --prefix apps/web run build:browser
 git diff --check
@@ -457,17 +474,17 @@ git commit -m "ci: require Chromium browser evidence"
 
 Create `e2e/support/registers.ts` with this inventory:
 
-| Key | Path | Floor | Final header | Representative primary action |
-|---|---|---:|---|---|
-| tasks | `/tasks` | 720 | Due | `SOP-PUR-014` link |
-| audits | `/audits` | 800 | Started | `REC-000061` link |
-| objectives | `/objectives` | 720 | Due | `OBJ-001` link |
-| management reviews | `/management-reviews` | 800 | Status | `MR-001` link |
-| dcrs | `/dcrs` | 1040 | Created | `DCR-2026-0001` button |
-| improvement | `/improvement` | 920 | Opened | `IMP-2026-0001` button |
-| risks | `/risks` | 720 | Treatment | `Supplier single point of failure` button |
-| context | `/context` | 880 | Last reviewed | `Skilled and certified QA team` button |
-| interested parties | `/interested-parties` | 880 | Last reviewed | `Acme Manufacturing` button |
+| Key                | Path                  | Floor | Final header  | Representative primary action             |
+| ------------------ | --------------------- | ----: | ------------- | ----------------------------------------- |
+| tasks              | `/tasks`              |   720 | Due           | `SOP-PUR-014` link                        |
+| audits             | `/audits`             |   800 | Started       | `REC-000061` link                         |
+| objectives         | `/objectives`         |   720 | Due           | `OBJ-001` link                            |
+| management reviews | `/management-reviews` |   800 | Status        | `MR-001` link                             |
+| dcrs               | `/dcrs`               |  1040 | Created       | `DCR-2026-0001` button                    |
+| improvement        | `/improvement`        |   920 | Opened        | `IMP-2026-0001` button                    |
+| risks              | `/risks`              |   720 | Treatment     | `Supplier single point of failure` button |
+| context            | `/context`            |   880 | Last reviewed | `Skilled and certified QA team` button    |
+| interested parties | `/interested-parties` |   880 | Last reviewed | `Acme Manufacturing` button               |
 
 Include the expected search placeholder and first filter accessible name where present. Keep the manifest
 `as const` and type-check role as `"link" | "button"`.
@@ -557,8 +574,8 @@ page Vitest suite, and document the measured before/after behavior in the commit
 - [ ] **Step 6: Format, inspect, and commit**
 
 ```bash
-apps/web/node_modules/.bin/prettier --write apps/web/e2e apps/web/src/test/msw/handlers.ts
-apps/web/node_modules/.bin/prettier --check apps/web/e2e apps/web/src/test/msw/handlers.ts
+(cd apps/web && node_modules/.bin/prettier --write e2e src/test/msw/handlers.ts)
+(cd apps/web && node_modules/.bin/prettier --check e2e src/test/msw/handlers.ts)
 npm --prefix apps/web run lint
 npm --prefix apps/web run build:browser
 git diff --check
@@ -751,7 +768,7 @@ browser entry.
 
 - [ ] **Step 3: Run task-level requirements review**
 
-Review `323fb179..HEAD` against all fifteen design acceptance criteria. Confirm:
+Review `323fb179..HEAD` against all twelve design acceptance criteria. Confirm:
 
 - exact nine-route/two-viewport matrix;
 - numeric document/container/table/far-edge measurements;
@@ -779,8 +796,8 @@ RED/GREEN evidence.
 - [ ] **Step 5: Format scoped files and rerun final implementation gates**
 
 ```bash
-apps/web/node_modules/.bin/prettier --write apps/web/playwright.config.ts apps/web/tsconfig.browser.json apps/web/e2e apps/web/src/test/msw/handlers.ts
-apps/web/node_modules/.bin/prettier --check apps/web/playwright.config.ts apps/web/tsconfig.browser.json apps/web/e2e apps/web/src/test/msw/handlers.ts
+(cd apps/web && node_modules/.bin/prettier --write playwright.config.ts tsconfig.browser.json e2e src/test/msw/handlers.ts)
+(cd apps/web && node_modules/.bin/prettier --check playwright.config.ts tsconfig.browser.json e2e src/test/msw/handlers.ts)
 npm --prefix apps/web run test:browser
 npm --prefix apps/web run lint
 npm --prefix apps/web run build:browser
@@ -864,8 +881,8 @@ State that this closes Programme 1 only; do not select or claim the next program
 - [ ] **Step 5: Format scoped documentation**
 
 ```bash
-apps/web/node_modules/.bin/prettier --write docs/current-status.md docs/dev-workflow.md docs/superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md docs/superpowers/plans/2026-08-13-s-responsive-browser-evidence.md docs/adr/0003-use-playwright-for-responsive-browser-evidence.md docs/debt/<actual-file>.md
-apps/web/node_modules/.bin/prettier --check docs/current-status.md docs/dev-workflow.md docs/superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md docs/superpowers/plans/2026-08-13-s-responsive-browser-evidence.md docs/adr/0003-use-playwright-for-responsive-browser-evidence.md docs/debt/<actual-file>.md
+(cd apps/web && node_modules/.bin/prettier --write ../../docs/current-status.md ../../docs/dev-workflow.md ../../docs/superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md ../../docs/superpowers/plans/2026-08-13-s-responsive-browser-evidence.md ../../docs/adr/0003-use-playwright-for-responsive-browser-evidence.md ../../docs/debt/20260813234519-playwright-responsive-browser-harness.md)
+(cd apps/web && node_modules/.bin/prettier --check ../../docs/current-status.md ../../docs/dev-workflow.md ../../docs/superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md ../../docs/superpowers/plans/2026-08-13-s-responsive-browser-evidence.md ../../docs/adr/0003-use-playwright-for-responsive-browser-evidence.md ../../docs/debt/20260813234519-playwright-responsive-browser-harness.md)
 ```
 
 Do not whole-file format `docs/slice-history.md`; inspect only the inserted block.
