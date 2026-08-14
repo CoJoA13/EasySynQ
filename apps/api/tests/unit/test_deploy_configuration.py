@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -26,10 +27,43 @@ def _repo_root() -> Path:
 
 
 ROOT = _repo_root()
+BROWSER_ONLY_CONTEXT_ROOTS = frozenset(
+    {
+        "e2e",
+        "playwright.config.ts",
+        "tsconfig.browser.json",
+        ".playwright-dist",
+        "playwright-report",
+        "test-results",
+    }
+)
 
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text()
+
+
+def _assert_no_protected_dockerignore_reinclusions(
+    dockerignore: list[str], protected_roots: frozenset[str]
+) -> None:
+    for raw_pattern in dockerignore:
+        pattern = raw_pattern.strip()
+        if not pattern.startswith("!"):
+            continue
+
+        reinclusion = pattern.removeprefix("!").lstrip("/").rstrip("/")
+        assert ".." not in reinclusion.split("/"), (
+            f"parent-relative Docker reinclusion is not allowed beside protected roots: {pattern}"
+        )
+        assert not any(
+            reinclusion == root or reinclusion.startswith(f"{root}/") for root in protected_roots
+        ), f"Docker reinclusion reaches a protected browser root: {pattern}"
+
+        if any(character in reinclusion for character in "*?["):
+            first_component, separator, _ = reinclusion.partition("/")
+            assert separator and not any(
+                fnmatchcase(root, first_component) for root in protected_roots
+            ), f"Docker wildcard reinclusion can reach a protected browser root: {pattern}"
 
 
 def test_minio_host_publish_is_dev_only_and_loopback_bound() -> None:
@@ -219,21 +253,10 @@ def test_web_image_uses_lockfile_and_excludes_host_artifacts() -> None:
 def test_web_image_excludes_browser_harness_and_removes_playwright_from_runtime() -> None:
     dockerfile = _read("apps/web/Dockerfile")
     dockerignore = _read("apps/web/.dockerignore").splitlines()
-    browser_only_context_roots = {
-        "e2e",
-        "playwright.config.ts",
-        "tsconfig.browser.json",
-        ".playwright-dist",
-        "playwright-report",
-        "test-results",
-    }
 
     # These exact app-root patterns are interpreted by Docker before the broad `COPY . .`.
-    assert browser_only_context_roots.issubset(dockerignore)
-    assert not any(
-        pattern.startswith("!") and pattern.removeprefix("!") in browser_only_context_roots
-        for pattern in dockerignore
-    )
+    assert BROWSER_ONLY_CONTEXT_ROOTS.issubset(dockerignore)
+    _assert_no_protected_dockerignore_reinclusions(dockerignore, BROWSER_ONLY_CONTEXT_ROOTS)
     assert "COPY . ." in dockerfile
 
     install_build_cleanup = """RUN npm ci \\
@@ -245,6 +268,24 @@ def test_web_image_excludes_browser_harness_and_removes_playwright_from_runtime(
     assert dockerfile.count("RUN npm ci") == 1
     assert (
         'CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]' in dockerfile
+    )
+
+
+def test_web_image_invariant_rejects_exact_descendant_and_wildcard_reinclusions() -> None:
+    for root in BROWSER_ONLY_CONTEXT_ROOTS:
+        for reinclusion in (
+            f"!{root}",
+            f"!{root}/nested/probe",
+            f"!**/{root}",
+            f"!{root[:4]}*/nested/probe",
+        ):
+            with pytest.raises(AssertionError):
+                _assert_no_protected_dockerignore_reinclusions(
+                    [*BROWSER_ONLY_CONTEXT_ROOTS, reinclusion], BROWSER_ONLY_CONTEXT_ROOTS
+                )
+
+    _assert_no_protected_dockerignore_reinclusions(
+        [*BROWSER_ONLY_CONTEXT_ROOTS, "!docs/**/*.md"], BROWSER_ONLY_CONTEXT_ROOTS
     )
 
 
