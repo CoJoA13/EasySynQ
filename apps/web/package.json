@@ -6,11 +6,14 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:browser": "tsc -p tsconfig.browser.json --noEmit && vite build --config e2e/vite.config.ts",
     "preview": "vite preview",
+    "preview:browser": "vite preview --config e2e/vite.config.ts --host 127.0.0.1",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "fmt": "prettier --write \"src/**/*.{ts,tsx,css}\"",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:browser": "npm run build:browser && playwright test"
   },
   "dependencies": {
     "@mantine/core": "^7.13.0",

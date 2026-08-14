@@ -27,6 +27,9 @@ htmlcov/
 node_modules/
 apps/web/dist/
 apps/web/.vite/
+apps/web/.playwright-dist/
+apps/web/playwright-report/
+apps/web/test-results/
 *.log
 npm-debug.log*
 
