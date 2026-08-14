@@ -54,22 +54,74 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
         "npm test -- --shard=${{ matrix.shard }}/2"
     ) == 1
 
+    web_browser = jobs["web-browser"]
+    _assert_hard_fail(web_browser)
+    assert web_browser == {
+        "name": "web browser (Chromium)",
+        "runs-on": "ubuntu-latest",
+        "steps": [
+            {"uses": "actions/checkout@v7"},
+            {
+                "uses": "actions/setup-node@v7",
+                "with": {
+                    "node-version": "22",
+                    "cache": "npm",
+                    "cache-dependency-path": "apps/web/package-lock.json",
+                },
+            },
+            {"working-directory": "apps/web", "run": "npm ci"},
+            {
+                "name": "install Chromium",
+                "working-directory": "apps/web",
+                "run": "npx playwright install --with-deps chromium",
+            },
+            {
+                "name": "responsive browser evidence",
+                "working-directory": "apps/web",
+                "run": "npm run test:browser",
+            },
+            {
+                "name": "upload browser diagnostics",
+                "if": "${{ failure() }}",
+                "uses": "actions/upload-artifact@v6",
+                "with": {
+                    "name": "playwright-report",
+                    "path": "apps/web/playwright-report\napps/web/test-results\n",
+                    "if-no-files-found": "ignore",
+                    "retention-days": 7,
+                },
+            },
+        ],
+    }
+    for step in web_browser["steps"]:
+        command = step.get("run", "")
+        assert "|| true" not in command
+        assert "--changed" not in command
+        assert "--retries" not in command
+
     web_gate = jobs["web"]
     _assert_hard_fail(web_gate)
-    assert web_gate["name"] == "web"
-    assert web_gate["needs"] == "web-shards"
-    assert web_gate["if"] == "${{ always() }}"
-    assert len(web_gate["steps"]) == 1
-    assert web_gate["steps"][0] == {
-        "name": "gate on the shard results",
-        "run": (
-            "result='${{ needs.web-shards.result }}'\n"
-            'if [ "$result" != "success" ]; then\n'
-            '  echo "web shards did not all pass (result=$result)"\n'
-            "  exit 1\n"
-            "fi\n"
-            'echo "all web shards passed"\n'
-        ),
+    assert web_gate == {
+        "name": "web",
+        "needs": ["web-shards", "web-browser"],
+        "if": "${{ always() }}",
+        "runs-on": "ubuntu-latest",
+        "steps": [
+            {
+                "name": "gate on the shard results",
+                "run": (
+                    "shards_result='${{ needs.web-shards.result }}'\n"
+                    "browser_result='${{ needs.web-browser.result }}'\n"
+                    'if [ "$shards_result" != "success" ] '
+                    '|| [ "$browser_result" != "success" ]; then\n'
+                    '  echo "web checks did not all pass '
+                    '(web-shards=$shards_result, web-browser=$browser_result)"\n'
+                    "  exit 1\n"
+                    "fi\n"
+                    'echo "all web checks passed"\n'
+                ),
+            }
+        ],
     }
 
     expected_commands = {
