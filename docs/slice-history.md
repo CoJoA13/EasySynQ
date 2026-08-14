@@ -39,7 +39,7 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ### S-responsive-browser-evidence — required Chromium register proof
 
-Shipped 2026-08-14 at reviewed implementation evidence baseline
+Recorded 2026-08-14 at implementation evidence baseline
 `1dcbc2bc12b14e11f037a657d44659412a7a39c0`, on a branch based on main squash `323fb179`. The
 owner-approved [`design`](superpowers/specs/2026-08-13-s-responsive-browser-evidence-design.md),
 [`plan`](superpowers/plans/2026-08-13-s-responsive-browser-evidence.md), and
@@ -98,10 +98,12 @@ abort code, or weakening protected Docker-root matching is detected.
 
 Task 8's first complete-suite durable job, `job-mssmmw65-bdd6b919`, is retained as honest RED evidence. It
 exited 1 after 285.70 seconds with all 1,865 intended tests passing because Vitest also discovered six
-Playwright `e2e/*.spec.ts` files and rejected their top-level Playwright `test()` calls. The focused static
-discovery probe listed the same six files. Commit `1dcbc2b` preserves Vitest's own default exclusions while
-adding `e2e/**`; the probe then returned no file, one intended source suite passed 10/10, lint and both
-builds passed, and Chromium remained 26/26. Final durable job `job-mssng14k-588252b8` then ran exact direct
+Playwright `e2e/*.spec.ts` files and rejected their top-level Playwright `test()` calls. Before the
+exclusion, the package-root probe
+`(cd apps/web && node_modules/.bin/vitest list e2e --filesOnly --staticParse)` listed the same six files.
+Commit `1dcbc2b` preserves Vitest's own default exclusions while adding `e2e/**`; the same package-root
+command then returned no files, one intended source suite passed 10/10, lint and both builds passed, and
+Chromium remained 26/26. Final durable job `job-mssng14k-588252b8` then ran exact direct
 argv `npm --prefix apps/web test` from the isolated worktree and exited 0: all 260 Vitest files and 1,865
 tests passed in 311.95 seconds (transform 3.39 seconds, setup 41.58 seconds, import 45.23 seconds, tests
 133.02 seconds, environment 72.59 seconds), with no failed suite, failed test, retry, or unhandled error.
@@ -115,11 +117,11 @@ advisory, repeated Node `localStorage` warning, and the preview child's `NO_COLO
 No current owner-visible residual was created; the two debt records above own deliberate future harness
 reassessment without duplicating `docs/open-residuals.md`.
 
-This closes Programme 1 only. It does not select or authorize the next programme and makes no Firefox,
-WebKit, NVDA, JAWS, VoiceOver, Orca, or other actual assistive-technology claim. It also does not claim a
-live API, database, object store, Keycloak, Docker-backed application, deployment, migration round trip, or
-disposable Fedora acceptance. API, contract, integration, and migration totals remain inherited rather
-than freshly verified.
+Fix round 1's scoped Task 8 re-review found the corrected authority set clean. This closes Programme 1
+only; it does not select or authorize the next programme and makes no Firefox, WebKit, NVDA, JAWS,
+VoiceOver, Orca, or other actual assistive-technology claim. It also does not claim a live API, database,
+object store, Keycloak, Docker-backed application, deployment, migration round trip, or disposable Fedora
+acceptance. API, contract, integration, and migration totals remain inherited rather than freshly verified.
 
 ### S-responsive-data-heavy-views — localized shared-register containment
 

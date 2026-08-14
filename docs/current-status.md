@@ -68,8 +68,8 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
-the facts it freshly verifies; partial or unavailable checks must be reported as such. At reviewed
-implementation baseline `1dcbc2bc12b14e11f037a657d44659412a7a39c0` on 2026-08-14, durable job
+the facts it freshly verifies; partial or unavailable checks must be reported as such. At implementation
+evidence baseline `1dcbc2bc12b14e11f037a657d44659412a7a39c0` on 2026-08-14, durable job
 `job-mssng14k-588252b8` ran exact direct argv `npm --prefix apps/web test` from the isolated worktree and
 exited 0 with all 260 Vitest files and 1,865 tests passing in 311.95 seconds (transform 3.39 seconds, setup
 41.58 seconds, import 45.23 seconds, tests 133.02 seconds, environment 72.59 seconds), with no failed suite,
@@ -78,11 +78,13 @@ failed test, retry, or unhandled error. Its stderr retained Node's repeated `Exp
 
 The preceding required run, durable job `job-mssmmw65-bdd6b919`, honestly exited 1 after 285.70 seconds:
 all 1,865 intended Vitest assertions passed, but Vitest's default `*.spec.ts` discovery also collected six
-Playwright files under `e2e/`, whose top-level Playwright `test()` calls failed as foreign suites. The
-focused discovery RED listed those six files. Commit `1dcbc2b` extends `configDefaults.exclude` with
-`e2e/**`, preserving Vitest's default exclusions; the same discovery probe then returned no file, one
-intended source suite passed 10/10, and lint, browser build, production build, and the complete Chromium
-suite remained green before the final durable rerun.
+Playwright files under `e2e/`, whose top-level Playwright `test()` calls failed as foreign suites. Before
+the exclusion, the package-root probe
+`(cd apps/web && node_modules/.bin/vitest list e2e --filesOnly --staticParse)` listed those six files.
+Commit `1dcbc2b` extends `configDefaults.exclude` with `e2e/**`, preserving Vitest's default exclusions;
+the same package-root command then returned no files, one intended source suite passed 10/10, and lint,
+browser build, production build, and the complete Chromium suite remained green before the final durable
+rerun.
 
 The final exact `npm --prefix apps/web run test:browser` command typechecked and built the isolated entry,
 then passed 26 Chromium tests in 11.0 seconds with one worker and zero retries. The count is separate from
