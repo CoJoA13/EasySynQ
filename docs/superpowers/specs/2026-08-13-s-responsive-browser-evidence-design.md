@@ -161,9 +161,9 @@ not participate in application recovery.
 
 ## 7. Geometry evidence
 
-A single explicit manifest lists each route, minimum table width, table identity, final header, and final
-primary action. Removing or changing an approved route requires updating that manifest and its expected
-contract rather than silently reducing coverage.
+A single explicit manifest lists each route, minimum table width, table identity, final header or cell,
+and representative primary action. Removing or changing an approved route requires updating that manifest
+and its expected contract rather than silently reducing coverage.
 
 ### 7.1 Narrow viewport — 320 by 800
 
@@ -173,7 +173,7 @@ For every route the browser proves:
   tolerance;
 - the page-owned table scroll container fits within the document and has horizontal overflow;
 - the rendered table respects at least the route's approved content floor;
-- the final header and representative final-column action exist exactly once;
+- the far-edge header or cell and the representative primary action each exist exactly once;
 - setting the localized container to its maximum horizontal offset makes the final content reachable
   within the container bounds;
 - the search control uses its available narrow width without forcing page overflow;
@@ -197,9 +197,10 @@ not substitutes for the measurements.
 
 ### 8.1 DCR register
 
-`/dcrs`, the widest cohort table, proves that keyboard movement can reach the offscreen final action and
-that the localized container reveals the focused control. In normal rendering the focused control must
-match `:focus-visible` and expose a non-none visible focus treatment.
+`/dcrs`, the widest cohort table, proves that keyboard movement can reach its far-edge sortable Created
+header and that the localized container reveals the focused control. Its identifier drawer button remains
+the one representative primary row action. In normal rendering the focused sort control must match
+`:focus-visible` and expose a non-none visible focus treatment.
 
 With `forced-colors: active`, the same keyboard-derived focus must expose the application contract of a
 two-pixel system-color outline, a two-pixel offset, and no box shadow. The assertion uses computed browser
