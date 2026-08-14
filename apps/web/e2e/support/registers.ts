@@ -141,6 +141,94 @@ export interface RegisterGeometry {
   farEdgeInsideAfterScroll: boolean;
 }
 
+export interface ActiveElementGeometry {
+  inside: boolean;
+  containerClientWidth: number;
+  containerScrollLeft: number;
+  containerScrollWidth: number;
+  containerLeft: number;
+  containerRight: number;
+  activeLeft: number;
+  activeRight: number;
+}
+
+export interface FocusStyles {
+  matchesFocusVisible: boolean;
+  outlineStyle: string;
+  outlineWidth: string;
+  outlineOffset: string;
+  boxShadow: string;
+}
+
+export async function measureActiveElementWithinRegister(
+  page: Page,
+): Promise<ActiveElementGeometry> {
+  return page.locator("table:visible").evaluate((table) => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !table.contains(active)) {
+      throw new Error("Expected the active element inside the visible register table");
+    }
+
+    let container = table.parentElement;
+    while (container) {
+      const overflowX = getComputedStyle(container).overflowX;
+      if (overflowX === "auto" || overflowX === "scroll") break;
+      container = container.parentElement;
+    }
+    if (!container) throw new Error("Expected a localized horizontal scroll owner for the table");
+
+    const containerRect = container.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+    return {
+      inside:
+        activeRect.left >= containerRect.left - 1 && activeRect.right <= containerRect.right + 1,
+      containerClientWidth: container.clientWidth,
+      containerScrollLeft: container.scrollLeft,
+      containerScrollWidth: container.scrollWidth,
+      containerLeft: containerRect.left,
+      containerRight: containerRect.right,
+      activeLeft: activeRect.left,
+      activeRight: activeRect.right,
+    };
+  });
+}
+
+export async function readActiveFocusStyles(page: Page): Promise<FocusStyles> {
+  return page.locator(":focus").evaluate((active) => {
+    const style = getComputedStyle(active);
+    return {
+      matchesFocusVisible: active.matches(":focus-visible"),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+      outlineOffset: style.outlineOffset,
+      boxShadow: style.boxShadow,
+    };
+  });
+}
+
+export async function assertRegisterTableStructure(
+  page: Page,
+  fixtureRowCount: number,
+): Promise<void> {
+  const visibleTables = page.locator("table:visible");
+  const tableCount = await visibleTables.count();
+  if (tableCount !== 1) {
+    throw new Error(`Expected one structural register table, found ${tableCount}`);
+  }
+
+  const rowNavCounts = await visibleTables
+    .locator("tbody tr")
+    .evaluateAll((rows) => rows.map((row) => row.querySelectorAll("[data-rownav]").length));
+  if (
+    rowNavCounts.length !== fixtureRowCount ||
+    rowNavCounts.some((controlCount) => controlCount !== 1)
+  ) {
+    throw new Error(
+      `Expected ${fixtureRowCount} fixture rows with one row-navigation control each, found ${JSON.stringify(rowNavCounts)}`,
+    );
+  }
+}
+
 export async function measureRegister(
   page: Page,
   registerCase: RegisterCase,
