@@ -20,7 +20,7 @@ MSW 2 fixture data, Playwright Test with Chromium, GitHub Actions, Bash and pyte
 
 ## Global constraints
 
-- Work only in `/home/cjones/Desktop/EasySynQ/.worktrees/responsive-browser-evidence` on
+- Work only in the existing isolated responsive-browser-evidence worktree on branch
   `codex/responsive-browser-evidence`.
 - The implementation baseline is design clarification commit `06ebfdc`; do not alter the primary
   checkout's untracked `.superdesign/` or either unrelated prunable worktree registration.
