@@ -63,6 +63,7 @@ from ..services.records.listing import (
 )
 from ..services.records.presentation import (
     EvidenceTargetLabel,
+    GrantSetCache,
     RecordLabels,
     hydrate_evidence_target_labels,
     hydrate_record_labels,
@@ -494,8 +495,12 @@ async def _serialize_evidence_links(
     caller: AppUser,
     links: list[EvidenceForLink],
     ctx: RequestContext,
+    *,
+    grant_sets: GrantSetCache | None = None,
 ) -> list[dict[str, Any]]:
-    labels = await hydrate_evidence_target_labels(session, caller, links, ctx)
+    labels = await hydrate_evidence_target_labels(
+        session, caller, links, ctx, grant_sets=grant_sets
+    )
     return [_evidence_link(link, labels[link.id]) for link in links]
 
 
@@ -510,9 +515,12 @@ async def _serialize_full(
 ) -> dict[str, Any]:
     blobs = await records_repo.list_evidence_blobs(session, record.id)
     links = await records_repo.list_evidence_links(session, record.id)
-    labels = await hydrate_record_labels(session, caller, [(record, base)], ctx)
+    grant_sets: GrantSetCache = {}
+    labels = await hydrate_record_labels(
+        session, caller, [(record, base)], ctx, grant_sets=grant_sets
+    )
     serialized_links = (
-        await _serialize_evidence_links(session, caller, links, ctx)
+        await _serialize_evidence_links(session, caller, links, ctx, grant_sets=grant_sets)
         if hydrate_links
         else [
             _evidence_link(link, EvidenceTargetLabel(label=None, readable=False)) for link in links
@@ -679,7 +687,13 @@ async def list_records_endpoint(
             ),
             criteria,
         )
-    labels = await hydrate_record_labels(session, caller, page_rows, ctx)
+    labels = await hydrate_record_labels(
+        session,
+        caller,
+        page_rows,
+        ctx,
+        grant_sets={"record.read": grants},
+    )
     return {
         "data": [_record_summary(record, base, labels[record.id]) for record, base in page_rows],
         "page": {

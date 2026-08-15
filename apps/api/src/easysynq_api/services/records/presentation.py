@@ -18,7 +18,7 @@ from ...db.models.app_user import AppUser
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.record import Record
-from ...domain.authz import RequestContext, ResourceContext, authorize
+from ...domain.authz import RequestContext, ResolvedGrant, ResourceContext, authorize
 from ..authz import gather_grants
 from ..authz.resource import resource_from_doc
 from ..vault import repository as vault_repo
@@ -41,6 +41,23 @@ class RecordLabels:
 class EvidenceTargetLabel:
     label: str | None
     readable: bool
+
+
+type GrantSetCache = dict[str, Sequence[ResolvedGrant]]
+
+
+async def _grants_for(
+    session: AsyncSession,
+    caller: AppUser,
+    permission_key: str,
+    grant_sets: GrantSetCache,
+) -> Sequence[ResolvedGrant]:
+    """Gather one permission family lazily within a single request's presentation work."""
+    if permission_key not in grant_sets:
+        grant_sets[permission_key] = await gather_grants(
+            session, caller.id, caller.org_id, permission_key
+        )
+    return grant_sets[permission_key]
 
 
 def _record_resource(
@@ -66,6 +83,8 @@ async def hydrate_record_labels(
     caller: AppUser,
     rows: Sequence[tuple[Record, DocumentedInformation]],
     ctx: RequestContext,
+    *,
+    grant_sets: GrantSetCache | None = None,
 ) -> dict[uuid.UUID, RecordLabels]:
     """Hydrate labels for an already-authorized output page or detail row.
 
@@ -75,6 +94,8 @@ async def hydrate_record_labels(
     """
     if not rows:
         return {}
+    if grant_sets is None:
+        grant_sets = {}
 
     records = [record for record, _base in rows]
     actor_ids = {record.captured_by for record in records}
@@ -100,7 +121,7 @@ async def hydrate_record_labels(
 
     readable_documents: set[uuid.UUID] = set()
     if source_ids:
-        document_grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
+        document_grants = await _grants_for(session, caller, "document.read", grant_sets)
         process_ids_by_doc = await vault_repo.process_ids_for_docs(session, list(documents))
         for document_id, (document, document_type) in documents.items():
             # A non-null type whose tenant-anchored join did not resolve is a malformed cross-org
@@ -118,7 +139,7 @@ async def hydrate_record_labels(
 
     readable_lineage: set[uuid.UUID] = set()
     if lineage_ids:
-        record_grants = await gather_grants(session, caller.id, caller.org_id, "record.read")
+        record_grants = await _grants_for(session, caller, "record.read", grant_sets)
         process_ids_by_record = await records_repo.record_process_ids_effective_for(
             session, [record for record, _base in lineage.values()]
         )
@@ -174,11 +195,15 @@ async def hydrate_evidence_target_labels(
     caller: AppUser,
     links: Sequence[EvidenceForLink],
     ctx: RequestContext,
+    *,
+    grant_sets: GrantSetCache | None = None,
 ) -> dict[uuid.UUID, EvidenceTargetLabel]:
     """Hydrate evidence targets only after each target independently passes its read permission."""
     out = {link.id: EvidenceTargetLabel(label=None, readable=False) for link in links}
     if not links:
         return out
+    if grant_sets is None:
+        grant_sets = {}
 
     ids_by_type: dict[EvidenceForTargetType, set[uuid.UUID]] = {
         target_type: set() for target_type in EvidenceForTargetType
@@ -189,7 +214,7 @@ async def hydrate_evidence_target_labels(
     document_ids = ids_by_type[EvidenceForTargetType.DOCUMENT]
     if document_ids:
         documents = await records_repo.load_label_documents(session, caller.org_id, document_ids)
-        grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
+        grants = await _grants_for(session, caller, "document.read", grant_sets)
         process_ids_by_doc = await vault_repo.process_ids_for_docs(session, list(documents))
         readable: dict[uuid.UUID, str] = {}
         for document_id, (document, document_type) in documents.items():
@@ -209,7 +234,7 @@ async def hydrate_evidence_target_labels(
     process_ids = ids_by_type[EvidenceForTargetType.PROCESS]
     if process_ids:
         processes = await records_repo.load_label_processes(session, caller.org_id, process_ids)
-        grants = await gather_grants(session, caller.id, caller.org_id, "process.read")
+        grants = await _grants_for(session, caller, "process.read", grant_sets)
         readable = {
             process_id: process.name
             for process_id, process in processes.items()
@@ -227,7 +252,7 @@ async def hydrate_evidence_target_labels(
     clause_ids = ids_by_type[EvidenceForTargetType.CLAUSE]
     if clause_ids:
         clauses = await records_repo.load_label_clauses(session, caller.org_id, clause_ids)
-        grants = await gather_grants(session, caller.id, caller.org_id, "clauseMap.read")
+        grants = await _grants_for(session, caller, "clauseMap.read", grant_sets)
         allowed = authorize(grants, "clauseMap.read", ResourceContext.system(), ctx).allow
         if allowed:
             clause_labels = {
@@ -244,7 +269,7 @@ async def hydrate_evidence_target_labels(
     finding_ids = ids_by_type[EvidenceForTargetType.FINDING]
     if finding_ids:
         findings = await records_repo.load_label_findings(session, caller.org_id, finding_ids)
-        grants = await gather_grants(session, caller.id, caller.org_id, "finding.read")
+        grants = await _grants_for(session, caller, "finding.read", grant_sets)
         allowed = authorize(grants, "finding.read", ResourceContext.system(), ctx).allow
         if allowed:
             finding_labels = {
@@ -261,7 +286,7 @@ async def hydrate_evidence_target_labels(
     stage_ids = ids_by_type[EvidenceForTargetType.CAPA_STAGE]
     if stage_ids:
         stages = await records_repo.load_label_capa_stages(session, caller.org_id, stage_ids)
-        grants = await gather_grants(session, caller.id, caller.org_id, "capa.read")
+        grants = await _grants_for(session, caller, "capa.read", grant_sets)
         stage_labels: dict[uuid.UUID, str] = {}
         for stage_id, (stage, capa, base) in stages.items():
             resource = (
