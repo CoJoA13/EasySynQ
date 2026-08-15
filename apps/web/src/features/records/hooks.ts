@@ -22,7 +22,7 @@ export function useRecords(request: RecordListRequest) {
   const query = buildRecordsQuery(request);
   return useQuery({
     queryKey: ["records", query],
-    queryFn: () => api.get<RecordPage>(`/api/v1/records?${query}`),
+    queryFn: ({ signal }) => api.get<RecordPage>(`/api/v1/records?${query}`, signal),
     retry: false,
   });
 }
@@ -31,7 +31,7 @@ export function useRecord(recordId: string | null) {
   const api = useApi();
   return useQuery({
     queryKey: ["record", recordId],
-    queryFn: () => api.get<RecordDetail>(`/api/v1/records/${recordId!}`),
+    queryFn: ({ signal }) => api.get<RecordDetail>(`/api/v1/records/${recordId!}`, signal),
     enabled: recordId !== null,
     retry: false,
   });
