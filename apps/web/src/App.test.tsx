@@ -8,6 +8,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { App, LegacyImportRedirect } from "./App";
 import { AuthContext, type AuthState } from "./lib/auth";
 import { server } from "./test/msw/server";
+import { recordsFixture } from "./test/msw/handlers";
 import { renderWithProviders, TEST_AUTH } from "./test/render";
 
 const routeCrash = vi.hoisted(() => ({ library: false }));
@@ -476,6 +477,30 @@ test("operational app renders the shell + Library at /library", async () => {
   renderWithProviders(<App />, { route: "/library" });
   await waitFor(() => expect(screen.getByText("Document Library")).toBeInTheDocument());
   expect(screen.getAllByRole("link", { name: "Home" }).length).toBeGreaterThan(0); // shell rail
+});
+
+test("operational app routes /records through the shell and calls the row-filtered API", async () => {
+  let calls = 0;
+  server.use(http.get("/api/v1/records", () => {
+    calls += 1;
+    return HttpResponse.json(recordsFixture);
+  }));
+  renderWithProviders(<App />, { route: "/records" });
+  expect(await screen.findByRole("heading", { name: "Records" })).toBeInTheDocument();
+  expect(await screen.findByRole("link", { name: /open record REC-000041/i })).toBeInTheDocument();
+  expect(calls).toBe(1);
+});
+
+test("direct /records route remains API-enforced without a client-side rail gate", async () => {
+  let calls = 0;
+  server.use(http.get("/api/v1/records", () => {
+    calls += 1;
+    return HttpResponse.json({ data: [], page: { limit: 50, returned: 0, next_cursor: null } });
+  }));
+  renderWithProviders(<App />, { route: "/records" });
+  expect(await screen.findByText("No records yet")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Records" })).toHaveAttribute("href", "/records");
+  expect(calls).toBe(1);
 });
 
 test("the /search route renders the results page", async () => {
