@@ -4632,7 +4632,8 @@
             "required": false,
             "description": "Opaque, versioned page token bound to the normalized query and filters.",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             }
           },
           {

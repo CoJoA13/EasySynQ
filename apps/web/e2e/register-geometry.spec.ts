@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { installRegisterApi } from "./support/api";
+import {
+  installRegisterApi,
+  MAXIMUM_EVIDENCE_FILENAME,
+  MAXIMUM_RECORD_SEARCH,
+} from "./support/api";
 import { measureRegister, REGISTER_CASES } from "./support/registers";
 import type { RegisterCase } from "./support/registers";
 
@@ -145,6 +149,72 @@ test("records stacks its toolbar above one localized scroll owner at 320 pixels"
   const geometry = await measureRegister(page, RECORDS_CASE);
   expect(geometry.documentScrollWidth - geometry.documentClientWidth).toBeLessThanOrEqual(1);
   expect(geometry.containerScrollWidth).toBeGreaterThan(geometry.containerClientWidth);
+});
+
+test("records bounds maximum dynamic labels and actions at 320 pixels", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await installRegisterApi(page, { route: "records", maxContent: true });
+  await page.goto(`/records?q=${MAXIMUM_RECORD_SEARCH}`);
+
+  const filterChip = page.getByRole("button", {
+    name: `Remove filter Search: ${MAXIMUM_RECORD_SEARCH}`,
+    exact: true,
+  });
+  const next = page.getByRole("button", { name: "Next records page", exact: true });
+  await expect(filterChip).toBeVisible();
+  await expect(next).toBeVisible();
+  for (const control of [filterChip, next]) {
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.x).toBeGreaterThanOrEqual(-1);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(321);
+  }
+  expect(
+    await filterChip
+      .locator("span")
+      .last()
+      .evaluate((label) => {
+        const styles = getComputedStyle(label);
+        return {
+          overflow: styles.overflow,
+          textOverflow: styles.textOverflow,
+          whiteSpace: styles.whiteSpace,
+        };
+      }),
+  ).toEqual({ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+
+  await page.goto(`/records/${RECORD_ID}`);
+  const download = page.getByRole("button", {
+    name: `Download ${MAXIMUM_EVIDENCE_FILENAME}`,
+    exact: true,
+  });
+  await expect(download).toBeVisible();
+  const downloadBox = await download.boundingBox();
+  expect(downloadBox).not.toBeNull();
+  expect(downloadBox!.height).toBeGreaterThanOrEqual(44);
+  expect(downloadBox!.x).toBeGreaterThanOrEqual(-1);
+  expect(downloadBox!.x + downloadBox!.width).toBeLessThanOrEqual(321);
+  expect(
+    await download.locator("span.mantine-Text-root").evaluate((label) => {
+      const styles = getComputedStyle(label);
+      return {
+        overflow: styles.overflow,
+        textOverflow: styles.textOverflow,
+        whiteSpace: styles.whiteSpace,
+      };
+    }),
+  ).toEqual({ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
 });
 
 for (const viewport of VIEWPORTS) {

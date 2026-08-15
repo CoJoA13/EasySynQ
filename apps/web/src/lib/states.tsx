@@ -40,7 +40,7 @@ export function ErrorState({
       <Stack gap="sm" align="flex-start">
         <Text size="sm">{message}</Text>
         {onRetry && (
-          <Button variant="light" color="red" size="compact-sm" onClick={onRetry}>
+          <Button variant="light" color="red" size="compact-sm" mih={44} onClick={onRetry}>
             Try again
           </Button>
         )}

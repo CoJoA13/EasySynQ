@@ -15,12 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._evidence_enums import EvidenceForTargetType
 from ...db.models.app_user import AppUser
+from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.record import Record
 from ...domain.authz import RequestContext, ResolvedGrant, ResourceContext, authorize
 from ..authz import gather_grants
 from ..authz.resource import resource_from_doc
+from ..authz.version_history import required_version_read_permission, version_resource
 from ..vault import repository as vault_repo
 from . import repository as records_repo
 
@@ -120,6 +122,7 @@ async def hydrate_record_labels(
     lineage = await records_repo.load_label_records(session, caller.org_id, lineage_ids)
 
     readable_documents: set[uuid.UUID] = set()
+    document_resources: dict[uuid.UUID, ResourceContext] = {}
     if source_ids:
         document_grants = await _grants_for(session, caller, "document.read", grant_sets)
         process_ids_by_doc = await vault_repo.process_ids_for_docs(session, list(documents))
@@ -134,8 +137,47 @@ async def hydrate_record_labels(
                 document_type=document_type,
                 process_ids=process_ids_by_doc.get(document_id, frozenset()),
             )
+            document_resources[document_id] = resource
             if authorize(document_grants, "document.read", resource, ctx).allow:
                 readable_documents.add(document_id)
+
+    # R59: the source Document label and its pinned immutable version label have distinct
+    # boundaries. ``document.read`` is always mandatory above. Effective needs no extra key;
+    # working/pre-release states need document.read_draft; historical states need
+    # document.read_obsolete. Reuse the canonical Document tuple and version projection so every
+    # selector and lifecycle predicate (including deny-wins) participates.
+    readable_versions: set[uuid.UUID] = set()
+    version_candidates: list[tuple[uuid.UUID, DocumentVersion, str | None]] = []
+    for record in records:
+        source_id = record.source_document_id
+        version = versions.get(record.source_version_id) if record.source_version_id else None
+        if (
+            source_id is None
+            or source_id not in readable_documents
+            or source_id not in document_resources
+            or version is None
+            or version.document_id != source_id
+        ):
+            continue
+        version_candidates.append(
+            (source_id, version, required_version_read_permission(version.version_state))
+        )
+    specialized_grants = {
+        key: await _grants_for(session, caller, key, grant_sets)
+        for key in sorted({key for _source_id, _version, key in version_candidates if key})
+    }
+    version_ctx = dataclasses.replace(ctx, actor_user_id=ctx.actor_user_id or str(caller.id))
+    for source_id, version, key in version_candidates:
+        if (
+            key is None
+            or authorize(
+                specialized_grants[key],
+                key,
+                version_resource(document_resources[source_id], version),
+                version_ctx,
+            ).allow
+        ):
+            readable_versions.add(version.id)
 
     readable_lineage: set[uuid.UUID] = set()
     if lineage_ids:
@@ -158,9 +200,7 @@ async def hydrate_record_labels(
         )
         version_label = (
             pinned_version.revision_label
-            if source_readable
-            and pinned_version is not None
-            and pinned_version.document_id == source_id
+            if pinned_version is not None and pinned_version.id in readable_versions
             else None
         )
         actor = actors.get(record.captured_by)

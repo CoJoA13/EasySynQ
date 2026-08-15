@@ -2360,7 +2360,7 @@ paths:
           in: query
           required: false
           description: Opaque, versioned page token bound to the normalized query and filters.
-          schema: { type: string }
+          schema: { type: string, minLength: 1 }
         - name: q
           in: query
           required: false

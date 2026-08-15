@@ -1140,3 +1140,29 @@ git commit -m "docs: record records console evidence"
 ```
 
 If the two debt files were removed, `git add` stages those deletions. Then re-run `git status --short`, `just authority-check`, and `bash scripts/check-no-site-data.sh`. Stop at a clean review-ready branch and request explicit owner approval before any push or PR action.
+
+---
+
+## Final-review implementation ruling addendum — 2026-08-15
+
+This addendum supersedes only the conflicting historical implementation instructions below; the task
+record and its RED/GREEN evidence remain historical.
+
+1. The instruction to case-fold `q` in the cursor fingerprint is superseded. Fingerprints use the exact
+   trimmed Unicode string, and the focused cursor proof includes a case-fold-expanding value.
+2. Source-version label hydration follows R59: canonical base `document.read` is mandatory; Effective
+   needs no extra key; Draft/InReview/Approved require `document.read_draft`; and
+   Superseded/Obsolete require `document.read_obsolete`. The specialized check uses the canonical
+   Document resource projected with immutable version-relative fields and preserves DENY precedence.
+3. A cursor-bearing `422` becomes the invalid-page UI only when the canonical problem is
+   `validation_error` / `Invalid records cursor`; unrelated `422` responses keep the retryable load-error
+   presentation. Empty cursor values are rejected by the route and authoritative OpenAPI schema.
+4. The permission-aware Records-rail steps are superseded. The rail entry is unconditional because a
+   SYSTEM permission inventory cannot see PROCESS-scoped `record.read`; the row-filtered API remains the
+   authorization boundary and may return an empty page.
+
+The consolidated final-review wave also aligns scalar/batch/packs authorization tuples with the
+satellite-aware source-process loader, limits correction inheritance to source-less successors, retains
+pack lifecycle predicates, anchors the shared base row to tenant plus `RECORD` kind, and hardens URL
+debounce, source typeahead, neutral unresolved selections, and 320-pixel action/label geometry. No new
+write surface, migration, permission key, or role default is introduced.

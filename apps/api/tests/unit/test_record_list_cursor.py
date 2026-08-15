@@ -61,11 +61,27 @@ def test_cursor_payload_has_opaque_query_fingerprint_and_exact_keys() -> None:
     assert len(payload["query"]) == 64
 
 
-def test_casefolded_and_trimmed_search_has_stable_fingerprint() -> None:
+def test_trimmed_search_has_stable_fingerprint() -> None:
     left = encode_record_cursor(_BOUNDARY, RecordListCriteria(q="  NeedLe "))
-    right = encode_record_cursor(_BOUNDARY, RecordListCriteria(q="needle"))
+    right = encode_record_cursor(_BOUNDARY, RecordListCriteria(q="NeedLe"))
 
     assert left == right
+
+
+@pytest.mark.parametrize(
+    ("left_query", "right_query"),
+    [("NeedLe", "needle"), ("Straße", "Strasse")],
+)
+def test_search_fingerprint_preserves_exact_trimmed_unicode(
+    left_query: str, right_query: str
+) -> None:
+    """Cursor query identity is exact after trimming; Unicode casefold expansion is forbidden."""
+    left = encode_record_cursor(_BOUNDARY, RecordListCriteria(q=left_query))
+    right = encode_record_cursor(_BOUNDARY, RecordListCriteria(q=right_query))
+
+    assert left != right
+    with pytest.raises(InvalidRecordCursor, match="query"):
+        decode_record_cursor(left, RecordListCriteria(q=right_query))
 
 
 @pytest.mark.parametrize(

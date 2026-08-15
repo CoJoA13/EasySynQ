@@ -37,7 +37,7 @@ from easysynq_api.db.models._clause_enums import PdcaPhase
 from easysynq_api.db.models._evidence_enums import EvidenceForTargetType
 from easysynq_api.db.models._record_enums import RecordDispositionState, RecordType
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
-from easysynq_api.db.models._vault_enums import DocumentCurrentState, DocumentKind
+from easysynq_api.db.models._vault_enums import DocumentCurrentState, DocumentKind, VersionState
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
@@ -55,7 +55,7 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_engine, get_session, get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, RequestContext, ResolvedGrant, ScopeLevel
 from easysynq_api.domain.records.content_hash import record_content_hash
-from easysynq_api.problems import register_exception_handlers
+from easysynq_api.problems import ProblemException, register_exception_handlers
 from easysynq_api.services.records import repository as records_repo
 from easysynq_api.services.records import service as records_service
 from easysynq_api.services.records.listing import RecordListCriteria, RecordListCursor
@@ -965,7 +965,10 @@ async def test_display_labels_source_backed_list_detail_and_bounded_queries(
 
     one_counts = await hydration_select_counts(record_ids[:1], link_ids[:1])
     several_counts = await hydration_select_counts(record_ids, link_ids)
-    assert one_counts == several_counts == (15, 3)
+    # The canonical satellite-aware process loader adds one bounded SELECT, and R59's distinct
+    # pinned-Draft authorization adds the bounded specialized-grant lookup. Neither scales with
+    # rows.
+    assert one_counts == several_counts == (19, 3)
 
     # A pinned version owned by another document never borrows the readable source's label.
     other_source = (
@@ -1444,7 +1447,11 @@ async def test_display_labels_use_bounded_independent_related_authority_without_
         called("versions")
         return {
             version_id: SimpleNamespace(
-                id=version_id, document_id=source_id, revision_label="Rev 7"
+                id=version_id,
+                document_id=source_id,
+                revision_label="Rev 7",
+                version_state=VersionState.Effective,
+                author_user_id=caller.id,
             )
         }
 
@@ -1533,6 +1540,195 @@ async def test_display_labels_use_bounded_independent_related_authority_without_
     assert {"evaluate", "enforce", "require"}.isdisjoint(vars(presentation))
 
 
+@pytest.mark.parametrize(
+    (
+        "version_state",
+        "document_effects",
+        "specialized_key",
+        "specialized_effects",
+        "expected_source_readable",
+        "expected_label",
+    ),
+    [
+        (VersionState.Effective, (Effect.ALLOW,), None, (), True, "Rev pinned"),
+        (VersionState.Effective, (), None, (), False, None),
+        (VersionState.Draft, (Effect.ALLOW,), "document.read_draft", (), True, None),
+        (
+            VersionState.Draft,
+            (Effect.ALLOW,),
+            "document.read_draft",
+            (Effect.ALLOW,),
+            True,
+            "Rev pinned",
+        ),
+        (VersionState.InReview, (Effect.ALLOW,), "document.read_draft", (), True, None),
+        (
+            VersionState.InReview,
+            (Effect.ALLOW,),
+            "document.read_draft",
+            (Effect.ALLOW,),
+            True,
+            "Rev pinned",
+        ),
+        (
+            VersionState.InReview,
+            (Effect.ALLOW,),
+            "document.read_draft",
+            (Effect.ALLOW, Effect.DENY),
+            True,
+            None,
+        ),
+        (VersionState.Approved, (Effect.ALLOW,), "document.read_draft", (), True, None),
+        (
+            VersionState.Approved,
+            (Effect.ALLOW,),
+            "document.read_draft",
+            (Effect.ALLOW,),
+            True,
+            "Rev pinned",
+        ),
+        (
+            VersionState.Superseded,
+            (Effect.ALLOW,),
+            "document.read_obsolete",
+            (),
+            True,
+            None,
+        ),
+        (
+            VersionState.Superseded,
+            (Effect.ALLOW,),
+            "document.read_obsolete",
+            (Effect.ALLOW,),
+            True,
+            "Rev pinned",
+        ),
+        (VersionState.Obsolete, (Effect.ALLOW,), "document.read_obsolete", (), True, None),
+        (
+            VersionState.Obsolete,
+            (Effect.ALLOW,),
+            "document.read_obsolete",
+            (Effect.ALLOW,),
+            True,
+            "Rev pinned",
+        ),
+    ],
+)
+async def test_source_version_label_requires_state_specific_read_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+    version_state: VersionState,
+    document_effects: tuple[Effect, ...],
+    specialized_key: str | None,
+    specialized_effects: tuple[Effect, ...],
+    expected_source_readable: bool,
+    expected_label: str | None,
+) -> None:
+    """R59: document.read is mandatory, then the pinned immutable state adds its own read key."""
+    presentation = sys.modules[records_api.hydrate_record_labels.__module__]
+    caller = AppUser(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        keycloak_subject=f"version-label-{uuid.uuid4().hex}",
+        display_name="Version label proof",
+    )
+    source_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    record = SimpleNamespace(
+        id=uuid.uuid4(),
+        captured_by=caller.id,
+        source_document_id=source_id,
+        source_version_id=version_id,
+        retention_policy_id=uuid.uuid4(),
+        correction_of=None,
+        superseded_by_correction=None,
+    )
+    base = SimpleNamespace(
+        folder_path=None,
+        framework_id=uuid.uuid4(),
+        current_state=DocumentCurrentState.Effective,
+    )
+    source = SimpleNamespace(
+        id=source_id,
+        identifier="SOP-R59",
+        title="Pinned version source",
+        kind=DocumentKind.DOCUMENT,
+        document_type_id=None,
+        folder_path="Documents.R59",
+        framework_id=uuid.uuid4(),
+        current_state=DocumentCurrentState.Effective,
+    )
+    version = SimpleNamespace(
+        id=version_id,
+        document_id=source_id,
+        revision_label="Rev pinned",
+        version_state=version_state,
+        author_user_id=uuid.uuid4(),
+    )
+
+    async def load_actors(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
+    async def load_documents(*_args: object, **_kwargs: object) -> dict:
+        return {source_id: (source, None)}
+
+    async def load_versions(*_args: object, **_kwargs: object) -> dict:
+        return {version_id: version}
+
+    async def load_policies(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
+    async def load_records(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
+    async def no_processes(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
+    requested: list[str] = []
+
+    async def grants(
+        _session: object, _user_id: uuid.UUID, _org_id: uuid.UUID, key: str
+    ) -> list[ResolvedGrant]:
+        requested.append(key)
+        if key == "document.read":
+            effects = document_effects
+        elif key == specialized_key:
+            effects = specialized_effects
+        else:
+            effects = ()
+        return [
+            ResolvedGrant(
+                effect=effect,
+                level=ScopeLevel.SYSTEM,
+                selector={},
+                predicates={},
+                source=f"r59:{key}:{effect.value}",
+                is_override=True,
+            )
+            for effect in effects
+        ]
+
+    monkeypatch.setattr(presentation.records_repo, "load_label_actors", load_actors)
+    monkeypatch.setattr(presentation.records_repo, "load_label_documents", load_documents)
+    monkeypatch.setattr(presentation.records_repo, "load_label_versions", load_versions)
+    monkeypatch.setattr(presentation.records_repo, "load_label_policies", load_policies)
+    monkeypatch.setattr(presentation.records_repo, "load_label_records", load_records)
+    monkeypatch.setattr(presentation.vault_repo, "process_ids_for_docs", no_processes)
+    monkeypatch.setattr(presentation, "gather_grants", grants)
+
+    labels = await records_api.hydrate_record_labels(
+        object(),  # type: ignore[arg-type] -- every DB boundary is replaced above
+        caller,
+        [(record, base)],
+        RequestContext(now=datetime.datetime(2026, 8, 14, tzinfo=datetime.UTC)),
+    )
+
+    assert labels[record.id].source_document_readable is expected_source_readable
+    assert labels[record.id].source_version_label == expected_label
+    assert requested == ["document.read"] + (
+        [specialized_key] if expected_source_readable and specialized_key else []
+    )
+
+
 async def test_detail_reuses_document_grants_for_source_and_evidence_without_container(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1582,7 +1778,15 @@ async def test_detail_reuses_document_grants_for_source_and_evidence_without_con
         return {source_id: (source, None)}
 
     async def load_versions(*_args: object, **_kwargs: object) -> dict:
-        return {version_id: SimpleNamespace(document_id=source_id, revision_label="Rev reuse")}
+        return {
+            version_id: SimpleNamespace(
+                id=version_id,
+                document_id=source_id,
+                revision_label="Rev reuse",
+                version_state=VersionState.Effective,
+                author_user_id=caller.id,
+            )
+        }
 
     async def load_policies(*_args: object, **_kwargs: object) -> dict:
         return {policy_id: SimpleNamespace(name="Reuse retention")}
@@ -2251,6 +2455,7 @@ async def test_cursor_query_mismatch_malformed_and_unsupported(
 
     typed_errors = [
         {"limit": 0},
+        {"cursor": ""},
         {"record_type": "NOT_A_RECORD"},
         {"source_document_id": "not-a-uuid"},
         {"disposition_state": "NOT_A_STATE"},
@@ -2436,6 +2641,39 @@ async def test_list_empty_grants_explicit_deny_and_time_predicate(
 # --- deterministic pre-authorization candidates -----------------------------------------
 
 
+@pytest.mark.parametrize("mismatch", ["base_org", "base_kind"])
+async def test_detail_loader_collapses_invalid_shared_pk_base_to_not_found_without_container(
+    monkeypatch: pytest.MonkeyPatch, mismatch: str
+) -> None:
+    caller = AppUser(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        keycloak_subject=f"detail-base-anchor-{uuid.uuid4().hex}",
+        display_name="Detail base anchor",
+    )
+    record_id = uuid.uuid4()
+    record = SimpleNamespace(id=record_id, org_id=caller.org_id)
+    base = SimpleNamespace(
+        id=record_id,
+        org_id=uuid.uuid4() if mismatch == "base_org" else caller.org_id,
+        kind=DocumentKind.DOCUMENT if mismatch == "base_kind" else DocumentKind.RECORD,
+    )
+
+    async def get_record(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return record
+
+    async def get_base(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return base
+
+    monkeypatch.setattr(records_repo, "get_record", get_record)
+    monkeypatch.setattr(records_repo, "get_base", get_base)
+
+    with pytest.raises(ProblemException) as exc_info:
+        await records_api._load(object(), caller, record_id)  # type: ignore[arg-type]
+    assert exc_info.value.status == 404
+    assert exc_info.value.code == "not_found"
+
+
 async def test_candidate_tenant_predicate_excludes_other_organization(
     app_client: AsyncClient,
 ) -> None:
@@ -2444,6 +2682,8 @@ async def test_candidate_tenant_predicate_excludes_other_organization(
     captured_at = datetime.datetime(2026, 8, 14, 12, tzinfo=datetime.UTC)
     local_record_id = uuid.uuid4()
     foreign_record_id = uuid.uuid4()
+    mismatched_base_org_id = uuid.uuid4()
+    wrong_base_kind_id = uuid.uuid4()
 
     async with get_sessionmaker()() as session:
         local_org_id = await session.scalar(select(Organization.id).limit(1))
@@ -2491,35 +2731,68 @@ async def test_candidate_tenant_predicate_excludes_other_organization(
             (
                 local_record_id,
                 local_org_id,
+                local_org_id,
                 local_framework_id,
                 local_actor.id,
                 local_policy_id,
+                DocumentKind.RECORD,
             ),
             (
                 foreign_record_id,
                 foreign_org.id,
+                foreign_org.id,
                 foreign_framework.id,
                 foreign_actor.id,
                 foreign_policy.id,
+                DocumentKind.RECORD,
+            ),
+            # Adversarial shared-PK row: the Record claims the caller's org while its base is
+            # foreign. The base tenant anchor must exclude it before authorization.
+            (
+                mismatched_base_org_id,
+                local_org_id,
+                foreign_org.id,
+                foreign_framework.id,
+                local_actor.id,
+                local_policy_id,
+                DocumentKind.RECORD,
+            ),
+            # A same-tenant Document base must never be projected as a Record candidate.
+            (
+                wrong_base_kind_id,
+                local_org_id,
+                local_org_id,
+                local_framework_id,
+                local_actor.id,
+                local_policy_id,
+                DocumentKind.DOCUMENT,
             ),
         )
-        for record_id, org_id, framework_id, actor_id, policy_id in candidates:
+        for (
+            record_id,
+            record_org_id,
+            base_org_id,
+            framework_id,
+            actor_id,
+            policy_id,
+            base_kind,
+        ) in candidates:
             session.add(
                 DocumentedInformation(
                     id=record_id,
-                    org_id=org_id,
+                    org_id=base_org_id,
                     framework_id=framework_id,
-                    kind=DocumentKind.RECORD,
-                    identifier=identifier,
+                    kind=base_kind,
+                    identifier=f"{identifier}-{record_id}",
                     title=title,
-                    owner_user_id=actor_id,
-                    created_by=actor_id,
+                    owner_user_id=(foreign_actor.id if base_org_id == foreign_org.id else actor_id),
+                    created_by=foreign_actor.id if base_org_id == foreign_org.id else actor_id,
                 )
             )
             session.add(
                 Record(
                     id=record_id,
-                    org_id=org_id,
+                    org_id=record_org_id,
                     record_type=RecordType.EVIDENCE,
                     captured_at=captured_at,
                     captured_by=actor_id,

@@ -8,13 +8,30 @@ import { RecordDownloadButton } from "./RecordDownloadButton";
 
 const EVIDENCE_ENDPOINT =
   "/api/v1/records/re000001-0001-0001-0001-000000000001/evidence/abc123/download";
-const RENDITION_ENDPOINT =
-  "/api/v1/records/re000001-0001-0001-0001-000000000001/rendition";
+const RENDITION_ENDPOINT = "/api/v1/records/re000001-0001-0001-0001-000000000001/rendition";
 const OBJECT_URL = "https://objects.example.test/records/evidence.pdf";
 const NEXT_EVIDENCE_ENDPOINT =
   "/api/v1/records/re000002-0002-0002-0002-000000000002/evidence/def456/download";
 
 afterEach(() => vi.restoreAllMocks());
+
+test("keeps a maximum-length download label accessible inside a 44px constrained control", () => {
+  const label = `Download ${"evidence-file-".repeat(20)}.pdf`;
+  renderWithProviders(<RecordDownloadButton label={label} endpoint={EVIDENCE_ENDPOINT} />);
+
+  const button = screen.getByRole("button", { name: label });
+  expect(button).toHaveStyle({
+    minHeight: "calc(2.75rem * var(--mantine-scale))",
+    maxWidth: "100%",
+  });
+  const visibleLabel = screen.getByText(label);
+  expect(visibleLabel.tagName).toBe("SPAN");
+  expect(visibleLabel).toHaveStyle({
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  });
+});
 
 function successfulDownload() {
   return HttpResponse.json({
@@ -35,7 +52,9 @@ test("each activation obtains a fresh presign and opens only the returned object
       return successfulDownload();
     }),
   );
-  renderWithProviders(<RecordDownloadButton label="Download evidence" endpoint={EVIDENCE_ENDPOINT} />);
+  renderWithProviders(
+    <RecordDownloadButton label="Download evidence" endpoint={EVIDENCE_ENDPOINT} />,
+  );
 
   const button = screen.getByRole("button", { name: "Download evidence" });
   await user.click(button);
@@ -69,7 +88,10 @@ test("a failed evidence action leaves another action enabled and retry clears on
     http.get(EVIDENCE_ENDPOINT, () => {
       evidenceCalls += 1;
       return evidenceCalls === 1
-        ? HttpResponse.json({ code: "storage_unavailable", title: "Storage unavailable" }, { status: 503 })
+        ? HttpResponse.json(
+            { code: "storage_unavailable", title: "Storage unavailable" },
+            { status: 503 },
+          )
         : successfulDownload();
     }),
     http.get(RENDITION_ENDPOINT, () => successfulDownload()),
@@ -93,9 +115,7 @@ test("a failed evidence action leaves another action enabled and retry clears on
 
   await user.click(screen.getByRole("button", { name: "Download structured PDF" }));
   await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
-  expect(screen.getByRole("alert")).toHaveTextContent(
-    "Couldn't prepare this download. Try again.",
-  );
+  expect(screen.getByRole("alert")).toHaveTextContent("Couldn't prepare this download. Try again.");
 
   await user.click(screen.getByRole("button", { name: "Download evidence" }));
   await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(2));
@@ -113,7 +133,9 @@ test.each([
       HttpResponse.json({ code, title: "Presign failed" }, { status }),
     ),
   );
-  renderWithProviders(<RecordDownloadButton label="Download evidence" endpoint={EVIDENCE_ENDPOINT} />);
+  renderWithProviders(
+    <RecordDownloadButton label="Download evidence" endpoint={EVIDENCE_ENDPOINT} />,
+  );
 
   await userEvent.setup().click(screen.getByRole("button", { name: "Download evidence" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(message);

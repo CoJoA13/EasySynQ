@@ -51,6 +51,7 @@ test("recovers the Context register after one network error", async ({ page }) =
 });
 
 test("recovers Records after one HTTP 503 while its URL and controls persist", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
   const scenario = {
     route: "records",
     override: {
@@ -73,6 +74,9 @@ test("recovers Records after one HTTP 503 while its URL and controls persist", a
   await expect(search).toHaveValue("REC-000041");
   await expect(recordType).toHaveValue("EVIDENCE");
   await expect(page.getByRole("table")).toHaveCount(0);
+  const retryBox = await retry.boundingBox();
+  expect(retryBox).not.toBeNull();
+  expect(retryBox!.height).toBeGreaterThanOrEqual(44);
 
   await retry.click();
 

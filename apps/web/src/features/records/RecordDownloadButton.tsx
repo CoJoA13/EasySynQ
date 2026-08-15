@@ -86,16 +86,34 @@ export function RecordDownloadButton({
   }
 
   return (
-    <Stack gap="xs" align="flex-start">
+    <Stack gap="xs" align="flex-start" w="100%" miw={0}>
       <Button
         type="button"
         variant="light"
-        style={{ background: "var(--es-accent-soft)", color: "var(--es-accent-text)" }}
+        mih={44}
+        maw="100%"
+        aria-label={label}
+        style={{
+          minWidth: 0,
+          background: "var(--es-accent-soft)",
+          color: "var(--es-accent-text)",
+        }}
         loading={loading}
         disabled={loading}
         onClick={() => void download()}
       >
-        {label}
+        <Text
+          component="span"
+          style={{
+            display: "block",
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </Text>
       </Button>
       {error && (
         <Alert color="red" role="alert" py="xs">

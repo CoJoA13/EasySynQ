@@ -67,7 +67,10 @@ def _criteria_fingerprint(criteria: RecordListCriteria) -> str:
             criteria.disposition_state.value if criteria.disposition_state is not None else None
         ),
         "legal_hold": criteria.legal_hold,
-        "q": search.casefold() if search is not None else None,
+        # Cursor identity follows the exact trimmed Unicode query. PostgreSQL ILIKE may match the
+        # same rows for some case variants, but that does not make distinct client criteria
+        # interchangeable; casefold can also expand Unicode (for example, ß → ss).
+        "q": search,
         "record_type": criteria.record_type.value if criteria.record_type is not None else None,
         "source_document_id": (
             str(criteria.source_document_id) if criteria.source_document_id is not None else None

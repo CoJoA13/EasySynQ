@@ -39,12 +39,12 @@ from ...db.models.evidence_pack import EvidencePack
 from ...db.models.framework import Framework
 from ...db.models.pending_blob_purge import PendingBlobPurge
 from ...db.models.process import Process
-from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.storage_config import StorageConfig
 from ...db.models.system_config import SystemConfig
 from ...db.models.worm_destroy_request import WormDestroyRequest
+from ..vault import repository as vault_repo
 from .listing import (
     RecordListCriteria,
     RecordListCursor,
@@ -259,7 +259,11 @@ async def list_record_candidates(
     limit: int,
 ) -> list[tuple[Record, DocumentedInformation]]:
     """Return deterministic tenant/search/filter candidates for the caller's PDP scan."""
-    filters: list[ColumnElement[bool]] = [Record.org_id == org_id]
+    filters: list[ColumnElement[bool]] = [
+        Record.org_id == org_id,
+        DocumentedInformation.org_id == org_id,
+        DocumentedInformation.kind == DocumentKind.RECORD,
+    ]
     search = normalize_record_search(criteria.q)
     if search is not None:
         pattern = f"%{escape_ilike_literal(search)}%"
@@ -308,9 +312,10 @@ async def list_record_candidates(
 async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
     """The processes a record is bound to — for the PDP ``ResourceContext`` so a PROCESS-scoped
     ``record.read`` grant is honored: the record's evidence-for PROCESS links (leg A) + its source
-    document's process links (leg B). A record holds no ``ProcessLink`` of its own. This is the ONE
-    source of truth shared by the records read gate AND the evidence-pack classifier (do NOT
-    re-derive the union elsewhere)."""
+    document's canonical process tuple (leg B), including satellite bindings such as a Quality
+    Objective's ``process_id``. A record holds no ``ProcessLink`` of its own. This is the ONE source
+    of truth shared by the records read gate AND the evidence-pack classifier (do NOT re-derive the
+    authorization tuple elsewhere)."""
     via_link = (
         await session.scalars(
             select(EvidenceForLink.target_id).where(
@@ -319,18 +324,10 @@ async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
             )
         )
     ).all()
-    via_doc: list[uuid.UUID] = []
+    via_doc: frozenset[str] = frozenset()
     if record.source_document_id is not None:
-        via_doc = list(
-            (
-                await session.scalars(
-                    select(ProcessLink.process_id).where(
-                        ProcessLink.documented_information_id == record.source_document_id
-                    )
-                )
-            ).all()
-        )
-    return {str(x) for x in (*via_link, *via_doc)}
+        via_doc = await vault_repo.process_ids_for_doc(session, record.source_document_id)
+    return {str(x) for x in via_link} | set(via_doc)
 
 
 async def record_process_ids_effective(session: AsyncSession, record: Record) -> set[str]:
@@ -343,7 +340,7 @@ async def record_process_ids_effective(session: AsyncSession, record: Record) ->
     construction — ``capture_correction`` rejects an already-superseded original — but the set makes
     it robust on ANY input). Never crosses an org; never widens a record with its own binding."""
     own = await record_process_ids(session, record)
-    if own or record.correction_of is None:
+    if own or record.source_document_id is not None or record.correction_of is None:
         return own
     seen = {record.id}
     cursor: uuid.UUID | None = record.correction_of
@@ -383,16 +380,9 @@ async def record_process_ids_for(
 
     source_by_record = {r.id: r.source_document_id for r in records if r.source_document_id}
     if source_by_record:
-        doc_rows = (
-            await session.execute(
-                select(ProcessLink.documented_information_id, ProcessLink.process_id).where(
-                    ProcessLink.documented_information_id.in_(set(source_by_record.values()))
-                )
-            )
-        ).all()
-        by_doc: dict[uuid.UUID, set[str]] = {}
-        for did, pid in doc_rows:
-            by_doc.setdefault(did, set()).add(str(pid))
+        by_doc = await vault_repo.process_ids_for_docs(
+            session, list(set(source_by_record.values()))
+        )
         for rid, did in source_by_record.items():
             out[rid] |= by_doc.get(did, set())
     return out

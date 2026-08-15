@@ -6,6 +6,7 @@ import {
   contextRegisterStatusFixture,
   dcrListFixture,
   directoryFixture,
+  docFixture,
   initiativeFixtures,
   interestedPartyListFixture,
   interestedPartyRegisterStatusFixture,
@@ -24,6 +25,7 @@ import type { RegisterCase } from "./registers";
 export interface RegisterScenario {
   route: RegisterCase["key"];
   override?: RegisterRequestOverride;
+  maxContent?: boolean;
 }
 
 export type RegisterRequestOutcome = "http-503" | "network-error" | "loaded";
@@ -47,6 +49,32 @@ if (!currentDirectoryUser || !primaryTask || !primaryProcess || !primaryRecord) 
 }
 const primaryProcessId = primaryProcess.id;
 const primaryRecordId = primaryRecord.id;
+
+export const MAXIMUM_RECORD_SEARCH = "Q".repeat(200);
+export const MAXIMUM_EVIDENCE_FILENAME = `${"evidence".repeat(31)}.pdf`;
+
+const maximumRecordsFixture = {
+  ...recordsFixture,
+  data: recordsFixture.data.map((record, index) =>
+    index === 0
+      ? {
+          ...record,
+          title: "Preventive-maintenance-schedule".repeat(8),
+          captured_by_display_name: "Maximum-length-captured-by-name".repeat(7),
+        }
+      : record,
+  ),
+};
+
+const maximumRecordDetailFixture = {
+  ...recordDetailFixture,
+  title: maximumRecordsFixture.data[0]!.title,
+  captured_by_display_name: maximumRecordsFixture.data[0]!.captured_by_display_name,
+  source_document_title: "Maximum-length-source-document-title".repeat(7),
+  evidence_blobs: recordDetailFixture.evidence_blobs.map((blob, index) =>
+    index === 0 ? { ...blob, filename: MAXIMUM_EVIDENCE_FILENAME } : blob,
+  ),
+};
 
 const currentUser = {
   ...currentDirectoryUser,
@@ -219,8 +247,28 @@ export async function installRegisterApi(
     if (
       scenario.route === "records" &&
       method === "GET" &&
+      url.pathname === "/api/v1/documents" &&
+      hasOnlySearchParams(url, { limit: "20", offset: "0" })
+    ) {
+      await fulfillJson(route, {
+        data: docFixture,
+        page: {
+          limit: 20,
+          offset: 0,
+          returned: docFixture.length,
+          has_more: false,
+        },
+      });
+      return;
+    }
+
+    if (
+      scenario.route === "records" &&
+      method === "GET" &&
       url.pathname === "/api/v1/records" &&
       (hasOnlySearchParams(url, { limit: "50" }) ||
+        (scenario.maxContent &&
+          hasOnlySearchParams(url, { limit: "50", q: MAXIMUM_RECORD_SEARCH })) ||
         hasOnlySearchParams(url, {
           limit: "50",
           q: "REC-000041",
@@ -228,7 +276,7 @@ export async function installRegisterApi(
         }))
     ) {
       await fulfillJson(route, {
-        ...recordsFixture,
+        ...(scenario.maxContent ? maximumRecordsFixture : recordsFixture),
         page: { ...recordsFixture.page, limit: 50 },
       });
       return;
@@ -240,7 +288,10 @@ export async function installRegisterApi(
       url.pathname === `/api/v1/records/${primaryRecordId}` &&
       url.search === ""
     ) {
-      await fulfillJson(route, recordDetailFixture);
+      await fulfillJson(
+        route,
+        scenario.maxContent ? maximumRecordDetailFixture : recordDetailFixture,
+      );
       return;
     }
 

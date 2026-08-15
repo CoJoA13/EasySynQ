@@ -22,6 +22,10 @@ def test_records_list_publishes_cursor_page_without_hidden_counts() -> None:
     assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/RecordPage"
     }
+    cursor = next(
+        parameter for parameter in operation["parameters"] if parameter["name"] == "cursor"
+    )
+    assert cursor["schema"] == {"type": "string", "minLength": 1}
     page = spec["components"]["schemas"]["RecordPage"]
     assert page["required"] == ["data", "page"]
     assert set(page["properties"]["page"]["properties"]) == {"limit", "returned", "next_cursor"}

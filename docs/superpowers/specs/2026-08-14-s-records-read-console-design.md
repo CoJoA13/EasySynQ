@@ -401,3 +401,27 @@ This is smallest but searches only loaded records and cannot satisfy reliable lo
 
 Both retain register context, but they compress long evidence/lifecycle content and add responsive,
 focus, and history complexity. The owner selected the dedicated detail route.
+
+## 13. Implementation ruling addendum — 2026-08-15
+
+This dated addendum records the owner-approved final-review rulings that govern the shipped slice. It
+does not rewrite the historical design process above.
+
+- The Records rail entry is unconditional. A SYSTEM permission inventory cannot observe a caller's
+  PROCESS-scoped `record.read`; the row-filtered Records API remains the security boundary, and a caller
+  with no applicable grant receives the calm empty register.
+- R59 applies independently to a source document label and its pinned immutable version label. The
+  document must first pass canonical `document.read`. Effective versions need no additional key;
+  Draft, InReview, and Approved require `document.read_draft`; Superseded and Obsolete require
+  `document.read_obsolete`. Specialized decisions retain the canonical Document tuple and project the
+  immutable version lifecycle/identity fields, with DENY precedence and no fabricated label.
+- Cursor fingerprints preserve the exact trimmed Unicode search string. They do not case-fold it:
+  PostgreSQL `ILIKE` behavior does not make Unicode case-fold expansions equivalent cursor criteria.
+- The web register recognizes an invalid-page condition only for a cursor-bearing canonical
+  `422 validation_error` whose problem title is `Invalid records cursor`. Other validation failures,
+  including an invalid enum combined with a cursor, remain ordinary load errors.
+
+Final review also confirmed that an empty cursor is invalid at both the route and OpenAPI boundaries,
+and that dynamic search/evidence labels retain their full accessible names while bounded visually at
+320 CSS pixels. These points refine the earlier verification contract without changing the read-only
+slice boundary.

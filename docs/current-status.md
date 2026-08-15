@@ -49,6 +49,21 @@ retains the dedicated authenticated test entry, central fail-closed fixtures, Ch
 worker, zero retries, and synthetic rather than live-stack boundary. Detailed shipped behavior and evidence
 remain in [`slice-history.md`](slice-history.md#s-records-read-console--evidence-operations-read-console).
 
+A 2026-08-15 final-review reconciliation hardens that shipped boundary without changing the migration or
+the frontmatter baseline/counts. Record read tuples now include source Quality Objective process bindings
+on scalar, batch, and evidence-pack paths; only source-less corrections inherit a predecessor binding;
+pack classification retains lifecycle predicates; and candidate/detail base rows are anchored to the
+caller's tenant and `RECORD` kind. R59 now governs pinned source-version labels independently from the
+mandatory source-document read. Cursor identity preserves exact trimmed Unicode, empty cursors fail
+canonical validation, and only the canonical cursor-specific `422` activates first-page recovery.
+
+The Records rail entry remains unconditional because SYSTEM permission inventory cannot represent
+PROCESS-scoped `record.read`; row filtering remains the security boundary. The register now adopts Clear,
+chip, Back, and Forward URL changes without stale debounce replay; source lookup opens with a safe blank
+row-filtered query and keeps typed query separate from selected display; missing source/captured-by
+selections stay neutral; and maximum search/evidence labels plus Download, Next, and recovery actions
+remain bounded with 44 CSS-pixel targets at 320 CSS pixels. No write capability was added.
+
 ## Runtime truth
 
 Before creating a migration, run:

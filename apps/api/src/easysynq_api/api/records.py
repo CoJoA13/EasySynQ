@@ -26,6 +26,7 @@ from ..auth.dependencies import get_current_user
 from ..db.models._audit_enums import ActorType
 from ..db.models._evidence_enums import EvidenceForTargetType
 from ..db.models._record_enums import RecordDispositionState, RecordType
+from ..db.models._vault_enums import DocumentKind
 from ..db.models.app_user import AppUser
 from ..db.models.blob import Blob
 from ..db.models.disposition_event import DispositionEvent
@@ -141,7 +142,7 @@ class RecordListParams(BaseModel):
     disposition_state: RecordDispositionState | None = None
     legal_hold: bool | None = None
     limit: int = Field(default=50, ge=1, le=100)
-    cursor: str | None = None
+    cursor: str | None = Field(default=None, min_length=1)
 
     @field_validator("q", mode="before")
     @classmethod
@@ -444,7 +445,13 @@ async def _load(
 ) -> tuple[Record, DocumentedInformation]:
     record = await records_repo.get_record(session, record_id)
     base = await records_repo.get_base(session, record_id)
-    if record is None or base is None or record.org_id != caller.org_id:
+    if (
+        record is None
+        or base is None
+        or record.org_id != caller.org_id
+        or base.org_id != caller.org_id
+        or base.kind != DocumentKind.RECORD
+    ):
         raise ProblemException(status=404, code="not_found", title="Record not found")
     return record, base
 

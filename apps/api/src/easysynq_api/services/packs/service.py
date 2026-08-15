@@ -178,6 +178,7 @@ async def classify_candidates(
             folder_path=base.folder_path,
             process_ids=frozenset(process_ids),
             framework_id=str(base.framework_id),
+            lifecycle_state=base.current_state.value,
         )
         if not authorize(grants, "record.read", resource, ctx).allow:
             out.append(

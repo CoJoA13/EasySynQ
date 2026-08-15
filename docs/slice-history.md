@@ -111,6 +111,29 @@ backend/database/object-store/Keycloak acceptance, deployed Docker-backed applic
 deployment, or disposable Fedora proof is claimed. Docker-backed pytest fixtures and the populated
 migration round trip are claimed only to the exact gates above.
 
+#### Final-review reconciliation — 2026-08-15
+
+The sole consolidated final-review wave closed authorization parity gaps without widening the read-only
+slice. Canonical source-process resolution now includes `QualityObjective.process_id` for Records scalar
+and batch decisions and PROCESS evidence-pack selection, preserving broad-ALLOW-plus-PROCESS-DENY across
+list, detail, presign, rendition, lineage, and pack surfaces. Source-backed corrections no longer inherit
+their predecessor's process tuple in scalar reads or pack selection; pack classification carries the
+record lifecycle; and candidate/detail shared base rows fail closed unless tenant and `RECORD` kind match.
+
+Pinned source-version labels now implement R59's two-stage boundary: `document.read` plus the immutable
+state-specific key where required, evaluated on the canonical Document context with deny-always-wins.
+Cursor fingerprints retain exact trimmed Unicode, an empty cursor is a canonical validation error, and
+the SPA reserves cursor reset for the exact `Invalid records cursor` problem. The rail remains
+unconditional because PROCESS grants are not visible to the SYSTEM inventory and the filtered API owns
+the calm empty result.
+
+The same wave guards debounced search against Clear/chip/history replay, separates source-picker open,
+typed-query, and selected-display state, keeps unresolved source/captured-by deep links neutral, and
+bounds full-accessible-name filter/evidence labels at 320 CSS pixels. Download, Next, cursor recovery,
+and Retry actions meet the 44 CSS-pixel target contract. Fresh final-wave verification is recorded in
+the implementation report; the established complete-suite frontmatter counts above are intentionally
+unchanged by partial affected reruns.
+
 ### S-responsive-browser-evidence — required Chromium register proof
 
 Recorded 2026-08-14 at implementation evidence baseline
