@@ -28,7 +28,7 @@ async function request<T>(
   token: string | null,
   body?: unknown,
   extraHeaders?: Record<string, string>,
-  signal?: AbortSignal,
+  requestOptions?: { signal?: AbortSignal },
 ): Promise<T> {
   const headers: Record<string, string> = { ...(extraHeaders ?? {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -38,7 +38,7 @@ async function request<T>(
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   };
-  if (signal !== undefined) options.signal = signal;
+  if (requestOptions?.signal !== undefined) options.signal = requestOptions.signal;
   const resp = await fetch(path, options);
   if (!resp.ok) {
     let problem: ApiProblem = {};
@@ -66,8 +66,8 @@ async function request<T>(
 export const apiGet = <T>(
   path: string,
   token: string | null = null,
-  signal?: AbortSignal,
-): Promise<T> => request<T>("GET", path, token, undefined, undefined, signal);
+  options?: { signal?: AbortSignal },
+): Promise<T> => request<T>("GET", path, token, undefined, undefined, options);
 
 // Authed BINARY fetch (S-web-4b): the visual-diff page PNG streams image/png through the
 // authenticated API (R59 state-aware version gates, NOT a presigned URL), so a bare <img src> can't
@@ -111,7 +111,8 @@ export function useApi() {
   const { token } = useAuth();
   return useMemo(
     () => ({
-      get: <T>(path: string, signal?: AbortSignal): Promise<T> => apiGet<T>(path, token, signal),
+      get: <T>(path: string, options?: { signal?: AbortSignal }): Promise<T> =>
+        apiGet<T>(path, token, options),
       getBlob: (path: string): Promise<Blob> => apiGetBlob(path, token),
       send: <T>(
         method: "POST" | "PUT" | "PATCH" | "DELETE",
