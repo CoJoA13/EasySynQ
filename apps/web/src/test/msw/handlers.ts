@@ -60,6 +60,7 @@ import type {
   RiskRegisterStatus,
   RiskRow,
   RiskSummary,
+  RecordDetail,
   RecordPage,
   SupersededCopies,
   Task,
@@ -1025,6 +1026,63 @@ export const recordsFixture: RecordPage = {
     },
   ],
   page: { limit: 100, returned: 2, next_cursor: "next-records-page" },
+};
+
+export const recordDetailFixture: RecordDetail = {
+  ...recordsFixture.data[0]!,
+  source_document_id: "11111111-1111-1111-1111-111111111111",
+  source_document_identifier: "SOP-PUR-014",
+  source_document_title: "Supplier Selection & Evaluation",
+  source_document_readable: true,
+  source_version_id: "dddd1111-1111-1111-1111-111111111111",
+  source_version_label: "Rev B",
+  disposition_state: "ON_HOLD",
+  legal_hold: true,
+  has_structured_pdf: true,
+  correction_of: "re000040-0040-0040-0040-000000000040",
+  superseded_by_correction: "re000042-0042-0042-0042-000000000042",
+  content_hash: "sha256:sealed-record-hash",
+  content_hash_version: 2,
+  form_field_values: {
+    inspection_result: "Pass",
+    measurements: [{ gauge_id: "G-7", in_tolerance: true }, null, 12.5],
+  },
+  retention_basis_date: "2026-06-01",
+  correction_of_readable: true,
+  superseded_by_correction_readable: false,
+  created_at: "2026-06-01T09:01:00+00:00",
+  evidence_blobs: [
+    {
+      sha256: "abc123",
+      is_original: true,
+      filename: "maintenance-schedule.pdf",
+      content_type: "application/pdf",
+      size_bytes: 1536,
+      created_at: "2026-06-01T09:00:30+00:00",
+    },
+  ],
+  evidence_links: [
+    {
+      id: "el000001-0001-0001-0001-000000000001",
+      record_id: recordsFixture.data[0]!.id,
+      target_type: "document",
+      target_id: "22222222-2222-2222-2222-222222222222",
+      target_label: "WI-MNT-004 — Maintenance checks",
+      target_readable: true,
+      link_reason: "Governing work instruction",
+      created_at: "2026-06-01T09:02:00+00:00",
+    },
+    {
+      id: "el000002-0002-0002-0002-000000000002",
+      record_id: recordsFixture.data[0]!.id,
+      target_type: "process",
+      target_id: "pr000002-0002-0002-0002-000000000002",
+      target_label: null,
+      target_readable: false,
+      link_reason: null,
+      created_at: null,
+    },
+  ],
 };
 
 // ---- S-web-7c complaint + NCR fixtures (pinned to the _complaint / _ncr serializers) ----
@@ -3311,6 +3369,23 @@ export const handlers = [
   ),
   http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(null)),
   http.get("/api/v1/records", () => HttpResponse.json(recordsFixture)),
+  http.get("/api/v1/records/:recordId", ({ params }) =>
+    HttpResponse.json({ ...recordDetailFixture, id: String(params.recordId) }),
+  ),
+  http.get("/api/v1/records/:recordId/evidence/:sha256/download", ({ params }) =>
+    HttpResponse.json({
+      download_url: `https://objects.example.test/records/${String(params.sha256)}`,
+      sha256: String(params.sha256),
+      content_type: "application/pdf",
+    }),
+  ),
+  http.get("/api/v1/records/:recordId/rendition", () =>
+    HttpResponse.json({
+      download_url: "https://objects.example.test/records/structured.pdf",
+      sha256: "structured-pdf-sha",
+      content_type: "application/pdf",
+    }),
+  ),
   // ---- S-web-7c complaints + NCRs (default happy-path; per-test overrides for 403/empty/error) ----
   http.get("/api/v1/complaints", () => HttpResponse.json(complaintListFixture)),
   http.post("/api/v1/complaints", () =>

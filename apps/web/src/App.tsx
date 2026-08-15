@@ -46,6 +46,7 @@ import { InterestedPartiesRegisterPage } from "./features/interested-parties/Int
 import { NotificationsPage } from "./features/notifications/NotificationsPage";
 import { NotificationSettingsPage } from "./features/notifications/NotificationSettingsPage";
 import { RecordsPage } from "./features/records/RecordsPage";
+import { RecordDetailPage } from "./features/records/RecordDetailPage";
 import { useAuth } from "./lib/auth";
 import { MutationFeedbackProvider } from "./lib/mutationFeedback";
 import { RouteChromeProvider, useRouteChrome } from "./lib/routeChrome";
@@ -258,7 +259,7 @@ function AppContent() {
           <Route path="context" element={<ContextRegisterPage />} />
           <Route path="interested-parties" element={<InterestedPartiesRegisterPage />} />
           <Route path="records" element={<RecordsPage />} />
-          <Route path="records/:recordId" element={<Navigate to="/records" replace />} />
+          <Route path="records/:recordId" element={<RecordDetailPage />} />
         </Route>
         <Route
           path="*"
