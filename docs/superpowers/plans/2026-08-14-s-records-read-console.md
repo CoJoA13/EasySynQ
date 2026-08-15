@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Work only in `/home/cjones/Desktop/EasySynQ/.worktrees/evidence-operations` on branch `codex/evidence-operations`; preserve the primary checkout's unrelated untracked `.superdesign/` directory and do not prune or modify either `/tmp` worktree record.
+- Work only in the dedicated linked worktree on branch `codex/evidence-operations`; preserve the primary checkout's unrelated untracked `.superdesign/` directory and do not prune or modify either `/tmp` worktree record.
 - Treat `docs/superpowers/specs/2026-08-14-s-records-read-console-design.md`, R3, R21, R26, R27, R39, R59, R65, ADR 0003, and ADR 0004 as binding.
 - Read every relevant `docs/debt/` record before editing its hotspot. In particular, re-read `20260813234519-playwright-responsive-browser-harness.md`, `20260814022608-browser-probe-hardening.md`, `20260814035922-forced-colors-containment-proof.md`, and `20260813144730-responsive-register-cohort.md` before browser work.
 - Replace the old bare-array `GET /records` response in place and migrate every repository consumer in the same slice. Do not add a compatibility endpoint, response shim, feature flag, or duplicate list path.

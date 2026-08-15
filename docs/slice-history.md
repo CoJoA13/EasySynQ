@@ -37,6 +37,80 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## PROGRAMME 1 — frontend resilience and accessibility
 
+### S-records-read-console — Evidence Operations read console
+
+Recorded 2026-08-15 while preserving implementation compatibility baseline
+`1dcbc2bc12b14e11f037a657d44659412a7a39c0`. The owner-approved
+[`design`](superpowers/specs/2026-08-14-s-records-read-console-design.md),
+[`plan`](superpowers/plans/2026-08-14-s-records-read-console.md), R3/R21/R26/R27/R39/R59/R65, and
+[`ADR 0004`](adr/0004-modernize-records-list-contract-in-place.md) define the first Evidence Operations
+slice as a read-only Records console rather than a second capture or lifecycle-mutation surface.
+
+`GET /records` replaces the pre-production bare array in place with an authorization-correct
+`{data,page}` cursor envelope, and every repository consumer—including the CAPA evidence picker—moves in
+the same slice. The request supports trimmed identifier/title search plus record type, disposition state,
+legal hold, source document, and captured-by filters. Keyset order is `(captured_at DESC, id DESC)`; opaque
+versioned cursors bind normalized query state. Candidate scanning reuses the canonical tenant/PDP/process
+scope and correction-fallback rules, continues past hidden candidates, and exposes neither totals nor
+hidden-row-derived cursor information. Display-ready source, actor, retention, version, and related-target
+labels are hydrated only after the record is readable and never widen related-object authorization.
+
+The routed SPA adds `/records` and `/records/:recordId`, permission-aware navigation, URL-owned search and
+filter state, cursor history, native identifier links, and Back restoration to the filtered page. The
+register remains one semantic table with localized horizontal containment. The detail view groups
+provenance, lifecycle, correction lineage, structured values, evidence, evidence-for links, and rendition
+state. Evidence and rendition downloads request fresh presigned URLs, open without forwarding the EasySynQ
+bearer token, and keep per-action pending/error state isolated. Record capture, corrections, evidence-link
+writes, legal-hold/disposition/retention/WORM mutations, new permissions, role defaults, and Keycloak
+behavior remain outside this slice.
+
+Migration `0086_record_page_index` adds only `(org_id, captured_at DESC, id DESC)` for deterministic page
+order; model metadata agrees, the populated migration coherence gate proved upgrade/downgrade/re-upgrade,
+and the fresh single Alembic head is `0086` with `0087` next. OpenAPI, generated server/web artifacts, and
+the contract lock were regenerated through the repository command; their fresh in-sync digest is
+`6acfcd63d6967a6294ce1f1a45cd5df833fe2e7c431f3f46a77f69598b24ccda`.
+
+Fresh short/static gates passed: Ruff format reported 743 files already formatted, Ruff lint passed, mypy
+reported no issues in 441 source files, web ESLint exited 0, and the production TypeScript/Vite build
+transformed 1,106 modules and completed with only the existing large-chunk advisory. Focused Records unit
+coverage passed 95 tests. After Docker became available, the focused Records integration selection passed
+62 tests, the populated migration round trip passed 1 test, and all 283 selected published response schemas
+passed. Their known diagnostics were the PostgreSQL/MinIO/Redis testcontainers import deprecations.
+
+The affected web selection passed 10 files/124 tests. Durable complete-suite evidence then passed 1,729 API
+unit tests with one release-ceremony skip in 24.83 seconds; 1,080 API integration tests with two
+shared-database management-review skips, 283 deselected, and three testcontainers deprecations in 536.15
+seconds; and 266 Vitest files/1,912 tests in 284.82 seconds. Vitest retained Node's repeated `localStorage`
+experimental warning. The first integration attempts honestly failed while Docker was unavailable and then
+while host `pg_dump` was absent; after Docker was healthy and PostgreSQL client 16.14 was installed, the
+same persisted full-integration argv completed green without a Records code change.
+
+The exact browser gate rebuilt the dedicated entry and passed 38/38 Chromium tests in 14.7 seconds with one
+worker and zero retries. Records register/detail fixtures extend the responsive geometry, recovery,
+accessibility, focus, forced-colors, and fail-closed traffic cohort. Commit `b493b43` supplied executable
+closure for the timeout/Docker-path child-probe and forced-colors containment debts and deleted their paid
+records. ADR 0003's 2026-08-15 reassessment retains Chromium-only, the dedicated authenticated entry,
+central fail-closed fixtures, one worker, zero retries, and the synthetic/live-stack boundary.
+`responsive-register-cohort` and `playwright-responsive-browser-harness` remain open because their payoff
+triggers did not fire.
+
+Task 11 also removed an absolute developer-home worktree path from the historical implementation plan and
+deleted its paid site-data debt. A host OpenSSL wording difference first exposed a brittle rollback-runbook
+unit assertion; focused RED/GREEN evidence replaced only that diagnostic-string expectation with the owned
+privileged-export side effect, the complete unit suite passed, and the paid portability debt was deleted.
+The runbook's certificate and hostname rejection behavior remains fail closed.
+
+The contributor doctor remained an honest diagnostic: it reported host Node 26, failure of its system
+Python command/probe to recognize the uv-managed Python 3.12.13 used by the API commands, and the absent
+repository `.env`. Those broader contributor-profile findings did not become false failures for the exact
+Ruff, mypy, pytest, npm, contract, or Alembic commands that demonstrably passed. PostgreSQL client
+`pg_dump`/`pg_restore` 16.14 and Docker were available for the final integration evidence.
+
+No Firefox, WebKit, NVDA, JAWS, VoiceOver, Orca, or other actual assistive-technology session ran. No live
+backend/database/object-store/Keycloak acceptance, deployed Docker-backed application acceptance,
+deployment, or disposable Fedora proof is claimed. Docker-backed pytest fixtures and the populated
+migration round trip are claimed only to the exact gates above.
+
 ### S-responsive-browser-evidence — required Chromium register proof
 
 Recorded 2026-08-14 at implementation evidence baseline
