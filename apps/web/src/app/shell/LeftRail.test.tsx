@@ -47,6 +47,12 @@ test("Library + Review and approve sit under the DO section", () => {
     "href",
     "/tasks",
   );
+  expect(within(doSection).getByRole("link", { name: "Records" })).toHaveAttribute("href", "/records");
+});
+
+test("Records is unconditional because PROCESS-scoped record.read is not visible to the SYSTEM permissions query", async () => {
+  renderWithProviders(<LeftRail />, { route: "/" });
+  expect(await screen.findByRole("link", { name: "Records" })).toHaveAttribute("href", "/records");
 });
 
 test("Change requests (DCR) sits under the ACT section, beside CAPA + Improvement", async () => {

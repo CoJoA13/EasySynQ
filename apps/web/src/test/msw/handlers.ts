@@ -1024,7 +1024,7 @@ export const recordsFixture: RecordPage = {
       superseded_by_correction: null,
     },
   ],
-  page: { limit: 100, returned: 2, next_cursor: null },
+  page: { limit: 100, returned: 2, next_cursor: "next-records-page" },
 };
 
 // ---- S-web-7c complaint + NCR fixtures (pinned to the _complaint / _ncr serializers) ----

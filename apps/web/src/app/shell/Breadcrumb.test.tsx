@@ -79,6 +79,7 @@ test.each([
   ["/reports/document-control", "Controlled document register", "document-control"],
   ["/management-reviews", "Management reviews", "management-reviews"],
   ["/interested-parties", "Interested parties", "interested-parties"],
+  ["/records", "Records", "records"],
   ["/drift/superseded-copies", "Superseded copies", "superseded-copies"],
 ])("Breadcrumb humanizes the registered route %s", (route, label, rawSlug) => {
   const client = new QueryClient();
@@ -93,6 +94,7 @@ test.each([
   ["/reports/document-control", "Reports"],
   ["/settings/notifications", "Settings"],
   [`/dcrs/${ID}/diff`, "Change request"],
+  [`/records/${ID}`, "Record"],
 ])("Breadcrumb renders the non-route parent in %s as text, not a dead link", (route, label) => {
   const client = new QueryClient();
   renderCrumb(client, route);

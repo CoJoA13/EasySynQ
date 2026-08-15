@@ -31,6 +31,7 @@ const LABELS: Record<string, string> = {
   risks: "Risk & opportunity register",
   context: "Context of the organization",
   "interested-parties": "Interested parties",
+  records: "Records",
   search: "Search",
 };
 
@@ -42,6 +43,7 @@ const DETAIL_LABELS: Record<string, string> = {
   ingestion: "Import run",
   objectives: "Objective",
   "management-reviews": "Management review",
+  records: "Record",
   dcrs: "Change request",
 };
 
