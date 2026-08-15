@@ -38,6 +38,7 @@ _CANONICAL_CHECK = "ck_process_edge_no_self_loop"
 _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
 _RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
 _ROLE_ASSIGNMENT_USER_INDEX = "ix_role_assignment_user_id"
+_RECORD_PAGE_INDEX = "ix_record_org_id_captured_at_id_desc"
 _EXPECTED_RETENTION_GRANTS = {
     ("Internal Auditor", "retention.read"),
     ("QMS Owner", "retention.manage"),
@@ -153,6 +154,16 @@ def _table_indexes(connection: sa.Connection, table_name: str) -> set[str]:
             {"table_name": table_name},
         ).scalars()
     }
+
+
+def _index_definition(connection: sa.Connection, index_name: str) -> str | None:
+    return connection.execute(
+        sa.text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE schemaname = current_schema() AND indexname = :index_name"
+        ),
+        {"index_name": index_name},
+    ).scalar_one_or_none()
 
 
 def _clause_phases(connection: sa.Connection, framework_id: object) -> dict[str, str]:
@@ -875,6 +886,28 @@ def test_populated_historical_transitions_and_head_repairs(
                     assert phase == "DO", number  # the whole clause-7 tree is DO (R62)
                 assert phases["6.2"] == "PLAN"  # neighbors untouched
                 assert "split across PLAN" not in _clause7_intent(connection, framework_id)
+
+            # 0086 adds only the candidate-page index. Its downgrade is data-safe on this
+            # populated record table, and re-upgrade restores the exact descending keyset shape.
+            with engine.connect() as connection:
+                head_indexes = _table_indexes(connection, "record")
+                assert _RECORD_PAGE_INDEX in head_indexes
+                index_definition = _index_definition(connection, _RECORD_PAGE_INDEX)
+                assert index_definition is not None
+                org_position = index_definition.index("org_id")
+                captured_position = index_definition.index("captured_at DESC")
+                id_position = index_definition.index("id DESC", captured_position)
+                assert org_position < captured_position < id_position
+            command.downgrade(config, "0085_user_credential_issued")
+            with engine.connect() as connection:
+                downgraded_indexes = _table_indexes(connection, "record")
+                assert head_indexes - downgraded_indexes == {_RECORD_PAGE_INDEX}
+                assert downgraded_indexes == head_indexes - {_RECORD_PAGE_INDEX}
+                assert _index_definition(connection, _RECORD_PAGE_INDEX) is None
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                assert _table_indexes(connection, "record") == head_indexes
+                assert _index_definition(connection, _RECORD_PAGE_INDEX) == index_definition
             command.check(config)
         finally:
             engine.dispose()

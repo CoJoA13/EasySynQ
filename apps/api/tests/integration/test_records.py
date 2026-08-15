@@ -10,6 +10,7 @@ test's own record ids (the shared DB accumulates rows across tests).
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import uuid
 from collections.abc import Callable
@@ -24,8 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
 from easysynq_api.db.models._clause_enums import PdcaPhase
-from easysynq_api.db.models._record_enums import RecordType
+from easysynq_api.db.models._record_enums import RecordDispositionState, RecordType
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
+from easysynq_api.db.models._vault_enums import DocumentKind
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
@@ -41,7 +43,9 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.domain.records.content_hash import record_content_hash
+from easysynq_api.services.records import repository as records_repo
 from easysynq_api.services.records import service as records_service
+from easysynq_api.services.records.listing import RecordListCriteria, RecordListCursor
 from easysynq_api.services.vault import storage, upload_rejection
 from easysynq_api.services.vault.staged_identity import StagedVersionLocator, StagingDomain
 
@@ -644,6 +648,147 @@ async def test_all_16_record_types_accepted(
         r = await _capture(app_client, h, record_type=rtype, title=f"{rtype} record")
         assert r.status_code == 201, f"{rtype}: {r.text}"
         assert r.json()["record_type"] == rtype
+
+
+# --- deterministic pre-authorization candidates -----------------------------------------
+
+
+async def test_candidate_order_uses_descending_id_tiebreak_and_strict_boundary(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("candidate-order")
+    actor_id = await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    record_ids: list[uuid.UUID] = []
+    for sequence in range(3):
+        response = await _capture(
+            app_client,
+            h,
+            record_type="EVIDENCE",
+            title=f"candidate order {sequence} {uuid.uuid4().hex}",
+        )
+        assert response.status_code == 201, response.text
+        record_ids.append(uuid.UUID(response.json()["id"]))
+
+    captured_at = datetime.datetime(2026, 8, 14, 12, tzinfo=datetime.UTC)
+    criteria = RecordListCriteria(captured_by=actor_id)
+    expected = sorted(record_ids, reverse=True)
+    async with get_sessionmaker()() as session:
+        records = list(
+            (await session.scalars(select(Record).where(Record.id.in_(record_ids)))).all()
+        )
+        for record in records:
+            record.captured_at = captured_at
+        await session.commit()
+
+        rows = await records_repo.list_record_candidates(
+            session,
+            records[0].org_id,
+            criteria=criteria,
+            after=None,
+            limit=10,
+        )
+        assert [record.id for record, _base in rows] == expected
+
+        after = RecordListCursor(captured_at=captured_at, record_id=expected[1])
+        rows_after = await records_repo.list_record_candidates(
+            session,
+            records[0].org_id,
+            criteria=criteria,
+            after=after,
+            limit=10,
+        )
+        assert [record.id for record, _base in rows_after] == expected[2:]
+
+
+async def test_literal_search_filters_identifier_title_and_all_record_fields(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("candidate-filters")
+    actor_id = await _grant(subject, _RECORD_PERMS)
+    other_actor_id = await _grant(_subject("candidate-other-actor"), _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    marker = uuid.uuid4().hex
+    literal = f"50%_done\\-{marker}"
+    cases = {
+        "target": f"Literal {literal}",
+        "identifier_target": f"Identifier-only match {marker}",
+        "wildcard_decoy": f"Literal 50AXdone-{marker}",
+        "wrong_search": f"Unrelated {marker}",
+        "wrong_type": f"Literal {literal}",
+        "wrong_source": f"Literal {literal}",
+        "wrong_actor": f"Literal {literal}",
+        "wrong_disposition": f"Literal {literal}",
+        "wrong_hold": f"Literal {literal}",
+    }
+    record_ids: dict[str, uuid.UUID] = {}
+    for name, title in cases.items():
+        response = await _capture(
+            app_client,
+            h,
+            record_type="EVIDENCE",
+            title=title,
+        )
+        assert response.status_code == 201, response.text
+        record_ids[name] = uuid.UUID(response.json()["id"])
+
+    async with get_sessionmaker()() as session:
+        actor = await session.get(AppUser, actor_id)
+        assert actor is not None
+        framework_id = await session.scalar(
+            select(Framework.id).where(Framework.org_id == actor.org_id).limit(1)
+        )
+        assert framework_id is not None
+        source_document = DocumentedInformation(
+            org_id=actor.org_id,
+            framework_id=framework_id,
+            kind=DocumentKind.DOCUMENT,
+            identifier=f"CANDIDATE-SOURCE-{marker}",
+            title=f"Candidate source {marker}",
+            owner_user_id=actor_id,
+            created_by=actor_id,
+        )
+        session.add(source_document)
+        await session.flush()
+        records = {
+            record.id: record
+            for record in (
+                await session.scalars(select(Record).where(Record.id.in_(record_ids.values())))
+            ).all()
+        }
+        source_document_id = source_document.id
+        for record in records.values():
+            record.source_document_id = source_document_id
+        identifier_base = await session.get(DocumentedInformation, record_ids["identifier_target"])
+        assert identifier_base is not None
+        identifier_base.identifier = f"LITERAL {literal}"
+        records[record_ids["wrong_type"]].record_type = RecordType.CALIBRATION
+        records[record_ids["wrong_source"]].source_document_id = None
+        records[record_ids["wrong_actor"]].captured_by = other_actor_id
+        records[record_ids["wrong_disposition"]].disposition_state = RecordDispositionState.ON_HOLD
+        records[record_ids["wrong_hold"]].legal_hold = True
+        await session.commit()
+
+        criteria = RecordListCriteria(
+            q=f"  LITERAL 50%_DONE\\-{marker.upper()}  ",
+            record_type=RecordType.EVIDENCE,
+            source_document_id=source_document_id,
+            captured_by=actor_id,
+            disposition_state=RecordDispositionState.ACTIVE,
+            legal_hold=False,
+        )
+        rows = await records_repo.list_record_candidates(
+            session,
+            actor.org_id,
+            criteria=criteria,
+            after=None,
+            limit=20,
+        )
+
+    assert {record.id for record, _base in rows} == {
+        record_ids["target"],
+        record_ids["identifier_target"],
+    }
 
 
 async def test_evidence_reuse_of_non_worm_blob_rejected(

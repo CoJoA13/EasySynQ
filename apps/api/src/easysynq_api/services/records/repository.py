@@ -36,6 +36,12 @@ from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.storage_config import StorageConfig
 from ...db.models.system_config import SystemConfig
 from ...db.models.worm_destroy_request import WormDestroyRequest
+from .listing import (
+    RecordListCriteria,
+    RecordListCursor,
+    escape_ilike_literal,
+    normalize_record_search,
+)
 
 SYSTEM_DEFAULT_POLICY_NAME = "System Default Retention"
 SEALED_PACK_POLICY_NAME = "Sealed Evidence Pack Retention"
@@ -59,6 +65,58 @@ async def get_record(session: AsyncSession, record_id: uuid.UUID) -> Record | No
 async def get_base(session: AsyncSession, record_id: uuid.UUID) -> DocumentedInformation | None:
     """The shared-PK base row (``documented_information``, kind=RECORD) for a record."""
     return await session.get(DocumentedInformation, record_id)
+
+
+async def list_record_candidates(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    criteria: RecordListCriteria,
+    after: RecordListCursor | None,
+    limit: int,
+) -> list[tuple[Record, DocumentedInformation]]:
+    """Return deterministic tenant/search/filter candidates for the caller's PDP scan."""
+    filters: list[ColumnElement[bool]] = [Record.org_id == org_id]
+    search = normalize_record_search(criteria.q)
+    if search is not None:
+        pattern = f"%{escape_ilike_literal(search)}%"
+        filters.append(
+            or_(
+                DocumentedInformation.identifier.ilike(pattern, escape="\\"),
+                DocumentedInformation.title.ilike(pattern, escape="\\"),
+            )
+        )
+    if criteria.record_type is not None:
+        filters.append(Record.record_type == criteria.record_type)
+    if criteria.source_document_id is not None:
+        filters.append(Record.source_document_id == criteria.source_document_id)
+    if criteria.captured_by is not None:
+        filters.append(Record.captured_by == criteria.captured_by)
+    if criteria.disposition_state is not None:
+        filters.append(Record.disposition_state == criteria.disposition_state)
+    if criteria.legal_hold is not None:
+        filters.append(Record.legal_hold == criteria.legal_hold)
+    if after is not None:
+        filters.append(
+            or_(
+                Record.captured_at < after.captured_at,
+                and_(
+                    Record.captured_at == after.captured_at,
+                    Record.id < after.record_id,
+                ),
+            )
+        )
+
+    rows = (
+        await session.execute(
+            select(Record, DocumentedInformation)
+            .join(DocumentedInformation, Record.id == DocumentedInformation.id)
+            .where(*filters)
+            .order_by(desc(Record.captured_at), desc(Record.id))
+            .limit(limit)
+        )
+    ).all()
+    return [(r, d) for r, d in rows]
 
 
 async def list_records(
