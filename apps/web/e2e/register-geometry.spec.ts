@@ -190,6 +190,18 @@ test("records bounds maximum dynamic labels and actions at 320 pixels", async ({
   ).toBeLessThanOrEqual(1);
 
   await page.goto(`/records/${RECORD_ID}`);
+  await page.addStyleTag({
+    content: 'body { font-family: "Liberation Sans", sans-serif !important; }',
+  });
+  const banner = page.getByRole("banner");
+  const account = page.getByRole("button", { name: "Account", exact: true });
+  const [bannerBox, accountBox] = await Promise.all([banner.boundingBox(), account.boundingBox()]);
+  expect(bannerBox).not.toBeNull();
+  expect(accountBox).not.toBeNull();
+  expect(accountBox!.x + accountBox!.width).toBeLessThanOrEqual(
+    bannerBox!.x + bannerBox!.width + 1,
+  );
+
   const download = page.getByRole("button", {
     name: `Download ${MAXIMUM_EVIDENCE_FILENAME}`,
     exact: true,

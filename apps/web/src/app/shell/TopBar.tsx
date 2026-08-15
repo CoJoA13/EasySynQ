@@ -12,7 +12,8 @@ import { usePermissions } from "./usePermissions";
 // count lives at /tasks. (useAckCount is unchanged and still powers Home's DoCard.)
 //
 // S-web-6: the search box is a real button (not a read-only text input) and renders on every breakpoint;
-// it is icon-only below `sm` to keep the no-wrap header from overflowing on ~320px phones.
+// it is icon-only below `sm`, and the adjacent logo carries the brand below `xs`, so fallback font
+// metrics cannot push the no-wrap header actions beyond ~320px phones.
 export function TopBar({
   navOpened,
   onToggleNav,
@@ -35,7 +36,9 @@ export function TopBar({
           aria-label="Toggle navigation"
         />
         <img src="/easysynq-mark-simple.svg" alt="" aria-hidden="true" width={22} height={22} />
-        <Text fw={700}>EasySynQ</Text>
+        <Text fw={700} visibleFrom="xs">
+          EasySynQ
+        </Text>
       </Group>
       <Button
         variant="default"
