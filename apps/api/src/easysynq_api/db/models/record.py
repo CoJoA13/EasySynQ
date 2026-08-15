@@ -118,3 +118,11 @@ class Record(Base):
     # aborts on a RESTRICT FK; nulled + the blob row dropped when the record is destroyed
     # (the blob-row-iff-bytes invariant).
     structured_pdf_blob_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+Index(
+    "ix_record_org_id_captured_at_id_desc",
+    Record.org_id,
+    Record.captured_at.desc(),
+    Record.id.desc(),
+)

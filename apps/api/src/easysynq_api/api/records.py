@@ -15,17 +15,18 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import uuid
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Request, Response, status
-from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, select
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
 from ..db.models._audit_enums import ActorType
 from ..db.models._evidence_enums import EvidenceForTargetType
 from ..db.models._record_enums import RecordDispositionState, RecordType
+from ..db.models._vault_enums import DocumentKind
 from ..db.models.app_user import AppUser
 from ..db.models.blob import Blob
 from ..db.models.disposition_event import DispositionEvent
@@ -54,6 +55,20 @@ from ..services.records import (
     unlink_evidence,
 )
 from ..services.records import repository as records_repo
+from ..services.records.listing import (
+    InvalidRecordCursor,
+    RecordListCriteria,
+    RecordListCursor,
+    decode_record_cursor,
+    encode_record_cursor,
+)
+from ..services.records.presentation import (
+    EvidenceTargetLabel,
+    GrantSetCache,
+    RecordLabels,
+    hydrate_evidence_target_labels,
+    hydrate_record_labels,
+)
 from ..services.vault import repository as vault_repo
 from ..services.vault import storage
 from ..services.vault.staged_identity import StagingDomain
@@ -119,6 +134,25 @@ class DispositionReason(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+class RecordListParams(BaseModel):
+    q: str | None = Field(default=None, max_length=200)
+    record_type: RecordType | None = None
+    source_document_id: uuid.UUID | None = None
+    captured_by: uuid.UUID | None = None
+    disposition_state: RecordDispositionState | None = None
+    legal_hold: bool | None = None
+    limit: int = Field(default=50, ge=1, le=100)
+    cursor: str | None = Field(default=None, min_length=1)
+
+    @field_validator("q", mode="before")
+    @classmethod
+    def _strip_search(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 def _evidence_inputs(evidence: list[EvidenceRef]) -> list[EvidenceInput]:
     return [
         EvidenceInput(
@@ -165,12 +199,14 @@ def _evidence_blob(eb: EvidenceBlob, b: Blob) -> dict[str, Any]:
     }
 
 
-def _evidence_link(link: EvidenceForLink) -> dict[str, Any]:
+def _evidence_link(link: EvidenceForLink, label: EvidenceTargetLabel) -> dict[str, Any]:
     return {
         "id": str(link.id),
         "record_id": str(link.record_id),
         "target_type": link.target_type.value,
         "target_id": str(link.target_id),
+        "target_label": label.label,
+        "target_readable": label.readable,
         "link_reason": link.link_reason,
         "created_at": link.created_at.isoformat() if link.created_at else None,
     }
@@ -216,14 +252,10 @@ def _disposition_event(event: DispositionEvent) -> dict[str, Any]:
     }
 
 
-def _record(
-    record: Record,
-    base: DocumentedInformation,
-    *,
-    evidence_blobs: list[dict[str, Any]] | None = None,
-    evidence_links: list[dict[str, Any]] | None = None,
+def _record_summary(
+    record: Record, base: DocumentedInformation, labels: RecordLabels
 ) -> dict[str, Any]:
-    out: dict[str, Any] = {
+    return {
         "id": str(record.id),
         "identifier": base.identifier,
         "kind": base.kind.value,
@@ -233,17 +265,17 @@ def _record(
         "framework_id": str(base.framework_id),
         "captured_at": record.captured_at.isoformat() if record.captured_at else None,
         "captured_by": str(record.captured_by),
-        "content_hash": record.content_hash,
-        "content_hash_version": record.content_hash_version,
+        "captured_by_display_name": labels.captured_by_display_name,
         "source_document_id": (
             str(record.source_document_id) if record.source_document_id else None
         ),
+        "source_document_identifier": labels.source_document_identifier,
+        "source_document_title": labels.source_document_title,
+        "source_document_readable": labels.source_document_readable,
         "source_version_id": str(record.source_version_id) if record.source_version_id else None,
-        "form_field_values": record.form_field_values,
+        "source_version_label": labels.source_version_label,
         "retention_policy_id": str(record.retention_policy_id),
-        "retention_basis_date": (
-            record.retention_basis_date.isoformat() if record.retention_basis_date else None
-        ),
+        "retention_policy_name": labels.retention_policy_name,
         "disposition_state": record.disposition_state.value,
         "legal_hold": record.legal_hold,
         "has_structured_pdf": record.structured_pdf_blob_sha256 is not None,
@@ -251,12 +283,33 @@ def _record(
         "superseded_by_correction": (
             str(record.superseded_by_correction) if record.superseded_by_correction else None
         ),
-        "created_at": base.created_at.isoformat() if base.created_at else None,
     }
-    if evidence_blobs is not None:
-        out["evidence_blobs"] = evidence_blobs
-    if evidence_links is not None:
-        out["evidence_links"] = evidence_links
+
+
+def _record_detail(
+    record: Record,
+    base: DocumentedInformation,
+    labels: RecordLabels,
+    *,
+    evidence_blobs: list[dict[str, Any]],
+    evidence_links: list[dict[str, Any]],
+) -> dict[str, Any]:
+    out = _record_summary(record, base, labels)
+    out.update(
+        {
+            "content_hash": record.content_hash,
+            "content_hash_version": record.content_hash_version,
+            "form_field_values": record.form_field_values,
+            "retention_basis_date": (
+                record.retention_basis_date.isoformat() if record.retention_basis_date else None
+            ),
+            "correction_of_readable": labels.correction_of_readable,
+            "superseded_by_correction_readable": labels.superseded_by_correction_readable,
+            "created_at": base.created_at.isoformat() if base.created_at else None,
+            "evidence_blobs": evidence_blobs,
+            "evidence_links": evidence_links,
+        }
+    )
     return out
 
 
@@ -392,7 +445,13 @@ async def _load(
 ) -> tuple[Record, DocumentedInformation]:
     record = await records_repo.get_record(session, record_id)
     base = await records_repo.get_base(session, record_id)
-    if record is None or base is None or record.org_id != caller.org_id:
+    if (
+        record is None
+        or base is None
+        or record.org_id != caller.org_id
+        or base.org_id != caller.org_id
+        or base.kind != DocumentKind.RECORD
+    ):
         raise ProblemException(status=404, code="not_found", title="Record not found")
     return record, base
 
@@ -431,16 +490,55 @@ async def _retention_until_for(session: AsyncSession, record: Record) -> datetim
         return None
 
 
+def _request_context(request: Request) -> RequestContext:
+    return RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
+
+
+async def _serialize_evidence_links(
+    session: AsyncSession,
+    caller: AppUser,
+    links: list[EvidenceForLink],
+    ctx: RequestContext,
+    *,
+    grant_sets: GrantSetCache | None = None,
+) -> list[dict[str, Any]]:
+    labels = await hydrate_evidence_target_labels(
+        session, caller, links, ctx, grant_sets=grant_sets
+    )
+    return [_evidence_link(link, labels[link.id]) for link in links]
+
+
 async def _serialize_full(
-    session: AsyncSession, record: Record, base: DocumentedInformation
+    session: AsyncSession,
+    caller: AppUser,
+    record: Record,
+    base: DocumentedInformation,
+    ctx: RequestContext,
+    *,
+    hydrate_links: bool,
 ) -> dict[str, Any]:
     blobs = await records_repo.list_evidence_blobs(session, record.id)
     links = await records_repo.list_evidence_links(session, record.id)
-    return _record(
+    grant_sets: GrantSetCache = {}
+    labels = await hydrate_record_labels(
+        session, caller, [(record, base)], ctx, grant_sets=grant_sets
+    )
+    serialized_links = (
+        await _serialize_evidence_links(session, caller, links, ctx, grant_sets=grant_sets)
+        if hydrate_links
+        else [
+            _evidence_link(link, EvidenceTargetLabel(label=None, readable=False)) for link in links
+        ]
+    )
+    return _record_detail(
         record,
         base,
+        labels[record.id],
         evidence_blobs=[_evidence_blob(eb, b) for eb, b in blobs],
-        evidence_links=[_evidence_link(link) for link in links],
+        evidence_links=serialized_links,
     )
 
 
@@ -498,76 +596,137 @@ async def capture_endpoint(
         rejection_context=_evidence_rejection_context(caller),
     )
     _, base = await _load(session, caller, record.id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.get("/records")
 async def list_records_endpoint(
+    request: Request,
+    params: Annotated[RecordListParams, Query()],
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-    limit: int = 50,
-    record_type: str | None = None,
-    source_document_id: uuid.UUID | None = None,
-    captured_by: uuid.UUID | None = None,
-    disposition_state: str | None = None,
-    legal_hold: bool | None = None,
-) -> list[dict[str, Any]]:
-    filters: list[ColumnElement[bool]] = []
-    if record_type is not None:
-        try:
-            filters.append(Record.record_type == RecordType(record_type))
-        except ValueError as exc:
-            raise ProblemException(
-                status=422, code="validation_error", title="Invalid record_type filter"
-            ) from exc
-    if source_document_id is not None:
-        filters.append(Record.source_document_id == source_document_id)
-    if captured_by is not None:
-        filters.append(Record.captured_by == captured_by)
-    if disposition_state is not None:
-        try:
-            filters.append(Record.disposition_state == RecordDispositionState(disposition_state))
-        except ValueError as exc:
-            raise ProblemException(
-                status=422, code="validation_error", title="Invalid disposition_state filter"
-            ) from exc
-    if legal_hold is not None:
-        filters.append(Record.legal_hold == legal_hold)
-    rows = await records_repo.list_records(
-        session, caller.org_id, filters=filters, limit=min(limit, 100)
+) -> dict[str, Any]:
+    criteria = RecordListCriteria(
+        q=params.q,
+        record_type=params.record_type,
+        source_document_id=params.source_document_id,
+        captured_by=params.captured_by,
+        disposition_state=params.disposition_state,
+        legal_hold=params.legal_hold,
     )
-    # Filter-not-403 (doc 15 §9.3): drop rows the caller may not record.read.
+    try:
+        client_after = decode_record_cursor(params.cursor, criteria) if params.cursor else None
+    except InvalidRecordCursor as exc:
+        raise ProblemException(
+            status=422, code="validation_error", title="Invalid records cursor"
+        ) from exc
+
     grants = await gather_grants(session, caller.id, caller.org_id, "record.read")
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
-    # S-records-R: batch-load each row's process binding so a bound Process-Owner's PROCESS-scoped
-    # record.read matches (the decoupled read scope; the write gates stay process-blind). The R3-1
-    # correction fallback runs only for the rare source-less corrected rows (empty union).
-    process_ids_by_record = await records_repo.record_process_ids_for(session, [r for r, _ in rows])
-    visible: list[tuple[Record, DocumentedInformation]] = []
-    for record, base in rows:
-        pids = process_ids_by_record.get(record.id) or set()
-        if not pids and record.correction_of is not None:
-            pids = await records_repo.record_process_ids_effective(session, record)
-        resource = ResourceContext(
-            artifact_id=str(record.id),
-            kind="RECORD",
-            folder_path=base.folder_path,
-            framework_id=str(base.framework_id),
-            process_ids=frozenset(pids),
+    if not grants:
+        return {
+            "data": [],
+            "page": {"limit": params.limit, "returned": 0, "next_cursor": None},
+        }
+
+    ctx = _request_context(request)
+    batch_size = max(100, min(500, params.limit * 4))
+    scan_after = client_after
+    readable: list[tuple[Record, DocumentedInformation]] = []
+
+    while len(readable) < params.limit + 1:
+        candidates = await records_repo.list_record_candidates(
+            session,
+            caller.org_id,
+            criteria=criteria,
+            after=scan_after,
+            limit=batch_size,
         )
-        if authorize(grants, "record.read", resource, ctx).allow:
-            visible.append((record, base))
-    return [_record(r, b) for r, b in visible]
+        if not candidates:
+            break
+
+        process_ids_by_record = await records_repo.record_process_ids_for(
+            session, [record for record, _base in candidates]
+        )
+        for record, base in candidates:
+            process_ids = process_ids_by_record.get(record.id) or set()
+            if (
+                not process_ids
+                and record.source_document_id is None
+                and record.correction_of is not None
+            ):
+                process_ids = await records_repo.record_process_ids_effective(session, record)
+            resource = ResourceContext(
+                artifact_id=str(record.id),
+                kind="RECORD",
+                folder_path=base.folder_path,
+                framework_id=str(base.framework_id),
+                process_ids=frozenset(process_ids),
+                lifecycle_state=base.current_state.value,
+            )
+            if authorize(grants, "record.read", resource, ctx).allow:
+                readable.append((record, base))
+                if len(readable) == params.limit + 1:
+                    break
+
+        if len(readable) == params.limit + 1 or len(candidates) < batch_size:
+            break
+        last_candidate = candidates[-1][0]
+        scan_after = RecordListCursor(
+            captured_at=last_candidate.captured_at,
+            record_id=last_candidate.id,
+        )
+
+    page_rows = readable[: params.limit]
+    next_cursor = None
+    if len(readable) > params.limit:
+        last_readable = page_rows[-1][0]
+        next_cursor = encode_record_cursor(
+            RecordListCursor(
+                captured_at=last_readable.captured_at,
+                record_id=last_readable.id,
+            ),
+            criteria,
+        )
+    labels = await hydrate_record_labels(
+        session,
+        caller,
+        page_rows,
+        ctx,
+        grant_sets={"record.read": grants},
+    )
+    return {
+        "data": [_record_summary(record, base, labels[record.id]) for record, base in page_rows],
+        "page": {
+            "limit": params.limit,
+            "returned": len(page_rows),
+            "next_cursor": next_cursor,
+        },
+    }
 
 
 @router.get("/records/{record_id}")
 async def get_record_endpoint(
     record_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     record, base = await _load(session, caller, record_id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=True,
+    )
 
 
 @router.get("/records/{record_id}/evidence/{sha256}/download")
@@ -698,18 +857,26 @@ async def correction_endpoint(
         rejection_context=_evidence_rejection_context(caller),
     )
     _, base = await _load(session, caller, new_record.id)
-    return await _serialize_full(session, new_record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        new_record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.get("/records/{record_id}/evidence-links")
 async def list_evidence_links_endpoint(
     record_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
     await _load(session, caller, record_id)
     links = await records_repo.list_evidence_links(session, record_id)
-    return [_evidence_link(link) for link in links]
+    return await _serialize_evidence_links(session, caller, links, _request_context(request))
 
 
 @router.post("/records/{record_id}/evidence-links", status_code=status.HTTP_201_CREATED)
@@ -732,7 +899,8 @@ async def link_evidence_endpoint(
         target_id=body.target_id,
         link_reason=body.link_reason,
     )
-    return _evidence_link(link)
+    serialized = await _serialize_evidence_links(session, caller, [link], _request_context(request))
+    return serialized[0]
 
 
 @router.delete(
@@ -790,6 +958,7 @@ async def get_disposition_endpoint(
 async def advance_disposition_endpoint(
     record_id: uuid.UUID,
     body: DispositionAdvance,
+    request: Request,
     caller: AppUser = Depends(_dispose),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -804,13 +973,21 @@ async def advance_disposition_endpoint(
         reason=body.reason,
     )
     _, base = await _load(session, caller, record.id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.post("/records/{record_id}/legal-hold")
 async def legal_hold_endpoint(
     record_id: uuid.UUID,
     body: LegalHoldAction,
+    request: Request,
     caller: AppUser = Depends(_dispose),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -821,7 +998,14 @@ async def legal_hold_endpoint(
     else:
         record = await release_legal_hold(session, caller, record_id, reason=body.reason)
     _, base = await _load(session, caller, record.id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.get("/records/{record_id}/worm-destroy-requests")
@@ -853,6 +1037,7 @@ async def approve_worm_destroy_endpoint(
     record_id: uuid.UUID,
     req_id: uuid.UUID,
     body: DispositionReason,
+    request: Request,
     caller: AppUser = Depends(_dispose),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -860,7 +1045,14 @@ async def approve_worm_destroy_endpoint(
     requester (409); the governance-bypass purge is fail-closed; COMPLIANCE mode is refused."""
     record = await approve_worm_destroy(session, caller, record_id, req_id, reason=body.reason)
     _, base = await _load(session, caller, record.id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.post("/records/{record_id}/worm-destroy-requests/{req_id}/cancel")

@@ -54,6 +54,8 @@ interface ChildRun {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  timedOut: boolean;
+  elapsedMs: number;
 }
 
 const PROBES = [
@@ -75,7 +77,7 @@ const PROBES = [
   },
 ] as const;
 
-function runProbe(): Promise<ChildRun> {
+function runProbe(probeFile: string, timeoutMs: number): Promise<ChildRun> {
   const webRoot = resolve(import.meta.dirname, "..");
   const cli = resolve(webRoot, "node_modules/@playwright/test/cli.js");
   const environment: NodeJS.ProcessEnv = {
@@ -86,15 +88,70 @@ function runProbe(): Promise<ChildRun> {
   delete environment.FORCE_COLOR;
 
   return new Promise((resolveRun, rejectRun) => {
+    const startedAt = Date.now();
     const child = spawn(
       process.execPath,
-      [cli, "test", "--config", "e2e/playwright.probe.config.ts"],
+      [cli, "test", `e2e/${probeFile}`, "--config", "e2e/playwright.probe.config.ts"],
       {
         cwd: webRoot,
         env: environment,
         stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
       },
     );
+    let timedOut = false;
+    let closeFired = false;
+    let settled = false;
+    let killTimeout: NodeJS.Timeout | undefined;
+
+    function clearTimers(): void {
+      clearTimeout(timeout);
+      if (killTimeout) clearTimeout(killTimeout);
+    }
+
+    function signalProbe(signal: NodeJS.Signals): void {
+      const pid = child.pid;
+      if (!Number.isInteger(pid) || (pid ?? 0) <= 0) {
+        throw new Error("Playwright probe has no valid positive process id");
+      }
+      if (process.platform !== "win32") {
+        try {
+          process.kill(-(pid as number), signal);
+          return;
+        } catch {
+          // The child can lose its POSIX group before delivery; fall back to its validated PID.
+        }
+      }
+      child.kill(signal);
+    }
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      try {
+        signalProbe("SIGTERM");
+      } catch (error) {
+        clearTimers();
+        if (!settled) {
+          settled = true;
+          rejectRun(error);
+        }
+        return;
+      }
+      if (!closeFired) {
+        killTimeout = setTimeout(() => {
+          if (closeFired) return;
+          try {
+            signalProbe("SIGKILL");
+          } catch (error) {
+            clearTimers();
+            if (!settled) {
+              settled = true;
+              rejectRun(error);
+            }
+          }
+        }, 2_000);
+      }
+    }, timeoutMs);
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -105,9 +162,26 @@ function runProbe(): Promise<ChildRun> {
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    child.once("error", rejectRun);
+    child.once("error", (error) => {
+      clearTimers();
+      if (!settled) {
+        settled = true;
+        rejectRun(error);
+      }
+    });
     child.once("close", (exitCode, signal) => {
-      resolveRun({ exitCode, signal, stdout, stderr });
+      closeFired = true;
+      clearTimers();
+      if (settled) return;
+      settled = true;
+      resolveRun({
+        exitCode,
+        signal,
+        stdout,
+        stderr,
+        timedOut,
+        elapsedMs: Date.now() - startedAt,
+      });
     });
   });
 }
@@ -127,11 +201,12 @@ function decodeAbortMarker(result: ProbeResult): unknown {
 }
 
 test("default fail-closed interceptor has exact abort and fatal outcomes", async () => {
-  const child = await runProbe();
+  const child = await runProbe("harness-fail-closed.probe.spec.ts", 10_000);
 
   expect(child.signal).toBeNull();
   expect(child.exitCode).toBe(1);
   expect(child.stderr).toBe("");
+  expect(child.timedOut).toBe(false);
 
   const report = JSON.parse(child.stdout) as ProbeReport;
   expect(report.errors).toEqual([]);
@@ -153,4 +228,12 @@ test("default fail-closed interceptor has exact abort and fatal outcomes", async
     expect(result?.errors.map((error) => error.message?.split("\n", 1)[0])).toEqual([probe.fatal]);
     expect(decodeAbortMarker(result as ProbeResult)).toEqual(probe.marker);
   }
+});
+
+test("terminates a timed-out probe within the bounded grace period", async () => {
+  const child = await runProbe("harness-timeout.probe.spec.ts", 1_000);
+
+  expect(child.timedOut).toBe(true);
+  expect(child.signal ?? child.exitCode).not.toBeNull();
+  expect(child.elapsedMs).toBeLessThan(8_000);
 });

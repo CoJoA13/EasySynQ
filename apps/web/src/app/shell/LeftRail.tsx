@@ -45,6 +45,9 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
   ],
   DO: [
     { to: "/library", label: "Library", prefix: "/library" },
+    // Ungated: record.read can be authorized at PROCESS scope, while this shell query is SYSTEM-only.
+    // The row-filtered Records API is the authority; no-grant callers receive the calm empty register.
+    { to: "/records", label: "Records", prefix: "/records" },
     { to: "/tasks", label: "Review and approve", prefix: "/tasks" },
     { to: "/imports", label: "Import", prefix: "/imports", gate: "import.review" },
   ],

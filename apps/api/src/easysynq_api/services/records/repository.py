@@ -22,20 +22,35 @@ from ...db.models._evidence_enums import EvidenceForTargetType
 from ...db.models._pack_enums import PackStatus
 from ...db.models._record_enums import RecordDispositionState
 from ...db.models._retention_enums import DispositionAction, RetentionBasis
+from ...db.models._vault_enums import DocumentKind
+from ...db.models.app_user import AppUser
+from ...db.models.audit_finding import AuditFinding
 from ...db.models.blob import Blob
+from ...db.models.capa import Capa
+from ...db.models.capa_stage import CapaStage
+from ...db.models.clause import Clause
 from ...db.models.disposition_event import DispositionEvent
+from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.evidence_pack import EvidencePack
+from ...db.models.framework import Framework
 from ...db.models.pending_blob_purge import PendingBlobPurge
-from ...db.models.process_link import ProcessLink
+from ...db.models.process import Process
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.storage_config import StorageConfig
 from ...db.models.system_config import SystemConfig
 from ...db.models.worm_destroy_request import WormDestroyRequest
+from ..vault import repository as vault_repo
+from .listing import (
+    RecordListCriteria,
+    RecordListCursor,
+    escape_ilike_literal,
+    normalize_record_search,
+)
 
 SYSTEM_DEFAULT_POLICY_NAME = "System Default Retention"
 SEALED_PACK_POLICY_NAME = "Sealed Evidence Pack Retention"
@@ -61,20 +76,230 @@ async def get_base(session: AsyncSession, record_id: uuid.UUID) -> DocumentedInf
     return await session.get(DocumentedInformation, record_id)
 
 
-async def list_records(
+async def load_label_actors(
+    session: AsyncSession, org_id: uuid.UUID, actor_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, AppUser]:
+    """Load record capturers in one tenant-constrained query."""
+    ids = set(actor_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(select(AppUser).where(AppUser.org_id == org_id, AppUser.id.in_(ids)))
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_documents(
+    session: AsyncSession, org_id: uuid.UUID, document_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, tuple[DocumentedInformation, DocumentType | None]]:
+    """Load document label/authz inputs in one query, anchored directly to the caller's org."""
+    ids = set(document_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(DocumentedInformation, DocumentType)
+            .outerjoin(
+                DocumentType,
+                and_(
+                    DocumentType.id == DocumentedInformation.document_type_id,
+                    DocumentType.org_id == org_id,
+                ),
+            )
+            .where(
+                DocumentedInformation.org_id == org_id,
+                DocumentedInformation.kind == DocumentKind.DOCUMENT,
+                DocumentedInformation.id.in_(ids),
+            )
+        )
+    ).all()
+    return {doc.id: (doc, document_type) for doc, document_type in rows}
+
+
+async def load_label_versions(
+    session: AsyncSession, org_id: uuid.UUID, version_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, DocumentVersion]:
+    """Load pinned-version labels in one tenant-constrained query."""
+    ids = set(version_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(
+            select(DocumentVersion).where(
+                DocumentVersion.org_id == org_id,
+                DocumentVersion.id.in_(ids),
+            )
+        )
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_policies(
+    session: AsyncSession, org_id: uuid.UUID, policy_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, RetentionPolicy]:
+    """Load snapshotted retention-policy names in one tenant-constrained query."""
+    ids = set(policy_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(
+            select(RetentionPolicy).where(
+                RetentionPolicy.org_id == org_id,
+                RetentionPolicy.id.in_(ids),
+            )
+        )
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_records(
+    session: AsyncSession, org_id: uuid.UUID, record_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, tuple[Record, DocumentedInformation]]:
+    """Load related record label/authz inputs in one query without crossing tenants."""
+    ids = set(record_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(Record, DocumentedInformation)
+            .join(DocumentedInformation, DocumentedInformation.id == Record.id)
+            .where(
+                Record.org_id == org_id,
+                DocumentedInformation.org_id == org_id,
+                DocumentedInformation.kind == DocumentKind.RECORD,
+                Record.id.in_(ids),
+            )
+        )
+    ).all()
+    return {record.id: (record, base) for record, base in rows}
+
+
+async def load_label_clauses(
+    session: AsyncSession, org_id: uuid.UUID, clause_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, Clause]:
+    """Load clause labels in one query through the framework tenant anchor."""
+    ids = set(clause_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(
+            select(Clause)
+            .join(Framework, Framework.id == Clause.framework_id)
+            .where(Framework.org_id == org_id, Clause.id.in_(ids))
+        )
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_processes(
+    session: AsyncSession, org_id: uuid.UUID, process_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, Process]:
+    """Load process labels in one tenant-constrained query."""
+    ids = set(process_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(select(Process).where(Process.org_id == org_id, Process.id.in_(ids)))
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_findings(
+    session: AsyncSession, org_id: uuid.UUID, finding_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, tuple[AuditFinding, DocumentedInformation]]:
+    """Load finding labels from their shared record bases in one tenant-constrained query."""
+    ids = set(finding_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(AuditFinding, DocumentedInformation)
+            .join(DocumentedInformation, DocumentedInformation.id == AuditFinding.id)
+            .where(
+                AuditFinding.org_id == org_id,
+                DocumentedInformation.org_id == org_id,
+                DocumentedInformation.kind == DocumentKind.RECORD,
+                AuditFinding.id.in_(ids),
+            )
+        )
+    ).all()
+    return {finding.id: (finding, base) for finding, base in rows}
+
+
+async def load_label_capa_stages(
+    session: AsyncSession, org_id: uuid.UUID, stage_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, tuple[CapaStage, Capa, DocumentedInformation]]:
+    """Load stage, parent CAPA, and shared CAPA label in one tenant-constrained query."""
+    ids = set(stage_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(CapaStage, Capa, DocumentedInformation)
+            .join(Capa, Capa.id == CapaStage.capa_id)
+            .join(DocumentedInformation, DocumentedInformation.id == Capa.id)
+            .where(
+                CapaStage.org_id == org_id,
+                Capa.org_id == org_id,
+                DocumentedInformation.org_id == org_id,
+                DocumentedInformation.kind == DocumentKind.RECORD,
+                CapaStage.id.in_(ids),
+            )
+        )
+    ).all()
+    return {stage.id: (stage, capa, base) for stage, capa, base in rows}
+
+
+async def list_record_candidates(
     session: AsyncSession,
     org_id: uuid.UUID,
     *,
-    filters: list,  # type: ignore[type-arg]  # list of SQLAlchemy boolean ColumnElements
+    criteria: RecordListCriteria,
+    after: RecordListCursor | None,
     limit: int,
 ) -> list[tuple[Record, DocumentedInformation]]:
-    """The records list (record ⨝ base), newest capture first; pre-authz ``limit`` cap."""
+    """Return deterministic tenant/search/filter candidates for the caller's PDP scan."""
+    filters: list[ColumnElement[bool]] = [
+        Record.org_id == org_id,
+        DocumentedInformation.org_id == org_id,
+        DocumentedInformation.kind == DocumentKind.RECORD,
+    ]
+    search = normalize_record_search(criteria.q)
+    if search is not None:
+        pattern = f"%{escape_ilike_literal(search)}%"
+        filters.append(
+            or_(
+                DocumentedInformation.identifier.ilike(pattern, escape="\\"),
+                DocumentedInformation.title.ilike(pattern, escape="\\"),
+            )
+        )
+    if criteria.record_type is not None:
+        filters.append(Record.record_type == criteria.record_type)
+    if criteria.source_document_id is not None:
+        filters.append(Record.source_document_id == criteria.source_document_id)
+    if criteria.captured_by is not None:
+        filters.append(Record.captured_by == criteria.captured_by)
+    if criteria.disposition_state is not None:
+        filters.append(Record.disposition_state == criteria.disposition_state)
+    if criteria.legal_hold is not None:
+        filters.append(Record.legal_hold == criteria.legal_hold)
+    if after is not None:
+        filters.append(
+            or_(
+                Record.captured_at < after.captured_at,
+                and_(
+                    Record.captured_at == after.captured_at,
+                    Record.id < after.record_id,
+                ),
+            )
+        )
+
     rows = (
         await session.execute(
             select(Record, DocumentedInformation)
             .join(DocumentedInformation, Record.id == DocumentedInformation.id)
-            .where(Record.org_id == org_id, *filters)
-            .order_by(desc(Record.captured_at))
+            .where(*filters)
+            .order_by(desc(Record.captured_at), desc(Record.id))
             .limit(limit)
         )
     ).all()
@@ -87,9 +312,10 @@ async def list_records(
 async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
     """The processes a record is bound to — for the PDP ``ResourceContext`` so a PROCESS-scoped
     ``record.read`` grant is honored: the record's evidence-for PROCESS links (leg A) + its source
-    document's process links (leg B). A record holds no ``ProcessLink`` of its own. This is the ONE
-    source of truth shared by the records read gate AND the evidence-pack classifier (do NOT
-    re-derive the union elsewhere)."""
+    document's canonical process tuple (leg B), including satellite bindings such as a Quality
+    Objective's ``process_id``. A record holds no ``ProcessLink`` of its own. This is the ONE source
+    of truth shared by the records read gate AND the evidence-pack classifier (do NOT re-derive the
+    authorization tuple elsewhere)."""
     via_link = (
         await session.scalars(
             select(EvidenceForLink.target_id).where(
@@ -98,18 +324,10 @@ async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
             )
         )
     ).all()
-    via_doc: list[uuid.UUID] = []
+    via_doc: frozenset[str] = frozenset()
     if record.source_document_id is not None:
-        via_doc = list(
-            (
-                await session.scalars(
-                    select(ProcessLink.process_id).where(
-                        ProcessLink.documented_information_id == record.source_document_id
-                    )
-                )
-            ).all()
-        )
-    return {str(x) for x in (*via_link, *via_doc)}
+        via_doc = await vault_repo.process_ids_for_doc(session, record.source_document_id)
+    return {str(x) for x in via_link} | set(via_doc)
 
 
 async def record_process_ids_effective(session: AsyncSession, record: Record) -> set[str]:
@@ -122,7 +340,7 @@ async def record_process_ids_effective(session: AsyncSession, record: Record) ->
     construction — ``capture_correction`` rejects an already-superseded original — but the set makes
     it robust on ANY input). Never crosses an org; never widens a record with its own binding."""
     own = await record_process_ids(session, record)
-    if own or record.correction_of is None:
+    if own or record.source_document_id is not None or record.correction_of is None:
         return own
     seen = {record.id}
     cursor: uuid.UUID | None = record.correction_of
@@ -162,18 +380,65 @@ async def record_process_ids_for(
 
     source_by_record = {r.id: r.source_document_id for r in records if r.source_document_id}
     if source_by_record:
-        doc_rows = (
-            await session.execute(
-                select(ProcessLink.documented_information_id, ProcessLink.process_id).where(
-                    ProcessLink.documented_information_id.in_(set(source_by_record.values()))
-                )
-            )
-        ).all()
-        by_doc: dict[uuid.UUID, set[str]] = {}
-        for did, pid in doc_rows:
-            by_doc.setdefault(did, set()).add(str(pid))
+        by_doc = await vault_repo.process_ids_for_docs(
+            session, list(set(source_by_record.values()))
+        )
         for rid, did in source_by_record.items():
             out[rid] |= by_doc.get(did, set())
+    return out
+
+
+async def record_process_ids_effective_for(
+    session: AsyncSession, records: list[Record]
+) -> dict[uuid.UUID, set[str]]:
+    """Batch the effective process tuple, including the source-less correction fallback.
+
+    The common leg-A/leg-B union is always two grouped queries. Correction ancestors are then
+    visited breadth-first: every depth uses one ``IN`` query for records plus the same grouped
+    union loader, so query count follows chain depth rather than output-row count. Tenant and cycle
+    checks are applied independently for every root.
+    """
+    out = await record_process_ids_for(session, records)
+    roots = {record.id: record for record in records}
+    cursors = {
+        record.id: record.correction_of
+        for record in records
+        if not out[record.id]
+        and record.source_document_id is None
+        and record.correction_of is not None
+    }
+    seen: dict[uuid.UUID, set[uuid.UUID]] = {record_id: {record_id} for record_id in cursors}
+
+    while cursors:
+        cursor_ids = set(cursors.values())
+        ancestors = list(
+            (
+                await session.scalars(
+                    select(Record).where(
+                        Record.id.in_(cursor_ids),
+                        Record.org_id.in_({root.org_id for root in roots.values()}),
+                    )
+                )
+            ).all()
+        )
+        by_id = {ancestor.id: ancestor for ancestor in ancestors}
+        own_by_ancestor = await record_process_ids_for(session, ancestors)
+        next_cursors: dict[uuid.UUID, uuid.UUID] = {}
+
+        for root_id, cursor_id in cursors.items():
+            root = roots[root_id]
+            ancestor = by_id.get(cursor_id)
+            if ancestor is None or ancestor.org_id != root.org_id or cursor_id in seen[root_id]:
+                continue
+            seen[root_id].add(cursor_id)
+            ancestor_own = own_by_ancestor.get(cursor_id) or set()
+            if ancestor_own:
+                out[root_id] = ancestor_own
+            elif ancestor.correction_of is not None:
+                next_cursors[root_id] = ancestor.correction_of
+
+        cursors = next_cursors
+
     return out
 
 

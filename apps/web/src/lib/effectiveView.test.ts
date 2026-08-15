@@ -362,6 +362,8 @@ describe("classifyEffectiveView", () => {
     ["/risks", "Risks"],
     ["/context", "Context"],
     ["/interested-parties", "Interested parties"],
+    ["/records", "Records"],
+    ["/records/record-a", "Record"],
   ])("retains the %s route title", (pathname, label) => {
     expect(view(pathname)).toMatchObject({
       title: `EasySynQ — ${label}`,

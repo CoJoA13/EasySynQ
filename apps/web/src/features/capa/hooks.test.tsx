@@ -5,7 +5,9 @@ import type { ReactNode } from "react";
 import { expect, test } from "vitest";
 import { AuthContext } from "../../lib/auth";
 import { TEST_AUTH } from "../../test/render";
+import { recordsFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
+import { useRecords } from "../records/hooks";
 import { useCapa, useCapas, useComplaints, useNcrs } from "./hooks";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -43,6 +45,71 @@ test("useCapa returns the detail with stages", async () => {
 test("useCapa is disabled when id is null", () => {
   const { result } = renderHook(() => useCapa(null), { wrapper });
   expect(result.current.fetchStatus).toBe("idle");
+});
+
+test("useRecords requests the bounded page and returns its summary rows", async () => {
+  let requestPathAndQuery = "";
+  server.use(
+    http.get("/api/v1/records", ({ request }) => {
+      const requestUrl = new URL(request.url);
+      requestPathAndQuery = `${requestUrl.pathname}${requestUrl.search}`;
+      return HttpResponse.json(recordsFixture);
+    }),
+  );
+
+  const { result } = renderHook(() => useRecords({ limit: 100 }), { wrapper });
+
+  await waitFor(() => expect(result.current.data).toBeDefined());
+  expect(requestPathAndQuery).toBe("/api/v1/records?limit=100");
+  expect(result.current.data!.data.map((record) => record.identifier)).toContain("REC-000041");
+});
+
+test("useRecords aborts a superseded request before its late page can replace current data", async () => {
+  let markOlderRequestStarted!: () => void;
+  const olderRequestStarted = new Promise<void>((resolve) => {
+    markOlderRequestStarted = resolve;
+  });
+  let releaseOlderResponse!: () => void;
+  const olderResponseReleased = new Promise<void>((resolve) => {
+    releaseOlderResponse = resolve;
+  });
+  let olderRequestAborted = false;
+
+  server.use(
+    http.get("/api/v1/records", async ({ request }) => {
+      const requestUrl = new URL(request.url);
+      if (requestUrl.searchParams.get("q") === "older") {
+        request.signal.addEventListener(
+          "abort",
+          () => {
+            olderRequestAborted = true;
+          },
+          { once: true },
+        );
+        markOlderRequestStarted();
+        await olderResponseReleased;
+        return HttpResponse.json({ ...recordsFixture, data: recordsFixture.data.slice(0, 1) });
+      }
+      return HttpResponse.json({ ...recordsFixture, data: recordsFixture.data.slice(1) });
+    }),
+  );
+
+  const { result, rerender } = renderHook(({ q }: { q: string }) => useRecords({ limit: 100, q }), {
+    wrapper,
+    initialProps: { q: "older" },
+  });
+
+  await olderRequestStarted;
+  rerender({ q: "newer" });
+
+  try {
+    await waitFor(() => expect(olderRequestAborted).toBe(true));
+    await waitFor(() => expect(result.current.data?.data[0]?.identifier).toBe("REC-000042"));
+  } finally {
+    releaseOlderResponse();
+  }
+
+  await waitFor(() => expect(result.current.data?.data[0]?.identifier).toBe("REC-000042"));
 });
 
 test("useComplaints returns the {data} rows", async () => {

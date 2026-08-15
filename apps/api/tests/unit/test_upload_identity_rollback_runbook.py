@@ -1213,7 +1213,7 @@ def test_appliance_rejects_invalid_hostname_and_real_openssl_rejects_ca(
         env={"PATH": f"{fake_bin}:/usr/bin:/bin", "ESQ_SUDO_LOG": str(sudo_log)},
     )
     assert invalid_ca.returncode != 0
-    assert "Could not read certificate" in invalid_ca.stderr
+    assert sudo_log.read_text(encoding="utf-8") == "easysynq-status --ca\n"
 
 
 def test_repository_build_and_cleanup_failures_are_safe(tmp_path: pathlib.Path) -> None:

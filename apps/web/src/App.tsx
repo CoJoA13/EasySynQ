@@ -45,6 +45,8 @@ import { ContextRegisterPage } from "./features/context/ContextRegisterPage";
 import { InterestedPartiesRegisterPage } from "./features/interested-parties/InterestedPartiesRegisterPage";
 import { NotificationsPage } from "./features/notifications/NotificationsPage";
 import { NotificationSettingsPage } from "./features/notifications/NotificationSettingsPage";
+import { RecordsPage } from "./features/records/RecordsPage";
+import { RecordDetailPage } from "./features/records/RecordDetailPage";
 import { useAuth } from "./lib/auth";
 import { MutationFeedbackProvider } from "./lib/mutationFeedback";
 import { RouteChromeProvider, useRouteChrome } from "./lib/routeChrome";
@@ -256,6 +258,8 @@ function AppContent() {
           <Route path="risks" element={<RisksRegisterPage />} />
           <Route path="context" element={<ContextRegisterPage />} />
           <Route path="interested-parties" element={<InterestedPartiesRegisterPage />} />
+          <Route path="records" element={<RecordsPage />} />
+          <Route path="records/:recordId" element={<RecordDetailPage />} />
         </Route>
         <Route
           path="*"

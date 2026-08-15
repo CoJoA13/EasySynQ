@@ -2351,10 +2351,23 @@ paths:
       summary: List records the caller may read (row-filtered by record.read).
       description: >-
         Row-filtered by record.read (filter, not 403). Effective-immutable records only (records are
-        not in the documents surface). Plain query-param filters (no bracketed grammar); a bad enum
-        value → 422. limit is a pre-authz cap.
+        not in the documents surface). Results are ordered by captured_at DESC, id DESC. The cursor is
+        opaque and versioned, bound to the normalized query and filters. Plain query-param filters use
+        no bracketed grammar.
       parameters:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque, versioned page token bound to the normalized query and filters.
+          schema: { type: string, minLength: 1 }
+        - name: q
+          in: query
+          required: false
+          description: >-
+            Trimmed, case-insensitive substring search over record identifier and title. Blank values
+            are ignored; percent, underscore, and the escape character are matched literally.
+          schema: { type: string, maxLength: 200 }
         - name: record_type
           in: query
           required: false
@@ -2371,9 +2384,12 @@ paths:
           description: Records (newest capture first).
           content:
             application/json:
-              schema: { type: array, items: { $ref: "#/components/schemas/Record" } }
+              schema: { $ref: "#/components/schemas/RecordPage" }
         "422":
-          description: Invalid filter value (bad enum; code=validation_error).
+          description: >-
+            Validation error (code=validation_error): invalid enum, UUID, or limit; an overlong
+            search value; a malformed or unsupported-version cursor; or a cursor whose bound query
+            and filters do not match this request.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -8542,12 +8558,14 @@ components:
     EvidenceLink:
       type: object
       additionalProperties: false
-      required: [id, record_id, target_type, target_id]
+      required: [id, record_id, target_type, target_id, target_label, target_readable]
       properties:
         id: { type: string, format: uuid }
         record_id: { type: string, format: uuid }
         target_type: { type: string, enum: [clause, process, document, finding, capa_stage] }
         target_id: { type: string, format: uuid }
+        target_label: { type: [string, "null"] }
+        target_readable: { type: boolean }
         link_reason: { type: [string, "null"] }
         created_at: { type: [string, "null"], format: date-time }
 
@@ -10098,7 +10116,7 @@ components:
     Record:
       type: object
       additionalProperties: false
-      required: [id, identifier, kind, record_type, title, classification, framework_id, captured_by, content_hash_version, retention_policy_id, disposition_state, legal_hold]
+      required: [id, identifier, kind, record_type, title, classification, framework_id, captured_by, content_hash_version, retention_policy_id, disposition_state, legal_hold, source_document_readable, correction_of_readable, superseded_by_correction_readable]
       properties:
         id: { type: string, format: uuid }
         identifier: { type: string, example: REC-QA-014 }
@@ -10109,6 +10127,7 @@ components:
         framework_id: { type: string, format: uuid }
         captured_at: { type: [string, "null"], format: date-time }
         captured_by: { type: string, format: uuid }
+        captured_by_display_name: { type: [string, "null"] }
         content_hash:
           type: [string, "null"]
           description: The "sha256:"-prefixed seal over the structured content + the evidence-digest manifest.
@@ -10120,15 +10139,20 @@ components:
           type: [string, "null"]
           format: uuid
           description: The controlled document this record was produced under, or null for ad-hoc EVIDENCE.
+        source_document_identifier: { type: [string, "null"] }
+        source_document_title: { type: [string, "null"] }
+        source_document_readable: { type: boolean }
         source_version_id:
           type: [string, "null"]
           format: uuid
           description: The exact pinned version (R21) — required when source_document_id is set, else null.
+        source_version_label: { type: [string, "null"] }
         form_field_values: { type: [object, "null"], additionalProperties: true }
         retention_policy_id:
           type: string
           format: uuid
           description: The retention policy snapshotted at capture (one-way ratchet, doc 06 §5.2).
+        retention_policy_name: { type: [string, "null"] }
         retention_basis_date:
           type: [string, "null"]
           format: date
@@ -10144,10 +10168,12 @@ components:
           type: [string, "null"]
           format: uuid
           description: The record this one corrects (when this record is itself a correction), or null.
+        correction_of_readable: { type: boolean }
         superseded_by_correction:
           type: [string, "null"]
           format: uuid
           description: The successor that corrected this record (this record stays retrievable), or null.
+        superseded_by_correction_readable: { type: boolean }
         created_at: { type: [string, "null"], format: date-time }
         evidence_blobs:
           type: array
@@ -10157,6 +10183,52 @@ components:
           type: array
           items: { $ref: "#/components/schemas/EvidenceLink" }
           description: The evidence-for links (omitted on the list serializer, present on single reads).
+
+    RecordSummary:
+      type: object
+      additionalProperties: false
+      required: [id, identifier, kind, record_type, title, classification, framework_id, captured_at, captured_by, captured_by_display_name, source_document_id, source_document_identifier, source_document_title, source_document_readable, source_version_id, source_version_label, retention_policy_id, retention_policy_name, disposition_state, legal_hold, has_structured_pdf, correction_of, superseded_by_correction]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string, example: REC-QA-014 }
+        kind: { type: string, enum: [DOCUMENT, RECORD] }
+        record_type: { $ref: "#/components/schemas/RecordType" }
+        title: { type: string }
+        classification: { type: string, enum: [Public, Internal, Confidential, Restricted] }
+        framework_id: { type: string, format: uuid }
+        captured_at: { type: [string, "null"], format: date-time }
+        captured_by: { type: string, format: uuid }
+        captured_by_display_name: { type: [string, "null"] }
+        source_document_id: { type: [string, "null"], format: uuid }
+        source_document_identifier: { type: [string, "null"] }
+        source_document_title: { type: [string, "null"] }
+        source_document_readable: { type: boolean }
+        source_version_id: { type: [string, "null"], format: uuid }
+        source_version_label: { type: [string, "null"] }
+        retention_policy_id: { type: string, format: uuid }
+        retention_policy_name: { type: [string, "null"] }
+        disposition_state: { type: string, enum: [ACTIVE, DUE_FOR_REVIEW, ON_HOLD, DISPOSED] }
+        legal_hold: { type: boolean }
+        has_structured_pdf: { type: boolean }
+        correction_of: { type: [string, "null"], format: uuid }
+        superseded_by_correction: { type: [string, "null"], format: uuid }
+
+    RecordPage:
+      type: object
+      additionalProperties: false
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/RecordSummary" }
+        page:
+          type: object
+          additionalProperties: false
+          required: [limit, returned, next_cursor]
+          properties:
+            limit: { type: integer, minimum: 1, maximum: 100 }
+            returned: { type: integer, minimum: 0 }
+            next_cursor: { type: [string, "null"] }
 
     RecordCreate:
       type: object

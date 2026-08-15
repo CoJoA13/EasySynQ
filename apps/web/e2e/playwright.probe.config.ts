@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: ".",
-  testMatch: "harness-fail-closed.probe.spec.ts",
+  testMatch: "*.probe.spec.ts",
   outputDir: "../test-results/probe",
   fullyParallel: false,
   retries: 0,

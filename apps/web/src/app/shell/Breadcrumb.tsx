@@ -1,7 +1,9 @@
 import { Anchor, Breadcrumbs, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "react-router-dom";
-import type { DocumentSummary } from "../../lib/types";
+import type { ReactNode } from "react";
+import type { DocumentSummary, RecordDetail } from "../../lib/types";
+import { useFreshRecordData } from "../../features/records/hooks";
 
 const LABELS: Record<string, string> = {
   "": "Home",
@@ -31,6 +33,7 @@ const LABELS: Record<string, string> = {
   risks: "Risk & opportunity register",
   context: "Context of the organization",
   "interested-parties": "Interested parties",
+  records: "Records",
   search: "Search",
 };
 
@@ -42,6 +45,7 @@ const DETAIL_LABELS: Record<string, string> = {
   ingestion: "Import run",
   objectives: "Objective",
   "management-reviews": "Management review",
+  records: "Record",
   dcrs: "Change request",
 };
 
@@ -57,6 +61,16 @@ const NON_ROUTE_CRUMBS = new Set(["/documents", "/reports", "/settings"]);
 
 function isRoutableCrumb(path: string): boolean {
   return !NON_ROUTE_CRUMBS.has(path) && !/^\/dcrs\/[^/]+$/.test(path);
+}
+
+function RecordBreadcrumbLabel({ recordId }: { recordId: string }) {
+  const recordQuery = useQuery<RecordDetail>({
+    queryKey: ["record", recordId],
+    queryFn: () => Promise.reject(new Error("breadcrumb does not fetch")),
+    enabled: false,
+  });
+  const record = useFreshRecordData(recordId, recordQuery);
+  return <>{record?.identifier ?? DETAIL_LABELS.records}</>;
 }
 
 export interface BreadcrumbProps {
@@ -80,7 +94,6 @@ export function Breadcrumb({ notFound = false }: BreadcrumbProps) {
     queryFn: () => Promise.reject(new Error("breadcrumb does not fetch")),
     enabled: false,
   });
-
   if (notFound) {
     return (
       <Breadcrumbs aria-label="Breadcrumb">
@@ -92,12 +105,15 @@ export function Breadcrumb({ notFound = false }: BreadcrumbProps) {
     );
   }
 
-  const crumbs = [{ to: "/", label: "Home", linkable: true }].concat(
-    segments.map((seg, i) => {
+  const crumbs: { to: string; label: ReactNode; linkable: boolean }[] = [
+    { to: "/", label: "Home", linkable: true },
+    ...segments.map((seg, i) => {
       const parent = i > 0 ? segments[i - 1] : null;
-      let label = LABELS[seg];
+      let label: ReactNode = LABELS[seg];
       if (!label && parent === "documents") {
         label = doc?.identifier ?? DETAIL_LABELS.documents;
+      } else if (!label && parent === "records") {
+        label = <RecordBreadcrumbLabel key={seg} recordId={seg} />;
       } else if (!label && parent) {
         label = DETAIL_LABELS[parent];
       }
@@ -105,7 +121,7 @@ export function Breadcrumb({ notFound = false }: BreadcrumbProps) {
       const to = "/" + segments.slice(0, i + 1).join("/");
       return { to, label, linkable: isRoutableCrumb(to) };
     }),
-  );
+  ];
   return (
     <Breadcrumbs aria-label="Breadcrumb">
       {crumbs.map((c, i) =>

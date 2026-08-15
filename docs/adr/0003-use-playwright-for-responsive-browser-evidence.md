@@ -68,3 +68,13 @@ responsive contract from regressing.
 Revisit the dedicated entry, engine matrix, fixture ownership, worker count, and live-stack boundary on
 production-auth browser acceptance, a material non-Chromium divergence, or expansion beyond the focused
 cohort.
+
+## Reassessment — 2026-08-15
+
+The Records register and detail routes expand the focused responsive-browser cohort. They continue to use
+the dedicated authenticated test entry, centrally owned fail-closed fixtures, Chromium as the only engine,
+one worker, zero retries, and the synthetic frontend boundary rather than a live application stack.
+
+This focused-cohort expansion does not otherwise fire the payoff trigger. Production-auth browser
+acceptance, a material non-Chromium divergence, and a reason to revisit fixture ownership, worker count,
+or the live-stack boundary remain unproven.

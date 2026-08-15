@@ -11,22 +11,31 @@ own-id-scoped (the shared session DB accumulates rows).
 from __future__ import annotations
 
 import asyncio
+import datetime
 import uuid
 from collections.abc import Callable
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.db.models._objective_enums import ObjectiveDirection
 from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.document_version import DocumentVersion
+from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.quality_objective import QualityObjective
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.services.records import repository as records_repo
 from easysynq_api.services.records.service import link_evidence
 
 from . import s5_helpers as s5
+from .test_packs import _seal, _teardown
 from .test_processes import _create_process, _link_doc_to_process
 from .test_records import (
     _capture,
@@ -41,7 +50,14 @@ from .test_vault import _auth, _checkin, _create, _ensure_user, _upload
 pytestmark = pytest.mark.integration
 
 
-async def _grant_scoped(subject: str, key: str, *, level: ScopeLevel, selector: dict) -> uuid.UUID:
+async def _grant_scoped(
+    subject: str,
+    key: str,
+    *,
+    level: ScopeLevel,
+    selector: dict,
+    effect: Effect = Effect.ALLOW,
+) -> uuid.UUID:
     """Mint a scoped permission override (no SYSTEM) — the direct-grant precedent (test_processes
     ``:assignment_process`` / ``_assign_role_bound``)."""
     async with get_sessionmaker()() as s:
@@ -55,7 +71,7 @@ async def _grant_scoped(subject: str, key: str, *, level: ScopeLevel, selector: 
                 org_id=user.org_id,
                 user_id=user.id,
                 permission_id=perm.id,
-                effect=Effect.ALLOW,
+                effect=effect,
                 scope_id=scope.id,
             )
         )
@@ -63,10 +79,16 @@ async def _grant_scoped(subject: str, key: str, *, level: ScopeLevel, selector: 
         return user.id
 
 
-async def _grant_process(subject: str, key: str, *process_ids: str) -> uuid.UUID:
+async def _grant_process(
+    subject: str, key: str, *process_ids: str, effect: Effect = Effect.ALLOW
+) -> uuid.UUID:
     """A PROCESS-scoped override over the given process ids."""
     return await _grant_scoped(
-        subject, key, level=ScopeLevel.PROCESS, selector={"process_ids": list(process_ids)}
+        subject,
+        key,
+        level=ScopeLevel.PROCESS,
+        selector={"process_ids": list(process_ids)},
+        effect=effect,
     )
 
 
@@ -153,7 +175,7 @@ async def test_process_owner_record_list_filters_by_process(
 
     listed = await app_client.get("/api/v1/records?limit=100", headers=hb)
     assert listed.status_code == 200, listed.text
-    ids = {rec["id"] for rec in listed.json()}
+    ids = {rec["id"] for rec in listed.json()["data"]}
     assert r1["id"] in ids
     assert r2["id"] not in ids
 
@@ -242,6 +264,429 @@ async def test_correction_chain_two_hops_keeps_visibility(
     await _grant_process(owner, "record.read", p1["id"])
     hb = _auth(token_factory, owner)
     assert (await app_client.get(f"/api/v1/records/{s2}", headers=hb)).status_code == 200
+    listed = await app_client.get("/api/v1/records?limit=100", headers=hb)
+    assert listed.status_code == 200, listed.text
+    assert s2 in {record["id"] for record in listed.json()["data"]}
+
+
+async def test_process_pack_traverses_unbound_source_backed_bridge_for_source_less_tail(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Pack discovery crosses an empty-tuple source-backed bridge without selecting it."""
+    author = _subject("source-backed-bridge-author")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)
+    author_headers = _auth(token_factory, author)
+    process = await _create_process(app_client, author_headers)
+    record_ids: list[str] = []
+    owned_document_ids: list[str] = []
+    pack_id: uuid.UUID | None = None
+
+    try:
+        original = await _capture_evidence(app_client, author_headers)
+        original_id = original["id"]
+        record_ids.append(original_id)
+        await _link_process(app_client, author_headers, original_id, process["id"])
+
+        source_backed_id = await _correct(app_client, author_headers, original_id)
+        record_ids.append(source_backed_id)
+        source_less_id = await _correct(app_client, author_headers, source_backed_id)
+        record_ids.append(source_less_id)
+
+        # The correction API now carries a source pin forward, so create the two real corrections
+        # first and then shape the stored legacy topology under test: only the intermediate row has
+        # an unbound real source document. The original and tail keep their API-produced hashes.
+        unbound_source = await _create(app_client, author_headers, await s5.type_id("SOP"))
+        owned_document_ids.append(unbound_source["id"])
+        async with get_sessionmaker()() as session:
+            source_backed = await session.get(Record, uuid.UUID(source_backed_id))
+            assert source_backed is not None
+            source_backed.source_document_id = uuid.UUID(unbound_source["id"])
+            await session.commit()
+
+        owner = _subject("source-backed-bridge-owner")
+        await _grant_process(owner, "record.read", process["id"])
+        await _grant(owner, ("report.evidence_pack.generate", "report.export"))
+        owner_headers = _auth(token_factory, owner)
+
+        listed = await app_client.get("/api/v1/records?limit=100", headers=owner_headers)
+        assert listed.status_code == 200, listed.text
+        listed_ids = {row["id"] for row in listed.json()["data"]}
+        assert original_id in listed_ids
+        assert source_backed_id not in listed_ids
+        assert source_less_id in listed_ids
+
+        detail_source_less = await app_client.get(
+            f"/api/v1/records/{source_less_id}", headers=owner_headers
+        )
+        assert detail_source_less.status_code == 200
+
+        pack = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=owner_headers,
+            json={
+                "title": "Source-backed bridge parity pack",
+                "scope_kind": "PROCESS",
+                "process_ids": [process["id"]],
+            },
+        )
+        assert pack.status_code == 201, pack.text
+        pack_id = uuid.UUID(pack.json()["id"])
+        preview_statuses = {
+            item["record_id"]: item["inclusion_status"] for item in pack.json()["items"]
+        }
+        assert preview_statuses.get(original_id) == "INCLUDED"
+        assert source_backed_id not in preview_statuses
+        assert preview_statuses.get(source_less_id) == "INCLUDED"
+
+        await _seal(pack_id)
+        sealed = await app_client.get(f"/api/v1/evidence-packs/{pack_id}", headers=owner_headers)
+        assert sealed.status_code == 200, sealed.text
+        assert sealed.json()["status"] == "SEALED"
+        sealed_statuses = {
+            item["record_id"]: item["inclusion_status"] for item in sealed.json()["items"]
+        }
+        assert sealed_statuses.get(source_less_id) == "INCLUDED"
+    finally:
+        if record_ids:
+            async with get_sessionmaker()() as session:
+                for record_id in record_ids:
+                    record = await session.get(Record, uuid.UUID(record_id))
+                    if record is not None:
+                        record.correction_of = None
+                        record.superseded_by_correction = None
+                await session.commit()
+        await _teardown(
+            record_ids=[*record_ids, *owned_document_ids],
+            pack_id=pack_id,
+            scope_id=None,
+            process_id=uuid.UUID(process["id"]),
+        )
+
+
+async def test_source_backed_correction_does_not_inherit_process_visibility(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """R3-1 is source-less only: an unbound source-backed correction cannot inherit P1."""
+    author = _subject("rc-source-a")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)
+    headers = _auth(token_factory, author)
+    process = await _create_process(app_client, headers)
+    original = await _capture_evidence(app_client, headers)
+    await _link_process(app_client, headers, original["id"], process["id"])
+
+    source = await _create(app_client, headers, await s5.type_id("SOP"))
+    await app_client.post(f"/api/v1/documents/{source['id']}/checkout", headers=headers)
+    sha = await _upload(
+        app_client,
+        headers,
+        source["id"],
+        f"source-backed-{uuid.uuid4().hex}".encode(),
+    )
+    checked_in = await _checkin(
+        app_client,
+        headers,
+        source["id"],
+        sha,
+        change_reason="source-backed list proof",
+        change_significance="MAJOR",
+    )
+    assert checked_in.status_code == 201, checked_in.text
+
+    marker = f"source-backed-{uuid.uuid4().hex}"
+    correction_evidence = await _upload_evidence(
+        app_client, headers, f"source-backed-correction-{uuid.uuid4().hex}".encode()
+    )
+    corrected = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=headers,
+        json={
+            "record_type": "RELEASE",
+            "title": marker,
+            "source_document_id": source["id"],
+            "source_version_id": checked_in.json()["id"],
+            "evidence": [_evidence_json(correction_evidence)],
+        },
+    )
+    assert corrected.status_code == 201, corrected.text
+    corrected_id = corrected.json()["id"]
+    async with get_sessionmaker()() as session:
+        corrected_record = await session.get(Record, uuid.UUID(corrected_id))
+        assert corrected_record is not None
+        corrected_record.structured_pdf_blob_sha256 = correction_evidence.sha256
+        await session.commit()
+
+    owner = _subject("rc-source-b")
+    await _grant_process(owner, "record.read", process["id"])
+    await _grant(owner, ("report.evidence_pack.generate", "report.export"))
+    owner_headers = _auth(token_factory, owner)
+    listed = await app_client.get(
+        "/api/v1/records",
+        headers=owner_headers,
+        params={"q": marker, "limit": 100},
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"] == []
+
+    # Every scalar read surface must agree with the list's source-less-only inheritance rule.
+    for path in (
+        f"/api/v1/records/{corrected_id}",
+        f"/api/v1/records/{corrected_id}/evidence/{correction_evidence.sha256}/download",
+        f"/api/v1/records/{corrected_id}/rendition",
+    ):
+        assert (await app_client.get(path, headers=owner_headers)).status_code == 403
+
+    # The readable predecessor must not leak the restricted successor through its lineage label.
+    predecessor = await app_client.get(f"/api/v1/records/{original['id']}", headers=owner_headers)
+    assert predecessor.status_code == 200, predecessor.text
+    assert predecessor.json()["superseded_by_correction_readable"] is False
+
+    pack = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=owner_headers,
+        json={
+            "title": "Source-backed correction parity pack",
+            "scope_kind": "PROCESS",
+            "process_ids": [process["id"]],
+        },
+    )
+    assert pack.status_code == 201, pack.text
+    assert corrected_id not in {item["record_id"] for item in pack.json()["items"]}
+    await _seal(uuid.UUID(pack.json()["id"]))
+    sealed_pack = await app_client.get(
+        f"/api/v1/evidence-packs/{pack.json()['id']}", headers=owner_headers
+    )
+    assert sealed_pack.status_code == 200, sealed_pack.text
+    assert sealed_pack.json()["status"] == "SEALED"
+    assert corrected_id not in {item["record_id"] for item in sealed_pack.json()["items"]}
+
+
+async def test_scalar_source_backed_correction_does_not_inherit_process_visibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scalar gate must apply the same source-less-only fallback as the batched list gate."""
+    source_backed = SimpleNamespace(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        record_type="RELEASE",
+        captured_at=None,
+        captured_by=uuid.uuid4(),
+        source_document_id=uuid.uuid4(),
+        source_version_id=uuid.uuid4(),
+        retention_policy_id=uuid.uuid4(),
+        correction_of=uuid.uuid4(),
+    )
+
+    async def own_processes(_session: object, record: SimpleNamespace) -> set[str]:
+        return set() if record.id == source_backed.id else {str(uuid.uuid4())}
+
+    class _Session:
+        async def get(self, _model: object, record_id: uuid.UUID) -> SimpleNamespace:
+            return SimpleNamespace(
+                id=record_id,
+                org_id=source_backed.org_id,
+                record_type="EVIDENCE",
+                captured_at=None,
+                captured_by=uuid.uuid4(),
+                retention_policy_id=uuid.uuid4(),
+                source_document_id=None,
+                correction_of=None,
+            )
+
+    monkeypatch.setattr(records_repo, "record_process_ids", own_processes)
+
+    assert (
+        await records_repo.record_process_ids_effective(  # type: ignore[arg-type]
+            _Session(), source_backed
+        )
+        == set()
+    )
+
+
+async def test_objective_source_process_binding_is_consistent_across_record_read_surfaces(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A QualityObjective satellite binding drives list/detail/bytes/rendition/lineage and packs.
+
+    The source has deliberately no ProcessLink: its only process association is
+    ``quality_objective.process_id``. A broad ALLOW plus a matching PROCESS DENY proves deny-wins
+    on the same canonical tuple instead of merely proving a narrow positive path.
+    """
+    author = _subject("objective-record-author")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)
+    author_headers = _auth(token_factory, author)
+    process = await _create_process(app_client, author_headers)
+
+    source = await _create(app_client, author_headers, await s5.type_id("SOP"))
+    await app_client.post(f"/api/v1/documents/{source['id']}/checkout", headers=author_headers)
+    source_sha = await _upload(
+        app_client,
+        author_headers,
+        source["id"],
+        f"objective-source-{uuid.uuid4().hex}".encode(),
+    )
+    checked_in = await _checkin(
+        app_client,
+        author_headers,
+        source["id"],
+        source_sha,
+        change_reason="objective source process proof",
+        change_significance="MAJOR",
+    )
+    assert checked_in.status_code == 201, checked_in.text
+
+    async with get_sessionmaker()() as session:
+        source_row = await session.get(DocumentedInformation, uuid.UUID(source["id"]))
+        assert source_row is not None
+        session.add(
+            QualityObjective(
+                id=source_row.id,
+                org_id=source_row.org_id,
+                target_value=Decimal("1"),
+                unit="proof",
+                direction=ObjectiveDirection.HIGHER_IS_BETTER,
+                due_date=datetime.date(2026, 12, 31),
+                process_id=uuid.UUID(process["id"]),
+            )
+        )
+        await session.commit()
+
+    title = f"Objective-source record {uuid.uuid4().hex}"
+    evidence = await _upload_evidence(
+        app_client, author_headers, f"objective-evidence-{uuid.uuid4().hex}".encode()
+    )
+    captured = await _capture(
+        app_client,
+        author_headers,
+        record_type="EVIDENCE",
+        title=title,
+        source_document_id=source["id"],
+        source_version_id=checked_in.json()["id"],
+        evidence=[_evidence_json(evidence)],
+    )
+    assert captured.status_code == 201, captured.text
+    record_id = captured.json()["id"]
+    async with get_sessionmaker()() as session:
+        record = await session.get(Record, uuid.UUID(record_id))
+        assert record is not None
+        # Reuse the test's real stored blob as the rendition pointer; this route proof is about the
+        # shared read gate, not the asynchronous renderer.
+        record.structured_pdf_blob_sha256 = evidence.sha256
+        await session.commit()
+
+    correction = await app_client.post(
+        f"/api/v1/records/{record_id}/correction",
+        headers=author_headers,
+        json={"record_type": "EVIDENCE", "title": f"{title} correction"},
+    )
+    assert correction.status_code == 201, correction.text
+    correction_id = correction.json()["id"]
+
+    owner = _subject("objective-record-owner")
+    await _grant_process(owner, "record.read", process["id"])
+    await _grant(owner, ("report.evidence_pack.generate", "report.export"))
+    owner_headers = _auth(token_factory, owner)
+
+    listed = await app_client.get(
+        "/api/v1/records", headers=owner_headers, params={"q": title, "limit": 100}
+    )
+    assert listed.status_code == 200, listed.text
+    assert {row["id"] for row in listed.json()["data"]} == {record_id, correction_id}
+    detail = await app_client.get(f"/api/v1/records/{correction_id}", headers=owner_headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["correction_of_readable"] is True
+    assert (
+        await app_client.get(
+            f"/api/v1/records/{record_id}/evidence/{evidence.sha256}/download",
+            headers=owner_headers,
+        )
+    ).status_code == 200
+    assert (
+        await app_client.get(f"/api/v1/records/{record_id}/rendition", headers=owner_headers)
+    ).status_code == 200
+
+    pack = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=owner_headers,
+        json={
+            "title": "Objective source process pack",
+            "scope_kind": "PROCESS",
+            "process_ids": [process["id"]],
+        },
+    )
+    assert pack.status_code == 201, pack.text
+    statuses = {
+        item["record_id"]: item["inclusion_status"]
+        for item in pack.json()["items"]
+        if item["record_id"] in {record_id, correction_id}
+    }
+    assert statuses == {record_id: "INCLUDED", correction_id: "INCLUDED"}
+    await _seal(uuid.UUID(pack.json()["id"]))
+    sealed = await app_client.get(
+        f"/api/v1/evidence-packs/{pack.json()['id']}", headers=owner_headers
+    )
+    assert sealed.status_code == 200, sealed.text
+    assert sealed.json()["status"] == "SEALED"
+    sealed_statuses = {
+        item["record_id"]: item["inclusion_status"]
+        for item in sealed.json()["items"]
+        if item["record_id"] in {record_id, correction_id}
+    }
+    assert sealed_statuses == {record_id: "INCLUDED", correction_id: "INCLUDED"}
+
+    denied = _subject("objective-record-denied")
+    await _grant(denied, ("record.read", "report.evidence_pack.generate", "report.export"))
+    await _grant_process(denied, "record.read", process["id"], effect=Effect.DENY)
+    denied_headers = _auth(token_factory, denied)
+    denied_list = await app_client.get(
+        "/api/v1/records", headers=denied_headers, params={"q": title, "limit": 100}
+    )
+    assert denied_list.status_code == 200, denied_list.text
+    assert denied_list.json()["data"] == []
+    for path in (
+        f"/api/v1/records/{record_id}",
+        f"/api/v1/records/{record_id}/evidence/{evidence.sha256}/download",
+        f"/api/v1/records/{record_id}/rendition",
+        f"/api/v1/records/{correction_id}",
+    ):
+        assert (await app_client.get(path, headers=denied_headers)).status_code == 403
+
+    denied_pack = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=denied_headers,
+        json={
+            "title": "Objective source denied pack",
+            "scope_kind": "PROCESS",
+            "process_ids": [process["id"]],
+        },
+    )
+    assert denied_pack.status_code == 201, denied_pack.text
+    denied_statuses = {
+        item["record_id"]: item["inclusion_status"]
+        for item in denied_pack.json()["items"]
+        if item["record_id"] in {record_id, correction_id}
+    }
+    assert denied_statuses == {
+        record_id: "EXCLUDED_PERMISSION",
+        correction_id: "EXCLUDED_PERMISSION",
+    }
+    await _seal(uuid.UUID(denied_pack.json()["id"]))
+    denied_sealed = await app_client.get(
+        f"/api/v1/evidence-packs/{denied_pack.json()['id']}", headers=denied_headers
+    )
+    assert denied_sealed.status_code == 200, denied_sealed.text
+    assert denied_sealed.json()["status"] == "SEALED"
+    denied_sealed_statuses = {
+        item["record_id"]: item["inclusion_status"]
+        for item in denied_sealed.json()["items"]
+        if item["record_id"] in {record_id, correction_id}
+    }
+    assert denied_sealed_statuses == {
+        record_id: "EXCLUDED_PERMISSION",
+        correction_id: "EXCLUDED_PERMISSION",
+    }
 
 
 # --- Slice W: Process-Owner record authoring (write-enable) + target re-auth -------------
@@ -498,6 +943,97 @@ async def _source_backed_record(client: AsyncClient, h: dict[str, str], *process
     )
     assert r.status_code == 201, r.text
     return r.json()
+
+
+async def test_related_restricted_labels_do_not_inherit_current_record_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Current-record readability leaves its source, predecessor, and process target restricted."""
+    author = _subject("related-restricted-author")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)
+    author_headers = _auth(token_factory, author)
+    process = await _create_process(app_client, author_headers)
+    original = await _source_backed_record(app_client, author_headers, process["id"])
+    corrected = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=author_headers,
+        json={"record_type": "RELEASE", "title": "Restricted related labels"},
+    )
+    assert corrected.status_code == 201, corrected.text
+    current = corrected.json()
+    await _link_process(app_client, author_headers, current["id"], process["id"])
+
+    reader = _subject("related-restricted-reader")
+    await _grant_artifact(reader, "record.read", current["id"])
+    detail = await app_client.get(
+        f"/api/v1/records/{current['id']}", headers=_auth(token_factory, reader)
+    )
+
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["source_document_readable"] is False
+    assert body["source_document_identifier"] is None
+    assert body["source_document_title"] is None
+    assert body["source_version_label"] is None
+    assert body["correction_of_readable"] is False
+    assert body["superseded_by_correction_readable"] is False
+    assert body["captured_by_display_name"]
+    assert body["retention_policy_name"]
+    assert len(body["evidence_links"]) == 1
+    assert body["evidence_links"][0]["target_readable"] is False
+    assert body["evidence_links"][0]["target_label"] is None
+
+
+async def test_related_readable_labels_require_each_related_grant(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Source, lineage, and process labels flip only after their own canonical read grants."""
+    author = _subject("related-readable-author")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)
+    author_headers = _auth(token_factory, author)
+    process = await _create_process(app_client, author_headers)
+    original = await _source_backed_record(app_client, author_headers, process["id"])
+    corrected = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=author_headers,
+        json={"record_type": "RELEASE", "title": "Readable related labels"},
+    )
+    assert corrected.status_code == 201, corrected.text
+    current = corrected.json()
+    await _link_process(app_client, author_headers, current["id"], process["id"])
+
+    async with get_sessionmaker()() as session:
+        current_record = await session.get(Record, uuid.UUID(current["id"]))
+        assert current_record is not None
+        source = await session.get(DocumentedInformation, current_record.source_document_id)
+        version = await session.get(DocumentVersion, current_record.source_version_id)
+        assert source is not None
+        assert version is not None
+
+    reader = _subject("related-readable-reader")
+    await _grant_artifact(reader, "record.read", current["id"])
+    await _grant_artifact(reader, "record.read", original["id"])
+    await _grant_artifact(reader, "document.read", str(source.id))
+    await _grant_artifact(reader, "document.read_draft", str(source.id))
+    await _grant_process(reader, "process.read", process["id"])
+    reader_headers = _auth(token_factory, reader)
+
+    detail = await app_client.get(f"/api/v1/records/{current['id']}", headers=reader_headers)
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["source_document_identifier"] == source.identifier
+    assert body["source_document_title"] == source.title
+    assert body["source_document_readable"] is True
+    assert body["source_version_label"] == version.revision_label
+    assert body["correction_of_readable"] is True
+    assert body["evidence_links"][0]["target_readable"] is True
+    assert body["evidence_links"][0]["target_label"] == process["name"]
+
+    predecessor = await app_client.get(f"/api/v1/records/{original['id']}", headers=reader_headers)
+    assert predecessor.status_code == 200, predecessor.text
+    assert predecessor.json()["superseded_by_correction_readable"] is True
 
 
 async def test_process_owner_correction_cannot_supersede_co_bound_record(

@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { installRegisterApi } from "./support/api";
+import {
+  installRegisterApi,
+  MAXIMUM_EVIDENCE_FILENAME,
+  MAXIMUM_RECORD_SEARCH,
+  MAXIMUM_RECORD_TITLE,
+} from "./support/api";
 import { measureRegister, REGISTER_CASES } from "./support/registers";
 import type { RegisterCase } from "./support/registers";
 
@@ -8,6 +13,11 @@ const VIEWPORTS = [
   { name: "narrow", width: 320, height: 800 },
   { name: "desktop", width: 1280, height: 900 },
 ] as const;
+
+const RECORD_ID = "re000001-0001-0001-0001-000000000001";
+const RECORDS_CASE = REGISTER_CASES.find((registerCase) => registerCase.key === "records");
+
+if (!RECORDS_CASE) throw new Error("Records register manifest is required");
 
 async function expectFirstFilterReachable(
   page: Page,
@@ -101,4 +111,150 @@ for (const registerCase of REGISTER_CASES as readonly RegisterCase[]) {
       }
     });
   }
+}
+
+test("records stacks its toolbar above one localized scroll owner at 320 pixels", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await installRegisterApi(page, { route: "records" });
+  await page.goto("/records");
+
+  const controls = [
+    page.getByRole("searchbox", { name: "Search records", exact: true }),
+    page.getByRole("textbox", { name: "Record type", exact: true }),
+    page.getByRole("textbox", { name: "Disposition", exact: true }),
+    page.getByRole("textbox", { name: "Legal hold", exact: true }),
+    page.getByRole("textbox", { name: "Source document", exact: true }),
+    page.getByRole("textbox", { name: "Captured by", exact: true }),
+  ];
+  await expect(page.getByRole("link", { name: "Open record REC-000041" })).toBeVisible();
+  const boxes = await Promise.all(
+    controls.map(async (control) => {
+      await expect(control).toBeVisible();
+      return control.boundingBox();
+    }),
+  );
+  expect(boxes.every((box) => box !== null)).toBe(true);
+
+  const firstBox = boxes[0]!;
+  for (const [index, box] of boxes.entries()) {
+    expect(
+      Math.abs(box!.x - firstBox.x),
+      `control ${index} horizontal alignment`,
+    ).toBeLessThanOrEqual(1);
+    expect(Math.abs(box!.width - firstBox.width), `control ${index} width`).toBeLessThanOrEqual(1);
+    if (index > 0) expect(box!.y).toBeGreaterThan(boxes[index - 1]!.y);
+  }
+
+  const geometry = await measureRegister(page, RECORDS_CASE);
+  expect(geometry.documentScrollWidth - geometry.documentClientWidth).toBeLessThanOrEqual(1);
+  expect(geometry.containerScrollWidth).toBeGreaterThan(geometry.containerClientWidth);
+});
+
+test("records bounds maximum dynamic labels and actions at 320 pixels", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await installRegisterApi(page, { route: "records", maxContent: true });
+  await page.goto(`/records?q=${MAXIMUM_RECORD_SEARCH}`);
+
+  const filterChip = page.getByRole("button", {
+    name: `Remove filter Search: ${MAXIMUM_RECORD_SEARCH}`,
+    exact: true,
+  });
+  const next = page.getByRole("button", { name: "Next records page", exact: true });
+  await expect(filterChip).toBeVisible();
+  await expect(next).toBeVisible();
+  for (const control of [filterChip, next]) {
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.x).toBeGreaterThanOrEqual(-1);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(321);
+  }
+  expect(
+    await filterChip
+      .locator("span")
+      .last()
+      .evaluate((label) => {
+        const styles = getComputedStyle(label);
+        return {
+          overflow: styles.overflow,
+          textOverflow: styles.textOverflow,
+          whiteSpace: styles.whiteSpace,
+        };
+      }),
+  ).toEqual({ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+
+  await page.goto(`/records/${RECORD_ID}`);
+  const title = page.getByRole("heading", { name: MAXIMUM_RECORD_TITLE, exact: true });
+  await expect(title).toBeVisible();
+  expect(await title.evaluate((heading) => getComputedStyle(heading).overflowWrap)).toBe(
+    "anywhere",
+  );
+
+  const download = page.getByRole("button", {
+    name: `Download ${MAXIMUM_EVIDENCE_FILENAME}`,
+    exact: true,
+  });
+  await expect(download).toBeVisible();
+  const downloadBox = await download.boundingBox();
+  expect(downloadBox).not.toBeNull();
+  expect(downloadBox!.height).toBeGreaterThanOrEqual(44);
+  expect(downloadBox!.x).toBeGreaterThanOrEqual(-1);
+  expect(downloadBox!.x + downloadBox!.width).toBeLessThanOrEqual(321);
+  expect(
+    await download.locator("span.mantine-Text-root").evaluate((label) => {
+      const styles = getComputedStyle(label);
+      return {
+        overflow: styles.overflow,
+        textOverflow: styles.textOverflow,
+        whiteSpace: styles.whiteSpace,
+      };
+    }),
+  ).toEqual({ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+});
+
+for (const viewport of VIEWPORTS) {
+  test(`records detail uses its ${viewport.name} section layout without document overflow`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await installRegisterApi(page, { route: "records" });
+    await page.goto(`/records/${RECORD_ID}`);
+
+    await expect(
+      page.getByRole("heading", { name: "Preventive-maintenance schedule" }),
+    ).toBeVisible();
+    const provenance = page.getByRole("region", { name: "Provenance" });
+    const lifecycle = page.getByRole("region", { name: "Lifecycle" });
+    const [provenanceBox, lifecycleBox, documentGeometry] = await Promise.all([
+      provenance.boundingBox(),
+      lifecycle.boundingBox(),
+      page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      })),
+    ]);
+    expect(provenanceBox).not.toBeNull();
+    expect(lifecycleBox).not.toBeNull();
+    expect(documentGeometry.scrollWidth - documentGeometry.clientWidth).toBeLessThanOrEqual(1);
+
+    if (viewport.name === "narrow") {
+      expect(Math.abs(provenanceBox!.x - lifecycleBox!.x)).toBeLessThanOrEqual(1);
+      expect(lifecycleBox!.y).toBeGreaterThanOrEqual(provenanceBox!.y + provenanceBox!.height - 1);
+    } else {
+      expect(Math.abs(provenanceBox!.y - lifecycleBox!.y)).toBeLessThanOrEqual(1);
+      expect(lifecycleBox!.x).toBeGreaterThanOrEqual(provenanceBox!.x + provenanceBox!.width - 1);
+    }
+  });
 }

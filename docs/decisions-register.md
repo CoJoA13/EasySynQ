@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R64) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R65) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, and R65 locks the temporary pre-production compatibility posture.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R64
+## Part 3 — Resolutions R1–R65
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1932,6 +1932,39 @@ access. This slice does **not** fix that — it is pre-existing behaviour of the
 surface, and the failure direction is **under**-grant. A binding UI is its own slice.
 
 Bumps the resolutions range **R1–R63 → R1–R64**.
+
+### R65 — Pre-production compatibility posture — 2026-08-14
+
+EasySynQ was only partly deployed and was never completed as a supported production setup. Preserving
+every provisional interface would therefore make incomplete experiments permanent and obstruct better
+usability and architecture before real adoption.
+
+**Normative rules.** Until the first supported production deployment or an external-client
+compatibility commitment:
+
+1. A breaking interface or obsolete implementation MAY be removed or replaced when an owner-approved
+   design explains the improvement and credible alternatives.
+2. Every known repository consumer, OpenAPI/generated artifact, executable contract, fixture, and
+   current documentation MUST migrate atomically. A compatibility shim or duplicate endpoint is added
+   only when its continuing value is explicit, not by default.
+3. Cleanup MUST remain bounded to the approved behavior. It does not authorize unrelated rewrites or
+   the silent removal of still-used capabilities.
+4. This posture NEVER relaxes deny-by-default, deny-always-wins, tenancy, audit, WORM, source-store,
+   credential, site-data, schema-upgrade, or data-preservation rules. Destructive data conversion or
+   abandonment of an existing upgrade path still requires its own owner-approved design and proof.
+
+**Expiry.** Before the first supported production deployment or external-client compatibility
+commitment, the owner MUST replace this temporary posture with an explicit API/versioning and
+deprecation policy. After that boundary, R65 is not authority for a new in-place breaking change.
+
+**First application.** S-records-read-console replaces the provisional bare-array `GET /records`
+response with one cursor-paginated page contract and migrates all known consumers in the same slice;
+ADR 0004 records the alternatives and consequences.
+
+**Back-propagation:** ADR 0004 and the S-records-read-console design. AGENTS.md already points
+contributors to this register and needs no duplicate mutable compatibility rule.
+
+Bumps the resolutions range **R1–R64 → R1–R65**.
 
 ---
 

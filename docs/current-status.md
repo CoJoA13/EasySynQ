@@ -1,15 +1,15 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-14"
+as_of: "2026-08-15"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-responsive-browser-evidence"
-migration_head: "0085"
-next_migration: "0086"
-api_unit_tests: 1686
-web_test_files: 260
-web_tests: 1865
+last_shipped_slice: "S-records-read-console"
+migration_head: "0086"
+next_migration: "0087"
+api_unit_tests: 1729
+web_test_files: 266
+web_tests: 1912
 contract_tests: 283
-integration_passed: 1051
+integration_passed: 1080
 integration_skipped: 2
 ci_jobs: 11
 ci_checks: 15
@@ -26,28 +26,49 @@ authority and it is not runtime discovery: binding decisions live in
 
 The original MVP foundation and the ISO 9001 workflow families are delivered. The routed SPA covers the
 main document, workflow, compliance, reporting, audit, ingestion, drift, objective, management-review,
-DCR, improvement, risk, context, interested-party, and identity-provisioning surfaces. Records,
-retention/disposition, and Evidence Packs are API/worker-complete but do not have dedicated SPA
-management routes.
+DCR, improvement, risk, context, interested-party, identity-provisioning, and read-only Records surfaces.
+Retention Policy and Evidence Pack management remain without dedicated SPA routes.
 
-The last shipped slice makes the nine shared-register responsive contract a required Chromium gate for
-Tasks, Audits, Objectives, Management Reviews, DCRs, Improvement, Risks, Context, and Interested Parties.
-A separate test-only Vite entry mounts the real application route tree, shell, theme, query provider, and
-production components with deterministic authenticated context. Playwright centrally fulfills synthetic
-API fixtures and fails closed on undeclared API or external HTTP(S) traffic; no browser-test authentication
-path or fixture enters the production bundle.
+The last shipped slice adds an Evidence Operations Records register at `/records` and a dedicated
+`/records/:recordId` detail route. `GET /records` now returns an authorization-correct cursor page ordered
+by `(captured_at DESC, id DESC)`, with identifier/title search and the existing record-type, disposition,
+legal-hold, source-document, and captured-by filters. Cursors bind their normalized query, hidden candidates
+do not leak into counts or cursor boundaries, and all repository consumers—including the CAPA evidence
+picker—consume the page envelope. List and detail labels remain independently authorization-gated.
 
-At 320 by 800 and 1280 by 900, the browser suite measures document, localized container, table, toolbar,
-and far-edge geometry while retaining one semantic table and one native action tree. It also proves one
-HTTP 503 recovery, one network-abort recovery, DCR keyboard focus in normal and forced-colors rendering,
-Tasks native-link and row-keyboard semantics, Context named filters and live result-count announcement,
-and the fail-closed interceptor through isolated negative child probes. The stable `web` CI aggregate now
-requires both Vitest shards and the dedicated `web-browser` Chromium job.
+The register preserves its search/filter state in the URL, exposes one semantic table with native record
+links, and restores the filtered cursor page on browser Back. Detail presentation groups provenance,
+lifecycle, correction lineage, structured values, evidence, evidence-for links, and rendition state.
+Evidence and rendition activations request fresh presigned URLs without forwarding the EasySynQ bearer
+token. The slice is read-only: it adds no capture, correction, evidence-link, legal-hold, disposition,
+retention, WORM-destroy, permission, role, or Keycloak mutation.
 
-The slice retains Chromium-only, one-worker, zero-retry evidence and preserves production OIDC, provider
-lifetime, API/OpenAPI, migrations, database, specialized tables, Compose, and deployment behavior. Detailed
-shipped behavior and evidence remain in
-[`slice-history.md`](slice-history.md#s-responsive-browser-evidence--required-chromium-register-proof).
+Migration `0086` adds only the deterministic Records page-order index. The required responsive Chromium
+cohort now includes the Records register and detail route alongside the prior nine shared registers. It
+retains the dedicated authenticated test entry, central fail-closed fixtures, Chromium-only engine, one
+worker, zero retries, and synthetic rather than live-stack boundary. Detailed shipped behavior and evidence
+remain in [`slice-history.md`](slice-history.md#s-records-read-console--evidence-operations-read-console).
+
+A 2026-08-15 final-review reconciliation hardens that shipped boundary without changing the migration or
+the frontmatter baseline/counts. Record read tuples now include source Quality Objective process bindings
+on scalar, batch, and evidence-pack paths; only source-less corrections inherit a predecessor binding;
+pack classification retains lifecycle predicates; and candidate/detail base rows are anchored to the
+caller's tenant and `RECORD` kind. R59 now governs pinned source-version labels independently from the
+mandatory source-document read. Cursor identity preserves exact trimmed Unicode, empty cursors fail
+canonical validation, and only the canonical cursor-specific `422` activates first-page recovery.
+A separate bounded remediation restores PROCESS evidence-pack parity through a process-unbound,
+source-backed correction bridge: the bridge remains unselected, while a later source-less correction can
+inherit the first non-empty ancestor tuple exactly as the Records list and detail gates do.
+
+The Records rail entry remains unconditional because SYSTEM permission inventory cannot represent
+PROCESS-scoped `record.read`; row filtering remains the security boundary. The register adopts Clear,
+chip, Back, and Forward URL changes without stale settled-search replay. The separate remediation also
+cancels a pending local search when another criterion or Clear all makes URL state authoritative. Source
+lookup opens with a safe blank row-filtered query, keeps typed query separate from selected display, and
+retains a selected id/label pair already returned by that endpoint when a later result page omits it;
+unseen source ids and missing captured-by selections stay neutral. Maximum search/evidence labels plus
+Download, Next, and recovery actions remain bounded with 44 CSS-pixel targets at 320 CSS pixels. No write
+capability was added.
 
 ## Runtime truth
 
@@ -68,43 +89,42 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
-the facts it freshly verifies; partial or unavailable checks must be reported as such. At implementation
-evidence baseline `1dcbc2bc12b14e11f037a657d44659412a7a39c0` on 2026-08-14, durable job
-`job-mssng14k-588252b8` ran exact direct argv `npm --prefix apps/web test` from the isolated worktree and
-exited 0 with all 260 Vitest files and 1,865 tests passing in 311.95 seconds (transform 3.39 seconds, setup
-41.58 seconds, import 45.23 seconds, tests 133.02 seconds, environment 72.59 seconds), with no failed suite,
-failed test, retry, or unhandled error. Its stderr retained Node's repeated `ExperimentalWarning` that
-`localStorage` was unavailable because `--localstorage-file` was not provided.
+the facts it freshly verifies; partial or unavailable checks must be reported as such. The implementation
+compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; the Records
+slice did not rewrite that field merely because its branch SHA differs.
 
-The preceding required run, durable job `job-mssmmw65-bdd6b919`, honestly exited 1 after 285.70 seconds:
-all 1,865 intended Vitest assertions passed, but Vitest's default `*.spec.ts` discovery also collected six
-Playwright files under `e2e/`, whose top-level Playwright `test()` calls failed as foreign suites. Before
-the exclusion, the package-root probe
-`(cd apps/web && node_modules/.bin/vitest list e2e --filesOnly --staticParse)` listed those six files.
-Commit `1dcbc2b` extends `configDefaults.exclude` with `e2e/**`, preserving Vitest's default exclusions;
-the same package-root command then returned no files, one intended source suite passed 10/10, and lint,
-browser build, production build, and the complete Chromium suite remained green before the final durable
-rerun.
+Fresh 2026-08-15 durable evidence measured the complete suites. API unit job
+`job-msue53tc-802a4b3f` collected 1,730 items and finished with 1,729 passed and one release-ceremony skip
+in 24.83 seconds. API integration job `job-msuas7j6-0af5ad42` collected 1,365 items and finished with
+1,080 passed, two shared-database management-review skips, 283 deselected, and three testcontainers import
+deprecations in 536.15 seconds. Published response-contract job `job-msu7ej4l-c1c3bbea` passed all 283
+selected response schemas with the same three deprecations. Web job `job-msu6hrki-0c62b2a0` passed all
+266 Vitest files and 1,912 tests in 284.82 seconds; stderr retained Node's repeated `localStorage`
+experimental warning.
 
-The final exact `npm --prefix apps/web run test:browser` command typechecked and built the isolated entry,
-then passed 26 Chromium tests in 11.0 seconds with one worker and zero retries. The count is separate from
-Vitest: eighteen route-and-viewport geometry cases cover all nine routes at 320 by 800 and 1280 by 900;
-four focused cases cover DCR focus and forced colors, Tasks native semantics and row navigation, and Context
-filter/live-region semantics; two cases cover HTTP and network recovery; one mounts the routed shell; and
-one meta-spec validates the fail-closed request interceptor through two isolated deliberately failing child
-probes. Diagnostic output retained Vite's existing large-chunk advisory plus Node's `localStorage` and
-`NO_COLOR`/`FORCE_COLOR` warnings.
+The populated migration coherence/downgrade/re-upgrade job passed 1/1 with the PostgreSQL testcontainers
+deprecation, and the focused Records Docker-backed selection passed 62 tests with PostgreSQL, MinIO, and
+Redis testcontainers deprecations. Focused Records unit coverage passed 95 tests, and the affected web
+selection passed 10 files/124 tests. The exact browser command rebuilt the isolated entry and passed 38/38
+Chromium tests in 14.7 seconds with one worker and zero retries.
 
-Implementation review added the shared sortable-header focus scroll correction, browser-only Docker-context
-exclusions and one-layer Playwright removal, regression-safe fail-closed negative evidence, stricter Docker
-reinclusion guards, and restored-error-copy recovery assertions. The final implementation and CI contract
-checks passed before authority closure. Scoped documentation formatting, authority and Claude compatibility
-fixtures, repository authority, site-data fixtures and direct scan, high-severity lock audit, range and
-working-tree diff guards, and the structural-row no-match guard all passed at handoff. API, contract,
-integration, and migration numeric values above retain their prior successful evidence because their full
-authoritative gates were not refreshed for this frontend browser-evidence slice. Firefox, WebKit, actual
-assistive-technology sessions, live backend integration, Docker-backed application acceptance, deployment,
-migration round-trip, and disposable Fedora proof did not run and are not described as passed.
+Static and contract gates were also fresh: Ruff format reported 743 files already formatted; Ruff lint
+passed; mypy found no issues in 441 source files; web ESLint exited 0; the production TypeScript/Vite build
+transformed 1,106 modules and completed with only the existing large-chunk advisory; contract generation
+and lint were in sync at SHA-256
+`6acfcd63d6967a6294ce1f1a45cd5df833fe2e7c431f3f46a77f69598b24ccda`; and Alembic reported only
+`0086_record_page_index (head)`, making `0087` next.
+
+The broad contributor doctor remained diagnostic rather than a false failure for these exact commands: it
+saw unsupported host Node 26, did not recognize the uv-managed Python 3.12.13 selected by `uv run`, and
+reported the intentionally absent repository `.env`. The commands above nevertheless completed in their
+own declared environments. PostgreSQL client `pg_dump` and `pg_restore` 16.14 were present for the green
+integration rerun.
+
+Firefox, WebKit, actual assistive-technology sessions, live backend/database/object-store/Keycloak
+acceptance, a deployed Docker-backed application acceptance, deployment, and disposable Fedora proof did
+not run and are not described as passed. Docker-backed pytest fixtures and the populated migration
+round-trip are claimed only to the exact gates recorded above.
 
 ## CI topology
 

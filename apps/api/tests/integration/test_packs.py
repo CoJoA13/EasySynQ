@@ -42,10 +42,11 @@ from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.retention_policy import RetentionPolicy
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.domain.authz.types import Effect, ResolvedGrant, ScopeLevel
 from easysynq_api.domain.records.content_hash import CONTENT_HASH_VERSION_V1, record_content_hash
 from easysynq_api.services.packs import build
 from easysynq_api.services.packs import repository as packs_repo
+from easysynq_api.services.packs import service as packs_service
 from easysynq_api.services.records.repository import SEALED_PACK_POLICY_NAME
 from easysynq_api.services.vault import storage
 
@@ -56,6 +57,61 @@ from .test_vault import _auth
 pytestmark = pytest.mark.integration
 
 _PACK_PERMS = ("report.evidence_pack.generate", "report.export", "record.read", "record.create")
+
+
+async def test_pack_classification_preserves_lifecycle_predicate_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lifecycle-scoped deny must participate in the same complete tuple as the records list."""
+    generator = AppUser(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        keycloak_subject=f"pack-lifecycle-{uuid.uuid4().hex}",
+        display_name="Pack lifecycle proof",
+    )
+    record = type("Candidate", (), {"id": uuid.uuid4()})()
+    base = type(
+        "Base",
+        (),
+        {
+            "folder_path": None,
+            "framework_id": uuid.uuid4(),
+            "current_state": type("State", (), {"value": "Effective"})(),
+        },
+    )()
+
+    async def grants(*_args: object, **_kwargs: object) -> list[ResolvedGrant]:
+        return [
+            ResolvedGrant(
+                effect=Effect.ALLOW,
+                level=ScopeLevel.SYSTEM,
+                selector={},
+                predicates={},
+                source="broad allow",
+            ),
+            ResolvedGrant(
+                effect=Effect.DENY,
+                level=ScopeLevel.SYSTEM,
+                selector={},
+                predicates={"lifecycle_state": ["Effective"]},
+                source="effective deny",
+            ),
+        ]
+
+    async def no_processes(*_args: object, **_kwargs: object) -> set[str]:
+        return set()
+
+    async def no_tombstone(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(packs_service, "gather_grants", grants)
+    monkeypatch.setattr(packs_service.records_repo, "record_process_ids_effective", no_processes)
+    monkeypatch.setattr(packs_service.repo, "has_destroy_tombstone", no_tombstone)
+
+    classified = await packs_service.classify_candidates(  # type: ignore[arg-type]
+        object(), generator, [(record, base)]
+    )
+    assert classified[0].status is PackInclusionStatus.EXCLUDED_PERMISSION
 
 
 async def _make_process(user_id: uuid.UUID, name: str) -> uuid.UUID:

@@ -60,6 +60,8 @@ import type {
   RiskRegisterStatus,
   RiskRow,
   RiskSummary,
+  RecordDetail,
+  RecordPage,
   SupersededCopies,
   Task,
   WorkflowInstance,
@@ -969,21 +971,119 @@ export const supersededCopiesFixture = {
   ],
 } satisfies SupersededCopies;
 
-// GET /records — the evidence picker source (a bare array).
-export const recordsFixture = [
-  {
-    id: "re000001-0001-0001-0001-000000000001",
-    identifier: "REC-000041",
-    title: "Preventive-maintenance schedule",
-    record_type: "EVIDENCE",
+// GET /records — the authorization-filtered page consumed by the evidence picker.
+export const recordsFixture: RecordPage = {
+  data: [
+    {
+      id: "re000001-0001-0001-0001-000000000001",
+      identifier: "REC-000041",
+      kind: "RECORD",
+      title: "Preventive-maintenance schedule",
+      record_type: "EVIDENCE",
+      classification: "Internal",
+      framework_id: "fr000001-0001-0001-0001-000000000001",
+      captured_at: "2026-06-01T09:00:00+00:00",
+      captured_by: "us000001-0001-0001-0001-000000000001",
+      captured_by_display_name: "Mara Quality",
+      source_document_id: null,
+      source_document_identifier: null,
+      source_document_title: null,
+      source_document_readable: false,
+      source_version_id: null,
+      source_version_label: null,
+      retention_policy_id: "rp000001-0001-0001-0001-000000000001",
+      retention_policy_name: "Quality records — 7 years",
+      disposition_state: "ACTIVE",
+      legal_hold: false,
+      has_structured_pdf: false,
+      correction_of: null,
+      superseded_by_correction: null,
+    },
+    {
+      id: "re000002-0002-0002-0002-000000000002",
+      identifier: "REC-000042",
+      kind: "RECORD",
+      title: "Audit re-check checklist",
+      record_type: "EVIDENCE",
+      classification: "Internal",
+      framework_id: "fr000001-0001-0001-0001-000000000001",
+      captured_at: "2026-05-31T09:00:00+00:00",
+      captured_by: "us000001-0001-0001-0001-000000000001",
+      captured_by_display_name: "Mara Quality",
+      source_document_id: null,
+      source_document_identifier: null,
+      source_document_title: null,
+      source_document_readable: false,
+      source_version_id: null,
+      source_version_label: null,
+      retention_policy_id: "rp000001-0001-0001-0001-000000000001",
+      retention_policy_name: "Quality records — 7 years",
+      disposition_state: "ACTIVE",
+      legal_hold: false,
+      has_structured_pdf: false,
+      correction_of: null,
+      superseded_by_correction: null,
+    },
+  ],
+  page: { limit: 100, returned: 2, next_cursor: "next-records-page" },
+};
+
+export const recordDetailFixture: RecordDetail = {
+  ...recordsFixture.data[0]!,
+  source_document_id: "11111111-1111-1111-1111-111111111111",
+  source_document_identifier: "SOP-PUR-014",
+  source_document_title: "Supplier Selection & Evaluation",
+  source_document_readable: true,
+  source_version_id: "dddd1111-1111-1111-1111-111111111111",
+  source_version_label: "Rev B",
+  disposition_state: "ON_HOLD",
+  legal_hold: true,
+  has_structured_pdf: true,
+  correction_of: "re000040-0040-0040-0040-000000000040",
+  superseded_by_correction: "re000042-0042-0042-0042-000000000042",
+  content_hash: "sha256:sealed-record-hash",
+  content_hash_version: 2,
+  form_field_values: {
+    inspection_result: "Pass",
+    measurements: [{ gauge_id: "G-7", in_tolerance: true }, null, 12.5],
   },
-  {
-    id: "re000002-0002-0002-0002-000000000002",
-    identifier: "REC-000042",
-    title: "Audit re-check checklist",
-    record_type: "EVIDENCE",
-  },
-];
+  retention_basis_date: "2026-06-01",
+  correction_of_readable: true,
+  superseded_by_correction_readable: false,
+  created_at: "2026-06-01T09:01:00+00:00",
+  evidence_blobs: [
+    {
+      sha256: "abc123",
+      is_original: true,
+      filename: "maintenance-schedule.pdf",
+      content_type: "application/pdf",
+      size_bytes: 1536,
+      created_at: "2026-06-01T09:00:30+00:00",
+    },
+  ],
+  evidence_links: [
+    {
+      id: "el000001-0001-0001-0001-000000000001",
+      record_id: recordsFixture.data[0]!.id,
+      target_type: "document",
+      target_id: "22222222-2222-2222-2222-222222222222",
+      target_label: "WI-MNT-004 — Maintenance checks",
+      target_readable: true,
+      link_reason: "Governing work instruction",
+      created_at: "2026-06-01T09:02:00+00:00",
+    },
+    {
+      id: "el000002-0002-0002-0002-000000000002",
+      record_id: recordsFixture.data[0]!.id,
+      target_type: "process",
+      target_id: "pr000002-0002-0002-0002-000000000002",
+      target_label: null,
+      target_readable: false,
+      link_reason: null,
+      created_at: null,
+    },
+  ],
+};
 
 // ---- S-web-7c complaint + NCR fixtures (pinned to the _complaint / _ncr serializers) ----
 export const complaintListFixture = {
@@ -3269,6 +3369,23 @@ export const handlers = [
   ),
   http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(null)),
   http.get("/api/v1/records", () => HttpResponse.json(recordsFixture)),
+  http.get("/api/v1/records/:recordId", ({ params }) =>
+    HttpResponse.json({ ...recordDetailFixture, id: String(params.recordId) }),
+  ),
+  http.get("/api/v1/records/:recordId/evidence/:sha256/download", ({ params }) =>
+    HttpResponse.json({
+      download_url: `https://objects.example.test/records/${String(params.sha256)}`,
+      sha256: String(params.sha256),
+      content_type: "application/pdf",
+    }),
+  ),
+  http.get("/api/v1/records/:recordId/rendition", () =>
+    HttpResponse.json({
+      download_url: "https://objects.example.test/records/structured.pdf",
+      sha256: "structured-pdf-sha",
+      content_type: "application/pdf",
+    }),
+  ),
   // ---- S-web-7c complaints + NCRs (default happy-path; per-test overrides for 403/empty/error) ----
   http.get("/api/v1/complaints", () => HttpResponse.json(complaintListFixture)),
   http.post("/api/v1/complaints", () =>

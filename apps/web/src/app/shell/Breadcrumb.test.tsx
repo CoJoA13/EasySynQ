@@ -60,6 +60,18 @@ test("Breadcrumb updates to the identifier when the document loads after a cold 
   expect(screen.queryByText(ID)).not.toBeInTheDocument();
 });
 
+test("Breadcrumb shows the authorized record identifier without exposing its route UUID", async () => {
+  const client = new QueryClient();
+  renderCrumb(client, `/records/${ID}`);
+  expect(screen.getAllByText("Record").length).toBeGreaterThanOrEqual(1);
+  expect(screen.queryByText(ID)).not.toBeInTheDocument();
+  act(() => {
+    client.setQueryData(["record", ID], { id: ID, identifier: "REC-000041" });
+  });
+  expect(await screen.findByText("REC-000041")).toBeInTheDocument();
+  expect(screen.queryByText(ID)).not.toBeInTheDocument();
+});
+
 test.each([
   [`/tasks/${ID}`, "Task"],
   [`/audits/${ID}`, "Audit"],
@@ -79,6 +91,7 @@ test.each([
   ["/reports/document-control", "Controlled document register", "document-control"],
   ["/management-reviews", "Management reviews", "management-reviews"],
   ["/interested-parties", "Interested parties", "interested-parties"],
+  ["/records", "Records", "records"],
   ["/drift/superseded-copies", "Superseded copies", "superseded-copies"],
 ])("Breadcrumb humanizes the registered route %s", (route, label, rawSlug) => {
   const client = new QueryClient();
@@ -93,6 +106,7 @@ test.each([
   ["/reports/document-control", "Reports"],
   ["/settings/notifications", "Settings"],
   [`/dcrs/${ID}/diff`, "Change request"],
+  [`/records/${ID}`, "Record"],
 ])("Breadcrumb renders the non-route parent in %s as text, not a dead link", (route, label) => {
   const client = new QueryClient();
   renderCrumb(client, route);

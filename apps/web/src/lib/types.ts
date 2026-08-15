@@ -910,12 +910,104 @@ export interface CapaApproval {
   proposed_action_plan: Record<string, unknown> | null;
 }
 
-// GET /records (a bare array; filter-not-403) — the evidence picker's source. Minimal shape.
+// GET /records — the authorization-filtered page consumed by the register and CAPA picker.
+export interface RecordListRequest {
+  limit: number;
+  cursor?: string;
+  q?: string;
+  record_type?: RecordType;
+  source_document_id?: string;
+  captured_by?: string;
+  disposition_state?: RecordDispositionState;
+  legal_hold?: boolean;
+}
+
+export type RecordType =
+  | "AUDIT"
+  | "AUDIT_FINDING"
+  | "CAPA"
+  | "COMPETENCE"
+  | "CALIBRATION"
+  | "MGMT_REVIEW"
+  | "SUPPLIER_EVAL"
+  | "RELEASE"
+  | "KPI_READING"
+  | "SATISFACTION"
+  | "TRACEABILITY"
+  | "PROPERTY_EVENT"
+  | "CHANGE"
+  | "EVIDENCE"
+  | "FILLED_FORM"
+  | "COMPLAINT";
+
+export type RecordClassification = "Public" | "Internal" | "Confidential" | "Restricted";
+export type RecordDispositionState = "ACTIVE" | "DUE_FOR_REVIEW" | "ON_HOLD" | "DISPOSED";
+
 export interface RecordSummary {
   id: string;
   identifier: string | null;
+  kind: "DOCUMENT" | "RECORD";
   title: string;
-  record_type: string;
+  record_type: RecordType;
+  classification: RecordClassification;
+  framework_id: string;
+  captured_at: string | null;
+  captured_by: string;
+  captured_by_display_name: string | null;
+  source_document_id: string | null;
+  source_document_identifier: string | null;
+  source_document_title: string | null;
+  source_document_readable: boolean;
+  source_version_id: string | null;
+  source_version_label: string | null;
+  retention_policy_id: string;
+  retention_policy_name: string | null;
+  disposition_state: RecordDispositionState;
+  legal_hold: boolean;
+  has_structured_pdf: boolean;
+  correction_of: string | null;
+  superseded_by_correction: string | null;
+}
+
+export interface RecordPage {
+  data: RecordSummary[];
+  page: {
+    limit: number;
+    returned: number;
+    next_cursor: string | null;
+  };
+}
+
+export interface RecordEvidenceBlob {
+  sha256: string;
+  is_original: boolean;
+  filename: string | null;
+  content_type: string | null;
+  size_bytes: number;
+  created_at: string | null;
+}
+
+export interface RecordEvidenceLink {
+  id: string;
+  record_id: string;
+  target_type: string;
+  target_id: string;
+  target_label: string | null;
+  target_readable: boolean;
+  link_reason: string | null;
+  created_at: string | null;
+}
+
+export interface RecordDetail extends RecordSummary {
+  content_hash: string | null;
+  content_hash_version: 1 | 2;
+  form_field_values: Record<string, unknown> | null;
+  retention_basis_date: string | null;
+  correction_of_readable: boolean;
+  superseded_by_correction_readable: boolean;
+  created_at: string | null;
+  evidence_blobs: RecordEvidenceBlob[];
+  evidence_links: RecordEvidenceLink[];
 }
 
 // ---- request bodies (CAPA writes) ----
