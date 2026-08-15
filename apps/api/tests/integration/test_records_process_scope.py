@@ -153,7 +153,7 @@ async def test_process_owner_record_list_filters_by_process(
 
     listed = await app_client.get("/api/v1/records?limit=100", headers=hb)
     assert listed.status_code == 200, listed.text
-    ids = {rec["id"] for rec in listed.json()}
+    ids = {rec["id"] for rec in listed.json()["data"]}
     assert r1["id"] in ids
     assert r2["id"] not in ids
 
@@ -242,6 +242,9 @@ async def test_correction_chain_two_hops_keeps_visibility(
     await _grant_process(owner, "record.read", p1["id"])
     hb = _auth(token_factory, owner)
     assert (await app_client.get(f"/api/v1/records/{s2}", headers=hb)).status_code == 200
+    listed = await app_client.get("/api/v1/records?limit=100", headers=hb)
+    assert listed.status_code == 200, listed.text
+    assert s2 in {record["id"] for record in listed.json()["data"]}
 
 
 # --- Slice W: Process-Owner record authoring (write-enable) + target re-auth -------------

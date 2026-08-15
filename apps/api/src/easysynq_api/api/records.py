@@ -15,11 +15,11 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import uuid
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Request, Response, status
-from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, select
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
@@ -54,6 +54,13 @@ from ..services.records import (
     unlink_evidence,
 )
 from ..services.records import repository as records_repo
+from ..services.records.listing import (
+    InvalidRecordCursor,
+    RecordListCriteria,
+    RecordListCursor,
+    decode_record_cursor,
+    encode_record_cursor,
+)
 from ..services.vault import repository as vault_repo
 from ..services.vault import storage
 from ..services.vault.staged_identity import StagingDomain
@@ -117,6 +124,25 @@ class WormDestroyRequestCreate(BaseModel):
 
 class DispositionReason(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
+
+
+class RecordListParams(BaseModel):
+    q: str | None = Field(default=None, max_length=200)
+    record_type: RecordType | None = None
+    source_document_id: uuid.UUID | None = None
+    captured_by: uuid.UUID | None = None
+    disposition_state: RecordDispositionState | None = None
+    legal_hold: bool | None = None
+    limit: int = Field(default=50, ge=1, le=100)
+    cursor: str | None = None
+
+    @field_validator("q", mode="before")
+    @classmethod
+    def _strip_search(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 def _evidence_inputs(evidence: list[EvidenceRef]) -> list[EvidenceInput]:
@@ -503,61 +529,99 @@ async def capture_endpoint(
 
 @router.get("/records")
 async def list_records_endpoint(
+    request: Request,
+    params: Annotated[RecordListParams, Query()],
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-    limit: int = 50,
-    record_type: str | None = None,
-    source_document_id: uuid.UUID | None = None,
-    captured_by: uuid.UUID | None = None,
-    disposition_state: str | None = None,
-    legal_hold: bool | None = None,
-) -> list[dict[str, Any]]:
-    filters: list[ColumnElement[bool]] = []
-    if record_type is not None:
-        try:
-            filters.append(Record.record_type == RecordType(record_type))
-        except ValueError as exc:
-            raise ProblemException(
-                status=422, code="validation_error", title="Invalid record_type filter"
-            ) from exc
-    if source_document_id is not None:
-        filters.append(Record.source_document_id == source_document_id)
-    if captured_by is not None:
-        filters.append(Record.captured_by == captured_by)
-    if disposition_state is not None:
-        try:
-            filters.append(Record.disposition_state == RecordDispositionState(disposition_state))
-        except ValueError as exc:
-            raise ProblemException(
-                status=422, code="validation_error", title="Invalid disposition_state filter"
-            ) from exc
-    if legal_hold is not None:
-        filters.append(Record.legal_hold == legal_hold)
-    rows = await records_repo.list_records(
-        session, caller.org_id, filters=filters, limit=min(limit, 100)
+) -> dict[str, Any]:
+    criteria = RecordListCriteria(
+        q=params.q,
+        record_type=params.record_type,
+        source_document_id=params.source_document_id,
+        captured_by=params.captured_by,
+        disposition_state=params.disposition_state,
+        legal_hold=params.legal_hold,
     )
-    # Filter-not-403 (doc 15 §9.3): drop rows the caller may not record.read.
+    try:
+        client_after = decode_record_cursor(params.cursor, criteria) if params.cursor else None
+    except InvalidRecordCursor as exc:
+        raise ProblemException(
+            status=422, code="validation_error", title="Invalid records cursor"
+        ) from exc
+
     grants = await gather_grants(session, caller.id, caller.org_id, "record.read")
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
-    # S-records-R: batch-load each row's process binding so a bound Process-Owner's PROCESS-scoped
-    # record.read matches (the decoupled read scope; the write gates stay process-blind). The R3-1
-    # correction fallback runs only for the rare source-less corrected rows (empty union).
-    process_ids_by_record = await records_repo.record_process_ids_for(session, [r for r, _ in rows])
-    visible: list[tuple[Record, DocumentedInformation]] = []
-    for record, base in rows:
-        pids = process_ids_by_record.get(record.id) or set()
-        if not pids and record.correction_of is not None:
-            pids = await records_repo.record_process_ids_effective(session, record)
-        resource = ResourceContext(
-            artifact_id=str(record.id),
-            kind="RECORD",
-            folder_path=base.folder_path,
-            framework_id=str(base.framework_id),
-            process_ids=frozenset(pids),
+    if not grants:
+        return {
+            "data": [],
+            "page": {"limit": params.limit, "returned": 0, "next_cursor": None},
+        }
+
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
+    batch_size = max(100, min(500, params.limit * 4))
+    scan_after = client_after
+    readable: list[tuple[Record, DocumentedInformation]] = []
+
+    while len(readable) < params.limit + 1:
+        candidates = await records_repo.list_record_candidates(
+            session,
+            caller.org_id,
+            criteria=criteria,
+            after=scan_after,
+            limit=batch_size,
         )
-        if authorize(grants, "record.read", resource, ctx).allow:
-            visible.append((record, base))
-    return [_record(r, b) for r, b in visible]
+        if not candidates:
+            break
+
+        process_ids_by_record = await records_repo.record_process_ids_for(
+            session, [record for record, _base in candidates]
+        )
+        for record, base in candidates:
+            process_ids = process_ids_by_record.get(record.id) or set()
+            if not process_ids and record.correction_of is not None:
+                process_ids = await records_repo.record_process_ids_effective(session, record)
+            resource = ResourceContext(
+                artifact_id=str(record.id),
+                kind="RECORD",
+                folder_path=base.folder_path,
+                framework_id=str(base.framework_id),
+                process_ids=frozenset(process_ids),
+                lifecycle_state=base.current_state.value,
+            )
+            if authorize(grants, "record.read", resource, ctx).allow:
+                readable.append((record, base))
+                if len(readable) == params.limit + 1:
+                    break
+
+        if len(readable) == params.limit + 1 or len(candidates) < batch_size:
+            break
+        last_candidate = candidates[-1][0]
+        scan_after = RecordListCursor(
+            captured_at=last_candidate.captured_at,
+            record_id=last_candidate.id,
+        )
+
+    page_rows = readable[: params.limit]
+    next_cursor = None
+    if len(readable) > params.limit:
+        last_readable = page_rows[-1][0]
+        next_cursor = encode_record_cursor(
+            RecordListCursor(
+                captured_at=last_readable.captured_at,
+                record_id=last_readable.id,
+            ),
+            criteria,
+        )
+    return {
+        "data": [_record(record, base) for record, base in page_rows],
+        "page": {
+            "limit": params.limit,
+            "returned": len(page_rows),
+            "next_cursor": next_cursor,
+        },
+    }
 
 
 @router.get("/records/{record_id}")

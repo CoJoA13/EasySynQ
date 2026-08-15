@@ -10,24 +10,30 @@ test's own record ids (the shared DB accumulates rows across tests).
 
 from __future__ import annotations
 
+import base64
 import datetime
 import hashlib
+import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from easysynq_api.api import records as records_api
+from easysynq_api.auth.dependencies import get_current_user
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
 from easysynq_api.db.models._clause_enums import PdcaPhase
 from easysynq_api.db.models._record_enums import RecordDispositionState, RecordType
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
-from easysynq_api.db.models._vault_enums import DocumentKind
+from easysynq_api.db.models._vault_enums import DocumentCurrentState, DocumentKind
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
@@ -41,9 +47,10 @@ from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.retention_policy import RetentionPolicy
 from easysynq_api.db.models.scope import Scope
-from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.db.session import get_session, get_sessionmaker
+from easysynq_api.domain.authz.types import Effect, ResolvedGrant, ScopeLevel
 from easysynq_api.domain.records.content_hash import record_content_hash
+from easysynq_api.problems import register_exception_handlers
 from easysynq_api.services.records import repository as records_repo
 from easysynq_api.services.records import service as records_service
 from easysynq_api.services.records.listing import RecordListCriteria, RecordListCursor
@@ -71,6 +78,19 @@ class _EvidenceUpload:
     version_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class _RecordListSeed:
+    title: str
+    captured_at: datetime.datetime
+    identifier: str | None = None
+    record_id: uuid.UUID | None = None
+    record_type: RecordType = RecordType.EVIDENCE
+    source_document_id: uuid.UUID | None = None
+    captured_by: uuid.UUID | None = None
+    disposition_state: RecordDispositionState = RecordDispositionState.ACTIVE
+    legal_hold: bool = False
+
+
 def _subject(prefix: str) -> str:
     return f"kc-{prefix}-{uuid.uuid4().hex[:10]}"
 
@@ -95,6 +115,129 @@ async def _grant(subject: str, keys: tuple[str, ...]) -> uuid.UUID:
             )
         await s.commit()
         return user.id
+
+
+async def _grant_list_override(
+    subject: str,
+    *,
+    effect: Effect,
+    level: ScopeLevel,
+    selector: dict[str, object] | None = None,
+    valid_from: datetime.datetime | None = None,
+    valid_until: datetime.datetime | None = None,
+) -> uuid.UUID:
+    """Grant one direct ``record.read`` override for list authorization proofs."""
+    async with get_sessionmaker()() as session:
+        user = await _ensure_user(session, subject)
+        permission = (
+            await session.execute(select(Permission).where(Permission.key == "record.read"))
+        ).scalar_one()
+        scope = Scope(
+            org_id=user.org_id,
+            level=level,
+            selector=selector,
+        )
+        session.add(scope)
+        await session.flush()
+        session.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=permission.id,
+                effect=effect,
+                scope_id=scope.id,
+                valid_from=valid_from,
+                valid_until=valid_until,
+            )
+        )
+        await session.commit()
+        return user.id
+
+
+async def _ensure_subject_without_grants(subject: str) -> uuid.UUID:
+    async with get_sessionmaker()() as session:
+        user = await _ensure_user(session, subject)
+        await session.commit()
+        return user.id
+
+
+async def _seed_record_list_rows(
+    actor_id: uuid.UUID, marker: str, seeds: list[_RecordListSeed]
+) -> list[uuid.UUID]:
+    """Insert small, independently identifiable list fixtures without storage side effects."""
+    async with get_sessionmaker()() as session:
+        actor = await session.get(AppUser, actor_id)
+        assert actor is not None
+        framework_id = await session.scalar(
+            select(Framework.id).where(Framework.org_id == actor.org_id).limit(1)
+        )
+        policy_id = await session.scalar(
+            select(RetentionPolicy.id).where(RetentionPolicy.org_id == actor.org_id).limit(1)
+        )
+        assert framework_id is not None
+        assert policy_id is not None
+
+        record_ids: list[uuid.UUID] = []
+        for index, seed in enumerate(seeds):
+            record_id = seed.record_id or uuid.uuid4()
+            record_ids.append(record_id)
+            session.add(
+                DocumentedInformation(
+                    id=record_id,
+                    org_id=actor.org_id,
+                    framework_id=framework_id,
+                    kind=DocumentKind.RECORD,
+                    identifier=seed.identifier or f"LIST-{marker}-{index}-{record_id.hex[:8]}",
+                    title=seed.title,
+                    current_state=DocumentCurrentState.Effective,
+                    owner_user_id=actor_id,
+                    created_by=actor_id,
+                )
+            )
+            session.add(
+                Record(
+                    id=record_id,
+                    org_id=actor.org_id,
+                    record_type=seed.record_type,
+                    captured_at=seed.captured_at,
+                    captured_by=seed.captured_by or actor_id,
+                    content_hash_version=2,
+                    source_document_id=seed.source_document_id,
+                    retention_policy_id=policy_id,
+                    disposition_state=seed.disposition_state,
+                    legal_hold=seed.legal_hold,
+                )
+            )
+        await session.commit()
+        return record_ids
+
+
+async def _seed_list_source_documents(
+    actor_id: uuid.UUID, marker: str, *, count: int = 2
+) -> list[uuid.UUID]:
+    async with get_sessionmaker()() as session:
+        actor = await session.get(AppUser, actor_id)
+        assert actor is not None
+        framework_id = await session.scalar(
+            select(Framework.id).where(Framework.org_id == actor.org_id).limit(1)
+        )
+        assert framework_id is not None
+        source_ids: list[uuid.UUID] = []
+        for index in range(count):
+            source = DocumentedInformation(
+                org_id=actor.org_id,
+                framework_id=framework_id,
+                kind=DocumentKind.DOCUMENT,
+                identifier=f"LIST-SOURCE-{marker}-{index}",
+                title=f"List source {marker} {index}",
+                owner_user_id=actor_id,
+                created_by=actor_id,
+            )
+            session.add(source)
+            await session.flush()
+            source_ids.append(source.id)
+        await session.commit()
+        return source_ids
 
 
 async def _upload_evidence(
@@ -649,6 +792,596 @@ async def test_all_16_record_types_accepted(
         r = await _capture(app_client, h, record_type=rtype, title=f"{rtype} record")
         assert r.status_code == 201, f"{rtype}: {r.text}"
         assert r.json()["record_type"] == rtype
+
+
+# --- authorization-correct HTTP list pages -----------------------------------------------
+
+
+async def test_list_page_envelope_filters_hidden_candidates_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route fills a readable page and anchors its cursor to the last readable row."""
+    org_id = uuid.uuid4()
+    caller = AppUser(
+        id=uuid.uuid4(),
+        org_id=org_id,
+        keycloak_subject=f"route-proof-{uuid.uuid4().hex}",
+        display_name="Route proof",
+    )
+    captured_at = datetime.datetime(2026, 8, 14, 17, tzinfo=datetime.UTC)
+    record_ids = [uuid.uuid4() for _ in range(4)]
+
+    def candidate(record_id: uuid.UUID, index: int) -> tuple[SimpleNamespace, SimpleNamespace]:
+        return (
+            SimpleNamespace(
+                id=record_id,
+                record_type=RecordType.EVIDENCE,
+                captured_at=captured_at - datetime.timedelta(seconds=index),
+                captured_by=caller.id,
+                content_hash=None,
+                content_hash_version=2,
+                source_document_id=None,
+                source_version_id=None,
+                form_field_values=None,
+                retention_policy_id=uuid.uuid4(),
+                retention_basis_date=None,
+                disposition_state=RecordDispositionState.ACTIVE,
+                legal_hold=False,
+                structured_pdf_blob_sha256=None,
+                correction_of=None,
+                superseded_by_correction=None,
+            ),
+            SimpleNamespace(
+                identifier=f"ROUTE-{index}",
+                kind=DocumentKind.RECORD,
+                title=f"Route record {index}",
+                classification=SimpleNamespace(value="Internal"),
+                framework_id=uuid.uuid4(),
+                folder_path=None,
+                current_state=DocumentCurrentState.Effective,
+                created_at=captured_at,
+            ),
+        )
+
+    candidates = [candidate(record_id, index) for index, record_id in enumerate(record_ids)]
+    visible_ids = {record_ids[index] for index in (0, 2, 3)}
+
+    async def fake_list_candidates(
+        _session: object,
+        _org_id: uuid.UUID,
+        *,
+        criteria: RecordListCriteria,
+        after: RecordListCursor | None,
+        limit: int,
+    ) -> list[tuple[SimpleNamespace, SimpleNamespace]]:
+        del criteria
+        start = 0
+        if after is not None:
+            start = next(
+                index + 1
+                for index, (record, _base) in enumerate(candidates)
+                if record.id == after.record_id
+            )
+        return candidates[start : start + limit]
+
+    async def fake_process_ids(
+        _session: object, records: list[SimpleNamespace]
+    ) -> dict[uuid.UUID, set[str]]:
+        return {record.id: set() for record in records}
+
+    async def fake_grants(*_args: object, **_kwargs: object) -> list[ResolvedGrant]:
+        return [
+            ResolvedGrant(
+                effect=Effect.ALLOW,
+                level=ScopeLevel.ARTIFACT,
+                selector={"artifact_id": str(record_id)},
+                predicates={},
+                source="route-proof",
+                is_override=True,
+            )
+            for record_id in visible_ids
+        ]
+
+    monkeypatch.setattr(records_repo, "list_record_candidates", fake_list_candidates)
+    monkeypatch.setattr(records_repo, "record_process_ids_for", fake_process_ids)
+    monkeypatch.setattr(records_api, "gather_grants", fake_grants)
+
+    app = FastAPI()
+    register_exception_handlers(app)
+    app.include_router(records_api.router)
+    app.dependency_overrides[get_current_user] = lambda: caller
+    app.dependency_overrides[get_session] = lambda: object()
+    async with AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/v1/records", params={"limit": 2})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [row["id"] for row in body["data"]] == [str(record_ids[0]), str(record_ids[2])]
+    assert body["page"]["returned"] == 2
+    assert body["page"]["next_cursor"] is not None
+
+    async with AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        second = await client.get(
+            "/api/v1/records",
+            params={"limit": 2, "cursor": body["page"]["next_cursor"]},
+        )
+        mismatch = await client.get(
+            "/api/v1/records",
+            params={"q": "different", "limit": 2, "cursor": body["page"]["next_cursor"]},
+        )
+        trimmed_max = await client.get("/api/v1/records", params={"q": " " + "x" * 200 + " "})
+        over_max = await client.get("/api/v1/records", params={"q": " " + "x" * 201 + " "})
+
+    assert [row["id"] for row in second.json()["data"]] == [str(record_ids[3])]
+    assert second.json()["page"] == {"limit": 2, "returned": 1, "next_cursor": None}
+    assert mismatch.status_code == 422
+    assert mismatch.json()["title"] == "Invalid records cursor"
+    assert trimmed_max.status_code == 200
+    assert over_max.status_code == 422
+
+    async def no_grants(*_args: object, **_kwargs: object) -> list[ResolvedGrant]:
+        return []
+
+    async def candidates_must_not_run(
+        *_args: object, **_kwargs: object
+    ) -> list[tuple[object, object]]:
+        raise AssertionError("candidate query ran for an empty grant sequence")
+
+    monkeypatch.setattr(records_api, "gather_grants", no_grants)
+    monkeypatch.setattr(records_repo, "list_record_candidates", candidates_must_not_run)
+    async with AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        empty = await client.get("/api/v1/records")
+    assert empty.json() == {
+        "data": [],
+        "page": {"limit": 50, "returned": 0, "next_cursor": None},
+    }
+
+
+async def test_list_page_envelope_cursor_and_equal_timestamp_tiebreak(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("list-page-envelope")
+    actor_id = await _grant(subject, ("record.read",))
+    headers = _auth(token_factory, subject)
+    marker = uuid.uuid4().hex
+    captured_at = datetime.datetime(2026, 8, 14, 16, tzinfo=datetime.UTC)
+    ordered_ids = [uuid.UUID(int=value) for value in (4, 3, 2, 1)]
+    await _seed_record_list_rows(
+        actor_id,
+        marker,
+        [
+            _RecordListSeed(
+                title=f"Equal timestamp {marker}",
+                captured_at=captured_at,
+                record_id=record_id,
+            )
+            for record_id in reversed(ordered_ids)
+        ],
+    )
+
+    listed = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": marker, "limit": 2}
+    )
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert [row["id"] for row in body["data"]] == [str(value) for value in ordered_ids[:2]]
+    assert body["page"] == {
+        "limit": 2,
+        "returned": 2,
+        "next_cursor": body["page"]["next_cursor"],
+    }
+    assert body["page"]["next_cursor"] is not None
+
+    second = await app_client.get(
+        "/api/v1/records",
+        headers=headers,
+        params={"q": marker, "limit": 2, "cursor": body["page"]["next_cursor"]},
+    )
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert not ({row["id"] for row in body["data"]} & {row["id"] for row in second_body["data"]})
+    assert [row["id"] for row in second_body["data"]] == [str(value) for value in ordered_ids[2:]]
+    assert second_body["page"] == {"limit": 2, "returned": 2, "next_cursor": None}
+
+
+async def test_list_default_and_max_limits(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("list-limits")
+    actor_id = await _grant(subject, ("record.read",))
+    headers = _auth(token_factory, subject)
+    marker = uuid.uuid4().hex
+    start = datetime.datetime(2026, 8, 14, 15, tzinfo=datetime.UTC)
+    await _seed_record_list_rows(
+        actor_id,
+        marker,
+        [
+            _RecordListSeed(
+                title=f"Limit fixture {marker} {index}",
+                captured_at=start - datetime.timedelta(seconds=index),
+            )
+            for index in range(101)
+        ],
+    )
+
+    default_page = await app_client.get("/api/v1/records", headers=headers, params={"q": marker})
+    assert default_page.status_code == 200, default_page.text
+    assert default_page.json()["page"]["limit"] == 50
+    assert default_page.json()["page"]["returned"] == 50
+    assert default_page.json()["page"]["next_cursor"] is not None
+
+    max_page = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": marker, "limit": 100}
+    )
+    assert max_page.status_code == 200, max_page.text
+    assert max_page.json()["page"]["limit"] == 100
+    assert max_page.json()["page"]["returned"] == 100
+    assert max_page.json()["page"]["next_cursor"] is not None
+
+    above_max = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": marker, "limit": 101}
+    )
+    assert above_max.status_code == 422, above_max.text
+    assert above_max.json()["code"] == "validation_error"
+
+
+async def test_list_search_normalization_literal_matching_and_filters(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("list-search-filter")
+    actor_id = await _grant(subject, ("record.read",))
+    other_actor_id = await _grant(_subject("list-search-other"), ("record.read",))
+    headers = _auth(token_factory, subject)
+    marker = uuid.uuid4().hex
+    source_id, other_source_id = await _seed_list_source_documents(actor_id, marker)
+    captured_at = datetime.datetime(2026, 8, 14, 14, tzinfo=datetime.UTC)
+    literal = f"50%_done\\-{marker}"
+    seeds = [
+        _RecordListSeed(title=f"Trimmed Needle {marker}", captured_at=captured_at),
+        _RecordListSeed(
+            title=f"Identifier match fixture {marker}",
+            identifier=f"MiXeD-Identifier-{marker}",
+            captured_at=captured_at - datetime.timedelta(seconds=1),
+        ),
+        _RecordListSeed(
+            title=f"Literal {literal}", captured_at=captured_at - datetime.timedelta(seconds=2)
+        ),
+        _RecordListSeed(
+            title=f"Literal 50AXdoneZ-{marker}",
+            captured_at=captured_at - datetime.timedelta(seconds=3),
+        ),
+        _RecordListSeed(
+            title=f"Filter {marker} target",
+            captured_at=captured_at - datetime.timedelta(seconds=4),
+            source_document_id=source_id,
+        ),
+        _RecordListSeed(
+            title=f"Filter {marker} wrong type",
+            captured_at=captured_at - datetime.timedelta(seconds=5),
+            record_type=RecordType.CALIBRATION,
+            source_document_id=source_id,
+        ),
+        _RecordListSeed(
+            title=f"Filter {marker} wrong source",
+            captured_at=captured_at - datetime.timedelta(seconds=6),
+            source_document_id=other_source_id,
+        ),
+        _RecordListSeed(
+            title=f"Filter {marker} wrong actor",
+            captured_at=captured_at - datetime.timedelta(seconds=7),
+            source_document_id=source_id,
+            captured_by=other_actor_id,
+        ),
+        _RecordListSeed(
+            title=f"Filter {marker} wrong disposition",
+            captured_at=captured_at - datetime.timedelta(seconds=8),
+            source_document_id=source_id,
+            disposition_state=RecordDispositionState.ON_HOLD,
+        ),
+        _RecordListSeed(
+            title=f"Filter {marker} wrong hold",
+            captured_at=captured_at - datetime.timedelta(seconds=9),
+            source_document_id=source_id,
+            legal_hold=True,
+        ),
+    ]
+    record_ids = await _seed_record_list_rows(actor_id, marker, seeds)
+
+    blank = await app_client.get(
+        "/api/v1/records",
+        headers=headers,
+        params={"q": "   ", "captured_by": str(actor_id), "limit": 100},
+    )
+    assert blank.status_code == 200, blank.text
+    assert {row["id"] for row in blank.json()["data"]} == {
+        str(record_id)
+        for record_id, seed in zip(record_ids, seeds, strict=True)
+        if seed.captured_by is None
+    }
+
+    title_match = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": f"  tRiMmEd NeEdLe {marker.upper()}  "}
+    )
+    assert [row["id"] for row in title_match.json()["data"]] == [str(record_ids[0])]
+    identifier_match = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": f"mixed-IDENTIFIER-{marker.upper()}"}
+    )
+    assert [row["id"] for row in identifier_match.json()["data"]] == [str(record_ids[1])]
+    literal_match = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": literal.upper()}
+    )
+    assert [row["id"] for row in literal_match.json()["data"]] == [str(record_ids[2])]
+
+    filter_marker = f"Filter {marker}"
+    checks = [
+        ({"record_type": "EVIDENCE"}, record_ids[5]),
+        ({"source_document_id": str(source_id)}, record_ids[6]),
+        ({"captured_by": str(actor_id)}, record_ids[7]),
+        ({"disposition_state": "ACTIVE"}, record_ids[8]),
+        ({"legal_hold": "false"}, record_ids[9]),
+    ]
+    for filter_params, excluded_id in checks:
+        response = await app_client.get(
+            "/api/v1/records",
+            headers=headers,
+            params={"q": filter_marker, "limit": 100, **filter_params},
+        )
+        assert response.status_code == 200, response.text
+        ids = {row["id"] for row in response.json()["data"]}
+        assert str(record_ids[4]) in ids
+        assert str(excluded_id) not in ids
+
+    combined = await app_client.get(
+        "/api/v1/records",
+        headers=headers,
+        params={
+            "q": filter_marker,
+            "record_type": "EVIDENCE",
+            "source_document_id": str(source_id),
+            "captured_by": str(actor_id),
+            "disposition_state": "ACTIVE",
+            "legal_hold": "false",
+        },
+    )
+    assert combined.status_code == 200, combined.text
+    assert [row["id"] for row in combined.json()["data"]] == [str(record_ids[4])]
+
+
+async def test_cursor_query_mismatch_malformed_and_unsupported(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("list-cursor-errors")
+    actor_id = await _grant(subject, ("record.read",))
+    headers = _auth(token_factory, subject)
+    marker = uuid.uuid4().hex
+    captured_at = datetime.datetime(2026, 8, 14, 13, tzinfo=datetime.UTC)
+    await _seed_record_list_rows(
+        actor_id,
+        marker,
+        [
+            _RecordListSeed(
+                title=f"Cursor fixture {marker} {index}",
+                captured_at=captured_at - datetime.timedelta(seconds=index),
+            )
+            for index in range(3)
+        ],
+    )
+    first = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": marker, "limit": 1}
+    )
+    cursor = first.json()["page"]["next_cursor"]
+    assert cursor is not None
+    unsupported_payload = {
+        "v": 2,
+        "captured_at": captured_at.isoformat(),
+        "id": str(uuid.uuid4()),
+        "query": "0" * 64,
+    }
+    unsupported = (
+        base64.urlsafe_b64encode(json.dumps(unsupported_payload, separators=(",", ":")).encode())
+        .decode()
+        .rstrip("=")
+    )
+
+    attempts = [
+        {"q": f"{marker}-different", "limit": 1, "cursor": cursor},
+        {"q": marker, "limit": 1, "cursor": "not-a-cursor!"},
+        {"q": marker, "limit": 1, "cursor": unsupported},
+    ]
+    for cursor_params in attempts:
+        response = await app_client.get("/api/v1/records", headers=headers, params=cursor_params)
+        assert response.status_code == 422, response.text
+        assert response.json()["code"] == "validation_error"
+        assert response.json()["title"] == "Invalid records cursor"
+
+    typed_errors = [
+        {"limit": 0},
+        {"record_type": "NOT_A_RECORD"},
+        {"source_document_id": "not-a-uuid"},
+        {"disposition_state": "NOT_A_STATE"},
+        {"q": " " + "x" * 201 + " "},
+    ]
+    for validation_params in typed_errors:
+        response = await app_client.get(
+            "/api/v1/records", headers=headers, params=validation_params
+        )
+        assert response.status_code == 422, response.text
+        assert response.json()["code"] == "validation_error"
+
+    trimmed_max = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": " " + "x" * 200 + " "}
+    )
+    assert trimmed_max.status_code == 200, trimmed_max.text
+
+
+async def test_hidden_candidates_between_visible_rows_fill_pages_without_advancing_cursor(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    author = _subject("list-hidden-author")
+    actor_id = await _grant(author, ("record.read",))
+    marker = uuid.uuid4().hex
+    start = datetime.datetime(2026, 8, 14, 12, tzinfo=datetime.UTC)
+    record_ids = await _seed_record_list_rows(
+        actor_id,
+        marker,
+        [
+            _RecordListSeed(
+                title=f"Hidden page {marker} {index}",
+                captured_at=start - datetime.timedelta(seconds=index),
+            )
+            for index in range(6)
+        ],
+    )
+    visible_ids = [record_ids[index] for index in (0, 3, 5)]
+    viewer = _subject("list-hidden-viewer")
+    for record_id in visible_ids:
+        await _grant_list_override(
+            viewer,
+            effect=Effect.ALLOW,
+            level=ScopeLevel.ARTIFACT,
+            selector={"artifact_id": str(record_id)},
+        )
+    headers = _auth(token_factory, viewer)
+
+    first = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": marker, "limit": 2}
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert [row["id"] for row in first_body["data"]] == [str(value) for value in visible_ids[:2]]
+    assert first_body["page"]["returned"] == 2
+    assert first_body["page"]["next_cursor"] is not None
+
+    second = await app_client.get(
+        "/api/v1/records",
+        headers=headers,
+        params={
+            "q": marker,
+            "limit": 2,
+            "cursor": first_body["page"]["next_cursor"],
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert [row["id"] for row in second.json()["data"]] == [str(visible_ids[2])]
+    assert second.json()["page"] == {"limit": 2, "returned": 1, "next_cursor": None}
+
+
+async def test_list_search_scans_more_than_one_hundred_hidden_candidates(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    author = _subject("list-deep-author")
+    actor_id = await _grant(author, ("record.read",))
+    marker = uuid.uuid4().hex
+    start = datetime.datetime(2026, 8, 14, 11, tzinfo=datetime.UTC)
+    record_ids = await _seed_record_list_rows(
+        actor_id,
+        marker,
+        [
+            _RecordListSeed(
+                title=f"Deep search {marker} {index}",
+                captured_at=start - datetime.timedelta(seconds=index),
+            )
+            for index in range(106)
+        ],
+    )
+    target_id = record_ids[-1]
+    viewer = _subject("list-deep-viewer")
+    await _grant_list_override(
+        viewer,
+        effect=Effect.ALLOW,
+        level=ScopeLevel.ARTIFACT,
+        selector={"artifact_id": str(target_id)},
+    )
+
+    response = await app_client.get(
+        "/api/v1/records",
+        headers=_auth(token_factory, viewer),
+        params={"q": f"deep SEARCH {marker.upper()}", "limit": 1},
+    )
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()["data"]] == [str(target_id)]
+    assert response.json()["page"] == {"limit": 1, "returned": 1, "next_cursor": None}
+
+
+async def test_list_empty_grants_explicit_deny_and_time_predicate(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    author = _subject("list-predicate-author")
+    actor_id = await _grant(author, ("record.read",))
+    marker = uuid.uuid4().hex
+    start = datetime.datetime(2026, 8, 14, 10, tzinfo=datetime.UTC)
+    record_ids = await _seed_record_list_rows(
+        actor_id,
+        marker,
+        [
+            _RecordListSeed(
+                title=f"Predicate {marker} {index}",
+                captured_at=start - datetime.timedelta(seconds=index),
+            )
+            for index in range(2)
+        ],
+    )
+
+    no_grants = _subject("list-no-grants")
+    await _ensure_subject_without_grants(no_grants)
+    empty = await app_client.get(
+        "/api/v1/records", headers=_auth(token_factory, no_grants), params={"q": marker}
+    )
+    assert empty.status_code == 200, empty.text
+    assert empty.json() == {
+        "data": [],
+        "page": {"limit": 50, "returned": 0, "next_cursor": None},
+    }
+
+    denied = _subject("list-explicit-deny")
+    await _grant(denied, ("record.read",))
+    await _grant_list_override(
+        denied,
+        effect=Effect.DENY,
+        level=ScopeLevel.ARTIFACT,
+        selector={"artifact_id": str(record_ids[0])},
+    )
+    deny_response = await app_client.get(
+        "/api/v1/records", headers=_auth(token_factory, denied), params={"q": marker}
+    )
+    assert deny_response.status_code == 200, deny_response.text
+    assert [row["id"] for row in deny_response.json()["data"]] == [str(record_ids[1])]
+
+    expired = _subject("list-expired")
+    await _grant_list_override(
+        expired,
+        effect=Effect.ALLOW,
+        level=ScopeLevel.SYSTEM,
+        valid_until=datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1),
+    )
+    expired_response = await app_client.get(
+        "/api/v1/records", headers=_auth(token_factory, expired), params={"q": marker}
+    )
+    assert expired_response.status_code == 200, expired_response.text
+    assert expired_response.json()["data"] == []
+
+    current = _subject("list-current")
+    now = datetime.datetime.now(datetime.UTC)
+    await _grant_list_override(
+        current,
+        effect=Effect.ALLOW,
+        level=ScopeLevel.SYSTEM,
+        valid_from=now - datetime.timedelta(days=1),
+        valid_until=now + datetime.timedelta(days=1),
+    )
+    current_response = await app_client.get(
+        "/api/v1/records", headers=_auth(token_factory, current), params={"q": marker}
+    )
+    assert current_response.status_code == 200, current_response.text
+    assert [row["id"] for row in current_response.json()["data"]] == [
+        str(record_id) for record_id in record_ids
+    ]
 
 
 # --- deterministic pre-authorization candidates -----------------------------------------

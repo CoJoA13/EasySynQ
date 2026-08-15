@@ -119,26 +119,6 @@ async def list_record_candidates(
     return [(r, d) for r, d in rows]
 
 
-async def list_records(
-    session: AsyncSession,
-    org_id: uuid.UUID,
-    *,
-    filters: list,  # type: ignore[type-arg]  # list of SQLAlchemy boolean ColumnElements
-    limit: int,
-) -> list[tuple[Record, DocumentedInformation]]:
-    """The records list (record ⨝ base), newest capture first; pre-authz ``limit`` cap."""
-    rows = (
-        await session.execute(
-            select(Record, DocumentedInformation)
-            .join(DocumentedInformation, Record.id == DocumentedInformation.id)
-            .where(Record.org_id == org_id, *filters)
-            .order_by(desc(Record.captured_at))
-            .limit(limit)
-        )
-    ).all()
-    return [(r, d) for r, d in rows]
-
-
 # --- process binding (S-records-R: the records process-scope read source of truth) -------
 
 
