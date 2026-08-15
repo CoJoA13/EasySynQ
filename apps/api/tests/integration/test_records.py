@@ -36,6 +36,7 @@ from easysynq_api.db.models.clause import Clause
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.evidence_blob import EvidenceBlob
 from easysynq_api.db.models.framework import Framework
+from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.retention_policy import RetentionPolicy
@@ -651,6 +652,113 @@ async def test_all_16_record_types_accepted(
 
 
 # --- deterministic pre-authorization candidates -----------------------------------------
+
+
+async def test_candidate_tenant_predicate_excludes_other_organization(
+    app_client: AsyncClient,
+) -> None:
+    del app_client  # fixture dependency provides the migrated real PostgreSQL database
+    marker = uuid.uuid4().hex
+    captured_at = datetime.datetime(2026, 8, 14, 12, tzinfo=datetime.UTC)
+    local_record_id = uuid.uuid4()
+    foreign_record_id = uuid.uuid4()
+
+    async with get_sessionmaker()() as session:
+        local_org_id = await session.scalar(select(Organization.id).limit(1))
+        assert local_org_id is not None
+        local_framework_id = await session.scalar(
+            select(Framework.id).where(Framework.org_id == local_org_id).limit(1)
+        )
+        local_policy_id = await session.scalar(
+            select(RetentionPolicy.id).where(RetentionPolicy.org_id == local_org_id).limit(1)
+        )
+        assert local_framework_id is not None
+        assert local_policy_id is not None
+
+        local_actor = AppUser(
+            org_id=local_org_id,
+            keycloak_subject=f"candidate-local-{marker}",
+            display_name="Candidate local actor",
+        )
+        foreign_org = Organization(
+            legal_name=f"Candidate foreign {marker}",
+            short_code=f"CF{marker[:8].upper()}",
+        )
+        session.add_all([local_actor, foreign_org])
+        await session.flush()
+        foreign_framework = Framework(
+            org_id=foreign_org.id,
+            code="iso9001:2015",
+            name="ISO 9001:2015",
+        )
+        foreign_actor = AppUser(
+            org_id=foreign_org.id,
+            keycloak_subject=f"candidate-foreign-{marker}",
+            display_name="Candidate foreign actor",
+        )
+        foreign_policy = RetentionPolicy(
+            org_id=foreign_org.id,
+            name="Candidate tenant retention",
+        )
+        session.add_all([foreign_framework, foreign_actor, foreign_policy])
+        await session.flush()
+
+        title = f"Tenant candidate {marker}"
+        identifier = f"TENANT-CANDIDATE-{marker}"
+        candidates = (
+            (
+                local_record_id,
+                local_org_id,
+                local_framework_id,
+                local_actor.id,
+                local_policy_id,
+            ),
+            (
+                foreign_record_id,
+                foreign_org.id,
+                foreign_framework.id,
+                foreign_actor.id,
+                foreign_policy.id,
+            ),
+        )
+        for record_id, org_id, framework_id, actor_id, policy_id in candidates:
+            session.add(
+                DocumentedInformation(
+                    id=record_id,
+                    org_id=org_id,
+                    framework_id=framework_id,
+                    kind=DocumentKind.RECORD,
+                    identifier=identifier,
+                    title=title,
+                    owner_user_id=actor_id,
+                    created_by=actor_id,
+                )
+            )
+            session.add(
+                Record(
+                    id=record_id,
+                    org_id=org_id,
+                    record_type=RecordType.EVIDENCE,
+                    captured_at=captured_at,
+                    captured_by=actor_id,
+                    content_hash_version=2,
+                    retention_policy_id=policy_id,
+                    disposition_state=RecordDispositionState.ACTIVE,
+                    legal_hold=False,
+                )
+            )
+        await session.flush()
+
+        rows = await records_repo.list_record_candidates(
+            session,
+            local_org_id,
+            criteria=RecordListCriteria(q=marker),
+            after=None,
+            limit=10,
+        )
+
+        assert [record.id for record, _base in rows] == [local_record_id]
+    # Closing the uncommitted session rolls both tenant fixtures back from the shared database.
 
 
 async def test_candidate_order_uses_descending_id_tiebreak_and_strict_boundary(
