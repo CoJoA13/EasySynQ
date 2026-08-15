@@ -35,7 +35,7 @@ from easysynq_api.services.records import repository as records_repo
 from easysynq_api.services.records.service import link_evidence
 
 from . import s5_helpers as s5
-from .test_packs import _seal
+from .test_packs import _seal, _teardown
 from .test_processes import _create_process, _link_doc_to_process
 from .test_records import (
     _capture,
@@ -267,6 +267,99 @@ async def test_correction_chain_two_hops_keeps_visibility(
     listed = await app_client.get("/api/v1/records?limit=100", headers=hb)
     assert listed.status_code == 200, listed.text
     assert s2 in {record["id"] for record in listed.json()["data"]}
+
+
+async def test_process_pack_traverses_unbound_source_backed_bridge_for_source_less_tail(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Pack discovery crosses an empty-tuple source-backed bridge without selecting it."""
+    author = _subject("source-backed-bridge-author")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)
+    author_headers = _auth(token_factory, author)
+    process = await _create_process(app_client, author_headers)
+    record_ids: list[str] = []
+    pack_id: uuid.UUID | None = None
+
+    try:
+        original = await _capture_evidence(app_client, author_headers)
+        original_id = original["id"]
+        record_ids.append(original_id)
+        await _link_process(app_client, author_headers, original_id, process["id"])
+
+        source_backed_id = await _correct(app_client, author_headers, original_id)
+        record_ids.append(source_backed_id)
+        source_less_id = await _correct(app_client, author_headers, source_backed_id)
+        record_ids.append(source_less_id)
+
+        # The correction API now carries a source pin forward, so create the two real corrections
+        # first and then shape the stored legacy topology under test: only the intermediate row has
+        # an unbound real source document. The original and tail keep their API-produced hashes.
+        unbound_source = await _create(app_client, author_headers, await s5.type_id("SOP"))
+        async with get_sessionmaker()() as session:
+            source_backed = await session.get(Record, uuid.UUID(source_backed_id))
+            assert source_backed is not None
+            source_backed.source_document_id = uuid.UUID(unbound_source["id"])
+            await session.commit()
+
+        owner = _subject("source-backed-bridge-owner")
+        await _grant_process(owner, "record.read", process["id"])
+        await _grant(owner, ("report.evidence_pack.generate", "report.export"))
+        owner_headers = _auth(token_factory, owner)
+
+        listed = await app_client.get("/api/v1/records?limit=100", headers=owner_headers)
+        assert listed.status_code == 200, listed.text
+        listed_ids = {row["id"] for row in listed.json()["data"]}
+        assert original_id in listed_ids
+        assert source_backed_id not in listed_ids
+        assert source_less_id in listed_ids
+
+        detail_source_less = await app_client.get(
+            f"/api/v1/records/{source_less_id}", headers=owner_headers
+        )
+        assert detail_source_less.status_code == 200
+
+        pack = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=owner_headers,
+            json={
+                "title": "Source-backed bridge parity pack",
+                "scope_kind": "PROCESS",
+                "process_ids": [process["id"]],
+            },
+        )
+        assert pack.status_code == 201, pack.text
+        pack_id = uuid.UUID(pack.json()["id"])
+        preview_statuses = {
+            item["record_id"]: item["inclusion_status"] for item in pack.json()["items"]
+        }
+        assert preview_statuses.get(original_id) == "INCLUDED"
+        assert source_backed_id not in preview_statuses
+        assert preview_statuses.get(source_less_id) == "INCLUDED"
+
+        await _seal(pack_id)
+        sealed = await app_client.get(f"/api/v1/evidence-packs/{pack_id}", headers=owner_headers)
+        assert sealed.status_code == 200, sealed.text
+        assert sealed.json()["status"] == "SEALED"
+        sealed_statuses = {
+            item["record_id"]: item["inclusion_status"] for item in sealed.json()["items"]
+        }
+        assert sealed_statuses.get(source_less_id) == "INCLUDED"
+    finally:
+        if record_ids:
+            async with get_sessionmaker()() as session:
+                for record_id in record_ids:
+                    record = await session.get(Record, uuid.UUID(record_id))
+                    if record is not None:
+                        record.correction_of = None
+                        record.superseded_by_correction = None
+                await session.commit()
+        await _teardown(
+            record_ids=record_ids,
+            pack_id=pack_id,
+            scope_id=None,
+            process_id=uuid.UUID(process["id"]),
+        )
 
 
 async def test_source_backed_correction_does_not_inherit_process_visibility(

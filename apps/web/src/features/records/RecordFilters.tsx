@@ -52,6 +52,8 @@ export function RecordFilters({
   const urlSearch = value.q ?? "";
   const urlSearchRef = useRef(urlSearch);
   urlSearchRef.current = urlSearch;
+  const searchRef = useRef(search);
+  searchRef.current = search;
   const valueRef = useRef(value);
   valueRef.current = value;
   const onChangeRef = useRef(onChange);
@@ -61,11 +63,12 @@ export function RecordFilters({
   useEffect(() => {
     if (urlSearch !== lastWrittenRef.current) {
       lastWrittenRef.current = urlSearch;
+      searchRef.current = urlSearch;
       setSearch(urlSearch);
     }
   }, [urlSearch]);
   useEffect(() => {
-    if (settledSearch !== urlSearchRef.current) {
+    if (settledSearch === searchRef.current && settledSearch !== urlSearchRef.current) {
       lastWrittenRef.current = settledSearch;
       onChangeRef.current({
         ...valueRef.current,
@@ -74,19 +77,44 @@ export function RecordFilters({
     }
   }, [settledSearch]);
 
-  const sourceOptions = useMemo(() => {
-    const listed = (sourceDocuments.data?.data ?? []).map((document) => ({
-      value: document.id,
-      label: `${document.identifier ?? "Document"} — ${document.title}`,
-    }));
-    if (
-      value.source_document_id &&
-      !listed.some((item) => item.value === value.source_document_id)
-    ) {
-      return [{ value: value.source_document_id, label: "Selected item unavailable" }, ...listed];
+  const listedSourceOptions = useMemo(
+    () =>
+      (sourceDocuments.data?.data ?? []).map((document) => ({
+        value: document.id,
+        label: `${document.identifier ?? "Document"} — ${document.title}`,
+      })),
+    [sourceDocuments.data],
+  );
+  const selectedSourceProjectionRef = useRef<{ value: string; label: string } | null>(null);
+  const selectedSourceIdRef = useRef(value.source_document_id);
+  if (selectedSourceIdRef.current !== value.source_document_id) {
+    selectedSourceIdRef.current = value.source_document_id;
+    if (selectedSourceProjectionRef.current?.value !== value.source_document_id) {
+      selectedSourceProjectionRef.current = null;
     }
-    return listed;
-  }, [sourceDocuments.data, value.source_document_id]);
+  }
+  const listedSelectedSource = listedSourceOptions.find(
+    (option) => option.value === value.source_document_id,
+  );
+  if (!value.source_document_id) {
+    selectedSourceProjectionRef.current = null;
+  } else if (listedSelectedSource) {
+    selectedSourceProjectionRef.current = listedSelectedSource;
+  }
+  const retainedSelectedSource =
+    selectedSourceProjectionRef.current?.value === value.source_document_id
+      ? selectedSourceProjectionRef.current
+      : null;
+  const sourceOptions =
+    value.source_document_id && !listedSelectedSource
+      ? [
+          retainedSelectedSource ?? {
+            value: value.source_document_id,
+            label: "Selected item unavailable",
+          },
+          ...listedSourceOptions,
+        ]
+      : listedSourceOptions;
 
   const selectedSourceLabel =
     sourceOptions.find((option) => option.value === value.source_document_id)?.label ?? "";
@@ -135,7 +163,25 @@ export function RecordFilters({
     w: { base: "100%", sm: 260 },
     style: { flexShrink: 0 },
   } as const;
-  const patch = (next: Partial<Criteria>) => onChange({ ...value, ...next });
+  const adoptUrlSearch = (next: string | undefined) => {
+    const adopted = next ?? "";
+    searchRef.current = adopted;
+    lastWrittenRef.current = adopted;
+    setSearch(adopted);
+  };
+  const patch = (next: Partial<Criteria>) => {
+    const nextCriteria = { ...value, ...next };
+    adoptUrlSearch(nextCriteria.q);
+    if ("source_document_id" in next && !next.source_document_id) {
+      selectedSourceProjectionRef.current = null;
+    }
+    onChange(nextCriteria);
+  };
+  const clearAll = () => {
+    adoptUrlSearch(undefined);
+    selectedSourceProjectionRef.current = null;
+    onClear();
+  };
   const truncateLabel = {
     display: "block",
     minWidth: 0,
@@ -211,7 +257,9 @@ export function RecordFilters({
             }
           }}
           onChange={(next) => {
-            const label = sourceOptions.find((option) => option.value === next)?.label ?? "";
+            const selected = listedSourceOptions.find((option) => option.value === next) ?? null;
+            selectedSourceProjectionRef.current = selected;
+            const label = selected?.label ?? "";
             selectionDisplayRef.current = label;
             setSourceDisplay(label);
             setSourceQuery("");
@@ -253,7 +301,7 @@ export function RecordFilters({
               </Text>
             </Button>
           ))}
-          <Button variant="subtle" size="compact-xs" mih={44} onClick={onClear}>
+          <Button variant="subtle" size="compact-xs" mih={44} onClick={clearAll}>
             Clear all
           </Button>
         </Group>

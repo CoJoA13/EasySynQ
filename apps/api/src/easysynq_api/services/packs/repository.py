@@ -137,9 +137,9 @@ async def _process_candidate_ids(
     session: AsyncSession, org_id: uuid.UUID, process_ids: list[uuid.UUID]
 ) -> set[uuid.UUID]:
     """PROCESS scope: UNION of (records evidence-for the process) AND (records under a
-    process-linked or satellite-bound source document) AND (source-less correction successors that
-    inherit a selected process via ``correction_of`` — so a corrected record stays in the PROCESS
-    evidence pack exactly as it stays visible at ``/records``; the Codex CX-2 finding)."""
+    process-linked or satellite-bound source document) AND source-less correction successors that
+    inherit a selected process via ``correction_of``. The ancestor walk may traverse an unbound
+    source-backed correction without selecting it, matching the canonical Records read tuple."""
     if not process_ids:
         return set()
     leg_a = (
@@ -172,52 +172,61 @@ async def _process_candidate_ids(
             )
         )
     ).all()
-    base = set(leg_a) | set(leg_b)
-    # CX-2: also include source-LESS correction successors that INHERIT a selected process via
-    # ``correction_of`` (matching ``records_repo.record_process_ids_effective`` / the read gate). A
-    # successor with its OWN binding is already selected by its own leg; only the empty-own ones
-    # inherit, and the walk stops at any OWNED successor (its successors inherit from IT, not from a
-    # selected process). Acyclic chain → terminates; ``fresh - base`` is the cycle backstop.
-    frontier = set(base)
+    selected = set(leg_a) | set(leg_b)
+    # Traverse every empty-own successor, including a source-backed bridge, but select only
+    # source-less successors. Any non-empty own tuple terminates inheritance even when it points to
+    # a different process; ``visited`` keeps malformed cycles finite.
+    visited = set(selected)
+    frontier = set(selected)
     while frontier:
-        successors = set(
+        successor_rows = list(
             (
                 await session.scalars(
-                    select(Record.id).where(
+                    select(Record).where(
                         Record.org_id == org_id,
-                        Record.source_document_id.is_(None),
                         Record.correction_of.in_(frontier),
                     )
                 )
             ).all()
         )
-        fresh = successors - base
-        if not fresh:
+        fresh_rows = [row for row in successor_rows if row.id not in visited]
+        if not fresh_rows:
             break
-        # "owned" == a NON-EMPTY evidence-for PROCESS union for the source-less successors above.
-        # Source-backed corrections never reach this fallback, matching
-        # ``record_process_ids_effective_for``.
-        owned = set(
+        visited.update(row.id for row in fresh_rows)
+        fresh_ids = {row.id for row in fresh_rows}
+        own_bound_ids = set(
             (
                 await session.scalars(
                     select(Record.id).where(
-                        Record.id.in_(fresh),
-                        Record.id.in_(
-                            select(EvidenceForLink.record_id).where(
-                                EvidenceForLink.record_id.in_(fresh),
-                                EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
-                            )
+                        Record.org_id == org_id,
+                        Record.id.in_(fresh_ids),
+                        or_(
+                            Record.id.in_(
+                                select(EvidenceForLink.record_id).where(
+                                    EvidenceForLink.org_id == org_id,
+                                    EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
+                                )
+                            ),
+                            Record.source_document_id.in_(
+                                select(ProcessLink.documented_information_id).where(
+                                    ProcessLink.org_id == org_id,
+                                )
+                            ),
+                            Record.source_document_id.in_(
+                                select(QualityObjective.id).where(
+                                    QualityObjective.org_id == org_id,
+                                    QualityObjective.process_id.is_not(None),
+                                )
+                            ),
                         ),
                     )
                 )
             ).all()
         )
-        inheriting = fresh - owned
-        if not inheriting:
-            break
-        base |= inheriting
-        frontier = inheriting
-    return base
+        inheriting_rows = [row for row in fresh_rows if row.id not in own_bound_ids]
+        selected.update(row.id for row in inheriting_rows if row.source_document_id is None)
+        frontier = {row.id for row in inheriting_rows}
+    return selected
 
 
 async def _finding_candidate_ids(

@@ -56,13 +56,19 @@ pack classification retains lifecycle predicates; and candidate/detail base rows
 caller's tenant and `RECORD` kind. R59 now governs pinned source-version labels independently from the
 mandatory source-document read. Cursor identity preserves exact trimmed Unicode, empty cursors fail
 canonical validation, and only the canonical cursor-specific `422` activates first-page recovery.
+A separate bounded remediation restores PROCESS evidence-pack parity through a process-unbound,
+source-backed correction bridge: the bridge remains unselected, while a later source-less correction can
+inherit the first non-empty ancestor tuple exactly as the Records list and detail gates do.
 
 The Records rail entry remains unconditional because SYSTEM permission inventory cannot represent
-PROCESS-scoped `record.read`; row filtering remains the security boundary. The register now adopts Clear,
-chip, Back, and Forward URL changes without stale debounce replay; source lookup opens with a safe blank
-row-filtered query and keeps typed query separate from selected display; missing source/captured-by
-selections stay neutral; and maximum search/evidence labels plus Download, Next, and recovery actions
-remain bounded with 44 CSS-pixel targets at 320 CSS pixels. No write capability was added.
+PROCESS-scoped `record.read`; row filtering remains the security boundary. The register adopts Clear,
+chip, Back, and Forward URL changes without stale settled-search replay. The separate remediation also
+cancels a pending local search when another criterion or Clear all makes URL state authoritative. Source
+lookup opens with a safe blank row-filtered query, keeps typed query separate from selected display, and
+retains a selected id/label pair already returned by that endpoint when a later result page omits it;
+unseen source ids and missing captured-by selections stay neutral. Maximum search/evidence labels plus
+Download, Next, and recovery actions remain bounded with 44 CSS-pixel targets at 320 CSS pixels. No write
+capability was added.
 
 ## Runtime truth
 

@@ -6,7 +6,7 @@ import { http, HttpResponse } from "msw";
 import { expect, test, vi } from "vitest";
 import { renderWithProviders } from "../../test/render";
 import { expectResponsiveTable } from "../../test/responsiveTable";
-import { recordsFixture } from "../../test/msw/handlers";
+import { docFixture, recordsFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { RecordsPage } from "./RecordsPage";
 
@@ -112,6 +112,25 @@ test("does not replay a settled search after Clear all changes the URL", async (
   expect(screen.getByLabelText("Current location")).not.toHaveTextContent("q=settled-search");
 });
 
+test("cancels a pending search when Clear all makes URL state authoritative", async () => {
+  const user = userEvent.setup();
+  renderRecords("/records?record_type=EVIDENCE");
+  await screen.findByRole("link", { name: /open record REC-000041/i });
+
+  const search = screen.getByRole("searchbox", { name: "Search records" });
+  await user.type(search, "pending-search");
+  await user.click(screen.getByRole("button", { name: "Clear all" }));
+
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+  expect(search).toHaveValue("");
+  const location = new URL(
+    screen.getByLabelText("Current location").textContent ?? "",
+    "http://test",
+  );
+  expect(location.searchParams.has("record_type")).toBe(false);
+  expect(location.searchParams.has("q")).toBe(false);
+});
+
 test("adopts Back and Forward search values even when history returns to its initial value", async () => {
   const user = userEvent.setup();
   renderRecords("/records?q=initial-search");
@@ -173,6 +192,45 @@ test("keeps a selected source label out of the server search query", async () =>
   expect(queries).toContain("Supplier");
   expect(queries).not.toContain("SOP-PUR-014 — Supplier Selection & Evaluation");
   fetchSpy.mockRestore();
+});
+
+test("retains an authorized selected source label after blank results omit it", async () => {
+  const user = userEvent.setup();
+  const documentQueries: Array<string | null> = [];
+  server.use(
+    http.get("/api/v1/documents", ({ request }) => {
+      const q = new URL(request.url).searchParams.get("q");
+      documentQueries.push(q);
+      const rows = q === "Supplier" ? [docFixture[0]] : [docFixture[1]];
+      return HttpResponse.json({
+        data: rows,
+        page: { limit: 20, offset: 0, returned: rows.length, has_more: false },
+      });
+    }),
+  );
+  renderRecords();
+  await screen.findByRole("link", { name: /open record REC-000041/i });
+
+  const source = screen.getByRole("textbox", { name: "Source document" });
+  await user.click(source);
+  await screen.findByRole("option", { name: /SOP-PRD-007/ });
+  await user.type(source, "Supplier");
+  await user.click(
+    await screen.findByRole("option", {
+      name: "SOP-PUR-014 — Supplier Selection & Evaluation",
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByLabelText("Current location")).toHaveTextContent(
+      "source_document_id=11111111-1111-1111-1111-111111111111",
+    ),
+  );
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+
+  expect(source).toHaveValue("SOP-PUR-014 — Supplier Selection & Evaluation");
+  expect(screen.queryByDisplayValue("Selected item unavailable")).not.toBeInTheDocument();
+  expect(documentQueries).toContain("Supplier");
+  expect(documentQueries).not.toContain("SOP-PUR-014 — Supplier Selection & Evaluation");
 });
 
 test("keeps an unavailable selected UUID neutral and does not use a raw UUID lookup", async () => {
