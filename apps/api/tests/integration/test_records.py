@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from httpx import AsyncClient
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -941,6 +941,104 @@ async def test_list_page_envelope_filters_hidden_candidates_without_container(
         "data": [],
         "page": {"limit": 50, "returned": 0, "next_cursor": None},
     }
+
+
+async def test_source_backed_correction_does_not_inherit_process_visibility_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A correction with a source document may not inherit an ancestor's PROCESS binding."""
+    caller = AppUser(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        keycloak_subject=f"source-backed-proof-{uuid.uuid4().hex}",
+        display_name="Source-backed proof",
+    )
+    inherited_process_id = uuid.uuid4()
+    captured_at = datetime.datetime(2026, 8, 14, 18, tzinfo=datetime.UTC)
+    record = SimpleNamespace(
+        id=uuid.uuid4(),
+        record_type=RecordType.RELEASE,
+        captured_at=captured_at,
+        captured_by=caller.id,
+        content_hash=None,
+        content_hash_version=2,
+        source_document_id=uuid.uuid4(),
+        source_version_id=uuid.uuid4(),
+        form_field_values=None,
+        retention_policy_id=uuid.uuid4(),
+        retention_basis_date=None,
+        disposition_state=RecordDispositionState.ACTIVE,
+        legal_hold=False,
+        structured_pdf_blob_sha256=None,
+        correction_of=uuid.uuid4(),
+        superseded_by_correction=None,
+    )
+    base = SimpleNamespace(
+        identifier="ROUTE-SOURCE-BACKED",
+        kind=DocumentKind.RECORD,
+        title="Source-backed correction",
+        classification=SimpleNamespace(value="Internal"),
+        framework_id=uuid.uuid4(),
+        folder_path=None,
+        current_state=DocumentCurrentState.Effective,
+        created_at=captured_at,
+    )
+
+    async def fake_candidates(*_args: object, **_kwargs: object) -> list[tuple[object, object]]:
+        return [(record, base)]
+
+    async def fake_process_ids(*_args: object, **_kwargs: object) -> dict[uuid.UUID, set[str]]:
+        return {record.id: set()}
+
+    async def inherited_process_ids(*_args: object, **_kwargs: object) -> set[str]:
+        return {str(inherited_process_id)}
+
+    async def process_grant(*_args: object, **_kwargs: object) -> list[ResolvedGrant]:
+        return [
+            ResolvedGrant(
+                effect=Effect.ALLOW,
+                level=ScopeLevel.PROCESS,
+                selector={"process_ids": [str(inherited_process_id)]},
+                predicates={},
+                source="route-proof",
+                is_override=True,
+            )
+        ]
+
+    monkeypatch.setattr(records_repo, "list_record_candidates", fake_candidates)
+    monkeypatch.setattr(records_repo, "record_process_ids_for", fake_process_ids)
+    monkeypatch.setattr(records_repo, "record_process_ids_effective", inherited_process_ids)
+    monkeypatch.setattr(records_api, "gather_grants", process_grant)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/records",
+            "headers": [],
+            "query_string": b"",
+            "client": ("127.0.0.1", 1),
+        }
+    )
+
+    result = await records_api.list_records_endpoint(
+        request=request,
+        params=records_api.RecordListParams(),
+        caller=caller,
+        session=object(),  # type: ignore[arg-type] -- repository boundary is replaced above
+    )
+
+    assert result["data"] == []
+    assert result["page"] == {"limit": 50, "returned": 0, "next_cursor": None}
+
+    record.source_document_id = None
+    record.source_version_id = None
+    source_less_result = await records_api.list_records_endpoint(
+        request=request,
+        params=records_api.RecordListParams(),
+        caller=caller,
+        session=object(),  # type: ignore[arg-type] -- repository boundary is replaced above
+    )
+    assert [row["id"] for row in source_less_result["data"]] == [str(record.id)]
 
 
 async def test_list_page_envelope_cursor_and_equal_timestamp_tiebreak(

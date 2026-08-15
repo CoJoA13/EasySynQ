@@ -247,6 +247,60 @@ async def test_correction_chain_two_hops_keeps_visibility(
     assert s2 in {record["id"] for record in listed.json()["data"]}
 
 
+async def test_source_backed_correction_does_not_inherit_process_visibility(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """R3-1 is source-less only: an unbound source-backed correction cannot inherit P1."""
+    author = _subject("rc-source-a")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)
+    headers = _auth(token_factory, author)
+    process = await _create_process(app_client, headers)
+    original = await _capture_evidence(app_client, headers)
+    await _link_process(app_client, headers, original["id"], process["id"])
+
+    source = await _create(app_client, headers, await s5.type_id("SOP"))
+    await app_client.post(f"/api/v1/documents/{source['id']}/checkout", headers=headers)
+    sha = await _upload(
+        app_client,
+        headers,
+        source["id"],
+        f"source-backed-{uuid.uuid4().hex}".encode(),
+    )
+    checked_in = await _checkin(
+        app_client,
+        headers,
+        source["id"],
+        sha,
+        change_reason="source-backed list proof",
+        change_significance="MAJOR",
+    )
+    assert checked_in.status_code == 201, checked_in.text
+
+    marker = f"source-backed-{uuid.uuid4().hex}"
+    corrected = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=headers,
+        json={
+            "record_type": "RELEASE",
+            "title": marker,
+            "source_document_id": source["id"],
+            "source_version_id": checked_in.json()["id"],
+        },
+    )
+    assert corrected.status_code == 201, corrected.text
+
+    owner = _subject("rc-source-b")
+    await _grant_process(owner, "record.read", process["id"])
+    listed = await app_client.get(
+        "/api/v1/records",
+        headers=_auth(token_factory, owner),
+        params={"q": marker, "limit": 100},
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"] == []
+
+
 # --- Slice W: Process-Owner record authoring (write-enable) + target re-auth -------------
 
 

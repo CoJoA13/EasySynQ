@@ -580,7 +580,11 @@ async def list_records_endpoint(
         )
         for record, base in candidates:
             process_ids = process_ids_by_record.get(record.id) or set()
-            if not process_ids and record.correction_of is not None:
+            if (
+                not process_ids
+                and record.source_document_id is None
+                and record.correction_of is not None
+            ):
                 process_ids = await records_repo.record_process_ids_effective(session, record)
             resource = ResourceContext(
                 artifact_id=str(record.id),
