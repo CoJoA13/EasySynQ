@@ -56,6 +56,8 @@ const TITLES = [
   ["/risks", "Risks"],
   ["/context", "Context"],
   ["/interested-parties", "Interested parties"],
+  ["/records", "Records"],
+  ["/records/:recordId", "Record"],
 ] as const;
 
 const DETAIL_RULES = [

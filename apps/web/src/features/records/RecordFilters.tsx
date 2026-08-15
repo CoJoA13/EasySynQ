@@ -61,6 +61,11 @@ export function RecordFilters({
   if (value.q) chips.push(["q", `Search: ${value.q}`]);
 
   const control = { miw: 0, w: { base: "100%", sm: "auto" }, mih: 44 } as const;
+  const searchControl = {
+    ...control,
+    w: { base: "100%", sm: 260 },
+    style: { flexShrink: 0 },
+  } as const;
   const patch = (next: Partial<Criteria>) => onChange({ ...value, ...next });
   return (
     <Stack gap="xs" aria-label="Record filters">
@@ -68,10 +73,10 @@ export function RecordFilters({
         <TextInput
           type="search"
           label="Search records"
-          placeholder="Search identifier or title"
+          placeholder="Search identifier or title…"
           value={search}
           onChange={(event) => setSearch(event.currentTarget.value)}
-          {...control}
+          {...searchControl}
         />
         <Select label="Record type" placeholder="All" data={typeOptions} value={value.record_type ?? null} onChange={(v) => patch({ record_type: v ?? undefined })} clearable {...control} />
         <Select label="Disposition" placeholder="All" data={dispositionOptions} value={value.disposition_state ?? null} onChange={(v) => patch({ disposition_state: v ?? undefined })} clearable {...control} />

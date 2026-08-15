@@ -9,6 +9,11 @@ const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
 ] as const;
 
+const RECORD_ID = "re000001-0001-0001-0001-000000000001";
+const RECORDS_CASE = REGISTER_CASES.find((registerCase) => registerCase.key === "records");
+
+if (!RECORDS_CASE) throw new Error("Records register manifest is required");
+
 async function expectFirstFilterReachable(
   page: Page,
   firstFilter: NonNullable<RegisterCase["firstFilter"]>,
@@ -101,4 +106,78 @@ for (const registerCase of REGISTER_CASES as readonly RegisterCase[]) {
       }
     });
   }
+}
+
+test("records stacks its toolbar above one localized scroll owner at 320 pixels", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await installRegisterApi(page, { route: "records" });
+  await page.goto("/records");
+
+  const controls = [
+    page.getByRole("searchbox", { name: "Search records", exact: true }),
+    page.getByRole("textbox", { name: "Record type", exact: true }),
+    page.getByRole("textbox", { name: "Disposition", exact: true }),
+    page.getByRole("textbox", { name: "Legal hold", exact: true }),
+    page.getByRole("textbox", { name: "Source document", exact: true }),
+    page.getByRole("textbox", { name: "Captured by", exact: true }),
+  ];
+  await expect(page.getByRole("link", { name: "Open record REC-000041" })).toBeVisible();
+  const boxes = await Promise.all(
+    controls.map(async (control) => {
+      await expect(control).toBeVisible();
+      return control.boundingBox();
+    }),
+  );
+  expect(boxes.every((box) => box !== null)).toBe(true);
+
+  const firstBox = boxes[0]!;
+  for (const [index, box] of boxes.entries()) {
+    expect(
+      Math.abs(box!.x - firstBox.x),
+      `control ${index} horizontal alignment`,
+    ).toBeLessThanOrEqual(1);
+    expect(Math.abs(box!.width - firstBox.width), `control ${index} width`).toBeLessThanOrEqual(1);
+    if (index > 0) expect(box!.y).toBeGreaterThan(boxes[index - 1]!.y);
+  }
+
+  const geometry = await measureRegister(page, RECORDS_CASE);
+  expect(geometry.documentScrollWidth - geometry.documentClientWidth).toBeLessThanOrEqual(1);
+  expect(geometry.containerScrollWidth).toBeGreaterThan(geometry.containerClientWidth);
+});
+
+for (const viewport of VIEWPORTS) {
+  test(`records detail uses its ${viewport.name} section layout without document overflow`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await installRegisterApi(page, { route: "records" });
+    await page.goto(`/records/${RECORD_ID}`);
+
+    await expect(
+      page.getByRole("heading", { name: "Preventive-maintenance schedule" }),
+    ).toBeVisible();
+    const provenance = page.getByRole("region", { name: "Provenance" });
+    const lifecycle = page.getByRole("region", { name: "Lifecycle" });
+    const [provenanceBox, lifecycleBox, documentGeometry] = await Promise.all([
+      provenance.boundingBox(),
+      lifecycle.boundingBox(),
+      page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      })),
+    ]);
+    expect(provenanceBox).not.toBeNull();
+    expect(lifecycleBox).not.toBeNull();
+    expect(documentGeometry.scrollWidth - documentGeometry.clientWidth).toBeLessThanOrEqual(1);
+
+    if (viewport.name === "narrow") {
+      expect(Math.abs(provenanceBox!.x - lifecycleBox!.x)).toBeLessThanOrEqual(1);
+      expect(lifecycleBox!.y).toBeGreaterThanOrEqual(provenanceBox!.y + provenanceBox!.height - 1);
+    } else {
+      expect(Math.abs(provenanceBox!.y - lifecycleBox!.y)).toBeLessThanOrEqual(1);
+      expect(lifecycleBox!.x).toBeGreaterThanOrEqual(provenanceBox!.x + provenanceBox!.width - 1);
+    }
+  });
 }

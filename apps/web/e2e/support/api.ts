@@ -13,6 +13,8 @@ import {
   notificationFixtures,
   objectiveFixtures,
   processesFixture,
+  recordDetailFixture,
+  recordsFixture,
   riskListFixture,
   riskRegisterStatusFixture,
   taskFixture,
@@ -38,11 +40,13 @@ const HARNESS_ORIGIN = "http://127.0.0.1:4174";
 const currentDirectoryUser = directoryFixture[0];
 const primaryTask = taskFixture[0];
 const primaryProcess = processesFixture[0];
+const primaryRecord = recordsFixture.data[0];
 
-if (!currentDirectoryUser || !primaryTask || !primaryProcess) {
-  throw new Error("browser fixtures require a synthetic user, task, and process");
+if (!currentDirectoryUser || !primaryTask || !primaryProcess || !primaryRecord) {
+  throw new Error("browser fixtures require a synthetic user, task, process, and record");
 }
 const primaryProcessId = primaryProcess.id;
+const primaryRecordId = primaryRecord.id;
 
 const currentUser = {
   ...currentDirectoryUser,
@@ -202,12 +206,41 @@ export async function installRegisterApi(
     if (
       (scenario.route === "audits" ||
         scenario.route === "dcrs" ||
-        scenario.route === "improvement") &&
+        scenario.route === "improvement" ||
+        scenario.route === "records") &&
       method === "GET" &&
       url.pathname === "/api/v1/directory/users" &&
       url.search === ""
     ) {
       await fulfillJson(route, directoryFixture);
+      return;
+    }
+
+    if (
+      scenario.route === "records" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/records" &&
+      (hasOnlySearchParams(url, { limit: "50" }) ||
+        hasOnlySearchParams(url, {
+          limit: "50",
+          q: "REC-000041",
+          record_type: "EVIDENCE",
+        }))
+    ) {
+      await fulfillJson(route, {
+        ...recordsFixture,
+        page: { ...recordsFixture.page, limit: 50 },
+      });
+      return;
+    }
+
+    if (
+      scenario.route === "records" &&
+      method === "GET" &&
+      url.pathname === `/api/v1/records/${primaryRecordId}` &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, recordDetailFixture);
       return;
     }
 

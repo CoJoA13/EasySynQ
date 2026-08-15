@@ -18,7 +18,7 @@ function recordsOrigin(state: unknown): string {
 
 function BackToRecords({ to }: { to: string }) {
   return (
-    <Anchor component={Link} to={to} aria-label="Back to records">
+    <Anchor component={Link} c="var(--es-accent-text)" to={to} aria-label="Back to records">
       ← Back to records
     </Anchor>
   );
@@ -76,17 +76,17 @@ function RecordDetailRoute({ recordId }: { recordId: string | null }) {
       <Stack gap="lg">
         <Stack gap="xs">
           <BackToRecords to={backTo} />
-          <Text c="dimmed" fw={600} size="sm">
+          <Text c="var(--es-text-2)" fw={600} size="sm">
             {record.identifier ?? "Record"}
           </Text>
           <Title order={2} ref={headingRef} tabIndex={-1}>
             {record.title}
           </Title>
           <Group gap="xs" aria-label="Record state">
-            <Badge variant="light">{humanizeToken(record.record_type)}</Badge>
-            <Badge variant="outline">{record.classification}</Badge>
-            <Badge variant="outline">{humanizeToken(record.disposition_state)}</Badge>
-            <Badge variant="outline">{record.legal_hold ? "Legal hold" : "No legal hold"}</Badge>
+            <Badge variant="status" color="neutral">{humanizeToken(record.record_type)}</Badge>
+            <Badge variant="status" color="neutral">{record.classification}</Badge>
+            <Badge variant="status" color="neutral">{humanizeToken(record.disposition_state)}</Badge>
+            <Badge variant="status" color="neutral">{record.legal_hold ? "Legal hold" : "No legal hold"}</Badge>
           </Group>
           {record.has_structured_pdf && (
             <RecordDownloadButton

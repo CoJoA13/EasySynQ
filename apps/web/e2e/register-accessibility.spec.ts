@@ -1,10 +1,47 @@
 import { expect, test } from "@playwright/test";
 import { installRegisterApi } from "./support/api";
+import { resolve } from "node:path";
 import {
   assertRegisterTableStructure,
   measureActiveElementWithinRegister,
   readActiveFocusStyles,
 } from "./support/registers";
+
+const RECORD_ID = "re000001-0001-0001-0001-000000000001";
+const axePath = resolve(
+  import.meta.dirname,
+  "../node_modules/jest-axe/node_modules/axe-core/axe.min.js",
+);
+
+interface AxeViolation {
+  id: string;
+  impact: string | null;
+  nodes: Array<{ target: string[] }>;
+}
+
+async function expectNoSeriousOrCriticalViolations(page: import("@playwright/test").Page) {
+  await page.addScriptTag({ path: axePath });
+  const violations = await page.evaluate(async () => {
+    const axe = (
+      window as unknown as Window & {
+        axe: { run: (context: Document | Element) => Promise<{ violations: AxeViolation[] }> };
+      }
+    ).axe;
+    const routeContent = document.querySelector("#main-content > .mantine-Container-root");
+    if (!(routeContent instanceof HTMLElement)) {
+      throw new Error("Expected one routed Records container");
+    }
+    const results = await axe.run(routeContent);
+    return results.violations
+      .filter(({ impact }) => impact === "serious" || impact === "critical")
+      .map(({ id, impact, nodes }) => ({
+        id,
+        impact,
+        targets: nodes.flatMap(({ target }) => target),
+      }));
+  });
+  expect(violations).toEqual([]);
+}
 
 test("keeps keyboard focus visible on the far-edge DCR sort control", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 });
@@ -42,6 +79,97 @@ test("keeps the far-edge DCR focus treatment visible in forced colors", async ({
     outlineOffset: "2px",
     boxShadow: "none",
   });
+  const geometry = await measureActiveElementWithinRegister(page);
+  expect(geometry.inside, JSON.stringify(geometry)).toBe(true);
+});
+
+test("preserves native Records identifier links and table semantics", async ({ page }) => {
+  await installRegisterApi(page, { route: "records" });
+  await page.goto("/records");
+
+  const table = page.getByRole("table");
+  const identifierLinks = table.locator("tbody a[data-rownav]");
+  await expect(table).toBeVisible();
+  await assertRegisterTableStructure(page, 2);
+  await expect(table.getByRole("columnheader")).toHaveText([
+    "Identifier",
+    "Title",
+    "Type",
+    "Captured by",
+    "Captured",
+    "State",
+  ]);
+  await expect(identifierLinks).toHaveCount(2);
+  await expect(identifierLinks.first()).toHaveAttribute("href", `/records/${RECORD_ID}`);
+  expect(
+    await identifierLinks.evaluateAll((links) =>
+      links.map((link) => ({
+        tagName: link.tagName,
+        tabIndex: link.tabIndex,
+      })),
+    ),
+  ).toEqual([
+    { tagName: "A", tabIndex: 0 },
+    { tagName: "A", tabIndex: 0 },
+  ]);
+  expect(
+    await table.locator("tbody tr").evaluateAll((rows) =>
+      rows.map((row) => ({
+        role: row.getAttribute("role"),
+        tabIndex: row.getAttribute("tabindex"),
+      })),
+    ),
+  ).toEqual([
+    { role: null, tabIndex: null },
+    { role: null, tabIndex: null },
+  ]);
+});
+
+test("keeps keyboard focus visible on the far-edge Records control", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await installRegisterApi(page, { route: "records" });
+  await page.goto("/records");
+
+  const sourceDocument = page.getByRole("textbox", { name: "Source document", exact: true });
+  const capturedBy = page.getByRole("textbox", { name: "Captured by", exact: true });
+  await sourceDocument.focus();
+  await page.keyboard.press("Tab");
+  await expect(capturedBy).toBeFocused();
+  const focusStyles = await readActiveFocusStyles(page);
+  expect(focusStyles.matchesFocusVisible).toBe(true);
+  expect(focusStyles.outlineStyle !== "none" || focusStyles.boxShadow !== "none").toBe(true);
+  const geometry = await capturedBy.evaluate((control) => {
+    const rect = control.getBoundingClientRect();
+    return {
+      left: rect.left,
+      right: rect.right,
+      width: rect.width,
+      documentClientWidth: document.documentElement.clientWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  expect(geometry.left).toBeGreaterThanOrEqual(-1);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.documentClientWidth + 1);
+  expect(geometry.documentScrollWidth - geometry.documentClientWidth).toBeLessThanOrEqual(1);
+});
+
+test("has no serious or critical axe violations on the Records register", async ({ page }) => {
+  await installRegisterApi(page, { route: "records" });
+  await page.goto("/records");
+
+  await expect(page.getByRole("link", { name: "Open record REC-000041" })).toBeVisible();
+  await expectNoSeriousOrCriticalViolations(page);
+});
+
+test("has no serious or critical axe violations on populated record detail", async ({ page }) => {
+  await installRegisterApi(page, { route: "records" });
+  await page.goto(`/records/${RECORD_ID}`);
+
+  await expect(
+    page.getByRole("heading", { name: "Preventive-maintenance schedule" }),
+  ).toBeVisible();
+  await expect(page.getByRole("region", { name: "Evidence files" })).toBeVisible();
+  await expectNoSeriousOrCriticalViolations(page);
 });
 
 test("preserves native Task links, row navigation, and table semantics", async ({ page }) => {

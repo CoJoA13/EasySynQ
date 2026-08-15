@@ -114,6 +114,18 @@ test("Back restores the exact filtered cursor URL and identifier link retains it
   await waitFor(() => expect(screen.getByLabelText("Location state")).toHaveTextContent("/records?q=REC-41"));
 });
 
+test("shows the unfiltered empty message for a valid cursor-only page", async () => {
+  server.use(http.get("/api/v1/records", () => HttpResponse.json({
+    data: [],
+    page: { limit: 50, returned: 0, next_cursor: null },
+  })));
+
+  renderRecords("/records?cursor=valid-next-page");
+
+  expect(await screen.findByText("No records yet")).toBeInTheDocument();
+  expect(screen.queryByText("No records match your filters")).not.toBeInTheDocument();
+});
+
 test("keeps the toolbar visible for loading, empty, invalid-cursor, and retryable-error states", async () => {
   let releaseLoading: ((value: Response) => void) | undefined;
   server.use(http.get("/api/v1/records", () => new Promise<Response>((resolve) => { releaseLoading = resolve; })));

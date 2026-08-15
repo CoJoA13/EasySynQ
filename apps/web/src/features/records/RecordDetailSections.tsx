@@ -21,7 +21,7 @@ function DetailList({ children }: { children: ReactNode }) {
 function DetailValue({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <Text component="dt" size="xs" c="dimmed" fw={600}>
+      <Text component="dt" size="xs" c="var(--es-text-2)" fw={600}>
         {label}
       </Text>
       <Text component="dd" m={0} style={{ overflowWrap: "anywhere" }}>
@@ -76,7 +76,7 @@ function RelatedRecord({
   if (!id) return <>None recorded</>;
   if (!readable) return <>Restricted related item</>;
   return (
-    <Anchor component={Link} to={`/records/${id}`}>
+    <Anchor component={Link} c="var(--es-accent-text)" to={`/records/${id}`}>
       {label}
     </Anchor>
   );
@@ -130,7 +130,7 @@ function evidenceTarget(link: RecordEvidenceLink): ReactNode {
   const label = link.target_label;
   if (link.target_type !== "document") return label;
   return (
-    <Anchor component={Link} to={`/documents/${link.target_id}`}>
+    <Anchor component={Link} c="var(--es-accent-text)" to={`/documents/${link.target_id}`}>
       {label}
     </Anchor>
   );
@@ -152,7 +152,7 @@ export function RecordDetailSections({ record }: { record: RecordDetail }) {
               {!record.source_document_id ? (
                 "None recorded"
               ) : record.source_document_readable ? (
-                <Anchor component={Link} to={`/documents/${record.source_document_id}`}>
+                <Anchor component={Link} c="var(--es-accent-text)" to={`/documents/${record.source_document_id}`}>
                   {sourceLabel(record)}
                 </Anchor>
               ) : (

@@ -10,7 +10,8 @@ export interface RegisterCase {
     | "improvement"
     | "risks"
     | "context"
-    | "interested-parties";
+    | "interested-parties"
+    | "records";
   path: string;
   floor: number;
   headers: readonly string[];
@@ -128,6 +129,16 @@ export const REGISTER_CASES = [
     searchPlaceholder: "Search parties…",
     firstFilter: { role: "textbox", name: "Filter by party type" },
     primaryAction: { role: "button", name: "Acme Manufacturing" },
+  },
+  {
+    key: "records",
+    path: "/records",
+    floor: 840,
+    headers: ["Identifier", "Title", "Type", "Captured by", "Captured", "State"],
+    finalHeader: "State",
+    searchPlaceholder: "Search identifier or title…",
+    firstFilter: { role: "textbox", name: "Record type" },
+    primaryAction: { role: "link", name: "Open record REC-000041" },
   },
 ] as const satisfies readonly RegisterCase[];
 

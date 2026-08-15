@@ -55,6 +55,8 @@ def _assert_no_protected_dockerignore_reinclusions(
         assert ".." not in reinclusion.split("/"), (
             f"parent-relative Docker reinclusion is not allowed beside protected roots: {pattern}"
         )
+        while reinclusion.startswith("./"):
+            reinclusion = reinclusion[2:]
         assert not any(
             reinclusion == root or reinclusion.startswith(f"{root}/") for root in protected_roots
         ), f"Docker reinclusion reaches a protected browser root: {pattern}"
@@ -283,6 +285,12 @@ def test_web_image_invariant_rejects_exact_descendant_and_wildcard_reinclusions(
                 _assert_no_protected_dockerignore_reinclusions(
                     [*BROWSER_ONLY_CONTEXT_ROOTS, reinclusion], BROWSER_ONLY_CONTEXT_ROOTS
                 )
+
+    for reinclusion in ("!./e2e", "!././e2e/nested", "!./playwright.config.ts"):
+        with pytest.raises(AssertionError):
+            _assert_no_protected_dockerignore_reinclusions(
+                [*BROWSER_ONLY_CONTEXT_ROOTS, reinclusion], BROWSER_ONLY_CONTEXT_ROOTS
+            )
 
     _assert_no_protected_dockerignore_reinclusions(
         [*BROWSER_ONLY_CONTEXT_ROOTS, "!docs/**/*.md"], BROWSER_ONLY_CONTEXT_ROOTS

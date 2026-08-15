@@ -90,6 +90,7 @@ export function RecordDownloadButton({
       <Button
         type="button"
         variant="light"
+        style={{ background: "var(--es-accent-soft)", color: "var(--es-accent-text)" }}
         loading={loading}
         disabled={loading}
         onClick={() => void download()}
@@ -102,7 +103,7 @@ export function RecordDownloadButton({
         </Alert>
       )}
       {renditionPending && (
-        <Text size="sm" c="dimmed" role="status">
+        <Text size="sm" c="var(--es-text-2)" role="status">
           Structured PDF is not ready yet
         </Text>
       )}
