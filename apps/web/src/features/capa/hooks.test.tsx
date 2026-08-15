@@ -5,7 +5,9 @@ import type { ReactNode } from "react";
 import { expect, test } from "vitest";
 import { AuthContext } from "../../lib/auth";
 import { TEST_AUTH } from "../../test/render";
+import { recordsFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
+import { useRecords } from "../records/hooks";
 import { useCapa, useCapas, useComplaints, useNcrs } from "./hooks";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -43,6 +45,23 @@ test("useCapa returns the detail with stages", async () => {
 test("useCapa is disabled when id is null", () => {
   const { result } = renderHook(() => useCapa(null), { wrapper });
   expect(result.current.fetchStatus).toBe("idle");
+});
+
+test("useRecords requests the bounded page and returns its summary rows", async () => {
+  let requestPathAndQuery = "";
+  server.use(
+    http.get("/api/v1/records", ({ request }) => {
+      const requestUrl = new URL(request.url);
+      requestPathAndQuery = `${requestUrl.pathname}${requestUrl.search}`;
+      return HttpResponse.json(recordsFixture);
+    }),
+  );
+
+  const { result } = renderHook(() => useRecords({ limit: 100 }), { wrapper });
+
+  await waitFor(() => expect(result.current.data).toBeDefined());
+  expect(requestPathAndQuery).toBe("/api/v1/records?limit=100");
+  expect(result.current.data!.data.map((record) => record.identifier)).toContain("REC-000041");
 });
 
 test("useComplaints returns the {data} rows", async () => {

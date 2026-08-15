@@ -2,7 +2,7 @@
 import { Alert, Button, Group, Select, Text, TextInput } from "@mantine/core";
 import { useState } from "react";
 import { ApiError } from "../../lib/api";
-import { useRecords } from "./hooks";
+import { useRecords } from "../records/hooks";
 import { useLinkEvidence } from "./mutations";
 
 // Light "link an existing record as evidence" affordance (epic §7: no net-new upload). The picked record
@@ -20,7 +20,7 @@ export function EvidenceLinker({
   // standalone labels plain.
   labelSuffix?: string;
 }) {
-  const { data: records } = useRecords();
+  const { data: page } = useRecords({ limit: 100 });
   const link = useLinkEvidence(capaId);
   const [recordId, setRecordId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
@@ -31,7 +31,11 @@ export function EvidenceLinker({
     if (!recordId) return;
     setError(null);
     try {
-      await link.mutateAsync({ recordId, targetId: stageId, linkReason: reason.trim() || undefined });
+      await link.mutateAsync({
+        recordId,
+        targetId: stageId,
+        linkReason: reason.trim() || undefined,
+      });
       setDone(true);
       setRecordId(null);
       setReason("");
@@ -66,7 +70,7 @@ export function EvidenceLinker({
             setError(null);
           }}
           comboboxProps={{ keepMounted: false }}
-          data={(records ?? []).map((r) => ({
+          data={(page?.data ?? []).map((r) => ({
             value: r.id,
             label: `${r.identifier ?? r.id} — ${r.title}`,
           }))}

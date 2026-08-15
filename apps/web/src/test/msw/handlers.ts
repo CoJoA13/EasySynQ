@@ -60,6 +60,7 @@ import type {
   RiskRegisterStatus,
   RiskRow,
   RiskSummary,
+  RecordPage,
   SupersededCopies,
   Task,
   WorkflowInstance,
@@ -969,21 +970,62 @@ export const supersededCopiesFixture = {
   ],
 } satisfies SupersededCopies;
 
-// GET /records — the evidence picker source (a bare array).
-export const recordsFixture = [
-  {
-    id: "re000001-0001-0001-0001-000000000001",
-    identifier: "REC-000041",
-    title: "Preventive-maintenance schedule",
-    record_type: "EVIDENCE",
-  },
-  {
-    id: "re000002-0002-0002-0002-000000000002",
-    identifier: "REC-000042",
-    title: "Audit re-check checklist",
-    record_type: "EVIDENCE",
-  },
-];
+// GET /records — the authorization-filtered page consumed by the evidence picker.
+export const recordsFixture: RecordPage = {
+  data: [
+    {
+      id: "re000001-0001-0001-0001-000000000001",
+      identifier: "REC-000041",
+      kind: "RECORD",
+      title: "Preventive-maintenance schedule",
+      record_type: "EVIDENCE",
+      classification: "Internal",
+      framework_id: "fr000001-0001-0001-0001-000000000001",
+      captured_at: "2026-06-01T09:00:00+00:00",
+      captured_by: "us000001-0001-0001-0001-000000000001",
+      captured_by_display_name: "Mara Quality",
+      source_document_id: null,
+      source_document_identifier: null,
+      source_document_title: null,
+      source_document_readable: false,
+      source_version_id: null,
+      source_version_label: null,
+      retention_policy_id: "rp000001-0001-0001-0001-000000000001",
+      retention_policy_name: "Quality records — 7 years",
+      disposition_state: "ACTIVE",
+      legal_hold: false,
+      has_structured_pdf: false,
+      correction_of: null,
+      superseded_by_correction: null,
+    },
+    {
+      id: "re000002-0002-0002-0002-000000000002",
+      identifier: "REC-000042",
+      kind: "RECORD",
+      title: "Audit re-check checklist",
+      record_type: "EVIDENCE",
+      classification: "Internal",
+      framework_id: "fr000001-0001-0001-0001-000000000001",
+      captured_at: "2026-05-31T09:00:00+00:00",
+      captured_by: "us000001-0001-0001-0001-000000000001",
+      captured_by_display_name: "Mara Quality",
+      source_document_id: null,
+      source_document_identifier: null,
+      source_document_title: null,
+      source_document_readable: false,
+      source_version_id: null,
+      source_version_label: null,
+      retention_policy_id: "rp000001-0001-0001-0001-000000000001",
+      retention_policy_name: "Quality records — 7 years",
+      disposition_state: "ACTIVE",
+      legal_hold: false,
+      has_structured_pdf: false,
+      correction_of: null,
+      superseded_by_correction: null,
+    },
+  ],
+  page: { limit: 100, returned: 2, next_cursor: null },
+};
 
 // ---- S-web-7c complaint + NCR fixtures (pinned to the _complaint / _ncr serializers) ----
 export const complaintListFixture = {
