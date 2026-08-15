@@ -126,6 +126,16 @@ def test_decode_rejects_unsupported_version() -> None:
         decode_record_cursor(_payload_token(payload), RecordListCriteria())
 
 
+@pytest.mark.parametrize("query", ["0" * 63, "g" * 64])
+def test_decode_rejects_query_that_is_not_sha256_hex(query: str) -> None:
+    token = encode_record_cursor(_BOUNDARY, RecordListCriteria())
+    raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+    payload = {**json.loads(raw), "query": query}
+
+    with pytest.raises(InvalidRecordCursor, match=r"^invalid cursor$"):
+        decode_record_cursor(_payload_token(payload), RecordListCriteria())
+
+
 def test_decode_rejects_naive_timestamp() -> None:
     payload = {
         "v": 1,

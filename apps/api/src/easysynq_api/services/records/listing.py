@@ -9,6 +9,7 @@ import datetime
 import hashlib
 import hmac
 import json
+import string
 import uuid
 
 from ...db.models._record_enums import RecordDispositionState, RecordType
@@ -120,6 +121,8 @@ def decode_record_cursor(token: str, criteria: RecordListCriteria) -> RecordList
         if not isinstance(captured_at_value, str) or not isinstance(record_id_value, str):
             raise ValueError("invalid cursor field types")
         if not isinstance(query, str):
+            raise ValueError("invalid cursor query")
+        if len(query) != 64 or any(character not in string.hexdigits for character in query):
             raise ValueError("invalid cursor query")
 
         captured_at = datetime.datetime.fromisoformat(captured_at_value)
