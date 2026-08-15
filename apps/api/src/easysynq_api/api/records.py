@@ -61,6 +61,12 @@ from ..services.records.listing import (
     decode_record_cursor,
     encode_record_cursor,
 )
+from ..services.records.presentation import (
+    EvidenceTargetLabel,
+    RecordLabels,
+    hydrate_evidence_target_labels,
+    hydrate_record_labels,
+)
 from ..services.vault import repository as vault_repo
 from ..services.vault import storage
 from ..services.vault.staged_identity import StagingDomain
@@ -191,12 +197,14 @@ def _evidence_blob(eb: EvidenceBlob, b: Blob) -> dict[str, Any]:
     }
 
 
-def _evidence_link(link: EvidenceForLink) -> dict[str, Any]:
+def _evidence_link(link: EvidenceForLink, label: EvidenceTargetLabel) -> dict[str, Any]:
     return {
         "id": str(link.id),
         "record_id": str(link.record_id),
         "target_type": link.target_type.value,
         "target_id": str(link.target_id),
+        "target_label": label.label,
+        "target_readable": label.readable,
         "link_reason": link.link_reason,
         "created_at": link.created_at.isoformat() if link.created_at else None,
     }
@@ -242,14 +250,10 @@ def _disposition_event(event: DispositionEvent) -> dict[str, Any]:
     }
 
 
-def _record(
-    record: Record,
-    base: DocumentedInformation,
-    *,
-    evidence_blobs: list[dict[str, Any]] | None = None,
-    evidence_links: list[dict[str, Any]] | None = None,
+def _record_summary(
+    record: Record, base: DocumentedInformation, labels: RecordLabels
 ) -> dict[str, Any]:
-    out: dict[str, Any] = {
+    return {
         "id": str(record.id),
         "identifier": base.identifier,
         "kind": base.kind.value,
@@ -259,17 +263,17 @@ def _record(
         "framework_id": str(base.framework_id),
         "captured_at": record.captured_at.isoformat() if record.captured_at else None,
         "captured_by": str(record.captured_by),
-        "content_hash": record.content_hash,
-        "content_hash_version": record.content_hash_version,
+        "captured_by_display_name": labels.captured_by_display_name,
         "source_document_id": (
             str(record.source_document_id) if record.source_document_id else None
         ),
+        "source_document_identifier": labels.source_document_identifier,
+        "source_document_title": labels.source_document_title,
+        "source_document_readable": labels.source_document_readable,
         "source_version_id": str(record.source_version_id) if record.source_version_id else None,
-        "form_field_values": record.form_field_values,
+        "source_version_label": labels.source_version_label,
         "retention_policy_id": str(record.retention_policy_id),
-        "retention_basis_date": (
-            record.retention_basis_date.isoformat() if record.retention_basis_date else None
-        ),
+        "retention_policy_name": labels.retention_policy_name,
         "disposition_state": record.disposition_state.value,
         "legal_hold": record.legal_hold,
         "has_structured_pdf": record.structured_pdf_blob_sha256 is not None,
@@ -277,12 +281,33 @@ def _record(
         "superseded_by_correction": (
             str(record.superseded_by_correction) if record.superseded_by_correction else None
         ),
-        "created_at": base.created_at.isoformat() if base.created_at else None,
     }
-    if evidence_blobs is not None:
-        out["evidence_blobs"] = evidence_blobs
-    if evidence_links is not None:
-        out["evidence_links"] = evidence_links
+
+
+def _record_detail(
+    record: Record,
+    base: DocumentedInformation,
+    labels: RecordLabels,
+    *,
+    evidence_blobs: list[dict[str, Any]],
+    evidence_links: list[dict[str, Any]],
+) -> dict[str, Any]:
+    out = _record_summary(record, base, labels)
+    out.update(
+        {
+            "content_hash": record.content_hash,
+            "content_hash_version": record.content_hash_version,
+            "form_field_values": record.form_field_values,
+            "retention_basis_date": (
+                record.retention_basis_date.isoformat() if record.retention_basis_date else None
+            ),
+            "correction_of_readable": labels.correction_of_readable,
+            "superseded_by_correction_readable": labels.superseded_by_correction_readable,
+            "created_at": base.created_at.isoformat() if base.created_at else None,
+            "evidence_blobs": evidence_blobs,
+            "evidence_links": evidence_links,
+        }
+    )
     return out
 
 
@@ -457,16 +482,48 @@ async def _retention_until_for(session: AsyncSession, record: Record) -> datetim
         return None
 
 
+def _request_context(request: Request) -> RequestContext:
+    return RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
+
+
+async def _serialize_evidence_links(
+    session: AsyncSession,
+    caller: AppUser,
+    links: list[EvidenceForLink],
+    ctx: RequestContext,
+) -> list[dict[str, Any]]:
+    labels = await hydrate_evidence_target_labels(session, caller, links, ctx)
+    return [_evidence_link(link, labels[link.id]) for link in links]
+
+
 async def _serialize_full(
-    session: AsyncSession, record: Record, base: DocumentedInformation
+    session: AsyncSession,
+    caller: AppUser,
+    record: Record,
+    base: DocumentedInformation,
+    ctx: RequestContext,
+    *,
+    hydrate_links: bool,
 ) -> dict[str, Any]:
     blobs = await records_repo.list_evidence_blobs(session, record.id)
     links = await records_repo.list_evidence_links(session, record.id)
-    return _record(
+    labels = await hydrate_record_labels(session, caller, [(record, base)], ctx)
+    serialized_links = (
+        await _serialize_evidence_links(session, caller, links, ctx)
+        if hydrate_links
+        else [
+            _evidence_link(link, EvidenceTargetLabel(label=None, readable=False)) for link in links
+        ]
+    )
+    return _record_detail(
         record,
         base,
+        labels[record.id],
         evidence_blobs=[_evidence_blob(eb, b) for eb, b in blobs],
-        evidence_links=[_evidence_link(link) for link in links],
+        evidence_links=serialized_links,
     )
 
 
@@ -524,7 +581,14 @@ async def capture_endpoint(
         rejection_context=_evidence_rejection_context(caller),
     )
     _, base = await _load(session, caller, record.id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.get("/records")
@@ -556,10 +620,7 @@ async def list_records_endpoint(
             "page": {"limit": params.limit, "returned": 0, "next_cursor": None},
         }
 
-    ctx = RequestContext(
-        now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
-    )
+    ctx = _request_context(request)
     batch_size = max(100, min(500, params.limit * 4))
     scan_after = client_after
     readable: list[tuple[Record, DocumentedInformation]] = []
@@ -618,8 +679,9 @@ async def list_records_endpoint(
             ),
             criteria,
         )
+    labels = await hydrate_record_labels(session, caller, page_rows, ctx)
     return {
-        "data": [_record(record, base) for record, base in page_rows],
+        "data": [_record_summary(record, base, labels[record.id]) for record, base in page_rows],
         "page": {
             "limit": params.limit,
             "returned": len(page_rows),
@@ -631,11 +693,19 @@ async def list_records_endpoint(
 @router.get("/records/{record_id}")
 async def get_record_endpoint(
     record_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     record, base = await _load(session, caller, record_id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=True,
+    )
 
 
 @router.get("/records/{record_id}/evidence/{sha256}/download")
@@ -766,18 +836,26 @@ async def correction_endpoint(
         rejection_context=_evidence_rejection_context(caller),
     )
     _, base = await _load(session, caller, new_record.id)
-    return await _serialize_full(session, new_record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        new_record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.get("/records/{record_id}/evidence-links")
 async def list_evidence_links_endpoint(
     record_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
     await _load(session, caller, record_id)
     links = await records_repo.list_evidence_links(session, record_id)
-    return [_evidence_link(link) for link in links]
+    return await _serialize_evidence_links(session, caller, links, _request_context(request))
 
 
 @router.post("/records/{record_id}/evidence-links", status_code=status.HTTP_201_CREATED)
@@ -800,7 +878,8 @@ async def link_evidence_endpoint(
         target_id=body.target_id,
         link_reason=body.link_reason,
     )
-    return _evidence_link(link)
+    serialized = await _serialize_evidence_links(session, caller, [link], _request_context(request))
+    return serialized[0]
 
 
 @router.delete(
@@ -858,6 +937,7 @@ async def get_disposition_endpoint(
 async def advance_disposition_endpoint(
     record_id: uuid.UUID,
     body: DispositionAdvance,
+    request: Request,
     caller: AppUser = Depends(_dispose),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -872,13 +952,21 @@ async def advance_disposition_endpoint(
         reason=body.reason,
     )
     _, base = await _load(session, caller, record.id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.post("/records/{record_id}/legal-hold")
 async def legal_hold_endpoint(
     record_id: uuid.UUID,
     body: LegalHoldAction,
+    request: Request,
     caller: AppUser = Depends(_dispose),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -889,7 +977,14 @@ async def legal_hold_endpoint(
     else:
         record = await release_legal_hold(session, caller, record_id, reason=body.reason)
     _, base = await _load(session, caller, record.id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.get("/records/{record_id}/worm-destroy-requests")
@@ -921,6 +1016,7 @@ async def approve_worm_destroy_endpoint(
     record_id: uuid.UUID,
     req_id: uuid.UUID,
     body: DispositionReason,
+    request: Request,
     caller: AppUser = Depends(_dispose),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -928,7 +1024,14 @@ async def approve_worm_destroy_endpoint(
     requester (409); the governance-bypass purge is fail-closed; COMPLIANCE mode is refused."""
     record = await approve_worm_destroy(session, caller, record_id, req_id, reason=body.reason)
     _, base = await _load(session, caller, record.id)
-    return await _serialize_full(session, record, base)
+    return await _serialize_full(
+        session,
+        caller,
+        record,
+        base,
+        _request_context(request),
+        hydrate_links=False,
+    )
 
 
 @router.post("/records/{record_id}/worm-destroy-requests/{req_id}/cancel")

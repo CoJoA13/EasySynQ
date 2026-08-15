@@ -14,6 +14,7 @@ import base64
 import datetime
 import hashlib
 import json
+import sys
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -23,14 +24,17 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request
 from httpx import AsyncClient
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from easysynq_api._generated.models import EvidenceLink as ContractEvidenceLink
+from easysynq_api._generated.models import RecordSummary as ContractRecordSummary
 from easysynq_api.api import records as records_api
 from easysynq_api.auth.dependencies import get_current_user
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
 from easysynq_api.db.models._clause_enums import PdcaPhase
+from easysynq_api.db.models._evidence_enums import EvidenceForTargetType
 from easysynq_api.db.models._record_enums import RecordDispositionState, RecordType
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
 from easysynq_api.db.models._vault_enums import DocumentCurrentState, DocumentKind
@@ -41,14 +45,15 @@ from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.clause import Clause
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.evidence_blob import EvidenceBlob
+from easysynq_api.db.models.evidence_for_link import EvidenceForLink
 from easysynq_api.db.models.framework import Framework
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.retention_policy import RetentionPolicy
 from easysynq_api.db.models.scope import Scope
-from easysynq_api.db.session import get_session, get_sessionmaker
-from easysynq_api.domain.authz.types import Effect, ResolvedGrant, ScopeLevel
+from easysynq_api.db.session import get_engine, get_session, get_sessionmaker
+from easysynq_api.domain.authz.types import Effect, RequestContext, ResolvedGrant, ScopeLevel
 from easysynq_api.domain.records.content_hash import record_content_hash
 from easysynq_api.problems import register_exception_handlers
 from easysynq_api.services.records import repository as records_repo
@@ -753,6 +758,182 @@ async def test_capture_pins_source_version(
     assert rec["source_version_id"] == version_id
 
 
+async def test_display_labels_source_backed_list_detail_and_bounded_queries(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Source labels arrive with list/detail and hydration SELECT count is page-size constant."""
+    subject = _subject("display-labels")
+    actor_id = await _grant_doc_perms(subject)
+    await _grant(subject, _RECORD_PERMS)
+    headers = _auth(token_factory, subject)
+    marker = uuid.uuid4().hex
+    source_title = f"Display source {marker}"
+    source = (
+        await app_client.post(
+            "/api/v1/documents",
+            headers=headers,
+            json={
+                "title": source_title,
+                "document_type_id": await _sop_type_id(),
+                "area_code": "QA",
+            },
+        )
+    ).json()
+    await app_client.post(f"/api/v1/documents/{source['id']}/checkout", headers=headers)
+    upload = await _upload(app_client, headers, source["id"], f"display-source-{marker}".encode())
+    checked_in = await app_client.post(
+        f"/api/v1/documents/{source['id']}/checkin",
+        headers=headers,
+        json={
+            "sha256": upload.sha256,
+            "staging_version_id": upload.version_id,
+            "change_reason": "display label proof",
+            "change_significance": "MAJOR",
+        },
+    )
+    assert checked_in.status_code == 201, checked_in.text
+    version = checked_in.json()
+
+    record_ids: list[uuid.UUID] = []
+    for index in range(3):
+        captured = await _capture(
+            app_client,
+            headers,
+            record_type="RELEASE",
+            title=f"Display record {marker} {index}",
+            source_document_id=source["id"],
+            source_version_id=version["id"],
+        )
+        assert captured.status_code == 201, captured.text
+        record_ids.append(uuid.UUID(captured.json()["id"]))
+
+    listed = await app_client.get(
+        "/api/v1/records", headers=headers, params={"q": marker, "limit": 10}
+    )
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()["data"]
+    assert {row["id"] for row in rows} == {str(record_id) for record_id in record_ids}
+    for row in rows:
+        assert row["captured_by_display_name"] == subject
+        assert row["source_document_identifier"] == source["identifier"]
+        assert row["source_document_title"] == source_title
+        assert row["source_document_readable"] is True
+        assert row["source_version_label"] == version["revision_label"]
+        assert row["retention_policy_name"]
+        assert {
+            "content_hash",
+            "content_hash_version",
+            "form_field_values",
+            "retention_basis_date",
+            "created_at",
+            "evidence_blobs",
+            "evidence_links",
+        }.isdisjoint(row)
+
+    detail = await app_client.get(f"/api/v1/records/{record_ids[0]}", headers=headers)
+    assert detail.status_code == 200, detail.text
+    detail_body = detail.json()
+    assert detail_body["source_document_identifier"] == source["identifier"]
+    assert detail_body["source_version_label"] == version["revision_label"]
+    assert "content_hash" in detail_body
+    assert "form_field_values" in detail_body
+    assert "evidence_blobs" in detail_body
+    assert "evidence_links" in detail_body
+
+    hydrate = getattr(records_api, "hydrate_record_labels", None)
+    assert hydrate is not None
+
+    async def hydration_select_count(selected_ids: list[uuid.UUID]) -> int:
+        async with get_sessionmaker()() as session:
+            caller = await session.get(AppUser, actor_id)
+            assert caller is not None
+            selected_rows = list(
+                (
+                    await session.execute(
+                        select(Record, DocumentedInformation)
+                        .join(DocumentedInformation, DocumentedInformation.id == Record.id)
+                        .where(Record.id.in_(selected_ids))
+                    )
+                ).all()
+            )
+            statements: list[str] = []
+
+            def before_cursor_execute(
+                _conn: object,
+                _cursor: object,
+                statement: str,
+                _parameters: object,
+                _context: object,
+                _executemany: bool,
+            ) -> None:
+                if statement.lstrip().upper().startswith("SELECT"):
+                    statements.append(statement)
+
+            sync_engine = get_engine().sync_engine
+            event.listen(sync_engine, "before_cursor_execute", before_cursor_execute)
+            try:
+                await hydrate(
+                    session,
+                    caller,
+                    selected_rows,
+                    RequestContext(now=datetime.datetime(2026, 8, 14, tzinfo=datetime.UTC)),
+                )
+            finally:
+                event.remove(sync_engine, "before_cursor_execute", before_cursor_execute)
+            return len(statements)
+
+    one_count = await hydration_select_count(record_ids[:1])
+    several_count = await hydration_select_count(record_ids)
+    assert one_count == several_count
+    assert one_count <= 12
+
+    # A pinned version owned by another document never borrows the readable source's label.
+    other_source = (
+        await app_client.post(
+            "/api/v1/documents",
+            headers=headers,
+            json={
+                "title": f"Other source {marker}",
+                "document_type_id": await _sop_type_id(),
+                "area_code": "QA",
+            },
+        )
+    ).json()
+    await app_client.post(f"/api/v1/documents/{other_source['id']}/checkout", headers=headers)
+    other_upload = await _upload(
+        app_client, headers, other_source["id"], f"other-source-{marker}".encode()
+    )
+    other_checkin = await app_client.post(
+        f"/api/v1/documents/{other_source['id']}/checkin",
+        headers=headers,
+        json={
+            "sha256": other_upload.sha256,
+            "staging_version_id": other_upload.version_id,
+            "change_reason": "parent mismatch proof",
+            "change_significance": "MAJOR",
+        },
+    )
+    assert other_checkin.status_code == 201, other_checkin.text
+    async with get_sessionmaker()() as session:
+        mismatched = await session.get(Record, record_ids[0])
+        assert mismatched is not None
+        mismatched.source_version_id = uuid.UUID(other_checkin.json()["id"])
+        await session.commit()
+    try:
+        mismatched_detail = await app_client.get(
+            f"/api/v1/records/{record_ids[0]}", headers=headers
+        )
+        assert mismatched_detail.status_code == 200, mismatched_detail.text
+        assert mismatched_detail.json()["source_document_readable"] is True
+        assert mismatched_detail.json()["source_version_label"] is None
+    finally:
+        async with get_sessionmaker()() as session:
+            mismatched = await session.get(Record, record_ids[0])
+            assert mismatched is not None
+            mismatched.source_version_id = uuid.UUID(version["id"])
+            await session.commit()
+
+
 async def test_r21_ad_hoc_null_but_under_doc_requires_version(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
@@ -882,9 +1063,30 @@ async def test_list_page_envelope_filters_hidden_candidates_without_container(
             for record_id in visible_ids
         ]
 
+    async def fake_labels(
+        _session: object,
+        _caller: AppUser,
+        rows: list[tuple[SimpleNamespace, SimpleNamespace]],
+        _ctx: RequestContext,
+    ) -> dict[uuid.UUID, records_api.RecordLabels]:
+        return {
+            record.id: records_api.RecordLabels(
+                captured_by_display_name=caller.display_name,
+                source_document_identifier=None,
+                source_document_title=None,
+                source_document_readable=False,
+                source_version_label=None,
+                retention_policy_name=None,
+                correction_of_readable=False,
+                superseded_by_correction_readable=False,
+            )
+            for record, _base in rows
+        }
+
     monkeypatch.setattr(records_repo, "list_record_candidates", fake_list_candidates)
     monkeypatch.setattr(records_repo, "record_process_ids_for", fake_process_ids)
     monkeypatch.setattr(records_api, "gather_grants", fake_grants)
+    monkeypatch.setattr(records_api, "hydrate_record_labels", fake_labels)
 
     app = FastAPI()
     register_exception_handlers(app)
@@ -941,6 +1143,534 @@ async def test_list_page_envelope_filters_hidden_candidates_without_container(
         "data": [],
         "page": {"limit": 50, "returned": 0, "next_cursor": None},
     }
+
+
+async def test_display_labels_hydrate_only_readable_list_rows_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The list hydrates its authorized output page and emits only the summary contract."""
+    caller = AppUser(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        keycloak_subject=f"display-label-proof-{uuid.uuid4().hex}",
+        display_name="Display label proof",
+    )
+    captured_at = datetime.datetime(2026, 8, 14, 19, tzinfo=datetime.UTC)
+    visible_id = uuid.uuid4()
+    hidden_id = uuid.uuid4()
+    policy_id = uuid.uuid4()
+
+    def candidate(record_id: uuid.UUID, title: str) -> tuple[SimpleNamespace, SimpleNamespace]:
+        return (
+            SimpleNamespace(
+                id=record_id,
+                record_type=RecordType.EVIDENCE,
+                captured_at=captured_at,
+                captured_by=caller.id,
+                content_hash="sha256:" + "ab" * 32,
+                content_hash_version=2,
+                source_document_id=None,
+                source_version_id=None,
+                form_field_values={"secret": "detail-only"},
+                retention_policy_id=policy_id,
+                retention_basis_date=datetime.date(2026, 8, 14),
+                disposition_state=RecordDispositionState.ACTIVE,
+                legal_hold=False,
+                structured_pdf_blob_sha256=None,
+                correction_of=None,
+                superseded_by_correction=None,
+            ),
+            SimpleNamespace(
+                identifier=f"LABEL-{record_id.hex[:8]}",
+                kind=DocumentKind.RECORD,
+                title=title,
+                classification=SimpleNamespace(value="Internal"),
+                framework_id=uuid.uuid4(),
+                folder_path=None,
+                current_state=DocumentCurrentState.Effective,
+                created_at=captured_at,
+            ),
+        )
+
+    candidates = [candidate(visible_id, "Visible"), candidate(hidden_id, "Hidden")]
+
+    async def fake_candidates(*_args: object, **_kwargs: object) -> list[tuple[object, object]]:
+        return candidates
+
+    async def fake_process_ids(
+        _session: object, records: list[SimpleNamespace]
+    ) -> dict[uuid.UUID, set[str]]:
+        return {record.id: set() for record in records}
+
+    async def fake_grants(*_args: object, **_kwargs: object) -> list[ResolvedGrant]:
+        return [
+            ResolvedGrant(
+                effect=Effect.ALLOW,
+                level=ScopeLevel.ARTIFACT,
+                selector={"artifact_id": str(visible_id)},
+                predicates={},
+                source="display-label-proof",
+                is_override=True,
+            )
+        ]
+
+    hydrated_rows: list[uuid.UUID] = []
+
+    async def fake_hydrate(
+        _session: object,
+        _caller: AppUser,
+        rows: list[tuple[SimpleNamespace, SimpleNamespace]],
+        _ctx: RequestContext,
+    ) -> dict[uuid.UUID, SimpleNamespace]:
+        hydrated_rows.extend(record.id for record, _base in rows)
+        return {
+            record.id: SimpleNamespace(
+                captured_by_display_name="Captured operator",
+                source_document_identifier=None,
+                source_document_title=None,
+                source_document_readable=False,
+                source_version_label=None,
+                retention_policy_name="Seven year retention",
+                correction_of_readable=False,
+                superseded_by_correction_readable=False,
+            )
+            for record, _base in rows
+        }
+
+    monkeypatch.setattr(records_repo, "list_record_candidates", fake_candidates)
+    monkeypatch.setattr(records_repo, "record_process_ids_for", fake_process_ids)
+    monkeypatch.setattr(records_api, "gather_grants", fake_grants)
+    monkeypatch.setattr(records_api, "hydrate_record_labels", fake_hydrate, raising=False)
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/records",
+            "headers": [],
+            "query_string": b"",
+            "client": ("127.0.0.1", 1),
+        }
+    )
+    result = await records_api.list_records_endpoint(
+        request=request,
+        params=records_api.RecordListParams(),
+        caller=caller,
+        session=object(),  # type: ignore[arg-type] -- every DB boundary is replaced above
+    )
+
+    assert hydrated_rows == [visible_id]
+    assert result["data"][0]["captured_by_display_name"] == "Captured operator"
+    assert result["data"][0]["retention_policy_name"] == "Seven year retention"
+    assert result["data"][0]["source_document_readable"] is False
+    ContractRecordSummary.model_validate(result["data"][0])
+    assert {
+        "content_hash",
+        "content_hash_version",
+        "form_field_values",
+        "retention_basis_date",
+        "created_at",
+        "evidence_blobs",
+        "evidence_links",
+        "correction_of_readable",
+        "superseded_by_correction_readable",
+    }.isdisjoint(result["data"][0])
+
+
+async def test_display_labels_use_bounded_independent_related_authority_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production hydrator batches families and authorizes source/lineage independently."""
+    hydrate = getattr(records_api, "hydrate_record_labels", None)
+    assert hydrate is not None
+    presentation = sys.modules[hydrate.__module__]
+    caller = AppUser(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        keycloak_subject=f"bounded-label-proof-{uuid.uuid4().hex}",
+        display_name="Bounded label proof",
+    )
+    source_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    policy_id = uuid.uuid4()
+    predecessor_id = uuid.uuid4()
+    successor_id = uuid.uuid4()
+    process_id = uuid.uuid4()
+
+    def record_row(record_id: uuid.UUID) -> tuple[SimpleNamespace, SimpleNamespace]:
+        return (
+            SimpleNamespace(
+                id=record_id,
+                captured_by=caller.id,
+                source_document_id=source_id,
+                source_version_id=version_id,
+                retention_policy_id=policy_id,
+                correction_of=predecessor_id,
+                superseded_by_correction=successor_id,
+            ),
+            SimpleNamespace(
+                folder_path="Records.QA",
+                framework_id=uuid.uuid4(),
+                current_state=DocumentCurrentState.Effective,
+            ),
+        )
+
+    rows = [record_row(uuid.uuid4()) for _index in range(3)]
+    source = SimpleNamespace(
+        id=source_id,
+        identifier="SOP-001",
+        title="Assembly procedure",
+        kind=DocumentKind.DOCUMENT,
+        document_type_id=None,
+        folder_path="Documents.QA",
+        framework_id=uuid.uuid4(),
+        current_state=DocumentCurrentState.Effective,
+    )
+    predecessor = SimpleNamespace(
+        id=predecessor_id,
+        source_document_id=None,
+        correction_of=None,
+    )
+    successor = SimpleNamespace(
+        id=successor_id,
+        source_document_id=None,
+        correction_of=None,
+    )
+    related_base = SimpleNamespace(
+        folder_path="Records.QA",
+        framework_id=uuid.uuid4(),
+        current_state=DocumentCurrentState.Effective,
+    )
+    calls: dict[str, int] = {}
+
+    def called(name: str) -> None:
+        calls[name] = calls.get(name, 0) + 1
+
+    async def load_actors(*_args: object, **_kwargs: object) -> dict:
+        called("actors")
+        return {caller.id: caller}
+
+    async def load_documents(*_args: object, **_kwargs: object) -> dict:
+        called("documents")
+        return {source_id: (source, None)}
+
+    async def load_versions(*_args: object, **_kwargs: object) -> dict:
+        called("versions")
+        return {
+            version_id: SimpleNamespace(
+                id=version_id, document_id=source_id, revision_label="Rev 7"
+            )
+        }
+
+    async def load_policies(*_args: object, **_kwargs: object) -> dict:
+        called("policies")
+        return {policy_id: SimpleNamespace(name="Seven year retention")}
+
+    async def load_records(*_args: object, **_kwargs: object) -> dict:
+        called("records")
+        return {
+            predecessor_id: (predecessor, related_base),
+            successor_id: (successor, related_base),
+        }
+
+    async def doc_processes(*_args: object, **_kwargs: object) -> dict:
+        called("document_processes")
+        return {source_id: frozenset({str(process_id)})}
+
+    async def record_processes(*_args: object, **_kwargs: object) -> dict:
+        called("record_processes")
+        return {predecessor_id: set(), successor_id: set()}
+
+    async def independent_grants(
+        _session: object, _user_id: uuid.UUID, _org_id: uuid.UUID, key: str
+    ) -> list[ResolvedGrant]:
+        called(key)
+        if key == "document.read":
+            return [
+                ResolvedGrant(
+                    effect=Effect.ALLOW,
+                    level=ScopeLevel.PROCESS,
+                    selector={"process_id": str(process_id)},
+                    predicates={},
+                    source="source-process",
+                )
+            ]
+        return [
+            ResolvedGrant(
+                effect=Effect.ALLOW,
+                level=ScopeLevel.ARTIFACT,
+                selector={"artifact_id": str(predecessor_id)},
+                predicates={},
+                source="predecessor-only",
+            )
+        ]
+
+    monkeypatch.setattr(presentation.records_repo, "load_label_actors", load_actors)
+    monkeypatch.setattr(presentation.records_repo, "load_label_documents", load_documents)
+    monkeypatch.setattr(presentation.records_repo, "load_label_versions", load_versions)
+    monkeypatch.setattr(presentation.records_repo, "load_label_policies", load_policies)
+    monkeypatch.setattr(presentation.records_repo, "load_label_records", load_records)
+    monkeypatch.setattr(
+        presentation.records_repo, "record_process_ids_effective_for", record_processes
+    )
+    monkeypatch.setattr(presentation.vault_repo, "process_ids_for_docs", doc_processes)
+    monkeypatch.setattr(presentation, "gather_grants", independent_grants)
+
+    labels = await hydrate(
+        object(),  # type: ignore[arg-type] -- every DB boundary is replaced above
+        caller,
+        rows,
+        RequestContext(now=datetime.datetime(2026, 8, 14, tzinfo=datetime.UTC)),
+    )
+
+    assert set(labels) == {record.id for record, _base in rows}
+    for label in labels.values():
+        assert label.captured_by_display_name == caller.display_name
+        assert label.source_document_identifier == "SOP-001"
+        assert label.source_document_title == "Assembly procedure"
+        assert label.source_document_readable is True
+        assert label.source_version_label == "Rev 7"
+        assert label.retention_policy_name == "Seven year retention"
+        assert label.correction_of_readable is True
+        assert label.superseded_by_correction_readable is False
+    assert calls == {
+        "actors": 1,
+        "documents": 1,
+        "versions": 1,
+        "policies": 1,
+        "records": 1,
+        "document.read": 1,
+        "document_processes": 1,
+        "record.read": 1,
+        "record_processes": 1,
+    }
+    assert {"evaluate", "enforce", "require"}.isdisjoint(vars(presentation))
+
+
+async def test_evidence_target_labels_do_not_substitute_current_record_read_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A current-record grant never substitutes for any evidence target's own read key."""
+    hydrate = getattr(records_api, "hydrate_evidence_target_labels", None)
+    assert hydrate is not None
+    presentation = sys.modules[hydrate.__module__]
+    caller = AppUser(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        keycloak_subject=f"restricted-target-proof-{uuid.uuid4().hex}",
+        display_name="Restricted target proof",
+    )
+    targets = {target_type: uuid.uuid4() for target_type in EvidenceForTargetType}
+    record_id = uuid.uuid4()
+    links = [
+        SimpleNamespace(
+            id=uuid.uuid4(),
+            record_id=record_id,
+            target_type=target_type,
+            target_id=target_id,
+            link_reason=None,
+            created_at=None,
+        )
+        for target_type, target_id in targets.items()
+    ]
+
+    document = SimpleNamespace(
+        id=targets[EvidenceForTargetType.DOCUMENT],
+        identifier="SOP-001",
+        title="Assembly procedure",
+        kind=DocumentKind.DOCUMENT,
+        document_type_id=None,
+        folder_path=None,
+        framework_id=uuid.uuid4(),
+        current_state=DocumentCurrentState.Effective,
+    )
+    finding_base = SimpleNamespace(identifier="FND-001", title="Seal defect")
+    capa_base = SimpleNamespace(identifier="CAPA-001", title="Seal corrective action")
+    stage = SimpleNamespace(stage=SimpleNamespace(value="Verify"))
+    capa = SimpleNamespace(process_id=uuid.uuid4())
+
+    async def load_documents(*_args: object, **_kwargs: object) -> dict:
+        return {document.id: (document, None)}
+
+    async def load_clauses(*_args: object, **_kwargs: object) -> dict:
+        return {
+            targets[EvidenceForTargetType.CLAUSE]: SimpleNamespace(number="8.5", title="Production")
+        }
+
+    async def load_processes(*_args: object, **_kwargs: object) -> dict:
+        return {targets[EvidenceForTargetType.PROCESS]: SimpleNamespace(name="Assembly")}
+
+    async def load_findings(*_args: object, **_kwargs: object) -> dict:
+        return {targets[EvidenceForTargetType.FINDING]: (SimpleNamespace(), finding_base)}
+
+    async def load_stages(*_args: object, **_kwargs: object) -> dict:
+        return {targets[EvidenceForTargetType.CAPA_STAGE]: (stage, capa, capa_base)}
+
+    async def no_doc_processes(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
+    requested_keys: list[str] = []
+
+    async def current_record_only(
+        _session: object, _user_id: uuid.UUID, _org_id: uuid.UUID, key: str
+    ) -> list[ResolvedGrant]:
+        requested_keys.append(key)
+        if key == "record.read":
+            return [
+                ResolvedGrant(
+                    effect=Effect.ALLOW,
+                    level=ScopeLevel.SYSTEM,
+                    selector={},
+                    predicates={},
+                    source="current-record-only",
+                )
+            ]
+        return []
+
+    monkeypatch.setattr(presentation.records_repo, "load_label_documents", load_documents)
+    monkeypatch.setattr(presentation.records_repo, "load_label_clauses", load_clauses)
+    monkeypatch.setattr(presentation.records_repo, "load_label_processes", load_processes)
+    monkeypatch.setattr(presentation.records_repo, "load_label_findings", load_findings)
+    monkeypatch.setattr(presentation.records_repo, "load_label_capa_stages", load_stages)
+    monkeypatch.setattr(presentation.vault_repo, "process_ids_for_docs", no_doc_processes)
+    monkeypatch.setattr(presentation, "gather_grants", current_record_only)
+
+    labels = await hydrate(
+        object(),  # type: ignore[arg-type] -- every DB boundary is replaced above
+        caller,
+        links,
+        RequestContext(now=datetime.datetime(2026, 8, 14, tzinfo=datetime.UTC)),
+    )
+
+    assert "record.read" not in requested_keys
+    assert set(requested_keys) == {
+        "document.read",
+        "process.read",
+        "clauseMap.read",
+        "finding.read",
+        "capa.read",
+    }
+    assert all(label.readable is False and label.label is None for label in labels.values())
+    for link in links:
+        ContractEvidenceLink.model_validate(records_api._evidence_link(link, labels[link.id]))
+
+
+async def test_evidence_target_labels_use_each_independent_permission_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each independently authorized target returns only its display label and readability flag."""
+    hydrate = getattr(records_api, "hydrate_evidence_target_labels", None)
+    assert hydrate is not None
+    presentation = sys.modules[hydrate.__module__]
+    caller = AppUser(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        keycloak_subject=f"readable-target-proof-{uuid.uuid4().hex}",
+        display_name="Readable target proof",
+    )
+    targets = {target_type: uuid.uuid4() for target_type in EvidenceForTargetType}
+    record_id = uuid.uuid4()
+    links = [
+        SimpleNamespace(
+            id=uuid.uuid4(),
+            record_id=record_id,
+            target_type=target_type,
+            target_id=target_id,
+            link_reason=None,
+            created_at=None,
+        )
+        for target_type, target_id in targets.items()
+    ]
+    document = SimpleNamespace(
+        id=targets[EvidenceForTargetType.DOCUMENT],
+        identifier="SOP-001",
+        title="Assembly procedure",
+        kind=DocumentKind.DOCUMENT,
+        document_type_id=None,
+        folder_path=None,
+        framework_id=uuid.uuid4(),
+        current_state=DocumentCurrentState.Effective,
+    )
+    process_id = targets[EvidenceForTargetType.PROCESS]
+    capa_process_id = uuid.uuid4()
+
+    async def load_documents(*_args: object, **_kwargs: object) -> dict:
+        return {document.id: (document, None)}
+
+    async def load_clauses(*_args: object, **_kwargs: object) -> dict:
+        return {
+            targets[EvidenceForTargetType.CLAUSE]: SimpleNamespace(number="8.5", title="Production")
+        }
+
+    async def load_processes(*_args: object, **_kwargs: object) -> dict:
+        return {process_id: SimpleNamespace(name="Assembly")}
+
+    async def load_findings(*_args: object, **_kwargs: object) -> dict:
+        return {
+            targets[EvidenceForTargetType.FINDING]: (
+                SimpleNamespace(),
+                SimpleNamespace(identifier="FND-001", title="Seal defect"),
+            )
+        }
+
+    async def load_stages(*_args: object, **_kwargs: object) -> dict:
+        return {
+            targets[EvidenceForTargetType.CAPA_STAGE]: (
+                SimpleNamespace(stage=SimpleNamespace(value="Verify")),
+                SimpleNamespace(process_id=capa_process_id),
+                SimpleNamespace(identifier="CAPA-001", title="Seal corrective action"),
+            )
+        }
+
+    async def no_doc_processes(*_args: object, **_kwargs: object) -> dict:
+        return {}
+
+    async def independently_allowed(
+        _session: object, _user_id: uuid.UUID, _org_id: uuid.UUID, key: str
+    ) -> list[ResolvedGrant]:
+        if key == "process.read":
+            selector = {"process_ids": [str(process_id)]}
+            level = ScopeLevel.PROCESS
+        elif key == "capa.read":
+            selector = {"process_ids": [str(capa_process_id)]}
+            level = ScopeLevel.PROCESS
+        else:
+            selector = {}
+            level = ScopeLevel.SYSTEM
+        return [
+            ResolvedGrant(
+                effect=Effect.ALLOW,
+                level=level,
+                selector=selector,
+                predicates={},
+                source=f"independent:{key}",
+            )
+        ]
+
+    monkeypatch.setattr(presentation.records_repo, "load_label_documents", load_documents)
+    monkeypatch.setattr(presentation.records_repo, "load_label_clauses", load_clauses)
+    monkeypatch.setattr(presentation.records_repo, "load_label_processes", load_processes)
+    monkeypatch.setattr(presentation.records_repo, "load_label_findings", load_findings)
+    monkeypatch.setattr(presentation.records_repo, "load_label_capa_stages", load_stages)
+    monkeypatch.setattr(presentation.vault_repo, "process_ids_for_docs", no_doc_processes)
+    monkeypatch.setattr(presentation, "gather_grants", independently_allowed)
+
+    labels = await hydrate(
+        object(),  # type: ignore[arg-type] -- every DB boundary is replaced above
+        caller,
+        links,
+        RequestContext(now=datetime.datetime(2026, 8, 14, tzinfo=datetime.UTC)),
+    )
+
+    by_type = {link.target_type: labels[link.id] for link in links}
+    assert by_type[EvidenceForTargetType.CLAUSE].label == "8.5 — Production"
+    assert by_type[EvidenceForTargetType.PROCESS].label == "Assembly"
+    assert by_type[EvidenceForTargetType.DOCUMENT].label == "SOP-001 — Assembly procedure"
+    assert by_type[EvidenceForTargetType.FINDING].label == "FND-001 — Seal defect"
+    assert by_type[EvidenceForTargetType.CAPA_STAGE].label == "CAPA-001 — Verify"
+    assert all(label.readable is True for label in labels.values())
+    for link in links:
+        ContractEvidenceLink.model_validate(records_api._evidence_link(link, labels[link.id]))
 
 
 async def test_source_backed_correction_does_not_inherit_process_visibility_without_container(
@@ -1005,10 +1735,31 @@ async def test_source_backed_correction_does_not_inherit_process_visibility_with
             )
         ]
 
+    async def fake_labels(
+        _session: object,
+        _caller: AppUser,
+        rows: list[tuple[SimpleNamespace, SimpleNamespace]],
+        _ctx: RequestContext,
+    ) -> dict[uuid.UUID, records_api.RecordLabels]:
+        return {
+            related.id: records_api.RecordLabels(
+                captured_by_display_name=caller.display_name,
+                source_document_identifier=None,
+                source_document_title=None,
+                source_document_readable=False,
+                source_version_label=None,
+                retention_policy_name=None,
+                correction_of_readable=False,
+                superseded_by_correction_readable=False,
+            )
+            for related, _base in rows
+        }
+
     monkeypatch.setattr(records_repo, "list_record_candidates", fake_candidates)
     monkeypatch.setattr(records_repo, "record_process_ids_for", fake_process_ids)
     monkeypatch.setattr(records_repo, "record_process_ids_effective", inherited_process_ids)
     monkeypatch.setattr(records_api, "gather_grants", process_grant)
+    monkeypatch.setattr(records_api, "hydrate_record_labels", fake_labels)
     request = Request(
         {
             "type": "http",
@@ -1894,6 +2645,150 @@ async def test_record_captured_audit_in_txn(
 
 
 # --- evidence links ----------------------------------------------------------------------
+
+
+async def test_evidence_target_labels_require_independent_family_permissions(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Record readability neither substitutes for target reads nor crosses the tenant boundary."""
+    author = _subject("target-label-author")
+    author_id = await _grant_doc_perms(author)
+    await _grant(author, (*_RECORD_PERMS, "process.create"))
+    author_headers = _auth(token_factory, author)
+    record = (
+        await _capture(
+            app_client,
+            author_headers,
+            record_type="EVIDENCE",
+            title=f"Target label record {uuid.uuid4().hex}",
+        )
+    ).json()
+    process = (
+        await app_client.post(
+            "/api/v1/processes",
+            headers=author_headers,
+            json={"name": f"Target process {uuid.uuid4().hex[:10]}", "pdca_phase": "DO"},
+        )
+    ).json()
+    document = (
+        await app_client.post(
+            "/api/v1/documents",
+            headers=author_headers,
+            json={
+                "title": f"Target document {uuid.uuid4().hex}",
+                "document_type_id": await _sop_type_id(),
+                "area_code": "QA",
+            },
+        )
+    ).json()
+    clause_id = await _first_iso_clause_id()
+    async with get_sessionmaker()() as session:
+        clause = await session.get(Clause, uuid.UUID(clause_id))
+        assert clause is not None
+        clause_label = f"{clause.number} — {clause.title}"
+
+    for target_type, target_id in (
+        ("clause", clause_id),
+        ("process", process["id"]),
+        ("document", document["id"]),
+    ):
+        linked = await app_client.post(
+            f"/api/v1/records/{record['id']}/evidence-links",
+            headers=author_headers,
+            json={"target_type": target_type, "target_id": target_id},
+        )
+        assert linked.status_code == 201, linked.text
+
+    # Corrupt/adversarial polymorphic edge: a local link points at a real foreign-tenant document.
+    async with get_sessionmaker()() as session:
+        local_author = await session.get(AppUser, author_id)
+        assert local_author is not None
+        foreign_org = Organization(
+            legal_name=f"Target foreign {uuid.uuid4().hex}",
+            short_code=f"TF{uuid.uuid4().hex[:8].upper()}",
+        )
+        session.add(foreign_org)
+        await session.flush()
+        foreign_framework = Framework(
+            org_id=foreign_org.id,
+            code="iso9001:2015",
+            name="ISO 9001:2015",
+        )
+        foreign_actor = AppUser(
+            org_id=foreign_org.id,
+            keycloak_subject=f"foreign-target-{uuid.uuid4().hex}",
+            display_name="Foreign target actor",
+        )
+        session.add_all([foreign_framework, foreign_actor])
+        await session.flush()
+        foreign_document = DocumentedInformation(
+            org_id=foreign_org.id,
+            framework_id=foreign_framework.id,
+            kind=DocumentKind.DOCUMENT,
+            identifier=f"FOREIGN-{uuid.uuid4().hex[:8]}",
+            title="Foreign target document",
+            owner_user_id=foreign_actor.id,
+            created_by=foreign_actor.id,
+        )
+        session.add(foreign_document)
+        await session.flush()
+        foreign_link = EvidenceForLink(
+            org_id=local_author.org_id,
+            record_id=uuid.UUID(record["id"]),
+            target_type=EvidenceForTargetType.DOCUMENT,
+            target_id=foreign_document.id,
+            created_by=author_id,
+        )
+        session.add(foreign_link)
+        await session.flush()
+        foreign_link_id = foreign_link.id
+        foreign_document_uuid = foreign_document.id
+        foreign_actor_id = foreign_actor.id
+        foreign_framework_id = foreign_framework.id
+        foreign_org_id = foreign_org.id
+        await session.commit()
+        foreign_document_id = str(foreign_document_uuid)
+
+    try:
+        reader = _subject("target-label-reader")
+        await _grant(reader, ("record.read",))
+        reader_headers = _auth(token_factory, reader)
+        restricted = await app_client.get(f"/api/v1/records/{record['id']}", headers=reader_headers)
+        assert restricted.status_code == 200, restricted.text
+        restricted_links = restricted.json()["evidence_links"]
+        assert restricted_links
+        assert all(link["target_readable"] is False for link in restricted_links)
+        assert all(link["target_label"] is None for link in restricted_links)
+
+        await _grant(reader, ("clauseMap.read", "process.read", "document.read"))
+        readable = await app_client.get(f"/api/v1/records/{record['id']}", headers=reader_headers)
+        assert readable.status_code == 200, readable.text
+        by_target = {link["target_id"]: link for link in readable.json()["evidence_links"]}
+        assert by_target[clause_id]["target_label"] == clause_label
+        assert by_target[clause_id]["target_readable"] is True
+        assert by_target[process["id"]]["target_label"] == process["name"]
+        assert by_target[process["id"]]["target_readable"] is True
+        assert by_target[document["id"]]["target_label"] == (
+            f"{document['identifier']} — {document['title']}"
+        )
+        assert by_target[document["id"]]["target_readable"] is True
+        assert by_target[foreign_document_id]["target_label"] is None
+        assert by_target[foreign_document_id]["target_readable"] is False
+        assert all("route" not in link and "path" not in link for link in by_target.values())
+    finally:
+        async with get_sessionmaker()() as session:
+            await session.execute(
+                delete(EvidenceForLink).where(EvidenceForLink.id == foreign_link_id)
+            )
+            await session.execute(
+                delete(DocumentedInformation).where(
+                    DocumentedInformation.id == foreign_document_uuid
+                )
+            )
+            await session.execute(delete(AppUser).where(AppUser.id == foreign_actor_id))
+            await session.execute(delete(Framework).where(Framework.id == foreign_framework_id))
+            await session.execute(delete(Organization).where(Organization.id == foreign_org_id))
+            await session.commit()
 
 
 async def test_evidence_link_map_get_unmap(

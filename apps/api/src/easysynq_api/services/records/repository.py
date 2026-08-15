@@ -22,14 +22,23 @@ from ...db.models._evidence_enums import EvidenceForTargetType
 from ...db.models._pack_enums import PackStatus
 from ...db.models._record_enums import RecordDispositionState
 from ...db.models._retention_enums import DispositionAction, RetentionBasis
+from ...db.models._vault_enums import DocumentKind
+from ...db.models.app_user import AppUser
+from ...db.models.audit_finding import AuditFinding
 from ...db.models.blob import Blob
+from ...db.models.capa import Capa
+from ...db.models.capa_stage import CapaStage
+from ...db.models.clause import Clause
 from ...db.models.disposition_event import DispositionEvent
+from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.evidence_pack import EvidencePack
+from ...db.models.framework import Framework
 from ...db.models.pending_blob_purge import PendingBlobPurge
+from ...db.models.process import Process
 from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
@@ -65,6 +74,180 @@ async def get_record(session: AsyncSession, record_id: uuid.UUID) -> Record | No
 async def get_base(session: AsyncSession, record_id: uuid.UUID) -> DocumentedInformation | None:
     """The shared-PK base row (``documented_information``, kind=RECORD) for a record."""
     return await session.get(DocumentedInformation, record_id)
+
+
+async def load_label_actors(
+    session: AsyncSession, org_id: uuid.UUID, actor_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, AppUser]:
+    """Load record capturers in one tenant-constrained query."""
+    ids = set(actor_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(select(AppUser).where(AppUser.org_id == org_id, AppUser.id.in_(ids)))
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_documents(
+    session: AsyncSession, org_id: uuid.UUID, document_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, tuple[DocumentedInformation, DocumentType | None]]:
+    """Load document label/authz inputs in one query, anchored directly to the caller's org."""
+    ids = set(document_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(DocumentedInformation, DocumentType)
+            .outerjoin(
+                DocumentType,
+                and_(
+                    DocumentType.id == DocumentedInformation.document_type_id,
+                    DocumentType.org_id == org_id,
+                ),
+            )
+            .where(
+                DocumentedInformation.org_id == org_id,
+                DocumentedInformation.kind == DocumentKind.DOCUMENT,
+                DocumentedInformation.id.in_(ids),
+            )
+        )
+    ).all()
+    return {doc.id: (doc, document_type) for doc, document_type in rows}
+
+
+async def load_label_versions(
+    session: AsyncSession, org_id: uuid.UUID, version_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, DocumentVersion]:
+    """Load pinned-version labels in one tenant-constrained query."""
+    ids = set(version_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(
+            select(DocumentVersion).where(
+                DocumentVersion.org_id == org_id,
+                DocumentVersion.id.in_(ids),
+            )
+        )
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_policies(
+    session: AsyncSession, org_id: uuid.UUID, policy_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, RetentionPolicy]:
+    """Load snapshotted retention-policy names in one tenant-constrained query."""
+    ids = set(policy_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(
+            select(RetentionPolicy).where(
+                RetentionPolicy.org_id == org_id,
+                RetentionPolicy.id.in_(ids),
+            )
+        )
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_records(
+    session: AsyncSession, org_id: uuid.UUID, record_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, tuple[Record, DocumentedInformation]]:
+    """Load related record label/authz inputs in one query without crossing tenants."""
+    ids = set(record_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(Record, DocumentedInformation)
+            .join(DocumentedInformation, DocumentedInformation.id == Record.id)
+            .where(
+                Record.org_id == org_id,
+                DocumentedInformation.org_id == org_id,
+                DocumentedInformation.kind == DocumentKind.RECORD,
+                Record.id.in_(ids),
+            )
+        )
+    ).all()
+    return {record.id: (record, base) for record, base in rows}
+
+
+async def load_label_clauses(
+    session: AsyncSession, org_id: uuid.UUID, clause_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, Clause]:
+    """Load clause labels in one query through the framework tenant anchor."""
+    ids = set(clause_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(
+            select(Clause)
+            .join(Framework, Framework.id == Clause.framework_id)
+            .where(Framework.org_id == org_id, Clause.id.in_(ids))
+        )
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_processes(
+    session: AsyncSession, org_id: uuid.UUID, process_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, Process]:
+    """Load process labels in one tenant-constrained query."""
+    ids = set(process_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.scalars(select(Process).where(Process.org_id == org_id, Process.id.in_(ids)))
+    ).all()
+    return {row.id: row for row in rows}
+
+
+async def load_label_findings(
+    session: AsyncSession, org_id: uuid.UUID, finding_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, tuple[AuditFinding, DocumentedInformation]]:
+    """Load finding labels from their shared record bases in one tenant-constrained query."""
+    ids = set(finding_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(AuditFinding, DocumentedInformation)
+            .join(DocumentedInformation, DocumentedInformation.id == AuditFinding.id)
+            .where(
+                AuditFinding.org_id == org_id,
+                DocumentedInformation.org_id == org_id,
+                DocumentedInformation.kind == DocumentKind.RECORD,
+                AuditFinding.id.in_(ids),
+            )
+        )
+    ).all()
+    return {finding.id: (finding, base) for finding, base in rows}
+
+
+async def load_label_capa_stages(
+    session: AsyncSession, org_id: uuid.UUID, stage_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, tuple[CapaStage, Capa, DocumentedInformation]]:
+    """Load stage, parent CAPA, and shared CAPA label in one tenant-constrained query."""
+    ids = set(stage_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(CapaStage, Capa, DocumentedInformation)
+            .join(Capa, Capa.id == CapaStage.capa_id)
+            .join(DocumentedInformation, DocumentedInformation.id == Capa.id)
+            .where(
+                CapaStage.org_id == org_id,
+                Capa.org_id == org_id,
+                DocumentedInformation.org_id == org_id,
+                DocumentedInformation.kind == DocumentKind.RECORD,
+                CapaStage.id.in_(ids),
+            )
+        )
+    ).all()
+    return {stage.id: (stage, capa, base) for stage, capa, base in rows}
 
 
 async def list_record_candidates(
@@ -212,6 +395,60 @@ async def record_process_ids_for(
             by_doc.setdefault(did, set()).add(str(pid))
         for rid, did in source_by_record.items():
             out[rid] |= by_doc.get(did, set())
+    return out
+
+
+async def record_process_ids_effective_for(
+    session: AsyncSession, records: list[Record]
+) -> dict[uuid.UUID, set[str]]:
+    """Batch the effective process tuple, including the source-less correction fallback.
+
+    The common leg-A/leg-B union is always two grouped queries. Correction ancestors are then
+    visited breadth-first: every depth uses one ``IN`` query for records plus the same grouped
+    union loader, so query count follows chain depth rather than output-row count. Tenant and cycle
+    checks are applied independently for every root.
+    """
+    out = await record_process_ids_for(session, records)
+    roots = {record.id: record for record in records}
+    cursors = {
+        record.id: record.correction_of
+        for record in records
+        if not out[record.id]
+        and record.source_document_id is None
+        and record.correction_of is not None
+    }
+    seen: dict[uuid.UUID, set[uuid.UUID]] = {record_id: {record_id} for record_id in cursors}
+
+    while cursors:
+        cursor_ids = set(cursors.values())
+        ancestors = list(
+            (
+                await session.scalars(
+                    select(Record).where(
+                        Record.id.in_(cursor_ids),
+                        Record.org_id.in_({root.org_id for root in roots.values()}),
+                    )
+                )
+            ).all()
+        )
+        by_id = {ancestor.id: ancestor for ancestor in ancestors}
+        own_by_ancestor = await record_process_ids_for(session, ancestors)
+        next_cursors: dict[uuid.UUID, uuid.UUID] = {}
+
+        for root_id, cursor_id in cursors.items():
+            root = roots[root_id]
+            ancestor = by_id.get(cursor_id)
+            if ancestor is None or ancestor.org_id != root.org_id or cursor_id in seen[root_id]:
+                continue
+            seen[root_id].add(cursor_id)
+            ancestor_own = own_by_ancestor.get(cursor_id) or set()
+            if ancestor_own:
+                out[root_id] = ancestor_own
+            elif ancestor.correction_of is not None:
+                next_cursors[root_id] = ancestor.correction_of
+
+        cursors = next_cursors
+
     return out
 
 

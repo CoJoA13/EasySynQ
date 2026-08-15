@@ -19,6 +19,8 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.document_version import DocumentVersion
+from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.scope import Scope
@@ -555,6 +557,96 @@ async def _source_backed_record(client: AsyncClient, h: dict[str, str], *process
     )
     assert r.status_code == 201, r.text
     return r.json()
+
+
+async def test_related_restricted_labels_do_not_inherit_current_record_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Current-record readability leaves its source, predecessor, and process target restricted."""
+    author = _subject("related-restricted-author")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)
+    author_headers = _auth(token_factory, author)
+    process = await _create_process(app_client, author_headers)
+    original = await _source_backed_record(app_client, author_headers, process["id"])
+    corrected = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=author_headers,
+        json={"record_type": "RELEASE", "title": "Restricted related labels"},
+    )
+    assert corrected.status_code == 201, corrected.text
+    current = corrected.json()
+    await _link_process(app_client, author_headers, current["id"], process["id"])
+
+    reader = _subject("related-restricted-reader")
+    await _grant_artifact(reader, "record.read", current["id"])
+    detail = await app_client.get(
+        f"/api/v1/records/{current['id']}", headers=_auth(token_factory, reader)
+    )
+
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["source_document_readable"] is False
+    assert body["source_document_identifier"] is None
+    assert body["source_document_title"] is None
+    assert body["source_version_label"] is None
+    assert body["correction_of_readable"] is False
+    assert body["superseded_by_correction_readable"] is False
+    assert body["captured_by_display_name"]
+    assert body["retention_policy_name"]
+    assert len(body["evidence_links"]) == 1
+    assert body["evidence_links"][0]["target_readable"] is False
+    assert body["evidence_links"][0]["target_label"] is None
+
+
+async def test_related_readable_labels_require_each_related_grant(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Source, lineage, and process labels flip only after their own canonical read grants."""
+    author = _subject("related-readable-author")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)
+    author_headers = _auth(token_factory, author)
+    process = await _create_process(app_client, author_headers)
+    original = await _source_backed_record(app_client, author_headers, process["id"])
+    corrected = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=author_headers,
+        json={"record_type": "RELEASE", "title": "Readable related labels"},
+    )
+    assert corrected.status_code == 201, corrected.text
+    current = corrected.json()
+    await _link_process(app_client, author_headers, current["id"], process["id"])
+
+    async with get_sessionmaker()() as session:
+        current_record = await session.get(Record, uuid.UUID(current["id"]))
+        assert current_record is not None
+        source = await session.get(DocumentedInformation, current_record.source_document_id)
+        version = await session.get(DocumentVersion, current_record.source_version_id)
+        assert source is not None
+        assert version is not None
+
+    reader = _subject("related-readable-reader")
+    await _grant_artifact(reader, "record.read", current["id"])
+    await _grant_artifact(reader, "record.read", original["id"])
+    await _grant_artifact(reader, "document.read", str(source.id))
+    await _grant_process(reader, "process.read", process["id"])
+    reader_headers = _auth(token_factory, reader)
+
+    detail = await app_client.get(f"/api/v1/records/{current['id']}", headers=reader_headers)
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["source_document_identifier"] == source.identifier
+    assert body["source_document_title"] == source.title
+    assert body["source_document_readable"] is True
+    assert body["source_version_label"] == version.revision_label
+    assert body["correction_of_readable"] is True
+    assert body["evidence_links"][0]["target_readable"] is True
+    assert body["evidence_links"][0]["target_label"] == process["name"]
+
+    predecessor = await app_client.get(f"/api/v1/records/{original['id']}", headers=reader_headers)
+    assert predecessor.status_code == 200, predecessor.text
+    assert predecessor.json()["superseded_by_correction_readable"] is True
 
 
 async def test_process_owner_correction_cannot_supersede_co_bound_record(
