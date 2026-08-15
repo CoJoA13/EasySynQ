@@ -1,5 +1,5 @@
 import { Alert, Button, Stack, Text } from "@mantine/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, useApi } from "../../lib/api";
 
 interface RecordDownload {
@@ -33,21 +33,40 @@ export function RecordDownloadButton({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [renditionPending, setRenditionPending] = useState(false);
+  const activation = useRef(0);
+  const controller = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    activation.current += 1;
+    controller.current?.abort();
+    controller.current = null;
     setLoading(false);
     setError(null);
     setRenditionPending(false);
+    return () => {
+      activation.current += 1;
+      controller.current?.abort();
+      controller.current = null;
+    };
   }, [endpoint]);
 
   async function download() {
+    const currentActivation = activation.current + 1;
+    activation.current = currentActivation;
+    controller.current?.abort();
+    const currentController = new AbortController();
+    controller.current = currentController;
     setLoading(true);
     setError(null);
     setRenditionPending(false);
     try {
-      const result = await api.get<RecordDownload>(endpoint);
+      const result = await api.get<RecordDownload>(endpoint, {
+        signal: currentController.signal,
+      });
+      if (activation.current !== currentActivation) return;
       window.open(result.download_url, "_blank", "noopener,noreferrer");
     } catch (caught) {
+      if (activation.current !== currentActivation) return;
       if (
         pendingIsNormal &&
         caught instanceof ApiError &&
@@ -59,7 +78,10 @@ export function RecordDownloadButton({
         setError(downloadError(caught));
       }
     } finally {
-      setLoading(false);
+      if (activation.current === currentActivation) {
+        controller.current = null;
+        setLoading(false);
+      }
     }
   }
 

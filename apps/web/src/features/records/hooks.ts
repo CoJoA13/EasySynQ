@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useRef } from "react";
 import { useApi } from "../../lib/api";
 import type { DocumentsPage, RecordDetail, RecordPage } from "../../lib/types";
 import { buildRecordsQuery, type RecordUrlState } from "./recordUrlState";
@@ -19,8 +20,28 @@ export function useRecord(recordId: string | null) {
     queryKey: ["record", recordId],
     queryFn: ({ signal }) => api.get<RecordDetail>(`/api/v1/records/${recordId!}`, { signal }),
     enabled: recordId !== null,
+    refetchOnMount: "always",
     retry: false,
   });
+}
+
+export function useFreshRecordData(
+  recordId: string | null,
+  query: {
+    data: RecordDetail | undefined;
+    dataUpdatedAt: number;
+    isSuccess: boolean;
+  },
+): RecordDetail | undefined {
+  const initialDataUpdatedAt = useRef(query.dataUpdatedAt);
+  if (
+    !query.isSuccess ||
+    query.dataUpdatedAt <= initialDataUpdatedAt.current ||
+    query.data?.id !== recordId
+  ) {
+    return undefined;
+  }
+  return query.data;
 }
 
 export function useRecordSourceDocuments(q: string, enabled: boolean) {

@@ -66,7 +66,7 @@ test("Breadcrumb shows the authorized record identifier without exposing its rou
   expect(screen.getAllByText("Record").length).toBeGreaterThanOrEqual(1);
   expect(screen.queryByText(ID)).not.toBeInTheDocument();
   act(() => {
-    client.setQueryData(["record", ID], { identifier: "REC-000041" });
+    client.setQueryData(["record", ID], { id: ID, identifier: "REC-000041" });
   });
   expect(await screen.findByText("REC-000041")).toBeInTheDocument();
   expect(screen.queryByText(ID)).not.toBeInTheDocument();

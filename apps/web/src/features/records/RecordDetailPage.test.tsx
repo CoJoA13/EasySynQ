@@ -1,10 +1,12 @@
 import { axe } from "jest-axe";
-import { screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { expect, test, vi } from "vitest";
 import type { RecordDetail } from "../../lib/types";
+import { Breadcrumb } from "../../app/shell/Breadcrumb";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { RecordDetailPage } from "./RecordDetailPage";
@@ -130,6 +132,26 @@ function renderDetail(route = `/records/${RECORD_ID}`) {
       <Route path="/bad-origin" element={<Link to={`/records/${RECORD_ID}`} state={{ from: "/documents/private" }}>Open detail</Link>} />
     </Routes>,
     { route },
+  );
+}
+
+function renderDetailWithBreadcrumb(queryClient: QueryClient) {
+  return renderWithProviders(
+    <>
+      <Breadcrumb />
+      <Routes>
+        <Route
+          path="/records/:recordId"
+          element={
+            <>
+              <RecordDetailPage />
+              <ParameterChange />
+            </>
+          }
+        />
+      </Routes>
+    </>,
+    { route: `/records/${RECORD_ID}`, queryClient },
   );
 }
 
@@ -326,5 +348,55 @@ test.each([403, 404] as const)(
     expect(
       await screen.findByText(status === 403 ? "Record access is unavailable." : "This record could not be found."),
     ).toBeInTheDocument();
+  },
+);
+
+test.each([403, 404] as const)(
+  "keeps a cached destination out of the page and breadcrumb before and after %s",
+  async (status) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const cachedDestination: RecordDetail = {
+      ...recordDetailFixture,
+      id: NEXT_RECORD_ID,
+      identifier: "REC-CACHED-B",
+      title: "Cached destination record",
+    };
+    queryClient.setQueryData(["record", NEXT_RECORD_ID], cachedDestination);
+    let finishDestination: ((response: Response) => void) | undefined;
+    server.use(
+      http.get("/api/v1/records/:recordId", ({ params }) => {
+        if (String(params.recordId) === NEXT_RECORD_ID) {
+          return new Promise<Response>((resolve) => {
+            finishDestination = resolve;
+          });
+        }
+        return HttpResponse.json(recordDetailFixture);
+      }),
+    );
+    renderDetailWithBreadcrumb(queryClient);
+    await screen.findByRole("heading", { name: "Preventive-maintenance schedule" });
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open next record" }));
+    await waitFor(() => expect(finishDestination).toBeTypeOf("function"));
+    expect(screen.queryAllByText("REC-CACHED-B")).toHaveLength(0);
+    expect(screen.queryByText("Cached destination record")).not.toBeInTheDocument();
+    expect(within(screen.getByLabelText("Breadcrumb")).queryByText("REC-CACHED-B")).not.toBeInTheDocument();
+
+    await act(async () => {
+      finishDestination?.(
+        HttpResponse.json(
+          { code: status === 403 ? "permission_denied" : "not_found", title: "Unavailable" },
+          { status },
+        ),
+      );
+    });
+    expect(
+      await screen.findByText(
+        status === 403 ? "Record access is unavailable." : "This record could not be found.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryAllByText("REC-CACHED-B")).toHaveLength(0);
+    expect(screen.queryByText("Cached destination record")).not.toBeInTheDocument();
+    expect(within(screen.getByLabelText("Breadcrumb")).queryByText("REC-CACHED-B")).not.toBeInTheDocument();
   },
 );

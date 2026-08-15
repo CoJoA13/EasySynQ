@@ -4,7 +4,7 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
 import { humanizeToken } from "../../lib/labels";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
-import { useRecord } from "./hooks";
+import { useFreshRecordData, useRecord } from "./hooks";
 import { RecordDetailSections } from "./RecordDetailSections";
 import { RecordDownloadButton } from "./RecordDownloadButton";
 
@@ -26,17 +26,21 @@ function BackToRecords({ to }: { to: string }) {
 
 export function RecordDetailPage() {
   const { recordId = null } = useParams();
+  return <RecordDetailRoute key={recordId ?? "missing-record"} recordId={recordId} />;
+}
+
+function RecordDetailRoute({ recordId }: { recordId: string | null }) {
   const location = useLocation();
   const recordQuery = useRecord(recordId);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const record = recordQuery.data?.id === recordId ? recordQuery.data : undefined;
+  const record = useFreshRecordData(recordId, recordQuery);
   const backTo = recordsOrigin(location.state);
 
   useEffect(() => {
     if (record) headingRef.current?.focus();
   }, [record]);
 
-  if (recordQuery.isLoading && !record) {
+  if (!recordQuery.isError && !record) {
     return (
       <Container size="xl" py="md">
         <LoadingState label="Loading record" />

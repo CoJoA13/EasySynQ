@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, expect, test, vi } from "vitest";
@@ -11,6 +11,8 @@ const EVIDENCE_ENDPOINT =
 const RENDITION_ENDPOINT =
   "/api/v1/records/re000001-0001-0001-0001-000000000001/rendition";
 const OBJECT_URL = "https://objects.example.test/records/evidence.pdf";
+const NEXT_EVIDENCE_ENDPOINT =
+  "/api/v1/records/re000002-0002-0002-0002-000000000002/evidence/def456/download";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -138,5 +140,90 @@ test("renders rendition_pending as a normal not-ready state without opening a UR
   await userEvent.setup().click(screen.getByRole("button", { name: "Download structured PDF" }));
   expect(await screen.findByRole("status")).toHaveTextContent("Structured PDF is not ready yet");
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(openSpy).not.toHaveBeenCalled();
+});
+
+function downloadResponse(downloadUrl: string, sha256: string): Response {
+  return new Response(
+    JSON.stringify({ download_url: downloadUrl, sha256, content_type: "application/pdf" }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+test("an endpoint change aborts and ignores the old activation while the new activation owns state", async () => {
+  const user = userEvent.setup();
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  let oldSignal: AbortSignal | undefined;
+  let newSignal: AbortSignal | undefined;
+  let finishOld: ((response: Response) => void) | undefined;
+  let finishNew: ((response: Response) => void) | undefined;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const path = String(input);
+    return new Promise<Response>((resolve) => {
+      if (path === EVIDENCE_ENDPOINT) {
+        oldSignal = init?.signal ?? undefined;
+        finishOld = resolve;
+      } else if (path === NEXT_EVIDENCE_ENDPOINT) {
+        newSignal = init?.signal ?? undefined;
+        finishNew = resolve;
+      } else {
+        throw new Error(`Unexpected fetch ${path}`);
+      }
+    });
+  });
+  const rendered = renderWithProviders(
+    <RecordDownloadButton label="Download old evidence" endpoint={EVIDENCE_ENDPOINT} />,
+  );
+  await user.click(screen.getByRole("button", { name: "Download old evidence" }));
+  await waitFor(() => expect(finishOld).toBeTypeOf("function"));
+
+  rendered.rerender(
+    <RecordDownloadButton label="Download new evidence" endpoint={NEXT_EVIDENCE_ENDPOINT} />,
+  );
+  await waitFor(() => expect(oldSignal?.aborted).toBe(true));
+  await user.click(screen.getByRole("button", { name: "Download new evidence" }));
+  await waitFor(() => expect(finishNew).toBeTypeOf("function"));
+  expect(newSignal?.aborted).toBe(false);
+
+  await act(async () => {
+    finishOld?.(downloadResponse("https://objects.example.test/records/old.pdf", "abc123"));
+  });
+  expect(openSpy).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Download new evidence" })).toBeDisabled();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+  await act(async () => {
+    finishNew?.(downloadResponse("https://objects.example.test/records/new.pdf", "def456"));
+  });
+  expect(openSpy).toHaveBeenCalledWith(
+    "https://objects.example.test/records/new.pdf",
+    "_blank",
+    "noopener,noreferrer",
+  );
+  expect(screen.getByRole("button", { name: "Download new evidence" })).toBeEnabled();
+});
+
+test("unmount aborts an in-flight presign and prevents its completion from opening a URL", async () => {
+  const user = userEvent.setup();
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  let signal: AbortSignal | undefined;
+  let finish: ((response: Response) => void) | undefined;
+  vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+    signal = init?.signal ?? undefined;
+    return new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+  });
+  const rendered = renderWithProviders(
+    <RecordDownloadButton label="Download evidence" endpoint={EVIDENCE_ENDPOINT} />,
+  );
+  await user.click(screen.getByRole("button", { name: "Download evidence" }));
+  await waitFor(() => expect(finish).toBeTypeOf("function"));
+
+  rendered.unmount();
+  expect(signal?.aborted).toBe(true);
+  await act(async () => {
+    finish?.(downloadResponse(OBJECT_URL, "abc123"));
+  });
   expect(openSpy).not.toHaveBeenCalled();
 });
