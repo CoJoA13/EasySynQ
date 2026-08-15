@@ -51,6 +51,7 @@ const primaryProcessId = primaryProcess.id;
 const primaryRecordId = primaryRecord.id;
 
 export const MAXIMUM_RECORD_SEARCH = "Q".repeat(200);
+export const MAXIMUM_RECORD_TITLE = "Preventive-maintenance-schedule".repeat(8);
 export const MAXIMUM_EVIDENCE_FILENAME = `${"evidence".repeat(31)}.pdf`;
 
 const maximumRecordsFixture = {
@@ -59,7 +60,7 @@ const maximumRecordsFixture = {
     index === 0
       ? {
           ...record,
-          title: "Preventive-maintenance-schedule".repeat(8),
+          title: MAXIMUM_RECORD_TITLE,
           captured_by_display_name: "Maximum-length-captured-by-name".repeat(7),
         }
       : record,

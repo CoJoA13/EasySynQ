@@ -79,7 +79,13 @@ function RecordDetailRoute({ recordId }: { recordId: string | null }) {
           <Text c="var(--es-text-2)" fw={600} size="sm">
             {record.identifier ?? "Record"}
           </Text>
-          <Title order={2} ref={headingRef} tabIndex={-1}>
+          <Title
+            order={2}
+            ref={headingRef}
+            tabIndex={-1}
+            miw={0}
+            style={{ overflowWrap: "anywhere" }}
+          >
             {record.title}
           </Title>
           <Group gap="xs" aria-label="Record state">

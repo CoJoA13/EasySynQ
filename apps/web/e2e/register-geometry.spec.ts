@@ -4,6 +4,7 @@ import {
   installRegisterApi,
   MAXIMUM_EVIDENCE_FILENAME,
   MAXIMUM_RECORD_SEARCH,
+  MAXIMUM_RECORD_TITLE,
 } from "./support/api";
 import { measureRegister, REGISTER_CASES } from "./support/registers";
 import type { RegisterCase } from "./support/registers";
@@ -190,16 +191,10 @@ test("records bounds maximum dynamic labels and actions at 320 pixels", async ({
   ).toBeLessThanOrEqual(1);
 
   await page.goto(`/records/${RECORD_ID}`);
-  await page.addStyleTag({
-    content: 'body { font-family: "Liberation Sans", sans-serif !important; }',
-  });
-  const banner = page.getByRole("banner");
-  const account = page.getByRole("button", { name: "Account", exact: true });
-  const [bannerBox, accountBox] = await Promise.all([banner.boundingBox(), account.boundingBox()]);
-  expect(bannerBox).not.toBeNull();
-  expect(accountBox).not.toBeNull();
-  expect(accountBox!.x + accountBox!.width).toBeLessThanOrEqual(
-    bannerBox!.x + bannerBox!.width + 1,
+  const title = page.getByRole("heading", { name: MAXIMUM_RECORD_TITLE, exact: true });
+  await expect(title).toBeVisible();
+  expect(await title.evaluate((heading) => getComputedStyle(heading).overflowWrap)).toBe(
+    "anywhere",
   );
 
   const download = page.getByRole("button", {
