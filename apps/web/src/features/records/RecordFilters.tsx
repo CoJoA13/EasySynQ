@@ -79,11 +79,14 @@ export function RecordFilters({
 
   const listedSourceOptions = useMemo(
     () =>
-      (sourceDocuments.data?.data ?? []).map((document) => ({
+      (sourceDocuments.isSuccess && sourceDocuments.isFetchedAfterMount
+        ? (sourceDocuments.data?.data ?? [])
+        : []
+      ).map((document) => ({
         value: document.id,
         label: `${document.identifier ?? "Document"} — ${document.title}`,
       })),
-    [sourceDocuments.data],
+    [sourceDocuments.data, sourceDocuments.isFetchedAfterMount, sourceDocuments.isSuccess],
   );
   const selectedSourceProjectionRef = useRef<{ value: string; label: string } | null>(null);
   const selectedSourceIdRef = useRef(value.source_document_id);

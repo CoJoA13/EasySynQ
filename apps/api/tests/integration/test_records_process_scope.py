@@ -279,6 +279,7 @@ async def test_process_pack_traverses_unbound_source_backed_bridge_for_source_le
     author_headers = _auth(token_factory, author)
     process = await _create_process(app_client, author_headers)
     record_ids: list[str] = []
+    owned_document_ids: list[str] = []
     pack_id: uuid.UUID | None = None
 
     try:
@@ -296,6 +297,7 @@ async def test_process_pack_traverses_unbound_source_backed_bridge_for_source_le
         # first and then shape the stored legacy topology under test: only the intermediate row has
         # an unbound real source document. The original and tail keep their API-produced hashes.
         unbound_source = await _create(app_client, author_headers, await s5.type_id("SOP"))
+        owned_document_ids.append(unbound_source["id"])
         async with get_sessionmaker()() as session:
             source_backed = await session.get(Record, uuid.UUID(source_backed_id))
             assert source_backed is not None
@@ -355,7 +357,7 @@ async def test_process_pack_traverses_unbound_source_backed_bridge_for_source_le
                         record.superseded_by_correction = None
                 await session.commit()
         await _teardown(
-            record_ids=record_ids,
+            record_ids=[*record_ids, *owned_document_ids],
             pack_id=pack_id,
             scope_id=None,
             process_id=uuid.UUID(process["id"]),

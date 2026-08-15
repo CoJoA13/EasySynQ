@@ -1,4 +1,5 @@
 import { axe } from "jest-axe";
+import { QueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
@@ -37,7 +38,7 @@ function BackButton() {
   );
 }
 
-function renderRecords(route = "/records") {
+function renderRecords(route = "/records", queryClient?: QueryClient) {
   return renderWithProviders(
     <Routes>
       <Route
@@ -52,7 +53,7 @@ function renderRecords(route = "/records") {
       />
       <Route path="/records/:recordId" element={<LocationProbe />} />
     </Routes>,
-    { route },
+    { route, ...(queryClient ? { queryClient } : {}) },
   );
 }
 
@@ -231,6 +232,43 @@ test("retains an authorized selected source label after blank results omit it", 
   expect(screen.queryByDisplayValue("Selected item unavailable")).not.toBeInTheDocument();
   expect(documentQueries).toContain("Supplier");
   expect(documentQueries).not.toContain("SOP-PUR-014 — Supplier Selection & Evaluation");
+});
+
+test("keeps a matching pre-mount source cache neutral without a successful current response", async () => {
+  const user = userEvent.setup();
+  const cachedDocument = docFixture[0]!;
+  const cachedLabel = "SOP-PUR-014 — Supplier Selection & Evaluation";
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClient.setQueryData(["record-source-documents", "limit=20&offset=0"], {
+    data: [cachedDocument],
+    page: { limit: 20, offset: 0, returned: 1, has_more: false },
+  });
+  const currentMountRequests: string[] = [];
+  server.use(
+    http.get("/api/v1/documents", ({ request }) => {
+      currentMountRequests.push(request.url);
+      return HttpResponse.json(
+        { code: "permission_denied", title: "Source documents unavailable" },
+        { status: 403 },
+      );
+    }),
+  );
+
+  renderRecords(`/records?source_document_id=${cachedDocument.id}`, queryClient);
+  await screen.findByRole("link", { name: /open record REC-000041/i });
+
+  const source = screen.getByRole("textbox", { name: "Source document" });
+  await waitFor(() => expect(source).toHaveValue("Selected item unavailable"));
+  expect(source).not.toHaveValue(cachedLabel);
+  expect(screen.queryByDisplayValue(cachedLabel)).not.toBeInTheDocument();
+  expect(currentMountRequests).toEqual([]);
+
+  await user.click(source);
+  await waitFor(() => expect(currentMountRequests).toHaveLength(1));
+  await waitFor(() =>
+    expect(screen.queryByRole("option", { name: cachedLabel })).not.toBeInTheDocument(),
+  );
+  expect(source).toHaveValue("Selected item unavailable");
 });
 
 test("keeps an unavailable selected UUID neutral and does not use a raw UUID lookup", async () => {
