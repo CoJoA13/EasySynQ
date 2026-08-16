@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from fnmatch import fnmatchcase
@@ -41,6 +42,129 @@ BROWSER_ONLY_CONTEXT_ROOTS = frozenset(
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text()
+
+
+_SETUP_SHEET_HEREDOC = re.compile(
+    r'^\s*cat >"\$SETUP_FILE" <<(?P<delimiter>[A-Z][A-Z0-9_]*)\n'
+    r"(?P<body>.*?)\n(?P=delimiter)\n",
+    re.MULTILINE | re.DOTALL,
+)
+_SETUP_SHEET_LINES = (
+    "Application URL: https://${HOSTNAME_DEFAULT}/setup",
+    "Your one-time setup secret (EasySynQ):",
+    "${secret}",
+    "Single-use, 24h. Re-mint: easysynq-status --remint",
+    "1. Then create the first administrator in /setup with the setup secret.",
+    "2. Save the shown-once temporary password and continue to sign in.",
+    "3. Then sign in, replace the password, and complete the remaining setup gates.",
+)
+_BREAK_GLASS_OR_ORPHAN_RECOVERY = re.compile(
+    r"\b(?:break[- ]glass|orphan(?:ed)?[- ]?(?:adoption|recovery))\b", re.IGNORECASE
+)
+_NORMAL_FLOW_KEYCLOAK_CREATION = re.compile(
+    r"\b(?:create|add|make|provision)\b[^.\n]{0,120}\b(?:"
+    r"keycloak\b[^.\n]{0,80}\b(?:user|identity|account)\b|"
+    r"(?:user|identity|account)\b[^.\n]{0,80}\b(?:in|on|via)\s+keycloak\b|"
+    r"(?:intended|first)\b[^.\n]{0,60}\b(?:administrator|admin)\b"
+    r"[^.\n]{0,60}\b(?:identity|account)\b"
+    r")",
+    re.IGNORECASE,
+)
+_NORMAL_FLOW_SUBJECT_HANDOFF = re.compile(
+    r"\b(?:copy|paste|enter|supply|provide|handle)\b[^.\n]{0,120}"
+    r"\b(?:keycloak\s+)?(?:subject|sub)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_setup_sheet(provisioner: str) -> str:
+    matches = list(_SETUP_SHEET_HEREDOC.finditer(provisioner))
+    assert len(matches) == 1, "provisioner must write exactly one EASYSYNQ-SETUP.txt heredoc"
+    return matches[0]["body"]
+
+
+def _assert_setup_sheet_is_secret_only(setup_sheet: str) -> None:
+    """Keep the hand-off file a narrowly-scoped browser bootstrap secret, never a login record."""
+    nonempty_lines = tuple(line.strip() for line in setup_sheet.splitlines() if line.strip())
+    assert nonempty_lines == _SETUP_SHEET_LINES, (
+        "EASYSYNQ-SETUP.txt may contain only the app URL, one-time setup secret, expiry/remint, "
+        "and browser setup steps"
+    )
+
+    variable_names = {
+        braced or bare
+        for braced, bare in re.findall(
+            r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))",
+            setup_sheet,
+        )
+    }
+    assert variable_names == {"HOSTNAME_DEFAULT", "secret"}, (
+        "EASYSYNQ-SETUP.txt may interpolate only the host URL and one-time setup secret"
+    )
+    assert "$(" not in setup_sheet, "EASYSYNQ-SETUP.txt must not execute shell substitutions"
+
+
+def _post_ready_provision_actions(provisioner: str) -> str:
+    ready_marker = '[ "$ok" -eq 1 ] || { log "readyz never went green"; exit 1; }'
+    post_ready = provisioner[provisioner.index(ready_marker) + len(ready_marker) :]
+    return _SETUP_SHEET_HEREDOC.sub("", post_ready)
+
+
+def _assert_no_human_identity_actions(post_ready_actions: str) -> None:
+    """Allow service configuration while forbidding appliance-side human account provisioning."""
+    forbidden_mechanisms = (
+        r"\bkcadm(?:\.sh)?\b[^\n]*\bcreate\s+users?\b",
+        r"\bkcadm(?:\.sh)?\b[^\n]*\b(?:set|reset)-password\b",
+        r"\b(?:useradd|adduser|usermod|passwd|chpasswd)\b",
+        r"\b(?:create|new|add)[-_](?:keycloak[-_])?user\b",
+        r"\b(?:bash|sh|python3?)\b[^\n]*(?:create|new)[-_](?:keycloak[-_])?user(?:\.sh)?\b",
+        r"\b(?:curl|http|wget)\b[^\n]*(?:/admin/realms/[^\s]*/users|/users\b)",
+        r"[\"'](?:username|password|credentials?)[\"']\s*:",
+        r"\b(?:--username|--new-password|--password)\b",
+        r"\b(?:username|user_name|login_name)\s*=\s*(?!\$?\{?KEYCLOAK_ADMIN\b)",
+        r"(?m)^\s*(?!KEYCLOAK_ADMIN(?:_PASSWORD)?\b)[A-Z_]*"
+        r"(?:USERNAME|PASSWORD|CREDENTIAL)[A-Z_]*\s*=",
+    )
+    for pattern in forbidden_mechanisms:
+        assert not re.search(pattern, post_ready_actions, re.IGNORECASE), (
+            "post-ready appliance actions must not create a human identity or set its credential: "
+            f"{pattern}"
+        )
+
+
+def _normal_flow_doc_text(content: str) -> str:
+    retained: list[str] = []
+    exception_heading_level: int | None = None
+    for line in content.splitlines():
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading:
+            heading_level = len(heading[1])
+            if exception_heading_level is not None and heading_level <= exception_heading_level:
+                exception_heading_level = None
+            if _BREAK_GLASS_OR_ORPHAN_RECOVERY.search(heading[2]):
+                exception_heading_level = heading_level
+        if exception_heading_level is not None or _BREAK_GLASS_OR_ORPHAN_RECOVERY.search(line):
+            continue
+        retained.append(line)
+    return "\n".join(retained)
+
+
+def _assert_no_retired_normal_flow_docs(current_docs: dict[str, str]) -> None:
+    for path, content in current_docs.items():
+        normal_flow = _normal_flow_doc_text(content)
+        assert "/setup/bootstrap" not in normal_flow.lower(), (
+            f"{path} documents the retired normal-flow bootstrap endpoint"
+        )
+        for sentence in re.split(r"(?<=[.!?])\s+|\n", normal_flow):
+            instruction = re.sub(r"`[^`]*`", "", sentence)
+            if re.search(r"\b(?:do not|don't|never|does not|not)\b", sentence, re.IGNORECASE):
+                continue
+            assert not _NORMAL_FLOW_KEYCLOAK_CREATION.search(instruction), (
+                f"{path} directs normal installation through Keycloak-user creation"
+            )
+            assert not _NORMAL_FLOW_SUBJECT_HANDOFF.search(instruction), (
+                f"{path} directs normal installation to copy or handle an identity subject"
+            )
 
 
 def _assert_no_protected_dockerignore_reinclusions(
@@ -363,20 +487,42 @@ def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() ->
     provisioner = _read("infra/appliance/provision/easysynq-provision.sh")
     setup_helper = ROOT / "infra/appliance/provision/bin/easysynq-create-user"
 
-    for forbidden in (
-        "qmsadmin",
-        "easysynq-create-user",
-        "Sign in:",
-        "EasySynQ-Setup-1   (you must set a new password)",
-    ):
-        assert forbidden not in provisioner
+    setup_sheet = _extract_setup_sheet(provisioner)
+    _assert_setup_sheet_is_secret_only(setup_sheet)
+    _assert_no_human_identity_actions(_post_ready_provision_actions(provisioner))
 
-    assert "https://${HOSTNAME_DEFAULT}" in provisioner
-    assert "one-time setup secret" in provisioner
-    assert "create the first administrator in /setup" in provisioner
-    assert "shown-once temporary password" in provisioner
-    assert "sign in, replace the password" in provisioner
-    assert "Single-use, 24h. Re-mint: easysynq-status --remint" in provisioner
+    for unsafe_line in (
+        "Administrator username: alternate-admin",
+        "Temporary password: alternate-password-123",
+        "    ${first_admin_password}",
+    ):
+        with pytest.raises(AssertionError):
+            _assert_setup_sheet_is_secret_only(
+                "Application URL: https://${HOSTNAME_DEFAULT}/setup\n"
+                "Your one-time setup secret (EasySynQ):\n"
+                "    ${secret}\n"
+                f"{unsafe_line}\n"
+            )
+
+    for unsafe_action in (
+        "kcadm.sh create users -r easysynq -s username=alternate-admin",
+        "kcadm.sh set-password -r easysynq --username alternate-admin --new-password secret",
+        "useradd alternate-admin",
+        "passwd alternate-admin",
+        "easysynq-create-user alternate-admin",
+        "bash scripts/new-keycloak-user.sh alternate-admin",
+        'curl -d \'{"username": "alternate-admin", "credentials": [{"value": "secret"}]}\'',
+    ):
+        with pytest.raises(AssertionError):
+            _assert_no_human_identity_actions(unsafe_action)
+
+    _assert_no_human_identity_actions(
+        "KEYCLOAK_ADMIN=service-admin\n"
+        "KEYCLOAK_ADMIN_PASSWORD=internal-secret\n"
+        "kcadm.sh update clients/easysynq-web -s 'redirectUris=[\"https://app.example/*\"]'\n"
+        "python -m easysynq_api.cli.keycloak_redirect --origin https://app.example\n"
+    )
+
     assert 'install -m 600 -o easysynq -g easysynq /dev/null "$SETUP_FILE"' in provisioner
     assert not setup_helper.exists()
 
@@ -393,17 +539,25 @@ def test_current_install_docs_keep_first_administrator_creation_in_app() -> None
         "docs/dev-workflow.md",
     )
 
-    forbidden_normal_flow = (
-        "/setup/bootstrap",
-        "Create the intended administrator's sign-in identity in Keycloak first",
-        "Create or federate the intended administrator identity first",
-        "create a temporary Keycloak account from the repository root",
-        "bind each already-created Keycloak identity by its OIDC `sub`",
-        "paste the Keycloak `sub`",
+    _assert_no_retired_normal_flow_docs({path: _read(path) for path in current_docs})
+
+    for unsafe_normal_flow in (
+        "Create a Keycloak user before opening EasySynQ.",
+        "Create or federate the intended administrator identity first.",
+        "Copy the Keycloak subject and paste it into the setup form.",
+        "Use POST /setup/bootstrap to create the first administrator.",
+    ):
+        with pytest.raises(AssertionError):
+            _assert_no_retired_normal_flow_docs({"docs/current-install.md": unsafe_normal_flow})
+
+    _assert_no_retired_normal_flow_docs(
+        {
+            "docs/current-install.md": (
+                "## Break-glass and orphan recovery\n"
+                "Create a Keycloak user and copy the Keycloak subject.\n"
+            )
+        }
     )
-    combined = "\n".join(_read(path) for path in current_docs)
-    for forbidden in forbidden_normal_flow:
-        assert forbidden not in combined
 
 
 def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
