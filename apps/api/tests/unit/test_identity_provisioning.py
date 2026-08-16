@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.services.identity.provisioning import (
     CredentiallessIdentity,
     IdentityProfile,
@@ -32,6 +33,7 @@ class FakeClient:
     operations: list[str] = field(default_factory=list)
     lookup_usernames: list[str] = field(default_factory=list)
     lookup_calls: int = 0
+    reconcile_calls: list[dict[str, object]] = field(default_factory=list)
 
     async def ensure_optional_user_profile_fields(self) -> None:
         self.operations.append("profile")
@@ -57,6 +59,9 @@ class FakeClient:
 
     async def set_temporary_password(self, *, subject: str, password: str) -> None:
         self.reset_calls.append((subject, password))
+
+    async def reconcile_claimed_user_profile(self, **kwargs: object) -> None:
+        self.reconcile_calls.append(kwargs)
 
 
 def _profile() -> IdentityProfile:
@@ -113,6 +118,37 @@ async def test_bootstrap_retry_reconciles_profile_before_adopting_claimed_identi
 
     assert client.operations == ["profile", "lookup"]
     assert result == CredentiallessIdentity(subject="sub-existing", created=False)
+
+
+async def test_claimed_profile_reconciliation_canonicalizes_and_forwards_exact_identity() -> None:
+    claim = uuid.uuid4()
+    client = FakeClient(UserLookup(found=False))
+
+    await identity_provisioning.reconcile_claimed_identity_profile(
+        client,
+        IdentityProfile("  First.Admin  ", "admin@example.local", "First", None),
+        subject="sub-1",
+        bootstrap_claim_id=claim,
+    )
+
+    assert client.reconcile_calls == [
+        {
+            "subject": "sub-1",
+            "username": "first.admin",
+            "bootstrap_claim_id": claim,
+            "email": "admin@example.local",
+            "first_name": "First",
+            "last_name": None,
+        }
+    ]
+
+
+async def test_ordinary_identity_provisioning_never_reconciles_a_claimed_profile() -> None:
+    client = FakeClient(UserLookup(found=False))
+
+    await ensure_credentialless_identity(client, _profile())
+
+    assert client.reconcile_calls == []
 
 
 async def test_ordinary_existing_username_raises_with_subject() -> None:

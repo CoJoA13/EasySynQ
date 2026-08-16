@@ -106,6 +106,25 @@ async def ensure_credentialless_identity(
     return CredentiallessIdentity(subject=subject, created=True)
 
 
+async def reconcile_claimed_identity_profile(
+    client: KeycloakProvisioningClient,
+    profile: IdentityProfile,
+    *,
+    subject: str,
+    bootstrap_claim_id: uuid.UUID,
+) -> None:
+    """Reconcile the exact bootstrap-owned identity without affecting ordinary provisioning."""
+    profile = dataclasses.replace(profile, username=canonicalize_username(profile.username))
+    await client.reconcile_claimed_user_profile(
+        subject=subject,
+        username=profile.username,
+        bootstrap_claim_id=bootstrap_claim_id,
+        email=profile.email,
+        first_name=profile.first_name,
+        last_name=profile.last_name,
+    )
+
+
 async def issue_temporary_credential(
     client: KeycloakProvisioningClient, *, subject: str, username: str
 ) -> str:

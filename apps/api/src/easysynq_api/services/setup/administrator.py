@@ -523,6 +523,7 @@ async def _persist_user_and_role(
     org_id: uuid.UUID,
     profile: FirstAdministratorProfile,
     identity: CredentiallessIdentity,
+    client: Any,
     cfg: SystemConfig,
 ) -> tuple[AppUser, dict[str, Any]]:
     _assert_claim(cfg, claim_id=claim_id, username=profile.username)
@@ -533,6 +534,31 @@ async def _persist_user_and_role(
             code="bootstrap_not_ready",
             title="The setup organization changed",
         )
+
+    try:
+        await identity_provisioning.reconcile_claimed_identity_profile(
+            client,
+            IdentityProfile(
+                username=profile.username,
+                email=profile.email,
+                first_name=profile.first_name,
+                last_name=profile.last_name,
+            ),
+            subject=identity.subject,
+            bootstrap_claim_id=claim_id,
+        )
+    except KeycloakRejected:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="The identity provider rejected the administrator profile",
+        ) from None
+    except KeycloakUnavailable:
+        raise ProblemException(
+            status=502,
+            code="keycloak_unavailable",
+            title="The identity provider is unavailable",
+        ) from None
 
     created_user = False
     if cfg.bootstrap_admin_user_id is not None:
@@ -569,6 +595,9 @@ async def _persist_user_and_role(
                 code="bootstrap_not_ready",
                 title="The recovered first administrator user is not eligible",
             )
+
+    user.display_name = profile.display_name
+    user.email = profile.email
 
     role = await session.scalar(
         select(Role).where(Role.org_id == org_id, Role.name == SYSTEM_ADMIN_ROLE)
@@ -736,6 +765,7 @@ async def provision_first_administrator(
                 org_id=org_id,
                 profile=profile,
                 identity=identity,
+                client=client,
                 cfg=cfg,
             )
         except Exception:

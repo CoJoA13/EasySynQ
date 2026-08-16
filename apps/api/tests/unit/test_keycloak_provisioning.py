@@ -23,6 +23,7 @@ _KWARGS = {
     "admin_user": "admin",
     "admin_password": "secret",
 }
+_WRONG_BOOTSTRAP_CLAIM = str(uuid.uuid4())
 
 
 def _client(handler: object) -> KeycloakProvisioningClient:
@@ -36,6 +37,306 @@ def _token_ok(request: httpx.Request) -> httpx.Response | None:
     if request.method == "POST" and request.url.path.endswith("/protocol/openid-connect/token"):
         return httpx.Response(200, json={"access_token": "admin-token"})
     return None
+
+
+def _claimed_user_representation(claim: uuid.UUID) -> dict[str, object]:
+    return {
+        "id": "sub-1",
+        "username": "first.admin",
+        "enabled": True,
+        "email": "original@example.local",
+        "emailVerified": True,
+        "firstName": "Original",
+        "lastName": "Administrator",
+        "attributes": {
+            BOOTSTRAP_CLAIM_ATTRIBUTE: [str(claim)],
+            "employeeId": ["E-100"],
+        },
+        "requiredActions": ["UPDATE_PASSWORD"],
+        "federationLink": "directory-provider",
+        "createdTimestamp": 1_700_000_000_000,
+        "access": {"manage": True},
+    }
+
+
+async def test_claimed_user_profile_preserves_every_unapproved_field() -> None:
+    claim = uuid.uuid4()
+    original = _claimed_user_representation(claim)
+    requests: list[str] = []
+    put_bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        requests.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json=original)
+        if request.method == "PUT":
+            put_bodies.append(json.loads(request.content))
+            return httpx.Response(204)
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        await kc.reconcile_claimed_user_profile(
+            subject="sub-1",
+            username="first.admin",
+            bootstrap_claim_id=claim,
+            email="corrected@example.local",
+            first_name="Corrected",
+            last_name=None,
+        )
+
+    assert requests == ["GET", "PUT"]
+    assert original["email"] == "original@example.local"
+    put_body = put_bodies[0]
+    assert put_body["id"] == "sub-1"
+    assert put_body["username"] == "first.admin"
+    assert put_body["attributes"] == original["attributes"]
+    assert put_body["requiredActions"] == original["requiredActions"]
+    assert put_body["federationLink"] == original["federationLink"]
+    assert put_body["createdTimestamp"] == original["createdTimestamp"]
+    assert put_body["access"] == original["access"]
+    assert put_body["email"] == "corrected@example.local"
+    assert put_body["emailVerified"] is True
+    assert put_body["firstName"] == "Corrected"
+    assert put_body["lastName"] is None
+
+
+async def test_claimed_user_profile_skips_put_when_approved_fields_are_equal() -> None:
+    claim = uuid.uuid4()
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        requests.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json=_claimed_user_representation(claim))
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        await kc.reconcile_claimed_user_profile(
+            subject="sub-1",
+            username="first.admin",
+            bootstrap_claim_id=claim,
+            email="original@example.local",
+            first_name="Original",
+            last_name="Administrator",
+        )
+
+    assert requests == ["GET"]
+
+
+async def test_claimed_user_profile_uses_explicit_clearing_semantics() -> None:
+    claim = uuid.uuid4()
+    put_bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET":
+            return httpx.Response(200, json=_claimed_user_representation(claim))
+        put_bodies.append(json.loads(request.content))
+        return httpx.Response(204)
+
+    async with _client(handler) as kc:
+        await kc.reconcile_claimed_user_profile(
+            subject="sub-1",
+            username="first.admin",
+            bootstrap_claim_id=claim,
+            email=None,
+            first_name=None,
+            last_name=None,
+        )
+
+    assert put_bodies[0]["email"] is None
+    assert put_bodies[0]["emailVerified"] is False
+    assert put_bodies[0]["firstName"] is None
+    assert put_bodies[0]["lastName"] is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "sensitive"),
+    [
+        ({"id": "sub-other"}, "sub-other"),
+        ({"username": "other.admin"}, "other.admin"),
+        ({"attributes": {"employeeId": ["E-100"]}}, "E-100"),
+        (
+            {"attributes": {BOOTSTRAP_CLAIM_ATTRIBUTE: ["not-a-uuid"]}},
+            "not-a-uuid",
+        ),
+        (
+            {"attributes": {BOOTSTRAP_CLAIM_ATTRIBUTE: [_WRONG_BOOTSTRAP_CLAIM]}},
+            _WRONG_BOOTSTRAP_CLAIM,
+        ),
+    ],
+)
+async def test_claimed_user_profile_fails_closed_on_wrong_or_malformed_ownership(
+    mutation: dict[str, object], sensitive: str
+) -> None:
+    claim = uuid.uuid4()
+    representation = _claimed_user_representation(claim)
+    representation.update(mutation)
+    put_attempted = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal put_attempted
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET":
+            return httpx.Response(200, json=representation)
+        put_attempted = True
+        return httpx.Response(204)
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable) as excinfo:
+            await kc.reconcile_claimed_user_profile(
+                subject="sub-1",
+                username="first.admin",
+                bootstrap_claim_id=claim,
+                email="corrected@example.local",
+                first_name="Corrected",
+                last_name="Administrator",
+            )
+
+    assert put_attempted is False
+    assert "sub-1" not in str(excinfo.value)
+    assert str(claim) not in str(excinfo.value)
+    assert sensitive not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("status_code", [400, 409])
+async def test_claimed_user_profile_maps_validation_rejection_without_provider_detail(
+    status_code: int,
+) -> None:
+    claim = uuid.uuid4()
+    provider_detail = f"invalid subject=sub-1 marker={claim}"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET":
+            return httpx.Response(200, json=_claimed_user_representation(claim))
+        return httpx.Response(status_code, json={"errorMessage": provider_detail})
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakRejected) as excinfo:
+            await kc.reconcile_claimed_user_profile(
+                subject="sub-1",
+                username="first.admin",
+                bootstrap_claim_id=claim,
+                email="corrected@example.local",
+                first_name="Corrected",
+                last_name="Administrator",
+            )
+
+    assert "sub-1" not in str(excinfo.value)
+    assert str(claim) not in str(excinfo.value)
+    assert provider_detail not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("status_code", [403, 404, 500, 503])
+@pytest.mark.parametrize("operation", ["GET", "PUT"])
+async def test_claimed_user_profile_maps_unavailable_status_without_provider_detail(
+    status_code: int, operation: str
+) -> None:
+    claim = uuid.uuid4()
+    provider_detail = f"provider subject=sub-1 marker={claim}"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET" and operation == "PUT":
+            return httpx.Response(200, json=_claimed_user_representation(claim))
+        return httpx.Response(status_code, json={"error": provider_detail})
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable) as excinfo:
+            await kc.reconcile_claimed_user_profile(
+                subject="sub-1",
+                username="first.admin",
+                bootstrap_claim_id=claim,
+                email="corrected@example.local",
+                first_name="Corrected",
+                last_name="Administrator",
+            )
+
+    assert "sub-1" not in str(excinfo.value)
+    assert str(claim) not in str(excinfo.value)
+    assert provider_detail not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("body", [[], None, "not-an-object"])
+async def test_claimed_user_profile_rejects_malformed_json_shape(body: object) -> None:
+    claim = uuid.uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(200, json=body)
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable):
+            await kc.reconcile_claimed_user_profile(
+                subject="sub-1",
+                username="first.admin",
+                bootstrap_claim_id=claim,
+                email=None,
+                first_name=None,
+                last_name=None,
+            )
+
+
+async def test_claimed_user_profile_rejects_malformed_json_body() -> None:
+    claim = uuid.uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(200, content=b"{not-json")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable):
+            await kc.reconcile_claimed_user_profile(
+                subject="sub-1",
+                username="first.admin",
+                bootstrap_claim_id=claim,
+                email=None,
+                first_name=None,
+                last_name=None,
+            )
+
+
+async def test_claimed_user_profile_maps_transport_failure_without_identity_detail() -> None:
+    claim = uuid.uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        raise httpx.ConnectError(f"failed for {request.url}", request=request)
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable) as excinfo:
+            await kc.reconcile_claimed_user_profile(
+                subject="sub-1",
+                username="first.admin",
+                bootstrap_claim_id=claim,
+                email=None,
+                first_name=None,
+                last_name=None,
+            )
+
+    assert "sub-1" not in str(excinfo.value)
+    assert str(claim) not in str(excinfo.value)
 
 
 async def test_lookup_requires_exact_and_reverifies_the_returned_username() -> None:

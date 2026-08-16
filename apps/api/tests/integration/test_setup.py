@@ -63,6 +63,15 @@ class _FakeIdentity:
     subject: str
     marker: str | None
     email: str | None
+    first_name: str | None
+    last_name: str | None
+    unrelated_fields: dict[str, object] = field(
+        default_factory=lambda: {
+            "requiredActions": ["UPDATE_PASSWORD"],
+            "federationLink": "directory-provider",
+            "employeeId": ["E-100"],
+        }
+    )
 
 
 @dataclass(slots=True)
@@ -92,6 +101,7 @@ class _FakeKeycloak:
     rejection_barrier: _CreateRejectionBarrier | None = None
     rejection_revalidation: UserLookup | Exception | None = None
     create_rejected: bool = False
+    profile_rejection_detail_template: str | None = None
 
     async def __aenter__(self) -> _FakeKeycloak:
         return self
@@ -125,7 +135,6 @@ class _FakeKeycloak:
         bootstrap_claim_id: uuid.UUID | None = None,
     ) -> str:
         self.operations.append("create")
-        del first_name, last_name
         if username in self.accounts:
             account = self.accounts[username]
             raise KeycloakConflict("username", "duplicate", keycloak_subject=account.subject)
@@ -149,10 +158,44 @@ class _FakeKeycloak:
             subject=subject,
             marker=str(bootstrap_claim_id) if bootstrap_claim_id is not None else None,
             email=email,
+            first_name=first_name,
+            last_name=last_name,
         )
         if self.fail_after_create:
             raise KeycloakUnavailable("create result was uncertain")
         return subject
+
+    async def reconcile_claimed_user_profile(
+        self,
+        *,
+        subject: str,
+        username: str,
+        bootstrap_claim_id: uuid.UUID,
+        email: str | None,
+        first_name: str | None,
+        last_name: str | None,
+    ) -> None:
+        self.operations.append("reconcile")
+        account = self.accounts.get(username)
+        if (
+            account is None
+            or account.subject != subject
+            or account.marker != str(bootstrap_claim_id)
+        ):
+            raise KeycloakUnavailable("claimed identity ownership could not be established")
+        rejection = self.profile_rejection_detail_template
+        if rejection is not None:
+            raise KeycloakRejected(
+                rejection.format(
+                    subject=subject,
+                    claim=bootstrap_claim_id,
+                    username=username,
+                    email=email,
+                )
+            )
+        account.email = email
+        account.first_name = first_name
+        account.last_name = last_name
 
     async def set_temporary_password(self, *, subject: str, password: str) -> None:
         if self.password_error is not None:
@@ -169,10 +212,22 @@ class _FakeKeycloak:
         self.passwords.setdefault(subject, []).append(password)
 
     def add_account(
-        self, username: str, *, marker: str | None = None, email: str | None = None
+        self,
+        username: str,
+        *,
+        marker: str | None = None,
+        email: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
     ) -> str:
         subject = f"unrelated:{username}"
-        self.accounts[username] = _FakeIdentity(subject, marker, email)
+        self.accounts[username] = _FakeIdentity(
+            subject,
+            marker,
+            email,
+            first_name,
+            last_name,
+        )
         return subject
 
 
@@ -254,16 +309,19 @@ async def _provision(
     username: str,
     *,
     email: str | None = None,
+    display_name: str | None = None,
+    first_name: str | None = "First",
+    last_name: str | None = "Administrator",
 ) -> Any:
     return await client.post(
         "/api/v1/setup/administrator",
         json={
             "secret": secret,
             "username": username,
-            "display_name": f"Administrator {username}",
+            "display_name": display_name or f"Administrator {username}",
             "email": email,
-            "first_name": "First",
-            "last_name": "Administrator",
+            "first_name": first_name,
+            "last_name": last_name,
         },
     )
 
@@ -429,7 +487,14 @@ async def test_first_administrator_initial_issue_and_response_loss_reissue_are_p
     assert first_body["password_delivery"] == "shown_once"
     assert first_body["temporary_password"] != second_body["temporary_password"]
     assert "keycloak_subject" not in first.text
-    assert first_identity_operations == ["profile", "lookup", "profile", "lookup", "create"]
+    assert first_identity_operations == [
+        "profile",
+        "lookup",
+        "profile",
+        "lookup",
+        "create",
+        "reconcile",
+    ]
     subject = f"subject:{username}"
     assert _setup_keycloak.passwords[subject] == [
         first_body["temporary_password"],
@@ -1173,6 +1238,191 @@ async def test_database_failure_after_marked_create_retries_same_identity(
     assert _setup_keycloak.accounts[username].marker == str(claimed.bootstrap_admin_claim_id)
     recovered = await _provision(app_client, secret, username)
     assert recovered.status_code == 200, recovered.text
+
+
+async def test_claimed_retry_reconciles_corrected_profile_in_both_stores(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("corrected-profile")
+    original_email = "original@example.local"
+    corrected_email = "corrected@example.local"
+    _setup_keycloak.fail_after_create = True
+
+    uncertain = await _provision(
+        app_client,
+        secret,
+        username,
+        email=original_email,
+        display_name="Original Administrator",
+        first_name="Original",
+        last_name="Administrator",
+    )
+
+    assert uncertain.status_code == 502, uncertain.text
+    claimed = await _config()
+    assert claimed.bootstrap_admin_claim_id is not None
+    original_unrelated = dict(_setup_keycloak.accounts[username].unrelated_fields)
+    _setup_keycloak.fail_after_create = False
+
+    recovered = await _provision(
+        app_client,
+        secret,
+        username,
+        email=corrected_email,
+        display_name="Corrected Administrator",
+        first_name="Corrected",
+        last_name=None,
+    )
+
+    assert recovered.status_code == 200, recovered.text
+    account = _setup_keycloak.accounts[username]
+    assert account.marker == str(claimed.bootstrap_admin_claim_id)
+    assert account.email == corrected_email
+    assert account.first_name == "Corrected"
+    assert account.last_name is None
+    assert account.unrelated_fields == original_unrelated
+    current = await _config()
+    assert current.bootstrap_admin_user_id is not None
+    async with get_sessionmaker()() as session:
+        user = await session.get(AppUser, current.bootstrap_admin_user_id)
+    assert user is not None
+    assert user.display_name == "Corrected Administrator"
+    assert user.email == corrected_email
+
+
+async def test_concurrent_profile_retries_converge_on_one_complete_profile(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("concurrent-profile")
+    initial = await _provision(app_client, secret, username)
+    assert initial.status_code == 201, initial.text
+    profiles = {
+        (
+            "Profile Alpha",
+            "alpha@example.local",
+            "Alpha",
+            "Administrator",
+        ),
+        (
+            "Profile Beta",
+            "beta@example.local",
+            "Beta",
+            None,
+        ),
+    }
+
+    retries = await asyncio.gather(
+        _provision(
+            app_client,
+            secret,
+            username,
+            display_name="Profile Alpha",
+            email="alpha@example.local",
+            first_name="Alpha",
+            last_name="Administrator",
+        ),
+        _provision(
+            app_client,
+            secret,
+            username,
+            display_name="Profile Beta",
+            email="beta@example.local",
+            first_name="Beta",
+            last_name=None,
+        ),
+    )
+
+    assert {response.status_code for response in retries} == {200}
+    cfg = await _config()
+    assert cfg.bootstrap_admin_user_id is not None
+    async with get_sessionmaker()() as session:
+        user = await session.get(AppUser, cfg.bootstrap_admin_user_id)
+    assert user is not None
+    account = _setup_keycloak.accounts[username]
+    final_profile = (
+        user.display_name,
+        account.email,
+        account.first_name,
+        account.last_name,
+    )
+    assert final_profile in profiles
+    assert user.email == account.email
+    assert account.marker == str(cfg.bootstrap_admin_claim_id)
+
+
+async def test_rejected_claimed_profile_update_retains_claim_redacts_and_recovers(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("rejected-claimed-profile")
+    _setup_keycloak.fail_after_create = True
+    uncertain = await _provision(
+        app_client,
+        secret,
+        username,
+        email="original@example.local",
+        first_name="Original",
+        last_name="Administrator",
+    )
+    assert uncertain.status_code == 502, uncertain.text
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    account = _setup_keycloak.accounts[username]
+    marker = account.marker
+    unrelated = dict(account.unrelated_fields)
+
+    _setup_keycloak.fail_after_create = False
+    rejected_email = "provider-rejected@example.local"
+    _setup_keycloak.profile_rejection_detail_template = (
+        "rejected subject={subject}; claim={claim}; username={username}; email={email}"
+    )
+    rejected = await _provision(
+        app_client,
+        secret,
+        username,
+        email=rejected_email,
+        display_name="Rejected Projection",
+        first_name="Rejected",
+        last_name=None,
+    )
+
+    assert rejected.status_code == 422, rejected.text
+    body = rejected.json()
+    assert body["title"] == "The identity provider rejected the administrator profile"
+    assert body["status"] == 422
+    assert body["code"] == "validation_error"
+    assert "detail" not in body
+    assert username not in rejected.text
+    assert rejected_email not in rejected.text
+    assert str(cfg.bootstrap_admin_claim_id) not in rejected.text
+    retained = await _config()
+    assert retained.bootstrap_admin_claim_id == cfg.bootstrap_admin_claim_id
+    assert retained.bootstrap_admin_user_id is None
+    assert account.marker == marker
+    assert account.email == "original@example.local"
+    assert account.first_name == "Original"
+    assert account.last_name == "Administrator"
+    assert account.unrelated_fields == unrelated
+
+    _setup_keycloak.profile_rejection_detail_template = None
+    corrected = await _provision(
+        app_client,
+        secret,
+        username,
+        email="accepted@example.local",
+        display_name="Accepted Projection",
+        first_name="Accepted",
+        last_name=None,
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert account.email == "accepted@example.local"
+    assert account.first_name == "Accepted"
+    assert account.last_name is None
 
 
 async def test_password_failure_keeps_linked_user_and_role_for_retry(

@@ -20,6 +20,7 @@ Two behaviours are inherited from ``scripts/new-keycloak-user.sh`` and are load-
 
 from __future__ import annotations
 
+import copy
 import types
 import uuid
 from dataclasses import dataclass
@@ -64,10 +65,12 @@ class KeycloakConflict(KeycloakProvisioningError):
 
 
 class KeycloakRejected(KeycloakProvisioningError):
-    """Keycloak refused the create as invalid input — a 4xx other than 409 (an invalid email, or a
-    value the realm's user-profile validation rejects). Distinct from ``KeycloakUnavailable``: the
-    dependency IS reachable and retrying the same, unchanged form cannot succeed. ``detail`` is a
-    bounded, sanitised explanation built by ``_bounded_message`` — never the raw response body."""
+    """Keycloak refused profile input that cannot succeed unchanged.
+
+    Create uses this for a 4xx other than 409; exact claimed-profile reconciliation also uses it
+    for the provider's 400/409 validation responses. Distinct from ``KeycloakUnavailable``: the
+    dependency is reachable. ``detail`` is always bounded and sanitised, never a raw body.
+    """
 
     def __init__(self, detail: str) -> None:
         self.detail = detail
@@ -257,6 +260,74 @@ class KeycloakProvisioningClient:
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise KeycloakUnavailable(f"Keycloak user-profile update failed: {exc}") from exc
+
+    async def reconcile_claimed_user_profile(
+        self,
+        *,
+        subject: str,
+        username: str,
+        bootstrap_claim_id: uuid.UUID,
+        email: str | None,
+        first_name: str | None,
+        last_name: str | None,
+    ) -> None:
+        """Reconcile only an exactly marker-owned bootstrap identity's approved profile fields.
+
+        Keycloak's user update has whole-representation semantics and no compare-and-swap token.
+        Read and deep-copy the complete representation so provider-managed content survives, then
+        assign only the four fields approved by the bootstrap recovery contract. Failure text is
+        deliberately generic because the subject and marker are recovery capabilities that must
+        not escape through an exception or public problem response.
+        """
+        headers = await self._headers()
+        client = self._client
+        if client is None:
+            raise KeycloakUnavailable("Client not initialized; use async context manager")
+        subject_path = quote(subject, safe="")
+        path = f"/admin/realms/{self._realm}/users/{subject_path}"
+        try:
+            response = await client.get(path, headers=headers)
+        except httpx.HTTPError:
+            raise KeycloakUnavailable("Keycloak claimed-profile read failed") from None
+        if response.status_code != 200:
+            raise KeycloakUnavailable("Keycloak claimed-profile read failed")
+        try:
+            representation = response.json()
+        except ValueError:
+            raise KeycloakUnavailable("Keycloak claimed-profile response was unusable") from None
+        if not isinstance(representation, dict):
+            raise KeycloakUnavailable("Keycloak claimed-profile response was unusable")
+
+        try:
+            marker = _bootstrap_claim_id(representation)
+        except KeycloakUnavailable:
+            raise KeycloakUnavailable("Keycloak claimed-profile ownership was unusable") from None
+        if (
+            representation.get("id") != subject
+            or representation.get("username") != username
+            or marker != str(bootstrap_claim_id)
+        ):
+            raise KeycloakUnavailable("Keycloak claimed-profile ownership was unusable")
+
+        approved_fields = {
+            "email": email,
+            "emailVerified": email is not None,
+            "firstName": first_name,
+            "lastName": last_name,
+        }
+        if all(representation.get(key) == value for key, value in approved_fields.items()):
+            return
+
+        updated = copy.deepcopy(representation)
+        updated.update(approved_fields)
+        try:
+            response = await client.put(path, headers=headers, json=updated)
+        except httpx.HTTPError:
+            raise KeycloakUnavailable("Keycloak claimed-profile update failed") from None
+        if response.status_code in (400, 409):
+            raise KeycloakRejected("Keycloak rejected the claimed-profile update")
+        if not 200 <= response.status_code < 300:
+            raise KeycloakUnavailable("Keycloak claimed-profile update failed")
 
     async def create_user(
         self,
