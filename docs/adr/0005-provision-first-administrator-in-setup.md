@@ -133,6 +133,31 @@ compare-and-swap user-profile update, or when EasySynQ introduces supported exte
 administration. Remove reconciliation only if a future supported identity provider natively preserves
 EasySynQ’s optional-field semantics for both bootstrap and ordinary users.
 
+### 2026-08-16 live-proof correction — managed bootstrap claim marker
+
+The fresh-realm live acceptance proved an adjacent Keycloak 26 behavior: the default
+`unmanagedAttributePolicy` is disabled, so a successful Admin REST user create silently ignores the
+unknown `easysynqBootstrapClaim` attribute. The subsequent exact-user read therefore cannot prove
+marker ownership and fails closed before credential issuance.
+
+The same pre-lookup realm-profile reconciliation now also defines `easysynqBootstrapClaim` as one
+managed, non-multivalued attribute whose view and edit permissions are both admin-only. It appends
+that exact definition when absent, replaces a broader or otherwise mismatched definition, and refuses
+duplicate definitions. Every other attribute, group, validator, annotation, and the existing
+unmanaged-attribute policy remain unchanged; in particular, EasySynQ does not switch the realm to
+`ADMIN_EDIT` or `ENABLED`.
+
+This keeps the opaque recovery marker available to the Admin REST boundary without exposing it in
+end-user profile contexts or enabling unrelated custom attributes. It expands the existing
+whole-document user-profile write boundary and therefore remains covered by the registered
+Keycloak-profile-reconciliation debt rather than introducing a second residual.
+
+Broadly enabling unmanaged attributes was rejected because `ADMIN_EDIT` would admit every unknown
+attribute through administrative writes and `ENABLED` would also expose that surface to end-user
+contexts. Weakening the exact marker check was rejected because it is the proof that recovery acts
+only on the claim-bound identity. Updating only the realm export was rejected because fresh defaults
+and existing realms both require deterministic runtime reconciliation.
+
 ## 2026-08-16 amendment — canonical usernames and serialized proof admission
 
 ### Context

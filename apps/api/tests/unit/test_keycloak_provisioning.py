@@ -581,11 +581,190 @@ async def test_user_profile_reconcile_makes_only_product_optional_fields_optiona
                     "required": {"roles": ["user"]},
                     "annotations": {"inputType": "text"},
                 },
+                {
+                    "name": BOOTSTRAP_CLAIM_ATTRIBUTE,
+                    "permissions": {"view": ["admin"], "edit": ["admin"]},
+                    "multivalued": False,
+                },
             ],
             "groups": [{"name": "employment"}],
             "unmanagedAttributePolicy": "ENABLED",
         }
     ]
+
+
+async def test_user_profile_reconcile_defines_admin_only_marker_for_fresh_realm() -> None:
+    updated: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(
+                200,
+                json={
+                    "attributes": [
+                        {
+                            "name": "username",
+                            "required": {"roles": ["admin", "user"]},
+                            "permissions": {
+                                "view": ["admin", "user"],
+                                "edit": ["admin", "user"],
+                            },
+                        },
+                        {
+                            "name": "email",
+                            "required": {"roles": ["user"]},
+                            "validations": {"email": {}, "length": {"max": 255}},
+                        },
+                        {
+                            "name": "firstName",
+                            "required": {"roles": ["user"]},
+                            "validations": {"length": {"max": 255}},
+                        },
+                        {
+                            "name": "lastName",
+                            "required": {"roles": ["user"]},
+                            "validations": {"length": {"max": 255}},
+                        },
+                    ],
+                    "groups": [{"name": "user-metadata"}],
+                },
+            )
+        if request.method == "PUT" and request.url.path.endswith("/users/profile"):
+            updated.append(json.loads(request.content))
+            return httpx.Response(200, json=updated[-1])
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        await kc.ensure_optional_user_profile_fields()
+
+    assert updated == [
+        {
+            "attributes": [
+                {
+                    "name": "username",
+                    "required": {"roles": ["admin", "user"]},
+                    "permissions": {
+                        "view": ["admin", "user"],
+                        "edit": ["admin", "user"],
+                    },
+                },
+                {
+                    "name": "email",
+                    "validations": {"email": {}, "length": {"max": 255}},
+                },
+                {"name": "firstName", "validations": {"length": {"max": 255}}},
+                {"name": "lastName", "validations": {"length": {"max": 255}}},
+                {
+                    "name": BOOTSTRAP_CLAIM_ATTRIBUTE,
+                    "permissions": {"view": ["admin"], "edit": ["admin"]},
+                    "multivalued": False,
+                },
+            ],
+            "groups": [{"name": "user-metadata"}],
+        }
+    ]
+    assert "unmanagedAttributePolicy" not in updated[0]
+
+
+async def test_user_profile_reconcile_replaces_unsafe_marker_without_broadening_policy() -> None:
+    updated: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(
+                200,
+                json={
+                    "attributes": [
+                        {"name": "username", "required": {"roles": ["admin", "user"]}},
+                        {"name": "email"},
+                        {"name": "firstName"},
+                        {"name": "lastName"},
+                        {
+                            "name": BOOTSTRAP_CLAIM_ATTRIBUTE,
+                            "permissions": {
+                                "view": ["admin", "user"],
+                                "edit": ["admin", "user"],
+                            },
+                            "multivalued": True,
+                            "annotations": {"inputType": "text"},
+                        },
+                        {"name": "employeeId", "permissions": {"view": ["admin"]}},
+                    ],
+                    "groups": [{"name": "employment"}],
+                    "unmanagedAttributePolicy": "DISABLED",
+                },
+            )
+        if request.method == "PUT" and request.url.path.endswith("/users/profile"):
+            updated.append(json.loads(request.content))
+            return httpx.Response(200, json=updated[-1])
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        await kc.ensure_optional_user_profile_fields()
+
+    assert updated == [
+        {
+            "attributes": [
+                {"name": "username", "required": {"roles": ["admin", "user"]}},
+                {"name": "email"},
+                {"name": "firstName"},
+                {"name": "lastName"},
+                {
+                    "name": BOOTSTRAP_CLAIM_ATTRIBUTE,
+                    "permissions": {"view": ["admin"], "edit": ["admin"]},
+                    "multivalued": False,
+                },
+                {"name": "employeeId", "permissions": {"view": ["admin"]}},
+            ],
+            "groups": [{"name": "employment"}],
+            "unmanagedAttributePolicy": "DISABLED",
+        }
+    ]
+
+
+async def test_user_profile_reconcile_fails_closed_on_duplicate_marker_definition() -> None:
+    put_attempted = False
+    marker = {
+        "name": BOOTSTRAP_CLAIM_ATTRIBUTE,
+        "permissions": {"view": ["admin"], "edit": ["admin"]},
+        "multivalued": False,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal put_attempted
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(
+                200,
+                json={
+                    "attributes": [
+                        {"name": "username"},
+                        {"name": "email"},
+                        {"name": "firstName"},
+                        {"name": "lastName"},
+                        marker,
+                        marker,
+                    ]
+                },
+            )
+        if request.method == "PUT" and request.url.path.endswith("/users/profile"):
+            put_attempted = True
+            return httpx.Response(200, json={})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable, match="duplicate bootstrap marker"):
+            await kc.ensure_optional_user_profile_fields()
+
+    assert put_attempted is False
 
 
 async def test_user_profile_reconcile_fails_closed_when_a_builtin_field_is_missing() -> None:
@@ -637,6 +816,11 @@ async def test_user_profile_reconcile_skips_put_when_already_optional() -> None:
                         {"name": "firstName"},
                         {"name": "lastName"},
                         {"name": "employeeId", "required": {"roles": ["user"]}},
+                        {
+                            "name": BOOTSTRAP_CLAIM_ATTRIBUTE,
+                            "permissions": {"view": ["admin"], "edit": ["admin"]},
+                            "multivalued": False,
+                        },
                     ],
                     "groups": [{"name": "employment"}],
                 },

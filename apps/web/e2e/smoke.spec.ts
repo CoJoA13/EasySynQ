@@ -8,8 +8,13 @@ import {
   MAXIMUM_FIRST_ADMIN_EMAIL,
   MAXIMUM_FIRST_ADMIN_FIRST_NAME,
   MAXIMUM_FIRST_ADMIN_LAST_NAME,
+  MAXIMUM_FIRST_ADMIN_RECEIPT,
   MAXIMUM_FIRST_ADMIN_SECRET,
   MAXIMUM_FIRST_ADMIN_USERNAME,
+  REISSUED_FIRST_ADMIN_RECEIPT,
+  REISSUED_FIRST_ADMIN_TEMPORARY_PASSWORD,
+  REISSUE_FIRST_ADMIN_SECRET,
+  REMINTED_FIRST_ADMIN_SECRET,
 } from "./support/api";
 
 async function expectInsideNarrowViewport(locator: Locator): Promise<void> {
@@ -29,6 +34,63 @@ async function expectLoginCalls(page: Page, expected: number): Promise<void> {
       ),
     )
     .toBe(expected);
+}
+
+async function expectNoDocumentOverflow(page: Page): Promise<void> {
+  expect(
+    await page.evaluate(() => ({
+      innerWidth: window.innerWidth,
+      documentClientWidth: document.documentElement.clientWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      bodyLeft: document.body.getBoundingClientRect().left,
+      bodyRight: document.body.getBoundingClientRect().right,
+    })),
+  ).toEqual({
+    innerWidth: 320,
+    documentClientWidth: 320,
+    documentScrollWidth: 320,
+    bodyLeft: 0,
+    bodyRight: 320,
+  });
+}
+
+async function expectExactActionTarget(locator: Locator): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.height).toBe(44);
+  await expectInsideNarrowViewport(locator);
+}
+
+async function expectForcedColorsFocus(locator: Locator): Promise<void> {
+  await expect(locator).toBeFocused();
+  expect(
+    await locator.evaluate((element) => {
+      const styles = getComputedStyle(element);
+      return {
+        matchesFocusVisible: element.matches(":focus-visible"),
+        outlineStyle: styles.outlineStyle,
+        outlineWidth: styles.outlineWidth,
+        outlineOffset: styles.outlineOffset,
+        borderStyle: styles.borderStyle,
+        borderWidth: styles.borderWidth,
+      };
+    }),
+  ).toEqual({
+    matchesFocusVisible: true,
+    outlineStyle: "solid",
+    outlineWidth: "2px",
+    outlineOffset: "2px",
+    borderStyle: "solid",
+    borderWidth: "1px",
+  });
+}
+
+async function beforeUnloadIsPrevented(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
 }
 
 test("mounts the real routed shell with deterministic authenticated data", async ({ page }) => {
@@ -65,9 +127,17 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await page.emulateMedia({ forcedColors: "active" });
   const requestCount = await installFirstAdministratorApi(page);
   const externalRequests: string[] = [];
+  const requestBodies: Array<{ method: string; pathname: string; body: unknown }> = [];
   page.on("request", (request) => {
-    if (new URL(request.url()).origin !== "http://127.0.0.1:4174") {
+    const url = new URL(request.url());
+    if (url.origin !== "http://127.0.0.1:4174") {
       externalRequests.push(request.url());
+    } else if (url.pathname.startsWith("/api/") && request.method() === "POST") {
+      requestBodies.push({
+        method: request.method(),
+        pathname: url.pathname,
+        body: request.postDataJSON(),
+      });
     }
   });
 
@@ -82,9 +152,7 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   const firstName = page.getByLabel("First name", { exact: true });
   const lastName = page.getByLabel("Last name", { exact: true });
   const createAdministrator = page.getByRole("button", { name: "Create administrator" });
-  await expect(
-    page.getByRole("heading", { name: "Create the first administrator" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Create the first administrator" })).toBeVisible();
   await expect(page).toHaveURL("http://127.0.0.1:4174/setup?e2e-auth=tokenless");
   await expectLoginCalls(page, 0);
   expect(externalRequests).toEqual([]);
@@ -107,26 +175,7 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await expect(lastName).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(createAdministrator).toBeFocused();
-  expect(
-    await createAdministrator.evaluate((button) => {
-      const styles = getComputedStyle(button);
-      return {
-        matchesFocusVisible: button.matches(":focus-visible"),
-        outlineStyle: styles.outlineStyle,
-        outlineWidth: styles.outlineWidth,
-        outlineOffset: styles.outlineOffset,
-        borderStyle: styles.borderStyle,
-        borderWidth: styles.borderWidth,
-      };
-    }),
-  ).toEqual({
-    matchesFocusVisible: true,
-    outlineStyle: "solid",
-    outlineWidth: "2px",
-    outlineOffset: "2px",
-    borderStyle: "solid",
-    borderWidth: "1px",
-  });
+  await expectForcedColorsFocus(createAdministrator);
 
   for (const control of [
     secret,
@@ -139,11 +188,8 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   ]) {
     await expectInsideNarrowViewport(control);
   }
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBe(true);
+  await expectExactActionTarget(createAdministrator);
+  await expectNoDocumentOverflow(page);
 
   await page.keyboard.press("Enter");
 
@@ -158,7 +204,9 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await expect(passwordHeading).toBeVisible();
   await expect(passwordHeading).toBeFocused();
   await expect(password).toBeVisible();
+  await expect(copy).toBeEnabled();
   await expectLoginCalls(page, 0);
+  expect(await beforeUnloadIsPrevented(page)).toBe(true);
   const passwordShrinkBoundaries = await password.evaluate((element) => {
     const alert = element.closest('[role="alert"]');
     if (!(alert instanceof HTMLElement)) return [];
@@ -181,16 +229,8 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   for (const control of [password, copy, acknowledge]) {
     await expectInsideNarrowViewport(control);
   }
-  for (const action of [copy, acknowledge]) {
-    const box = await action.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.height).toBeGreaterThanOrEqual(44);
-  }
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-  ).toBe(true);
+  for (const action of [copy, acknowledge]) await expectExactActionTarget(action);
+  await expectNoDocumentOverflow(page);
 
   await acknowledge.focus();
   await expect(acknowledge).toBeFocused();
@@ -200,25 +240,175 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await expect(password).toBeVisible();
   await expect(page.getByRole("alert", { name: "Password receipt was not saved" })).toBeVisible();
   await expect(retry).toBeVisible();
+  await expectExactActionTarget(retry);
+  expect(requestBodies[1]).toEqual({
+    method: "POST",
+    pathname: "/api/v1/setup/administrator/acknowledge",
+    body: {
+      secret: MAXIMUM_FIRST_ADMIN_SECRET,
+      credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+    },
+  });
   await expect(page).toHaveURL("http://127.0.0.1:4174/setup?e2e-auth=tokenless");
   await expectLoginCalls(page, 0);
   expect(externalRequests).toEqual([]);
+  expect(await beforeUnloadIsPrevented(page)).toBe(true);
 
   await retry.focus();
+  await expectForcedColorsFocus(retry);
+  await page.keyboard.press("Enter");
+
+  const invalidAlert = page.getByRole("alert", { name: "Current setup secret required" });
+  const replacementSecret = page.getByRole("textbox", { name: "Current setup secret" });
+  const retryWithCurrentSecret = page.getByRole("button", {
+    name: "Retry with current setup secret",
+  });
+  await expect(invalidAlert).toBeVisible();
+  await expect(replacementSecret).toBeFocused();
+  await expect(copy).toBeEnabled();
+  await expectLoginCalls(page, 0);
+  await replacementSecret.fill(REMINTED_FIRST_ADMIN_SECRET);
+  await retryWithCurrentSecret.focus();
+  await expectForcedColorsFocus(retryWithCurrentSecret);
+  await expectExactActionTarget(retryWithCurrentSecret);
+  await expectNoDocumentOverflow(page);
+  await page.keyboard.press("Enter");
+
+  const supersededAlert = page.getByRole("alert", {
+    name: "Temporary password no longer current",
+  });
+  const issueNewPassword = page.getByRole("button", {
+    name: "Issue a new temporary password",
+  });
+  await expect(supersededAlert).toBeVisible();
+  await expect(password).toBeVisible();
+  await expect(copy).toBeDisabled();
+  await expect(acknowledge).toBeDisabled();
+  await expectForcedColorsFocus(issueNewPassword);
+  await expectExactActionTarget(issueNewPassword);
+  await expectNoDocumentOverflow(page);
+  await expectLoginCalls(page, 0);
+  expect(await beforeUnloadIsPrevented(page)).toBe(true);
+  await page.keyboard.press("Enter");
+
+  const reissueInvalidAlert = page.getByRole("alert", {
+    name: "Current setup secret required for reissue",
+  });
+  const reissueSecret = page.getByRole("textbox", { name: "Current setup secret" });
+  const retryReissue = page.getByRole("button", {
+    name: "Retry issuing with current setup secret",
+  });
+  await expect(reissueInvalidAlert).toBeVisible();
+  await expect(reissueSecret).toBeFocused();
+  await expect(copy).toBeDisabled();
+  await reissueSecret.fill(REISSUE_FIRST_ADMIN_SECRET);
+  await retryReissue.focus();
+  await expectForcedColorsFocus(retryReissue);
+  await expectExactActionTarget(retryReissue);
+  await expectNoDocumentOverflow(page);
+  await page.keyboard.press("Enter");
+
+  const reissuedPassword = page.getByText(REISSUED_FIRST_ADMIN_TEMPORARY_PASSWORD, {
+    exact: true,
+  });
+  await expect(reissuedPassword).toBeVisible();
+  await expect(password).toHaveCount(0);
+  const reissuedCopy = page.getByRole("button", { name: "Copy temporary password" });
+  const acknowledgeReissued = page.getByRole("button", {
+    name: "I’ve saved it — Continue to sign in",
+  });
+  await expect(reissuedCopy).toBeEnabled();
+  await expectLoginCalls(page, 0);
+  await acknowledgeReissued.focus();
+  await expectForcedColorsFocus(acknowledgeReissued);
+  await expectExactActionTarget(acknowledgeReissued);
+  await expectNoDocumentOverflow(page);
   await page.keyboard.press("Enter");
 
   await expect(page.getByRole("heading", { name: "Sign in to continue setup" })).toBeVisible();
   await expect(page.getByLabel("Legal name", { exact: true })).toHaveCount(0);
   await expectLoginCalls(page, 1);
-  await expect(
-    page.getByRole("heading", { name: "Create the first administrator" }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Create the first administrator" })).toHaveCount(
+    0,
+  );
   await expect(page).toHaveURL("http://127.0.0.1:4174/setup?e2e-auth=tokenless");
-  expect(requestCount("POST", "/api/v1/setup/administrator")).toBe(1);
-  expect(requestCount("POST", "/api/v1/setup/administrator/acknowledge")).toBe(2);
+  expect(requestCount("POST", "/api/v1/setup/administrator")).toBe(3);
+  expect(requestCount("POST", "/api/v1/setup/administrator/acknowledge")).toBe(4);
+  expect(requestCount("POST", "/api/v1/setup/bootstrap")).toBe(0);
   expect(requestCount("GET", "/api/v1/setup/state")).toBe(2);
   expect(requestCount("GET", "/api/v1/setup")).toBe(0);
   expect(externalRequests).toEqual([]);
+  expect(requestBodies).toEqual([
+    {
+      method: "POST",
+      pathname: "/api/v1/setup/administrator",
+      body: {
+        secret: MAXIMUM_FIRST_ADMIN_SECRET,
+        username: MAXIMUM_FIRST_ADMIN_USERNAME,
+        display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
+        email: MAXIMUM_FIRST_ADMIN_EMAIL,
+        first_name: MAXIMUM_FIRST_ADMIN_FIRST_NAME,
+        last_name: MAXIMUM_FIRST_ADMIN_LAST_NAME,
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/v1/setup/administrator/acknowledge",
+      body: {
+        secret: MAXIMUM_FIRST_ADMIN_SECRET,
+        credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/v1/setup/administrator/acknowledge",
+      body: {
+        secret: MAXIMUM_FIRST_ADMIN_SECRET,
+        credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/v1/setup/administrator/acknowledge",
+      body: {
+        secret: REMINTED_FIRST_ADMIN_SECRET,
+        credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/v1/setup/administrator",
+      body: {
+        secret: REMINTED_FIRST_ADMIN_SECRET,
+        username: MAXIMUM_FIRST_ADMIN_USERNAME,
+        display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
+        email: MAXIMUM_FIRST_ADMIN_EMAIL,
+        first_name: MAXIMUM_FIRST_ADMIN_FIRST_NAME,
+        last_name: MAXIMUM_FIRST_ADMIN_LAST_NAME,
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/v1/setup/administrator",
+      body: {
+        secret: REISSUE_FIRST_ADMIN_SECRET,
+        username: MAXIMUM_FIRST_ADMIN_USERNAME,
+        display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
+        email: MAXIMUM_FIRST_ADMIN_EMAIL,
+        first_name: MAXIMUM_FIRST_ADMIN_FIRST_NAME,
+        last_name: MAXIMUM_FIRST_ADMIN_LAST_NAME,
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/v1/setup/administrator/acknowledge",
+      body: {
+        secret: REISSUE_FIRST_ADMIN_SECRET,
+        credential_receipt: REISSUED_FIRST_ADMIN_RECEIPT,
+      },
+    },
+  ]);
+  expect(await beforeUnloadIsPrevented(page)).toBe(false);
 
   await page.goto("/setup?e2e-auth=authenticated");
 

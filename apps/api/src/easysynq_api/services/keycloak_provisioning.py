@@ -32,6 +32,11 @@ import httpx
 _TIMEOUT = 15.0
 BOOTSTRAP_CLAIM_ATTRIBUTE = "easysynqBootstrapClaim"
 _OPTIONAL_USER_PROFILE_FIELDS = ("email", "firstName", "lastName")
+_BOOTSTRAP_CLAIM_PROFILE_ATTRIBUTE: dict[str, Any] = {
+    "name": BOOTSTRAP_CLAIM_ATTRIBUTE,
+    "permissions": {"view": ["admin"], "edit": ["admin"]},
+    "multivalued": False,
+}
 
 
 class KeycloakProvisioningError(RuntimeError):
@@ -208,9 +213,11 @@ class KeycloakProvisioningClient:
         Keycloak's implicit default profile requires email and both name fields for ordinary
         users. EasySynQ deliberately permits all three to be absent, so leaving that default in
         place makes Keycloak add VERIFY_PROFILE after the required password update. Preserve the
-        complete realm profile document and remove only the ``required`` member from those exact
-        built-ins. The admin endpoint has whole-document PUT semantics, so an already-reconciled
-        profile is deliberately left untouched.
+        complete realm profile document, remove only the ``required`` member from those exact
+        built-ins, and define the bootstrap marker as a managed admin-only attribute. Keycloak's
+        default unmanaged-attribute policy silently drops unknown attributes, while broadening that
+        policy would expose unrelated attributes. The admin endpoint has whole-document PUT
+        semantics, so an already-reconciled profile is deliberately left untouched.
         """
         headers = await self._headers()
         client = self._client
@@ -231,11 +238,19 @@ class KeycloakProvisioningClient:
             raise KeycloakUnavailable("Keycloak user-profile attributes were not a list")
 
         found = {name: False for name in _OPTIONAL_USER_PROFILE_FIELDS}
+        marker_position: int | None = None
         changed = False
-        for attribute in attributes:
+        for position, attribute in enumerate(attributes):
             if not isinstance(attribute, dict) or not isinstance(attribute.get("name"), str):
                 raise KeycloakUnavailable("Keycloak user-profile attribute was malformed")
             name = attribute["name"]
+            if name == BOOTSTRAP_CLAIM_ATTRIBUTE:
+                if marker_position is not None:
+                    raise KeycloakUnavailable(
+                        "Keycloak user-profile contained duplicate bootstrap marker attribute"
+                    )
+                marker_position = position
+                continue
             if name not in found:
                 continue
             if found[name]:
@@ -252,6 +267,12 @@ class KeycloakProvisioningClient:
             raise KeycloakUnavailable(
                 f"Keycloak user-profile omitted built-in attributes {missing!r}"
             )
+        if marker_position is None:
+            attributes.append(copy.deepcopy(_BOOTSTRAP_CLAIM_PROFILE_ATTRIBUTE))
+            changed = True
+        elif attributes[marker_position] != _BOOTSTRAP_CLAIM_PROFILE_ATTRIBUTE:
+            attributes[marker_position] = copy.deepcopy(_BOOTSTRAP_CLAIM_PROFILE_ATTRIBUTE)
+            changed = True
         if not changed:
             return
 

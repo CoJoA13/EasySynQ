@@ -605,6 +605,15 @@ def test_first_admin_live_playwright_is_secret_safe_and_single_worker() -> None:
     assert "getByLabel(/^Setup secret/)" in spec
     assert 'getByRole("heading"' in spec
     assert 'name: "Temporary password — shown once"' in spec
+    assert "credential_receipt: string" in spec
+    assert "const credentialReceipt = provisioned.credential_receipt" in spec
+    assert "credential_receipt: credentialReceipt" in spec
+    assert "async function installLiveOriginGuard" in spec
+    assert spec.count("await installLiveOriginGuard(") == 2
+    assert "url.origin !== liveOrigin" in spec
+    assert "live acceptance blocked unexpected external request" in spec
+    assert "const sensitiveValues = [" in spec
+    assert spec.count("await expectSensitiveValuesNotRetained(") == 3
     assert 'input[name="username"]' in spec
     assert 'input[name="password-new"]' in spec
     assert spec.count('getByRole("button", { name: "Sign In", exact: true })') == 2
@@ -620,6 +629,8 @@ def test_first_admin_live_playwright_is_secret_safe_and_single_worker() -> None:
     assert "testInfo.attach" not in spec
     assert "screenshot(" not in spec
     assert "tracing." not in spec
+    assert not re.search(r"(?:localStorage|sessionStorage)\.setItem\([^\n]*credentialReceipt", spec)
+    assert not re.search(r"(?:goto|waitForURL)\([^\n]*credentialReceipt", spec)
 
 
 def test_first_admin_live_package_and_typecheck_boundaries_are_isolated() -> None:

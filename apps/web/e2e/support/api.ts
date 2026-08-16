@@ -60,6 +60,11 @@ export const MAXIMUM_FIRST_ADMIN_EMAIL = `${"e".repeat(308)}@example.com`;
 export const MAXIMUM_FIRST_ADMIN_FIRST_NAME = "F".repeat(255);
 export const MAXIMUM_FIRST_ADMIN_LAST_NAME = "L".repeat(255);
 export const LONG_FIRST_ADMIN_TEMPORARY_PASSWORD = "P".repeat(512);
+export const MAXIMUM_FIRST_ADMIN_RECEIPT = "R".repeat(43);
+export const REMINTED_FIRST_ADMIN_SECRET = "C".repeat(512);
+export const REISSUE_FIRST_ADMIN_SECRET = "N".repeat(512);
+export const REISSUED_FIRST_ADMIN_RECEIPT = "Z".repeat(43);
+export const REISSUED_FIRST_ADMIN_TEMPORARY_PASSWORD = "Q".repeat(512);
 
 const maximumRecordsFixture = {
   ...recordsFixture,
@@ -145,6 +150,7 @@ function hasExactJsonBody(actual: unknown, expected: Record<string, unknown>): b
 
 export async function installFirstAdministratorApi(page: Page): Promise<RequestCount> {
   const requestCounts = new Map<string, number>();
+  let provisionAttempts = 0;
   let acknowledgmentAttempts = 0;
   let acknowledged = false;
 
@@ -180,43 +186,94 @@ export async function installFirstAdministratorApi(page: Page): Promise<RequestC
       method === "POST" &&
       url.pathname === "/api/v1/setup/administrator" &&
       url.search === "" &&
-      request.headers().authorization === undefined &&
-      hasExactJsonBody(request.postDataJSON(), {
-        secret: MAXIMUM_FIRST_ADMIN_SECRET,
+      request.headers().authorization === undefined
+    ) {
+      const profile = {
         username: MAXIMUM_FIRST_ADMIN_USERNAME,
         display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
         email: MAXIMUM_FIRST_ADMIN_EMAIL,
         first_name: MAXIMUM_FIRST_ADMIN_FIRST_NAME,
         last_name: MAXIMUM_FIRST_ADMIN_LAST_NAME,
-      })
-    ) {
-      await route.fulfill({
-        status: 201,
-        contentType: "application/json",
-        body: JSON.stringify({
-          administrator: {
-            id: "ad000001-0001-0001-0001-000000000001",
-            username: MAXIMUM_FIRST_ADMIN_USERNAME,
-            display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
-            email: MAXIMUM_FIRST_ADMIN_EMAIL,
-            status: "INVITED",
-          },
-          temporary_password: LONG_FIRST_ADMIN_TEMPORARY_PASSWORD,
-          password_delivery: "shown_once",
-        }),
-      });
-      return;
+      };
+      const body = request.postDataJSON();
+      if (
+        provisionAttempts === 0 &&
+        hasExactJsonBody(body, { secret: MAXIMUM_FIRST_ADMIN_SECRET, ...profile })
+      ) {
+        provisionAttempts += 1;
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            administrator: {
+              id: "ad000001-0001-0001-0001-000000000001",
+              username: MAXIMUM_FIRST_ADMIN_USERNAME,
+              display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
+              email: MAXIMUM_FIRST_ADMIN_EMAIL,
+              status: "INVITED",
+            },
+            temporary_password: LONG_FIRST_ADMIN_TEMPORARY_PASSWORD,
+            credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+            password_delivery: "shown_once",
+          }),
+        });
+        return;
+      }
+      if (
+        provisionAttempts === 1 &&
+        hasExactJsonBody(body, { secret: REMINTED_FIRST_ADMIN_SECRET, ...profile })
+      ) {
+        provisionAttempts += 1;
+        await route.fulfill({
+          status: 403,
+          contentType: "application/problem+json",
+          body: JSON.stringify({
+            code: "bootstrap_invalid",
+            title: "Synthetic invalid bootstrap proof",
+          }),
+        });
+        return;
+      }
+      if (
+        provisionAttempts === 2 &&
+        hasExactJsonBody(body, { secret: REISSUE_FIRST_ADMIN_SECRET, ...profile })
+      ) {
+        provisionAttempts += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            administrator: {
+              id: "ad000001-0001-0001-0001-000000000001",
+              username: MAXIMUM_FIRST_ADMIN_USERNAME,
+              display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
+              email: MAXIMUM_FIRST_ADMIN_EMAIL,
+              status: "INVITED",
+            },
+            temporary_password: REISSUED_FIRST_ADMIN_TEMPORARY_PASSWORD,
+            credential_receipt: REISSUED_FIRST_ADMIN_RECEIPT,
+            password_delivery: "shown_once",
+          }),
+        });
+        return;
+      }
     }
 
     if (
       method === "POST" &&
       url.pathname === "/api/v1/setup/administrator/acknowledge" &&
       url.search === "" &&
-      request.headers().authorization === undefined &&
-      hasExactJsonBody(request.postDataJSON(), { secret: MAXIMUM_FIRST_ADMIN_SECRET })
+      request.headers().authorization === undefined
     ) {
-      acknowledgmentAttempts += 1;
-      if (acknowledgmentAttempts === 1) {
+      const body = request.postDataJSON();
+      if (
+        acknowledgmentAttempts === 0 &&
+        hasExactJsonBody(body, {
+          secret: MAXIMUM_FIRST_ADMIN_SECRET,
+          credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+        })
+      ) {
+        acknowledgmentAttempts += 1;
         await route.fulfill({
           status: 503,
           contentType: "application/problem+json",
@@ -227,12 +284,57 @@ export async function installFirstAdministratorApi(page: Page): Promise<RequestC
         });
         return;
       }
-      acknowledged = true;
-      await fulfillJson(route, {
-        setup_state: "IN_SETUP",
-        admin_user_id: "ad000001-0001-0001-0001-000000000001",
-      });
-      return;
+      if (
+        acknowledgmentAttempts === 1 &&
+        hasExactJsonBody(body, {
+          secret: MAXIMUM_FIRST_ADMIN_SECRET,
+          credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+        })
+      ) {
+        acknowledgmentAttempts += 1;
+        await route.fulfill({
+          status: 403,
+          contentType: "application/problem+json",
+          body: JSON.stringify({
+            code: "bootstrap_invalid",
+            title: "Synthetic invalid bootstrap proof",
+          }),
+        });
+        return;
+      }
+      if (
+        acknowledgmentAttempts === 2 &&
+        hasExactJsonBody(body, {
+          secret: REMINTED_FIRST_ADMIN_SECRET,
+          credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+        })
+      ) {
+        acknowledgmentAttempts += 1;
+        await route.fulfill({
+          status: 409,
+          contentType: "application/problem+json",
+          body: JSON.stringify({
+            code: "bootstrap_credential_superseded",
+            title: "Synthetic credential supersession",
+          }),
+        });
+        return;
+      }
+      if (
+        acknowledgmentAttempts === 3 &&
+        hasExactJsonBody(body, {
+          secret: REISSUE_FIRST_ADMIN_SECRET,
+          credential_receipt: REISSUED_FIRST_ADMIN_RECEIPT,
+        })
+      ) {
+        acknowledgmentAttempts += 1;
+        acknowledged = true;
+        await fulfillJson(route, {
+          setup_state: "IN_SETUP",
+          admin_user_id: "ad000001-0001-0001-0001-000000000001",
+        });
+        return;
+      }
     }
 
     if (
