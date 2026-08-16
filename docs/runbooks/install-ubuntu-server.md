@@ -250,27 +250,26 @@ Expected: one certificate.
 
 ## 5. First-run setup wizard
 
-Mint the one-time bootstrap secret on the Ubuntu host:
+Mint the one-time EasySynQ setup secret on the Ubuntu host:
 
 ```bash
 ./scripts/easysynq setup mint-bootstrap
 ```
 
-Create the intended administrator's sign-in identity in Keycloak first — the bootstrap secret grants
-EasySynQ administration but does **not** create a Keycloak password. See
-[Installation Guide §4.3](../manuals/installation-guide.md#43-create-the-first-sign-in-identity).
-
 Then browse to `https://<row 2: app FQDN>/setup` and complete the gates in order:
 
-1. Paste the bootstrap secret → you become the first **System Administrator**.
-2. **Organization** — legal name, short code, IANA timezone.
-3. **Storage** — *Verify storage* (the WORM probe, gate **G-B**). The `documents` bucket must be
+1. Enter the one-time setup secret and create the first **System Administrator**. EasySynQ creates
+   the sign-in identity; do not visit Keycloak or copy an identity subject.
+2. Save the shown-once temporary password, continue to sign in, and replace it when prompted.
+   SMTP is not required.
+3. **Organization** — legal name, short code, IANA timezone.
+4. **Storage** — *Verify storage* (the WORM probe, gate **G-B**). The `documents` bucket must be
    object-lock-enabled; see [minio-object-lock-prereq.md](minio-object-lock-prereq.md).
-4. **Backup** — set a destination, then *Run backup + restore-test drill*. Finalize is **blocked**
+5. **Backup** — set a destination, then *Run backup + restore-test drill*. Finalize is **blocked**
    until this passes (gate **G-C**). Point it at storage that leaves this host — a backup living
    only on the EasySynQ box is not a backup. See [backup-restore.md](backup-restore.md).
-5. **Authentication** — pick a method, acknowledge MFA, *Verify authentication* (gate **G-D**).
-6. **Finalize** → the install becomes `OPERATIONAL` and the setup latch lifts.
+6. **Authentication** — pick a method, acknowledge MFA, *Verify authentication* (gate **G-D**).
+7. **Finalize** → the install becomes `OPERATIONAL` and the setup latch lifts.
 
 Two items to handle at go-live rather than later:
 

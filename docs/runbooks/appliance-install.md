@@ -40,19 +40,21 @@ All provisioning is on the seed ISO in plain text — auditable before anything 
    generates unique secrets, mints the one-time setup secret. Watch progress on the VM
    console (Hyper-V Manager → Connect): `journalctl -fu easysynq-provision`.
 
-4. When the console shows **`[EasySynQ] READY`**, log in on the console as
-   `easysynq` / `EasySynQ-Setup-1` (you are forced to change it), then:
+4. When the console shows **`[EasySynQ] READY`**, use the fixed `easysynq` VM-console credential
+   from the appliance delivery to read the protected hand-off sheet:
 
    ```
    cat ~/EASYSYNQ-SETUP.txt
    ```
 
-   That sheet has the app URL, the initial sign-in account (`qmsadmin`, temporary
-   password), and the **one-time bootstrap secret** the wizard asks for.
+   This is an operating-system console credential, not an EasySynQ or Keycloak account. The sheet
+   has the app URL and a **one-time EasySynQ setup secret** only.
 
-5. From any workstation: **https://easysynq.local** → sign in → paste the secret →
-   complete the wizard (organization → storage + WORM verify → backup drill → authentication →
-   finalize).
+5. From any workstation, open **https://easysynq.local/setup**. Enter the setup secret and create
+   the first administrator. Save the shown-once temporary password, continue to sign in, replace
+   that password when prompted, then complete the wizard (organization → storage + WORM verify →
+   backup drill → authentication → finalize). The normal install path never opens Keycloak or asks
+   for an identity subject; SMTP is not required.
 
 ## The certificate warning (fix once, via GPO)
 
@@ -105,7 +107,6 @@ Do this **before** real usage starts — changing the OIDC issuer signs everyone
 |---|---|
 | `easysynq-status` | Container health + `/readyz` + provisioned version |
 | `easysynq-status --remint` | Re-issue the one-time bootstrap secret (expired/lost) |
-| `sudo easysynq-create-user <name>` | Add/reset a Keycloak sign-in account (temporary password). Bind its `sub` and assign EasySynQ roles separately in Administration → Users. |
 | `sudo easysynq-mount-qms //srv/share [user]` | Attach the QMS share read-only |
 | `sudo easysynq-reconfigure --host <fqdn>` | Move off mDNS to a real DNS name |
 | `easysynq-status --ca` | Print the root CA for the GPO trust rollout |

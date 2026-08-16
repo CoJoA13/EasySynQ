@@ -82,9 +82,8 @@ Choose one TLS mode:
 - WORM lock mode: `GOVERNANCE` is the normal choice; `COMPLIANCE` prevents deletion even by root
   until retention expires.
 - Backup target and separate custody for the backup encryption key.
-- Local Keycloak accounts or an upstream LDAP/OIDC/SAML identity provider configured through
-  Keycloak.
-- Optional SMTP relay and at least one out-of-band operations alert channel.
+- An optional later identity-provider and federation policy; it is not a first-install prerequisite.
+- An optional SMTP relay and at least one out-of-band operations alert channel.
 - Read-only source path for an existing QMS import, if applicable.
 
 ## 4. Online Linux installation
@@ -126,61 +125,21 @@ The installer:
 If `.env` already exists, the installer preserves its secrets and operator settings. Review the
 file rather than assuming it was regenerated.
 
-### 4.3 Create the first sign-in identity
-
-The bootstrap secret grants EasySynQ administration; it does not create a Keycloak password. If an
-upstream identity is already configured in Keycloak, use the intended administrator identity.
-For a local-only first install, create a temporary Keycloak account from the repository root.
-Replace `qmsadmin` if required:
-
-```bash
-EASYSYNQ_PROFILE_NAME="$(sed -n 's/^EASYSYNQ_PROFILE=\([^[:space:]#]*\).*/\1/p' .env)"
-EASYSYNQ_KC_ADMIN_USER="$(sed -n 's/^KEYCLOAK_ADMIN_USER=\([^[:space:]#]*\).*/\1/p' .env)"
-EASYSYNQ_KC_ADMIN_PASSWORD="$(sed -n 's/^KEYCLOAK_ADMIN_PASSWORD=\([^[:space:]#]*\).*/\1/p' .env)"
-read -rsp "Temporary qmsadmin password: " EASYSYNQ_TEMP_PASSWORD
-printf '\n'
-
-EASYSYNQ_COMPOSE=(
-  docker compose --env-file .env
-  -f infra/compose/compose.yml
-  -f "infra/compose/compose.${EASYSYNQ_PROFILE_NAME}.yml"
-  -f infra/compose/compose.production.yml
-)
-
-"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
-  /opt/keycloak/bin/kcadm.sh config credentials \
-  --server http://localhost:8080 --realm master \
-  --user "$EASYSYNQ_KC_ADMIN_USER" --password "$EASYSYNQ_KC_ADMIN_PASSWORD"
-
-"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
-  /opt/keycloak/bin/kcadm.sh create users -r easysynq \
-  -s username=qmsadmin -s enabled=true
-
-"${EASYSYNQ_COMPOSE[@]}" exec -T keycloak \
-  /opt/keycloak/bin/kcadm.sh set-password -r easysynq \
-  --username qmsadmin --new-password "$EASYSYNQ_TEMP_PASSWORD" --temporary
-
-unset EASYSYNQ_TEMP_PASSWORD EASYSYNQ_KC_ADMIN_PASSWORD EASYSYNQ_KC_ADMIN_USER
-```
-
-The password must be changed on first sign-in. Shell/process history is still sensitive; perform
-this operation from a controlled administrator session.
-
-The Hyper-V appliance already creates a temporary `qmsadmin` identity and prints its credentials on
-the setup sheet.
-
-### 4.4 Mint the one-time EasySynQ bootstrap secret
+### 4.3 Create the first administrator in EasySynQ
 
 ```bash
 ./scripts/easysynq setup mint-bootstrap
 ```
 
-The secret is shown once and expires. Open `https://<host>/setup`, sign in as the first identity,
-and paste the secret. That identity becomes the first **System Administrator**.
+The secret is shown once and expires. Open `https://<host>/setup`, enter the secret, and create the
+first **System Administrator** in the browser. EasySynQ creates the first sign-in identity; the
+operator does not visit Keycloak or handle an identity subject. Save the shown-once temporary
+password, continue to sign in, and change the password when prompted. SMTP is not required.
 
-### 4.5 Complete the six setup screens
+### 4.4 Complete the six setup screens
 
-1. **Activate** — sign in and consume the bootstrap secret.
+1. **Create administrator** — enter the one-time secret and administrator profile, save the
+   shown-once temporary password, then sign in and change it.
 2. **Organization** — legal name, short code, and IANA timezone. The timezone governs effective
    dates and business-day scheduling.
 3. **Storage** — choose WORM mode and run the live object-lock probe. Finalization is blocked until
@@ -198,12 +157,15 @@ and paste the secret. That identity becomes the first **System Administrator**.
 The “Not yet tamper-evident” warning is non-blocking but meaningful. The organization must configure
 a genuinely off-host/append-only audit checkpoint sink before claiming tamper-evidence.
 
-### 4.6 Complete post-finalize onboarding
+### 4.5 Complete post-finalize onboarding
 
 In the application:
 
 1. Open Account → **Administration**.
-2. In **Users**, bind each already-created Keycloak identity by its OIDC `sub`.
+2. In **Users**, create later accounts. `user.create` creates an account, `user.update` edits it,
+   and role assignment requires the separate `permission.grant` permission. Password reset remains
+   a system-tier operation. Each temporary password is shown once and must be changed at first
+   sign-in.
 3. Assign seeded roles and only the minimum required overrides.
 4. In **Processes**, assign accountable process owners.
 5. In **Config**, set the working calendar, email policy, quiet-hours escalation policy, and review

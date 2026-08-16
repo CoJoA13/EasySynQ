@@ -301,7 +301,7 @@ The user representation backs `app_user`. It carries a nullable `manager_id` (se
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
 | GET | `/users` | `user.read` | — | Filter `status`, `email`, `is_guest`, `manager_id`. Sort `display_name`, `created_at`. |
-| POST | `/users` | `user.create` | ✓ | Links an existing Keycloak subject (`keycloak_subject`) to a new `app_user` row, status begins `INVITED`; does **not** create the Keycloak account — see `POST /users/provision` below to create both together. Optional `manager_id`. |
+| POST | `/users` | `user.create` | ✓ | **Break-glass/orphan adoption only.** Links an existing Keycloak subject (`keycloak_subject`) to a new `app_user` row, status begins `INVITED`; does **not** create the Keycloak account. Normal later-user creation uses `POST /users/provision`; this endpoint is for a controlled recovery after an external or partially failed identity creation. |
 | POST | `/users/provision` | `user.create` | — | Creates the Keycloak sign-in account AND the `INVITED` `app_user` row in one call (S-user-create), returning a generated temporary password shown once (`password_delivery: shown_once`). Non-empty `role_ids` additionally needs `permission.grant` (SoD-guarded via `assert_can_assign_role`). 409 `keycloak_username_exists_unlinked` carries `keycloak_subject` so the caller can link instead via `POST /users`; 409 `user_exists` / `keycloak_email_exists`; 502 `keycloak_unavailable` (incl. the created-but-no-password case); 503 `keycloak_not_configured`. |
 | GET | `/users/{id}` | `user.read` | — | `expand=roles,overrides,manager`. |
 | PATCH | `/users/{id}` | `user.update` | — | `display_name`, attributes, `manager_id`, `status` (`ACTIVE/LOCKED/DISABLED`). `If-Match`. |
@@ -847,7 +847,8 @@ current gate. Rows explicitly labeled Future below are not mounted.
 |---|---|---|
 | GET / PATCH | `/admin/config` | **S-rec-3 (as built):** post-OPERATIONAL org toggles on `system_config` (today `capture_pre_release_templates`, doc 06 §4.2). Gated on the SYSTEM-domain `config.update` (admin-only; R35); audited `CONFIG_UPDATED` (object_type `config`). |
 | GET | `/setup/state` | Public minimal read of `system_config.setup_state`; the SPA uses it to choose wizard vs shell. |
-| POST | `/setup/bootstrap` | Authenticated but deliberately outside the PEP: the single-use install secret authorizes the first System Administrator grant and breaks the deny-by-default bootstrap cycle. |
+| POST | `/setup/administrator` | Public only while setup is `UNINITIALIZED`. A valid one-time setup secret creates or recovers the single bound first administrator; the response contains the administrator projection plus a generated `temporary_password` with `password_delivery: shown_once`. It never includes a Keycloak subject. Invalid/expired proof is 403; bound, advanced, not-ready, or collision state is 409; Keycloak failure is 422/502/503; attempts are rate-limited. |
+| POST | `/setup/administrator/acknowledge` | Public setup-secret proof acknowledging receipt of the shown-once temporary password. It consumes the secret and advances setup to `IN_SETUP`; it never returns a password. |
 | GET | `/setup` | Sensitive setup/gate detail, backed by `organization`, `system_config`, `storage_config`, and `backup_policy`; gated on `config.read`. |
 | PATCH | `/setup/org-profile` | Requires `config.update`; updates `organization.legal_name`, `short_code`, and `timezone`. There is no profile table. |
 | POST | `/setup/verify-storage` | Requires `storage.manage`; runs the G-B WORM probe and persists `storage_config.worm_verified_at`/`object_lock_mode`. Bucket/endpoint values remain deployment configuration. |
@@ -859,6 +860,12 @@ current gate. Rows explicitly labeled Future below are not mounted.
 | GET | `/admin/drift/status` | **S-drift-3:** latest `drift_scan` per kind + D1 blob coverage + the D4 headline. Gated on the SYSTEM-domain `drift.read` (R41); pure read, no scan trigger. |
 | GET | `/admin/drift/superseded-copies` | **S-drift-3 (D4, R11):** outstanding EXPORTED/PRINTED copies of now-Superseded/Obsolete versions (`limit`/`offset`; totals over the full set). The only detection leg reaching copies outside the mirror; the public `/verify` token is the per-copy resolution. |
 | POST | `/admin/export` | **Future design; not mounted.** A portable whole-vault export for migration/decommission remains distinct from scoped Evidence Packs and backups (R33). |
+
+First-administrator audit events are truthful system-actor events because no user has authenticated:
+`BOOTSTRAP_IDENTITY_CLAIMED` when the durable claim is made, `USER_CREATED` and
+`ADMIN_BOOTSTRAPPED` when the EasySynQ user and role commit, `USER_CREDENTIAL_ISSUED` after
+Keycloak accepts the temporary password, and `BOOTSTRAP_CONSUMED` on acknowledgement. None records
+the setup secret, temporary password, claim marker, or Keycloak subject.
 
 ### 8.18 Backup setup and restore drill (`/setup/*`)
 

@@ -359,6 +359,53 @@ def test_appliance_propagates_qr_share_and_deep_link_origins() -> None:
     assert '[ "$target" = "keycloak" ]' in compose_helper
 
 
+def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() -> None:
+    provisioner = _read("infra/appliance/provision/easysynq-provision.sh")
+    setup_helper = ROOT / "infra/appliance/provision/bin/easysynq-create-user"
+
+    for forbidden in (
+        "qmsadmin",
+        "easysynq-create-user",
+        "Sign in:",
+        "EasySynQ-Setup-1   (you must set a new password)",
+    ):
+        assert forbidden not in provisioner
+
+    assert "https://${HOSTNAME_DEFAULT}" in provisioner
+    assert "one-time setup secret" in provisioner
+    assert "create the first administrator in /setup" in provisioner
+    assert "shown-once temporary password" in provisioner
+    assert "sign in, replace the password" in provisioner
+    assert "Single-use, 24h. Re-mint: easysynq-status --remint" in provisioner
+    assert 'install -m 600 -o easysynq -g easysynq /dev/null "$SETUP_FILE"' in provisioner
+    assert not setup_helper.exists()
+
+
+def test_current_install_docs_keep_first_administrator_creation_in_app() -> None:
+    current_docs = (
+        "docs/runbooks/appliance-install.md",
+        "docs/runbooks/install-online.md",
+        "docs/runbooks/install-ubuntu-server.md",
+        "docs/manuals/installation-guide.md",
+        "docs/manuals/administrator-it-manual.md",
+        "docs/08-setup-and-onboarding.md",
+        "docs/15-api-design.md",
+        "docs/dev-workflow.md",
+    )
+
+    forbidden_normal_flow = (
+        "/setup/bootstrap",
+        "Create the intended administrator's sign-in identity in Keycloak first",
+        "Create or federate the intended administrator identity first",
+        "create a temporary Keycloak account from the repository root",
+        "bind each already-created Keycloak identity by its OIDC `sub`",
+        "paste the Keycloak `sub`",
+    )
+    combined = "\n".join(_read(path) for path in current_docs)
+    for forbidden in forbidden_normal_flow:
+        assert forbidden not in combined
+
+
 def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     compose = _read("infra/compose/compose.yml")
     image = _read("infra/compose/keycloak/Dockerfile")

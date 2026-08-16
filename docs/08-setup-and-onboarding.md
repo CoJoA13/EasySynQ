@@ -7,8 +7,9 @@ This section specifies how an EasySynQ instance goes from a freshly-installed Do
 > core as six screens: **Activate → Organization → Storage → Backup → Authentication → Finalize**.
 > Deferrable roles, users, process ownership, and import work continues after finalize in
 > **Administration** and the **Import** surface. Today the Roles tab inspects seeded bundles rather
-> than editing custom roles, and an EasySynQ user invite binds a Keycloak account that the operator
-> created first. Follow the [Installation Guide](manuals/installation-guide.md) and
+> than editing custom roles. The current setup flow creates the first administrator in EasySynQ
+> before any sign-in, and Administration → Users creates later accounts. Follow the
+> [Installation Guide](manuals/installation-guide.md) and
 > [Administrator & IT Manual](manuals/administrator-it-manual.md) for current procedures.
 
 ---
@@ -41,7 +42,7 @@ This is a **separation-of-duties** boundary enforced in three concrete ways, rep
 
 | Term | Meaning here |
 |---|---|
-| **Bootstrap secret** | A one-time, single-use token minted with `easysynq setup mint-bootstrap` (and stored hashed in PG) that authorizes creation of the *first* admin account. Invalidated the instant the first admin is created. |
+| **Bootstrap secret** | A one-time token minted with `easysynq setup mint-bootstrap` (stored only as a salted hash in PostgreSQL) that authorizes creation of the *first* admin account. It is consumed after the operator acknowledges the shown-once temporary password. |
 | **First-Run Setup Wizard** | The guided, resumable, one-time configuration flow (this section); the only thing reachable on a virgin instance. |
 | **Setup state** | An instance-level enum: `UNINITIALIZED → IN_SETUP → OPERATIONAL`. The QMS is unreachable until `OPERATIONAL`. |
 | **Org profile** | Singleton row describing the deploying organization (the single tenant; carries `org_id`). |
@@ -125,11 +126,17 @@ flowchart TD
     class S6,S7,S8,S9 defer;
 ```
 
+**Current bootstrap boundary.** While the instance is `UNINITIALIZED`, `/setup` presents the public
+first-administrator form. A valid setup secret is the only pre-authentication authority: EasySynQ
+creates the first Keycloak identity, assigns the System Administrator role, and shows a generated
+temporary password once. The operator saves it, acknowledges it, signs in, and changes it when
+prompted. The normal path never opens Keycloak, handles an identity subject, or requires SMTP.
+
 **Cross-cutting wizard behaviors (apply to every screen):**
 
 - **Resumable & atomic:** each screen commits its captured config to PostgreSQL on "Save & Continue"; a browser reload returns to the first incomplete screen. No partial state is lost.
 - **Validate-before-advance:** the **Next** button is disabled until synchronous validations pass; "live" checks (storage reachability, backup test, auth login) run as Celery jobs with progress feedback and never block the request thread (Architecture NFR).
-- **Audited:** every screen-completion writes an append-only audit event (`actor=admin`, `action=SETUP_STEP_COMPLETED`, `step`, `before/after summary`, correlation id). Setup is itself fully traceable.
+- **Audited:** every authenticated screen-completion writes an append-only audit event (`actor=admin`, `action=SETUP_STEP_COMPLETED`, `step`, `before/after summary`, correlation id). The pre-authentication first-administrator events use the system actor described in §5. Setup is itself fully traceable.
 - **Calm/progressive:** one decision cluster per screen; advanced options live behind a disclosure ("Advanced settings") and have safe defaults. A persistent left "setup checklist" shows blocking vs. deferrable status with RAG dots.
 - **Reversible within setup:** any completed step can be revisited and edited until finalize; after finalize, the equivalent change is made through the ongoing-admin surfaces (§9–§10), never by re-running the wizard.
 
@@ -150,19 +157,22 @@ sequenceDiagram
     Inst->>PG: generate bootstrap_secret, store SHA-256 hash + TTL (default 24h)
     Inst-->>Avery: print one-time secret to console (and to a 0600 file)
     Avery->>Web: open https://host/setup
-    Web-->>Avery: Welcome + "Enter bootstrap secret"
-    Avery->>Web: paste secret
-    Web->>PG: compare hash, check TTL & unused
-    PG-->>Web: valid -> open setup session (short-lived setup JWT)
-    Note over Web,PG: Secret marked CONSUMED on first valid use.<br/>Brute-force throttled; TTL expiry forces re-issue via CLI.
+    Web-->>Avery: Create first administrator form
+    Avery->>Web: secret + identity profile
+    Web->>PG: compare hash, check TTL & durable claim
+    PG-->>Web: create/recover identity; show temporary password once
+    Avery->>Web: acknowledge saved password
+    Note over Web,PG: Secret marked CONSUMED on acknowledgement.<br/>Brute-force throttled; TTL expiry forces re-issue via CLI.
 ```
 
 | Captures | Validates | Notes |
 |---|---|---|
-| Bootstrap secret (paste) | Hash match; not expired (TTL, default 24h); not already consumed; rate-limited (5 attempts / 15 min, then lock + CLI reissue) | Secret is **never** stored in plaintext; only a salted hash + TTL live in PG. On valid entry, a short-lived **setup session token** is issued. |
+| Bootstrap secret + administrator profile | Hash match; not expired (TTL, default 24h); one durable username claim; rate-limited | Secret is **never** stored in plaintext; only a salted hash + TTL live in PG. A successful provision returns a temporary password once; acknowledgement consumes the secret. |
 | (display only) Instance version, build digest, sizing profile (S/M; L reserved), host health summary | Read-only; confirms the operator is on the right instance | Surfaces the aggregate `/readyz` result so Avery starts from a known-good baseline. |
 
-**Outcome.** A scoped setup session is open; instance enters `UNINITIALIZED` interaction. No data captured yet beyond consuming the secret (audit-logged as `BOOTSTRAP_CONSUMED`).
+**Outcome.** The first administrator is provisioned in `INVITED` state. The temporary password is
+shown once; acknowledgement advances the instance to `IN_SETUP` and is audit-logged as
+`BOOTSTRAP_CONSUMED`.
 
 ---
 
@@ -172,12 +182,17 @@ sequenceDiagram
 
 | Captures | Validation | Rationale / boundary |
 |---|---|---|
-| Display name, **username**, work email | Email format; username uniqueness; email is for system notices (backup failures, health alerts), not QMS notifications | This account is created **directly in EasySynQ's local store and provisioned in Keycloak** as a local account regardless of later SSO choice, so there is always a break-glass admin even if federation breaks. |
-| **Password** (if local) or "I will federate this admin later" | Password policy from Keycloak (min length, complexity, breached-password check if enabled); confirm-match | If SSO is chosen in Step 5, Avery can later bind this account to the IdP, but the local credential remains as break-glass. |
+| Display name, **username**, optional work email | Email format; username uniqueness | EasySynQ provisions the account and Keycloak identity together. The operator does not create it in Keycloak or copy its subject. |
+| **Temporary password** | Generated after the EasySynQ user and System Administrator role commit | Displayed once only. Keycloak requires replacement at first sign-in; SMTP delivery is not required. |
 | **MFA enrolment** (TOTP / WebAuthn) — strongly prompted | Verify a live TOTP code / passkey registration before continuing | MFA on the super-user is a baseline; pre-positions Part-11 re-auth. Skippable only with an explicit "I accept reduced security" acknowledgement (logged). |
 | Acknowledge the **Admin-Outside-the-QMS notice** | Required checkbox: "I understand this account holds full SYSTEM permissions and does NOT author or approve QMS content by default." | Makes the separation-of-duties principle an explicit, audited acceptance, not fine print. |
 
-**On completion:** the `System Administrator` permission bundle (seeded, system-scope, **no QMS content capabilities**) is assigned; the **bootstrap secret is permanently invalidated**; instance transitions to `IN_SETUP`; audit event `ADMIN_BOOTSTRAPPED`. From here on, the wizard requires a real authenticated admin session.
+**On completion:** the `System Administrator` permission bundle (seeded, system-scope, **no QMS
+content capabilities**) is assigned. After password acknowledgement the **bootstrap secret is
+permanently consumed**, the instance transitions to `IN_SETUP`, and the browser starts real sign-in.
+The auditable sequence includes `BOOTSTRAP_IDENTITY_CLAIMED`, `USER_CREATED`,
+`ADMIN_BOOTSTRAPPED`, `USER_CREDENTIAL_ISSUED`, and `BOOTSTRAP_CONSUMED`; the first-admin events
+use the system actor because the administrator has not authenticated yet.
 
 > **Multiple admins.** Only one is required to proceed, but Step 1 offers an inline "Add a second administrator now (recommended)" so the install is not single-admin fragile. Additional admins can also be added later in §9.
 
@@ -444,33 +459,22 @@ The **self-grant friction + audit (§10.4) still applies to any QMS→admin cros
 > **Current surface.** Administration → Users → **Create user** creates the Keycloak sign-in
 > account and the EasySynQ `app_user` row together in one step, showing a generated temporary
 > password once (never stored, cannot be re-shown). The row starts `INVITED` and becomes `ACTIVE`
-> on first sign-in. If the username already exists in Keycloak but isn't yet linked to an EasySynQ
-> user, the form offers **Link the existing account** instead. The application still does not send
-> tokenized email invitations (realm SMTP is not configured) or bulk-create users from CSV.
-> `scripts/new-keycloak-user.sh` — or, on the Hyper-V appliance, `easysynq-create-user` — remains as
-> a fallback for when the Keycloak admin API itself is unreachable.
+> on first sign-in. If a recovery left an unlinked identity, the form offers **Link the existing
+> account** instead. The application does not send tokenized email invitations; SMTP is not required
+> for onboarding. `scripts/new-keycloak-user.sh`, subject-based `POST /users`, and `grant-role` are
+> break-glass/orphan-adoption tools only, never normal installation or user creation.
 
-### 11.1 Two provisioning paths
+### 11.1 Current provisioning and recovery paths
 
-| Path | When | Flow |
+| Path | Authority | Flow |
 |---|---|---|
-| **Invite** (preferred for SSO/email orgs) | SMTP configured & email-based onboarding | Avery enters email + role + scope → EasySynQ sends a tokenized invite → user completes profile/MFA via Keycloak → account `ACTIVE` |
-| **Direct create** | Local accounts, air-gapped, or bulk | Avery sets username/email/temp password (force-change at first login) + role + scope; or **CSV bulk import** with a dry-run preview & per-row validation |
+| **Create user** in Administration → Users | `user.create`; role assignment additionally needs `permission.grant` | Enter username and profile. EasySynQ creates the sign-in identity and `app_user`, then shows a generated temporary password once. The identity provider requires a password change at first sign-in. |
+| **Edit or reset** in Manage | `user.update`; reset of a user with system-domain authority additionally requires the system tier | Edit existing user state, or issue a fresh shown-once temporary password. |
+| **Orphan adoption** | subject-based `POST /users`, `user.create` | Exceptional recovery for an identity already created outside the application or left by a failed provision. It is not a normal onboarding flow. |
+| **Host break-glass** | `scripts/new-keycloak-user.sh` or `grant-role` | Controlled incident recovery only. Record the operator, reason, subject, and time outside the normal API audit path. |
 
-```mermaid
-flowchart LR
-    A["Avery: add user\n(email/username + role bundle + scope)"] --> B{Mode?}
-    B -->|Invite| C["Tokenized email invite\n(TTL, single-use)"]
-    C --> D["User sets credentials + MFA\n(via Keycloak)"]
-    D --> E["Account ACTIVE"]
-    B -->|Direct| F["Temp password / SSO-bound\n(force change at first login)"]
-    F --> E
-    B -->|CSV bulk| G["Upload -> dry-run validate\n(rows, dup emails, role names)"]
-    G --> H["Confirm -> batch create"]
-    H --> E
-    classDef ok fill:#efe,stroke:#7a7;
-    class E ok;
-```
+SMTP, tokenized invitation mail, bulk CSV creation, and asking normal operators to use identity
+subjects are not current user-onboarding behavior.
 
 ### 11.2 What the screen captures per user
 
@@ -485,7 +489,9 @@ flowchart LR
 
 > **Boundary note.** Avery may *create* the account that Mara will use and *assign* the Quality-Manager bundle, but Avery does not thereby gain QMS authoring. Assigning a bundle to someone else is a system act; using QMS capabilities is a content act gated by the bundle the *user* holds.
 
-**On completion:** users provisioned in EasySynQ + Keycloak; invites/temp credentials issued. Audit: `USER_CREATED`, `ROLE_ASSIGNED`, `SCOPE_ASSIGNED`, `GUEST_PROVISIONED` per user. (Skippable — at minimum Mara's account is recommended so the next steps can be handed off.)
+**On completion:** normal user creation writes `USER_CREATED`; role assignment is separately audited.
+Temporary credentials are shown once and never written to the audit trail. (Skippable — at minimum
+Mara's account is recommended so the next steps can be handed off.)
 
 ---
 

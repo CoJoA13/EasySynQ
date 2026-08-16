@@ -108,12 +108,10 @@ Every person has:
 1. a Keycloak identity used to authenticate; and
 2. an EasySynQ `app_user` row carrying status, roles, overrides, and scope.
 
-The Admin SPA's one-step **Create user** action (§5.2) creates the Keycloak account and the
-`app_user` row together; only *linking* an already-existing Keycloak identity to a new `app_user`
-row leaves Keycloak untouched. Conversely, a first successful Keycloak sign-in can JIT-provision an
-unprivileged ACTIVE `app_user` row when none was pre-created. Use the EasySynQ Users screen to
-pre-bind the exact OIDC subject (`sub`), identity metadata, and intended assignments before normal
-access.
+The Admin SPA's one-step **Create user** action (§5.2) creates the sign-in account and the
+`app_user` row together. A first successful sign-in can JIT-provision an unprivileged ACTIVE
+`app_user` row when none was pre-created. Normal administration is entirely in EasySynQ; operators
+do not open Keycloak or handle identity subjects.
 
 ### 5.2 Create a user (Admin SPA)
 
@@ -145,21 +143,23 @@ same way, and is now the normal password-reset path.
 
 Never use a shared generic login for approval or acknowledgement work.
 
-### 5.3 Fallback: create the Keycloak identity at the shell
+### 5.3 Break-glass and orphan adoption
 
-Use this only when Keycloak's admin connection is unavailable to the running application — **Create
-user** refuses with an explanation in that case, rather than silently failing. On a local-only
-installation, `scripts/new-keycloak-user.sh <username> [email] [FirstName] [LastName]` creates the
-Keycloak account directly (or resets its password if the username already exists) and prints its
-subject (`sub`); on the Hyper-V appliance, `sudo easysynq-create-user <name>` does the same. Either
-sets a temporary password on the Keycloak side only — the account is not yet an EasySynQ user.
+These are exceptional recovery tools, not an installation or normal user-creation path. If an
+identity was created outside the application or a prior provision was interrupted, the subject-based
+`POST /users` endpoint adopts that orphan into an EasySynQ `app_user`. It requires `user.create` and
+is used only by a controlled recovery procedure.
 
-Bind it afterward from **Administration → Users → Create user → Link the existing account** (§5.2),
-then open **Manage** and assign only the required seeded role(s).
+`scripts/new-keycloak-user.sh <username> [email] [FirstName] [LastName]` is likewise a
+break-glass identity-recovery tool. It can create or reset an external sign-in account and exposes a
+subject for the recovery operator; it is never used for the first administrator or ordinary users.
+Use `POST /users` to adopt the resulting orphan, then open **Administration → Users → Manage** and
+assign only the required seeded role(s).
 
-The organization's own Keycloak administration procedure remains equally valid for normal
-operations; the script above is a convenience wrapper around that same `kcadm.sh` mechanism, not the
-only way to reach it.
+`./scripts/easysynq grant-role <sub> "System Administrator" --org <short-code>` is an even narrower
+break-glass grant: it bypasses the wizard and PEP, JIT-creates the `app_user`, and must be recorded
+in the organization's independent change or incident record. Use it only to recover a known orphan,
+not to seed a normal installation.
 
 ### 5.4 Disable, re-enable, and retire access
 
@@ -171,12 +171,9 @@ only way to reach it.
 - The service refuses disabling the last active administrator. Maintain at least two.
 - External Auditor access should be narrowly scoped and time-boxed.
 
-For urgent recovery,
-`./scripts/easysynq grant-role <sub> "System Administrator" --org <short-code>` is a host-level
-break-glass bypass. It writes the assignment directly and does **not** traverse the normal API audit
-path, so record the command, operator, reason, subject, and time in the organization's independent
-change/incident record. Use it only after identifying the exact Keycloak subject and organization
-short code.
+For urgent recovery, use the controlled break-glass/orphan-adoption procedure in §5.3. It writes the
+assignment outside the normal API audit path, so record the command, operator, reason, subject, and
+time in the organization's independent change/incident record.
 
 ## 6. Roles, overrides, and process ownership
 

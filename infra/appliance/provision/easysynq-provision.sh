@@ -161,13 +161,6 @@ cmd_run() {
   done
   [ "$ok" -eq 1 ] || { log "readyz never went green"; exit 1; }
 
-  # No `|| true`: a failed account creation must FAIL the provision (a READY banner with a
-  # sign-in account that doesn't exist is worse than a visible retry). The helper itself is
-  # idempotent (create-if-absent + set-password). kcadm receives the admin password on the
-  # exec argv — accepted: it is inside the container's namespace on a single-admin VM.
-  step "keycloak: create the initial sign-in account (qmsadmin, temporary password)"
-  easysynq-create-user qmsadmin --temporary-password "EasySynQ-Setup-1"
-
   step "setup: mint the one-time bootstrap secret"
   local secret
   secret="$(compose exec -T api uv run python -m easysynq_api.cli.setup mint-bootstrap 2>/dev/null \
@@ -178,25 +171,18 @@ cmd_run() {
   # Create with final perms BEFORE content lands — no 0644 window on a file holding secrets.
   install -m 600 -o easysynq -g easysynq /dev/null "$SETUP_FILE"
   cat >"$SETUP_FILE" <<EOF
-EasySynQ appliance — first-run hand-off ($(date -u +%F))
-=========================================================
+Application URL: https://${HOSTNAME_DEFAULT}/setup
 
-1. From any workstation, open:   https://${HOSTNAME_DEFAULT}
-   (mDNS name — Windows 10/11 resolve it natively. Cert warning is expected
-   until the Caddy internal CA is distributed; see the runbook's GPO step.)
-
-2. Sign in:  qmsadmin / EasySynQ-Setup-1   (you must set a new password)
-
-3. The wizard asks for the one-time bootstrap secret:
+Your one-time setup secret (EasySynQ):
 
     ${secret}
 
-   (Single-use, 24h. Re-mint: easysynq-status --remint)
+Single-use, 24h. Re-mint: easysynq-status --remint
 
-4. Then: org profile -> storage + WORM verify -> backup drill -> finalize.
+1. Then create the first administrator in /setup with the setup secret.
+2. Save the shown-once temporary password and continue to sign in.
+3. Then sign in, replace the password, and complete the remaining setup gates.
 
-Helpers on this VM:  easysynq-status | easysynq-mount-qms | easysynq-create-user | easysynq-reconfigure
-QMS import share:    easysynq-mount-qms //server/share readonly-user
 EOF
   touch "$STATE_DIR/provisioned"
   console "\n[EasySynQ] READY — open https://${HOSTNAME_DEFAULT}\n  Setup sheet (sign-in + bootstrap secret): login here as 'easysynq', then: cat ~/EASYSYNQ-SETUP.txt\n"
