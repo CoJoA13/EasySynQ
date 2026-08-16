@@ -2197,6 +2197,7 @@ export interface FirstAdministratorSummary {
 export interface FirstAdministratorProvisioned {
   administrator: FirstAdministratorSummary;
   temporary_password: string;
+  credential_receipt: string;
   password_delivery: "shown_once";
 }
 

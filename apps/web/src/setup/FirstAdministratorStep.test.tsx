@@ -11,7 +11,12 @@ import { FirstAdministratorStep } from "./FirstAdministratorStep";
 const ADMIN_ID = "ad000001-0001-0001-0001-000000000001";
 const OLD_PASSWORD = "Old-Response-Lost-Password-7";
 const TEMPORARY_PASSWORD = "New-Only-Temporary-Password-8";
+const REISSUED_PASSWORD = "Reissued-Current-Temporary-Password-9";
 const SETUP_SECRET = "setup-secret-visible-only-in-memory";
+const MAXIMUM_FIRST_ADMIN_SECRET = "S".repeat(512);
+const CURRENT_SETUP_SECRET = "current-reminted-setup-secret";
+const CREDENTIAL_RECEIPT = "R".repeat(43);
+const REISSUED_CREDENTIAL_RECEIPT = "N".repeat(43);
 const LOCAL_STORAGE_DESCRIPTOR = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
 const PROVISIONED = {
@@ -23,6 +28,7 @@ const PROVISIONED = {
     status: "INVITED",
   },
   temporary_password: TEMPORARY_PASSWORD,
+  credential_receipt: CREDENTIAL_RECEIPT,
   password_delivery: "shown_once",
 } as const;
 
@@ -165,7 +171,9 @@ test("renders the native first-administrator profile form and requires nonblank 
   const user = userEvent.setup();
   const view = renderStep();
 
-  expect(screen.getByRole("heading", { name: "Create the first administrator" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("heading", { name: "Create the first administrator" }),
+  ).toBeInTheDocument();
   for (const label of [/^Setup secret/, /^Username/, /^Display name/]) {
     expect(screen.getByLabelText(label)).toBeInTheDocument();
   }
@@ -225,7 +233,7 @@ test("provisions without a bearer, normalizes optional blanks, and keeps both se
   });
 
   cacheObservation.stop();
-  for (const secret of [SETUP_SECRET, TEMPORARY_PASSWORD]) {
+  for (const secret of [SETUP_SECRET, TEMPORARY_PASSWORD, CREDENTIAL_RECEIPT]) {
     expect(window.location.href).not.toContain(secret);
     expect(storageEntries(globalThis.localStorage).join(" ")).not.toContain(secret);
     expect(storageEntries(globalThis.sessionStorage).join(" ")).not.toContain(secret);
@@ -238,9 +246,7 @@ test("provisions without a bearer, normalizes optional blanks, and keeps both se
 
 test("Copy reads the in-memory password", async () => {
   server.use(
-    http.post("/api/v1/setup/administrator", () =>
-      HttpResponse.json(PROVISIONED, { status: 201 }),
-    ),
+    http.post("/api/v1/setup/administrator", () => HttpResponse.json(PROVISIONED, { status: 201 })),
   );
   const user = userEvent.setup();
   const writeText = vi.fn(async () => undefined);
@@ -258,15 +264,13 @@ test("Copy reads the in-memory password", async () => {
   expect(writeText).toHaveBeenCalledWith(TEMPORARY_PASSWORD);
 });
 
-test("acknowledgment posts only the setup secret, remains visible while pending, and clears before one callback", async () => {
+test("acknowledgment posts the current secret and receipt, remains visible while pending, and clears before one callback", async () => {
   const ackResponse = deferred<Response>();
   let ackBody: unknown;
   let ackAuthorization: string | null = "not-captured";
   let ackCalls = 0;
   server.use(
-    http.post("/api/v1/setup/administrator", () =>
-      HttpResponse.json(PROVISIONED, { status: 201 }),
-    ),
+    http.post("/api/v1/setup/administrator", () => HttpResponse.json(PROVISIONED, { status: 201 })),
     http.post("/api/v1/setup/administrator/acknowledge", async ({ request }) => {
       ackCalls += 1;
       ackBody = await request.json();
@@ -276,7 +280,11 @@ test("acknowledgment posts only the setup secret, remains visible while pending,
   );
   const onAcknowledged = vi.fn(async () => {
     expect(screen.queryByText(TEMPORARY_PASSWORD)).toBeNull();
-    expect(document.body).not.toHaveTextContent(SETUP_SECRET);
+    expect(document.body).not.toHaveTextContent(MAXIMUM_FIRST_ADMIN_SECRET);
+    expect(document.body).not.toHaveTextContent(CREDENTIAL_RECEIPT);
+    expect(storageEntries(globalThis.localStorage).join(" ")).not.toContain(CREDENTIAL_RECEIPT);
+    expect(storageEntries(globalThis.sessionStorage).join(" ")).not.toContain(CREDENTIAL_RECEIPT);
+    expect(serializeClientCache(queryClient)).not.toContain(CREDENTIAL_RECEIPT);
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const localSetItem = vi.spyOn(globalThis.localStorage, "setItem");
@@ -284,7 +292,7 @@ test("acknowledgment posts only the setup secret, remains visible while pending,
   const cacheObservation = observeClientCache(queryClient);
   const user = userEvent.setup();
   renderStep(onAcknowledged, queryClient);
-  await fillRequiredForm(user);
+  await fillRequiredForm(user, { secret: MAXIMUM_FIRST_ADMIN_SECRET });
   await user.click(screen.getByRole("button", { name: "Create administrator" }));
 
   const continueButton = await screen.findByRole("button", {
@@ -306,11 +314,14 @@ test("acknowledgment posts only the setup secret, remains visible while pending,
   });
 
   await waitFor(() => expect(onAcknowledged).toHaveBeenCalledTimes(1));
-  expect(ackBody).toEqual({ secret: SETUP_SECRET });
+  expect(ackBody).toEqual({
+    secret: MAXIMUM_FIRST_ADMIN_SECRET,
+    credential_receipt: CREDENTIAL_RECEIPT,
+  });
   expect(ackAuthorization).toBeNull();
   expect(screen.queryByText(TEMPORARY_PASSWORD)).toBeNull();
   cacheObservation.stop();
-  for (const secret of [SETUP_SECRET, TEMPORARY_PASSWORD]) {
+  for (const secret of [MAXIMUM_FIRST_ADMIN_SECRET, TEMPORARY_PASSWORD, CREDENTIAL_RECEIPT]) {
     expect(storageEntries(globalThis.localStorage).join(" ")).not.toContain(secret);
     expect(storageEntries(globalThis.sessionStorage).join(" ")).not.toContain(secret);
     expect(cacheObservation.snapshots.join(" ")).not.toContain(secret);
@@ -319,14 +330,199 @@ test("acknowledgment posts only the setup secret, remains visible while pending,
   expect(sessionSetItem).not.toHaveBeenCalled();
 });
 
+test("bootstrap_invalid keeps the password and retries the same receipt with a focused current-secret proof", async () => {
+  const retryResponse = deferred<Response>();
+  const acknowledgeBodies: unknown[] = [];
+  let provisionCalls = 0;
+  server.use(
+    http.post("/api/v1/setup/administrator", () => {
+      provisionCalls += 1;
+      return HttpResponse.json(PROVISIONED, { status: 201 });
+    }),
+    http.post("/api/v1/setup/administrator/acknowledge", async ({ request }) => {
+      acknowledgeBodies.push(await request.json());
+      if (acknowledgeBodies.length === 1) {
+        return HttpResponse.json(
+          { code: "bootstrap_invalid", title: "unsafe invalid detail" },
+          { status: 403 },
+        );
+      }
+      return retryResponse.promise;
+    }),
+  );
+  const onAcknowledged = vi.fn(async () => {
+    expect(screen.queryByLabelText(/^Current setup secret/)).toBeNull();
+    expect(screen.queryByText(TEMPORARY_PASSWORD)).toBeNull();
+  });
+  const user = userEvent.setup();
+  const view = renderStep(onAcknowledged);
+  await fillRequiredForm(user);
+  await user.click(screen.getByRole("button", { name: "Create administrator" }));
+  await user.click(
+    await screen.findByRole("button", { name: "I’ve saved it — Continue to sign in" }),
+  );
+
+  expect(await screen.findByText(TEMPORARY_PASSWORD)).toBeInTheDocument();
+  expect(screen.getByText("Enter current setup secret")).toBeInTheDocument();
+  const currentSecret = screen
+    .getAllByLabelText(/^Current setup secret/)
+    .find((element): element is HTMLInputElement => element instanceof HTMLInputElement);
+  expect(currentSecret).toBeDefined();
+  if (currentSecret === undefined) throw new Error("Current setup secret input was not rendered");
+  await waitFor(() => expect(currentSecret).toHaveFocus());
+  expect(currentSecret).toBeRequired();
+  expect(screen.getByRole("button", { name: "Copy temporary password" })).toBeEnabled();
+  expect(
+    screen.getByRole("button", { name: "Retry with current setup secret" }),
+  ).toBeInTheDocument();
+  expect(provisionCalls).toBe(1);
+
+  await user.type(currentSecret, CURRENT_SETUP_SECRET);
+  await user.click(screen.getByRole("button", { name: "Retry with current setup secret" }));
+  await waitFor(() => expect(acknowledgeBodies).toHaveLength(2));
+  const duringReplacementAcknowledgment = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(duringReplacementAcknowledgment);
+  expect(duringReplacementAcknowledgment.defaultPrevented).toBe(true);
+  expect(screen.getByText(TEMPORARY_PASSWORD)).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Retry with current setup secret" }),
+  ).toBeDisabled();
+  expect(provisionCalls).toBe(1);
+
+  await act(async () => {
+    retryResponse.resolve(
+      HttpResponse.json({ setup_state: "IN_SETUP", admin_user_id: ADMIN_ID }, { status: 200 }),
+    );
+  });
+
+  await waitFor(() => expect(onAcknowledged).toHaveBeenCalledTimes(1));
+  expect(acknowledgeBodies).toEqual([
+    { secret: SETUP_SECRET, credential_receipt: CREDENTIAL_RECEIPT },
+    { secret: CURRENT_SETUP_SECRET, credential_receipt: CREDENTIAL_RECEIPT },
+  ]);
+  expect(provisionCalls).toBe(1);
+  expect(await axe(view.container)).toHaveNoViolations();
+});
+
+test("bootstrap_credential_superseded reissues the bound normalized profile and atomically replaces the password receipt", async () => {
+  const reissueResponse = deferred<Response>();
+  const provisionBodies: unknown[] = [];
+  const acknowledgeBodies: unknown[] = [];
+  server.use(
+    http.post("/api/v1/setup/administrator", async ({ request }) => {
+      provisionBodies.push(await request.json());
+      if (provisionBodies.length === 1) {
+        return HttpResponse.json(PROVISIONED, { status: 201 });
+      }
+      return reissueResponse.promise;
+    }),
+    http.post("/api/v1/setup/administrator/acknowledge", async ({ request }) => {
+      acknowledgeBodies.push(await request.json());
+      if (acknowledgeBodies.length === 1) {
+        return HttpResponse.json(
+          { code: "bootstrap_credential_superseded", title: "unsafe supersession detail" },
+          { status: 409 },
+        );
+      }
+      return HttpResponse.json({ setup_state: "IN_SETUP", admin_user_id: ADMIN_ID });
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const localSetItem = vi.spyOn(globalThis.localStorage, "setItem");
+  const sessionSetItem = vi.spyOn(globalThis.sessionStorage, "setItem");
+  const cacheObservation = observeClientCache(queryClient);
+  const onAcknowledged = vi.fn(async () => {
+    expect(screen.queryByText(REISSUED_PASSWORD)).toBeNull();
+    expect(serializeClientCache(queryClient)).not.toContain(REISSUED_CREDENTIAL_RECEIPT);
+  });
+  const user = userEvent.setup();
+  const view = renderStep(onAcknowledged, queryClient);
+  await fillRequiredForm(user, {
+    secret: `  ${CURRENT_SETUP_SECRET}  `,
+    username: "  FIRST.ADMIN  ",
+    displayName: "  First Administrator  ",
+  });
+  await user.type(screen.getByLabelText("Email"), "  first.admin@example.test  ");
+  await user.type(screen.getByLabelText("First name"), "  First  ");
+  await user.type(screen.getByLabelText("Last name"), "  Administrator  ");
+  await user.click(screen.getByRole("button", { name: "Create administrator" }));
+  await user.click(
+    await screen.findByRole("button", { name: "I’ve saved it — Continue to sign in" }),
+  );
+
+  expect(await screen.findByText(TEMPORARY_PASSWORD)).toBeInTheDocument();
+  expect(
+    screen.getByRole("alert", { name: "Temporary password no longer current" }),
+  ).toHaveTextContent("no longer current");
+  expect(screen.getByRole("button", { name: "Copy temporary password" })).toBeDisabled();
+  const reissue = screen.getByRole("button", { name: "Issue a new temporary password" });
+  await waitFor(() => expect(reissue).toHaveFocus());
+  await user.click(reissue);
+  await waitFor(() => expect(provisionBodies).toHaveLength(2));
+
+  const duringReissue = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(duringReissue);
+  expect(duringReissue.defaultPrevented).toBe(true);
+  expect(screen.getByText(TEMPORARY_PASSWORD)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Issue a new temporary password" })).toBeDisabled();
+  expect(provisionBodies[1]).toEqual({
+    secret: CURRENT_SETUP_SECRET,
+    username: "first.admin",
+    display_name: "First Administrator",
+    email: "first.admin@example.test",
+    first_name: "First",
+    last_name: "Administrator",
+  });
+
+  await act(async () => {
+    reissueResponse.resolve(
+      HttpResponse.json(
+        {
+          ...PROVISIONED,
+          temporary_password: REISSUED_PASSWORD,
+          credential_receipt: REISSUED_CREDENTIAL_RECEIPT,
+        },
+        { status: 200 },
+      ),
+    );
+  });
+
+  expect(await screen.findByText(REISSUED_PASSWORD)).toBeInTheDocument();
+  expect(screen.queryByText(TEMPORARY_PASSWORD)).toBeNull();
+  expect(screen.queryByRole("alert", { name: "Temporary password no longer current" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "I’ve saved it — Continue to sign in" }));
+  await waitFor(() => expect(acknowledgeBodies).toHaveLength(2));
+  await waitFor(() => expect(onAcknowledged).toHaveBeenCalledTimes(1));
+  expect(acknowledgeBodies).toEqual([
+    { secret: CURRENT_SETUP_SECRET, credential_receipt: CREDENTIAL_RECEIPT },
+    { secret: CURRENT_SETUP_SECRET, credential_receipt: REISSUED_CREDENTIAL_RECEIPT },
+  ]);
+  cacheObservation.stop();
+  for (const volatileValue of [
+    CURRENT_SETUP_SECRET,
+    TEMPORARY_PASSWORD,
+    REISSUED_PASSWORD,
+    CREDENTIAL_RECEIPT,
+    REISSUED_CREDENTIAL_RECEIPT,
+  ]) {
+    expect(window.location.href).not.toContain(volatileValue);
+    expect(storageEntries(globalThis.localStorage).join(" ")).not.toContain(volatileValue);
+    expect(storageEntries(globalThis.sessionStorage).join(" ")).not.toContain(volatileValue);
+    expect(cacheObservation.snapshots.join(" ")).not.toContain(volatileValue);
+  }
+  expect(localSetItem).not.toHaveBeenCalled();
+  expect(sessionSetItem).not.toHaveBeenCalled();
+  expect(await axe(view.container)).toHaveNoViolations();
+});
+
 test("acknowledgment failure keeps the credential panel and offers a single-flight Retry", async () => {
   let acknowledgments = 0;
+  const acknowledgeBodies: unknown[] = [];
   server.use(
-    http.post("/api/v1/setup/administrator", () =>
-      HttpResponse.json(PROVISIONED, { status: 201 }),
-    ),
-    http.post("/api/v1/setup/administrator/acknowledge", () => {
+    http.post("/api/v1/setup/administrator", () => HttpResponse.json(PROVISIONED, { status: 201 })),
+    http.post("/api/v1/setup/administrator/acknowledge", async ({ request }) => {
       acknowledgments += 1;
+      acknowledgeBodies.push(await request.json());
       if (acknowledgments === 1) {
         return HttpResponse.json(
           { code: "keycloak_unavailable", title: "unsafe raw outage detail" },
@@ -355,6 +551,10 @@ test("acknowledgment failure keeps the credential panel and offers a single-flig
   await user.click(screen.getByRole("button", { name: "Retry acknowledgment" }));
   await waitFor(() => expect(onAcknowledged).toHaveBeenCalledTimes(1));
   expect(acknowledgments).toBe(2);
+  expect(acknowledgeBodies).toEqual([
+    { secret: SETUP_SECRET, credential_receipt: CREDENTIAL_RECEIPT },
+    { secret: SETUP_SECRET, credential_receipt: CREDENTIAL_RECEIPT },
+  ]);
 });
 
 test("a valid-secret bound-identity response renders only the verified bound username", async () => {
@@ -379,7 +579,9 @@ test("a valid-secret bound-identity response renders only the verified bound use
   await fillRequiredForm(user, { username: "different.admin" });
   await user.click(screen.getByRole("button", { name: "Create administrator" }));
 
-  const heading = await screen.findByRole("heading", { name: "Administrator identity is already bound" });
+  const heading = await screen.findByRole("heading", {
+    name: "Administrator identity is already bound",
+  });
   await waitFor(() => expect(heading).toHaveFocus());
   expect(screen.getByText(boundUsername)).toBeInTheDocument();
   expect(document.body).not.toHaveTextContent(leakedSubject);
@@ -405,32 +607,35 @@ test.each([
     502,
     "The identity service is unavailable. Restore Keycloak connectivity, then try again.",
   ],
-] as const)("maps %s to safe actionable copy without identity-provider details", async (code, status, message) => {
-  const leakedSubject = "kc-sensitive-subject";
-  server.use(
-    http.post("/api/v1/setup/administrator", () =>
-      HttpResponse.json(
-        {
-          code,
-          title: `unsafe title ${leakedSubject}`,
-          detail: `unsafe detail ${leakedSubject}`,
-          keycloak_subject: leakedSubject,
-        },
-        { status },
+] as const)(
+  "maps %s to safe actionable copy without identity-provider details",
+  async (code, status, message) => {
+    const leakedSubject = "kc-sensitive-subject";
+    server.use(
+      http.post("/api/v1/setup/administrator", () =>
+        HttpResponse.json(
+          {
+            code,
+            title: `unsafe title ${leakedSubject}`,
+            detail: `unsafe detail ${leakedSubject}`,
+            keycloak_subject: leakedSubject,
+          },
+          { status },
+        ),
       ),
-    ),
-  );
-  const user = userEvent.setup();
-  const view = renderStep();
-  await fillRequiredForm(user);
-  await user.click(screen.getByRole("button", { name: "Create administrator" }));
+    );
+    const user = userEvent.setup();
+    const view = renderStep();
+    await fillRequiredForm(user);
+    await user.click(screen.getByRole("button", { name: "Create administrator" }));
 
-  const heading = await screen.findByRole("heading", { name: "Administrator was not created" });
-  await waitFor(() => expect(heading).toHaveFocus());
-  expect(screen.getByText(message)).toBeInTheDocument();
-  expect(document.body).not.toHaveTextContent(leakedSubject);
-  if (code === "keycloak_unavailable") expect(await axe(view.container)).toHaveNoViolations();
-});
+    const heading = await screen.findByRole("heading", { name: "Administrator was not created" });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(leakedSubject);
+    if (code === "keycloak_unavailable") expect(await axe(view.container)).toHaveNoViolations();
+  },
+);
 
 test("beforeunload guards provisioning, a visible password, and acknowledgment, then cleans up", async () => {
   const provisionResponse = deferred<Response>();
@@ -456,9 +661,7 @@ test("beforeunload guards provisioning, a visible password, and acknowledgment, 
   window.dispatchEvent(whileVisible);
   expect(whileVisible.defaultPrevented).toBe(true);
 
-  await user.click(
-    screen.getByRole("button", { name: "I’ve saved it — Continue to sign in" }),
-  );
+  await user.click(screen.getByRole("button", { name: "I’ve saved it — Continue to sign in" }));
   const duringAcknowledgment = new Event("beforeunload", { cancelable: true });
   window.dispatchEvent(duringAcknowledgment);
   expect(duringAcknowledgment.defaultPrevented).toBe(true);
@@ -502,7 +705,9 @@ test("reload cannot redisplay an old password and a response-loss resubmission s
   first.unmount();
   renderStep();
   expect(screen.queryByText(TEMPORARY_PASSWORD)).toBeNull();
-  expect(screen.getByRole("heading", { name: "Create the first administrator" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("heading", { name: "Create the first administrator" }),
+  ).toBeInTheDocument();
 });
 
 test("uses one shrinkable DOM at 320px with 44px action targets and forced-colors focus hooks", async () => {
@@ -540,7 +745,9 @@ test("uses one shrinkable DOM at 320px with 44px action targets and forced-color
   await user.click(screen.getByRole("button", { name: "Create administrator" }));
   await screen.findByText("P".repeat(512));
 
-  expect(screen.getAllByRole("heading", { name: "Temporary password — shown once" })).toHaveLength(1);
+  expect(screen.getAllByRole("heading", { name: "Temporary password — shown once" })).toHaveLength(
+    1,
+  );
   for (const button of screen.getAllByRole("button")) {
     expect(button).toHaveStyle({ minHeight: "44px" });
   }

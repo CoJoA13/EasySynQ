@@ -37,6 +37,9 @@ interface PresentedError {
   boundUsername?: string;
 }
 
+type AcknowledgeRecovery = "retry" | "replacement-secret" | "superseded" | null;
+type RetainedAdministratorProfile = Omit<FirstAdministratorRequest, "secret">;
+
 const EMPTY_FORM: FirstAdministratorForm = {
   secret: "",
   username: "",
@@ -128,13 +131,17 @@ function provisionError(error: unknown): PresentedError {
 export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorStepProps) {
   const [form, setForm] = useState<FirstAdministratorForm>(EMPTY_FORM);
   const [temporaryPassword, setTemporaryPassword] = useState("");
-  const [pending, setPending] = useState<"provision" | "acknowledge" | null>(null);
+  const [pending, setPending] = useState<"provision" | "acknowledge" | "reissue" | null>(null);
   const [error, setError] = useState<PresentedError | null>(null);
-  const [acknowledgeFailed, setAcknowledgeFailed] = useState(false);
+  const [acknowledgeRecovery, setAcknowledgeRecovery] = useState<AcknowledgeRecovery>(null);
   const inFlightRef = useRef(false);
   const secretRef = useRef("");
   const passwordRef = useRef("");
+  const receiptRef = useRef("");
+  const profileRef = useRef<RetainedAdministratorProfile | null>(null);
   const errorHeadingRef = useRef<HTMLHeadingElement>(null);
+  const replacementSecretRef = useRef<HTMLInputElement>(null);
+  const reissueButtonRef = useRef<HTMLButtonElement>(null);
 
   const guarded = pending !== null || temporaryPassword !== "";
   useEffect(() => {
@@ -151,6 +158,15 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
     if (error !== null) errorHeadingRef.current?.focus();
   }, [error]);
 
+  useEffect(() => {
+    if (pending !== null) return;
+    if (acknowledgeRecovery === "replacement-secret") {
+      replacementSecretRef.current?.focus();
+    } else if (acknowledgeRecovery === "superseded") {
+      reissueButtonRef.current?.focus();
+    }
+  }, [acknowledgeRecovery, pending]);
+
   const updateForm = <K extends keyof FirstAdministratorForm>(
     field: K,
     value: FirstAdministratorForm[K],
@@ -164,30 +180,51 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
     form.username.trim() !== "" &&
     form.displayName.trim() !== "";
 
-  const provision = async (): Promise<void> => {
-    if (inFlightRef.current || !canSubmit) return;
+  const provision = async (reissue = false): Promise<void> => {
+    if (inFlightRef.current) return;
+    let request: FirstAdministratorRequest;
+    if (reissue) {
+      const profile = profileRef.current;
+      const secret = secretRef.current.trim();
+      if (profile === null || secret === "") return;
+      request = { secret, ...profile };
+    } else {
+      if (!canSubmit) return;
+      request = {
+        secret: form.secret.trim(),
+        username: form.username.trim(),
+        display_name: form.displayName.trim(),
+        email: optional(form.email),
+        first_name: optional(form.firstName),
+        last_name: optional(form.lastName),
+      };
+    }
     inFlightRef.current = true;
-    setPending("provision");
+    setPending(reissue ? "reissue" : "provision");
     setError(null);
-    setAcknowledgeFailed(false);
-    const request: FirstAdministratorRequest = {
-      secret: form.secret.trim(),
-      username: form.username.trim(),
-      display_name: form.displayName.trim(),
-      email: optional(form.email),
-      first_name: optional(form.firstName),
-      last_name: optional(form.lastName),
-    };
+    if (!reissue) setAcknowledgeRecovery(null);
     secretRef.current = request.secret;
     try {
-      const { temporary_password } = await apiSend<FirstAdministratorProvisioned>(
-        "POST",
-        "/api/v1/setup/administrator",
-        null,
-        request,
-      );
-      passwordRef.current = temporary_password;
-      setTemporaryPassword(temporary_password);
+      const { administrator, temporary_password, credential_receipt } =
+        await apiSend<FirstAdministratorProvisioned>(
+          "POST",
+          "/api/v1/setup/administrator",
+          null,
+          request,
+        );
+      flushSync(() => {
+        passwordRef.current = temporary_password;
+        receiptRef.current = credential_receipt;
+        profileRef.current = {
+          username: administrator.username,
+          display_name: request.display_name,
+          email: request.email,
+          first_name: request.first_name,
+          last_name: request.last_name,
+        };
+        setTemporaryPassword(temporary_password);
+        setAcknowledgeRecovery(null);
+      });
     } catch (caught) {
       setError(provisionError(caught));
     } finally {
@@ -197,27 +234,51 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
   };
 
   const acknowledge = async (): Promise<void> => {
-    if (inFlightRef.current || passwordRef.current === "") return;
+    const secret = secretRef.current.trim();
+    if (
+      inFlightRef.current ||
+      passwordRef.current === "" ||
+      receiptRef.current === "" ||
+      secret === ""
+    ) {
+      return;
+    }
     inFlightRef.current = true;
+    secretRef.current = secret;
     setPending("acknowledge");
-    setAcknowledgeFailed(false);
     try {
       try {
         await apiSend<BootstrapAcknowledgeResponse>(
           "POST",
           "/api/v1/setup/administrator/acknowledge",
           null,
-          { secret: secretRef.current },
+          { secret, credential_receipt: receiptRef.current },
         );
-      } catch {
-        setAcknowledgeFailed(true);
+      } catch (caught) {
+        if (caught instanceof ApiError && caught.code === "bootstrap_invalid") {
+          flushSync(() => {
+            secretRef.current = "";
+            setForm((current) => ({ ...current, secret: "" }));
+            setAcknowledgeRecovery("replacement-secret");
+          });
+        } else if (
+          caught instanceof ApiError &&
+          caught.code === "bootstrap_credential_superseded"
+        ) {
+          setAcknowledgeRecovery("superseded");
+        } else {
+          setAcknowledgeRecovery("retry");
+        }
         return;
       }
       flushSync(() => {
         passwordRef.current = "";
+        receiptRef.current = "";
         secretRef.current = "";
+        profileRef.current = null;
         setTemporaryPassword("");
         setForm((current) => ({ ...current, secret: "" }));
+        setAcknowledgeRecovery(null);
       });
       await onAcknowledged();
     } finally {
@@ -227,17 +288,31 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
   };
 
   if (temporaryPassword !== "") {
+    const passwordSuperseded = acknowledgeRecovery === "superseded";
     return (
       <Stack data-testid="first-administrator-step" miw={0} w="100%" gap="sm">
-        <ShowOncePassword
-          password={temporaryPassword}
-          onDone={() => void acknowledge()}
-          doneLabel={
-            acknowledgeFailed ? "Retry acknowledgment" : "I’ve saved it — Continue to sign in"
-          }
-          description="Save this password now. Continuing records receipt and starts sign-in; Keycloak will require a replacement at first sign-in. If this response was lost, submitting the bound username again resets the password and invalidates the old value."
-          busy={pending === "acknowledge"}
-        />
+        <fieldset
+          disabled={passwordSuperseded}
+          style={{ border: 0, margin: 0, minWidth: 0, padding: 0, width: "100%" }}
+        >
+          <ShowOncePassword
+            password={temporaryPassword}
+            onDone={() => void acknowledge()}
+            doneLabel={
+              acknowledgeRecovery === "retry"
+                ? "Retry acknowledgment"
+                : acknowledgeRecovery === "replacement-secret"
+                  ? "Retry with current setup secret"
+                  : "I’ve saved it — Continue to sign in"
+            }
+            description={
+              acknowledgeRecovery === "superseded"
+                ? "This temporary password is no longer current. Keep it visible until EasySynQ issues and shows the replacement."
+                : "Save this password now. Continuing records receipt and starts sign-in; Keycloak will require a replacement at first sign-in. If this response was lost, submitting the bound username again resets the password and invalidates the old value."
+            }
+            busy={pending === "acknowledge"}
+          />
+        </fieldset>
         {pending === "acknowledge" && (
           <Alert
             color="blue"
@@ -248,7 +323,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
             Saving your receipt before sign-in…
           </Alert>
         )}
-        {acknowledgeFailed && (
+        {acknowledgeRecovery === "retry" && (
           <Alert
             color="red"
             role="alert"
@@ -257,6 +332,64 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
           >
             EasySynQ could not save your receipt. The password remains visible; retry before
             signing in.
+          </Alert>
+        )}
+        {acknowledgeRecovery === "replacement-secret" && (
+          <Alert
+            color="red"
+            role="alert"
+            aria-live="assertive"
+            aria-label="Current setup secret required"
+          >
+            <Stack gap="xs">
+              <Title order={3} size="h4">
+                Enter current setup secret
+              </Title>
+              <Text size="sm">
+                The previous setup secret was not accepted. Enter the current secret to acknowledge
+                this same temporary password.
+              </Text>
+              <PasswordInput
+                ref={replacementSecretRef}
+                label="Current setup secret"
+                required
+                autoComplete="off"
+                value={form.secret}
+                styles={INPUT_STYLES}
+                visibilityToggleButtonProps={{ style: { minHeight: 44, minWidth: 44 } }}
+                onChange={(event) => updateForm("secret", event.currentTarget.value)}
+              />
+            </Stack>
+          </Alert>
+        )}
+        {acknowledgeRecovery === "superseded" && (
+          <Alert
+            color="red"
+            role="alert"
+            aria-live="assertive"
+            aria-label="Temporary password no longer current"
+          >
+            <Stack gap="xs">
+              <Title order={3} size="h4">
+                Temporary password no longer current
+              </Title>
+              <Text size="sm">
+                A newer credential generation replaced the shown password. Issue a new temporary
+                password before continuing.
+              </Text>
+              <Group justify="flex-end" wrap="wrap">
+                <Button
+                  ref={reissueButtonRef}
+                  onClick={() => void provision(true)}
+                  loading={pending === "reissue"}
+                  disabled={pending !== null}
+                  aria-busy={pending === "reissue" || undefined}
+                  style={{ minHeight: 44 }}
+                >
+                  Issue a new temporary password
+                </Button>
+              </Group>
+            </Stack>
           </Alert>
         )}
       </Stack>
