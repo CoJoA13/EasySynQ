@@ -163,6 +163,41 @@ def _install_kc_race(monkeypatch: pytest.MonkeyPatch, *, winner_subject: str) ->
     monkeypatch.setattr(identity_provisioning, "keycloak_client", factory)
 
 
+def _install_kc_classifier_known_race_then_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch, *, winner_subject: str
+) -> None:
+    """The Keycloak transport's conflict classifier finds the exact subject, then a later lookup
+    fails. Ordinary provisioning must use the classified subject instead of creating this third
+    lookup failure path; bootstrap still re-reads to validate its marker."""
+    calls = {"lookup": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "t"})
+        if request.method == "GET" and request.url.path.endswith("/users"):
+            calls["lookup"] += 1
+            username = request.url.params["username"]
+            if calls["lookup"] == 1:
+                return httpx.Response(200, json=[])
+            if calls["lookup"] == 2:
+                return httpx.Response(200, json=[{"id": winner_subject, "username": username}])
+            return httpx.Response(503, json={"error": "transient lookup failure"})
+        if request.method == "POST" and request.url.path.endswith("/users"):
+            return httpx.Response(409, json={"errorMessage": "User exists with same username"})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    def factory() -> KeycloakProvisioningClient:
+        return KeycloakProvisioningClient(
+            base_url="http://kc",
+            realm="easysynq",
+            admin_user="admin",
+            admin_password="secret",
+            _transport=httpx.MockTransport(handler),
+        )
+
+    monkeypatch.setattr(identity_provisioning, "keycloak_client", factory)
+
+
 async def _app_user_count() -> int:
     sm = get_sessionmaker()
     async with sm() as s:
@@ -569,6 +604,43 @@ async def test_create_conflict_race_finds_linked_subject_returns_user_exists(
     body = resp.json()
     assert body["code"] == "user_exists"
     assert "keycloak_subject" not in body
+
+
+@pytest.mark.parametrize(
+    ("linked", "expected_code"),
+    [
+        (False, "keycloak_username_exists_unlinked"),
+        (True, "user_exists"),
+    ],
+)
+async def test_classifier_known_conflict_preserves_the_linked_or_unlinked_affordance(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    linked: bool,
+    expected_code: str,
+) -> None:
+    subject = _sub("classifier-known")
+    if linked:
+        async with get_sessionmaker()() as session:
+            await _ensure_user(session, subject)
+            await session.commit()
+    _install_kc_classifier_known_race_then_lookup_fails(monkeypatch, winner_subject=subject)
+    headers = await _admin(token_factory)
+
+    resp = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": f"classifier-known-{uuid.uuid4().hex[:6]}"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["code"] == expected_code
+    if linked:
+        assert "keycloak_subject" not in body
+    else:
+        assert body["keycloak_subject"] == subject
 
 
 async def test_duplicate_email_returns_keycloak_email_exists(

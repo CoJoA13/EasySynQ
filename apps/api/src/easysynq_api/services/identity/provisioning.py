@@ -79,8 +79,15 @@ async def ensure_credentialless_identity(
     except KeycloakConflict as exc:
         if exc.field != "username":
             raise
+        if not allow_matching_claim and exc.keycloak_subject is not None:
+            # The transport has already re-read and exact-matched this subject to classify the
+            # conflict. Ordinary provisioning has no marker to validate, so a further lookup can
+            # only turn a known username collision into an unrelated transient failure.
+            raise IdentityUsernameExists(exc.keycloak_subject) from exc
         # The transport re-reads to classify a 409; this re-read also proves the marker before
-        # a bootstrap retry adopts the identity created by the racing request.
+        # a bootstrap retry adopts the identity created by the racing request. Bootstrap must do
+        # this even when the conflict classifier supplied a subject, because only this lookup
+        # validates the exact opaque marker.
         raced = await client.find_user_by_username(profile.username)
         if not raced.found:
             raise KeycloakUnavailable("Keycloak create conflict could not be resolved") from exc

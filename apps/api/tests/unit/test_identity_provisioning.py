@@ -26,14 +26,18 @@ from easysynq_api.services.keycloak_provisioning import (
 class FakeClient:
     lookup: UserLookup | Exception
     create_result: str | Exception = "sub-created"
-    lookup_after_conflict: UserLookup | None = None
+    lookup_after_conflict: UserLookup | Exception | None = None
     create_calls: list[dict[str, object]] = field(default_factory=list)
     reset_calls: list[tuple[str, str]] = field(default_factory=list)
+    lookup_calls: int = 0
 
     async def find_user_by_username(self, username: str) -> UserLookup:
+        self.lookup_calls += 1
         if isinstance(self.lookup, Exception):
             raise self.lookup
         if self.lookup_after_conflict is not None and self.create_calls:
+            if isinstance(self.lookup_after_conflict, Exception):
+                raise self.lookup_after_conflict
             return self.lookup_after_conflict
         return self.lookup
 
@@ -131,6 +135,37 @@ async def test_create_conflict_adopts_only_reread_matching_marker() -> None:
     )
 
     assert result == CredentiallessIdentity(subject="sub-race", created=False)
+
+
+async def test_ordinary_classifier_known_conflict_raises_without_a_reread() -> None:
+    """A post-classifier transient lookup must not erase the ordinary 409 collision."""
+    client = FakeClient(
+        UserLookup(False),
+        KeycloakConflict("username", "duplicate", keycloak_subject="sub-race"),
+        KeycloakUnavailable("unexpected third lookup"),
+    )
+
+    with pytest.raises(IdentityUsernameExists) as excinfo:
+        await ensure_credentialless_identity(client, _profile())
+
+    assert excinfo.value.subject == "sub-race"
+    assert client.lookup_calls == 1
+
+
+async def test_bootstrap_classifier_known_conflict_rereads_and_validates_the_marker() -> None:
+    claim = uuid.uuid4()
+    client = FakeClient(
+        UserLookup(False),
+        KeycloakConflict("username", "duplicate", keycloak_subject="sub-race"),
+        UserLookup(True, "sub-race", str(claim)),
+    )
+
+    result = await ensure_credentialless_identity(
+        client, _profile(), bootstrap_claim_id=claim, allow_matching_claim=True
+    )
+
+    assert result == CredentiallessIdentity(subject="sub-race", created=False)
+    assert client.lookup_calls == 2
 
 
 async def test_unresolved_bootstrap_conflict_fails_closed() -> None:
