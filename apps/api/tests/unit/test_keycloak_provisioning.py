@@ -129,7 +129,10 @@ async def test_lookup_without_bootstrap_claim_returns_none() -> None:
     assert result.bootstrap_claim_id is None
 
 
-@pytest.mark.parametrize("marker", [["first", "second"], "not-a-list", [""], [1]])
+@pytest.mark.parametrize(
+    "marker",
+    [["first", "second"], "not-a-list", [""], [1], [], None, {}, True],
+)
 async def test_lookup_with_malformed_bootstrap_claim_fails_closed(marker: object) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         token = _token_ok(request)
@@ -149,6 +152,22 @@ async def test_lookup_with_malformed_bootstrap_claim_fails_closed(marker: object
     async with _client(handler) as kc:
         with pytest.raises(KeycloakUnavailable):
             await kc.find_user_by_username("jdoe")
+
+
+async def test_lookup_with_empty_attributes_returns_no_bootstrap_claim() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(
+            200,
+            json=[{"id": "sub-jdoe", "username": "jdoe", "attributes": {}}],
+        )
+
+    async with _client(handler) as kc:
+        result = await kc.find_user_by_username("jdoe")
+
+    assert result.bootstrap_claim_id is None
 
 
 async def test_lookup_failure_is_not_absence() -> None:
