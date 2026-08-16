@@ -19,6 +19,7 @@ import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from psycopg import sql
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
@@ -41,12 +42,14 @@ _ROLE_ASSIGNMENT_USER_INDEX = "ix_role_assignment_user_id"
 _RECORD_PAGE_INDEX = "ix_record_org_id_captured_at_id_desc"
 _BOOTSTRAP_ADMIN_USER_INDEX = "ix_system_config_bootstrap_admin_user_id"
 _BOOTSTRAP_ADMIN_USER_FK = "fk_system_config_bootstrap_admin_user_id_app_user"
+_BOOTSTRAP_RECEIPT_HASH = "a" * 64
 _BOOTSTRAP_CLAIM_COLUMNS = (
     "bootstrap_admin_claim_id",
     "bootstrap_admin_username",
     "bootstrap_admin_user_id",
     "bootstrap_claimed_at",
     "bootstrap_credential_issued_at",
+    "bootstrap_credential_receipt_hash",
 )
 _EXPECTED_RETENTION_GRANTS = {
     ("Internal Auditor", "retention.read"),
@@ -211,6 +214,7 @@ def test_populated_historical_transitions_and_head_repairs(
         monkeypatch.setenv("DATABASE_URL_SYNC", scratch_url)
         get_settings.cache_clear()
         config = _config()
+        assert ScriptDirectory.from_config(config).get_heads() == ["0088_bootstrap_credential"]
         engine = sa.create_engine(scratch_url)
         try:
             # 0004: role assignments and permission overrides must preserve their full FK closure.
@@ -918,9 +922,9 @@ def test_populated_historical_transitions_and_head_repairs(
                 assert _table_indexes(connection, "record") == head_indexes
                 assert _index_definition(connection, _RECORD_PAGE_INDEX) == index_definition
 
-            # 0087 adds a recoverable first-administrator claim without rewriting established
-            # setup or identity state. Its populated downgrade removes only the claim storage;
-            # re-upgrade restores nullable columns and leaves the existing rows untouched.
+            # 0087 + 0088 add a recoverable first-administrator claim and active credential receipt
+            # digest without rewriting established setup or identity state. The populated 0088
+            # downgrade removes only its receipt storage; re-upgrade restores its nullable column.
             claim_id = uuid.uuid4()
             with engine.begin() as connection:
                 connection.execute(
@@ -931,6 +935,13 @@ def test_populated_historical_transitions_and_head_repairs(
                         "bootstrap_credential_issued_at = now() WHERE org_id = :org"
                     ),
                     {"claim_id": claim_id, "user": user_id, "org": org_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "UPDATE system_config SET bootstrap_credential_receipt_hash = :digest "
+                        "WHERE org_id = :org"
+                    ),
+                    {"digest": _BOOTSTRAP_RECEIPT_HASH, "org": org_id},
                 )
             with engine.connect() as connection:
                 assert all(
@@ -958,16 +969,30 @@ def test_populated_historical_transitions_and_head_repairs(
                     ),
                     {"org": org_id, "user": user_id},
                 ).one()
+                claim_state = connection.execute(
+                    sa.text(
+                        "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
+                        "bootstrap_admin_user_id, bootstrap_claimed_at, "
+                        "bootstrap_credential_issued_at, bootstrap_credential_receipt_hash "
+                        "FROM system_config WHERE org_id = :org"
+                    ),
+                    {"org": org_id},
+                ).one()
+                assert claim_state[-1] == _BOOTSTRAP_RECEIPT_HASH
 
-            command.downgrade(config, "0086_record_page_index")
+            command.downgrade(config, "0087_first_admin_bootstrap")
             with engine.connect() as connection:
+                assert (
+                    _column_nullable(
+                        connection, "system_config", "bootstrap_credential_receipt_hash"
+                    )
+                    is None
+                )
                 assert all(
-                    _column_nullable(connection, "system_config", column) is None
-                    for column in _BOOTSTRAP_CLAIM_COLUMNS
+                    _column_nullable(connection, "system_config", column) == "YES"
+                    for column in _BOOTSTRAP_CLAIM_COLUMNS[:-1]
                 )
-                assert _BOOTSTRAP_ADMIN_USER_INDEX not in _table_indexes(
-                    connection, "system_config"
-                )
+                assert _BOOTSTRAP_ADMIN_USER_INDEX in _table_indexes(connection, "system_config")
                 assert (
                     connection.execute(
                         sa.text(
@@ -977,7 +1002,7 @@ def test_populated_historical_transitions_and_head_repairs(
                         ),
                         {"constraint": _BOOTSTRAP_ADMIN_USER_FK},
                     ).scalar_one()
-                    == 0
+                    == 1
                 )
                 assert (
                     connection.execute(
@@ -999,6 +1024,17 @@ def test_populated_historical_transitions_and_head_repairs(
                         {"user": user_id},
                     ).scalar_one()
                     == 1
+                )
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
+                            "bootstrap_admin_user_id, bootstrap_claimed_at, "
+                            "bootstrap_credential_issued_at FROM system_config WHERE org_id = :org"
+                        ),
+                        {"org": org_id},
+                    ).one()
+                    == claim_state[:-1]
                 )
 
             command.upgrade(config, "head")
@@ -1024,10 +1060,11 @@ def test_populated_historical_transitions_and_head_repairs(
                     sa.text(
                         "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
                         "bootstrap_admin_user_id, bootstrap_claimed_at, "
-                        "bootstrap_credential_issued_at FROM system_config WHERE org_id = :org"
+                        "bootstrap_credential_issued_at, bootstrap_credential_receipt_hash "
+                        "FROM system_config WHERE org_id = :org"
                     ),
                     {"org": org_id},
-                ).one() == (None, None, None, None, None)
+                ).one() == (*claim_state[:-1], None)
             command.check(config)
         finally:
             engine.dispose()

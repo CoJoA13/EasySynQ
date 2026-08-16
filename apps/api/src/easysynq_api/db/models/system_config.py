@@ -11,7 +11,19 @@ import datetime
 import enum
 import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Text, false, func, text, true
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    false,
+    func,
+    text,
+    true,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -167,7 +179,8 @@ class SystemConfig(Base):
     )
     # The staged first-administrator claim binds any retry to exactly one app identity while the
     # Keycloak and PostgreSQL transactions remain non-atomic (ADR 0005). Nullable fields preserve
-    # existing installations and deliberately avoid storing Keycloak marker or credential material.
+    # existing installations and deliberately avoid storing Keycloak marker, credential material, or
+    # the plaintext credential receipt.
     bootstrap_admin_claim_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )
@@ -187,6 +200,7 @@ class SystemConfig(Base):
     bootstrap_credential_issued_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    bootstrap_credential_receipt_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Auth-config gate G-D (S8c, doc 08 §9): the chosen primary login method (LOCAL/FEDERATED —
     # informational; the app always authenticates via Keycloak/OIDC) + the persisted non-bootstrap
     # login proof. ``auth_test_login_ok`` is True ONLY after ``/setup/configure-auth`` proves the
