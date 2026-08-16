@@ -12,4 +12,4 @@ ai_authored: true
 created: 2026-08-15
 ---
 
-ADR 0005 deliberately introduces a staged bootstrap identity claim because Keycloak and PostgreSQL cannot commit atomically. The claim and Keycloak recovery marker add state-machine and maintenance cost, but they prevent duplicate administrator grants and destructive compensation after partial failures. Remove this machinery if identity provisioning and application persistence gain one transactional boundary.
+ADR 0005 deliberately introduces a staged bootstrap identity claim because Keycloak and PostgreSQL cannot commit atomically. The claim, Keycloak recovery marker, and active credential-receipt digest add state-machine and maintenance cost, but they prevent duplicate administrator grants, destructive compensation, and acknowledgment of a superseded temporary password after partial or concurrent failures. Remove this machinery if identity provisioning, credential delivery, and application persistence gain one transactionally attested boundary.

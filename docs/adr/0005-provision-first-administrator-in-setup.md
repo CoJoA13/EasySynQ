@@ -192,3 +192,80 @@ live in one transactional datastore. Revisit the lowercase rule before adding a 
 provider with different documented canonicalization semantics; migrate any pending claims before
 changing the canonical form. The mirrored deferred boundary is tracked in
 [`bootstrap-admission-identity-coupling`](../debt/20260816024758-bootstrap-admission-identity-coupling.md).
+
+## 2026-08-16 amendment — credential-generation receipt and claimed-profile recovery
+
+### Context
+
+Independent PR review found that the singleton row lock prevents a password reset after bootstrap
+consumption, but does not prove that the operator acknowledged the password generation visible in a
+particular browser response. Two same-username requests can both reset the credential before either
+is acknowledged; the later reset invalidates the earlier response, whose setup secret alone could
+still consume bootstrap.
+
+The same review exposed three adjacent recovery gaps. A host break-glass role assignment can create
+an administrator before a public claim, a definitive Keycloak validation rejection can strand an
+unowned claim, and adoption of a marker-bound Keycloak identity can persist corrected profile values
+only in EasySynQ. The browser also had no in-panel way to supply a reminted setup secret after the
+password was displayed.
+
+### Decision
+
+Bind acknowledgment to the active temporary-password generation with a random volatile credential
+receipt. Persist only its SHA-256 digest on `system_config`, rotate it on every reset, return the
+plaintext receipt only with the show-once password, and require both the current setup secret and
+receipt for acknowledgment. A stale receipt fails without consuming bootstrap. Required receipt
+state must commit before the password is returned; the credential audit retains its non-fatal
+under-claim behavior through an isolated savepoint.
+
+Serialize public bootstrap against System Administrator assignments, allowing only the administrator
+already linked to the active claim. Release a still-unowned claim only after a definitive create-time
+Keycloak validation rejection proves no identity exists.
+
+Permit a retry to correct optional profile values on the exact marker-bound Keycloak identity. Read
+its full representation, verify subject, canonical username, and marker, preserve every unrelated
+field, and conditionally update only email and name fields while the singleton lock also protects the
+EasySynQ projection update. A rejected update retains the claim because the identity already exists.
+
+Keep the browser credential visible after acknowledgment failure. It may accept a reminted setup
+secret to acknowledge the same generation or explicitly reissue a password after the server reports
+that the visible generation was superseded. Every secret, password, and receipt remains volatile and
+is cleared before authentication begins.
+
+### Consequences
+
+Acknowledgment now proves receipt of the current usable password rather than merely proving that some
+password was once issued. Response loss and reminted-secret recovery remain in-app, while concurrent
+tabs cannot consume bootstrap on behalf of an invalidated credential.
+
+The contract and database gain one receipt field, and recovery gains another state value that every
+consumer and fixture must migrate atomically. Required receipt persistence narrows R64's non-fatal
+credential-audit rule: audit insertion may still under-claim, but failure to persist the receipt
+state itself must suppress the password response so the next retry can reset safely.
+
+EasySynQ serializes its own claimed-profile writes, but Keycloak exposes user updates as a whole
+`UserRepresentation` without a version or compare-and-swap token. A simultaneous external Keycloak
+administrator edit can still race the preserved-representation PUT. That deliberate limitation is
+tracked with the existing profile-reconciliation boundary.
+
+### Alternatives
+
+Refusing all password reissuance until acknowledgment was rejected because a lost response would
+need a separate manual override and would regress the approved recovery flow. Relying on the existing
+row lock plus stronger UI warnings was rejected because it cannot prove which returned password was
+acknowledged. Persisting plaintext passwords or receipts was rejected because it violates the
+show-once secrecy boundary.
+
+Binding the original optional profile values and rejecting every correction was considered. The
+owner selected marker-scoped reconciliation because it keeps recovery in-app and lets an operator
+correct input without Keycloak administration. Replacing the full Keycloak representation with a
+minimal update body was rejected because it risks clearing unrelated provider-managed fields.
+
+### Payoff trigger
+
+Remove the receipt state when identity-provider credential issuance and EasySynQ acknowledgment can
+participate in one transactionally attested delivery boundary. Replace or fence whole-representation
+profile reconciliation when Keycloak provides versioned or compare-and-swap user updates, or when
+external profile administration becomes a supported concurrent workflow. The receipt-state cost is
+tracked in
+[`bootstrap-credential-receipt-state`](../debt/20260816092041-bootstrap-credential-receipt-state.md).
