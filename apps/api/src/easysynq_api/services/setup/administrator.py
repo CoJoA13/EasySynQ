@@ -37,6 +37,11 @@ from .service import SYSTEM_ADMIN_ROLE, _check_rate_limit, _record_failure, _res
 
 logger = logging.getLogger("easysynq.setup")
 
+_DUMMY_BOOTSTRAP_HASH = (
+    "00000000000000000000000000000000:"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+)
+
 ALLOWED_BOOTSTRAP_AFTER_KEYS = {
     EventType.BOOTSTRAP_IDENTITY_CLAIMED: {"username"},
     EventType.USER_CREATED: {"status", "email", "provisioning"},
@@ -151,19 +156,10 @@ def _require_bound_username(bound_username: str, requested_username: str) -> Non
 def _verify_bootstrap_proof(
     cfg: SystemConfig | Any, secret: str, *, now: datetime.datetime
 ) -> None:
-    if cfg.bootstrap_secret_hash is None:
-        raise ProblemException(
-            status=409,
-            code="no_bootstrap_secret",
-            title="No bootstrap secret has been minted",
-        )
-    if cfg.bootstrap_expires_at is not None and now > cfg.bootstrap_expires_at:
-        raise ProblemException(
-            status=403,
-            code="bootstrap_expired",
-            title="The bootstrap secret has expired",
-        )
-    if not verify_secret(secret, cfg.bootstrap_secret_hash):
+    stored_hash = cfg.bootstrap_secret_hash
+    matches = verify_secret(secret, stored_hash or _DUMMY_BOOTSTRAP_HASH)
+    expired = cfg.bootstrap_expires_at is not None and now > cfg.bootstrap_expires_at
+    if stored_hash is None or expired or not matches:
         raise ProblemException(
             status=403,
             code="bootstrap_invalid",
@@ -185,7 +181,8 @@ def _validate_bootstrap_secret(
 
 
 async def _locked_singleton(session: AsyncSession) -> SystemConfig:
-    rows = (await session.execute(select(SystemConfig).with_for_update())).scalars().all()
+    statement = select(SystemConfig).with_for_update().execution_options(populate_existing=True)
+    rows = (await session.execute(statement)).scalars().all()
     if len(rows) != 1:
         raise ProblemException(
             status=409,
@@ -428,7 +425,6 @@ async def _resolve_identity(
             status=422,
             code="validation_error",
             title="The identity provider rejected the administrator profile",
-            detail=exc.detail,
         ) from exc
     except (KeycloakUnavailable, KeycloakConflict) as exc:
         raise ProblemException(
@@ -565,13 +561,15 @@ async def _persist_user_and_role(
     return user, summary
 
 
-async def _record_credential_issuance(
+async def _issue_and_record_credential(
     session: AsyncSession,
     *,
     claim_id: uuid.UUID,
     username: str,
     user_id: uuid.UUID,
-) -> None:
+    identity: CredentiallessIdentity,
+    client: Any,
+) -> str:
     cfg = await _locked_singleton(session)
     _assert_claim(cfg, claim_id=claim_id, username=username)
     if cfg.bootstrap_admin_user_id != user_id:
@@ -580,17 +578,37 @@ async def _record_credential_issuance(
             code="bootstrap_not_ready",
             title="The linked first administrator no longer matches",
         )
-    cfg.bootstrap_credential_issued_at = _now()
-    session.add(
-        _bootstrap_audit_event(
-            org_id=cfg.org_id,
-            event_type=EventType.USER_CREDENTIAL_ISSUED,
-            object_type=AuditObjectType.user,
-            object_id=user_id,
-            after={"credential_issued": True},
+
+    # The network call stays inside this row-lock boundary so acknowledgment and remint cannot
+    # pass the issuance generation. See docs/debt/20260815215020-bootstrap-credential-lock.md.
+    try:
+        password = await identity_provisioning.issue_temporary_credential(
+            client, subject=identity.subject, username=username
         )
-    )
-    await session.commit()
+    except KeycloakUnavailable as exc:
+        await session.rollback()
+        raise ProblemException(
+            status=502,
+            code="keycloak_unavailable",
+            title="The identity provider is unavailable",
+        ) from exc
+
+    try:
+        cfg.bootstrap_credential_issued_at = _now()
+        session.add(
+            _bootstrap_audit_event(
+                org_id=cfg.org_id,
+                event_type=EventType.USER_CREDENTIAL_ISSUED,
+                object_type=AuditObjectType.user,
+                object_id=user_id,
+                after={"credential_issued": True},
+            )
+        )
+        await session.commit()
+    except Exception as _exc:  # noqa: BLE001 — R64 makes every final DB failure non-fatal.
+        await session.rollback()
+        logger.warning("setup.first_administrator_credential_audit_failed user_id=%s", str(user_id))
+    return password
 
 
 async def provision_first_administrator(
@@ -615,29 +633,14 @@ async def provision_first_administrator(
         user_id = uuid.UUID(summary["id"])
         display_name = str(summary["display_name"])
         email = summary["email"]
-        try:
-            password = await identity_provisioning.issue_temporary_credential(
-                client, subject=identity.subject, username=profile.username
-            )
-        except KeycloakUnavailable as exc:
-            raise ProblemException(
-                status=502,
-                code="keycloak_unavailable",
-                title="The identity provider is unavailable",
-            ) from exc
-
-        try:
-            await _record_credential_issuance(
-                session,
-                claim_id=claim_id,
-                username=profile.username,
-                user_id=user_id,
-            )
-        except Exception as _exc:  # noqa: BLE001 — R64 makes every final DB failure non-fatal.
-            await session.rollback()
-            logger.warning(
-                "setup.first_administrator_credential_audit_failed user_id=%s", str(user_id)
-            )
+        password = await _issue_and_record_credential(
+            session,
+            claim_id=claim_id,
+            username=profile.username,
+            user_id=user_id,
+            identity=identity,
+            client=client,
+        )
         await _reset_failures()
         return FirstAdministratorProvisioned(
             admin_user_id=user_id,

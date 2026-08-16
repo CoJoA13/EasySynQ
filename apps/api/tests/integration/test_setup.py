@@ -8,9 +8,11 @@ first-run flow is deterministic regardless of order.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import shutil
 import tempfile
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -36,6 +38,7 @@ from easysynq_api.services import backup as backup_service
 from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.services.keycloak_provisioning import (
     KeycloakConflict,
+    KeycloakRejected,
     KeycloakUnavailable,
     UserLookup,
 )
@@ -62,12 +65,22 @@ class _FakeIdentity:
 
 
 @dataclass(slots=True)
+class _PasswordResetBarrier:
+    entered: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+    active: int = 0
+    max_active: int = 0
+
+
+@dataclass(slots=True)
 class _FakeKeycloak:
     accounts: dict[str, _FakeIdentity] = field(default_factory=dict)
     passwords: dict[str, list[str]] = field(default_factory=dict)
     lookup_error: Exception | None = None
     fail_after_create: bool = False
     password_error: Exception | None = None
+    password_barrier: _PasswordResetBarrier | None = None
+    rejection_detail_template: str | None = None
 
     async def __aenter__(self) -> _FakeKeycloak:
         return self
@@ -98,6 +111,14 @@ class _FakeKeycloak:
             raise KeycloakConflict("username", "duplicate", keycloak_subject=account.subject)
         if email is not None and any(account.email == email for account in self.accounts.values()):
             raise KeycloakConflict("email", "duplicate")
+        if self.rejection_detail_template is not None:
+            raise KeycloakRejected(
+                self.rejection_detail_template.format(
+                    claim=bootstrap_claim_id,
+                    username=username,
+                    email=email,
+                )
+            )
         subject = f"subject:{username}"
         self.accounts[username] = _FakeIdentity(
             subject=subject,
@@ -111,6 +132,15 @@ class _FakeKeycloak:
     async def set_temporary_password(self, *, subject: str, password: str) -> None:
         if self.password_error is not None:
             raise self.password_error
+        if self.password_barrier is not None:
+            barrier = self.password_barrier
+            barrier.active += 1
+            barrier.max_active = max(barrier.max_active, barrier.active)
+            await barrier.entered.put(subject)
+            try:
+                await barrier.release.wait()
+            finally:
+                barrier.active -= 1
         self.passwords.setdefault(subject, []).append(password)
 
     def add_account(
@@ -366,6 +396,74 @@ async def test_first_administrator_initial_issue_and_response_loss_reissue_are_p
     assert cfg.bootstrap_admin_user_id == uuid.UUID(first_body["administrator"]["id"])
 
 
+async def test_locked_singleton_refreshes_expire_on_commit_false_identity_map(
+    app_client: AsyncClient,
+) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    del app_client
+    await _reset_uninitialized()
+    async with get_sessionmaker()() as stale_session:
+        stale = await administrator_service._locked_singleton(stale_session)
+        assert stale.setup_state is SetupState.UNINITIALIZED
+        await stale_session.commit()
+
+        async with get_sessionmaker()() as advancing_session:
+            current = await administrator_service._locked_singleton(advancing_session)
+            current.setup_state = SetupState.IN_SETUP
+            current.bootstrap_consumed_at = setup_service._now()
+            await advancing_session.commit()
+
+        refreshed = await administrator_service._locked_singleton(stale_session)
+        assert refreshed is stale
+        assert refreshed.setup_state is SetupState.IN_SETUP
+        assert refreshed.bootstrap_consumed_at is not None
+        await stale_session.rollback()
+
+
+async def test_credential_reset_is_serialized_against_acknowledgment(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("credential-fence")
+    initial = await _provision(app_client, secret, username)
+    assert initial.status_code == 201
+    subject = f"subject:{username}"
+
+    barrier = _PasswordResetBarrier()
+    _setup_keycloak.password_barrier = barrier
+    first_reissue = asyncio.create_task(
+        _provision(app_client, secret, username), name="credential-reissue-one"
+    )
+    second_reissue = asyncio.create_task(
+        _provision(app_client, secret, username), name="credential-reissue-two"
+    )
+    await asyncio.wait_for(barrier.entered.get(), timeout=2)
+    acknowledgment = asyncio.create_task(
+        app_client.post("/api/v1/setup/administrator/acknowledge", json={"secret": secret}),
+        name="acknowledge-between-resets",
+    )
+
+    acknowledgment_was_blocked = False
+    try:
+        await asyncio.wait_for(asyncio.shield(acknowledgment), timeout=0.25)
+    except TimeoutError:
+        acknowledgment_was_blocked = True
+    finally:
+        barrier.release.set()
+
+    acknowledged = await asyncio.wait_for(acknowledgment, timeout=2)
+    password_count_at_acknowledgment = len(_setup_keycloak.passwords[subject])
+    reissued = await asyncio.wait_for(asyncio.gather(first_reissue, second_reissue), timeout=2)
+
+    assert acknowledgment_was_blocked is True
+    assert acknowledged.status_code == 200
+    assert barrier.max_active == 1
+    assert len(_setup_keycloak.passwords[subject]) == password_count_at_acknowledgment
+    assert {response.status_code for response in reissued} <= {200, 409}
+
+
 async def test_first_administrator_acknowledgment_is_idempotent_for_same_secret(
     app_client: AsyncClient,
 ) -> None:
@@ -451,6 +549,70 @@ async def test_reminted_secret_recovers_pending_claim_and_advanced_setup_refuses
     assert (await _config()).bootstrap_secret_hash == stored_hash
 
 
+async def test_remint_cannot_commit_after_racing_acknowledgment(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    del _setup_keycloak
+    secret = await _reset_uninitialized()
+    username = _sub("remint-race")
+    assert (await _provision(app_client, secret, username)).status_code == 201
+    original_hash = (await _config()).bootstrap_secret_hash
+    replacement_secret, replacement_hash = mint_secret()
+    assignment_checked = asyncio.Event()
+    allow_acknowledgment = asyncio.Event()
+    mint_called = threading.Event()
+    real_assignment_exists = administrator_service._admin_assignment_exists
+
+    async def pause_acknowledgment_assignment(
+        session: Any, *, org_id: uuid.UUID, user_id: uuid.UUID
+    ) -> bool:
+        assignment_checked.set()
+        await allow_acknowledgment.wait()
+        return await real_assignment_exists(session, org_id=org_id, user_id=user_id)
+
+    def observed_mint_secret() -> tuple[str, str]:
+        mint_called.set()
+        return replacement_secret, replacement_hash
+
+    def run_remint() -> tuple[str, str]:
+        try:
+            return "minted", setup_cli.mint_bootstrap()
+        except SystemExit as exc:
+            return "refused", str(exc)
+
+    monkeypatch.setattr(
+        administrator_service,
+        "_admin_assignment_exists",
+        pause_acknowledgment_assignment,
+    )
+    monkeypatch.setattr(setup_cli, "mint_secret", observed_mint_secret)
+    acknowledgment = asyncio.create_task(
+        app_client.post("/api/v1/setup/administrator/acknowledge", json={"secret": secret})
+    )
+    await asyncio.wait_for(assignment_checked.wait(), timeout=2)
+    remint = asyncio.create_task(asyncio.to_thread(run_remint))
+    mint_ran_before_acknowledgment = await asyncio.to_thread(mint_called.wait, 0.5)
+    allow_acknowledgment.set()
+
+    acknowledged = await asyncio.wait_for(acknowledgment, timeout=2)
+    remint_outcome = await asyncio.wait_for(remint, timeout=2)
+    final_cfg = await _config()
+
+    assert acknowledged.status_code == 200
+    assert mint_ran_before_acknowledgment is False
+    assert remint_outcome == (
+        "refused",
+        "bootstrap can only be minted while setup is UNINITIALIZED",
+    )
+    assert final_cfg.setup_state is SetupState.IN_SETUP
+    assert final_cfg.bootstrap_secret_hash == original_hash
+
+
 async def test_different_bound_username_discloses_only_username_after_valid_secret(
     app_client: AsyncClient,
 ) -> None:
@@ -505,6 +667,31 @@ async def test_reliable_email_collision_releases_unowned_claim(
     assert collision.status_code == 409
     assert collision.json()["code"] == "keycloak_email_exists"
     assert (await _config()).bootstrap_admin_claim_id is None
+
+
+async def test_keycloak_rejection_detail_never_echoes_marker_or_profile(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("rejected-profile")
+    email = "rejected-profile@example.local"
+    _setup_keycloak.rejection_detail_template = (
+        "upstream echoed claim={claim}; username={username}; email={email}"
+    )
+
+    response = await _provision(app_client, secret, username, email=email)
+
+    assert response.status_code == 422
+    body = response.json()
+    cfg = await _config()
+    assert body["code"] == "validation_error"
+    assert body["title"] == "The identity provider rejected the administrator profile"
+    assert "detail" not in body
+    assert secret not in response.text
+    assert username not in response.text
+    assert email not in response.text
+    assert str(cfg.bootstrap_admin_claim_id) not in response.text
 
 
 async def test_lookup_outage_retains_claim_and_fails_closed(
@@ -1092,7 +1279,7 @@ async def test_bootstrap_rejects_expired_secret(
         await s.commit()
     r = await _provision(app_client, secret, _sub("exp"))
     assert r.status_code == 403
-    assert r.json()["code"] == "bootstrap_expired"
+    assert r.json()["code"] == "bootstrap_invalid"
 
 
 async def test_bootstrap_rejects_when_no_secret_minted(
@@ -1104,8 +1291,8 @@ async def test_bootstrap_rejects_when_no_secret_minted(
         cfg.bootstrap_secret_hash = None
         await s.commit()
     r = await _provision(app_client, "anything", _sub("ns"))
-    assert r.status_code == 409
-    assert r.json()["code"] == "no_bootstrap_secret"
+    assert r.status_code == 403
+    assert r.json()["code"] == "bootstrap_invalid"
 
 
 async def test_grant_role_break_glass_still_works(

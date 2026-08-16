@@ -12,6 +12,7 @@ from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, Even
 from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.system_config import SetupState
 from easysynq_api.problems import ProblemException
+from easysynq_api.services.setup import administrator as administrator_service
 from easysynq_api.services.setup.administrator import (
     ALLOWED_BOOTSTRAP_AFTER_KEYS,
     FirstAdministratorProfile,
@@ -88,6 +89,56 @@ def test_secret_is_verified_before_advanced_state_is_disclosed() -> None:
         _validate_bootstrap_secret(cfg, secret, now=datetime.datetime.now(datetime.UTC))
     assert advanced.value.status == 409
     assert advanced.value.code == "setup_already_complete"
+
+
+@pytest.mark.parametrize("proof_state", ["missing", "expired", "bad"])
+@pytest.mark.parametrize(
+    "validator_name",
+    ["_validate_request_proof", "_validate_acknowledgment_proof"],
+)
+async def test_every_failed_proof_runs_comparison_and_counts_generic_denial(
+    monkeypatch: pytest.MonkeyPatch,
+    proof_state: str,
+    validator_name: str,
+) -> None:
+    valid_secret, stored_hash = mint_secret()
+    now = datetime.datetime.now(datetime.UTC)
+    cfg = SimpleNamespace(
+        bootstrap_secret_hash=None if proof_state == "missing" else stored_hash,
+        bootstrap_expires_at=(
+            now - datetime.timedelta(minutes=1)
+            if proof_state == "expired"
+            else now + datetime.timedelta(hours=1)
+        ),
+        setup_state=SetupState.UNINITIALIZED,
+        bootstrap_consumed_at=None,
+    )
+    presented = "wrong-secret" if proof_state in {"missing", "bad"} else valid_secret
+    compared_hashes: list[str | None] = []
+    failure_count = 0
+    real_verify = administrator_service.verify_secret
+
+    def observed_verify(secret: str, candidate_hash: str | None) -> bool:
+        compared_hashes.append(candidate_hash)
+        return real_verify(secret, candidate_hash)
+
+    async def record_failure() -> None:
+        nonlocal failure_count
+        failure_count += 1
+
+    monkeypatch.setattr(administrator_service, "verify_secret", observed_verify)
+    monkeypatch.setattr(administrator_service, "_record_failure", record_failure)
+
+    with pytest.raises(ProblemException) as excinfo:
+        validator = getattr(administrator_service, validator_name)
+        await validator(cfg, presented)
+
+    assert excinfo.value.status == 403
+    assert excinfo.value.code == "bootstrap_invalid"
+    assert excinfo.value.title == "Invalid bootstrap secret"
+    assert len(compared_hashes) == 1
+    assert compared_hashes[0] is not None
+    assert failure_count == 1
 
 
 def test_public_summary_defaults_missing_display_name_to_bound_username() -> None:

@@ -39,7 +39,12 @@ def mint_bootstrap(org_short_code: str = "DEFAULT", ttl_hours: int = 24) -> str:
             )
             if org is None:
                 raise SystemExit(f"no organization with short_code={org_short_code!r}")
-            cfg = session.get(SystemConfig, org.id)
+            cfg = session.scalar(
+                select(SystemConfig)
+                .where(SystemConfig.org_id == org.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
             if cfg is None:
                 raise SystemExit("system_config is not initialized")
             if cfg.setup_state is not SetupState.UNINITIALIZED:
