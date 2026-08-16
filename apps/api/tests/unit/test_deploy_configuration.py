@@ -94,10 +94,14 @@ _SAFE_NEGATIVE_NORMAL_FLOW_PHRASES = (
         re.IGNORECASE,
     ),
 )
-_DIRECT_HELPER_PATH_AT_COMMAND_POSITION = re.compile(
-    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*[\"']?(?:"
-    r"scripts/|\$\{?APP_DIR\}?/scripts/|(?:\./|\.\./)(?:[^/\s]+/)*scripts/|"
-    r"/(?:[^/\s]+/)*scripts/)"
+_PATH_VALUED_EXECUTABLE_AT_COMMAND_POSITION = re.compile(
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*[\"']?"
+    r"(?P<path>[^\s\"']*/[^\s\"']+)"
+)
+_PATH_VALUED_PYTHON_INTERPRETER = re.compile(r"(?:^|/)python(?:3)?$")
+_ALLOWED_POST_READY_PYTHON = re.compile(
+    r"(?:\bpython(?:3)?\b|/(?:[^/\s\"']+/)*python(?:3)?[\"']?)\s+-m\s+"
+    r"easysynq_api\.cli\.(?:setup\s+mint-bootstrap|keycloak_redirect)\b"
 )
 _NORMAL_FLOW_KEYCLOAK_CREATION = re.compile(
     r"(?<![-\w])(?:create|add|make|provision)\b[^.\n]{0,120}\b(?:"
@@ -178,15 +182,16 @@ def _assert_no_human_identity_actions(post_ready_actions: str) -> None:
             r"(?:^|[\s\"'])(?:\$\{?APP_DIR\}?/)?scripts/",
             statement,
         ), f"post-ready appliance actions must not run an unapproved helper: {statement}"
-        assert not _DIRECT_HELPER_PATH_AT_COMMAND_POSITION.search(statement), (
-            f"post-ready appliance actions must not run an unapproved helper: {statement}"
-        )
+        path_match = _PATH_VALUED_EXECUTABLE_AT_COMMAND_POSITION.search(statement)
+        if path_match:
+            executable_path = path_match["path"].rstrip("\"'")
+            assert _PATH_VALUED_PYTHON_INTERPRETER.search(executable_path) and (
+                _ALLOWED_POST_READY_PYTHON.search(statement)
+            ), f"post-ready appliance actions must not run an unapproved helper: {statement}"
         for _ in re.finditer(r"\bpython(?:3)?\b", statement):
-            assert re.search(
-                r"\bpython(?:3)?\s+-m\s+easysynq_api\.cli\."
-                r"(?:setup\s+mint-bootstrap|keycloak_redirect)\b",
-                statement,
-            ), f"post-ready appliance actions must not run an unapproved Python helper: {statement}"
+            assert _ALLOWED_POST_READY_PYTHON.search(statement), (
+                f"unapproved Python helper in post-ready appliance actions: {statement}"
+            )
 
 
 def _normal_flow_doc_text(content: str) -> str:
@@ -589,6 +594,10 @@ def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() ->
         "direct-renamed-helper": '"$APP_DIR/scripts/seed-initial-account.sh"',
         "relative-direct-helper": "./scripts/seed-initial-account.sh",
         "absolute-direct-helper": "/opt/easysynq/scripts/seed-initial-account.sh",
+        "parent-relative-direct-helper": "../seed-initial-account.sh",
+        "relative-bin-direct-helper": "./bin/seed-initial-account.sh",
+        "absolute-bin-direct-helper": "/opt/easysynq/bin/seed-initial-account.sh",
+        "venv-python-arbitrary-module": "/opt/easysynq/.venv/bin/python -m site",
     }
     rejected_actions: dict[str, bool] = {}
     for name, unsafe_action in unsafe_actions.items():
@@ -609,6 +618,10 @@ def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() ->
         "python -m easysynq_api.cli.keycloak_redirect --origin https://app.example\n"
     )
     _assert_no_human_identity_actions('echo "see ./scripts/seed-initial-account.sh"')
+    _assert_no_human_identity_actions('echo "see /opt/easysynq/bin/seed-initial-account.sh"')
+    _assert_no_human_identity_actions(
+        '"/opt/easysynq/.venv/bin/python" -m easysynq_api.cli.setup mint-bootstrap'
+    )
 
     assert 'install -m 600 -o easysynq -g easysynq /dev/null "$SETUP_FILE"' in provisioner
     assert not setup_helper.exists()
