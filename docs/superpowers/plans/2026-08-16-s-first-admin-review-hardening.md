@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Work only in `/home/cjones/Desktop/EasySynQ/.worktrees/first-admin-bootstrap` on `codex/first-admin-bootstrap`. Confirm the branch starts at approved design commit `d1f22c0`, and preserve the primary checkout's unrelated `.superdesign/` directory.
+- Work only in the existing linked feature worktree on `codex/first-admin-bootstrap`. Confirm the branch starts at approved design commit `d1f22c0`, and preserve the primary checkout's unrelated `.superdesign/` directory.
 - Do not prune or modify either unrelated prunable `/tmp` worktree record.
 - Binding authority is R64–R66, ADR 0005 including its 2026-08-16 receipt amendment, `docs/superpowers/specs/2026-08-15-s-first-admin-provisioning-design.md`, and `docs/superpowers/specs/2026-08-16-s-first-admin-review-hardening-design.md`.
 - Re-read the relevant debt before each hotspot: bootstrap claim state machine before `services/setup`, credential lock and credential-receipt state before `administrator.py`, Keycloak profile reconciliation before `keycloak_provisioning.py`, bootstrap admission coupling before `setup/service.py`, and responsive/live-CI debt before browser or harness changes.
@@ -59,7 +59,7 @@
 - [ ] **Step 1: Add failing migration-head and populated-round-trip assertions**
 
 Extend `_BOOTSTRAP_CLAIM_COLUMNS` with `bootstrap_credential_receipt_hash`, assert Alembic head is
-`0088_bootstrap_credential_receipt`, seed a 64-character digest at 0088, downgrade to 0087 and prove
+`0088_bootstrap_credential`, seed a 64-character digest at 0088, downgrade to 0087 and prove
 only that column disappears, then re-upgrade and prove the row survives with the nullable column
 restored:
 
@@ -91,7 +91,9 @@ Expected: migration coherence fails because head remains 0087 and the receipt co
 
 - [ ] **Step 3: Implement migration and ORM state**
 
-Create revision `0088_bootstrap_credential_receipt` with `down_revision = "0087_first_admin_bootstrap"`:
+Create revision `0088_bootstrap_credential` with `down_revision = "0087_first_admin_bootstrap"`.
+The owner approved this shortened internal identifier because the repository's Alembic version
+column is `VARCHAR(32)`; retain the descriptive filename and do not widen Alembic infrastructure:
 
 ```python
 def upgrade() -> None:
@@ -128,7 +130,7 @@ cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest tests/migration
 cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run alembic heads
 ```
 
-Expected: focused tests pass and Alembic reports exactly `0088_bootstrap_credential_receipt (head)`.
+Expected: focused tests pass and Alembic reports exactly `0088_bootstrap_credential (head)`.
 
 - [ ] **Step 5: Review and commit Task 1**
 
@@ -987,7 +989,7 @@ all commits and evidence to the owner; do not push or resolve GitHub threads unt
 ## Final Acceptance Checklist
 
 - [ ] All five unresolved review findings have focused RED/GREEN evidence.
-- [ ] Alembic has one head: `0088_bootstrap_credential_receipt`; populated 0087/0088 round trip passes.
+- [ ] Alembic has one head: `0088_bootstrap_credential`; populated 0087/0088 round trip passes.
 - [ ] Receipt plaintext exists only in the one provision response and volatile component memory.
 - [ ] Stale receipt cannot consume bootstrap; active and consumed-replay receipts behave exactly as designed.
 - [ ] Unrelated administrators block every public bootstrap stage without becoming an existence oracle.
