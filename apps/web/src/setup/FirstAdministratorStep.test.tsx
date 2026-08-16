@@ -39,14 +39,67 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function storageValues(storage: Storage | undefined): string[] {
+function storageEntries(storage: Storage | undefined): string[] {
   if (storage === undefined) return [];
   const values: string[] = [];
   for (let index = 0; index < storage.length; index += 1) {
     const key = storage.key(index);
-    if (key !== null) values.push(storage.getItem(key) ?? "");
+    if (key !== null) values.push(`${key}=${storage.getItem(key) ?? ""}`);
   }
   return values;
+}
+
+function serializeClientCache(queryClient: QueryClient): string {
+  return JSON.stringify(
+    {
+      queries: queryClient
+        .getQueryCache()
+        .getAll()
+        .map((query) => ({
+          queryKey: query.queryKey,
+          data: query.state.data,
+          error: query.state.error,
+          fetchFailureReason: query.state.fetchFailureReason,
+          state: query.state,
+        })),
+      mutations: queryClient
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => ({
+          mutationKey: mutation.options.mutationKey,
+          data: mutation.state.data,
+          variables: mutation.state.variables,
+          context: mutation.state.context,
+          error: mutation.state.error,
+          failureReason: mutation.state.failureReason,
+          state: mutation.state,
+        })),
+    },
+    (_key, value: unknown) =>
+      value instanceof Error
+        ? {
+            name: value.name,
+            message: value.message,
+            cause: value.cause,
+            ...Object.fromEntries(Object.entries(value)),
+          }
+        : value,
+  );
+}
+
+function observeClientCache(queryClient: QueryClient) {
+  const snapshots = [serializeClientCache(queryClient)];
+  const capture = () => snapshots.push(serializeClientCache(queryClient));
+  const unsubscribeQuery = queryClient.getQueryCache().subscribe(capture);
+  const unsubscribeMutation = queryClient.getMutationCache().subscribe(capture);
+  return {
+    snapshots,
+    stop: () => {
+      capture();
+      unsubscribeQuery();
+      unsubscribeMutation();
+    },
+  };
 }
 
 function memoryStorage(): Storage {
@@ -103,6 +156,7 @@ afterAll(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   globalThis.localStorage?.clear();
   globalThis.sessionStorage?.clear();
 });
@@ -138,6 +192,9 @@ test("provisions without a bearer, normalizes optional blanks, and keeps both se
     }),
   );
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const localSetItem = vi.spyOn(globalThis.localStorage, "setItem");
+  const sessionSetItem = vi.spyOn(globalThis.sessionStorage, "setItem");
+  const cacheObservation = observeClientCache(queryClient);
   const user = userEvent.setup();
   const view = renderStep(undefined, queryClient);
 
@@ -167,21 +224,15 @@ test("provisions without a bearer, normalizes optional blanks, and keeps both se
     last_name: null,
   });
 
-  const retainedQueryData = queryClient
-    .getQueryCache()
-    .getAll()
-    .map((query) => JSON.stringify(query.state.data ?? null));
-  const retainedMutationData = queryClient
-    .getMutationCache()
-    .getAll()
-    .map((mutation) => JSON.stringify(mutation.state.data ?? null));
+  cacheObservation.stop();
   for (const secret of [SETUP_SECRET, TEMPORARY_PASSWORD]) {
     expect(window.location.href).not.toContain(secret);
-    expect(storageValues(globalThis.localStorage).join(" ")).not.toContain(secret);
-    expect(storageValues(globalThis.sessionStorage).join(" ")).not.toContain(secret);
-    expect(retainedQueryData.join(" ")).not.toContain(secret);
-    expect(retainedMutationData.join(" ")).not.toContain(secret);
+    expect(storageEntries(globalThis.localStorage).join(" ")).not.toContain(secret);
+    expect(storageEntries(globalThis.sessionStorage).join(" ")).not.toContain(secret);
+    expect(cacheObservation.snapshots.join(" ")).not.toContain(secret);
   }
+  expect(localSetItem).not.toHaveBeenCalled();
+  expect(sessionSetItem).not.toHaveBeenCalled();
   expect(await axe(view.container)).toHaveNoViolations();
 });
 
@@ -227,8 +278,12 @@ test("acknowledgment posts only the setup secret, remains visible while pending,
     expect(screen.queryByText(TEMPORARY_PASSWORD)).toBeNull();
     expect(document.body).not.toHaveTextContent(SETUP_SECRET);
   });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const localSetItem = vi.spyOn(globalThis.localStorage, "setItem");
+  const sessionSetItem = vi.spyOn(globalThis.sessionStorage, "setItem");
+  const cacheObservation = observeClientCache(queryClient);
   const user = userEvent.setup();
-  renderStep(onAcknowledged);
+  renderStep(onAcknowledged, queryClient);
   await fillRequiredForm(user);
   await user.click(screen.getByRole("button", { name: "Create administrator" }));
 
@@ -254,6 +309,14 @@ test("acknowledgment posts only the setup secret, remains visible while pending,
   expect(ackBody).toEqual({ secret: SETUP_SECRET });
   expect(ackAuthorization).toBeNull();
   expect(screen.queryByText(TEMPORARY_PASSWORD)).toBeNull();
+  cacheObservation.stop();
+  for (const secret of [SETUP_SECRET, TEMPORARY_PASSWORD]) {
+    expect(storageEntries(globalThis.localStorage).join(" ")).not.toContain(secret);
+    expect(storageEntries(globalThis.sessionStorage).join(" ")).not.toContain(secret);
+    expect(cacheObservation.snapshots.join(" ")).not.toContain(secret);
+  }
+  expect(localSetItem).not.toHaveBeenCalled();
+  expect(sessionSetItem).not.toHaveBeenCalled();
 });
 
 test("acknowledgment failure keeps the credential panel and offers a single-flight Retry", async () => {

@@ -10,14 +10,9 @@ test("UNINITIALIZED renders public administrator creation without login or sensi
   const user = userEvent.setup();
   const login = vi.fn(async () => undefined);
   let detailReads = 0;
-  let retiredBootstrapCalls = 0;
   server.use(
     http.get("/api/v1/setup", () => {
       detailReads += 1;
-      return HttpResponse.json({});
-    }),
-    http.post("/api/v1/setup/bootstrap", () => {
-      retiredBootstrapCalls += 1;
       return HttpResponse.json({});
     }),
     http.post("/api/v1/setup/administrator", () =>
@@ -61,7 +56,6 @@ test("UNINITIALIZED renders public administrator creation without login or sensi
   await user.click(screen.getByRole("button", { name: "Create administrator" }));
 
   expect(await screen.findByText("New-Only-Temporary-Password-8")).toBeInTheDocument();
-  expect(retiredBootstrapCalls).toBe(0);
 });
 
 test("IN_SETUP without a token renders named sign-in recovery without the public form or setup detail", async () => {

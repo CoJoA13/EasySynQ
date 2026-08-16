@@ -456,16 +456,18 @@ test("administrator acknowledgment refetches setup state and starts login exactl
   expect(sessionStorage.getItem("es_auth_redirect")).toBe("1");
 });
 
-test("acknowledgment state-refetch failure does not start login", async () => {
+test("acknowledgment state-refetch failure stays on App recovery without login until Retry succeeds", async () => {
   const user = userEvent.setup();
   const login = vi.fn(async () => undefined);
   let stateReads = 0;
   server.use(
     http.get("/api/v1/setup/state", () => {
       stateReads += 1;
-      return stateReads === 1
-        ? HttpResponse.json({ setup_state: "UNINITIALIZED" })
-        : HttpResponse.json({ detail: "unavailable" }, { status: 503 });
+      if (stateReads === 1) return HttpResponse.json({ setup_state: "UNINITIALIZED" });
+      if (stateReads === 2) {
+        return HttpResponse.json({ detail: "unavailable" }, { status: 503 });
+      }
+      return HttpResponse.json({ setup_state: "IN_SETUP" });
     }),
     http.post("/api/v1/setup/administrator", () =>
       HttpResponse.json(
@@ -503,8 +505,18 @@ test("acknowledgment state-refetch failure does not start login", async () => {
   expect(
     await screen.findByRole("heading", { name: "Setup status is unavailable" }),
   ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry setup status" })).toBeNull();
+  expect(screen.queryByText("New-Only-Temporary-Password-8")).toBeNull();
+  expect(document.body).not.toHaveTextContent("one-time-setup-secret");
   expect(stateReads).toBe(2);
   expect(login).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+
+  await waitFor(() => expect(login).toHaveBeenCalledTimes(1));
+  expect(stateReads).toBe(3);
+  expect(sessionStorage.getItem("es_auth_redirect")).toBe("1");
 });
 
 test("setup state retry performs one additional read and recovers to the shell", async () => {

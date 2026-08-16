@@ -131,7 +131,6 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
   const [pending, setPending] = useState<"provision" | "acknowledge" | null>(null);
   const [error, setError] = useState<PresentedError | null>(null);
   const [acknowledgeFailed, setAcknowledgeFailed] = useState(false);
-  const [transitionFailed, setTransitionFailed] = useState(false);
   const inFlightRef = useRef(false);
   const secretRef = useRef("");
   const passwordRef = useRef("");
@@ -171,7 +170,6 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
     setPending("provision");
     setError(null);
     setAcknowledgeFailed(false);
-    setTransitionFailed(false);
     const request: FirstAdministratorRequest = {
       secret: form.secret.trim(),
       username: form.username.trim(),
@@ -204,12 +202,17 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
     setPending("acknowledge");
     setAcknowledgeFailed(false);
     try {
-      await apiSend<BootstrapAcknowledgeResponse>(
-        "POST",
-        "/api/v1/setup/administrator/acknowledge",
-        null,
-        { secret: secretRef.current },
-      );
+      try {
+        await apiSend<BootstrapAcknowledgeResponse>(
+          "POST",
+          "/api/v1/setup/administrator/acknowledge",
+          null,
+          { secret: secretRef.current },
+        );
+      } catch {
+        setAcknowledgeFailed(true);
+        return;
+      }
       flushSync(() => {
         passwordRef.current = "";
         secretRef.current = "";
@@ -217,52 +220,11 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
         setForm((current) => ({ ...current, secret: "" }));
       });
       await onAcknowledged();
-    } catch {
-      if (passwordRef.current !== "") setAcknowledgeFailed(true);
-      else setTransitionFailed(true);
     } finally {
       inFlightRef.current = false;
       setPending(null);
     }
   };
-
-  const retryTransition = async (): Promise<void> => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
-    setPending("acknowledge");
-    try {
-      await onAcknowledged();
-    } finally {
-      inFlightRef.current = false;
-      setPending(null);
-    }
-  };
-
-  if (transitionFailed) {
-    return (
-      <Stack data-testid="first-administrator-step" miw={0} w="100%" gap="md">
-        <Alert color="yellow" role="alert" aria-live="assertive">
-          <Stack gap="sm">
-            <Title order={2} size="h3">
-              Password receipt was saved
-            </Title>
-            <Text size="sm">
-              EasySynQ could not refresh setup status. Retry the status check; no password will be
-              shown or issued again.
-            </Text>
-            <Button
-              onClick={() => void retryTransition()}
-              loading={pending !== null}
-              disabled={pending !== null}
-              style={{ minHeight: 44 }}
-            >
-              Retry setup status
-            </Button>
-          </Stack>
-        </Alert>
-      </Stack>
-    );
-  }
 
   if (temporaryPassword !== "") {
     return (
