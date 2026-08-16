@@ -159,6 +159,25 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await expect(passwordHeading).toBeFocused();
   await expect(password).toBeVisible();
   await expectLoginCalls(page, 0);
+  const passwordShrinkBoundaries = await password.evaluate((element) => {
+    const alert = element.closest('[role="alert"]');
+    if (!(alert instanceof HTMLElement)) return [];
+
+    const minWidths: string[] = [];
+    let current: HTMLElement | null = element as HTMLElement;
+    while (current !== null && current !== alert) {
+      const parent: HTMLElement | null = current.parentElement;
+      if (parent === null) return [];
+      const parentDisplay = getComputedStyle(parent).display;
+      if (parentDisplay === "flex" || parentDisplay === "inline-flex") {
+        minWidths.push(getComputedStyle(current).minWidth);
+      }
+      current = parent;
+    }
+    return minWidths;
+  });
+  expect(passwordShrinkBoundaries).not.toHaveLength(0);
+  expect(passwordShrinkBoundaries.every((minWidth) => minWidth === "0px")).toBe(true);
   for (const control of [password, copy, acknowledge]) {
     await expectInsideNarrowViewport(control);
   }

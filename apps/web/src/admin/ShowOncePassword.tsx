@@ -30,8 +30,12 @@ export function ShowOncePassword({
 
   return (
     <Stack gap="sm" miw={0} w="100%">
-      <Alert color="yellow" aria-busy={busy || undefined}>
-        <Stack gap="xs">
+      <Alert
+        color="yellow"
+        aria-busy={busy || undefined}
+        styles={{ body: { minWidth: 0 }, message: { minWidth: 0 } }}
+      >
+        <Stack gap="xs" miw={0}>
           <Title ref={headingRef} order={2} size="h3" tabIndex={-1}>
             Temporary password — shown once
           </Title>
@@ -41,8 +45,10 @@ export function ShowOncePassword({
               fontSize: "1.1rem",
               letterSpacing: "0.05em",
               maxWidth: "100%",
+              minWidth: 0,
               overflowWrap: "anywhere",
               whiteSpace: "pre-wrap",
+              width: "100%",
               wordBreak: "break-word",
             }}
           >
