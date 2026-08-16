@@ -19,6 +19,7 @@ test; and (2) a role grant during provisioning is fully audited, in an order an 
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Callable
@@ -39,6 +40,7 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.domain.identity.temp_password import MIN_LENGTH
+from easysynq_api.services.authz.admin_guard import lock_admin_set
 from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.services.keycloak_provisioning import KeycloakProvisioningClient
 
@@ -343,6 +345,74 @@ async def test_provision_creates_the_account_the_row_and_the_credential(
         assert event is not None
         # Secrets hygiene: the password must never reach an audit payload.
         assert body["temporary_password"] not in str(event.after)
+
+
+async def test_admin_role_provisioning_locks_before_keycloak_identity_creation(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _install_kc(monkeypatch, new_subject=_sub("locked-admin-provision"))
+    headers = await _admin(token_factory)
+    admin_role_id = await _role_id(_ADMIN)
+    org_id = await s5.default_org_id()
+
+    async with get_sessionmaker()() as blocker:
+        await lock_admin_set(blocker, org_id)
+        attempted = asyncio.Event()
+
+        async def observed_lock(session: object, candidate_org_id: uuid.UUID) -> None:
+            attempted.set()
+            await lock_admin_set(session, candidate_org_id)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(users_api, "lock_admin_set", observed_lock, raising=False)
+        request = asyncio.create_task(
+            app_client.post(
+                "/api/v1/users/provision",
+                headers=headers,
+                json={
+                    "username": _sub("admin-provision"),
+                    "role_ids": [str(admin_role_id)],
+                },
+            )
+        )
+        lock_attempt = asyncio.create_task(attempted.wait())
+        done, _ = await asyncio.wait(
+            {request, lock_attempt}, timeout=2, return_when=asyncio.FIRST_COMPLETED
+        )
+        assert lock_attempt in done, "admin provisioning reached Keycloak without the shared lock"
+        assert request.done() is False
+        assert calls["created"] == []
+        await blocker.rollback()
+
+    response = await asyncio.wait_for(request, timeout=2)
+    assert response.status_code == 201, response.text
+
+
+async def test_ordinary_role_provisioning_does_not_take_admin_set_lock(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_kc(monkeypatch, new_subject=_sub("ordinary-role-provision"))
+    headers = await _admin(token_factory)
+    author_role_id = await _role_id("Author")
+    attempts = 0
+
+    async def observed_lock(session: object, org_id: uuid.UUID) -> None:
+        nonlocal attempts
+        attempts += 1
+        await lock_admin_set(session, org_id)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(users_api, "lock_admin_set", observed_lock, raising=False)
+    response = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": _sub("author-provision"), "role_ids": [str(author_role_id)]},
+    )
+
+    assert response.status_code == 201, response.text
+    assert attempts == 0
 
 
 async def test_ordinary_provisioning_never_sends_a_bootstrap_marker(

@@ -29,6 +29,7 @@ from ..domain.authz.types import Effect, ScopeLevel
 from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import (
+    SYSTEM_ADMIN_ROLE,
     AuthzAuditSink,
     assert_can_assign_role,
     assert_can_delete_override,
@@ -36,6 +37,7 @@ from ..services.authz import (
     assert_can_revoke_role,
     get_authz_audit_sink,
     invalidate_user_permissions,
+    lock_admin_set,
     require,
     revoke_removes_last_admin,
 )
@@ -282,6 +284,8 @@ async def assign_user_role(
     target = await _get_user(session, user_id, granter.org_id)
     role = await _resolve_role(session, target.org_id, body.role_id, body.role_name)
     await assert_can_assign_role(session, sink, granter, role.id)
+    if role.name == SYSTEM_ADMIN_ROLE:
+        await lock_admin_set(session, target.org_id)
     # ``managed_by`` is a RESERVED bound_scope marker set ONLY by owner-assignment (it drives the
     # hide/409 on the generic role surface + the candidacy/ack exclusions). Strip it here so a
     # generic caller cannot forge an assignment that masquerades as owner-assignment-managed and
@@ -292,17 +296,21 @@ async def assign_user_role(
     assignment = RoleAssignment(
         org_id=target.org_id, user_id=target.id, role_id=role.id, bound_scope=bound_scope
     )
-    session.add(assignment)
-    await session.flush()  # populate assignment.id for the audit row's object_id
-    _audit_authz_change(
-        session,
-        granter,
-        EventType.ROLE_ASSIGN,
-        assignment.id,
-        target.id,
-        after={"role_id": str(role.id), "role_name": role.name, "bound_scope": bound_scope},
-    )
-    await session.commit()
+    try:
+        session.add(assignment)
+        await session.flush()  # populate assignment.id for the audit row's object_id
+        _audit_authz_change(
+            session,
+            granter,
+            EventType.ROLE_ASSIGN,
+            assignment.id,
+            target.id,
+            after={"role_id": str(role.id), "role_name": role.name, "bound_scope": bound_scope},
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     await session.refresh(assignment)
     await invalidate_user_permissions(target.id)
     return _assignment(assignment, role.name)

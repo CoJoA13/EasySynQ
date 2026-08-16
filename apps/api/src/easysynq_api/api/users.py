@@ -36,6 +36,7 @@ from ..domain.authz.types import ResourceContext
 from ..logging import request_id_var
 from ..problems import ProblemCode, ProblemException
 from ..services.authz import (
+    SYSTEM_ADMIN_ROLE,
     AuthzAuditSink,
     assert_can_assign_role,
     assert_can_reset_credential,
@@ -43,6 +44,7 @@ from ..services.authz import (
     enforce,
     get_authz_audit_sink,
     invalidate_user_permissions,
+    lock_admin_set,
     require,
 )
 from ..services.identity import provisioning as identity_provisioning
@@ -216,8 +218,7 @@ async def list_users(
     return [_represent(u, names.get(u.id, [])) for u in users]
 
 
-@router.post("/users/provision", status_code=status.HTTP_201_CREATED)
-async def provision_user(
+async def _provision_user(
     request: Request,
     body: UserProvision,
     caller: AppUser = Depends(_user_create),
@@ -276,6 +277,12 @@ async def provision_user(
             )
         for role_id in role_ids:
             await assert_can_assign_role(session, sink, caller, role_id)
+
+    if SYSTEM_ADMIN_ROLE in role_names.values():
+        # Keep the administrator set stable from the first external identity read through the
+        # transaction that persists the user and role assignment. Ordinary role grants do not
+        # contend on this lock.
+        await lock_admin_set(session, caller.org_id)
 
     async with identity_provisioning.keycloak_client() as kc:
         try:
@@ -442,6 +449,23 @@ async def provision_user(
             )
 
     return response
+
+
+@router.post("/users/provision", status_code=status.HTTP_201_CREATED)
+async def provision_user(
+    request: Request,
+    body: UserProvision,
+    caller: AppUser = Depends(_user_create),
+    session: AsyncSession = Depends(get_session),
+    sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+) -> dict[str, Any]:
+    try:
+        return await _provision_user(request, body, caller, session, sink)
+    except Exception:
+        # An administrator-role request may own the transaction advisory lock across Keycloak.
+        # End its transaction here on every failure instead of relying on dependency teardown.
+        await session.rollback()
+        raise
 
 
 @router.get("/users/{user_id}")

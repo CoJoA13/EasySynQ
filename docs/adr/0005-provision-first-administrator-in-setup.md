@@ -269,3 +269,72 @@ profile reconciliation when Keycloak provides versioned or compare-and-swap user
 external profile administration becomes a supported concurrent workflow. The receipt-state cost is
 tracked in
 [`bootstrap-credential-receipt-state`](../debt/20260816092041-bootstrap-credential-receipt-state.md).
+
+## 2026-08-16 amendment — serialized administrator writers and definitive claim release
+
+### Context
+
+The bootstrap administrator check originally locked only the `system_config` singleton and then
+read role assignments. Generic API grants, in-app provisioning, and host break-glass grants did not
+take that row lock, so an administrator assignment could commit after bootstrap's check and before
+its own persistence, credential issuance, or acknowledgment. The existing per-organization
+administrator advisory lock serialized only revoke and disable writers and therefore did not close
+the insert side of the invariant.
+
+A create-time Keycloak validation rejection also released a still-unowned claim from the initial
+pre-create absence observation. While the create call was in flight, another same-claim request or
+external identity operation could make that observation stale; a delayed rejection could then clear
+the current claim despite a now-present marker-owned identity or changed administrator state.
+
+### Decision
+
+Use the existing per-organization transaction advisory `lock_admin_set` as the shared protocol for
+every supported runtime System Administrator assignment writer. Generic API grants, in-app user
+provisioning, host `grant-role`, bootstrap inserts, role revocation, and user disable take the same
+key before observing or mutating the administrator set and retain it through commit or rollback.
+The synchronous CLI helper and asynchronous application helper share one key derivation. Ordinary
+role assignment paths do not take the lock.
+
+Bootstrap always acquires locks in one order: the singleton `system_config` row first, then the
+organization's administrator advisory lock. After establishing the durable claim, it reacquires and
+validates both locks before the first Keycloak identity read and retains them across lookup,
+create/adopt, and the EasySynQ persistence or rejection-release decision. A non-conflict
+`KeycloakRejected` may release only after an exact-username re-read is definitively absent and the
+locked database claim remains unowned, unissued, unchanged, and free of an unrelated administrator.
+A found or malformed identity, provider uncertainty, changed claim, linked user, issued credential,
+or changed administrator set retains the claim. Every exception path explicitly rolls back the
+lock-owning transaction.
+
+Development persona seeding writes only fixed ordinary roles, owner-assignment writes only the
+fixed Process Owner role, and Alembic seed/backfill operations run offline rather than as supported
+concurrent runtime administrator writers; they remain outside this protocol. Direct database writes
+that bypass supported application and host surfaces remain unsupported.
+
+### Consequences
+
+Bootstrap's administrator uniqueness check now conflicts with every supported concurrent
+administrator insert, and same-claim requests cannot overlap the external identity stage. Ordinary
+role traffic retains its prior concurrency. Claim release is based on a fresh provider observation
+inside the same database serialization boundary as the release decision, so uncertainty retains
+recoverable state.
+
+The tradeoff is deliberately longer database lock duration while Keycloak lookup/create/adopt is in
+flight. Provider latency or outage can queue bootstrap and administrator writers for the same
+organization, so provider timeouts and explicit rollback remain part of the safety boundary. This
+cost is tracked in
+[`bootstrap-provider-lock-duration`](../debt/20260816120427-bootstrap-provider-lock-duration.md).
+
+### Alternatives
+
+A table-wide role-assignment lock was rejected because it would serialize unrelated organizations
+and ordinary role traffic. A claim compare-and-swap alone was rejected because it would not conflict
+with administrator writers or make a stale external absence observation current. A bootstrap-only
+singleton lock was rejected because other supported writers do not acquire it. Releasing from the
+initial absence observation was rejected because Keycloak and PostgreSQL do not share a snapshot.
+
+### Payoff trigger
+
+Remove the singleton-held provider stage and its lock-duration cost when identity provisioning and
+EasySynQ persistence can participate in one transactionally attested boundary. Replace the shared
+advisory protocol only when the database enforces an equivalent per-organization administrator-set
+invariant across every supported runtime writer without serializing ordinary roles.

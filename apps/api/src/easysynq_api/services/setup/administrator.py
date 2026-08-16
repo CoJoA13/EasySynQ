@@ -23,6 +23,7 @@ from ...db.models.role import Role, RoleAssignment
 from ...db.models.system_config import SetupState, SystemConfig
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..authz.admin_guard import lock_admin_set
 from ..identity import provisioning as identity_provisioning
 from ..identity.provisioning import CredentiallessIdentity, IdentityProfile, IdentityUsernameExists
 from ..keycloak_provisioning import (
@@ -267,6 +268,7 @@ async def _establish_claim(
     cfg = await _locked_singleton(session)
     await _check_rate_limit()
     await _validate_request_proof(cfg, secret)
+    await lock_admin_set(session, cfg.org_id)
     await _assert_only_claim_administrator(session, cfg)
     if cfg.bootstrap_admin_claim_id is not None:
         if not _claim_fields_are_complete(cfg):
@@ -330,9 +332,16 @@ def _well_formed_marker(marker: str) -> bool:
 
 
 async def _release_unowned_claim(
-    session: AsyncSession, *, claim_id: uuid.UUID, username: str
+    session: AsyncSession,
+    *,
+    cfg: SystemConfig,
+    claim_id: uuid.UUID,
+    username: str,
 ) -> bool:
-    cfg = await _locked_singleton(session)
+    # The caller retains the singleton row and admin-set advisory lock from before the initial
+    # Keycloak read. Re-check the admin set at the release decision even though supported writers
+    # cannot pass the advisory lock; an unsupported/direct mutation therefore fails closed too.
+    await _assert_only_claim_administrator(session, cfg)
     can_release = (
         cfg.setup_state is SetupState.UNINITIALIZED
         and cfg.bootstrap_consumed_at is None
@@ -369,6 +378,7 @@ async def _resolve_identity(
     *,
     profile: FirstAdministratorProfile,
     claim_id: uuid.UUID,
+    cfg: SystemConfig,
 ) -> tuple[CredentiallessIdentity, Any]:
     client = identity_provisioning.keycloak_client()
     try:
@@ -400,11 +410,19 @@ async def _resolve_identity(
                 )
             except KeycloakRejected:
                 if initial.found is False:
-                    await _release_unowned_claim(
-                        session,
-                        claim_id=claim_id,
-                        username=profile.username,
-                    )
+                    final = await client.find_user_by_username(profile.username)
+                    if final.found:
+                        # A found identity (matching marker or otherwise) makes the original
+                        # absence observation stale. Validate marker shape, retain the claim, and
+                        # report the original definitive profile rejection.
+                        _unrelated_lookup(final, claim_id=claim_id)
+                    else:
+                        await _release_unowned_claim(
+                            session,
+                            cfg=cfg,
+                            claim_id=claim_id,
+                            username=profile.username,
+                        )
                 raise
             except IdentityUsernameExists as exc:
                 lookup = await client.find_user_by_username(profile.username)
@@ -505,8 +523,8 @@ async def _persist_user_and_role(
     org_id: uuid.UUID,
     profile: FirstAdministratorProfile,
     identity: CredentiallessIdentity,
+    cfg: SystemConfig,
 ) -> tuple[AppUser, dict[str, Any]]:
-    cfg = await _locked_singleton(session)
     _assert_claim(cfg, claim_id=claim_id, username=profile.username)
     await _assert_only_claim_administrator(session, cfg)
     if cfg.org_id != org_id:
@@ -610,6 +628,27 @@ async def _persist_user_and_role(
     return user, summary
 
 
+async def _lock_claim_identity_stage(
+    session: AsyncSession,
+    *,
+    claim_id: uuid.UUID,
+    org_id: uuid.UUID,
+    username: str,
+) -> SystemConfig:
+    """Enter the bootstrap identity/persistence serialization boundary in canonical order."""
+    cfg = await _locked_singleton(session)
+    _assert_claim(cfg, claim_id=claim_id, username=username)
+    if cfg.org_id != org_id:
+        raise ProblemException(
+            status=409,
+            code="bootstrap_not_ready",
+            title="The setup organization changed",
+        )
+    await lock_admin_set(session, org_id)
+    await _assert_only_claim_administrator(session, cfg)
+    return cfg
+
+
 async def _issue_and_record_credential(
     session: AsyncSession,
     *,
@@ -621,6 +660,7 @@ async def _issue_and_record_credential(
 ) -> str:
     cfg = await _locked_singleton(session)
     _assert_claim(cfg, claim_id=claim_id, username=username)
+    await lock_admin_set(session, cfg.org_id)
     await _assert_only_claim_administrator(session, cfg)
     if cfg.bootstrap_admin_user_id != user_id:
         raise ProblemException(
@@ -669,16 +709,38 @@ async def provision_first_administrator(
 ) -> FirstAdministratorProvisioned:
     profile = profile.normalized()
     await _check_rate_limit()
-    claim_id, org_id = await _establish_claim(session, secret=secret, username=profile.username)
-    identity, client = await _resolve_identity(session, profile=profile, claim_id=claim_id)
     try:
-        _user, summary = await _persist_user_and_role(
+        claim_id, org_id = await _establish_claim(session, secret=secret, username=profile.username)
+        cfg = await _lock_claim_identity_stage(
             session,
             claim_id=claim_id,
             org_id=org_id,
-            profile=profile,
-            identity=identity,
+            username=profile.username,
         )
+        identity, client = await _resolve_identity(
+            session,
+            profile=profile,
+            claim_id=claim_id,
+            cfg=cfg,
+        )
+    except Exception:
+        # Every exception ends the transaction explicitly: singleton/advisory locks must never
+        # depend on request-session cleanup after a provider failure.
+        await session.rollback()
+        raise
+    try:
+        try:
+            _user, summary = await _persist_user_and_role(
+                session,
+                claim_id=claim_id,
+                org_id=org_id,
+                profile=profile,
+                identity=identity,
+                cfg=cfg,
+            )
+        except Exception:
+            await session.rollback()
+            raise
         # Capture all response values before the irreversible credential side effect.
         user_id = uuid.UUID(summary["id"])
         display_name = str(summary["display_name"])
@@ -700,6 +762,9 @@ async def provision_first_administrator(
             temporary_password=password,
             created=identity.created,
         )
+    except Exception:
+        await session.rollback()
+        raise
     finally:
         await client.__aexit__(None, None, None)
 
@@ -719,11 +784,12 @@ async def _admin_assignment_exists(
     return assignment is not None
 
 
-async def acknowledge_first_administrator(session: AsyncSession, *, secret: str) -> dict[str, str]:
+async def _acknowledge_first_administrator(session: AsyncSession, *, secret: str) -> dict[str, str]:
     await _check_rate_limit()
     cfg = await _locked_singleton(session)
     await _check_rate_limit()
     await _validate_acknowledgment_proof(cfg, secret)
+    await lock_admin_set(session, cfg.org_id)
     await _assert_only_claim_administrator(session, cfg)
 
     admin_user_id = cfg.bootstrap_admin_user_id
@@ -782,3 +848,11 @@ async def acknowledge_first_administrator(session: AsyncSession, *, secret: str)
     await session.commit()
     await _reset_failures()
     return {"setup_state": SetupState.IN_SETUP.value, "admin_user_id": str(admin_user_id)}
+
+
+async def acknowledge_first_administrator(session: AsyncSession, *, secret: str) -> dict[str, str]:
+    try:
+        return await _acknowledge_first_administrator(session, secret=secret)
+    except Exception:
+        await session.rollback()
+        raise

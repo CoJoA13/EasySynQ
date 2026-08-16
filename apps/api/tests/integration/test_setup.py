@@ -74,6 +74,12 @@ class _PasswordResetBarrier:
 
 
 @dataclass(slots=True)
+class _CreateRejectionBarrier:
+    entered: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@dataclass(slots=True)
 class _FakeKeycloak:
     accounts: dict[str, _FakeIdentity] = field(default_factory=dict)
     passwords: dict[str, list[str]] = field(default_factory=dict)
@@ -83,6 +89,9 @@ class _FakeKeycloak:
     password_error: Exception | None = None
     password_barrier: _PasswordResetBarrier | None = None
     rejection_detail_template: str | None = None
+    rejection_barrier: _CreateRejectionBarrier | None = None
+    rejection_revalidation: UserLookup | Exception | None = None
+    create_rejected: bool = False
 
     async def __aenter__(self) -> _FakeKeycloak:
         return self
@@ -97,6 +106,10 @@ class _FakeKeycloak:
         self.operations.append("lookup")
         if self.lookup_error is not None:
             raise self.lookup_error
+        if self.create_rejected and self.rejection_revalidation is not None:
+            if isinstance(self.rejection_revalidation, Exception):
+                raise self.rejection_revalidation
+            return self.rejection_revalidation
         account = self.accounts.get(username)
         if account is None:
             return UserLookup(found=False)
@@ -118,9 +131,14 @@ class _FakeKeycloak:
             raise KeycloakConflict("username", "duplicate", keycloak_subject=account.subject)
         if email is not None and any(account.email == email for account in self.accounts.values()):
             raise KeycloakConflict("email", "duplicate")
-        if self.rejection_detail_template is not None:
+        rejection_detail_template = self.rejection_detail_template
+        if rejection_detail_template is not None:
+            if self.rejection_barrier is not None:
+                await self.rejection_barrier.entered.put(username)
+                await self.rejection_barrier.release.wait()
+            self.create_rejected = True
             raise KeycloakRejected(
-                self.rejection_detail_template.format(
+                rejection_detail_template.format(
                     claim=bootstrap_claim_id,
                     username=username,
                     email=email,
@@ -490,6 +508,69 @@ async def test_credential_reset_is_serialized_against_acknowledgment(
     assert barrier.max_active == 1
     assert len(_setup_keycloak.passwords[subject]) == password_count_at_acknowledgment
     assert {response.status_code for response in reissued} <= {200, 409}
+
+
+async def test_bootstrap_credential_issuance_serializes_break_glass_admin_grant(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import grant_role as grant_role_cli
+    from easysynq_api.services.authz import admin_guard
+
+    secret = await _reset_uninitialized()
+    barrier = _PasswordResetBarrier()
+    _setup_keycloak.password_barrier = barrier
+    bootstrap = asyncio.create_task(_provision(app_client, secret, _sub("bootstrap-lock")))
+    await asyncio.wait_for(barrier.entered.get(), timeout=2)
+
+    lock_attempted = threading.Event()
+    grant_finished = threading.Event()
+
+    def observed_lock(session: object, org_id: uuid.UUID) -> None:
+        lock_attempted.set()
+        admin_guard.lock_admin_set_sync(session, org_id)  # type: ignore[attr-defined, arg-type]
+
+    def run_grant() -> str:
+        try:
+            return grant_role_cli.grant_role(_sub("racing-break-glass"))
+        finally:
+            grant_finished.set()
+
+    monkeypatch.setattr(grant_role_cli, "lock_admin_set_sync", observed_lock, raising=False)
+    competing_grant = asyncio.create_task(asyncio.to_thread(run_grant))
+    attempted_before_release = await asyncio.to_thread(lock_attempted.wait, 0.5)
+    finished_before_release = grant_finished.is_set()
+    barrier.release.set()
+
+    provisioned = await asyncio.wait_for(bootstrap, timeout=2)
+    grant_result = await asyncio.wait_for(competing_grant, timeout=2)
+
+    assert attempted_before_release is True
+    assert finished_before_release is False
+    assert provisioned.status_code == 201, provisioned.text
+    assert "assigned" in grant_result
+
+
+async def test_break_glass_ordinary_role_grant_does_not_take_admin_set_lock(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import grant_role as grant_role_cli
+
+    del app_client
+    await _reset_uninitialized()
+    attempts = 0
+
+    def observed_lock(_session: object, _org_id: uuid.UUID) -> None:
+        nonlocal attempts
+        attempts += 1
+
+    monkeypatch.setattr(grant_role_cli, "lock_admin_set_sync", observed_lock, raising=False)
+    result = grant_role_cli.grant_role(_sub("ordinary-break-glass"), "Author")
+
+    assert "assigned" in result
+    assert attempts == 0
 
 
 async def test_first_administrator_acknowledgment_is_idempotent_for_same_secret(
@@ -913,6 +994,100 @@ async def test_keycloak_rejection_releases_unowned_claim_and_allows_corrected_id
     _setup_keycloak.rejection_detail_template = None
     corrected = await _provision(app_client, secret, "corrected-admin")
     assert corrected.status_code == 201, corrected.text
+
+
+async def test_keycloak_rejection_revalidation_found_marker_retains_claim(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("rejected-marker-race")
+    await _establish_claim_only(
+        app_client,
+        _setup_keycloak,
+        secret=secret,
+        username=username,
+    )
+    before = await _config()
+    assert before.bootstrap_admin_claim_id is not None
+    _setup_keycloak.rejection_detail_template = "definitive profile rejection"
+    _setup_keycloak.rejection_revalidation = UserLookup(
+        True,
+        f"external:{username}",
+        str(before.bootstrap_admin_claim_id),
+    )
+
+    rejected = await _provision(app_client, secret, username)
+
+    assert rejected.status_code == 422, rejected.text
+    after = await _config()
+    assert after.bootstrap_admin_claim_id == before.bootstrap_admin_claim_id
+    assert after.bootstrap_admin_username == username
+
+
+async def test_keycloak_rejection_revalidation_outage_retains_claim(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("rejected-revalidation-outage")
+    _setup_keycloak.rejection_detail_template = "definitive profile rejection"
+    _setup_keycloak.rejection_revalidation = KeycloakUnavailable("revalidation unavailable")
+
+    rejected = await _provision(app_client, secret, username)
+
+    assert rejected.status_code == 502, rejected.text
+    assert rejected.json()["code"] == "keycloak_unavailable"
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
+
+
+async def test_same_claim_request_cannot_create_while_rejection_is_in_flight(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    secret = await _reset_uninitialized()
+    username = _sub("same-claim-rejection-race")
+    barrier = _CreateRejectionBarrier()
+    _setup_keycloak.rejection_detail_template = "first request rejected"
+    _setup_keycloak.rejection_barrier = barrier
+
+    first = asyncio.create_task(_provision(app_client, secret, username))
+    await asyncio.wait_for(barrier.entered.get(), timeout=2)
+    _setup_keycloak.rejection_detail_template = None
+    singleton_acquired = asyncio.Event()
+    real_locked_singleton = administrator_service._locked_singleton
+
+    async def observe_second_singleton(session: Any) -> SystemConfig:
+        cfg = await real_locked_singleton(session)
+        if asyncio.current_task() is second:
+            singleton_acquired.set()
+        return cfg
+
+    monkeypatch.setattr(administrator_service, "_locked_singleton", observe_second_singleton)
+    second = asyncio.create_task(_provision(app_client, secret, username))
+    acquired_before_release = False
+    try:
+        await asyncio.wait_for(singleton_acquired.wait(), timeout=0.25)
+        acquired_before_release = True
+    except TimeoutError:
+        pass
+    finally:
+        barrier.release.set()
+
+    rejected = await asyncio.wait_for(first, timeout=2)
+    created = await asyncio.wait_for(second, timeout=2)
+
+    assert acquired_before_release is False
+    assert rejected.status_code == 422, rejected.text
+    assert created.status_code == 201, created.text
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_user_id is not None
 
 
 async def test_lookup_outage_retains_claim_and_fails_closed(

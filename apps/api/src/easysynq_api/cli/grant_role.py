@@ -27,6 +27,7 @@ from ..config import get_settings
 from ..db.models.app_user import AppUser, UserStatus
 from ..db.models.organization import Organization
 from ..db.models.role import Role, RoleAssignment
+from ..services.authz.admin_guard import SYSTEM_ADMIN_ROLE, lock_admin_set_sync
 
 
 def grant_role(
@@ -54,35 +55,42 @@ def grant_role(
                 )
                 raise SystemExit(f"no role named {role_name!r}; available: {', '.join(available)}")
 
-            user = session.scalar(select(AppUser).where(AppUser.keycloak_subject == subject))
-            created = user is None
-            if user is None:
-                user = AppUser(
-                    org_id=org.id,
-                    keycloak_subject=subject,
-                    display_name=subject,
-                    status=UserStatus.ACTIVE,
-                )
-                session.add(user)
-                session.flush()
+            if role.name == SYSTEM_ADMIN_ROLE:
+                lock_admin_set_sync(session, org.id)
 
-            existing = session.scalar(
-                select(RoleAssignment).where(
-                    RoleAssignment.user_id == user.id, RoleAssignment.role_id == role.id
+            try:
+                user = session.scalar(select(AppUser).where(AppUser.keycloak_subject == subject))
+                created = user is None
+                if user is None:
+                    user = AppUser(
+                        org_id=org.id,
+                        keycloak_subject=subject,
+                        display_name=subject,
+                        status=UserStatus.ACTIVE,
+                    )
+                    session.add(user)
+                    session.flush()
+
+                existing = session.scalar(
+                    select(RoleAssignment).where(
+                        RoleAssignment.user_id == user.id, RoleAssignment.role_id == role.id
+                    )
                 )
-            )
-            suffix = " (user JIT-created)" if created else ""
-            if existing is not None:
+                suffix = " (user JIT-created)" if created else ""
+                if existing is not None:
+                    session.commit()
+                    return f"already assigned: {subject} -> {role_name}{suffix}"
+
+                session.add(
+                    RoleAssignment(
+                        org_id=org.id, user_id=user.id, role_id=role.id, bound_scope=bound_scope
+                    )
+                )
                 session.commit()
-                return f"already assigned: {subject} -> {role_name}{suffix}"
-
-            session.add(
-                RoleAssignment(
-                    org_id=org.id, user_id=user.id, role_id=role.id, bound_scope=bound_scope
-                )
-            )
-            session.commit()
-            return f"assigned: {subject} -> {role_name}{suffix}"
+                return f"assigned: {subject} -> {role_name}{suffix}"
+            except Exception:
+                session.rollback()
+                raise
     finally:
         engine.dispose()
 
