@@ -2,18 +2,16 @@
 
 The first install step. Generates a high-entropy single-use secret, stores its **salted hash** + TTL
 on ``system_config`` (the plaintext is shown ONCE here, never persisted), and prints it. The
-operator
-opens ``/setup`` in the browser, authenticates via Keycloak, and pastes the secret to become the
-first System Administrator — breaking the deny-by-default chicken-and-egg without a standing
-privileged account. ``grant-role`` remains the break-glass path.
+operator opens ``/setup`` in the browser and uses it to create the first System Administrator.
+``grant-role`` remains the break-glass path.
 
 Run it inside the api container (where the DB is reachable):
 
     easysynq setup mint-bootstrap [--ttl-hours 24]
 
 Uses a sync engine on the owner DSN — a one-shot script, not coupled to the app's event loop.
-Re-running mints a fresh secret (and clears any prior consumption), so a lost/expired secret is
-simply re-issued.
+While setup remains ``UNINITIALIZED``, re-running replaces only the secret proof and expiry so an
+expired pending administrator claim can be recovered. Advanced setup refuses reminting.
 """
 
 from __future__ import annotations
@@ -27,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db.models.organization import Organization
-from ..db.models.system_config import SystemConfig
+from ..db.models.system_config import SetupState, SystemConfig
 from ..services.setup.bootstrap import mint_secret
 
 
@@ -42,15 +40,15 @@ def mint_bootstrap(org_short_code: str = "DEFAULT", ttl_hours: int = 24) -> str:
             if org is None:
                 raise SystemExit(f"no organization with short_code={org_short_code!r}")
             cfg = session.get(SystemConfig, org.id)
-            if cfg is None:  # the 0012 migration seeds this; create defensively if absent
-                cfg = SystemConfig(org_id=org.id)
-                session.add(cfg)
+            if cfg is None:
+                raise SystemExit("system_config is not initialized")
+            if cfg.setup_state is not SetupState.UNINITIALIZED:
+                raise SystemExit("bootstrap can only be minted while setup is UNINITIALIZED")
             secret, stored_hash = mint_secret()
             cfg.bootstrap_secret_hash = stored_hash
             cfg.bootstrap_expires_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
                 hours=ttl_hours
             )
-            cfg.bootstrap_consumed_at = None
             session.commit()
             return secret
     finally:
@@ -72,7 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "mint-bootstrap":
         secret = mint_bootstrap(args.org, args.ttl_hours)
         print("Bootstrap secret minted (valid for", args.ttl_hours, "hours, single-use).")
-        print("Open /setup, sign in, and paste this secret to become the first admin:")
+        print("Open /setup and create the first administrator with this secret:")
         print()
         print(f"    {secret}")
         print()
