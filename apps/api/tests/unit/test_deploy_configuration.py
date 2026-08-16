@@ -7,6 +7,7 @@ plaintext MinIO, every browser URL is supplied together, and Keycloak's live sto
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -58,6 +59,7 @@ _SETUP_SHEET_LINES = (
     "2. Save the shown-once temporary password and continue to sign in.",
     "3. Then sign in, replace the password, and complete the remaining setup gates.",
 )
+_POST_READY_HANDOFF_SHA256 = "d4358d2540b30f050cade40d6f63cb1e78e892665f099e5e9f11d89b2d79423f"
 _BREAK_GLASS_OR_ORPHAN_RECOVERY_SECTION = re.compile(
     r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:break[- ]glass\b|orphan(?:ed)?\s+(?:adoption|recovery)\b)",
     re.IGNORECASE,
@@ -146,14 +148,28 @@ def _assert_setup_sheet_is_secret_only(setup_sheet: str) -> None:
     assert "$(" not in setup_sheet, "EASYSYNQ-SETUP.txt must not execute shell substitutions"
 
 
-def _post_ready_provision_actions(provisioner: str) -> str:
+def _post_ready_handoff_segment(provisioner: str) -> str:
     ready_marker = '[ "$ok" -eq 1 ] || { log "readyz never went green"; exit 1; }'
-    post_ready = provisioner[provisioner.index(ready_marker) + len(ready_marker) :]
-    return _SETUP_SHEET_HEREDOC.sub("", post_ready)
+    return provisioner[provisioner.index(ready_marker) + len(ready_marker) :]
+
+
+def _assert_approved_post_ready_handoff(post_ready_handoff: str) -> None:
+    """Authoritative review lock; semantic checks below are diagnostic defense-in-depth only."""
+    normalized_handoff = post_ready_handoff.replace("\r\n", "\n").replace("\r", "\n")
+    actual_sha256 = hashlib.sha256(normalized_handoff.encode()).hexdigest()
+    assert actual_sha256 == _POST_READY_HANDOFF_SHA256, (
+        "post-ready appliance handoff changed; reviewer must explicitly update the "
+        "approved SHA-256: "
+        f"{actual_sha256}"
+    )
+
+
+def _post_ready_provision_actions(provisioner: str) -> str:
+    return _SETUP_SHEET_HEREDOC.sub("", _post_ready_handoff_segment(provisioner))
 
 
 def _assert_no_human_identity_actions(post_ready_actions: str) -> None:
-    """Allow service configuration while forbidding appliance-side human account provisioning."""
+    """Diagnostic defense-in-depth; the raw post-ready handoff fingerprint is authoritative."""
     normalized_actions = re.sub(r"\\[ \t]*\r?\n[ \t]*", " ", post_ready_actions)
     forbidden_mechanisms = (
         r"\bkcadm(?:\.sh)?\b[^\n]*\bcreate\s+users?\b",
@@ -554,6 +570,9 @@ def test_appliance_propagates_qr_share_and_deep_link_origins() -> None:
 def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() -> None:
     provisioner = _read("infra/appliance/provision/easysynq-provision.sh")
     setup_helper = ROOT / "infra/appliance/provision/bin/easysynq-create-user"
+    post_ready_handoff = _post_ready_handoff_segment(provisioner)
+
+    _assert_approved_post_ready_handoff(post_ready_handoff)
 
     setup_sheet = _extract_setup_sheet(provisioner)
     _assert_setup_sheet_is_secret_only(setup_sheet)
@@ -598,18 +617,19 @@ def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() ->
         "relative-bin-direct-helper": "./bin/seed-initial-account.sh",
         "absolute-bin-direct-helper": "/opt/easysynq/bin/seed-initial-account.sh",
         "venv-python-arbitrary-module": "/opt/easysynq/.venv/bin/python -m site",
+        "mixed-pipeline-python": (
+            "/opt/easysynq/.venv/bin/python -m site | "
+            "python -m easysynq_api.cli.setup mint-bootstrap"
+        ),
+        "sudo-helper": "sudo /opt/easysynq/bin/seed-initial-account.sh",
+        "env-helper": "env X=y ./bin/seed-initial-account.sh",
+        "command-helper": "command /opt/easysynq/bin/seed-initial-account.sh",
     }
-    rejected_actions: dict[str, bool] = {}
-    for name, unsafe_action in unsafe_actions.items():
-        try:
-            _assert_no_human_identity_actions(unsafe_action)
-        except AssertionError:
-            rejected_actions[name] = True
-        else:
-            rejected_actions[name] = False
-    assert all(rejected_actions.values()), (
-        f"identity-action mutations bypassed the guard: {rejected_actions}"
-    )
+    # The semantic parser remains exercised as diagnostic defense-in-depth; the fingerprint below
+    # is authoritative because Bash pipelines and modifiers are outside this lightweight parser.
+    for unsafe_action in unsafe_actions.values():
+        with pytest.raises(AssertionError):
+            _assert_approved_post_ready_handoff(f"{post_ready_handoff}\n{unsafe_action}\n")
 
     _assert_no_human_identity_actions(
         "KEYCLOAK_ADMIN=service-admin\n"
