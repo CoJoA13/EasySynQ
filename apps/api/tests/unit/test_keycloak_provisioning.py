@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 import httpx
 import pytest
 
 from easysynq_api.services.keycloak_provisioning import (
+    BOOTSTRAP_CLAIM_ATTRIBUTE,
     KeycloakConflict,
     KeycloakNotConfigured,
     KeycloakProvisioningClient,
@@ -90,6 +92,65 @@ async def test_lookup_returns_the_subject_on_an_exact_match() -> None:
     assert result.subject == "sub-jdoe"
 
 
+async def test_lookup_returns_one_well_formed_bootstrap_claim() -> None:
+    claim = str(uuid.uuid4())
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "sub-jdoe",
+                    "username": "jdoe",
+                    "attributes": {BOOTSTRAP_CLAIM_ATTRIBUTE: [claim]},
+                }
+            ],
+        )
+
+    async with _client(handler) as kc:
+        result = await kc.find_user_by_username("jdoe")
+
+    assert result.bootstrap_claim_id == claim
+
+
+async def test_lookup_without_bootstrap_claim_returns_none() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(200, json=[{"id": "sub-jdoe", "username": "jdoe"}])
+
+    async with _client(handler) as kc:
+        result = await kc.find_user_by_username("jdoe")
+
+    assert result.bootstrap_claim_id is None
+
+
+@pytest.mark.parametrize("marker", [["first", "second"], "not-a-list", [""], [1]])
+async def test_lookup_with_malformed_bootstrap_claim_fails_closed(marker: object) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "sub-jdoe",
+                    "username": "jdoe",
+                    "attributes": {BOOTSTRAP_CLAIM_ATTRIBUTE: marker},
+                }
+            ],
+        )
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable):
+            await kc.find_user_by_username("jdoe")
+
+
 async def test_lookup_failure_is_not_absence() -> None:
     """A transient 5xx must raise — never fall through to CREATE as if the user were absent."""
 
@@ -130,6 +191,34 @@ async def test_create_user_sends_no_credential_and_returns_the_subject() -> None
     assert body["enabled"] is True
     # The account is created WITHOUT a credential; the password is set only after the PG commit.
     assert "credentials" not in body
+    assert "attributes" not in body
+
+
+async def test_create_user_sends_only_bootstrap_marker_for_bootstrap_calls() -> None:
+    claim = uuid.uuid4()
+    posted: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        posted.append(json.loads(request.content))
+        return httpx.Response(
+            201,
+            headers={"Location": "http://keycloak:8080/admin/realms/easysynq/users/sub-new"},
+        )
+
+    async with _client(handler) as kc:
+        await kc.create_user(
+            username="jdoe",
+            email=None,
+            first_name=None,
+            last_name=None,
+            bootstrap_claim_id=claim,
+        )
+
+    assert posted[0]["attributes"] == {BOOTSTRAP_CLAIM_ATTRIBUTE: [str(claim)]}
+    assert "credentials" not in posted[0]
 
 
 async def test_create_user_maps_a_conflict_to_the_offending_field() -> None:

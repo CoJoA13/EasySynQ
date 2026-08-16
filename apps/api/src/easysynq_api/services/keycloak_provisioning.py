@@ -21,6 +21,7 @@ Two behaviours are inherited from ``scripts/new-keycloak-user.sh`` and are load-
 from __future__ import annotations
 
 import types
+import uuid
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -28,6 +29,7 @@ from urllib.parse import quote
 import httpx
 
 _TIMEOUT = 15.0
+BOOTSTRAP_CLAIM_ATTRIBUTE = "easysynqBootstrapClaim"
 
 
 class KeycloakProvisioningError(RuntimeError):
@@ -71,13 +73,14 @@ class KeycloakRejected(KeycloakProvisioningError):
         super().__init__(detail)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class UserLookup:
     """A DEFINITIVE lookup outcome. A failure raises instead of being represented here, so a
     caller cannot mistake "we could not tell" for "absent"."""
 
     found: bool
     subject: str | None = None
+    bootstrap_claim_id: str | None = None
 
 
 class KeycloakProvisioningClient:
@@ -171,7 +174,11 @@ class KeycloakProvisioningClient:
             # Re-verify: `exact=true` guards against contains-match hazards;
             # never act on an account we did not ask for.
             if item.get("username") == username and isinstance(item.get("id"), str):
-                return UserLookup(found=True, subject=item["id"])
+                return UserLookup(
+                    found=True,
+                    subject=item["id"],
+                    bootstrap_claim_id=_bootstrap_claim_id(item),
+                )
         if body:
             # A NON-EMPTY response with no exact match is a lookup FAILURE, not absence: Keycloak
             # normalizes usernames (lowercases them), so provisioning `JDoe` when `jdoe` already
@@ -198,6 +205,7 @@ class KeycloakProvisioningClient:
         email: str | None,
         first_name: str | None,
         last_name: str | None,
+        bootstrap_claim_id: uuid.UUID | None = None,
     ) -> str:
         headers = await self._headers()
         client = self._client
@@ -214,6 +222,8 @@ class KeycloakProvisioningClient:
             payload["firstName"] = first_name
         if last_name:
             payload["lastName"] = last_name
+        if bootstrap_claim_id is not None:
+            payload["attributes"] = {BOOTSTRAP_CLAIM_ATTRIBUTE: [str(bootstrap_claim_id)]}
         try:
             response = await client.post(
                 f"/admin/realms/{self._realm}/users", headers=headers, json=payload
@@ -286,6 +296,26 @@ class KeycloakProvisioningClient:
         except httpx.HTTPError as exc:
             # The message must never interpolate `password`.
             raise KeycloakUnavailable(f"Keycloak set-password failed: {exc}") from exc
+
+
+def _bootstrap_claim_id(item: dict[str, Any]) -> str | None:
+    """Read the exact Keycloak list-valued recovery marker or fail closed."""
+    if "attributes" not in item:
+        return None
+    attributes = item["attributes"]
+    if not isinstance(attributes, dict):
+        raise KeycloakUnavailable("Keycloak bootstrap marker was malformed")
+    if BOOTSTRAP_CLAIM_ATTRIBUTE not in attributes:
+        return None
+    marker = attributes[BOOTSTRAP_CLAIM_ATTRIBUTE]
+    if (
+        not isinstance(marker, list)
+        or len(marker) != 1
+        or not isinstance(marker[0], str)
+        or not marker[0]
+    ):
+        raise KeycloakUnavailable("Keycloak bootstrap marker was malformed")
+    return marker[0]
 
 
 def _conflict_field(response: httpx.Response) -> str:
