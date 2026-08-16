@@ -1,8 +1,8 @@
 """S-user-create integration proofs — in-app Keycloak provisioning and credential issuance.
 
-No live Keycloak (D1): ``api.users._kc_client`` is monkeypatched to build the real
-``KeycloakProvisioningClient`` over an ``httpx.MockTransport``, so the endpoint exercises its true
-code path against a scripted identity service.
+No live Keycloak (D1): the shared ``identity_provisioning.keycloak_client`` factory is monkeypatched
+to build the real ``KeycloakProvisioningClient`` over an ``httpx.MockTransport``, so the endpoint
+exercises its true code path against a scripted identity service.
 
 Shared-DB discipline: every assertion is scoped to rows this test created, or is a delta. The suite
 shares one session database, so absolute counts are invalid.
@@ -19,6 +19,7 @@ test; and (2) a role grant during provisioning is fully audited, in an order an 
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -38,6 +39,7 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.domain.identity.temp_password import MIN_LENGTH
+from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.services.keycloak_provisioning import KeycloakProvisioningClient
 
 from . import s5_helpers as s5
@@ -88,7 +90,7 @@ def _install_kc(
     """Script the identity service. ``existing`` makes the username resolve to that subject.
     ``password_status`` scripts the ``reset-password`` leg — a non-204 fails it AFTER the account
     lookup/create has already succeeded, to exercise a post-commit Keycloak failure."""
-    calls: dict[str, list[object]] = {"password": []}
+    calls: dict[str, list[object]] = {"password": [], "created": []}
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path.endswith("/openid-connect/token"):
@@ -101,6 +103,7 @@ def _install_kc(
                 return httpx.Response(200, json=[])
             return httpx.Response(200, json=[{"id": existing, "username": username}])
         if request.method == "POST" and request.url.path.endswith("/users"):
+            calls["created"].append(json.loads(request.content))
             if create_status != 201:
                 return httpx.Response(create_status, json=create_body or {})
             return httpx.Response(
@@ -122,7 +125,7 @@ def _install_kc(
             _transport=httpx.MockTransport(handler),
         )
 
-    monkeypatch.setattr(users_api, "_kc_client", factory)
+    monkeypatch.setattr(identity_provisioning, "keycloak_client", factory)
     return calls
 
 
@@ -157,7 +160,7 @@ def _install_kc_race(monkeypatch: pytest.MonkeyPatch, *, winner_subject: str) ->
             _transport=httpx.MockTransport(handler),
         )
 
-    monkeypatch.setattr(users_api, "_kc_client", factory)
+    monkeypatch.setattr(identity_provisioning, "keycloak_client", factory)
 
 
 async def _app_user_count() -> int:
@@ -296,6 +299,31 @@ async def test_provision_creates_the_account_the_row_and_the_credential(
         assert event is not None
         # Secrets hygiene: the password must never reach an audit payload.
         assert body["temporary_password"] not in str(event.after)
+
+
+async def test_ordinary_provisioning_never_sends_a_bootstrap_marker(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary user creation is never eligible for bootstrap recovery ownership."""
+    calls = _install_kc(monkeypatch, new_subject=_sub("no-bootstrap-marker"))
+    headers = await _admin(token_factory)
+    username = f"ordinary-{uuid.uuid4().hex[:6]}"
+
+    resp = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": username},
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert calls["created"] == [
+        {
+            "username": username,
+            "enabled": True,
+        }
+    ]
 
 
 async def test_unlinked_username_collision_returns_the_subject_for_the_link_path(
@@ -869,6 +897,25 @@ async def test_reset_credential_of_an_unprivileged_target_still_requires_system_
         # — this caller never attempted a grant, and recording it as one would misfile the trail.
         assert event.after["permission_key"] == "user.reset_credential"
         assert event.after["permission_key"] != "permission.grant"
+
+
+async def test_reset_guard_refuses_user_create_only_caller_regardless_of_target_roles(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R64 gates the caller's tier, so a target's content role cannot relax the refusal."""
+    calls = _install_kc(monkeypatch)
+    caller_sub = _sub("resetcaller-content-target")
+    await _grant_user_create_only(caller_sub)
+    headers = _auth(token_factory, caller_sub)
+    target_id = await s5.grant_role(_sub("reset-content-target"), "Approver")
+
+    resp = await app_client.post(f"/api/v1/users/{target_id}/temporary-password", headers=headers)
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "two_tier_violation"
+    assert calls["password"] == []
 
 
 async def test_reset_credential_of_a_system_domain_target_requires_system_tier(

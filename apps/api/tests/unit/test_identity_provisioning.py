@@ -51,7 +51,7 @@ def _profile() -> IdentityProfile:
     return IdentityProfile("jdoe", "jdoe@example.local", "J", "Doe")
 
 
-async def test_absent_username_creates_credentialless_identity() -> None:
+async def test_ordinary_identity_creation_sends_no_bootstrap_marker() -> None:
     client = FakeClient(UserLookup(found=False))
 
     result = await ensure_credentialless_identity(client, _profile())
@@ -66,6 +66,7 @@ async def test_absent_username_creates_credentialless_identity() -> None:
             "bootstrap_claim_id": None,
         }
     ]
+    assert client.reset_calls == []
 
 
 async def test_ordinary_existing_username_raises_with_subject() -> None:
