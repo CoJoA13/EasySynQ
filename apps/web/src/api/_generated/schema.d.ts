@@ -95,7 +95,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/setup/bootstrap": {
+    "/setup/administrator": {
         parameters: {
             query?: never;
             header?: never;
@@ -104,8 +104,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Consume the one-time install secret and grant the caller System Administrator (the bootstrap-of-trust). Authenticated, but outside the PEP — the secret authorizes it. */
-        post: operations["bootstrapSetup"];
+        /** Provision or recover the first administrator using the one-time setup secret. */
+        post: operations["provisionFirstAdministrator"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setup/administrator/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge receipt of the first administrator temporary password. */
+        post: operations["acknowledgeFirstAdministrator"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4316,6 +4333,38 @@ export interface components {
             /** @example 0.1.0 */
             version: string;
         };
+        FirstAdministratorRequest: {
+            secret: string;
+            username: string;
+            display_name: string;
+            email?: string | null;
+            first_name?: string | null;
+            last_name?: string | null;
+        };
+        FirstAdministratorSummary: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            display_name: string;
+            email: string | null;
+            /** @enum {string} */
+            status: "INVITED";
+        };
+        FirstAdministratorProvisioned: {
+            administrator: components["schemas"]["FirstAdministratorSummary"];
+            temporary_password: string;
+            /** @enum {string} */
+            password_delivery: "shown_once";
+        };
+        BootstrapAcknowledgeRequest: {
+            secret: string;
+        };
+        BootstrapAcknowledgeResponse: {
+            /** @enum {string} */
+            setup_state: "IN_SETUP";
+            /** Format: uuid */
+            admin_user_id: string;
+        };
         DependencyStatus: {
             /** @enum {string} */
             name: "postgres" | "minio" | "redis" | "keycloak" | "alembic";
@@ -4339,10 +4388,11 @@ export interface components {
              * @description Stable machine-readable error code clients branch on.
              * @enum {string}
              */
-            code: "ack_obligation_lapsed" | "ack_superseded" | "already_archived" | "already_authorized" | "already_disposed" | "already_on_hold" | "audit_close_blocked" | "audit_finding_audit_closed" | "auth_unavailable" | "authorization_in_progress" | "backup_destination_invalid" | "backup_destination_unreachable" | "backup_not_configured" | "bootstrap_already_consumed" | "bootstrap_expired" | "bootstrap_invalid" | "capa_already_spawned" | "capa_approval_in_progress" | "capa_close_incomplete" | "capa_not_verified" | "capa_terminal" | "commit_blocked" | "compliance_mode_denies_destroy" | "conflict" | "create_target_managed_subtype" | "create_target_not_new" | "dcr_approval_in_progress" | "dcr_approver_conflict" | "dcr_effectivity_pending" | "dcr_impact_not_editable" | "dcr_no_approvers" | "dcr_not_assessable" | "dcr_not_cancellable" | "dcr_not_closable" | "dcr_not_editable" | "dcr_not_implementable" | "dcr_not_in_approval" | "dcr_not_routable" | "dependency_unavailable" | "document_not_approved" | "dual_control_same_actor" | "evidence_frozen" | "finding_already_corrected" | "finding_not_improvable" | "finding_superseded" | "impact_not_assessed" | "improvement_not_editable" | "improvement_transition_invalid" | "initiative_not_authorizable" | "internal_error" | "invalid_audit_transition" | "invalid_capa_transition" | "invalid_class" | "invalid_hour" | "invalid_mode" | "invalid_quiet_hours" | "invalid_state_transition" | "invalid_time" | "invalid_timezone" | "invalid_transition" | "keycloak_email_exists" | "keycloak_not_configured" | "keycloak_unavailable" | "keycloak_username_exists_unlinked" | "last_admin" | "leadership_authorization_required" | "legal_hold_active" | "lock_conflict" | "name_taken" | "ncr_already_dispositioned" | "no_approved_draft" | "no_bootstrap_secret" | "no_controlled_rendition" | "not_a_leadership_artifact" | "not_archived" | "not_editable" | "not_found" | "not_on_hold" | "not_open" | "obsoletion_blocked" | "on_legal_hold" | "output_not_actionable" | "output_not_improvable" | "pack_evidence_destroyed" | "pack_unavailable" | "permission_denied" | "program_archived" | "rate_limited" | "rendition_pending" | "retain_permanent" | "review_close_blocked" | "review_not_open_to_close" | "review_not_tracking" | "revision_chain_reconstruction_unsupported" | "role_missing" | "role_not_seeded" | "setup_already_complete" | "setup_gates_unsatisfied" | "setup_incomplete" | "setup_not_initialized" | "signing_key_unavailable" | "sod_self_disposition" | "sod_self_verify" | "sod_violation" | "source_bytes_in_foreign_bucket" | "staged_source_unavailable" | "staging_version_required" | "step_up_required" | "storage_unavailable" | "system_default_protected" | "system_policy_protected" | "target_kind_deferred" | "token_expired" | "token_invalid" | "two_tier_violation" | "unauthenticated" | "unknown_filter" | "upload_identity_mismatch" | "use_legal_hold_endpoint" | "user_exists" | "user_not_linked" | "validation_error" | "version_already_linked" | "version_not_approved" | "wal_pitr_unavailable" | "worm_destroy_request_open" | "worm_lock_unexpired" | "worm_not_enforced" | "worm_required";
+            code: "ack_obligation_lapsed" | "ack_superseded" | "already_archived" | "already_authorized" | "already_disposed" | "already_on_hold" | "audit_close_blocked" | "audit_finding_audit_closed" | "auth_unavailable" | "authorization_in_progress" | "backup_destination_invalid" | "backup_destination_unreachable" | "backup_not_configured" | "bootstrap_already_consumed" | "bootstrap_expired" | "bootstrap_identity_bound" | "bootstrap_invalid" | "bootstrap_not_ready" | "capa_already_spawned" | "capa_approval_in_progress" | "capa_close_incomplete" | "capa_not_verified" | "capa_terminal" | "commit_blocked" | "compliance_mode_denies_destroy" | "conflict" | "create_target_managed_subtype" | "create_target_not_new" | "dcr_approval_in_progress" | "dcr_approver_conflict" | "dcr_effectivity_pending" | "dcr_impact_not_editable" | "dcr_no_approvers" | "dcr_not_assessable" | "dcr_not_cancellable" | "dcr_not_closable" | "dcr_not_editable" | "dcr_not_implementable" | "dcr_not_in_approval" | "dcr_not_routable" | "dependency_unavailable" | "document_not_approved" | "dual_control_same_actor" | "evidence_frozen" | "finding_already_corrected" | "finding_not_improvable" | "finding_superseded" | "impact_not_assessed" | "improvement_not_editable" | "improvement_transition_invalid" | "initiative_not_authorizable" | "internal_error" | "invalid_audit_transition" | "invalid_capa_transition" | "invalid_class" | "invalid_hour" | "invalid_mode" | "invalid_quiet_hours" | "invalid_state_transition" | "invalid_time" | "invalid_timezone" | "invalid_transition" | "keycloak_email_exists" | "keycloak_not_configured" | "keycloak_unavailable" | "keycloak_username_exists_unlinked" | "last_admin" | "leadership_authorization_required" | "legal_hold_active" | "lock_conflict" | "name_taken" | "ncr_already_dispositioned" | "no_approved_draft" | "no_bootstrap_secret" | "no_controlled_rendition" | "not_a_leadership_artifact" | "not_archived" | "not_editable" | "not_found" | "not_on_hold" | "not_open" | "obsoletion_blocked" | "on_legal_hold" | "output_not_actionable" | "output_not_improvable" | "pack_evidence_destroyed" | "pack_unavailable" | "permission_denied" | "program_archived" | "rate_limited" | "rendition_pending" | "retain_permanent" | "review_close_blocked" | "review_not_open_to_close" | "review_not_tracking" | "revision_chain_reconstruction_unsupported" | "role_missing" | "role_not_seeded" | "setup_already_complete" | "setup_gates_unsatisfied" | "setup_incomplete" | "setup_not_initialized" | "signing_key_unavailable" | "sod_self_disposition" | "sod_self_verify" | "sod_violation" | "source_bytes_in_foreign_bucket" | "staged_source_unavailable" | "staging_version_required" | "step_up_required" | "storage_unavailable" | "system_default_protected" | "system_policy_protected" | "target_kind_deferred" | "token_expired" | "token_invalid" | "two_tier_violation" | "unauthenticated" | "unknown_filter" | "upload_identity_mismatch" | "use_legal_hold_endpoint" | "user_exists" | "user_not_linked" | "validation_error" | "version_already_linked" | "version_not_approved" | "wal_pitr_unavailable" | "worm_destroy_request_open" | "worm_lock_unexpired" | "worm_not_enforced" | "worm_required";
             detail?: string | null;
             instance?: string | null;
             request_id?: string | null;
+            bound_username?: string | null;
             errors?: {
                 field?: string;
                 code?: string;
@@ -7831,7 +7881,7 @@ export interface operations {
             403: components["responses"]["ProblemResponse"];
         };
     };
-    bootstrapSetup: {
+    provisionFirstAdministrator: {
         parameters: {
             query?: never;
             header?: never;
@@ -7840,28 +7890,76 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    secret: string;
-                };
+                "application/json": components["schemas"]["FirstAdministratorRequest"];
             };
         };
         responses: {
-            /** @description The caller is now System Administrator; setup_state advanced to IN_SETUP. */
+            /** @description Recovery or temporary-password reissue for the bound first administrator. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        setup_state: string;
-                        /** Format: uuid */
-                        admin_user_id: string;
-                    };
+                    "application/json": components["schemas"]["FirstAdministratorProvisioned"];
                 };
             };
+            /** @description First administrator created and a temporary password shown once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FirstAdministratorProvisioned"];
+                };
+            };
+            /** @description Invalid or expired bootstrap secret. */
             403: components["responses"]["ProblemResponse"];
+            /** @description No secret, setup advanced, identity bound/not ready, or username collision. */
             409: components["responses"]["ProblemResponse"];
+            /** @description Validation failure or Keycloak rejection. */
+            422: components["responses"]["ProblemResponse"];
+            /** @description Bootstrap rate limit exceeded. */
             429: components["responses"]["ProblemResponse"];
+            /** @description Keycloak unavailable. */
+            502: components["responses"]["ProblemResponse"];
+            /** @description Keycloak admin configuration is missing. */
+            503: components["responses"]["ProblemResponse"];
+        };
+    };
+    acknowledgeFirstAdministrator: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootstrapAcknowledgeRequest"];
+            };
+        };
+        responses: {
+            /** @description Bootstrap consumed and setup advanced to IN_SETUP. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapAcknowledgeResponse"];
+                };
+            };
+            /** @description Invalid or expired bootstrap secret. */
+            403: components["responses"]["ProblemResponse"];
+            /** @description No secret, setup advanced, identity bound/not ready, or username collision. */
+            409: components["responses"]["ProblemResponse"];
+            /** @description Validation failure or Keycloak rejection. */
+            422: components["responses"]["ProblemResponse"];
+            /** @description Bootstrap rate limit exceeded. */
+            429: components["responses"]["ProblemResponse"];
+            /** @description Keycloak unavailable. */
+            502: components["responses"]["ProblemResponse"];
+            /** @description Keycloak admin configuration is missing. */
+            503: components["responses"]["ProblemResponse"];
         };
     };
     setSetupOrgProfile: {

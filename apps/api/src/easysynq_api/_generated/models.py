@@ -24,6 +24,65 @@ class Health(BaseModel):
     version: Annotated[str, Field(examples=['0.1.0'])]
 
 
+class FirstAdministratorRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    secret: Annotated[str, Field(max_length=512, min_length=1)]
+    username: Annotated[str, Field(max_length=255, min_length=1)]
+    display_name: Annotated[str, Field(max_length=255, min_length=1)]
+    email: Annotated[str | None, Field(max_length=320)] = None
+    first_name: Annotated[str | None, Field(max_length=255)] = None
+    last_name: Annotated[str | None, Field(max_length=255)] = None
+
+
+class Status1(StrEnum):
+    INVITED = 'INVITED'
+
+
+class FirstAdministratorSummary(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    id: UUID
+    username: str
+    display_name: str
+    email: str | None
+    status: Status1
+
+
+class PasswordDelivery(StrEnum):
+    shown_once = 'shown_once'
+
+
+class FirstAdministratorProvisioned(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    administrator: FirstAdministratorSummary
+    temporary_password: str
+    password_delivery: PasswordDelivery
+
+
+class BootstrapAcknowledgeRequest(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    secret: Annotated[str, Field(max_length=512, min_length=1)]
+
+
+class SetupState(StrEnum):
+    IN_SETUP = 'IN_SETUP'
+
+
+class BootstrapAcknowledgeResponse(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    setup_state: SetupState
+    admin_user_id: UUID
+
+
 class Name(StrEnum):
     postgres = 'postgres'
     minio = 'minio'
@@ -66,7 +125,9 @@ class Code(StrEnum):
     backup_not_configured = 'backup_not_configured'
     bootstrap_already_consumed = 'bootstrap_already_consumed'
     bootstrap_expired = 'bootstrap_expired'
+    bootstrap_identity_bound = 'bootstrap_identity_bound'
     bootstrap_invalid = 'bootstrap_invalid'
+    bootstrap_not_ready = 'bootstrap_not_ready'
     capa_already_spawned = 'capa_already_spawned'
     capa_approval_in_progress = 'capa_approval_in_progress'
     capa_close_incomplete = 'capa_close_incomplete'
@@ -208,6 +269,7 @@ class Problem(BaseModel):
     detail: str | None = None
     instance: str | None = None
     request_id: str | None = None
+    bound_username: str | None = None
     errors: list[Error] | None = None
     allowed_transitions: Annotated[
         list[str] | None,
@@ -251,7 +313,7 @@ class OrgProfileUpdate(BaseModel):
     ]
 
 
-class SetupState(StrEnum):
+class SetupState1(StrEnum):
     UNINITIALIZED = 'UNINITIALIZED'
     IN_SETUP = 'IN_SETUP'
     OPERATIONAL = 'OPERATIONAL'
@@ -280,7 +342,7 @@ class SetupDetail(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    setup_state: SetupState
+    setup_state: SetupState1
     gates: Annotated[
         dict[str, bool],
         Field(
@@ -312,7 +374,7 @@ class AckCoverage(BaseModel):
     overdue: int
 
 
-class Status1(StrEnum):
+class Status2(StrEnum):
     acknowledged = 'acknowledged'
     pending = 'pending'
     overdue = 'overdue'
@@ -324,13 +386,13 @@ class AckStatusRow(BaseModel):
     )
     user_id: UUID
     display_name: str | None
-    status: Status1
+    status: Status2
     acknowledged_at: AwareDatetime | None = None
     acknowledged_revision_label: str | None = None
     due_at: AwareDatetime | None = None
 
 
-class Status2(StrEnum):
+class Status3(StrEnum):
     INVITED = 'INVITED'
     ACTIVE = 'ACTIVE'
     LOCKED = 'LOCKED'
@@ -346,7 +408,7 @@ class AppUser(BaseModel):
     keycloak_subject: str
     display_name: str | None = None
     email: str | None = None
-    status: Status2
+    status: Status3
     is_guest: bool
     org_timezone: Annotated[
         str,
@@ -365,7 +427,7 @@ class UserAdmin(BaseModel):
     keycloak_subject: str
     display_name: str | None = None
     email: str | None = None
-    status: Status2
+    status: Status3
     mfa_enrolled: bool
     is_guest: bool
     roles: list[str]
@@ -824,7 +886,7 @@ class MetadataDiffItem(BaseModel):
     changed: bool | None = None
 
 
-class Status4(StrEnum):
+class Status5(StrEnum):
     ok = 'ok'
     unavailable = 'unavailable'
 
@@ -841,7 +903,7 @@ class Hunk(BaseModel):
 
 
 class TextDiff(BaseModel):
-    status: Status4 | None = None
+    status: Status5 | None = None
     reason: str | None = None
     hunks: list[Hunk] | None = None
 
@@ -867,7 +929,7 @@ class VersionDiff(BaseModel):
     ]
 
 
-class Status5(StrEnum):
+class Status6(StrEnum):
     Pending = 'Pending'
     Ready = 'Ready'
     Failed = 'Failed'
@@ -883,7 +945,7 @@ class VisualDiffStatus(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    status: Status5
+    status: Status6
     page_count: int | None = None
     reason: Annotated[str | None, Field(description='Why Failed / Unavailable.')] = None
     pages: Annotated[
@@ -1671,7 +1733,7 @@ class PdcaPhase4(StrEnum):
     ACT = 'ACT'
 
 
-class Status6(StrEnum):
+class Status7(StrEnum):
     COVERED = 'COVERED'
     PARTIAL = 'PARTIAL'
     GAP = 'GAP'
@@ -1691,7 +1753,7 @@ class ChecklistRow(BaseModel):
     effective_count: Annotated[
         int, Field(description='Of those, how many have an Effective version.')
     ]
-    status: Status6
+    status: Status7
     overdue_review: Annotated[
         bool,
         Field(
@@ -2781,7 +2843,7 @@ class Category(Enum):
     NoneType_None = None
 
 
-class Status7(StrEnum):
+class Status8(StrEnum):
     active = 'active'
     closed = 'closed'
 
@@ -2794,7 +2856,7 @@ class ContextIssue(BaseModel):
     register_doc_id: Annotated[UUID, Field(description='The CTX register head id.')]
     classification: Classification3
     category: Category | None = None
-    status: Status7
+    status: Status8
     description: str
     last_reviewed_at: AwareDatetime | None = None
     row_version: int
@@ -2818,7 +2880,7 @@ class Classification5(Enum):
     NoneType_None = None
 
 
-class Status8(Enum):
+class Status9(Enum):
     active = 'active'
     closed = 'closed'
     NoneType_None = None
@@ -2830,7 +2892,7 @@ class ContextIssueUpdate(BaseModel):
     )
     classification: Classification5 | None = None
     category: Category | None = None
-    status: Status8 | None = None
+    status: Status9 | None = None
     description: Annotated[str | None, Field(max_length=4000, min_length=1)] = None
     last_reviewed_at: AwareDatetime | None = None
 
@@ -2937,7 +2999,7 @@ class Influence(Enum):
     NoneType_None = None
 
 
-class Status9(StrEnum):
+class Status10(StrEnum):
     active = 'active'
     closed = 'closed'
 
@@ -2952,7 +3014,7 @@ class InterestedParty(BaseModel):
     party_name: str
     needs_expectations: str
     influence: Influence | None = None
-    status: Status9
+    status: Status10
     last_reviewed_at: AwareDatetime | None = None
     row_version: int
     created_at: AwareDatetime | None = None
@@ -2981,7 +3043,7 @@ class PartyType2(Enum):
     NoneType_None = None
 
 
-class Status10(Enum):
+class Status11(Enum):
     active = 'active'
     closed = 'closed'
     NoneType_None = None
@@ -2997,7 +3059,7 @@ class InterestedPartyUpdate(BaseModel):
         None
     )
     influence: Influence | None = None
-    status: Status10 | None = None
+    status: Status11 | None = None
     last_reviewed_at: AwareDatetime | None = None
 
 
@@ -3328,7 +3390,7 @@ class DocumentLinkCreate(BaseModel):
     link_type: DocumentLinkType
 
 
-class Status11(StrEnum):
+class Status12(StrEnum):
     CLEAN = 'CLEAN'
     DIVERGENT = 'DIVERGENT'
     FAILED = 'FAILED'
@@ -3341,7 +3403,7 @@ class TriggeredBy(StrEnum):
 
 
 class DriftScanSummary(BaseModel):
-    status: Status11
+    status: Status12
     started_at: AwareDatetime
     finished_at: AwareDatetime | None
     counts: dict[str, Any]
@@ -3919,7 +3981,7 @@ class DispositionEvent(BaseModel):
     executed_at: AwareDatetime | None = None
 
 
-class Status12(StrEnum):
+class Status13(StrEnum):
     open = 'open'
     executed = 'executed'
     cancelled = 'cancelled'
@@ -3931,7 +3993,7 @@ class WormDestroyRequest(BaseModel):
     )
     id: UUID
     record_id: UUID
-    status: Status12
+    status: Status13
     legal_basis: str
     requested_by: UUID
     requested_at: AwareDatetime | None = None
@@ -4321,7 +4383,7 @@ class ImportClassification(BaseModel):
     ] = None
 
 
-class Status13(StrEnum):
+class Status14(StrEnum):
     extracted = 'extracted'
     ocr = 'ocr'
     empty = 'empty'
@@ -4332,7 +4394,7 @@ class ImportExtract(BaseModel):
     model_config = ConfigDict(
         extra='allow',
     )
-    status: Status13
+    status: Status14
     full_text: str | None = None
     text_truncated: bool | None = None
     header_block: str | None = None
@@ -4493,7 +4555,7 @@ class ImportProposalNode(BaseModel):
     ] = None
 
 
-class Status14(StrEnum):
+class Status15(StrEnum):
     DRAFT = 'DRAFT'
     BUILDING = 'BUILDING'
     SEALED = 'SEALED'
@@ -4512,7 +4574,7 @@ class EvidencePack(BaseModel):
     period_start: date_aliased | None = None
     period_end: date_aliased | None = None
     status: Annotated[
-        Status14,
+        Status15,
         Field(
             description='The build poll state; UNAVAILABLE is terminal after R27 derivative erasure.'
         ),
