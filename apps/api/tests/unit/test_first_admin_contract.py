@@ -78,8 +78,27 @@ def test_first_administrator_response_never_publishes_keycloak_identity() -> Non
         schemas["FirstAdministratorRequest"]["properties"]["display_name"]["pattern"] == r".*\S.*"
     )
     response = schemas["FirstAdministratorProvisioned"]
-    assert response["required"] == ["administrator", "temporary_password", "password_delivery"]
+    assert response["required"] == [
+        "administrator",
+        "temporary_password",
+        "credential_receipt",
+        "password_delivery",
+    ]
+    assert response["properties"]["credential_receipt"] == {
+        "type": "string",
+        "minLength": 43,
+        "maxLength": 43,
+        "pattern": "^[A-Za-z0-9_-]{43}$",
+    }
     assert response["properties"]["password_delivery"]["enum"] == ["shown_once"]
+    acknowledge = schemas["BootstrapAcknowledgeRequest"]
+    assert acknowledge["required"] == ["secret", "credential_receipt"]
+    assert acknowledge["properties"]["credential_receipt"] == {
+        "type": "string",
+        "minLength": 43,
+        "maxLength": 43,
+        "pattern": "^[A-Za-z0-9_-]{43}$",
+    }
     assert schemas["Problem"]["properties"]["bound_username"] == {"type": ["string", "null"]}
     assert "keycloak_subject" not in schemas["FirstAdministratorProblem"]["properties"]
     assert (

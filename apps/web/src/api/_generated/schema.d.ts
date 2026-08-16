@@ -4354,11 +4354,13 @@ export interface components {
         FirstAdministratorProvisioned: {
             administrator: components["schemas"]["FirstAdministratorSummary"];
             temporary_password: string;
+            credential_receipt: string;
             /** @enum {string} */
             password_delivery: "shown_once";
         };
         BootstrapAcknowledgeRequest: {
             secret: string;
+            credential_receipt: string;
         };
         BootstrapAcknowledgeResponse: {
             /** @enum {string} */
@@ -7949,7 +7951,7 @@ export interface operations {
             429: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Keycloak unavailable. */
             502: components["responses"]["FirstAdministratorProblemResponse"];
-            /** @description Keycloak admin configuration is missing. */
+            /** @description Keycloak admin configuration is missing, bootstrap rate limiting is unavailable, or required bootstrap state persistence failed. */
             503: components["responses"]["FirstAdministratorProblemResponse"];
         };
     };
@@ -7985,7 +7987,7 @@ export interface operations {
             429: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Keycloak unavailable. */
             502: components["responses"]["FirstAdministratorProblemResponse"];
-            /** @description Keycloak admin configuration is missing. */
+            /** @description Bootstrap rate limiting is unavailable. */
             503: components["responses"]["FirstAdministratorProblemResponse"];
         };
     };

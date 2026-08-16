@@ -317,7 +317,7 @@
             "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           },
           "503": {
-            "description": "Keycloak admin configuration is missing.",
+            "description": "Keycloak admin configuration is missing, bootstrap rate limiting is unavailable, or required bootstrap state persistence failed.",
             "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           }
         }
@@ -373,7 +373,7 @@
             "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           },
           "503": {
-            "description": "Keycloak admin configuration is missing.",
+            "description": "Bootstrap rate limiting is unavailable.",
             "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           }
         }
@@ -14235,6 +14235,7 @@
         "required": [
           "administrator",
           "temporary_password",
+          "credential_receipt",
           "password_delivery"
         ],
         "properties": {
@@ -14243,6 +14244,12 @@
           },
           "temporary_password": {
             "type": "string"
+          },
+          "credential_receipt": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
           },
           "password_delivery": {
             "type": "string",
@@ -14256,13 +14263,20 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "secret"
+          "secret",
+          "credential_receipt"
         ],
         "properties": {
           "secret": {
             "type": "string",
             "minLength": 1,
             "maxLength": 512
+          },
+          "credential_receipt": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
           }
         }
       },

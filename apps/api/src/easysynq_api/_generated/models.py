@@ -70,6 +70,9 @@ class FirstAdministratorProvisioned(BaseModel):
     )
     administrator: FirstAdministratorSummary
     temporary_password: str
+    credential_receipt: Annotated[
+        str, Field(max_length=43, min_length=43, pattern="^[A-Za-z0-9_-]{43}$")
+    ]
     password_delivery: PasswordDelivery
 
 
@@ -78,6 +81,9 @@ class BootstrapAcknowledgeRequest(BaseModel):
         extra="forbid",
     )
     secret: Annotated[str, Field(max_length=512, min_length=1)]
+    credential_receipt: Annotated[
+        str, Field(max_length=43, min_length=43, pattern="^[A-Za-z0-9_-]{43}$")
+    ]
 
 
 class SetupState(StrEnum):

@@ -306,7 +306,9 @@ paths:
           description: Keycloak unavailable.
           $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "503":
-          description: Keycloak admin configuration is missing.
+          description: >-
+            Keycloak admin configuration is missing, bootstrap rate limiting is unavailable, or
+            required bootstrap state persistence failed.
           $ref: "#/components/responses/FirstAdministratorProblemResponse"
 
   /setup/administrator/acknowledge:
@@ -348,7 +350,7 @@ paths:
           description: Keycloak unavailable.
           $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "503":
-          description: Keycloak admin configuration is missing.
+          description: Bootstrap rate limiting is unavailable.
           $ref: "#/components/responses/FirstAdministratorProblemResponse"
 
   /setup/org-profile:
@@ -7055,18 +7057,28 @@ components:
     FirstAdministratorProvisioned:
       type: object
       additionalProperties: false
-      required: [administrator, temporary_password, password_delivery]
+      required: [administrator, temporary_password, credential_receipt, password_delivery]
       properties:
         administrator: { $ref: "#/components/schemas/FirstAdministratorSummary" }
         temporary_password: { type: string }
+        credential_receipt:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{43}$"
         password_delivery: { type: string, enum: [shown_once] }
 
     BootstrapAcknowledgeRequest:
       type: object
       additionalProperties: false
-      required: [secret]
+      required: [secret, credential_receipt]
       properties:
         secret: { type: string, minLength: 1, maxLength: 512 }
+        credential_receipt:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{43}$"
 
     BootstrapAcknowledgeResponse:
       type: object

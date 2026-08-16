@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import hashlib
+import hmac
 import logging
+import secrets
 import uuid
 from typing import Any
 
@@ -42,6 +45,7 @@ _DUMMY_BOOTSTRAP_HASH = (
     "00000000000000000000000000000000:"
     "0000000000000000000000000000000000000000000000000000000000000000"
 )
+_DUMMY_RECEIPT_DIGEST = "0" * 64
 
 ALLOWED_BOOTSTRAP_AFTER_KEYS = {
     EventType.BOOTSTRAP_IDENTITY_CLAIMED: {"username"},
@@ -92,6 +96,7 @@ class FirstAdministratorProvisioned:
     display_name: str
     email: str | None
     temporary_password: str
+    credential_receipt: str
     created: bool
 
 
@@ -107,6 +112,16 @@ def _request_id() -> uuid.UUID | None:
         return uuid.UUID(value)
     except ValueError:
         return None
+
+
+def _new_credential_receipt() -> tuple[str, str]:
+    receipt = secrets.token_urlsafe(32)
+    return receipt, hashlib.sha256(receipt.encode("utf-8")).hexdigest()
+
+
+def _receipt_matches(receipt: str, stored_digest: str | None) -> bool:
+    supplied = hashlib.sha256(receipt.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(supplied, stored_digest or _DUMMY_RECEIPT_DIGEST)
 
 
 def _bootstrap_audit_event(
@@ -686,7 +701,7 @@ async def _issue_and_record_credential(
     user_id: uuid.UUID,
     identity: CredentiallessIdentity,
     client: Any,
-) -> str:
+) -> tuple[str, str]:
     cfg = await _locked_singleton(session)
     _assert_claim(cfg, claim_id=claim_id, username=username)
     await lock_admin_set(session, cfg.org_id)
@@ -712,22 +727,44 @@ async def _issue_and_record_credential(
             title="The identity provider is unavailable",
         ) from exc
 
+    receipt, receipt_digest = _new_credential_receipt()
+    cfg.bootstrap_credential_issued_at = _now()
+    cfg.bootstrap_credential_receipt_hash = receipt_digest
     try:
-        cfg.bootstrap_credential_issued_at = _now()
-        session.add(
-            _bootstrap_audit_event(
-                org_id=cfg.org_id,
-                event_type=EventType.USER_CREDENTIAL_ISSUED,
-                object_type=AuditObjectType.user,
-                object_id=user_id,
-                after={"credential_issued": True},
-            )
-        )
-        await session.commit()
-    except Exception as _exc:  # noqa: BLE001 — R64 makes every final DB failure non-fatal.
+        await session.flush()
+    except Exception as exc:
         await session.rollback()
+        raise ProblemException(
+            status=503,
+            code="dependency_unavailable",
+            title="Required bootstrap state could not be persisted",
+        ) from exc
+
+    try:
+        async with session.begin_nested():
+            session.add(
+                _bootstrap_audit_event(
+                    org_id=cfg.org_id,
+                    event_type=EventType.USER_CREDENTIAL_ISSUED,
+                    object_type=AuditObjectType.user,
+                    object_id=user_id,
+                    after={"credential_issued": True},
+                )
+            )
+            await session.flush()
+    except Exception:  # noqa: BLE001 — R64 permits only this isolated audit under-claim.
         logger.warning("setup.first_administrator_credential_audit_failed user_id=%s", str(user_id))
-    return password
+
+    try:
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        raise ProblemException(
+            status=503,
+            code="dependency_unavailable",
+            title="Required bootstrap state could not be persisted",
+        ) from exc
+    return password, receipt
 
 
 async def provision_first_administrator(
@@ -775,7 +812,7 @@ async def provision_first_administrator(
         user_id = uuid.UUID(summary["id"])
         display_name = str(summary["display_name"])
         email = summary["email"]
-        password = await _issue_and_record_credential(
+        password, credential_receipt = await _issue_and_record_credential(
             session,
             claim_id=claim_id,
             username=profile.username,
@@ -790,6 +827,7 @@ async def provision_first_administrator(
             display_name=display_name,
             email=email,
             temporary_password=password,
+            credential_receipt=credential_receipt,
             created=identity.created,
         )
     except Exception:
@@ -814,13 +852,14 @@ async def _admin_assignment_exists(
     return assignment is not None
 
 
-async def _acknowledge_first_administrator(session: AsyncSession, *, secret: str) -> dict[str, str]:
+async def _acknowledge_first_administrator(
+    session: AsyncSession, *, secret: str, credential_receipt: str
+) -> dict[str, str]:
     await _check_rate_limit()
     cfg = await _locked_singleton(session)
     await _check_rate_limit()
     await _validate_acknowledgment_proof(cfg, secret)
     await lock_admin_set(session, cfg.org_id)
-    await _assert_only_claim_administrator(session, cfg)
 
     admin_user_id = cfg.bootstrap_admin_user_id
     complete = (
@@ -835,6 +874,13 @@ async def _acknowledge_first_administrator(session: AsyncSession, *, secret: str
                 code="bootstrap_not_ready",
                 title="The consumed first-administrator claim is incomplete",
             )
+        if not _receipt_matches(credential_receipt, cfg.bootstrap_credential_receipt_hash):
+            raise ProblemException(
+                status=409,
+                code="bootstrap_credential_superseded",
+                title="The acknowledged credential generation is no longer active",
+            )
+        await _assert_only_claim_administrator(session, cfg)
         if not await _admin_assignment_exists(session, org_id=cfg.org_id, user_id=admin_user_id):
             raise ProblemException(
                 status=409,
@@ -857,6 +903,13 @@ async def _acknowledge_first_administrator(session: AsyncSession, *, secret: str
             code="bootstrap_not_ready",
             title="The first administrator is not ready for acknowledgment",
         )
+    if not _receipt_matches(credential_receipt, cfg.bootstrap_credential_receipt_hash):
+        raise ProblemException(
+            status=409,
+            code="bootstrap_credential_superseded",
+            title="The acknowledged credential generation is no longer active",
+        )
+    await _assert_only_claim_administrator(session, cfg)
     if not await _admin_assignment_exists(session, org_id=cfg.org_id, user_id=admin_user_id):
         raise ProblemException(
             status=409,
@@ -880,9 +933,15 @@ async def _acknowledge_first_administrator(session: AsyncSession, *, secret: str
     return {"setup_state": SetupState.IN_SETUP.value, "admin_user_id": str(admin_user_id)}
 
 
-async def acknowledge_first_administrator(session: AsyncSession, *, secret: str) -> dict[str, str]:
+async def acknowledge_first_administrator(
+    session: AsyncSession, *, secret: str, credential_receipt: str
+) -> dict[str, str]:
     try:
-        return await _acknowledge_first_administrator(session, secret=secret)
+        return await _acknowledge_first_administrator(
+            session,
+            secret=secret,
+            credential_receipt=credential_receipt,
+        )
     except Exception:
         await session.rollback()
         raise

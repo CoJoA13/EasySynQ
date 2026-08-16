@@ -1,8 +1,8 @@
 """First-run setup wizard (slice S8a, doc 08).
 
-The setup spine: secret-authorized first-administrator provisioning, the org profile, and the
-finalize transition that flips the ``setup_state`` one-way latch to ``OPERATIONAL``. The HTTP latch
-lives in ``main.py``; setup gates register in
+The setup spine: secret-authorized, active-credential-bound first-administrator provisioning, the
+org profile, and the finalize transition that flips the ``setup_state`` one-way latch to
+``OPERATIONAL``. The HTTP latch lives in ``main.py``; setup gates register in
 :data:`~easysynq_api.services.setup.service.GATES`.
 """
 

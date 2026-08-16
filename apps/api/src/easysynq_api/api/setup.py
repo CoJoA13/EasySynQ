@@ -59,6 +59,11 @@ class BootstrapAcknowledgeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     secret: str = Field(min_length=1, max_length=512)
+    credential_receipt: str = Field(
+        min_length=43,
+        max_length=43,
+        pattern=r"^[A-Za-z0-9_-]{43}$",
+    )
 
 
 class OrgProfileUpdate(BaseModel):
@@ -131,6 +136,7 @@ async def setup_administrator_endpoint(
             "status": "INVITED",
         },
         "temporary_password": result.temporary_password,
+        "credential_receipt": result.credential_receipt,
         "password_delivery": "shown_once",
     }
 
@@ -141,7 +147,11 @@ async def setup_administrator_acknowledge_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, str]:
     """Acknowledge receipt of the volatile password and advance the setup latch."""
-    return await acknowledge_first_administrator(session, secret=body.secret)
+    return await acknowledge_first_administrator(
+        session,
+        secret=body.secret,
+        credential_receipt=body.credential_receipt,
+    )
 
 
 @router.patch("/setup/org-profile")

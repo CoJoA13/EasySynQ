@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import shutil
 import tempfile
 import threading
@@ -22,6 +23,7 @@ import pytest
 import redis.asyncio as aioredis
 from httpx import AsyncClient
 from sqlalchemy import delete, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
@@ -255,6 +257,7 @@ async def _reset_uninitialized() -> str:
         cfg.bootstrap_admin_user_id = None
         cfg.bootstrap_claimed_at = None
         cfg.bootstrap_credential_issued_at = None
+        cfg.bootstrap_credential_receipt_hash = None
         cfg.auth_method = None  # reset G-D (S8c) so it starts unsatisfied
         cfg.auth_test_login_ok = None
         cfg.auth_test_login_at = None
@@ -338,7 +341,11 @@ async def _bootstrap(
     provisioned = provision.json()
     assert provisioned["temporary_password"]
     acknowledged = await client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+        "/api/v1/setup/administrator/acknowledge",
+        json={
+            "secret": secret,
+            "credential_receipt": provisioned["credential_receipt"],
+        },
     )
     assert acknowledged.status_code == 200, acknowledged.text
     body = {**provisioned, **acknowledged.json()}
@@ -466,7 +473,7 @@ async def test_bootstrap_rejects_wrong_secret_and_replay(
     assert replay.json()["code"] == "setup_already_complete"
 
 
-async def test_first_administrator_initial_issue_and_response_loss_reissue_are_public(
+async def test_first_administrator_credential_receipt_rotates_and_stale_receipt_is_rejected(
     app_client: AsyncClient,
     _setup_keycloak: _FakeKeycloak,
 ) -> None:
@@ -481,11 +488,17 @@ async def test_first_administrator_initial_issue_and_response_loss_reissue_are_p
     assert second.status_code == 200, second.text
     first_body = first.json()
     second_body = second.json()
-    assert set(first_body) == {"administrator", "temporary_password", "password_delivery"}
+    assert set(first_body) == {
+        "administrator",
+        "temporary_password",
+        "credential_receipt",
+        "password_delivery",
+    }
     assert first_body["administrator"]["username"] == username
     assert first_body["administrator"]["status"] == "INVITED"
     assert first_body["password_delivery"] == "shown_once"
     assert first_body["temporary_password"] != second_body["temporary_password"]
+    assert first_body["credential_receipt"] != second_body["credential_receipt"]
     assert "keycloak_subject" not in first.text
     assert first_identity_operations == [
         "profile",
@@ -505,6 +518,33 @@ async def test_first_administrator_initial_issue_and_response_loss_reissue_are_p
     assert cfg.bootstrap_admin_claim_id is not None
     assert cfg.bootstrap_admin_username == username
     assert cfg.bootstrap_admin_user_id == uuid.UUID(first_body["administrator"]["id"])
+    assert (
+        cfg.bootstrap_credential_receipt_hash
+        == hashlib.sha256(second_body["credential_receipt"].encode("utf-8")).hexdigest()
+    )
+    assert first_body["credential_receipt"] != cfg.bootstrap_credential_receipt_hash
+    assert second_body["credential_receipt"] != cfg.bootstrap_credential_receipt_hash
+
+    stale = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={
+            "secret": secret,
+            "credential_receipt": first_body["credential_receipt"],
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "bootstrap_credential_superseded"
+    assert "credential_receipt" not in stale.json()
+    assert (await _config()).setup_state is SetupState.UNINITIALIZED
+
+    current = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={
+            "secret": secret,
+            "credential_receipt": second_body["credential_receipt"],
+        },
+    )
+    assert current.status_code == 200, current.text
 
 
 async def test_locked_singleton_refreshes_expire_on_commit_false_identity_map(
@@ -552,7 +592,13 @@ async def test_credential_reset_is_serialized_against_acknowledgment(
     )
     await asyncio.wait_for(barrier.entered.get(), timeout=2)
     acknowledgment = asyncio.create_task(
-        app_client.post("/api/v1/setup/administrator/acknowledge", json={"secret": secret}),
+        app_client.post(
+            "/api/v1/setup/administrator/acknowledge",
+            json={
+                "secret": secret,
+                "credential_receipt": initial.json()["credential_receipt"],
+            },
+        ),
         name="acknowledge-between-resets",
     )
 
@@ -565,14 +611,28 @@ async def test_credential_reset_is_serialized_against_acknowledgment(
         barrier.release.set()
 
     acknowledged = await asyncio.wait_for(acknowledgment, timeout=2)
-    password_count_at_acknowledgment = len(_setup_keycloak.passwords[subject])
     reissued = await asyncio.wait_for(asyncio.gather(first_reissue, second_reissue), timeout=2)
 
     assert acknowledgment_was_blocked is True
-    assert acknowledged.status_code == 200
+    assert acknowledged.status_code == 409
+    assert acknowledged.json()["code"] == "bootstrap_credential_superseded"
     assert barrier.max_active == 1
-    assert len(_setup_keycloak.passwords[subject]) == password_count_at_acknowledgment
     assert {response.status_code for response in reissued} <= {200, 409}
+    assert (await _config()).setup_state is SetupState.UNINITIALIZED
+    active_digest = (await _config()).bootstrap_credential_receipt_hash
+    active = next(
+        response.json()
+        for response in reissued
+        if response.status_code == 200
+        and hashlib.sha256(response.json()["credential_receipt"].encode("utf-8")).hexdigest()
+        == active_digest
+    )
+    final_acknowledgment = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": active["credential_receipt"]},
+    )
+    assert final_acknowledgment.status_code == 200, final_acknowledgment.text
+    assert len(_setup_keycloak.passwords[subject]) == 3
 
 
 async def test_bootstrap_credential_issuance_serializes_break_glass_admin_grant(
@@ -652,13 +712,16 @@ async def test_first_administrator_acknowledgment_is_idempotent_for_same_secret(
         )
     consumed_before = consumed_before or 0
     provisioned = await _provision(app_client, secret, username)
-    admin_id = uuid.UUID(provisioned.json()["administrator"]["id"])
+    provisioned_body = provisioned.json()
+    admin_id = uuid.UUID(provisioned_body["administrator"]["id"])
 
     first = await app_client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
     )
     second = await app_client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
     )
 
     assert first.status_code == second.status_code == 200
@@ -694,9 +757,11 @@ async def test_acknowledgment_replay_accepts_matching_consumed_secret_after_expi
     secret = await _reset_uninitialized()
     username = _sub("ack-expired-replay")
     provisioned = await _provision(app_client, secret, username)
-    admin_id = provisioned.json()["administrator"]["id"]
+    provisioned_body = provisioned.json()
+    admin_id = provisioned_body["administrator"]["id"]
     first = await app_client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
     )
     password_count = len(_setup_keycloak.passwords[f"subject:{username}"])
     async with get_sessionmaker()() as session:
@@ -705,7 +770,8 @@ async def test_acknowledgment_replay_accepts_matching_consumed_secret_after_expi
         await session.commit()
 
     replay = await app_client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
     )
 
     assert first.status_code == 200
@@ -718,9 +784,14 @@ async def test_expired_consumed_acknowledgment_mismatch_is_generic_and_counted(
     app_client: AsyncClient,
 ) -> None:
     secret = await _reset_uninitialized()
-    assert (await _provision(app_client, secret, _sub("ack-expired-wrong"))).status_code == 201
+    provisioned = await _provision(app_client, secret, _sub("ack-expired-wrong"))
+    assert provisioned.status_code == 201
+    credential_receipt = provisioned.json()["credential_receipt"]
     assert (
-        await app_client.post("/api/v1/setup/administrator/acknowledge", json={"secret": secret})
+        await app_client.post(
+            "/api/v1/setup/administrator/acknowledge",
+            json={"secret": secret, "credential_receipt": credential_receipt},
+        )
     ).status_code == 200
     async with get_sessionmaker()() as session:
         cfg = (await session.execute(select(SystemConfig))).scalar_one()
@@ -728,7 +799,8 @@ async def test_expired_consumed_acknowledgment_mismatch_is_generic_and_counted(
         await session.commit()
 
     denied = await app_client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": "wrong"}
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": "wrong", "credential_receipt": credential_receipt},
     )
 
     assert denied.status_code == 403
@@ -746,9 +818,13 @@ async def test_expired_consumed_acknowledgment_replay_preserves_fail_closed_chec
 ) -> None:
     secret = await _reset_uninitialized()
     provisioned = await _provision(app_client, secret, _sub(f"ack-expired-{broken_state}"))
-    admin_id = uuid.UUID(provisioned.json()["administrator"]["id"])
+    provisioned_body = provisioned.json()
+    admin_id = uuid.UUID(provisioned_body["administrator"]["id"])
     assert (
-        await app_client.post("/api/v1/setup/administrator/acknowledge", json={"secret": secret})
+        await app_client.post(
+            "/api/v1/setup/administrator/acknowledge",
+            json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
+        )
     ).status_code == 200
     async with get_sessionmaker()() as session:
         cfg = (await session.execute(select(SystemConfig))).scalar_one()
@@ -760,7 +836,8 @@ async def test_expired_consumed_acknowledgment_replay_preserves_fail_closed_chec
         await session.commit()
 
     replay = await app_client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
     )
 
     assert replay.status_code == 409
@@ -794,7 +871,11 @@ async def test_reminted_secret_recovers_pending_claim_and_advanced_setup_refuses
     assert after.bootstrap_admin_user_id == admin_user_id
 
     acknowledged = await app_client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": replacement}
+        "/api/v1/setup/administrator/acknowledge",
+        json={
+            "secret": replacement,
+            "credential_receipt": recovered.json()["credential_receipt"],
+        },
     )
     assert acknowledged.status_code == 200
     stored_hash = (await _config()).bootstrap_secret_hash
@@ -814,7 +895,8 @@ async def test_remint_cannot_commit_after_racing_acknowledgment(
     del _setup_keycloak
     secret = await _reset_uninitialized()
     username = _sub("remint-race")
-    assert (await _provision(app_client, secret, username)).status_code == 201
+    provisioned = await _provision(app_client, secret, username)
+    assert provisioned.status_code == 201
     original_hash = (await _config()).bootstrap_secret_hash
     replacement_secret, replacement_hash = mint_secret()
     assignment_checked = asyncio.Event()
@@ -846,7 +928,13 @@ async def test_remint_cannot_commit_after_racing_acknowledgment(
     )
     monkeypatch.setattr(setup_cli, "mint_secret", observed_mint_secret)
     acknowledgment = asyncio.create_task(
-        app_client.post("/api/v1/setup/administrator/acknowledge", json={"secret": secret})
+        app_client.post(
+            "/api/v1/setup/administrator/acknowledge",
+            json={
+                "secret": secret,
+                "credential_receipt": provisioned.json()["credential_receipt"],
+            },
+        )
     )
     await asyncio.wait_for(assignment_checked.wait(), timeout=2)
     remint = asyncio.create_task(asyncio.to_thread(run_remint))
@@ -939,7 +1027,7 @@ async def test_claim_owned_administrator_can_reissue_and_acknowledge(
     reissued = await _provision(app_client, secret, username)
     acknowledged = await app_client.post(
         "/api/v1/setup/administrator/acknowledge",
-        json={"secret": secret},
+        json={"secret": secret, "credential_receipt": reissued.json()["credential_receipt"]},
     )
 
     assert created.status_code == 201, created.text
@@ -1455,7 +1543,7 @@ async def test_password_failure_keeps_linked_user_and_role_for_retry(
     assert recovered.status_code == 200, recovered.text
 
 
-async def test_final_credential_audit_failure_returns_password_and_underclaims(
+async def test_credential_audit_savepoint_failure_preserves_acknowledgeable_receipt_state(
     app_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -1467,9 +1555,10 @@ async def test_final_credential_audit_failure_returns_password_and_underclaims(
     real_builder = administrator_service._bootstrap_audit_event
 
     def fail_credential_audit(**kwargs: Any) -> AuditEvent:
-        if kwargs["event_type"] is EventType.USER_CREDENTIAL_ISSUED:
-            raise RuntimeError("forced credential audit failure")
-        return real_builder(**kwargs)
+        event = real_builder(**kwargs)
+        if event.event_type is EventType.USER_CREDENTIAL_ISSUED:
+            event.actor_type = None  # type: ignore[assignment]  # force DB INSERT failure
+        return event
 
     monkeypatch.setattr(administrator_service, "_bootstrap_audit_event", fail_credential_audit)
     response = await _provision(app_client, secret, username)
@@ -1478,29 +1567,140 @@ async def test_final_credential_audit_failure_returns_password_and_underclaims(
     body = response.json()
     cfg = await _config()
     assert cfg.bootstrap_admin_user_id is not None
-    assert cfg.bootstrap_credential_issued_at is None
+    assert cfg.bootstrap_credential_issued_at is not None
+    assert (
+        cfg.bootstrap_credential_receipt_hash
+        == hashlib.sha256(body["credential_receipt"].encode("utf-8")).hexdigest()
+    )
+    async with get_sessionmaker()() as session:
+        credential_audit = await session.scalar(
+            select(AuditEvent.id).where(
+                AuditEvent.event_type == EventType.USER_CREDENTIAL_ISSUED,
+                AuditEvent.object_id == cfg.bootstrap_admin_user_id,
+            )
+        )
+    assert credential_audit is None
     log_text = caplog.text
     assert secret not in log_text
     assert body["temporary_password"] not in log_text
+    assert body["credential_receipt"] not in log_text
     assert f"subject:{username}" not in log_text
     assert str(cfg.bootstrap_admin_user_id) in log_text
+    acknowledged = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": body["credential_receipt"]},
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+
+
+async def test_receipt_state_commit_failure_returns_no_credential_and_retry_rotates(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    secret = await _reset_uninitialized()
+    username = _sub("receipt-state-commit")
+    receipts = iter(("A" * 43, "B" * 43))
+
+    def deterministic_receipt() -> tuple[str, str]:
+        receipt = next(receipts)
+        return receipt, hashlib.sha256(receipt.encode("utf-8")).hexdigest()
+
+    real_commit = AsyncSession.commit
+    failed_once = False
+
+    async def fail_first_receipt_state_commit(session: AsyncSession) -> None:
+        nonlocal failed_once
+        has_receipt_state = any(
+            isinstance(value, SystemConfig) and value.bootstrap_credential_receipt_hash is not None
+            for value in session.identity_map.values()
+        )
+        if has_receipt_state and not session.in_nested_transaction() and not failed_once:
+            failed_once = True
+            raise RuntimeError("forced receipt-state commit failure")
+        await real_commit(session)
+
+    monkeypatch.setattr(
+        administrator_service,
+        "_new_credential_receipt",
+        deterministic_receipt,
+        raising=False,
+    )
+    monkeypatch.setattr(AsyncSession, "commit", fail_first_receipt_state_commit)
+
+    failed = await _provision(app_client, secret, username)
+
+    assert failed_once is True
+    assert failed.status_code == 503, failed.text
+    assert failed.json()["code"] == "dependency_unavailable"
+    assert "temporary_password" not in failed.text
+    assert "credential_receipt" not in failed.text
+    assert "A" * 43 not in failed.text
+    first_password = _setup_keycloak.passwords[f"subject:{username}"][-1]
+    assert first_password not in failed.text
+    assert secret not in failed.text
+    after_failure = await _config()
+    assert after_failure.bootstrap_credential_issued_at is None
+    assert after_failure.bootstrap_credential_receipt_hash is None
+    assert "A" * 43 not in caplog.text
+    assert first_password not in caplog.text
+    assert secret not in caplog.text
+
+    retried = await _provision(app_client, secret, username)
+
+    assert retried.status_code == 200, retried.text
+    body = retried.json()
+    assert body["credential_receipt"] == "B" * 43
+    assert body["credential_receipt"] != "A" * 43
+    assert _setup_keycloak.passwords[f"subject:{username}"][-1] != first_password
+    current = await _config()
+    assert (
+        current.bootstrap_credential_receipt_hash
+        == hashlib.sha256(body["credential_receipt"].encode("utf-8")).hexdigest()
+    )
+    acknowledged = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": body["credential_receipt"]},
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
 
 
 async def test_acknowledgment_requires_issued_credential_and_admin_assignment(
     app_client: AsyncClient,
     _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
     secret = await _reset_uninitialized()
     username = _sub("ack-not-ready")
     _setup_keycloak.password_error = KeycloakUnavailable("password endpoint unavailable")
     assert (await _provision(app_client, secret, username)).status_code == 502
+    comparisons = 0
+
+    def observed_receipt_match(_receipt: str, _stored_digest: str | None) -> bool:
+        nonlocal comparisons
+        comparisons += 1
+        return True
+
+    monkeypatch.setattr(
+        administrator_service,
+        "_receipt_matches",
+        observed_receipt_match,
+        raising=False,
+    )
 
     response = await app_client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": "x" * 43},
     )
 
     assert response.status_code == 409
     assert response.json()["code"] == "bootstrap_not_ready"
+    assert comparisons == 0
     assert (await _config()).setup_state is SetupState.UNINITIALIZED
 
 
@@ -1575,9 +1775,11 @@ async def test_first_administrator_audit_order_actor_and_payload_secrecy(
     baseline = baseline or 0
     provisioned = await _provision(app_client, secret, username)
     password = provisioned.json()["temporary_password"]
+    credential_receipt = provisioned.json()["credential_receipt"]
     admin_id = uuid.UUID(provisioned.json()["administrator"]["id"])
     acknowledged = await app_client.post(
-        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": credential_receipt},
     )
     assert acknowledged.status_code == 200
     cfg = await _config()
@@ -1631,6 +1833,7 @@ async def test_first_administrator_audit_order_actor_and_payload_secrecy(
         rendered = repr(event.after)
         assert secret not in rendered
         assert password not in rendered
+        assert credential_receipt not in rendered
         assert subject not in rendered
         assert str(cfg.bootstrap_admin_claim_id) not in rendered
     assert events[1].object_id == admin_id
@@ -2007,7 +2210,8 @@ async def test_bootstrap_rate_limit_is_rechecked_after_singleton_lock(
         response = await _provision(app_client, "wrong", _sub("rl-order"))
     else:
         response = await app_client.post(
-            "/api/v1/setup/administrator/acknowledge", json={"secret": "wrong"}
+            "/api/v1/setup/administrator/acknowledge",
+            json={"secret": "wrong", "credential_receipt": "x" * 43},
         )
 
     assert response.status_code == 403

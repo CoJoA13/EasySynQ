@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
+import re
 import uuid
 from types import SimpleNamespace
 
@@ -82,6 +84,49 @@ def test_bound_username_comparison_is_exact_after_normalization() -> None:
     assert excinfo.value.status == 409
     assert excinfo.value.code == "bootstrap_identity_bound"
     assert excinfo.value.members == {"bound_username": "first-admin"}
+
+
+def test_new_credential_receipt_is_url_safe_and_hashes_with_sha256() -> None:
+    receipt, digest = administrator_service._new_credential_receipt()
+
+    assert len(receipt) == 43
+    assert re.fullmatch(r"[A-Za-z0-9_-]{43}", receipt)
+    assert digest == hashlib.sha256(receipt.encode("utf-8")).hexdigest()
+    assert administrator_service._receipt_matches(receipt, digest) is True
+    assert administrator_service._receipt_matches("x" * 43, digest) is False
+    assert administrator_service._receipt_matches(receipt, None) is False
+
+
+@pytest.mark.parametrize(
+    ("case", "stored_digest", "use_wrong_receipt"),
+    [
+        ("missing", None, False),
+        ("malformed", "not-a-sha256-digest", False),
+        ("wrong", "generated", True),
+    ],
+)
+def test_receipt_rejection_executes_one_constant_time_comparison(
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    stored_digest: str | None,
+    use_wrong_receipt: bool,
+) -> None:
+    del case
+    receipt, digest = administrator_service._new_credential_receipt()
+    if stored_digest == "generated":
+        stored_digest = digest
+    supplied = "x" * 43 if use_wrong_receipt else receipt
+    comparisons: list[tuple[str, str]] = []
+    real_compare = administrator_service.hmac.compare_digest
+
+    def observed_compare(left: str, right: str) -> bool:
+        comparisons.append((left, right))
+        return real_compare(left, right)
+
+    monkeypatch.setattr(administrator_service.hmac, "compare_digest", observed_compare)
+
+    assert administrator_service._receipt_matches(supplied, stored_digest) is False
+    assert len(comparisons) == 1
 
 
 def test_secret_is_verified_before_advanced_state_is_disclosed() -> None:
