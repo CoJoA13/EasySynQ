@@ -7938,9 +7938,9 @@ export interface operations {
                     "application/json": components["schemas"]["FirstAdministratorProvisioned"];
                 };
             };
-            /** @description Invalid or expired bootstrap secret. */
+            /** @description Missing, expired, or invalid bootstrap secret; all return bootstrap_invalid. */
             403: components["responses"]["FirstAdministratorProblemResponse"];
-            /** @description No secret, setup advanced, identity bound/not ready, or username collision. */
+            /** @description Setup advanced, identity bound/not ready, or username collision. */
             409: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Validation failure or Keycloak rejection. */
             422: components["responses"]["FirstAdministratorProblemResponse"];
@@ -7974,9 +7974,9 @@ export interface operations {
                     "application/json": components["schemas"]["BootstrapAcknowledgeResponse"];
                 };
             };
-            /** @description Invalid or expired bootstrap secret. */
+            /** @description Missing, expired, or invalid bootstrap secret; all return bootstrap_invalid. */
             403: components["responses"]["FirstAdministratorProblemResponse"];
-            /** @description No secret, setup advanced, identity bound/not ready, or username collision. */
+            /** @description Setup advanced, identity bound/not ready, or username collision. */
             409: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Validation failure or Keycloak rejection. */
             422: components["responses"]["FirstAdministratorProblemResponse"];

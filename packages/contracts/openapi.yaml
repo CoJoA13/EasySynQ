@@ -289,10 +289,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/FirstAdministratorProvisioned" }
         "403":
-          description: Invalid or expired bootstrap secret.
+          description: Missing, expired, or invalid bootstrap secret; all return bootstrap_invalid.
           $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "409":
-          description: No secret, setup advanced, identity bound/not ready, or username collision.
+          description: Setup advanced, identity bound/not ready, or username collision.
           $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "422":
           description: Validation failure or Keycloak rejection.
@@ -325,10 +325,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/BootstrapAcknowledgeResponse" }
         "403":
-          description: Invalid or expired bootstrap secret.
+          description: Missing, expired, or invalid bootstrap secret; all return bootstrap_invalid.
           $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "409":
-          description: No secret, setup advanced, identity bound/not ready, or username collision.
+          description: Setup advanced, identity bound/not ready, or username collision.
           $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "422":
           description: Validation failure or Keycloak rejection.

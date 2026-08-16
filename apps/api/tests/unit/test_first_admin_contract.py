@@ -30,6 +30,21 @@ def test_first_administrator_replaces_the_authenticated_bootstrap_contract() -> 
         )
 
 
+def test_first_administrator_proof_failures_share_the_generic_403_contract() -> None:
+    spec = yaml.safe_load(OPENAPI.read_text(encoding="utf-8"))
+    paths = spec["paths"]
+    expected_proof_description = (
+        "Missing, expired, or invalid bootstrap secret; all return bootstrap_invalid."
+    )
+
+    for path in ("/setup/administrator", "/setup/administrator/acknowledge"):
+        responses = paths[path]["post"]["responses"]
+        assert responses["403"]["description"] == expected_proof_description
+        conflict_description = responses["409"]["description"].lower()
+        assert "no secret" not in conflict_description
+        assert "expired" not in conflict_description
+
+
 def test_first_administrator_response_never_publishes_keycloak_identity() -> None:
     spec = yaml.safe_load(OPENAPI.read_text(encoding="utf-8"))
     schemas = spec["components"]["schemas"]
@@ -37,7 +52,9 @@ def test_first_administrator_response_never_publishes_keycloak_identity() -> Non
     assert summary["required"] == ["id", "username", "display_name", "email", "status"]
     assert summary["properties"]["display_name"] == {"type": "string"}
     assert "keycloak_subject" not in summary["properties"]
-    assert schemas["FirstAdministratorRequest"]["properties"]["display_name"]["pattern"] == r".*\S.*"
+    assert (
+        schemas["FirstAdministratorRequest"]["properties"]["display_name"]["pattern"] == r".*\S.*"
+    )
     response = schemas["FirstAdministratorProvisioned"]
     assert response["required"] == ["administrator", "temporary_password", "password_delivery"]
     assert response["properties"]["password_delivery"]["enum"] == ["shown_once"]
