@@ -241,3 +241,60 @@ web unit, lint, type, build, authority, site-data, and diff gates run before han
 are updated only when those suites are freshly rerun. Firefox, WebKit, actual assistive technology,
 SMTP, deployment, general live acceptance, and disposable Fedora proof remain outside this review
 hardening slice.
+
+## 10. Whole-branch review correction — pre-operational administrator recovery
+
+### 10.1 Problem and outcome
+
+The final whole-branch review found that a supported fresh-install path still created a demo Keycloak
+identity before browser setup, and that the documented response to `bootstrap_administrator_exists`
+pointed to `grant-role`. That command adds the same System Administrator assignment that public
+bootstrap correctly refuses, so an `UNINITIALIZED` installation with an unrelated assignment has no
+supported recovery.
+
+All supported fresh-install instructions MUST instead create the first identity in `/setup`, show its
+temporary password once, and sign in only after acknowledgment. No guide or CLI help may require a
+pre-created demo identity for first setup.
+
+### 10.2 Host-only recovery command
+
+Add `easysynq setup release-administrator-blocker --subject <keycloak-subject> [--org CODE]` as an
+exceptional host recovery command. It MUST:
+
+- load and lock the organization `system_config` row and require `UNINITIALIZED` setup;
+- acquire the same per-organization administrator-set advisory lock after the singleton lock;
+- resolve the exact organization user by the supplied Keycloak subject;
+- refuse to remove the administrator assignment from the user linked to the active bootstrap claim;
+- remove only that user's System Administrator role assignment when it is unrelated to the claim;
+- preserve the Keycloak identity, `app_user`, every non-administrator role, and all historical
+  attribution; and
+- commit atomically or roll back without changing setup, claim, identity, or unrelated assignments.
+
+The command is safely repeatable: an absent user or absent blocking assignment reports that nothing
+was released and makes no write. It never deletes or disables an identity, advances setup, consumes a
+bootstrap proof, or grants another role. The operator must mint or retain a valid setup secret and
+resume the normal browser flow after the blocker is released.
+
+This host action runs before a trusted authenticated application administrator exists, so it cannot
+use the normal in-application audit actor. Output names only the operator-supplied subject and result;
+no secret, password, claim marker, provider response, or unrelated administrator is disclosed. The
+operator MUST record the command, operator, reason, subject, organization, and time in an independent
+change or incident record. This deliberate boundary is registered as
+[`uninitialized-admin-recovery`](../../debt/20260816173328-uninitialized-admin-recovery.md).
+
+### 10.3 Alternatives
+
+Adopting the unrelated administrator into the active public claim was rejected because it changes the
+owner-approved create-first-account experience and would let a bootstrap proof take control of an
+identity that lacks the claim marker. Direct SQL deletion was rejected because it bypasses the shared
+lock protocol and cannot enforce exact setup, organization, role, or claim ownership. Automatically
+removing every administrator was rejected because it is over-broad and could erase deliberate access
+state. The exact-subject host command is the smallest recoverable intervention.
+
+### 10.4 Verification
+
+Focused RED/GREEN evidence MUST prove lock order, `UNINITIALIZED` gating, claim-owned refusal, exact
+unrelated-assignment removal, preservation of identity/user/other roles, idempotent absence, rollback,
+wrapper dispatch/help, and updated fresh-install instructions. The populated migration proof MUST
+exercise both `0087 -> 0086 -> 0087` and `0088 -> 0087 -> 0088` boundaries before final evidence is
+recorded. Generated Playwright artifacts remain disposable and MUST be absent at handoff.
