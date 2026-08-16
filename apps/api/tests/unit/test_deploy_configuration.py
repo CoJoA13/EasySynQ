@@ -94,6 +94,11 @@ _SAFE_NEGATIVE_NORMAL_FLOW_PHRASES = (
         re.IGNORECASE,
     ),
 )
+_DIRECT_HELPER_PATH_AT_COMMAND_POSITION = re.compile(
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*[\"']?(?:"
+    r"scripts/|\$\{?APP_DIR\}?/scripts/|(?:\./|\.\./)(?:[^/\s]+/)*scripts/|"
+    r"/(?:[^/\s]+/)*scripts/)"
+)
 _NORMAL_FLOW_KEYCLOAK_CREATION = re.compile(
     r"(?<![-\w])(?:create|add|make|provision)\b[^.\n]{0,120}\b(?:"
     r"keycloak(?![-\w])[^.\n]{0,80}\b(?:user|identity|account)\b|"
@@ -173,6 +178,9 @@ def _assert_no_human_identity_actions(post_ready_actions: str) -> None:
             r"(?:^|[\s\"'])(?:\$\{?APP_DIR\}?/)?scripts/",
             statement,
         ), f"post-ready appliance actions must not run an unapproved helper: {statement}"
+        assert not _DIRECT_HELPER_PATH_AT_COMMAND_POSITION.search(statement), (
+            f"post-ready appliance actions must not run an unapproved helper: {statement}"
+        )
         for _ in re.finditer(r"\bpython(?:3)?\b", statement):
             assert re.search(
                 r"\bpython(?:3)?\s+-m\s+easysynq_api\.cli\."
@@ -579,6 +587,8 @@ def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() ->
         ),
         "renamed-helper": "bash scripts/seed-initial-account.sh",
         "direct-renamed-helper": '"$APP_DIR/scripts/seed-initial-account.sh"',
+        "relative-direct-helper": "./scripts/seed-initial-account.sh",
+        "absolute-direct-helper": "/opt/easysynq/scripts/seed-initial-account.sh",
     }
     rejected_actions: dict[str, bool] = {}
     for name, unsafe_action in unsafe_actions.items():
@@ -598,6 +608,7 @@ def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() ->
         "kcadm.sh update clients/easysynq-web -s 'redirectUris=[\"https://app.example/*\"]'\n"
         "python -m easysynq_api.cli.keycloak_redirect --origin https://app.example\n"
     )
+    _assert_no_human_identity_actions('echo "see ./scripts/seed-initial-account.sh"')
 
     assert 'install -m 600 -o easysynq -g easysynq /dev/null "$SETUP_FILE"' in provisioner
     assert not setup_helper.exists()
