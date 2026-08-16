@@ -60,6 +60,7 @@ async def ensure_credentialless_identity(
     allow_matching_claim: bool = False,
 ) -> CredentiallessIdentity:
     """Find or create only the identity this operation is allowed to own."""
+    await client.ensure_optional_user_profile_fields()
     lookup = await client.find_user_by_username(profile.username)
     if lookup.found:
         return _existing_identity(

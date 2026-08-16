@@ -3,7 +3,9 @@ dist
 coverage
 .vite
 e2e
+e2e-live
 playwright.config.ts
+playwright.live.config.ts
 tsconfig.browser.json
 .playwright-dist
 playwright-report

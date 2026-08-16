@@ -213,6 +213,183 @@ async def test_create_user_sends_no_credential_and_returns_the_subject() -> None
     assert "attributes" not in body
 
 
+async def test_user_profile_reconcile_makes_only_product_optional_fields_optional() -> None:
+    current_profile = {
+        "attributes": [
+            {
+                "name": "username",
+                "required": {"roles": ["admin", "user"]},
+                "permissions": {"view": ["admin", "user"]},
+            },
+            {
+                "name": "email",
+                "required": {"roles": ["user"]},
+                "validations": {"email": {}, "length": {"max": 255}},
+            },
+            {
+                "name": "firstName",
+                "required": {"roles": ["user"]},
+                "validations": {"length": {"max": 255}},
+            },
+            {
+                "name": "lastName",
+                "required": {"roles": ["user"]},
+                "validations": {"length": {"max": 255}},
+            },
+            {
+                "name": "employeeId",
+                "required": {"roles": ["user"]},
+                "annotations": {"inputType": "text"},
+            },
+        ],
+        "groups": [{"name": "employment"}],
+        "unmanagedAttributePolicy": "ENABLED",
+    }
+    updated: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(200, json=current_profile)
+        if request.method == "PUT" and request.url.path.endswith("/users/profile"):
+            updated.append(json.loads(request.content))
+            return httpx.Response(200, json=updated[-1])
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        await kc.ensure_optional_user_profile_fields()
+
+    assert updated == [
+        {
+            "attributes": [
+                {
+                    "name": "username",
+                    "required": {"roles": ["admin", "user"]},
+                    "permissions": {"view": ["admin", "user"]},
+                },
+                {
+                    "name": "email",
+                    "validations": {"email": {}, "length": {"max": 255}},
+                },
+                {"name": "firstName", "validations": {"length": {"max": 255}}},
+                {"name": "lastName", "validations": {"length": {"max": 255}}},
+                {
+                    "name": "employeeId",
+                    "required": {"roles": ["user"]},
+                    "annotations": {"inputType": "text"},
+                },
+            ],
+            "groups": [{"name": "employment"}],
+            "unmanagedAttributePolicy": "ENABLED",
+        }
+    ]
+
+
+async def test_user_profile_reconcile_fails_closed_when_a_builtin_field_is_missing() -> None:
+    put_attempted = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal put_attempted
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(
+                200,
+                json={
+                    "attributes": [
+                        {"name": "username"},
+                        {"name": "email"},
+                        {"name": "firstName"},
+                    ]
+                },
+            )
+        if request.method == "PUT" and request.url.path.endswith("/users/profile"):
+            put_attempted = True
+            return httpx.Response(200, json={})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable):
+            await kc.ensure_optional_user_profile_fields()
+
+    assert put_attempted is False
+
+
+async def test_user_profile_reconcile_skips_put_when_already_optional() -> None:
+    put_attempted = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal put_attempted
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(
+                200,
+                json={
+                    "attributes": [
+                        {"name": "username", "required": {"roles": ["user"]}},
+                        {"name": "email", "validations": {"email": {}}},
+                        {"name": "firstName"},
+                        {"name": "lastName"},
+                        {"name": "employeeId", "required": {"roles": ["user"]}},
+                    ],
+                    "groups": [{"name": "employment"}],
+                },
+            )
+        if request.method == "PUT" and request.url.path.endswith("/users/profile"):
+            put_attempted = True
+            return httpx.Response(200, json={})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        await kc.ensure_optional_user_profile_fields()
+
+    assert put_attempted is False
+
+
+async def test_user_profile_reconcile_fails_closed_when_read_fails() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(503, json={"error": "unavailable"})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable, match="user-profile read failed"):
+            await kc.ensure_optional_user_profile_fields()
+
+
+async def test_user_profile_reconcile_fails_closed_when_write_fails() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(
+                200,
+                json={
+                    "attributes": [
+                        {"name": "email", "required": {"roles": ["user"]}},
+                        {"name": "firstName", "required": {"roles": ["user"]}},
+                        {"name": "lastName", "required": {"roles": ["user"]}},
+                    ]
+                },
+            )
+        if request.method == "PUT" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(409, json={"error": "conflict"})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable, match="user-profile update failed"):
+            await kc.ensure_optional_user_profile_fields()
+
+
 async def test_create_user_sends_only_bootstrap_marker_for_bootstrap_calls() -> None:
     claim = uuid.uuid4()
     posted: list[dict[str, object]] = []

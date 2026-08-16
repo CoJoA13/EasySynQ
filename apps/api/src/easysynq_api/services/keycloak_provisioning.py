@@ -30,6 +30,7 @@ import httpx
 
 _TIMEOUT = 15.0
 BOOTSTRAP_CLAIM_ATTRIBUTE = "easysynqBootstrapClaim"
+_OPTIONAL_USER_PROFILE_FIELDS = ("email", "firstName", "lastName")
 
 
 class KeycloakProvisioningError(RuntimeError):
@@ -197,6 +198,65 @@ class KeycloakProvisioningClient:
                 f"Keycloak username lookup mismatch: asked for {username!r}, got {returned!r}"
             )
         return UserLookup(found=False)
+
+    async def ensure_optional_user_profile_fields(self) -> None:
+        """Reconcile Keycloak's profile policy with EasySynQ's optional identity fields.
+
+        Keycloak's implicit default profile requires email and both name fields for ordinary
+        users. EasySynQ deliberately permits all three to be absent, so leaving that default in
+        place makes Keycloak add VERIFY_PROFILE after the required password update. Preserve the
+        complete realm profile document and remove only the ``required`` member from those exact
+        built-ins. The admin endpoint has whole-document PUT semantics, so an already-reconciled
+        profile is deliberately left untouched.
+        """
+        headers = await self._headers()
+        client = self._client
+        if client is None:
+            raise KeycloakUnavailable("Client not initialized; use async context manager")
+        path = f"/admin/realms/{self._realm}/users/profile"
+        try:
+            response = await client.get(path, headers=headers)
+            response.raise_for_status()
+            profile = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise KeycloakUnavailable(f"Keycloak user-profile read failed: {exc}") from exc
+
+        if not isinstance(profile, dict):
+            raise KeycloakUnavailable("Keycloak user-profile response was not an object")
+        attributes = profile.get("attributes")
+        if not isinstance(attributes, list):
+            raise KeycloakUnavailable("Keycloak user-profile attributes were not a list")
+
+        found = {name: False for name in _OPTIONAL_USER_PROFILE_FIELDS}
+        changed = False
+        for attribute in attributes:
+            if not isinstance(attribute, dict) or not isinstance(attribute.get("name"), str):
+                raise KeycloakUnavailable("Keycloak user-profile attribute was malformed")
+            name = attribute["name"]
+            if name not in found:
+                continue
+            if found[name]:
+                raise KeycloakUnavailable(
+                    f"Keycloak user-profile contained duplicate built-in attribute {name!r}"
+                )
+            found[name] = True
+            if "required" in attribute:
+                del attribute["required"]
+                changed = True
+
+        missing = [name for name, present in found.items() if not present]
+        if missing:
+            raise KeycloakUnavailable(
+                f"Keycloak user-profile omitted built-in attributes {missing!r}"
+            )
+        if not changed:
+            return
+
+        try:
+            response = await client.put(path, headers=headers, json=profile)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise KeycloakUnavailable(f"Keycloak user-profile update failed: {exc}") from exc
 
     async def create_user(
         self,

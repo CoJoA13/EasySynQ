@@ -88,6 +88,9 @@ class _FakeKeycloak:
     async def __aexit__(self, *_args: object) -> None:
         return None
 
+    async def ensure_optional_user_profile_fields(self) -> None:
+        return None
+
     async def find_user_by_username(self, username: str) -> UserLookup:
         if self.lookup_error is not None:
             raise self.lookup_error

@@ -32,7 +32,9 @@ ROOT = _repo_root()
 BROWSER_ONLY_CONTEXT_ROOTS = frozenset(
     {
         "e2e",
+        "e2e-live",
         "playwright.config.ts",
+        "playwright.live.config.ts",
         "tsconfig.browser.json",
         ".playwright-dist",
         "playwright-report",
@@ -503,6 +505,133 @@ def test_web_image_invariant_rejects_exact_descendant_and_wildcard_reinclusions(
     _assert_no_protected_dockerignore_reinclusions(
         [*BROWSER_ONLY_CONTEXT_ROOTS, "!docs/**/*.md"], BROWSER_ONLY_CONTEXT_ROOTS
     )
+
+
+def test_first_admin_live_harness_owns_only_its_validated_stack_and_env() -> None:
+    harness_path = ROOT / "scripts/test-first-admin-keycloak.sh"
+    assert harness_path.exists(), "the live first-administrator runner must be repository-owned"
+    harness = harness_path.read_text(encoding="utf-8")
+
+    assert 'ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"' in harness
+    assert 'ENV_FILE="$ROOT/.env"' in harness
+    assert 'if [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; then' in harness
+    assert "live acceptance refuses an existing .env" in harness
+    assert 'PROJECT="easysynq-first-admin-$(openssl rand -hex 6)"' in harness
+    assert "^easysynq-first-admin-[a-z0-9]+$" in harness
+
+    compose_definition = harness[
+        harness.index("COMPOSE=(") : harness.index(")", harness.index("COMPOSE=("))
+    ]
+    assert "docker compose" in compose_definition
+    assert '-p "$PROJECT"' in compose_definition
+    assert '--env-file "$ENV_FILE"' in compose_definition
+    assert "infra/compose/compose.yml" in compose_definition
+    assert "infra/compose/compose.s.yml" in compose_definition
+    assert "infra/compose/compose.dev.yml" in compose_definition
+    assert harness.count("docker compose") == 1, (
+        "every Compose operation must use the one project-scoped argv"
+    )
+
+    trap_offset = harness.index("trap cleanup EXIT INT TERM")
+    startup_offset = harness.index('"${COMPOSE[@]}" up -d --build')
+    assert trap_offset < startup_offset
+    cleanup = harness[harness.index("cleanup() {") : trap_offset]
+    assert 'validate_project "$PROJECT"' in cleanup
+    assert '[ "$stack_started" -eq 1 ]' in cleanup
+    assert '"${COMPOSE[@]}" down -v --remove-orphans' in cleanup
+    assert '"${COMPOSE[@]}" logs --no-color --tail 200 api keycloak proxy' in cleanup
+    assert '[ "$env_created" -eq 1 ]' in cleanup
+    assert '[ "$ENV_FILE" = "$ROOT/.env" ]' in cleanup
+    assert 'unlink -- "$ENV_FILE"' in cleanup
+    assert 'elif [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; then' in cleanup
+
+    assert 'EASYSYNQ_ENV_ONLY=1 "$ROOT/scripts/install.sh" s' in harness
+    assert 'stack_started=1\n"${COMPOSE[@]}" up -d --build' in harness
+    assert 'curl -fsS "$APP_ORIGIN/readyz"' in harness
+    assert "easysynq_api.cli.keycloak_redirect" in harness
+    assert "easysynq_api.cli.setup import mint_bootstrap" in harness
+    assert "npm --prefix apps/web run test:first-admin-live" in harness
+    for variable in (
+        "EASYSYNQ_LIVE_BASE_URL",
+        "EASYSYNQ_LIVE_SETUP_SECRET",
+        "EASYSYNQ_LIVE_USERNAME",
+        "EASYSYNQ_LIVE_NEW_PASSWORD",
+    ):
+        assert f'{variable}="${{' in harness
+
+    assert "just down" not in harness
+    assert "rm -" not in harness
+    assert "rm " not in harness
+    assert not re.search(r"\b(?:rm|unlink)\b[^\n]*[?*\[]", harness)
+    assert "nohup" not in harness
+    assert "set -x" not in harness
+
+
+def test_first_admin_live_playwright_is_secret_safe_and_single_worker() -> None:
+    config_path = ROOT / "apps/web/playwright.live.config.ts"
+    spec_path = ROOT / "apps/web/e2e-live/first-admin.spec.ts"
+    assert config_path.exists(), "the live Playwright config must be separate from synthetic tests"
+    assert spec_path.exists(), "the real first-administrator flow must have a narrow live spec"
+    config = config_path.read_text(encoding="utf-8")
+    spec = spec_path.read_text(encoding="utf-8")
+
+    assert "process.env.EASYSYNQ_LIVE_BASE_URL" in config
+    assert 'throw new Error("EASYSYNQ_LIVE_BASE_URL is required")' in config
+    assert 'testDir: "./e2e-live"' in config
+    assert "workers: 1" in config
+    assert "retries: 0" in config
+    assert 'name: "chromium"' in config
+    assert 'browserName: "chromium"' in config
+    assert 'trace: "off"' in config
+    assert 'screenshot: "off"' in config
+    assert 'video: "off"' in config
+    assert "webServer:" not in config
+    assert "firefox" not in config.lower()
+    assert "webkit" not in config.lower()
+
+    assert 'test("first administrator completes the required Keycloak password update"' in spec
+    assert "const value = process.env[name]" in spec
+    for variable in (
+        "EASYSYNQ_LIVE_BASE_URL",
+        "EASYSYNQ_LIVE_SETUP_SECRET",
+        "EASYSYNQ_LIVE_USERNAME",
+        "EASYSYNQ_LIVE_NEW_PASSWORD",
+    ):
+        assert f'requiredEnvironment("{variable}")' in spec
+    assert "browser.newContext()" in spec
+    assert "getByLabel(/^Setup secret/)" in spec
+    assert 'getByRole("heading"' in spec
+    assert 'name: "Temporary password — shown once"' in spec
+    assert 'input[name="username"]' in spec
+    assert 'input[name="password-new"]' in spec
+    assert spec.count('getByRole("button", { name: "Sign In", exact: true })') == 2
+    assert spec.count('getByRole("button", { name: "Submit", exact: true })') == 1
+    assert 'input[type="submit"]' not in spec
+    assert 'getByLabel("Legal name", { exact: true })' in spec
+    assert 'input[name="password"]' in spec
+    assert spec.count('getByText("Invalid username or password.", { exact: true })') == 1
+    assert "#input-error" not in spec
+    assert "[role='alert']" not in spec
+    assert ".alert-error" not in spec
+    assert "console." not in spec
+    assert "testInfo.attach" not in spec
+    assert "screenshot(" not in spec
+    assert "tracing." not in spec
+
+
+def test_first_admin_live_package_and_typecheck_boundaries_are_isolated() -> None:
+    package = json.loads(_read("apps/web/package.json"))
+    vite = _read("apps/web/vite.config.ts")
+    browser_tsconfig = json.loads(_read("apps/web/tsconfig.browser.json"))
+    dockerignore = _read("apps/web/.dockerignore").splitlines()
+
+    assert package["scripts"]["test:first-admin-live"] == (
+        "playwright test --config playwright.live.config.ts"
+    )
+    assert '"e2e-live/**"' in vite
+    assert "e2e-live" in browser_tsconfig["include"]
+    assert "playwright.live.config.ts" in browser_tsconfig["include"]
+    assert {"e2e-live", "playwright.live.config.ts"}.issubset(dockerignore)
 
 
 def test_production_requires_one_consistent_browser_edge() -> None:

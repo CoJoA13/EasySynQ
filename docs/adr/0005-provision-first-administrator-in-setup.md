@@ -76,3 +76,59 @@ Keycloak/script dependency this change is intended to remove.
 If the identity provider and EasySynQ persistence can participate in one transactional provisioning
 boundary, remove the staged bootstrap claim and recovery marker. Until then, retain the claim because
 it is what makes partial external-system failure recoverable without deletion or duplicate grants.
+
+## 2026-08-16 amendment — Keycloak user-profile compatibility
+
+### Context
+
+Live first-administrator acceptance against the shipped Keycloak version reached the mandatory
+password update and was then diverted to `VERIFY_PROFILE`. When a realm has no explicit user-profile
+policy, Keycloak requires email, first name, and last name for ordinary users. EasySynQ’s approved
+first-administrator and later-user contracts make all three fields optional, and SMTP remains an
+optional installation dependency. Requiring or inventing profile data would therefore change the
+product contract rather than fix the identity-provider mismatch.
+
+Realm export alone cannot correct existing installations, and disabling `VERIFY_PROFILE` would
+remove useful validation for attributes that a site intentionally configures.
+
+### Decision
+
+Before the shared identity lookup/create path handles either the first administrator or an ordinary
+later user, EasySynQ reads the realm’s complete user-profile policy from Keycloak. It removes only
+the `required` member, when present, from the exact built-in attributes `email`, `firstName`, and
+`lastName`. It preserves every other member, validator, permission, group, custom attribute, and
+unmanaged-attribute policy returned by Keycloak, and performs a whole-document update only when one
+of those three members changed.
+
+The reconciliation runs before identity lookup so retries and existing realms receive the same
+policy. A malformed policy, missing or duplicate target built-in, failed read, or failed write stops
+provisioning. `VERIFY_PROFILE` remains enabled and continues to enforce every other configured
+profile rule.
+
+### Consequences
+
+The approved optional identity fields no longer interrupt first sign-in after the temporary password
+is replaced, and the same semantics apply to ordinary local-user provisioning. Existing realm
+customization is retained except for the three explicitly optional required flags. An already
+reconciled realm is read but not rewritten.
+
+Keycloak exposes this policy through a whole-document update without a version or compare-and-swap
+token. A concurrent external administrator edit could be overwritten between the read and write;
+this accepted limitation is tracked in
+[`keycloak-profile-reconciliation`](../debt/20260816010910-keycloak-profile-reconciliation.md).
+
+### Alternatives
+
+Making the three public setup fields required or fabricating placeholder values was rejected because
+it would contradict the approved optional-field and optional-SMTP contract. Disabling
+`VERIFY_PROFILE` was rejected because it would bypass unrelated site profile rules. Updating only
+the shipped realm export was rejected because it would not repair an existing realm. An unconditional
+whole-document write was rejected because it would create needless overwrite risk after the realm is
+already reconciled.
+
+### Payoff trigger
+
+Replace or fence the whole-document reconciliation when Keycloak provides a versioned or
+compare-and-swap user-profile update, or when EasySynQ introduces supported external profile-policy
+administration. Remove reconciliation only if a future supported identity provider natively preserves
+EasySynQ’s optional-field semantics for both bootstrap and ordinary users.

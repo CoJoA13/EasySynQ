@@ -48,6 +48,9 @@ from .test_vault import _auth, _ensure_user
 pytestmark = pytest.mark.integration
 
 _ADMIN = "System Administrator"
+_RECONCILED_USER_PROFILE = {
+    "attributes": [{"name": "email"}, {"name": "firstName"}, {"name": "lastName"}]
+}
 
 # CONFIRMED production bug, found by these two tests (not a test defect) — see the report for full
 # detail. In BOTH handlers' `except Exception: await session.rollback(); logger.warning(...,
@@ -95,6 +98,8 @@ def _install_kc(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path.endswith("/openid-connect/token"):
             return httpx.Response(200, json={"access_token": "t"})
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(200, json=_RECONCILED_USER_PROFILE)
         if request.method == "GET" and request.url.path.endswith("/users"):
             if lookup_status != 200:
                 return httpx.Response(lookup_status, json={"error": "boom"})
@@ -141,6 +146,8 @@ def _install_kc_race(monkeypatch: pytest.MonkeyPatch, *, winner_subject: str) ->
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path.endswith("/openid-connect/token"):
             return httpx.Response(200, json={"access_token": "t"})
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(200, json=_RECONCILED_USER_PROFILE)
         if request.method == "GET" and request.url.path.endswith("/users"):
             calls["lookup"] += 1
             username = request.url.params["username"]
@@ -174,6 +181,8 @@ def _install_kc_classifier_known_race_then_lookup_fails(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path.endswith("/openid-connect/token"):
             return httpx.Response(200, json={"access_token": "t"})
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(200, json=_RECONCILED_USER_PROFILE)
         if request.method == "GET" and request.url.path.endswith("/users"):
             calls["lookup"] += 1
             username = request.url.params["username"]

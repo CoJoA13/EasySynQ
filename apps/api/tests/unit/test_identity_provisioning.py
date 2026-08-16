@@ -29,9 +29,14 @@ class FakeClient:
     lookup_after_conflict: UserLookup | Exception | None = None
     create_calls: list[dict[str, object]] = field(default_factory=list)
     reset_calls: list[tuple[str, str]] = field(default_factory=list)
+    operations: list[str] = field(default_factory=list)
     lookup_calls: int = 0
 
+    async def ensure_optional_user_profile_fields(self) -> None:
+        self.operations.append("profile")
+
     async def find_user_by_username(self, username: str) -> UserLookup:
+        self.operations.append("lookup")
         self.lookup_calls += 1
         if isinstance(self.lookup, Exception):
             raise self.lookup
@@ -42,6 +47,7 @@ class FakeClient:
         return self.lookup
 
     async def create_user(self, **kwargs: object) -> str:
+        self.operations.append("create")
         self.create_calls.append(kwargs)
         if isinstance(self.create_result, Exception):
             raise self.create_result
@@ -71,6 +77,28 @@ async def test_ordinary_identity_creation_sends_no_bootstrap_marker() -> None:
         }
     ]
     assert client.reset_calls == []
+
+
+async def test_ordinary_identity_reconciles_profile_before_lookup_and_create() -> None:
+    client = FakeClient(UserLookup(found=False))
+
+    await ensure_credentialless_identity(client, _profile())
+
+    assert client.operations == ["profile", "lookup", "create"]
+
+
+async def test_bootstrap_retry_reconciles_profile_before_adopting_claimed_identity() -> None:
+    claim = uuid.uuid4()
+    client = FakeClient(
+        UserLookup(found=True, subject="sub-existing", bootstrap_claim_id=str(claim))
+    )
+
+    result = await ensure_credentialless_identity(
+        client, _profile(), bootstrap_claim_id=claim, allow_matching_claim=True
+    )
+
+    assert client.operations == ["profile", "lookup"]
+    assert result == CredentiallessIdentity(subject="sub-existing", created=False)
 
 
 async def test_ordinary_existing_username_raises_with_subject() -> None:
