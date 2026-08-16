@@ -38,6 +38,7 @@ interface PresentedError {
 }
 
 type AcknowledgeRecovery = "retry" | "replacement-secret" | "superseded" | null;
+type ReissueRecovery = "retry" | "replacement-secret" | null;
 type RetainedAdministratorProfile = Omit<FirstAdministratorRequest, "secret">;
 
 const EMPTY_FORM: FirstAdministratorForm = {
@@ -134,6 +135,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
   const [pending, setPending] = useState<"provision" | "acknowledge" | "reissue" | null>(null);
   const [error, setError] = useState<PresentedError | null>(null);
   const [acknowledgeRecovery, setAcknowledgeRecovery] = useState<AcknowledgeRecovery>(null);
+  const [reissueRecovery, setReissueRecovery] = useState<ReissueRecovery>(null);
   const inFlightRef = useRef(false);
   const secretRef = useRef("");
   const passwordRef = useRef("");
@@ -141,6 +143,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
   const profileRef = useRef<RetainedAdministratorProfile | null>(null);
   const errorHeadingRef = useRef<HTMLHeadingElement>(null);
   const replacementSecretRef = useRef<HTMLInputElement>(null);
+  const reissueSecretRef = useRef<HTMLInputElement>(null);
   const reissueButtonRef = useRef<HTMLButtonElement>(null);
 
   const guarded = pending !== null || temporaryPassword !== "";
@@ -163,9 +166,13 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
     if (acknowledgeRecovery === "replacement-secret") {
       replacementSecretRef.current?.focus();
     } else if (acknowledgeRecovery === "superseded") {
-      reissueButtonRef.current?.focus();
+      if (reissueRecovery === "replacement-secret") {
+        reissueSecretRef.current?.focus();
+      } else {
+        reissueButtonRef.current?.focus();
+      }
     }
-  }, [acknowledgeRecovery, pending]);
+  }, [acknowledgeRecovery, pending, reissueRecovery]);
 
   const updateForm = <K extends keyof FirstAdministratorForm>(
     field: K,
@@ -202,7 +209,10 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
     inFlightRef.current = true;
     setPending(reissue ? "reissue" : "provision");
     setError(null);
-    if (!reissue) setAcknowledgeRecovery(null);
+    if (!reissue) {
+      setAcknowledgeRecovery(null);
+      setReissueRecovery(null);
+    }
     secretRef.current = request.secret;
     try {
       const { administrator, temporary_password, credential_receipt } =
@@ -224,9 +234,22 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
         };
         setTemporaryPassword(temporary_password);
         setAcknowledgeRecovery(null);
+        setReissueRecovery(null);
       });
     } catch (caught) {
-      setError(provisionError(caught));
+      if (reissue) {
+        if (caught instanceof ApiError && caught.code === "bootstrap_invalid") {
+          flushSync(() => {
+            secretRef.current = "";
+            setForm((current) => ({ ...current, secret: "" }));
+            setReissueRecovery("replacement-secret");
+          });
+        } else {
+          setReissueRecovery("retry");
+        }
+      } else {
+        setError(provisionError(caught));
+      }
     } finally {
       inFlightRef.current = false;
       setPending(null);
@@ -266,6 +289,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
           caught.code === "bootstrap_credential_superseded"
         ) {
           setAcknowledgeRecovery("superseded");
+          setReissueRecovery(null);
         } else {
           setAcknowledgeRecovery("retry");
         }
@@ -277,8 +301,10 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
         secretRef.current = "";
         profileRef.current = null;
         setTemporaryPassword("");
-        setForm((current) => ({ ...current, secret: "" }));
+        setForm(EMPTY_FORM);
+        setError(null);
         setAcknowledgeRecovery(null);
+        setReissueRecovery(null);
       });
       await onAcknowledged();
     } finally {
@@ -377,16 +403,71 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
                 A newer credential generation replaced the shown password. Issue a new temporary
                 password before continuing.
               </Text>
+              {reissueRecovery !== "replacement-secret" && (
+                <Group justify="flex-end" wrap="wrap">
+                  <Button
+                    ref={reissueButtonRef}
+                    onClick={() => void provision(true)}
+                    loading={pending === "reissue"}
+                    disabled={pending !== null}
+                    aria-busy={pending === "reissue" || undefined}
+                    style={{ minHeight: 44 }}
+                  >
+                    {reissueRecovery === "retry"
+                      ? "Retry issuing temporary password"
+                      : "Issue a new temporary password"}
+                  </Button>
+                </Group>
+              )}
+            </Stack>
+          </Alert>
+        )}
+        {acknowledgeRecovery === "superseded" && reissueRecovery === "retry" && (
+          <Alert
+            color="red"
+            role="alert"
+            aria-live="assertive"
+            aria-label="New temporary password was not issued"
+          >
+            EasySynQ could not issue a replacement password. The stale password remains unusable.
+            Retry when the identity service is available.
+          </Alert>
+        )}
+        {acknowledgeRecovery === "superseded" && reissueRecovery === "replacement-secret" && (
+          <Alert
+            color="red"
+            role="alert"
+            aria-live="assertive"
+            aria-label="Current setup secret required for reissue"
+          >
+            <Stack gap="xs">
+              <Title order={3} size="h4">
+                Enter current setup secret to issue a new password
+              </Title>
+              <Text size="sm">
+                Enter the current setup secret to issue a replacement password. The stale password
+                cannot be acknowledged.
+              </Text>
+              <PasswordInput
+                ref={reissueSecretRef}
+                label="Current setup secret"
+                required
+                autoComplete="off"
+                value={form.secret}
+                styles={INPUT_STYLES}
+                visibilityToggleButtonProps={{ style: { minHeight: 44, minWidth: 44 } }}
+                onChange={(event) => updateForm("secret", event.currentTarget.value)}
+              />
               <Group justify="flex-end" wrap="wrap">
                 <Button
                   ref={reissueButtonRef}
                   onClick={() => void provision(true)}
                   loading={pending === "reissue"}
-                  disabled={pending !== null}
+                  disabled={pending !== null || form.secret.trim() === ""}
                   aria-busy={pending === "reissue" || undefined}
                   style={{ minHeight: 44 }}
                 >
-                  Issue a new temporary password
+                  Retry issuing with current setup secret
                 </Button>
               </Group>
             </Stack>

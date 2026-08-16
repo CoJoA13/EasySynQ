@@ -280,6 +280,27 @@ test("acknowledgment posts the current secret and receipt, remains visible while
   );
   const onAcknowledged = vi.fn(async () => {
     expect(screen.queryByText(TEMPORARY_PASSWORD)).toBeNull();
+    for (const label of [
+      /^Setup secret/,
+      /^Username/,
+      /^Display name/,
+      "Email",
+      "First name",
+      "Last name",
+    ]) {
+      expect(screen.getByLabelText(label)).toHaveValue("");
+    }
+    expect(screen.queryByRole("alert", { name: "Password receipt was not saved" })).toBeNull();
+    expect(screen.queryByRole("alert", { name: "Current setup secret required" })).toBeNull();
+    expect(
+      screen.queryByRole("alert", { name: "Temporary password no longer current" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("alert", { name: "New temporary password was not issued" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("alert", { name: "Current setup secret required for reissue" }),
+    ).toBeNull();
     expect(document.body).not.toHaveTextContent(MAXIMUM_FIRST_ADMIN_SECRET);
     expect(document.body).not.toHaveTextContent(CREDENTIAL_RECEIPT);
     expect(storageEntries(globalThis.localStorage).join(" ")).not.toContain(CREDENTIAL_RECEIPT);
@@ -512,6 +533,203 @@ test("bootstrap_credential_superseded reissues the bound normalized profile and 
   }
   expect(localSetItem).not.toHaveBeenCalled();
   expect(sessionSetItem).not.toHaveBeenCalled();
+  expect(await axe(view.container)).toHaveNoViolations();
+});
+
+test("a failed reissue names the response-loss error and retries the retained canonical profile", async () => {
+  const reissueRetry = deferred<Response>();
+  const provisionBodies: unknown[] = [];
+  const acknowledgeBodies: unknown[] = [];
+  server.use(
+    http.post("/api/v1/setup/administrator", async ({ request }) => {
+      provisionBodies.push(await request.json());
+      if (provisionBodies.length === 1) {
+        return HttpResponse.json(PROVISIONED, { status: 201 });
+      }
+      if (provisionBodies.length === 2) {
+        return HttpResponse.json(
+          { code: "keycloak_unavailable", title: "unsafe provider response loss" },
+          { status: 502 },
+        );
+      }
+      return reissueRetry.promise;
+    }),
+    http.post("/api/v1/setup/administrator/acknowledge", async ({ request }) => {
+      acknowledgeBodies.push(await request.json());
+      if (acknowledgeBodies.length === 1) {
+        return HttpResponse.json(
+          { code: "bootstrap_credential_superseded", title: "unsafe supersession detail" },
+          { status: 409 },
+        );
+      }
+      return HttpResponse.json({ setup_state: "IN_SETUP", admin_user_id: ADMIN_ID });
+    }),
+  );
+  const onAcknowledged = vi.fn(async () => undefined);
+  const user = userEvent.setup();
+  const view = renderStep(onAcknowledged);
+  await fillRequiredForm(user);
+  await user.click(screen.getByRole("button", { name: "Create administrator" }));
+  await user.click(
+    await screen.findByRole("button", { name: "I’ve saved it — Continue to sign in" }),
+  );
+  await user.click(await screen.findByRole("button", { name: "Issue a new temporary password" }));
+
+  const reissueError = await screen.findByRole("alert", {
+    name: "New temporary password was not issued",
+  });
+  expect(reissueError).toHaveTextContent(
+    "EasySynQ could not issue a replacement password. The stale password remains unusable.",
+  );
+  expect(reissueError).not.toHaveTextContent("unsafe provider response loss");
+  expect(screen.getByText(TEMPORARY_PASSWORD)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Copy temporary password" })).toBeDisabled();
+  const retry = screen.getByRole("button", { name: "Retry issuing temporary password" });
+  await waitFor(() => expect(retry).toHaveFocus());
+
+  await user.click(retry);
+  await waitFor(() => expect(provisionBodies).toHaveLength(3));
+  const duringRetry = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(duringRetry);
+  expect(duringRetry.defaultPrevented).toBe(true);
+  expect(screen.getByText(TEMPORARY_PASSWORD)).toBeInTheDocument();
+  expect(retry).toBeDisabled();
+
+  await act(async () => {
+    reissueRetry.resolve(
+      HttpResponse.json(
+        {
+          ...PROVISIONED,
+          temporary_password: REISSUED_PASSWORD,
+          credential_receipt: REISSUED_CREDENTIAL_RECEIPT,
+        },
+        { status: 200 },
+      ),
+    );
+  });
+
+  expect(await screen.findByText(REISSUED_PASSWORD)).toBeInTheDocument();
+  expect(screen.queryByText(TEMPORARY_PASSWORD)).toBeNull();
+  expect(screen.queryByRole("alert", { name: "New temporary password was not issued" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "I’ve saved it — Continue to sign in" }));
+  await waitFor(() => expect(onAcknowledged).toHaveBeenCalledTimes(1));
+  expect(provisionBodies).toEqual([
+    {
+      secret: SETUP_SECRET,
+      username: "first.admin",
+      display_name: "First Administrator",
+      email: null,
+      first_name: null,
+      last_name: null,
+    },
+    {
+      secret: SETUP_SECRET,
+      username: "first.admin",
+      display_name: "First Administrator",
+      email: null,
+      first_name: null,
+      last_name: null,
+    },
+    {
+      secret: SETUP_SECRET,
+      username: "first.admin",
+      display_name: "First Administrator",
+      email: null,
+      first_name: null,
+      last_name: null,
+    },
+  ]);
+  expect(acknowledgeBodies).toEqual([
+    { secret: SETUP_SECRET, credential_receipt: CREDENTIAL_RECEIPT },
+    { secret: SETUP_SECRET, credential_receipt: REISSUED_CREDENTIAL_RECEIPT },
+  ]);
+  expect(await axe(view.container)).toHaveNoViolations();
+});
+
+test("bootstrap_invalid during reissue requires a focused current secret for the next provision only", async () => {
+  const provisionBodies: unknown[] = [];
+  const acknowledgeBodies: unknown[] = [];
+  server.use(
+    http.post("/api/v1/setup/administrator", async ({ request }) => {
+      provisionBodies.push(await request.json());
+      if (provisionBodies.length === 1) {
+        return HttpResponse.json(PROVISIONED, { status: 201 });
+      }
+      if (provisionBodies.length === 2) {
+        return HttpResponse.json(
+          { code: "bootstrap_invalid", title: "unsafe rejected proof" },
+          { status: 403 },
+        );
+      }
+      return HttpResponse.json(
+        {
+          ...PROVISIONED,
+          temporary_password: REISSUED_PASSWORD,
+          credential_receipt: REISSUED_CREDENTIAL_RECEIPT,
+        },
+        { status: 200 },
+      );
+    }),
+    http.post("/api/v1/setup/administrator/acknowledge", async ({ request }) => {
+      acknowledgeBodies.push(await request.json());
+      if (acknowledgeBodies.length === 1) {
+        return HttpResponse.json(
+          { code: "bootstrap_credential_superseded", title: "unsafe supersession detail" },
+          { status: 409 },
+        );
+      }
+      return HttpResponse.json({ setup_state: "IN_SETUP", admin_user_id: ADMIN_ID });
+    }),
+  );
+  const onAcknowledged = vi.fn(async () => undefined);
+  const user = userEvent.setup();
+  const view = renderStep(onAcknowledged);
+  await fillRequiredForm(user);
+  await user.click(screen.getByRole("button", { name: "Create administrator" }));
+  await user.click(
+    await screen.findByRole("button", { name: "I’ve saved it — Continue to sign in" }),
+  );
+  await user.click(await screen.findByRole("button", { name: "Issue a new temporary password" }));
+
+  expect(
+    await screen.findByRole("alert", { name: "Current setup secret required for reissue" }),
+  ).toHaveTextContent("Enter the current setup secret to issue a replacement password.");
+  expect(screen.getByText(TEMPORARY_PASSWORD)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Copy temporary password" })).toBeDisabled();
+  const currentSecret = screen
+    .getAllByLabelText(/^Current setup secret/)
+    .find((element): element is HTMLInputElement => element instanceof HTMLInputElement);
+  expect(currentSecret).toBeDefined();
+  if (currentSecret === undefined) {
+    throw new Error("Current setup secret input for reissue was not rendered");
+  }
+  await waitFor(() => expect(currentSecret).toHaveFocus());
+  expect(currentSecret).toBeRequired();
+  expect(acknowledgeBodies).toHaveLength(1);
+
+  await user.type(currentSecret, CURRENT_SETUP_SECRET);
+  await user.click(screen.getByRole("button", { name: "Retry issuing with current setup secret" }));
+  await screen.findByText(REISSUED_PASSWORD);
+  expect(provisionBodies).toHaveLength(3);
+  expect(provisionBodies[2]).toEqual({
+    secret: CURRENT_SETUP_SECRET,
+    username: "first.admin",
+    display_name: "First Administrator",
+    email: null,
+    first_name: null,
+    last_name: null,
+  });
+  expect(acknowledgeBodies).toHaveLength(1);
+
+  await user.click(screen.getByRole("button", { name: "I’ve saved it — Continue to sign in" }));
+  await waitFor(() => expect(onAcknowledged).toHaveBeenCalledTimes(1));
+  expect(acknowledgeBodies).toEqual([
+    { secret: SETUP_SECRET, credential_receipt: CREDENTIAL_RECEIPT },
+    { secret: CURRENT_SETUP_SECRET, credential_receipt: REISSUED_CREDENTIAL_RECEIPT },
+  ]);
+  expect(window.location.href).not.toContain(CURRENT_SETUP_SECRET);
+  expect(storageEntries(globalThis.localStorage).join(" ")).not.toContain(CURRENT_SETUP_SECRET);
+  expect(storageEntries(globalThis.sessionStorage).join(" ")).not.toContain(CURRENT_SETUP_SECRET);
   expect(await axe(view.container)).toHaveNoViolations();
 });
 
