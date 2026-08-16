@@ -329,6 +329,11 @@ async def _resolve_identity(
     try:
         await client.__aenter__()
         try:
+            # Bootstrap performs a collision-classification lookup before it delegates to the
+            # shared create/adopt helper, so reconcile here before that very first identity read.
+            # The shared helper deliberately repeats this idempotent GET to retain its invariant
+            # for every ordinary and bootstrap caller; do not add a bypass flag at this boundary.
+            await client.ensure_optional_user_profile_fields()
             initial = await client.find_user_by_username(profile.username)
             if _unrelated_lookup(initial, claim_id=claim_id):
                 await _release_unowned_claim(session, claim_id=claim_id, username=profile.username)

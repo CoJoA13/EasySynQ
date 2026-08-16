@@ -48,7 +48,7 @@ cleanup() {
       "${COMPOSE[@]}" ps >&2
       "${COMPOSE[@]}" logs --no-color --tail 200 api keycloak proxy >&2
     fi
-    if ! "${COMPOSE[@]}" down -v --remove-orphans; then
+    if ! "${COMPOSE[@]}" down -v --remove-orphans --rmi local; then
       echo "live acceptance could not clean its validated Compose project" >&2
       stack_clean=0
       status=1

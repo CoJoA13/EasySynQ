@@ -76,6 +76,7 @@ class _PasswordResetBarrier:
 class _FakeKeycloak:
     accounts: dict[str, _FakeIdentity] = field(default_factory=dict)
     passwords: dict[str, list[str]] = field(default_factory=dict)
+    operations: list[str] = field(default_factory=list)
     lookup_error: Exception | None = None
     fail_after_create: bool = False
     password_error: Exception | None = None
@@ -89,9 +90,10 @@ class _FakeKeycloak:
         return None
 
     async def ensure_optional_user_profile_fields(self) -> None:
-        return None
+        self.operations.append("profile")
 
     async def find_user_by_username(self, username: str) -> UserLookup:
+        self.operations.append("lookup")
         if self.lookup_error is not None:
             raise self.lookup_error
         account = self.accounts.get(username)
@@ -108,6 +110,7 @@ class _FakeKeycloak:
         last_name: str | None,
         bootstrap_claim_id: uuid.UUID | None = None,
     ) -> str:
+        self.operations.append("create")
         del first_name, last_name
         if username in self.accounts:
             account = self.accounts[username]
@@ -375,6 +378,7 @@ async def test_first_administrator_initial_issue_and_response_loss_reissue_are_p
     username = _sub("response-loss")
 
     first = await _provision(app_client, secret, username)
+    first_identity_operations = list(_setup_keycloak.operations)
     second = await _provision(app_client, secret, username)
 
     assert first.status_code == 201, first.text
@@ -387,6 +391,7 @@ async def test_first_administrator_initial_issue_and_response_loss_reissue_are_p
     assert first_body["password_delivery"] == "shown_once"
     assert first_body["temporary_password"] != second_body["temporary_password"]
     assert "keycloak_subject" not in first.text
+    assert first_identity_operations == ["profile", "lookup", "profile", "lookup", "create"]
     subject = f"subject:{username}"
     assert _setup_keycloak.passwords[subject] == [
         first_body["temporary_password"],
@@ -654,6 +659,7 @@ async def test_unrelated_username_collision_releases_only_unowned_claim(
     assert cfg.bootstrap_admin_username is None
     assert cfg.bootstrap_admin_user_id is None
     assert cfg.bootstrap_credential_issued_at is None
+    assert _setup_keycloak.operations[:2] == ["profile", "lookup"]
     assert (await _provision(app_client, secret, _sub("replacement"))).status_code == 201
 
 
@@ -709,6 +715,7 @@ async def test_lookup_outage_retains_claim_and_fails_closed(
 
     assert response.status_code == 502
     assert response.json()["code"] == "keycloak_unavailable"
+    assert _setup_keycloak.operations == ["profile", "lookup"]
     cfg = await _config()
     assert cfg.bootstrap_admin_claim_id is not None
     assert cfg.bootstrap_admin_username == username

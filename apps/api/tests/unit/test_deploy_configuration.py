@@ -538,7 +538,10 @@ def test_first_admin_live_harness_owns_only_its_validated_stack_and_env() -> Non
     cleanup = harness[harness.index("cleanup() {") : trap_offset]
     assert 'validate_project "$PROJECT"' in cleanup
     assert '[ "$stack_started" -eq 1 ]' in cleanup
-    assert '"${COMPOSE[@]}" down -v --remove-orphans' in cleanup
+    assert '"${COMPOSE[@]}" down -v --remove-orphans --rmi local' in cleanup
+    assert cleanup.count('"${COMPOSE[@]}" down') == 1
+    assert "docker image" not in cleanup
+    assert "docker rmi" not in cleanup
     assert '"${COMPOSE[@]}" logs --no-color --tail 200 api keycloak proxy' in cleanup
     assert '[ "$env_created" -eq 1 ]' in cleanup
     assert '[ "$ENV_FILE" = "$ROOT/.env" ]' in cleanup
