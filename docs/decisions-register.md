@@ -1966,6 +1966,53 @@ contributors to this register and needs no duplicate mutable compatibility rule.
 
 Bumps the resolutions range **R1–R64 → R1–R65**.
 
+### R66 — First-administrator identity is provisioned inside setup — 2026-08-15
+
+First-run identity handling was inconsistent with the shipped in-app user provisioning surface:
+ordinary install paths required a separately created Keycloak identity before bootstrap, while the
+appliance created fixed `qmsadmin` credentials and wrote the temporary password to a setup sheet.
+The owner selected one no-SMTP browser flow for every fresh installation.
+
+**Normative rules.**
+
+1. **One in-app bootstrap.** While setup is `UNINITIALIZED`, a valid, unexpired EasySynQ bootstrap
+   secret authorizes creation of exactly one first-administrator identity. The operator never needs
+   a Keycloak console, Keycloak user script, or Keycloak subject.
+2. **R64 ordering and non-deletion apply.** The Keycloak account is created without a credential; the
+   EasySynQ user and System Administrator assignment commit; only then is the temporary password set.
+   EasySynQ never deletes a Keycloak account as compensation.
+3. **Durable single-identity recovery.** The first accepted operation binds a durable claim to one
+   username. Retries, response-loss recovery, and a reminted setup secret may recover or reset only
+   that bound identity. An unrelated Keycloak collision fails closed, and concurrency may not create
+   a second claim, user, or administrator grant.
+4. **Show once, then acknowledge.** The generated temporary password is returned once and stored
+   nowhere. A lost response is repaired by issuing a new temporary password, which invalidates the
+   previous value. Operator acknowledgment consumes the bootstrap secret, transitions setup to
+   `IN_SETUP`, clears browser-held secrets, and starts Keycloak sign-in; Keycloak requires a password
+   change at first sign-in.
+5. **Truthful pre-authentication audit.** Bootstrap provisioning uses `actor_type=system` and a NULL
+   actor because the administrator has not authenticated. Claim, user creation, administrator grant,
+   credential issuance, and bootstrap consumption are recorded only after each event occurs; no
+   credential, bootstrap secret, claim marker, or Keycloak subject enters an audit payload.
+6. **Post-setup separation is unchanged.** `user.create` creates accounts, `user.update` edits them,
+   `permission.grant` separately gates role assignment, and R64’s system-tier guard remains mandatory
+   for resetting another existing user’s credential. No new permission key is introduced.
+7. **Install-path convergence.** New install paths create no fixed human Keycloak account and write no
+   human password to a setup sheet. Internal Keycloak service credentials remain installation
+   secrets. Existing `OPERATIONAL` and legitimately `IN_SETUP` installations do not re-enter
+   bootstrap and lose no identity data.
+
+**Compatibility.** R65 permits replacing the provisional authenticated `POST /setup/bootstrap`
+contract in place. The replacement, every repository consumer, generated contract, installer,
+fixture, and current manual must migrate atomically; no compatibility shim is required.
+
+**Back-propagation:**
+[`S-first-admin-provisioning`](superpowers/specs/2026-08-15-s-first-admin-provisioning-design.md),
+[ADR 0005](adr/0005-provision-first-administrator-in-setup.md), docs 08/15, current installation
+manuals/runbooks, and the appliance setup handoff.
+
+Bumps the resolutions range **R1–R65 → R1–R66**.
+
 ---
 
 ## Part 4 — Gap-audit finding → resolution map
