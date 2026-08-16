@@ -15,7 +15,7 @@ import shutil
 import tempfile
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,7 +35,7 @@ from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.storage_config import StorageConfig
 from easysynq_api.db.models.system_config import SetupState, SystemConfig
 from easysynq_api.db.models.working_calendar import WorkingCalendar
-from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.db.session import get_engine, get_sessionmaker
 from easysynq_api.problems import ProblemException
 from easysynq_api.services import backup as backup_service
 from easysynq_api.services.identity import provisioning as identity_provisioning
@@ -1610,18 +1610,53 @@ async def test_receipt_state_commit_failure_returns_no_credential_and_retry_rota
         return receipt, hashlib.sha256(receipt.encode("utf-8")).hexdigest()
 
     real_commit = AsyncSession.commit
+    real_flush = AsyncSession.flush
+    real_rollback = AsyncSession.rollback
+    dialect = get_engine().sync_engine.dialect
+    real_do_commit = dialect.do_commit
     failed_once = False
+    receipt_state_flushed = False
+    target_async_commit_calls = 0
+    target_commit_boundary_calls = 0
+    failed_commit_rollback_completed = False
 
-    async def fail_first_receipt_state_commit(session: AsyncSession) -> None:
-        nonlocal failed_once
-        has_receipt_state = any(
-            isinstance(value, SystemConfig) and value.bootstrap_credential_receipt_hash is not None
+    async def observe_receipt_state_flush(
+        session: AsyncSession, objects: Sequence[Any] | None = None
+    ) -> None:
+        nonlocal receipt_state_flushed
+        await real_flush(session, objects=objects)
+        receipt_state_flushed = any(
+            isinstance(value, SystemConfig)
+            and value.bootstrap_credential_receipt_hash is not None
+            and value.bootstrap_credential_issued_at is not None
             for value in session.identity_map.values()
         )
-        if has_receipt_state and not session.in_nested_transaction() and not failed_once:
+
+    def fail_first_target_commit(dbapi_connection: Any) -> None:
+        nonlocal failed_once, target_commit_boundary_calls
+        if receipt_state_flushed and not failed_once:
+            target_commit_boundary_calls += 1
             failed_once = True
-            raise RuntimeError("forced receipt-state commit failure")
+            raise RuntimeError("forced receipt-state dialect commit failure")
+        real_do_commit(dbapi_connection)
+
+    async def observe_real_async_commit(session: AsyncSession) -> None:
+        nonlocal target_async_commit_calls
+        has_receipt_state = any(
+            isinstance(value, SystemConfig)
+            and value.bootstrap_credential_receipt_hash is not None
+            and value.bootstrap_credential_issued_at is not None
+            for value in session.identity_map.values()
+        )
+        if has_receipt_state and not session.in_nested_transaction():
+            target_async_commit_calls += 1
         await real_commit(session)
+
+    async def observe_failed_commit_rollback(session: AsyncSession) -> None:
+        nonlocal failed_commit_rollback_completed
+        await real_rollback(session)
+        if failed_once:
+            failed_commit_rollback_completed = True
 
     monkeypatch.setattr(
         administrator_service,
@@ -1629,11 +1664,18 @@ async def test_receipt_state_commit_failure_returns_no_credential_and_retry_rota
         deterministic_receipt,
         raising=False,
     )
-    monkeypatch.setattr(AsyncSession, "commit", fail_first_receipt_state_commit)
+    monkeypatch.setattr(AsyncSession, "flush", observe_receipt_state_flush)
+    monkeypatch.setattr(dialect, "do_commit", fail_first_target_commit)
+    monkeypatch.setattr(AsyncSession, "commit", observe_real_async_commit)
+    monkeypatch.setattr(AsyncSession, "rollback", observe_failed_commit_rollback)
 
     failed = await _provision(app_client, secret, username)
 
     assert failed_once is True
+    assert receipt_state_flushed is True
+    assert target_async_commit_calls == 1
+    assert target_commit_boundary_calls == 1
+    assert failed_commit_rollback_completed is True
     assert failed.status_code == 503, failed.text
     assert failed.json()["code"] == "dependency_unavailable"
     assert "temporary_password" not in failed.text
@@ -1657,6 +1699,7 @@ async def test_receipt_state_commit_failure_returns_no_credential_and_retry_rota
     assert body["credential_receipt"] != "A" * 43
     assert _setup_keycloak.passwords[f"subject:{username}"][-1] != first_password
     current = await _config()
+    assert current.bootstrap_credential_issued_at is not None
     assert (
         current.bootstrap_credential_receipt_hash
         == hashlib.sha256(body["credential_receipt"].encode("utf-8")).hexdigest()
