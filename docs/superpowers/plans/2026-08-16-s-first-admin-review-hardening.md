@@ -151,11 +151,21 @@ git commit -m "feat: persist first-admin credential receipt state"
 **Files:**
 
 - Modify: `apps/api/src/easysynq_api/services/setup/administrator.py`
+- Modify after owner-approved concurrency review: `apps/api/src/easysynq_api/services/authz/admin_guard.py`
+- Modify after owner-approved concurrency review: `apps/api/src/easysynq_api/services/authz/__init__.py`
+- Modify after owner-approved concurrency review: `apps/api/src/easysynq_api/api/authz.py`
+- Modify after owner-approved concurrency review: `apps/api/src/easysynq_api/api/users.py`
+- Modify after owner-approved concurrency review: `apps/api/src/easysynq_api/cli/grant_role.py`
 - Modify: `apps/api/src/easysynq_api/problems.py`
 - Modify: `packages/contracts/openapi.yaml`
 - Modify: `apps/api/tests/unit/test_first_admin_contract.py`
 - Modify: `apps/api/tests/integration/test_setup.py`
+- Modify after owner-approved concurrency review: `apps/api/tests/integration/test_authz.py`
+- Modify after owner-approved concurrency review: `apps/api/tests/integration/test_users_provision.py`
 - Modify: `apps/api/tests/unit/test_setup_administrator.py`
+- Modify after owner-approved concurrency review: `docs/adr/0005-provision-first-administrator-in-setup.md`
+- Modify after owner-approved concurrency review: `docs/debt/20260815194752-bootstrap-claim-state-machine.md`
+- Create after owner-approved concurrency review: `docs/debt/20260816120427-bootstrap-provider-lock-duration.md`
 - Regenerate: `packages/contracts/dist/openapi.json`
 - Regenerate: `packages/contracts/.contract.lock`
 - Regenerate: `apps/api/src/easysynq_api/_generated/models.py`
@@ -166,6 +176,10 @@ git commit -m "feat: persist first-admin credential receipt state"
 - Produces `_assert_only_claim_administrator(session, cfg) -> None`.
 - Produces `409 bootstrap_administrator_exists` only after valid bootstrap proof.
 - Narrows claim release to a definitively absent lookup followed by `KeycloakRejected` from create.
+- Owner-approved review correction: every supported System Administrator writer shares the existing
+  per-organization admin-set advisory lock. Bootstrap acquires singleton then admin-set lock before
+  Keycloak identity work and retains both through persistence or fresh-absence release revalidation.
+  Ordinary role grants do not acquire the admin-set lock.
 
 - [ ] **Step 1: Write the stable-error contract RED**
 
