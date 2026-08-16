@@ -301,7 +301,7 @@
             "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           },
           "409": {
-            "description": "Setup advanced, identity bound/not ready, or username collision.",
+            "description": "Setup advanced, identity bound/not ready, an unrelated administrator exists, or a username collision occurred.",
             "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           },
           "422": {
@@ -357,7 +357,7 @@
             "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           },
           "409": {
-            "description": "Setup advanced, identity bound/not ready, or username collision.",
+            "description": "Setup advanced, identity not ready, an unrelated administrator exists, or the credential generation was superseded.",
             "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           },
           "422": {
@@ -14368,7 +14368,9 @@
               "backup_destination_invalid",
               "backup_destination_unreachable",
               "backup_not_configured",
+              "bootstrap_administrator_exists",
               "bootstrap_already_consumed",
+              "bootstrap_credential_superseded",
               "bootstrap_expired",
               "bootstrap_identity_bound",
               "bootstrap_invalid",
@@ -14595,7 +14597,9 @@
               "backup_destination_invalid",
               "backup_destination_unreachable",
               "backup_not_configured",
+              "bootstrap_administrator_exists",
               "bootstrap_already_consumed",
+              "bootstrap_credential_superseded",
               "bootstrap_expired",
               "bootstrap_identity_bound",
               "bootstrap_invalid",

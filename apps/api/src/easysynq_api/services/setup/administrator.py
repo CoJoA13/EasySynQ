@@ -208,6 +208,28 @@ async def _locked_singleton(session: AsyncSession) -> SystemConfig:
     return rows[0]
 
 
+async def _assert_only_claim_administrator(session: AsyncSession, cfg: SystemConfig) -> None:
+    ids = set(
+        (
+            await session.scalars(
+                select(RoleAssignment.user_id)
+                .join(Role, Role.id == RoleAssignment.role_id)
+                .where(
+                    RoleAssignment.org_id == cfg.org_id,
+                    Role.name == SYSTEM_ADMIN_ROLE,
+                )
+            )
+        ).all()
+    )
+    allowed = {cfg.bootstrap_admin_user_id} if cfg.bootstrap_admin_user_id is not None else set()
+    if ids - allowed or (ids and not allowed):
+        raise ProblemException(
+            status=409,
+            code="bootstrap_administrator_exists",
+            title="An administrator already exists outside this bootstrap claim",
+        )
+
+
 async def _validate_request_proof(cfg: SystemConfig, secret: str) -> None:
     try:
         _validate_bootstrap_secret(cfg, secret, now=_now())
@@ -245,6 +267,7 @@ async def _establish_claim(
     cfg = await _locked_singleton(session)
     await _check_rate_limit()
     await _validate_request_proof(cfg, secret)
+    await _assert_only_claim_administrator(session, cfg)
     if cfg.bootstrap_admin_claim_id is not None:
         if not _claim_fields_are_complete(cfg):
             raise ProblemException(
@@ -358,7 +381,6 @@ async def _resolve_identity(
             await client.ensure_optional_user_profile_fields()
             initial = await client.find_user_by_username(profile.username)
             if _unrelated_lookup(initial, claim_id=claim_id):
-                await _release_unowned_claim(session, claim_id=claim_id, username=profile.username)
                 raise ProblemException(
                     status=409,
                     code="user_exists",
@@ -376,6 +398,14 @@ async def _resolve_identity(
                     bootstrap_claim_id=claim_id,
                     allow_matching_claim=True,
                 )
+            except KeycloakRejected:
+                if initial.found is False:
+                    await _release_unowned_claim(
+                        session,
+                        claim_id=claim_id,
+                        username=profile.username,
+                    )
+                raise
             except IdentityUsernameExists as exc:
                 lookup = await client.find_user_by_username(profile.username)
                 if not lookup.found:
@@ -383,9 +413,6 @@ async def _resolve_identity(
                         "Keycloak username conflict could not be resolved"
                     ) from exc
                 if _unrelated_lookup(lookup, claim_id=claim_id):
-                    await _release_unowned_claim(
-                        session, claim_id=claim_id, username=profile.username
-                    )
                     raise ProblemException(
                         status=409,
                         code="user_exists",
@@ -408,9 +435,6 @@ async def _resolve_identity(
                 lookup = await client.find_user_by_username(profile.username)
                 if lookup.found:
                     if _unrelated_lookup(lookup, claim_id=claim_id):
-                        await _release_unowned_claim(
-                            session, claim_id=claim_id, username=profile.username
-                        )
                         raise ProblemException(
                             status=409,
                             code="user_exists",
@@ -428,9 +452,6 @@ async def _resolve_identity(
                         allow_matching_claim=True,
                     )
                 else:
-                    await _release_unowned_claim(
-                        session, claim_id=claim_id, username=profile.username
-                    )
                     raise ProblemException(
                         status=409,
                         code="keycloak_email_exists",
@@ -487,6 +508,7 @@ async def _persist_user_and_role(
 ) -> tuple[AppUser, dict[str, Any]]:
     cfg = await _locked_singleton(session)
     _assert_claim(cfg, claim_id=claim_id, username=profile.username)
+    await _assert_only_claim_administrator(session, cfg)
     if cfg.org_id != org_id:
         raise ProblemException(
             status=409,
@@ -599,6 +621,7 @@ async def _issue_and_record_credential(
 ) -> str:
     cfg = await _locked_singleton(session)
     _assert_claim(cfg, claim_id=claim_id, username=username)
+    await _assert_only_claim_administrator(session, cfg)
     if cfg.bootstrap_admin_user_id != user_id:
         raise ProblemException(
             status=409,
@@ -701,6 +724,7 @@ async def acknowledge_first_administrator(session: AsyncSession, *, secret: str)
     cfg = await _locked_singleton(session)
     await _check_rate_limit()
     await _validate_acknowledgment_proof(cfg, secret)
+    await _assert_only_claim_administrator(session, cfg)
 
     admin_user_id = cfg.bootstrap_admin_user_id
     complete = (

@@ -274,6 +274,25 @@ async def _config() -> SystemConfig:
         return (await session.execute(select(SystemConfig))).scalar_one()
 
 
+async def _establish_claim_only(
+    client: AsyncClient,
+    keycloak: _FakeKeycloak,
+    *,
+    secret: str,
+    username: str,
+) -> None:
+    keycloak.lookup_error = KeycloakUnavailable("claim-only lookup outage")
+    try:
+        response = await _provision(client, secret, username)
+    finally:
+        keycloak.lookup_error = None
+    assert response.status_code == 502, response.text
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
+    assert cfg.bootstrap_admin_user_id is None
+
+
 async def _verify_storage(client: AsyncClient, h: dict[str, str], mode: str = "GOVERNANCE") -> dict:
     r = await client.post(
         "/api/v1/setup/verify-storage", headers=h, json={"object_lock_mode": mode}
@@ -721,6 +740,68 @@ async def test_different_bound_username_discloses_only_username_after_valid_secr
     assert secret not in response.text
 
 
+async def test_break_glass_administrator_blocks_public_claim(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+
+    secret = await _reset_uninitialized()
+    grant_role(_sub("existing-admin"))
+
+    response = await _provision(app_client, secret, _sub("second-admin"))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "bootstrap_administrator_exists"
+    assert (await _config()).bootstrap_admin_claim_id is None
+    assert _setup_keycloak.accounts == {}
+
+
+async def test_unrelated_administrator_blocks_pending_claim_without_releasing_it(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+
+    secret = await _reset_uninitialized()
+    bound_username = _sub("bound-admin")
+    await _establish_claim_only(
+        app_client,
+        _setup_keycloak,
+        secret=secret,
+        username=bound_username,
+    )
+    before = await _config()
+    grant_role(_sub("unrelated-admin"))
+
+    response = await _provision(app_client, secret, bound_username)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "bootstrap_administrator_exists"
+    after = await _config()
+    assert after.bootstrap_admin_claim_id == before.bootstrap_admin_claim_id
+    assert after.bootstrap_admin_username == bound_username
+
+
+async def test_claim_owned_administrator_can_reissue_and_acknowledge(
+    app_client: AsyncClient,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("claim-admin")
+
+    created = await _provision(app_client, secret, username)
+    reissued = await _provision(app_client, secret, username)
+    acknowledged = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret},
+    )
+
+    assert created.status_code == 201, created.text
+    assert reissued.status_code == 200, reissued.text
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["setup_state"] == "IN_SETUP"
+
+
 async def test_first_administrator_canonicalizes_mixed_case_username_end_to_end(
     app_client: AsyncClient,
     _setup_keycloak: _FakeKeycloak,
@@ -751,7 +832,7 @@ async def test_first_administrator_canonicalizes_mixed_case_username_end_to_end(
 
 
 @pytest.mark.parametrize("marker", [None, "00000000-0000-0000-0000-000000000001"])
-async def test_unrelated_username_collision_releases_only_unowned_claim(
+async def test_unrelated_username_collision_retains_claim(
     app_client: AsyncClient,
     _setup_keycloak: _FakeKeycloak,
     marker: str | None,
@@ -765,15 +846,14 @@ async def test_unrelated_username_collision_releases_only_unowned_claim(
     assert collision.status_code == 409
     assert collision.json()["code"] == "user_exists"
     cfg = await _config()
-    assert cfg.bootstrap_admin_claim_id is None
-    assert cfg.bootstrap_admin_username is None
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
     assert cfg.bootstrap_admin_user_id is None
     assert cfg.bootstrap_credential_issued_at is None
     assert _setup_keycloak.operations[:2] == ["profile", "lookup"]
-    assert (await _provision(app_client, secret, _sub("replacement"))).status_code == 201
 
 
-async def test_reliable_email_collision_releases_unowned_claim(
+async def test_reliable_email_collision_retains_claim(
     app_client: AsyncClient,
     _setup_keycloak: _FakeKeycloak,
 ) -> None:
@@ -781,11 +861,14 @@ async def test_reliable_email_collision_releases_unowned_claim(
     email = "duplicate@example.local"
     _setup_keycloak.add_account(_sub("email-owner"), email=email)
 
-    collision = await _provision(app_client, secret, _sub("email-collision"), email=email)
+    username = _sub("email-collision")
+    collision = await _provision(app_client, secret, username, email=email)
 
     assert collision.status_code == 409
     assert collision.json()["code"] == "keycloak_email_exists"
-    assert (await _config()).bootstrap_admin_claim_id is None
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
 
 
 async def test_keycloak_rejection_detail_never_echoes_marker_or_profile(
@@ -811,6 +894,25 @@ async def test_keycloak_rejection_detail_never_echoes_marker_or_profile(
     assert username not in response.text
     assert email not in response.text
     assert str(cfg.bootstrap_admin_claim_id) not in response.text
+
+
+async def test_keycloak_rejection_releases_unowned_claim_and_allows_corrected_identity(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    _setup_keycloak.rejection_detail_template = "definitive profile rejection"
+
+    rejected = await _provision(app_client, secret, "rejected-admin")
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "validation_error"
+    assert (await _config()).bootstrap_admin_claim_id is None
+    assert _setup_keycloak.accounts == {}
+
+    _setup_keycloak.rejection_detail_template = None
+    corrected = await _provision(app_client, secret, "corrected-admin")
+    assert corrected.status_code == 201, corrected.text
 
 
 async def test_lookup_outage_retains_claim_and_fails_closed(

@@ -8,6 +8,7 @@ OPENAPI = Path(__file__).resolve().parents[4] / "packages/contracts/openapi.yaml
 def test_first_administrator_replaces_the_authenticated_bootstrap_contract() -> None:
     spec = yaml.safe_load(OPENAPI.read_text(encoding="utf-8"))
     paths = spec["paths"]
+    schemas = spec["components"]["schemas"]
     assert "/setup/bootstrap" not in paths
     provision = paths["/setup/administrator"]["post"]
     acknowledge = paths["/setup/administrator/acknowledge"]["post"]
@@ -28,6 +29,22 @@ def test_first_administrator_replaces_the_authenticated_bootstrap_contract() -> 
         assert acknowledge["responses"][status]["$ref"] == (
             "#/components/responses/FirstAdministratorProblemResponse"
         )
+
+    problem_codes = set(schemas["Problem"]["properties"]["code"]["enum"])
+    first_administrator_codes = set(
+        schemas["FirstAdministratorProblem"]["properties"]["code"]["enum"]
+    )
+    required_codes = {
+        "bootstrap_administrator_exists",
+        "bootstrap_credential_superseded",
+    }
+    assert required_codes <= problem_codes
+    assert required_codes <= first_administrator_codes
+
+    for operation in (provision, acknowledge):
+        description = operation["responses"]["409"]["description"].lower()
+        assert "invalid secret" not in description
+        assert "expired" not in description
 
 
 def test_first_administrator_proof_failures_share_the_generic_403_contract() -> None:
