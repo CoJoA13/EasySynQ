@@ -58,13 +58,46 @@ _SETUP_SHEET_LINES = (
     "2. Save the shown-once temporary password and continue to sign in.",
     "3. Then sign in, replace the password, and complete the remaining setup gates.",
 )
-_BREAK_GLASS_OR_ORPHAN_RECOVERY = re.compile(
-    r"\b(?:break[- ]glass|orphan(?:ed)?[- ]?(?:adoption|recovery))\b", re.IGNORECASE
+_BREAK_GLASS_OR_ORPHAN_RECOVERY_SECTION = re.compile(
+    r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:break[- ]glass\b|orphan(?:ed)?\s+(?:adoption|recovery)\b)",
+    re.IGNORECASE,
+)
+_NEUTRAL_INLINE_CODE_IDENTIFIER = re.compile(
+    r"`(?:user\.create|user\.update|permission\.grant|/users/provision)`"
+)
+_SAFE_NEGATIVE_NORMAL_FLOW_PHRASES = (
+    re.compile(
+        r"\b(?:do\s+not|does\s+not|don't|never)\s+(?:create|add|make|provision)\b[^.\n]{0,120}"
+        r"\bkeycloak\b[^.\n]{0,80}\b(?:user|identity|account)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:do\s+)?not\s+(?:open|visit)\s+keycloak\b(?:\s+(?:or|and)\s+"
+        r"(?:copy|paste|enter|supply|provide|handle|ask\s+for)\s+(?:an?\s+)?"
+        r"(?:identity\s+)?subjects?\b)?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:do\s+not|don't|never)\s+(?:copy|paste|enter|supply|provide|handle|ask\s+for)"
+        r"\b[^.\n]{0,120}\b(?:identity\s+)?subjects?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\boperator\s+does\s+not\s+create\b[^.\n]{0,120}\bkeycloak\b"
+        r"[^.\n]{0,80}\b(?:or|and)\s+copy\b[^.\n]{0,80}\bsubjects?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:the\s+)?normal(?:\s+install)?\s+path\s+never\s+opens?\s+keycloak\b"
+        r"(?:,?\s*(?:handles?|copies?|pastes?|asks?\s+for)\s+(?:an?\s+)?"
+        r"(?:identity\s+)?subjects?\b)?",
+        re.IGNORECASE,
+    ),
 )
 _NORMAL_FLOW_KEYCLOAK_CREATION = re.compile(
-    r"\b(?:create|add|make|provision)\b[^.\n]{0,120}\b(?:"
-    r"keycloak\b[^.\n]{0,80}\b(?:user|identity|account)\b|"
-    r"(?:user|identity|account)\b[^.\n]{0,80}\b(?:in|on|via)\s+keycloak\b|"
+    r"(?<![-\w])(?:create|add|make|provision)\b[^.\n]{0,120}\b(?:"
+    r"keycloak(?![-\w])[^.\n]{0,80}\b(?:user|identity|account)\b|"
+    r"(?:user|identity|account)\b[^.\n]{0,80}\b(?:in|on|via)\s+keycloak(?![-\w])|"
     r"(?:intended|first)\b[^.\n]{0,60}\b(?:administrator|admin)\b"
     r"[^.\n]{0,60}\b(?:identity|account)\b"
     r")",
@@ -112,6 +145,7 @@ def _post_ready_provision_actions(provisioner: str) -> str:
 
 def _assert_no_human_identity_actions(post_ready_actions: str) -> None:
     """Allow service configuration while forbidding appliance-side human account provisioning."""
+    normalized_actions = re.sub(r"\\[ \t]*\r?\n[ \t]*", " ", post_ready_actions)
     forbidden_mechanisms = (
         r"\bkcadm(?:\.sh)?\b[^\n]*\bcreate\s+users?\b",
         r"\bkcadm(?:\.sh)?\b[^\n]*\b(?:set|reset)-password\b",
@@ -126,10 +160,25 @@ def _assert_no_human_identity_actions(post_ready_actions: str) -> None:
         r"(?:USERNAME|PASSWORD|CREDENTIAL)[A-Z_]*\s*=",
     )
     for pattern in forbidden_mechanisms:
-        assert not re.search(pattern, post_ready_actions, re.IGNORECASE), (
+        assert not re.search(pattern, normalized_actions, re.IGNORECASE), (
             "post-ready appliance actions must not create a human identity or set its credential: "
             f"{pattern}"
         )
+
+    for statement in re.split(r"(?:\n|&&|\|\||;)", normalized_actions):
+        if not statement.strip():
+            continue
+        assert not re.search(
+            r"(?:^|\s)(?:/bin/)?(?:bash|sh|source)\b|(?:^|\s)\.\s+|"
+            r"(?:^|[\s\"'])(?:\$\{?APP_DIR\}?/)?scripts/",
+            statement,
+        ), f"post-ready appliance actions must not run an unapproved helper: {statement}"
+        for _ in re.finditer(r"\bpython(?:3)?\b", statement):
+            assert re.search(
+                r"\bpython(?:3)?\s+-m\s+easysynq_api\.cli\."
+                r"(?:setup\s+mint-bootstrap|keycloak_redirect)\b",
+                statement,
+            ), f"post-ready appliance actions must not run an unapproved Python helper: {statement}"
 
 
 def _normal_flow_doc_text(content: str) -> str:
@@ -141,12 +190,18 @@ def _normal_flow_doc_text(content: str) -> str:
             heading_level = len(heading[1])
             if exception_heading_level is not None and heading_level <= exception_heading_level:
                 exception_heading_level = None
-            if _BREAK_GLASS_OR_ORPHAN_RECOVERY.search(heading[2]):
+            if _BREAK_GLASS_OR_ORPHAN_RECOVERY_SECTION.search(heading[2]):
                 exception_heading_level = heading_level
-        if exception_heading_level is not None or _BREAK_GLASS_OR_ORPHAN_RECOVERY.search(line):
+        if exception_heading_level is not None:
             continue
         retained.append(line)
     return "\n".join(retained)
+
+
+def _strip_tightly_bound_safe_negatives(instruction: str) -> str:
+    for safe_phrase in _SAFE_NEGATIVE_NORMAL_FLOW_PHRASES:
+        instruction = safe_phrase.sub("", instruction)
+    return instruction
 
 
 def _assert_no_retired_normal_flow_docs(current_docs: dict[str, str]) -> None:
@@ -156,9 +211,9 @@ def _assert_no_retired_normal_flow_docs(current_docs: dict[str, str]) -> None:
             f"{path} documents the retired normal-flow bootstrap endpoint"
         )
         for sentence in re.split(r"(?<=[.!?])\s+|\n", normal_flow):
-            instruction = re.sub(r"`[^`]*`", "", sentence)
-            if re.search(r"\b(?:do not|don't|never|does not|not)\b", sentence, re.IGNORECASE):
-                continue
+            instruction = _NEUTRAL_INLINE_CODE_IDENTIFIER.sub("", sentence)
+            instruction = instruction.replace("**", "")
+            instruction = _strip_tightly_bound_safe_negatives(instruction)
             assert not _NORMAL_FLOW_KEYCLOAK_CREATION.search(instruction), (
                 f"{path} directs normal installation through Keycloak-user creation"
             )
@@ -504,17 +559,38 @@ def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() ->
                 f"{unsafe_line}\n"
             )
 
-    for unsafe_action in (
-        "kcadm.sh create users -r easysynq -s username=alternate-admin",
-        "kcadm.sh set-password -r easysynq --username alternate-admin --new-password secret",
-        "useradd alternate-admin",
-        "passwd alternate-admin",
-        "easysynq-create-user alternate-admin",
-        "bash scripts/new-keycloak-user.sh alternate-admin",
-        'curl -d \'{"username": "alternate-admin", "credentials": [{"value": "secret"}]}\'',
-    ):
-        with pytest.raises(AssertionError):
+    unsafe_actions = {
+        "single-line-kcadm-create": "kcadm.sh create users -r easysynq -s username=alternate-admin",
+        "single-line-kcadm-password": (
+            "kcadm.sh set-password -r easysynq --username alternate-admin --new-password secret"
+        ),
+        "os-user-create": "useradd alternate-admin",
+        "os-password-set": "passwd alternate-admin",
+        "retired-helper": "easysynq-create-user alternate-admin",
+        "named-keycloak-helper": "bash scripts/new-keycloak-user.sh alternate-admin",
+        "credential-payload": (
+            'curl -d \'{"username": "alternate-admin", "credentials": [{"value": "secret"}]}\''
+        ),
+        "multiline-kcadm-create": "kcadm.sh \\\n  create \\\n  users -r easysynq",
+        "multiline-curl-credential": (
+            "curl \\\n"
+            "  https://keycloak.example/admin/realms/easysynq/users/123/reset-password \\\n"
+            "  -X PUT"
+        ),
+        "renamed-helper": "bash scripts/seed-initial-account.sh",
+        "direct-renamed-helper": '"$APP_DIR/scripts/seed-initial-account.sh"',
+    }
+    rejected_actions: dict[str, bool] = {}
+    for name, unsafe_action in unsafe_actions.items():
+        try:
             _assert_no_human_identity_actions(unsafe_action)
+        except AssertionError:
+            rejected_actions[name] = True
+        else:
+            rejected_actions[name] = False
+    assert all(rejected_actions.values()), (
+        f"identity-action mutations bypassed the guard: {rejected_actions}"
+    )
 
     _assert_no_human_identity_actions(
         "KEYCLOAK_ADMIN=service-admin\n"
@@ -541,14 +617,32 @@ def test_current_install_docs_keep_first_administrator_creation_in_app() -> None
 
     _assert_no_retired_normal_flow_docs({path: _read(path) for path in current_docs})
 
-    for unsafe_normal_flow in (
-        "Create a Keycloak user before opening EasySynQ.",
-        "Create or federate the intended administrator identity first.",
-        "Copy the Keycloak subject and paste it into the setup form.",
-        "Use POST /setup/bootstrap to create the first administrator.",
-    ):
-        with pytest.raises(AssertionError):
-            _assert_no_retired_normal_flow_docs({"docs/current-install.md": unsafe_normal_flow})
+    unsafe_normal_flow = {
+        "plain-keycloak-user": "Create a Keycloak user before opening EasySynQ.",
+        "administrator-identity": "Create or federate the intended administrator identity first.",
+        "subject-copy": "Copy the Keycloak subject and paste it into the setup form.",
+        "retired-endpoint": "Use POST /setup/bootstrap to create the first administrator.",
+        "inline-code-instruction": "Run `create a Keycloak user` before opening EasySynQ.",
+        "deceptive-negation": "Do not delay: create a Keycloak user before opening EasySynQ.",
+        "line-mentions-break-glass": "This is not break-glass: create a Keycloak user.",
+        "normal-heading-next-to-break-glass": (
+            "## Normal installation (not break-glass)\n"
+            "Create a Keycloak user before opening EasySynQ.\n"
+            "## Break-glass recovery\n"
+            "Create a Keycloak user only to recover an orphan.\n"
+        ),
+    }
+    rejected_docs: dict[str, bool] = {}
+    for name, content in unsafe_normal_flow.items():
+        try:
+            _assert_no_retired_normal_flow_docs({"docs/current-install.md": content})
+        except AssertionError:
+            rejected_docs[name] = True
+        else:
+            rejected_docs[name] = False
+    assert all(rejected_docs.values()), (
+        f"normal-flow documentation mutations bypassed the guard: {rejected_docs}"
+    )
 
     _assert_no_retired_normal_flow_docs(
         {
