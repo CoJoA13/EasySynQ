@@ -240,7 +240,7 @@ async def provision_user(
     and the fix is to reissue a password, never to retry create (it would only collide on the
     username) and never to delete the Keycloak account.
     """
-    username = body.username.strip()
+    username = identity_provisioning.canonicalize_username(body.username)
     if not username:
         raise ProblemException(
             status=422, code="validation_error", title="username must not be empty"
@@ -553,11 +553,9 @@ async def issue_temporary_password(
     Two jobs: it repairs a provision that committed the row but failed to set the credential, and
     it removes the last operational reason to run ``scripts/new-keycloak-user.sh``. Gated on
     ``user.create`` — issuing a credential is the same authority as creating the account — but
-    resetting an EXISTING user's credential is not always equivalent to creating a brand-new
-    unprivileged one: a caller who could reset a System Administrator's password could sign in as
-    them (the realm enforces no MFA). ``assert_can_reset_credential`` (R35's two-tier guard, the
-    same one ``assert_can_assign_role`` uses) therefore additionally requires a system-tier caller
-    whenever the target holds any system-domain permission.
+    resetting an EXISTING user's credential is not equivalent to creating a new identity. Under
+    R64, resetting every existing linked user unconditionally requires a system-tier caller in
+    addition to ``user.create``, regardless of the target's current permissions.
     """
     target = await _get_user(session, user_id, caller.org_id)
     if not target.keycloak_subject:
@@ -566,9 +564,9 @@ async def issue_temporary_password(
             code="user_not_linked",
             title="That user has no linked sign-in account",
         )
-    # Two-tier guard (R35) BEFORE generating a password or touching Keycloak: a content-tier
-    # `user.create` holder must not be able to take over a system-tier account by resetting its
-    # credential (see the guard's own docstring for the account-takeover rationale).
+    # R64's unconditional system-tier guard runs BEFORE generating a password or touching
+    # Keycloak. A content-tier `user.create` holder must not be able to take over any existing
+    # linked account by resetting its credential, regardless of the target's current authority.
     await assert_can_reset_credential(session, sink, caller, target)
     # `app_user` does not store the Keycloak username, so the closest identifier we hold is passed
     # to the policy guard. The generated value is 20 random characters and cannot collide with any

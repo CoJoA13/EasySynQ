@@ -56,6 +56,30 @@ _SHORT_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{1,31}$")
 _RL_KEY = "setup:bootstrap:fails"
 _RL_MAX = 5
 _RL_WINDOW_SECONDS = 900  # 5 attempts / 15 min (doc 08 §4)
+_RL_RECORD_FAILURE_LUA = """
+local window = tonumber(ARGV[1])
+if not window or window < 1 or window ~= math.floor(window) then
+  return redis.error_reply('invalid bootstrap rate-limit window')
+end
+
+local raw = redis.call('GET', KEYS[1])
+local count = 0
+if raw then
+  count = tonumber(raw)
+  if not count or count < 0 or count ~= math.floor(count) then
+    return redis.error_reply('malformed bootstrap failure counter')
+  end
+end
+
+local remaining = redis.call('TTL', KEYS[1])
+if remaining < 1 then
+  remaining = window
+end
+
+local next_count = count + 1
+redis.call('SET', KEYS[1], tostring(next_count), 'EX', remaining)
+return next_count
+"""
 
 
 def _now() -> datetime.datetime:
@@ -130,9 +154,12 @@ async def _check_rate_limit() -> None:
 async def _record_failure() -> None:
     try:
         async with _redis() as client:
-            count = await client.incr(_RL_KEY)
-            if count == 1:
-                await client.expire(_RL_KEY, _RL_WINDOW_SECONDS)
+            await client.eval(
+                _RL_RECORD_FAILURE_LUA,
+                1,
+                _RL_KEY,
+                str(_RL_WINDOW_SECONDS),
+            )
     except Exception as exc:
         raise ProblemException(
             status=503,

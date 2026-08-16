@@ -30,6 +30,7 @@ class FakeClient:
     create_calls: list[dict[str, object]] = field(default_factory=list)
     reset_calls: list[tuple[str, str]] = field(default_factory=list)
     operations: list[str] = field(default_factory=list)
+    lookup_usernames: list[str] = field(default_factory=list)
     lookup_calls: int = 0
 
     async def ensure_optional_user_profile_fields(self) -> None:
@@ -37,6 +38,7 @@ class FakeClient:
 
     async def find_user_by_username(self, username: str) -> UserLookup:
         self.operations.append("lookup")
+        self.lookup_usernames.append(username)
         self.lookup_calls += 1
         if isinstance(self.lookup, Exception):
             raise self.lookup
@@ -59,6 +61,18 @@ class FakeClient:
 
 def _profile() -> IdentityProfile:
     return IdentityProfile("jdoe", "jdoe@example.local", "J", "Doe")
+
+
+async def test_identity_boundary_canonicalizes_username_before_lookup_and_create() -> None:
+    client = FakeClient(UserLookup(found=False))
+
+    await ensure_credentialless_identity(
+        client,
+        IdentityProfile("  JDoe  ", "jdoe@example.local", "J", "Doe"),
+    )
+
+    assert client.lookup_usernames == ["jdoe"]
+    assert client.create_calls[0]["username"] == "jdoe"
 
 
 async def test_ordinary_identity_creation_sends_no_bootstrap_marker() -> None:

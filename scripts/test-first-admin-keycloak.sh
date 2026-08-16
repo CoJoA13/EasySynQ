@@ -154,7 +154,7 @@ BOOTSTRAP_SECRET="$(
   exit 1
 }
 
-ADMIN_USERNAME="firstadmin$(openssl rand -hex 6)"
+ADMIN_USERNAME="FirstAdmin$(openssl rand -hex 6)"
 NEW_PASSWORD="N7!$(openssl rand -hex 16)"
 
 EASYSYNQ_LIVE_BASE_URL="${APP_ORIGIN}" \

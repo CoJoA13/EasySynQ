@@ -60,7 +60,7 @@ class FirstAdministratorProfile:
     last_name: str | None
 
     def normalized(self) -> FirstAdministratorProfile:
-        username = self.username.strip()
+        username = identity_provisioning.canonicalize_username(self.username)
         display_name = self.display_name.strip()
         if not username or not display_name:
             raise ProblemException(
@@ -154,12 +154,28 @@ def _require_bound_username(bound_username: str, requested_username: str) -> Non
 
 
 def _verify_bootstrap_proof(
-    cfg: SystemConfig | Any, secret: str, *, now: datetime.datetime
+    cfg: SystemConfig | Any,
+    secret: str,
+    *,
+    now: datetime.datetime,
+    allow_expired_consumed_replay: bool = False,
 ) -> None:
     stored_hash = cfg.bootstrap_secret_hash
     matches = verify_secret(secret, stored_hash or _DUMMY_BOOTSTRAP_HASH)
+    if stored_hash is None or not matches:
+        raise ProblemException(
+            status=403,
+            code="bootstrap_invalid",
+            title="Invalid bootstrap secret",
+        )
+
     expired = cfg.bootstrap_expires_at is not None and now > cfg.bootstrap_expires_at
-    if stored_hash is None or expired or not matches:
+    consumed_replay = (
+        allow_expired_consumed_replay
+        and cfg.setup_state is SetupState.IN_SETUP
+        and cfg.bootstrap_consumed_at is not None
+    )
+    if expired and not consumed_replay:
         raise ProblemException(
             status=403,
             code="bootstrap_invalid",
@@ -203,7 +219,12 @@ async def _validate_request_proof(cfg: SystemConfig, secret: str) -> None:
 
 async def _validate_acknowledgment_proof(cfg: SystemConfig, secret: str) -> None:
     try:
-        _verify_bootstrap_proof(cfg, secret, now=_now())
+        _verify_bootstrap_proof(
+            cfg,
+            secret,
+            now=_now(),
+            allow_expired_consumed_replay=True,
+        )
     except ProblemException as exc:
         if exc.code == "bootstrap_invalid":
             await _record_failure()
@@ -222,6 +243,7 @@ async def _establish_claim(
     session: AsyncSession, *, secret: str, username: str
 ) -> tuple[uuid.UUID, uuid.UUID]:
     cfg = await _locked_singleton(session)
+    await _check_rate_limit()
     await _validate_request_proof(cfg, secret)
     if cfg.bootstrap_admin_claim_id is not None:
         if not _claim_fields_are_complete(cfg):
@@ -677,6 +699,7 @@ async def _admin_assignment_exists(
 async def acknowledge_first_administrator(session: AsyncSession, *, secret: str) -> dict[str, str]:
     await _check_rate_limit()
     cfg = await _locked_singleton(session)
+    await _check_rate_limit()
     await _validate_acknowledgment_proof(cfg, secret)
 
     admin_user_id = cfg.bootstrap_admin_user_id

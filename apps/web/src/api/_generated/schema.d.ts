@@ -418,7 +418,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Issue a fresh temporary password for a linked user, returned once (S-user-create). Repairs a provision whose credential step failed, and replaces scripts/new-keycloak-user.sh as the password-reset path. Needs user.create; resetting the credential of a user who holds any system-domain permission additionally requires system tier (two-tier guard, R35). */
+        /** Issue a fresh temporary password for a linked user, returned once (S-user-create). Repairs a provision whose credential step failed, and replaces scripts/new-keycloak-user.sh as the password-reset path. Needs user.create; resetting every existing linked user unconditionally requires a system-tier caller in addition (R64), regardless of the target's permissions. */
         post: operations["issueTemporaryPassword"];
         delete?: never;
         options?: never;
@@ -4335,6 +4335,7 @@ export interface components {
         };
         FirstAdministratorRequest: {
             secret: string;
+            /** @description Trimmed and canonicalized to lowercase before the bootstrap claim is bound. */
             username: string;
             display_name: string;
             email?: string | null;
@@ -7965,7 +7966,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Bootstrap consumed and setup advanced to IN_SETUP. */
+            /** @description Bootstrap consumed and setup advanced to IN_SETUP, or idempotent success for a matching already-consumed secret, including after expiry. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7974,7 +7975,7 @@ export interface operations {
                     "application/json": components["schemas"]["BootstrapAcknowledgeResponse"];
                 };
             };
-            /** @description Missing, expired, or invalid bootstrap secret; all return bootstrap_invalid. */
+            /** @description Missing or invalid bootstrap secret, or an expired unconsumed bootstrap secret; all return bootstrap_invalid. */
             403: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Setup advanced, identity bound/not ready, or username collision. */
             409: components["responses"]["FirstAdministratorProblemResponse"];
@@ -8445,6 +8446,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @description Trimmed and canonicalized to lowercase before Keycloak provisioning. */
                     username: string;
                     display_name?: string | null;
                     email?: string | null;
@@ -8560,7 +8562,7 @@ export interface operations {
             403: components["responses"]["ProblemResponse"];
             404: components["responses"]["ProblemResponse"];
             409: components["responses"]["ProblemResponse"];
-            /** @description two_tier_violation (target holds system-domain permissions; credential reset needs a system-tier caller). */
+            /** @description two_tier_violation (every existing linked user credential reset unconditionally requires a system-tier caller under R64). */
             422: {
                 headers: {
                     [name: string]: unknown;

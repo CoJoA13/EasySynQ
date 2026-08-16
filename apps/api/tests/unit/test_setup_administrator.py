@@ -42,6 +42,19 @@ def test_profile_normalizes_required_and_optional_fields() -> None:
     )
 
 
+def test_profile_canonicalizes_username_without_lowercasing_display_name() -> None:
+    profile = FirstAdministratorProfile(
+        username="  First.Admin  ",
+        display_name="  First Administrator  ",
+        email=None,
+        first_name=None,
+        last_name=None,
+    )
+
+    assert profile.normalized().username == "first.admin"
+    assert profile.normalized().display_name == "First Administrator"
+
+
 @pytest.mark.parametrize("field", ["username", "display_name"])
 def test_profile_rejects_blank_required_fields(field: str) -> None:
     values = {

@@ -167,7 +167,7 @@ sequenceDiagram
 
 | Captures | Validates | Notes |
 |---|---|---|
-| Bootstrap secret + administrator profile | Hash match; not expired (TTL, default 24h); one durable username claim; rate-limited | Secret is **never** stored in plaintext; only a salted hash + TTL live in PG. A successful provision returns a temporary password once; acknowledgement consumes the secret. |
+| Bootstrap secret + administrator profile | Hash match; not expired (TTL, default 24h); username trimmed and canonicalized to lowercase before one durable claim; rate-limited | Secret is **never** stored in plaintext; only a salted hash + TTL live in PG. A successful provision returns a temporary password once; acknowledgement consumes the secret. |
 | (display only) Instance version, build digest, sizing profile (S/M; L reserved), host health summary | Read-only; confirms the operator is on the right instance | Surfaces the aggregate `/readyz` result so Avery starts from a known-good baseline. |
 
 **Outcome.** The first administrator is provisioned in `INVITED` state. The temporary password is
@@ -182,7 +182,7 @@ shown once; acknowledgement advances the instance to `IN_SETUP` and is audit-log
 
 | Captures | Validation | Rationale / boundary |
 |---|---|---|
-| Display name, **username**, optional work email | Email format; username uniqueness | EasySynQ provisions the account and Keycloak identity together. The operator does not create it in Keycloak or copy its subject. |
+| Display name, **username**, optional work email | Email format; username uniqueness after trim-and-lowercase canonicalization | EasySynQ provisions the account and Keycloak identity together. The operator does not create it in Keycloak or copy its subject. Display-name case is preserved. |
 | **Temporary password** | Generated after the EasySynQ user and System Administrator role commit | Displayed once only. Keycloak requires replacement at first sign-in; SMTP delivery is not required. |
 | **MFA enrolment** (TOTP / WebAuthn) — strongly prompted | Verify a live TOTP code / passkey registration before continuing | MFA on the super-user is a baseline; pre-positions Part-11 re-auth. Skippable only with an explicit "I accept reduced security" acknowledgement (logged). |
 | Acknowledge the **Admin-Outside-the-QMS notice** | Required checkbox: "I understand this account holds full SYSTEM permissions and does NOT author or approve QMS content by default." | Makes the separation-of-duties principle an explicit, audited acceptance, not fine print. |
@@ -468,8 +468,9 @@ The **self-grant friction + audit (§10.4) still applies to any QMS→admin cros
 
 | Path | Authority | Flow |
 |---|---|---|
-| **Create user** in Administration → Users | `user.create`; role assignment additionally needs `permission.grant` | Enter username and profile. EasySynQ creates the sign-in identity and `app_user`, then shows a generated temporary password once. The identity provider requires a password change at first sign-in. |
-| **Edit or reset** in Manage | `user.update`; reset of a user with system-domain authority additionally requires the system tier | Edit existing user state, or issue a fresh shown-once temporary password. |
+| **Create user** in Administration → Users | `user.create`; role assignment additionally needs `permission.grant` | Enter username and profile. EasySynQ trims and canonicalizes the username to lowercase, creates the sign-in identity and `app_user`, then shows a generated temporary password once. The identity provider requires a password change at first sign-in. |
+| **Edit** in Manage | `user.update` | Edit existing user state. |
+| **Reset** in Manage | `user.create` + system tier | Issue a fresh shown-once temporary password. Resetting every existing linked user unconditionally requires the system tier under R64, regardless of the target's permissions. |
 | **Orphan adoption** | subject-based `POST /users`, `user.create` | Exceptional recovery for an identity already created outside the application or left by a failed provision. It is not a normal onboarding flow. |
 | **Host break-glass** | `scripts/new-keycloak-user.sh` or `grant-role` | Controlled incident recovery only. Record the operator, reason, subject, and time outside the normal API audit path. |
 

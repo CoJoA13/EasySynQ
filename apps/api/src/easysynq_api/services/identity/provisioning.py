@@ -41,6 +41,11 @@ class IdentityUsernameExists(Exception):
         super().__init__("username already exists")
 
 
+def canonicalize_username(username: str) -> str:
+    """Return the one username representation supported by EasySynQ and Keycloak."""
+    return username.strip().lower()
+
+
 def keycloak_client() -> KeycloakProvisioningClient:
     """Build the request-scoped Keycloak client from the established application settings."""
     settings = get_settings()
@@ -60,6 +65,7 @@ async def ensure_credentialless_identity(
     allow_matching_claim: bool = False,
 ) -> CredentiallessIdentity:
     """Find or create only the identity this operation is allowed to own."""
+    profile = dataclasses.replace(profile, username=canonicalize_username(profile.username))
     await client.ensure_optional_user_profile_fields()
     lookup = await client.find_user_by_username(profile.username)
     if lookup.found:
@@ -104,7 +110,7 @@ async def issue_temporary_credential(
     client: KeycloakProvisioningClient, *, subject: str, username: str
 ) -> str:
     """Set a fresh, realm-conforming temporary credential and return it only to the caller."""
-    password = generate_temporary_password(username)
+    password = generate_temporary_password(canonicalize_username(username))
     await client.set_temporary_password(subject=subject, password=password)
     return password
 

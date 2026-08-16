@@ -343,7 +343,7 @@
         },
         "responses": {
           "200": {
-            "description": "Bootstrap consumed and setup advanced to IN_SETUP.",
+            "description": "Bootstrap consumed and setup advanced to IN_SETUP, or idempotent success for a matching already-consumed secret, including after expiry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -353,7 +353,7 @@
             }
           },
           "403": {
-            "description": "Missing, expired, or invalid bootstrap secret; all return bootstrap_invalid.",
+            "description": "Missing or invalid bootstrap secret, or an expired unconsumed bootstrap secret; all return bootstrap_invalid.",
             "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           },
           "409": {
@@ -1096,7 +1096,8 @@
                 ],
                 "properties": {
                   "username": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Trimmed and canonicalized to lowercase before Keycloak provisioning."
                   },
                   "display_name": {
                     "type": [
@@ -1292,7 +1293,7 @@
           "users"
         ],
         "operationId": "issueTemporaryPassword",
-        "summary": "Issue a fresh temporary password for a linked user, returned once (S-user-create). Repairs a provision whose credential step failed, and replaces scripts/new-keycloak-user.sh as the password-reset path. Needs user.create; resetting the credential of a user who holds any system-domain permission additionally requires system tier (two-tier guard, R35).",
+        "summary": "Issue a fresh temporary password for a linked user, returned once (S-user-create). Repairs a provision whose credential step failed, and replaces scripts/new-keycloak-user.sh as the password-reset path. Needs user.create; resetting every existing linked user unconditionally requires a system-tier caller in addition (R64), regardless of the target's permissions.",
         "parameters": [
           {
             "name": "user_id",
@@ -1341,7 +1342,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {
-            "description": "two_tier_violation (target holds system-domain permissions; credential reset needs a system-tier caller).",
+            "description": "two_tier_violation (every existing linked user credential reset unconditionally requires a system-tier caller under R64).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -14161,7 +14162,8 @@
           "username": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 255
+            "maxLength": 255,
+            "description": "Trimmed and canonicalized to lowercase before the bootstrap claim is bound."
           },
           "display_name": {
             "type": "string",

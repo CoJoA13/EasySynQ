@@ -370,6 +370,27 @@ async def test_ordinary_provisioning_never_sends_a_bootstrap_marker(
     ]
 
 
+async def test_ordinary_provisioning_canonicalizes_mixed_case_username(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _install_kc(monkeypatch, new_subject=_sub("canonical-username"))
+    headers = await _admin(token_factory)
+    submitted = f"  Mixed.User-{uuid.uuid4().hex[:6]}  "
+    display_name = "Mixed Case Display"
+
+    response = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": submitted, "display_name": display_name},
+    )
+
+    assert response.status_code == 201, response.text
+    assert calls["created"][0]["username"] == submitted.strip().lower()
+    assert response.json()["user"]["display_name"] == display_name
+
+
 async def test_unlinked_username_collision_returns_the_subject_for_the_link_path(
     app_client: httpx.AsyncClient,
     token_factory: Callable[..., str],

@@ -132,3 +132,63 @@ Replace or fence the whole-document reconciliation when Keycloak provides a vers
 compare-and-swap user-profile update, or when EasySynQ introduces supported external profile-policy
 administration. Remove reconciliation only if a future supported identity provider natively preserves
 EasySynQ’s optional-field semantics for both bootstrap and ordinary users.
+
+## 2026-08-16 amendment — canonical usernames and serialized proof admission
+
+### Context
+
+Keycloak canonicalizes local usernames to lowercase. Preserving submitted case could therefore bind
+a durable bootstrap claim to a spelling that an exact retry lookup could never recover. Independent
+security review also found that the public bootstrap endpoints checked the Redis failure budget
+before acquiring the PostgreSQL singleton lock, allowing racing invalid proofs to pass admission
+together, and that separate Redis `INCR`/`EXPIRE` calls could leave a permanent no-TTL lockout.
+
+A separate response-loss edge existed after acknowledgment: once a correctly consumed secret
+expired, an otherwise idempotent retry was rejected before the already-complete claim could be
+returned.
+
+### Decision
+
+All supported local Keycloak usernames are trimmed and canonicalized to lowercase through the shared
+identity-provisioning boundary. First-administrator claims, Keycloak lookup/create operations,
+responses, audit projections, and ordinary in-app user provisioning all use that canonical value.
+Display-name case is preserved.
+
+Both bootstrap proof endpoints keep a fast Redis admission check and repeat it after taking the
+singleton `system_config` row lock, immediately before proof validation. Failed-proof recording is
+one atomic Redis Lua operation that replaces the counter with `SET ... EX`: a positive remaining TTL
+is preserved, a new or legacy no-TTL counter receives the full window, and malformed or unavailable
+state fails closed.
+
+Acknowledgment always performs the salted-hash comparison before consulting setup state. A matching
+proof may ignore expiry only when setup is already `IN_SETUP` and the secret is durably consumed;
+the complete-claim and administrator-assignment checks still run before idempotent success. Missing
+or mismatched proofs remain generic, counted `bootstrap_invalid` denials.
+
+### Consequences
+
+Case variants converge on one recoverable identity instead of stranding a claim. Concurrent invalid
+provision and acknowledgment requests share one serialized attempt budget, and a partial Redis TTL
+write can no longer create an indefinite numeric lockout. A caller that lost the successful
+acknowledgment response can recover after expiry without reissuing a credential or weakening denial
+behavior for any mismatched proof.
+
+### Alternatives
+
+Keeping only the pre-lock Redis check was rejected because racing requests could all pass before any
+failure was recorded. A split `INCR` followed by `EXPIRE`, including a Redis transaction that still
+exposes an error between application calls, was rejected because it can strand a numeric counter
+without a TTL; the server-side script makes the replacement and expiry one atomic operation.
+
+Rejecting uppercase input was considered, but canonicalizing before any durable or external write
+matches the supported Keycloak behavior and is less error-prone for operators. Continuing to reject
+all expired acknowledgment retries was rejected because a committed acknowledgment with a lost
+response must remain recoverable without another credential side effect.
+
+### Payoff trigger
+
+Replace the custom Redis admission script and cross-store lock coupling when bootstrap admission can
+live in one transactional datastore. Revisit the lowercase rule before adding a supported identity
+provider with different documented canonicalization semantics; migrate any pending claims before
+changing the canonical form. The mirrored deferred boundary is tracked in
+[`bootstrap-admission-identity-coupling`](../debt/20260816024758-bootstrap-admission-identity-coupling.md).

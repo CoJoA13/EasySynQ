@@ -34,6 +34,7 @@ from easysynq_api.db.models.storage_config import StorageConfig
 from easysynq_api.db.models.system_config import SetupState, SystemConfig
 from easysynq_api.db.models.working_calendar import WorkingCalendar
 from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.problems import ProblemException
 from easysynq_api.services import backup as backup_service
 from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.services.keycloak_provisioning import (
@@ -521,6 +522,86 @@ async def test_first_administrator_acknowledgment_is_idempotent_for_same_secret(
     assert len(consumed) == 1
 
 
+async def test_acknowledgment_replay_accepts_matching_consumed_secret_after_expiry(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("ack-expired-replay")
+    provisioned = await _provision(app_client, secret, username)
+    admin_id = provisioned.json()["administrator"]["id"]
+    first = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+    )
+    password_count = len(_setup_keycloak.passwords[f"subject:{username}"])
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.bootstrap_expires_at = setup_service._now() - datetime.timedelta(minutes=1)
+        await session.commit()
+
+    replay = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == {"setup_state": "IN_SETUP", "admin_user_id": admin_id}
+    assert len(_setup_keycloak.passwords[f"subject:{username}"]) == password_count
+
+
+async def test_expired_consumed_acknowledgment_mismatch_is_generic_and_counted(
+    app_client: AsyncClient,
+) -> None:
+    secret = await _reset_uninitialized()
+    assert (await _provision(app_client, secret, _sub("ack-expired-wrong"))).status_code == 201
+    assert (
+        await app_client.post("/api/v1/setup/administrator/acknowledge", json={"secret": secret})
+    ).status_code == 200
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.bootstrap_expires_at = setup_service._now() - datetime.timedelta(minutes=1)
+        await session.commit()
+
+    denied = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge", json={"secret": "wrong"}
+    )
+
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "bootstrap_invalid"
+    assert denied.json()["title"] == "Invalid bootstrap secret"
+    assert "IN_SETUP" not in denied.text
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        assert await client.get(setup_service._RL_KEY) == "1"
+
+
+@pytest.mark.parametrize("broken_state", ["incomplete_claim", "missing_assignment"])
+async def test_expired_consumed_acknowledgment_replay_preserves_fail_closed_checks(
+    app_client: AsyncClient,
+    broken_state: str,
+) -> None:
+    secret = await _reset_uninitialized()
+    provisioned = await _provision(app_client, secret, _sub(f"ack-expired-{broken_state}"))
+    admin_id = uuid.UUID(provisioned.json()["administrator"]["id"])
+    assert (
+        await app_client.post("/api/v1/setup/administrator/acknowledge", json={"secret": secret})
+    ).status_code == 200
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.bootstrap_expires_at = setup_service._now() - datetime.timedelta(minutes=1)
+        if broken_state == "incomplete_claim":
+            cfg.bootstrap_credential_issued_at = None
+        else:
+            await session.execute(delete(RoleAssignment).where(RoleAssignment.user_id == admin_id))
+        await session.commit()
+
+    replay = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge", json={"secret": secret}
+    )
+
+    assert replay.status_code == 409
+    assert replay.json()["code"] == "bootstrap_not_ready"
+
+
 async def test_reminted_secret_recovers_pending_claim_and_advanced_setup_refuses_remint(
     app_client: AsyncClient,
 ) -> None:
@@ -638,6 +719,35 @@ async def test_different_bound_username_discloses_only_username_after_valid_secr
     assert "claim" not in response.text.lower()
     assert "subject:" not in response.text
     assert secret not in response.text
+
+
+async def test_first_administrator_canonicalizes_mixed_case_username_end_to_end(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    submitted = f"  Mixed.Admin-{uuid.uuid4().hex[:8]}  "
+    canonical = submitted.strip().lower()
+
+    first = await _provision(app_client, secret, submitted)
+    retried = await _provision(app_client, secret, submitted.swapcase())
+
+    assert first.status_code == 201, first.text
+    assert retried.status_code == 200, retried.text
+    assert first.json()["administrator"]["username"] == canonical
+    assert retried.json()["administrator"]["username"] == canonical
+    cfg = await _config()
+    assert cfg.bootstrap_admin_username == canonical
+    assert set(_setup_keycloak.accounts) == {canonical}
+    async with get_sessionmaker()() as session:
+        claimed = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_type == EventType.BOOTSTRAP_IDENTITY_CLAIMED,
+                AuditEvent.object_id == cfg.org_id,
+                AuditEvent.after["username"].as_string() == canonical,
+            )
+        )
+    assert claimed is not None
 
 
 @pytest.mark.parametrize("marker", [None, "00000000-0000-0000-0000-000000000001"])
@@ -1277,6 +1387,147 @@ async def test_bootstrap_rate_limit_locks_out(
     locked = await _provision(app_client, "wrong", username)
     assert locked.status_code == 429
     assert locked.json()["code"] == "rate_limited"
+
+
+async def test_concurrent_invalid_bootstrap_attempts_stop_at_limit(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every racing request passes the fast pre-lock check; lock-time admission still limits the
+    serialized invalid proofs to exactly the configured failure budget."""
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    await _reset_uninitialized()
+    request_count = setup_service._RL_MAX + 3
+    outer_arrivals: set[asyncio.Task[Any]] = set()
+    all_outer_arrived = asyncio.Event()
+    real_check = administrator_service._check_rate_limit
+
+    async def synchronize_outer_checks() -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        if task not in outer_arrivals:
+            outer_arrivals.add(task)
+            if len(outer_arrivals) == request_count:
+                all_outer_arrived.set()
+            await asyncio.wait_for(all_outer_arrived.wait(), timeout=2)
+        await real_check()
+
+    monkeypatch.setattr(administrator_service, "_check_rate_limit", synchronize_outer_checks)
+    responses = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                _provision(app_client, "wrong", _sub(f"rl-race-{index}"))
+                for index in range(request_count)
+            )
+        ),
+        timeout=10,
+    )
+
+    assert [response.status_code for response in responses].count(403) == setup_service._RL_MAX
+    assert [response.status_code for response in responses].count(429) == 3
+    assert {response.json()["code"] for response in responses} == {
+        "bootstrap_invalid",
+        "rate_limited",
+    }
+    assert _setup_keycloak.operations == []
+
+
+@pytest.mark.parametrize("endpoint", ["provision", "acknowledge"])
+async def test_bootstrap_rate_limit_is_rechecked_after_singleton_lock(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+) -> None:
+    """Both public proof endpoints admit again only after the singleton lock is held."""
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    await _reset_uninitialized()
+    events: list[str] = []
+    real_check = administrator_service._check_rate_limit
+    real_lock = administrator_service._locked_singleton
+    real_request_proof = administrator_service._validate_request_proof
+    real_acknowledgment_proof = administrator_service._validate_acknowledgment_proof
+
+    async def observed_check() -> None:
+        events.append("rate")
+        await real_check()
+
+    async def observed_lock(session: Any) -> SystemConfig:
+        cfg = await real_lock(session)
+        events.append("locked")
+        return cfg
+
+    async def observed_request_proof(cfg: SystemConfig, secret: str) -> None:
+        events.append("proof")
+        await real_request_proof(cfg, secret)
+
+    async def observed_acknowledgment_proof(cfg: SystemConfig, secret: str) -> None:
+        events.append("proof")
+        await real_acknowledgment_proof(cfg, secret)
+
+    monkeypatch.setattr(administrator_service, "_check_rate_limit", observed_check)
+    monkeypatch.setattr(administrator_service, "_locked_singleton", observed_lock)
+    monkeypatch.setattr(administrator_service, "_validate_request_proof", observed_request_proof)
+    monkeypatch.setattr(
+        administrator_service,
+        "_validate_acknowledgment_proof",
+        observed_acknowledgment_proof,
+    )
+
+    if endpoint == "provision":
+        response = await _provision(app_client, "wrong", _sub("rl-order"))
+    else:
+        response = await app_client.post(
+            "/api/v1/setup/administrator/acknowledge", json={"secret": "wrong"}
+        )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "bootstrap_invalid"
+    assert events == ["rate", "locked", "rate", "proof"]
+
+
+async def test_atomic_failure_counter_repairs_legacy_no_ttl_and_preserves_live_ttl(
+    app_client: AsyncClient,
+) -> None:
+    del app_client
+    await _reset_uninitialized()
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        await client.set(setup_service._RL_KEY, "2", ex=120)
+        live_before = await client.ttl(setup_service._RL_KEY)
+
+    await setup_service._record_failure()
+
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        assert await client.get(setup_service._RL_KEY) == "3"
+        live_after = await client.ttl(setup_service._RL_KEY)
+        assert 0 < live_after <= live_before
+        assert live_after >= live_before - 2
+        await client.set(setup_service._RL_KEY, "4")
+        assert await client.ttl(setup_service._RL_KEY) == -1
+
+    await setup_service._record_failure()
+
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        assert await client.get(setup_service._RL_KEY) == "5"
+        repaired_ttl = await client.ttl(setup_service._RL_KEY)
+    assert setup_service._RL_WINDOW_SECONDS - 2 <= repaired_ttl <= setup_service._RL_WINDOW_SECONDS
+
+
+async def test_atomic_failure_counter_rejects_malformed_state_fail_closed(
+    app_client: AsyncClient,
+) -> None:
+    del app_client
+    await _reset_uninitialized()
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        await client.set(setup_service._RL_KEY, "not-an-integer")
+
+    with pytest.raises(ProblemException) as excinfo:
+        await setup_service._record_failure()
+
+    assert excinfo.value.status == 503
+    assert excinfo.value.code == "dependency_unavailable"
 
 
 async def test_bootstrap_rejects_expired_secret(

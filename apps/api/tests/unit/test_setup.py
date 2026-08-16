@@ -7,7 +7,10 @@ guard (a missing Python EventType member is a runtime crash, not a CI failure â€
 
 from __future__ import annotations
 
+import pytest
+
 from easysynq_api.db.models._audit_enums import EVENT_TYPE_VALUES, EventType
+from easysynq_api.services.setup import service as setup_service
 from easysynq_api.services.setup.bootstrap import mint_secret, verify_secret
 
 
@@ -56,3 +59,40 @@ def test_setup_event_types_resolve() -> None:
     ):
         assert EventType(label).value == label
         assert label in EVENT_TYPE_VALUES
+
+
+class _AtomicFailureRedis:
+    def __init__(self) -> None:
+        self.eval_calls: list[tuple[str, int, tuple[str, ...]]] = []
+
+    async def __aenter__(self) -> _AtomicFailureRedis:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def eval(self, script: str, numkeys: int, *args: str) -> int:
+        self.eval_calls.append((script, numkeys, args))
+        return 2
+
+    async def incr(self, _key: str) -> int:
+        raise AssertionError("failure recording must not expose a split INCR/EXPIRE window")
+
+    async def expire(self, _key: str, _ttl: int) -> bool:
+        raise RuntimeError("injected expiry failure")
+
+
+async def test_failure_counter_uses_one_atomic_redis_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _AtomicFailureRedis()
+    monkeypatch.setattr(setup_service, "_redis", lambda: client)
+
+    await setup_service._record_failure()
+
+    assert len(client.eval_calls) == 1
+    script, numkeys, args = client.eval_calls[0]
+    assert "SET" in script
+    assert "EX" in script
+    assert numkeys == 1
+    assert args == (setup_service._RL_KEY, str(setup_service._RL_WINDOW_SECONDS))

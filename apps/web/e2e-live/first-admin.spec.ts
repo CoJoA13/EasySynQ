@@ -9,6 +9,7 @@ function requiredEnvironment(name: string): string {
 const baseURL = requiredEnvironment("EASYSYNQ_LIVE_BASE_URL");
 const setupSecret = requiredEnvironment("EASYSYNQ_LIVE_SETUP_SECRET");
 const username = requiredEnvironment("EASYSYNQ_LIVE_USERNAME");
+const canonicalUsername = username.trim().toLowerCase();
 const newPassword = requiredEnvironment("EASYSYNQ_LIVE_NEW_PASSWORD");
 
 test("first administrator completes the required Keycloak password update", async ({
@@ -23,7 +24,18 @@ test("first administrator completes the required Keycloak password update", asyn
   await page.getByLabel(/^Setup secret/).fill(setupSecret);
   await page.getByLabel(/^Username/).fill(username);
   await page.getByLabel(/^Display name/).fill("Live First Administrator");
+  const provisionResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/v1/setup/administrator"),
+  );
   await page.getByRole("button", { name: "Create administrator" }).click();
+  const provisionResponse = await provisionResponsePromise;
+  expect(provisionResponse.status()).toBe(201);
+  const provisioned = (await provisionResponse.json()) as {
+    administrator: { username: string };
+  };
+  expect(provisioned.administrator.username).toBe(canonicalUsername);
 
   const passwordHeading = page.getByRole("heading", {
     name: "Temporary password — shown once",
@@ -36,7 +48,7 @@ test("first administrator completes the required Keycloak password update", asyn
 
   const keycloakUsername = page.locator('input[name="username"]');
   await expect(keycloakUsername).toBeVisible();
-  await keycloakUsername.fill(username);
+  await keycloakUsername.fill(canonicalUsername);
   await page.locator('input[name="password"]').fill(temporaryPassword);
   await page.getByRole("button", { name: "Sign In", exact: true }).click();
 
@@ -58,7 +70,7 @@ test("first administrator completes the required Keycloak password update", asyn
     await rejectedCredentialPage.goto(`${baseURL}/setup`);
     const cleanUsername = rejectedCredentialPage.locator('input[name="username"]');
     await expect(cleanUsername).toBeVisible();
-    await cleanUsername.fill(username);
+    await cleanUsername.fill(canonicalUsername);
     await rejectedCredentialPage.locator('input[name="password"]').fill(temporaryPassword);
     await rejectedCredentialPage.getByRole("button", { name: "Sign In", exact: true }).click();
 
