@@ -12,15 +12,29 @@ import { AuthContext, type AuthState } from "../src/lib/auth";
 import { theme } from "../src/theme/mantine";
 
 const TEST_USER_ID = "bbbb1111-1111-1111-1111-111111111111";
+const BROWSER_TEST_TOKEN = "browser-test-token";
+
+declare global {
+  interface Window {
+    __EASYSYNQ_E2E_LOGIN_CALLS__: number;
+  }
+}
+
+const tokenless = new URLSearchParams(window.location.search).get("e2e-auth") === "tokenless";
+window.__EASYSYNQ_E2E_LOGIN_CALLS__ = 0;
 
 const auth: AuthState = {
   status: { kind: "ready" },
-  token: "browser-test-token",
-  user: {
-    access_token: "browser-test-token",
-    profile: { sub: TEST_USER_ID },
-  } as AuthState["user"],
-  login: async () => undefined,
+  token: tokenless ? null : BROWSER_TEST_TOKEN,
+  user: tokenless
+    ? null
+    : ({
+        access_token: BROWSER_TEST_TOKEN,
+        profile: { sub: TEST_USER_ID },
+      } as AuthState["user"]),
+  login: async () => {
+    window.__EASYSYNQ_E2E_LOGIN_CALLS__ += 1;
+  },
   retry: async () => undefined,
   logout: async () => undefined,
 };

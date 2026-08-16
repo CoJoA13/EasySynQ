@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type { Locator } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import {
   installFirstAdministratorApi,
   installRegisterApi,
@@ -17,6 +17,18 @@ async function expectInsideNarrowViewport(locator: Locator): Promise<void> {
   expect(box).not.toBeNull();
   expect(box!.x).toBeGreaterThanOrEqual(-1);
   expect(box!.x + box!.width).toBeLessThanOrEqual(321);
+}
+
+async function expectLoginCalls(page: Page, expected: number): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __EASYSYNQ_E2E_LOGIN_CALLS__?: number })
+            .__EASYSYNQ_E2E_LOGIN_CALLS__,
+      ),
+    )
+    .toBe(expected);
 }
 
 test("mounts the real routed shell with deterministic authenticated data", async ({ page }) => {
@@ -59,7 +71,7 @@ test("first administrator setup is resilient at 320px in forced colors", async (
     }
   });
 
-  await page.goto("/setup");
+  await page.goto("/setup?e2e-auth=tokenless");
 
   expect(await page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
 
@@ -73,7 +85,8 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await expect(
     page.getByRole("heading", { name: "Create the first administrator" }),
   ).toBeVisible();
-  await expect(page).toHaveURL("http://127.0.0.1:4174/setup");
+  await expect(page).toHaveURL("http://127.0.0.1:4174/setup?e2e-auth=tokenless");
+  await expectLoginCalls(page, 0);
   expect(externalRequests).toEqual([]);
 
   await secret.fill(MAXIMUM_FIRST_ADMIN_SECRET);
@@ -145,6 +158,7 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await expect(passwordHeading).toBeVisible();
   await expect(passwordHeading).toBeFocused();
   await expect(password).toBeVisible();
+  await expectLoginCalls(page, 0);
   for (const control of [password, copy, acknowledge]) {
     await expectInsideNarrowViewport(control);
   }
@@ -167,20 +181,33 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await expect(password).toBeVisible();
   await expect(page.getByRole("alert", { name: "Password receipt was not saved" })).toBeVisible();
   await expect(retry).toBeVisible();
-  await expect(page).toHaveURL("http://127.0.0.1:4174/setup");
+  await expect(page).toHaveURL("http://127.0.0.1:4174/setup?e2e-auth=tokenless");
+  await expectLoginCalls(page, 0);
   expect(externalRequests).toEqual([]);
 
   await retry.focus();
   await page.keyboard.press("Enter");
 
-  await expect(page.getByLabel("Legal name", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to continue setup" })).toBeVisible();
+  await expect(page.getByLabel("Legal name", { exact: true })).toHaveCount(0);
+  await expectLoginCalls(page, 1);
   await expect(
     page.getByRole("heading", { name: "Create the first administrator" }),
   ).toHaveCount(0);
-  await expect(page).toHaveURL("http://127.0.0.1:4174/setup");
+  await expect(page).toHaveURL("http://127.0.0.1:4174/setup?e2e-auth=tokenless");
   expect(requestCount("POST", "/api/v1/setup/administrator")).toBe(1);
   expect(requestCount("POST", "/api/v1/setup/administrator/acknowledge")).toBe(2);
   expect(requestCount("GET", "/api/v1/setup/state")).toBe(2);
+  expect(requestCount("GET", "/api/v1/setup")).toBe(0);
+  expect(externalRequests).toEqual([]);
+
+  await page.goto("/setup?e2e-auth=authenticated");
+
+  await expect(page.getByLabel("Legal name", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to continue setup" })).toHaveCount(0);
+  await expectLoginCalls(page, 0);
+  await expect(page).toHaveURL("http://127.0.0.1:4174/setup?e2e-auth=authenticated");
+  expect(requestCount("GET", "/api/v1/setup/state")).toBe(3);
   expect(requestCount("GET", "/api/v1/setup")).toBe(1);
   expect(externalRequests).toEqual([]);
 });
