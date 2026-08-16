@@ -43,3 +43,7 @@ def test_first_administrator_response_never_publishes_keycloak_identity() -> Non
     assert response["properties"]["password_delivery"]["enum"] == ["shown_once"]
     assert schemas["Problem"]["properties"]["bound_username"] == {"type": ["string", "null"]}
     assert "keycloak_subject" not in schemas["FirstAdministratorProblem"]["properties"]
+    assert (
+        schemas["FirstAdministratorProblem"]["properties"]["code"]["enum"]
+        == schemas["Problem"]["properties"]["code"]["enum"]
+    )

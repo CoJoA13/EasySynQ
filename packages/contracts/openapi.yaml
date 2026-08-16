@@ -7096,7 +7096,7 @@ components:
         code:
           type: string
           description: Stable machine-readable error code clients branch on.
-          enum:
+          enum: &problem_code_enum
             - ack_obligation_lapsed
             - ack_superseded
             - already_archived
@@ -7260,7 +7260,9 @@ components:
         type: { type: string, format: uri }
         title: { type: string }
         status: { type: integer }
-        code: { type: string }
+        code:
+          type: string
+          enum: *problem_code_enum
         detail: { type: [string, "null"] }
         instance: { type: [string, "null"] }
         request_id: { type: [string, "null"] }

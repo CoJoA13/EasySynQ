@@ -298,7 +298,7 @@ class FirstAdministratorProblem(BaseModel):
     type: AnyUrl
     title: str
     status: int
-    code: str
+    code: Code
     detail: str | None = None
     instance: str | None = None
     request_id: str | None = None
