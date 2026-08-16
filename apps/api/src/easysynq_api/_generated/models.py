@@ -30,7 +30,7 @@ class FirstAdministratorRequest(BaseModel):
     )
     secret: Annotated[str, Field(max_length=512, min_length=1)]
     username: Annotated[str, Field(max_length=255, min_length=1)]
-    display_name: Annotated[str, Field(max_length=255, min_length=1)]
+    display_name: Annotated[str, Field(max_length=255, min_length=1, pattern='.*\\S.*')]
     email: Annotated[str | None, Field(max_length=320)] = None
     first_name: Annotated[str | None, Field(max_length=255)] = None
     last_name: Annotated[str | None, Field(max_length=255)] = None
@@ -289,6 +289,21 @@ class Problem(BaseModel):
             description="On keycloak_username_exists_unlinked: the existing Keycloak account's subject to link instead of creating a new one."
         ),
     ] = None
+
+
+class FirstAdministratorProblem(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    type: AnyUrl
+    title: str
+    status: int
+    code: str
+    detail: str | None = None
+    instance: str | None = None
+    request_id: str | None = None
+    bound_username: str | None = None
+    errors: list[Error] | None = None
 
 
 class AuthConfig(BaseModel):

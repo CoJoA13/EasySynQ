@@ -4407,6 +4407,22 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        FirstAdministratorProblem: {
+            /** Format: uri */
+            type: string;
+            title: string;
+            status: number;
+            code: string;
+            detail?: string | null;
+            instance?: string | null;
+            request_id?: string | null;
+            bound_username?: string | null;
+            errors?: {
+                field?: string;
+                code?: string;
+                message?: string;
+            }[] | null;
+        };
         AuthConfig: {
             issuer: string;
             client_id: string;
@@ -7735,6 +7751,15 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
+        /** @description A first-administrator setup error, without Keycloak identity details. */
+        FirstAdministratorProblemResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["FirstAdministratorProblem"];
+            };
+        };
         /** @description The audit after the FSM transition. */
         AuditTransition: {
             headers: {
@@ -7913,17 +7938,17 @@ export interface operations {
                 };
             };
             /** @description Invalid or expired bootstrap secret. */
-            403: components["responses"]["ProblemResponse"];
+            403: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description No secret, setup advanced, identity bound/not ready, or username collision. */
-            409: components["responses"]["ProblemResponse"];
+            409: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Validation failure or Keycloak rejection. */
-            422: components["responses"]["ProblemResponse"];
+            422: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Bootstrap rate limit exceeded. */
-            429: components["responses"]["ProblemResponse"];
+            429: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Keycloak unavailable. */
-            502: components["responses"]["ProblemResponse"];
+            502: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Keycloak admin configuration is missing. */
-            503: components["responses"]["ProblemResponse"];
+            503: components["responses"]["FirstAdministratorProblemResponse"];
         };
     };
     acknowledgeFirstAdministrator: {
@@ -7949,17 +7974,17 @@ export interface operations {
                 };
             };
             /** @description Invalid or expired bootstrap secret. */
-            403: components["responses"]["ProblemResponse"];
+            403: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description No secret, setup advanced, identity bound/not ready, or username collision. */
-            409: components["responses"]["ProblemResponse"];
+            409: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Validation failure or Keycloak rejection. */
-            422: components["responses"]["ProblemResponse"];
+            422: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Bootstrap rate limit exceeded. */
-            429: components["responses"]["ProblemResponse"];
+            429: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Keycloak unavailable. */
-            502: components["responses"]["ProblemResponse"];
+            502: components["responses"]["FirstAdministratorProblemResponse"];
             /** @description Keycloak admin configuration is missing. */
-            503: components["responses"]["ProblemResponse"];
+            503: components["responses"]["FirstAdministratorProblemResponse"];
         };
     };
     setSetupOrgProfile: {

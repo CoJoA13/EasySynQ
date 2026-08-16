@@ -290,22 +290,22 @@ paths:
               schema: { $ref: "#/components/schemas/FirstAdministratorProvisioned" }
         "403":
           description: Invalid or expired bootstrap secret.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "409":
           description: No secret, setup advanced, identity bound/not ready, or username collision.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "422":
           description: Validation failure or Keycloak rejection.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "429":
           description: Bootstrap rate limit exceeded.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "502":
           description: Keycloak unavailable.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "503":
           description: Keycloak admin configuration is missing.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
 
   /setup/administrator/acknowledge:
     post:
@@ -326,22 +326,22 @@ paths:
               schema: { $ref: "#/components/schemas/BootstrapAcknowledgeResponse" }
         "403":
           description: Invalid or expired bootstrap secret.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "409":
           description: No secret, setup advanced, identity bound/not ready, or username collision.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "422":
           description: Validation failure or Keycloak rejection.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "429":
           description: Bootstrap rate limit exceeded.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "502":
           description: Keycloak unavailable.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
         "503":
           description: Keycloak admin configuration is missing.
-          $ref: "#/components/responses/ProblemResponse"
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
 
   /setup/org-profile:
     patch:
@@ -6989,6 +6989,11 @@ components:
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+    FirstAdministratorProblemResponse:
+      description: A first-administrator setup error, without Keycloak identity details.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/FirstAdministratorProblem" }
     AuditTransition:
       description: The audit after the FSM transition.
       content:
@@ -7017,7 +7022,7 @@ components:
       properties:
         secret: { type: string, minLength: 1, maxLength: 512 }
         username: { type: string, minLength: 1, maxLength: 255 }
-        display_name: { type: string, minLength: 1, maxLength: 255 }
+        display_name: { type: string, minLength: 1, maxLength: 255, pattern: ".*\\S.*" }
         email: { type: [string, "null"], maxLength: 320 }
         first_name: { type: [string, "null"], maxLength: 255 }
         last_name: { type: [string, "null"], maxLength: 255 }
@@ -7246,6 +7251,29 @@ components:
         keycloak_subject:
           type: [string, "null"]
           description: "On keycloak_username_exists_unlinked: the existing Keycloak account's subject to link instead of creating a new one."
+
+    FirstAdministratorProblem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: [string, "null"] }
+        instance: { type: [string, "null"] }
+        request_id: { type: [string, "null"] }
+        bound_username: { type: [string, "null"] }
+        errors:
+          type: [array, "null"]
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              field: { type: string }
+              code: { type: string }
+              message: { type: string }
 
     AuthConfig:
       type: object
