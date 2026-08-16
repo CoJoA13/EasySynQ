@@ -108,6 +108,9 @@ class EventType(enum.Enum):
     ADMIN_BOOTSTRAPPED = "ADMIN_BOOTSTRAPPED"
     ORG_PROFILE_SET = "ORG_PROFILE_SET"
     SETUP_FINALIZED = "SETUP_FINALIZED"
+    # First-administrator provisioning (ADR 0005): records that a durable pre-authentication
+    # claim bound the bootstrap secret to one identity. Added via ALTER TYPE in 0087.
+    BOOTSTRAP_IDENTITY_CLAIMED = "BOOTSTRAP_IDENTITY_CLAIMED"
     # storage / WORM-verify gate (S8b, doc 08 §7) — added via ALTER TYPE … ADD VALUE in 0013.
     WORM_VERIFIED = "WORM_VERIFIED"
     # backup config + restore-test gate G-C / AC#5 (S8b2, doc 08 §8) — added via ALTER TYPE …

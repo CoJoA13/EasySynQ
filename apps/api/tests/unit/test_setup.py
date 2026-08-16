@@ -45,13 +45,14 @@ def test_each_mint_is_unique() -> None:
 def test_setup_event_types_resolve() -> None:
     """The setup labels resolve to Python members AND are in the tuple the migration rebuilds the
     PG type from (a missing member would crash DbVaultAuditSink at write time, not CI). S8a's four
-    + S8b's WORM_VERIFIED."""
+    + S8b's WORM_VERIFIED + the durable first-administrator claim event."""
     for label in (
         "BOOTSTRAP_CONSUMED",
         "ADMIN_BOOTSTRAPPED",
         "ORG_PROFILE_SET",
         "SETUP_FINALIZED",
         "WORM_VERIFIED",
+        "BOOTSTRAP_IDENTITY_CLAIMED",
     ):
         assert EventType(label).value == label
         assert label in EVENT_TYPE_VALUES

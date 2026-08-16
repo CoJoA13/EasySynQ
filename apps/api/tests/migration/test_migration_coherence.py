@@ -39,6 +39,15 @@ _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
 _RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
 _ROLE_ASSIGNMENT_USER_INDEX = "ix_role_assignment_user_id"
 _RECORD_PAGE_INDEX = "ix_record_org_id_captured_at_id_desc"
+_BOOTSTRAP_ADMIN_USER_INDEX = "ix_system_config_bootstrap_admin_user_id"
+_BOOTSTRAP_ADMIN_USER_FK = "fk_system_config_bootstrap_admin_user_id_app_user"
+_BOOTSTRAP_CLAIM_COLUMNS = (
+    "bootstrap_admin_claim_id",
+    "bootstrap_admin_username",
+    "bootstrap_admin_user_id",
+    "bootstrap_claimed_at",
+    "bootstrap_credential_issued_at",
+)
 _EXPECTED_RETENTION_GRANTS = {
     ("Internal Auditor", "retention.read"),
     ("QMS Owner", "retention.manage"),
@@ -908,6 +917,117 @@ def test_populated_historical_transitions_and_head_repairs(
             with engine.connect() as connection:
                 assert _table_indexes(connection, "record") == head_indexes
                 assert _index_definition(connection, _RECORD_PAGE_INDEX) == index_definition
+
+            # 0087 adds a recoverable first-administrator claim without rewriting established
+            # setup or identity state. Its populated downgrade removes only the claim storage;
+            # re-upgrade restores nullable columns and leaves the existing rows untouched.
+            claim_id = uuid.uuid4()
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "UPDATE system_config SET bootstrap_admin_claim_id = :claim_id, "
+                        "bootstrap_admin_username = 'first-admin', "
+                        "bootstrap_admin_user_id = :user, bootstrap_claimed_at = now(), "
+                        "bootstrap_credential_issued_at = now() WHERE org_id = :org"
+                    ),
+                    {"claim_id": claim_id, "user": user_id, "org": org_id},
+                )
+            with engine.connect() as connection:
+                assert all(
+                    _column_nullable(connection, "system_config", column) == "YES"
+                    for column in _BOOTSTRAP_CLAIM_COLUMNS
+                )
+                assert _BOOTSTRAP_ADMIN_USER_INDEX in _table_indexes(connection, "system_config")
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT confdeltype FROM pg_constraint "
+                            "WHERE conrelid = 'system_config'::regclass "
+                            "AND conname = :constraint"
+                        ),
+                        {"constraint": _BOOTSTRAP_ADMIN_USER_FK},
+                    ).scalar_one()
+                    == "r"
+                )
+                identity_setup = connection.execute(
+                    sa.text(
+                        "SELECT sc.org_id, sc.setup_state::text, o.short_code, "
+                        "u.id, u.keycloak_subject, u.display_name "
+                        "FROM system_config sc JOIN organization o ON o.id = sc.org_id "
+                        "JOIN app_user u ON u.id = :user WHERE sc.org_id = :org"
+                    ),
+                    {"org": org_id, "user": user_id},
+                ).one()
+
+            command.downgrade(config, "0086_record_page_index")
+            with engine.connect() as connection:
+                assert all(
+                    _column_nullable(connection, "system_config", column) is None
+                    for column in _BOOTSTRAP_CLAIM_COLUMNS
+                )
+                assert _BOOTSTRAP_ADMIN_USER_INDEX not in _table_indexes(
+                    connection, "system_config"
+                )
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT count(*) FROM pg_constraint "
+                            "WHERE conrelid = 'system_config'::regclass "
+                            "AND conname = :constraint"
+                        ),
+                        {"constraint": _BOOTSTRAP_ADMIN_USER_FK},
+                    ).scalar_one()
+                    == 0
+                )
+                assert (
+                    connection.execute(
+                        sa.text("SELECT count(*) FROM system_config WHERE org_id = :org"),
+                        {"org": org_id},
+                    ).scalar_one()
+                    == 1
+                )
+                assert (
+                    connection.execute(
+                        sa.text("SELECT count(*) FROM organization WHERE id = :org"),
+                        {"org": org_id},
+                    ).scalar_one()
+                    == 1
+                )
+                assert (
+                    connection.execute(
+                        sa.text("SELECT count(*) FROM app_user WHERE id = :user"),
+                        {"user": user_id},
+                    ).scalar_one()
+                    == 1
+                )
+
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                assert all(
+                    _column_nullable(connection, "system_config", column) == "YES"
+                    for column in _BOOTSTRAP_CLAIM_COLUMNS
+                )
+                assert _BOOTSTRAP_ADMIN_USER_INDEX in _table_indexes(connection, "system_config")
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT sc.org_id, sc.setup_state::text, o.short_code, "
+                            "u.id, u.keycloak_subject, u.display_name "
+                            "FROM system_config sc JOIN organization o ON o.id = sc.org_id "
+                            "JOIN app_user u ON u.id = :user WHERE sc.org_id = :org"
+                        ),
+                        {"org": org_id, "user": user_id},
+                    ).one()
+                    == identity_setup
+                )
+                assert connection.execute(
+                    sa.text(
+                        "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
+                        "bootstrap_admin_user_id, bootstrap_claimed_at, "
+                        "bootstrap_credential_issued_at FROM system_config WHERE org_id = :org"
+                    ),
+                    {"org": org_id},
+                ).one() == (None, None, None, None, None)
             command.check(config)
         finally:
             engine.dispose()

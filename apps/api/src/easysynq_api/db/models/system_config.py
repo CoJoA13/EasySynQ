@@ -11,7 +11,7 @@ import datetime
 import enum
 import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, false, func, text, true
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Text, false, func, text, true
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -37,6 +37,7 @@ setup_state_enum = SAEnum(
 
 class SystemConfig(Base):
     __tablename__ = "system_config"
+    __table_args__ = (Index("ix_system_config_bootstrap_admin_user_id", "bootstrap_admin_user_id"),)
 
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -163,6 +164,28 @@ class SystemConfig(Base):
     bootstrap_consumed_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    # The staged first-administrator claim binds any retry to exactly one app identity while the
+    # Keycloak and PostgreSQL transactions remain non-atomic (ADR 0005). Nullable fields preserve
+    # existing installations and deliberately avoid storing Keycloak marker or credential material.
+    bootstrap_admin_claim_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    bootstrap_admin_username: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bootstrap_admin_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "app_user.id",
+            ondelete="RESTRICT",
+            name="fk_system_config_bootstrap_admin_user_id_app_user",
+        ),
+        nullable=True,
+    )
+    bootstrap_claimed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    bootstrap_credential_issued_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     # Auth-config gate G-D (S8c, doc 08 §9): the chosen primary login method (LOCAL/FEDERATED —
     # informational; the app always authenticates via Keycloak/OIDC) + the persisted non-bootstrap
