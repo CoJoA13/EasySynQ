@@ -474,16 +474,17 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
                 visibilityToggleButtonProps={{ style: { minHeight: 44, minWidth: 44 } }}
                 onChange={(event) => updateForm("secret", event.currentTarget.value)}
               />
-              <Group justify="flex-end" wrap="wrap">
+              <Group justify="flex-end" wrap="wrap" style={{ minWidth: 0, width: "100%" }}>
                 <Button
                   ref={reissueButtonRef}
                   onClick={() => void provision(true)}
                   loading={pending === "reissue"}
                   disabled={pending !== null || form.secret.trim() === ""}
                   aria-busy={pending === "reissue" || undefined}
-                  style={{ minHeight: 44 }}
+                  aria-label="Retry issuing with current setup secret"
+                  style={{ minHeight: 44, minWidth: 0, maxWidth: "100%", width: "100%" }}
                 >
-                  Retry issuing with current setup secret
+                  Retry with current secret
                 </Button>
               </Group>
             </Stack>

@@ -719,7 +719,21 @@ test("bootstrap_invalid during reissue requires a focused current secret for the
   expect(acknowledgeBodies).toHaveLength(1);
 
   await user.type(currentSecret, CURRENT_SETUP_SECRET);
-  await user.click(screen.getByRole("button", { name: "Retry issuing with current setup secret" }));
+  const retryWithCurrentSecret = screen.getByRole("button", {
+    name: "Retry issuing with current setup secret",
+  });
+  expect(retryWithCurrentSecret).toHaveTextContent(/^Retry with current secret$/);
+  expect(retryWithCurrentSecret).toHaveStyle({
+    minHeight: "44px",
+    minWidth: "0px",
+    maxWidth: "100%",
+    width: "100%",
+  });
+  const retryGroup = retryWithCurrentSecret.parentElement;
+  expect(retryGroup).not.toBeNull();
+  if (retryGroup === null) throw new Error("Reissue retry action container was not rendered");
+  expect(retryGroup).toHaveStyle({ minWidth: "0px", width: "100%" });
+  await user.click(retryWithCurrentSecret);
   await screen.findByText(REISSUED_PASSWORD);
   expect(provisionBodies).toHaveLength(3);
   expect(provisionBodies[2]).toEqual({
