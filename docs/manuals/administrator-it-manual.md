@@ -161,6 +161,26 @@ break-glass grant: it bypasses the wizard and PEP, JIT-creates the `app_user`, a
 in the organization's independent change or incident record. Use it only to recover a known orphan,
 not to seed a normal installation.
 
+If an unrelated System Administrator assignment already blocks the public first-administrator flow,
+use this host-only recovery while the organization is still exactly `UNINITIALIZED`:
+
+```bash
+./scripts/easysynq setup release-administrator-blocker \
+  --subject <keycloak-subject> --org <short-code>
+```
+
+The command locks the setup singleton before the organization's administrator set, refuses
+`IN_SETUP` and completed installations, and refuses the user linked to an active bootstrap claim.
+It removes only the exact named user's System Administrator assignment. It does not call Keycloak,
+delete or disable the identity or `app_user`, remove another role or historical attribution, change
+setup or claim state, consume a setup proof, or grant replacement access. An absent user or already
+absent assignment is a safe no-op. After a successful release, retain or mint a valid setup secret
+and resume the normal `/setup` browser flow.
+
+This pre-authentication host action cannot use the normal application audit actor. Before running
+it, open an independent incident or change record; record the command, operator, reason, exact
+subject, organization, and time. Retain the command result with that record.
+
 ### 5.4 Disable, re-enable, and retire access
 
 - **Disable** prevents application access without deleting historical attribution.

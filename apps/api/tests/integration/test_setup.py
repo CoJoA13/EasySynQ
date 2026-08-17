@@ -26,8 +26,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from easysynq_api.config import get_settings
-from easysynq_api.db.models._audit_enums import EventType
-from easysynq_api.db.models.app_user import AppUser
+from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
+from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.backup_policy import BackupPolicy
 from easysynq_api.db.models.organization import Organization
@@ -989,6 +989,338 @@ async def test_break_glass_administrator_blocks_public_claim(
     assert response.json()["code"] == "bootstrap_administrator_exists"
     assert (await _config()).bootstrap_admin_claim_id is None
     assert _setup_keycloak.accounts == {}
+
+
+async def test_release_administrator_blocker_removes_only_the_exact_assignment(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.cli.setup import release_administrator_blocker
+
+    secret = await _reset_uninitialized()
+    subject = _sub("release-blocker")
+    grant_role(subject)
+    grant_role(subject, "Author")
+    claim_id = uuid.uuid4()
+    hidden_claim_username = _sub("hidden-claim-owner")
+    history_marker = uuid.uuid4().hex
+
+    async with get_sessionmaker()() as session:
+        org = (await session.execute(select(Organization))).scalar_one()
+        user = await session.scalar(
+            select(AppUser).where(AppUser.org_id == org.id, AppUser.keycloak_subject == subject)
+        )
+        assert user is not None
+        user.display_name = "Unrelated pre-operational administrator"
+        user.email = "unrelated-admin@example.invalid"
+        user.status = UserStatus.LOCKED
+        user.mfa_enrolled = True
+        user.is_guest = True
+        cfg = await session.get(SystemConfig, org.id)
+        assert cfg is not None
+        cfg.bootstrap_admin_claim_id = claim_id
+        cfg.bootstrap_admin_username = hidden_claim_username
+        admin_role_id = await session.scalar(
+            select(Role.id).where(Role.org_id == org.id, Role.name == _ADMIN)
+        )
+        assert admin_role_id is not None
+        session.add(
+            RoleAssignment(
+                org_id=org.id,
+                user_id=user.id,
+                role_id=admin_role_id,
+                bound_scope={"source": "supported-duplicate"},
+            )
+        )
+        event = AuditEvent(
+            org_id=org.id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=user.id,
+            actor_type=ActorType.user,
+            event_type=EventType.USER_STATUS_CHANGED,
+            object_type=AuditObjectType.user,
+            object_id=user.id,
+            after={"history_marker": history_marker},
+        )
+        session.add(event)
+        await session.flush()
+        user_id = user.id
+        event_id = event.id
+        assignment_rows = (
+            await session.execute(
+                select(Role.name, RoleAssignment.id)
+                .join(RoleAssignment, RoleAssignment.role_id == Role.id)
+                .where(RoleAssignment.org_id == org.id, RoleAssignment.user_id == user.id)
+            )
+        ).all()
+        admin_assignment_ids = {
+            assignment_id for role_name, assignment_id in assignment_rows if role_name == _ADMIN
+        }
+        author_assignment_ids = {
+            assignment_id for role_name, assignment_id in assignment_rows if role_name == "Author"
+        }
+        await session.commit()
+
+    blocked = await _provision(app_client, secret, _sub("public-first-admin"))
+    assert blocked.status_code == 409
+    assert blocked.json()["code"] == "bootstrap_administrator_exists"
+    assert _setup_keycloak.operations == []
+
+    result = release_administrator_blocker(subject)
+
+    assert subject in result
+    assert "released" in result.lower()
+    assert str(claim_id) not in result
+    assert hidden_claim_username not in result
+    assert secret not in result
+    assert _setup_keycloak.operations == []
+    async with get_sessionmaker()() as session:
+        user = await session.get(AppUser, user_id)
+        assert user is not None
+        assert user.keycloak_subject == subject
+        assert user.display_name == "Unrelated pre-operational administrator"
+        assert user.email == "unrelated-admin@example.invalid"
+        assert user.status is UserStatus.LOCKED
+        assert user.mfa_enrolled is True
+        assert user.is_guest is True
+        assignments_after = {
+            role_name: assignment_id
+            for role_name, assignment_id in (
+                await session.execute(
+                    select(Role.name, RoleAssignment.id)
+                    .join(RoleAssignment, RoleAssignment.role_id == Role.id)
+                    .where(RoleAssignment.user_id == user_id)
+                )
+            ).all()
+        }
+        preserved_event = await session.scalar(
+            select(AuditEvent).where(AuditEvent.id == event_id, AuditEvent.actor_id == user_id)
+        )
+
+    assert len(admin_assignment_ids) == 2
+    assert len(author_assignment_ids) == 1
+    assert assignments_after == {"Author": next(iter(author_assignment_ids))}
+    assert preserved_event is not None
+    assert preserved_event.after == {"history_marker": history_marker}
+
+
+async def test_release_administrator_blocker_refuses_the_claim_linked_user_without_mutation(
+    app_client: AsyncClient,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.cli.setup import release_administrator_blocker
+
+    del app_client
+    await _reset_uninitialized()
+    subject = _sub("claim-owned-blocker")
+    hidden_username = _sub("claim-owner")
+    claim_id = uuid.uuid4()
+    grant_role(subject)
+    async with get_sessionmaker()() as session:
+        user = await session.scalar(select(AppUser).where(AppUser.keycloak_subject == subject))
+        assert user is not None
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.bootstrap_admin_user_id = user.id
+        cfg.bootstrap_admin_claim_id = claim_id
+        cfg.bootstrap_admin_username = hidden_username
+        assignment_id = await session.scalar(
+            select(RoleAssignment.id)
+            .join(Role, Role.id == RoleAssignment.role_id)
+            .where(RoleAssignment.user_id == user.id, Role.name == _ADMIN)
+        )
+        await session.commit()
+
+    with pytest.raises(SystemExit) as refused:
+        release_administrator_blocker(subject)
+
+    detail = str(refused.value)
+    assert subject in detail
+    assert str(claim_id) not in detail
+    assert hidden_username not in detail
+    async with get_sessionmaker()() as session:
+        assert await session.get(RoleAssignment, assignment_id) is not None
+
+
+@pytest.mark.parametrize(
+    "setup_state",
+    [SetupState.IN_SETUP, SetupState.OPERATIONAL],
+    ids=["in-setup", "completed"],
+)
+async def test_release_administrator_blocker_refuses_advanced_setup_without_mutation(
+    app_client: AsyncClient,
+    setup_state: SetupState,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.cli.setup import release_administrator_blocker
+
+    del app_client
+    await _reset_uninitialized()
+    subject = _sub("advanced-setup-blocker")
+    grant_role(subject)
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.setup_state = setup_state
+        assignment_id = await session.scalar(
+            select(RoleAssignment.id)
+            .join(Role, Role.id == RoleAssignment.role_id)
+            .join(AppUser, AppUser.id == RoleAssignment.user_id)
+            .where(AppUser.keycloak_subject == subject, Role.name == _ADMIN)
+        )
+        await session.commit()
+
+    with pytest.raises(SystemExit) as refused:
+        release_administrator_blocker(subject)
+
+    assert subject in str(refused.value)
+    assert setup_state.value not in str(refused.value)
+    async with get_sessionmaker()() as session:
+        assert await session.get(RoleAssignment, assignment_id) is not None
+
+
+async def test_release_administrator_blocker_is_idempotent_for_absent_user_or_assignment(
+    app_client: AsyncClient,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.cli.setup import release_administrator_blocker
+
+    del app_client
+    await _reset_uninitialized()
+    absent_subject = _sub("absent-blocker")
+    ordinary_subject = _sub("ordinary-user")
+    grant_role(ordinary_subject, "Author")
+
+    first_absent = release_administrator_blocker(absent_subject)
+    second_absent = release_administrator_blocker(absent_subject)
+    first_ordinary = release_administrator_blocker(ordinary_subject)
+    second_ordinary = release_administrator_blocker(ordinary_subject)
+
+    for subject, result in (
+        (absent_subject, first_absent),
+        (absent_subject, second_absent),
+        (ordinary_subject, first_ordinary),
+        (ordinary_subject, second_ordinary),
+    ):
+        assert subject in result
+        assert "nothing released" in result.lower()
+    async with get_sessionmaker()() as session:
+        assert (
+            await session.scalar(
+                select(AppUser.id).where(AppUser.keycloak_subject == absent_subject)
+            )
+            is None
+        )
+        ordinary = await session.scalar(
+            select(AppUser).where(AppUser.keycloak_subject == ordinary_subject)
+        )
+        assert ordinary is not None
+        roles = set(
+            (
+                await session.execute(
+                    select(Role.name)
+                    .join(RoleAssignment, RoleAssignment.role_id == Role.id)
+                    .where(RoleAssignment.user_id == ordinary.id)
+                )
+            ).scalars()
+        )
+    assert roles == {"Author"}
+
+
+async def test_release_administrator_blocker_locks_singleton_before_admin_set(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session
+
+    from easysynq_api.cli import setup as setup_cli
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.services.authz import admin_guard
+
+    del app_client
+    await _reset_uninitialized()
+    subject = _sub("lock-order-blocker")
+    grant_role(subject)
+    singleton_was_locked = False
+
+    def observe_admin_lock(session: Session, org_id: uuid.UUID) -> None:
+        nonlocal singleton_was_locked
+        competing_engine = create_engine(get_settings().sync_dsn)
+        try:
+            with Session(competing_engine) as competing:
+                with pytest.raises(OperationalError):
+                    competing.scalar(
+                        select(SystemConfig)
+                        .where(SystemConfig.org_id == org_id)
+                        .with_for_update(nowait=True)
+                    )
+            singleton_was_locked = True
+        finally:
+            competing_engine.dispose()
+        admin_guard.lock_admin_set_sync(session, org_id)
+
+    monkeypatch.setattr(setup_cli, "lock_admin_set_sync", observe_admin_lock, raising=False)
+
+    setup_cli.release_administrator_blocker(subject)
+
+    assert singleton_was_locked is True
+
+
+@pytest.mark.parametrize("failure_phase", ["flush", "commit"])
+async def test_release_administrator_blocker_rolls_back_flush_or_commit_failure(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: str,
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+    from easysynq_api.cli.grant_role import grant_role
+
+    del app_client
+    await _reset_uninitialized()
+    subject = _sub("rollback-blocker")
+    provider_detail = f"provider-detail-{uuid.uuid4()}"
+    grant_role(subject)
+    async with get_sessionmaker()() as session:
+        assignment_id = await session.scalar(
+            select(RoleAssignment.id)
+            .join(Role, Role.id == RoleAssignment.role_id)
+            .join(AppUser, AppUser.id == RoleAssignment.user_id)
+            .where(AppUser.keycloak_subject == subject, Role.name == _ADMIN)
+        )
+
+    original_flush = setup_cli.Session.flush
+    original_rollback = setup_cli.Session.rollback
+    rollback_called = False
+
+    def observed_rollback(session: Any) -> None:
+        nonlocal rollback_called
+        rollback_called = True
+        original_rollback(session)
+
+    def failed_flush(session: Any, *args: Any, **kwargs: Any) -> None:
+        original_flush(session, *args, **kwargs)
+        raise RuntimeError(provider_detail)
+
+    def failed_commit(_session: Any) -> None:
+        raise RuntimeError(provider_detail)
+
+    with monkeypatch.context() as failure_injection:
+        failure_injection.setattr(setup_cli.Session, "rollback", observed_rollback)
+        failure_injection.setattr(
+            setup_cli.Session,
+            failure_phase,
+            failed_flush if failure_phase == "flush" else failed_commit,
+        )
+
+        with pytest.raises(SystemExit) as failed:
+            setup_cli.release_administrator_blocker(subject)
+
+    assert rollback_called is True
+    assert subject in str(failed.value)
+    assert provider_detail not in str(failed.value)
+    async with get_sessionmaker()() as session:
+        assert await session.get(RoleAssignment, assignment_id) is not None
 
 
 async def test_unrelated_administrator_blocks_pending_claim_without_releasing_it(

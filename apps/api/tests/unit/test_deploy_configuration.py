@@ -845,6 +845,27 @@ def test_current_install_docs_keep_first_administrator_creation_in_app() -> None
     assert "bootstrap_credential_superseded" in setup_and_onboarding
 
 
+def test_host_setup_exposes_release_administrator_blocker(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+
+    command = "release-administrator-blocker --subject <keycloak-subject> [--org CODE]"
+    wrapper_help = subprocess.run(  # noqa: S603 - fixed repository-owned executable
+        [str(ROOT / "scripts/easysynq"), "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert command in wrapper_help
+
+    with pytest.raises(SystemExit) as help_exit:
+        setup_cli.main(["--help"])
+    assert help_exit.value.code == 0
+    setup_help = capsys.readouterr().out
+    assert "release-administrator-blocker" in setup_help
+
+
 def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     compose = _read("infra/compose/compose.yml")
     image = _read("infra/compose/keycloak/Dockerfile")

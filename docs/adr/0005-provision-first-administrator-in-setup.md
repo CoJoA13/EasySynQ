@@ -363,3 +363,52 @@ Remove the singleton-held provider stage and its lock-duration cost when identit
 EasySynQ persistence can participate in one transactionally attested boundary. Replace the shared
 advisory protocol only when the database enforces an equivalent per-organization administrator-set
 invariant across every supported runtime writer without serializing ordinary roles.
+
+## 2026-08-16 amendment — pre-operational administrator blocker recovery
+
+### Context
+
+A supported but unrelated pre-operational System Administrator assignment makes the public
+first-administrator flow fail closed. The existing host `grant-role` command cannot recover that
+state because it adds the same assignment that blocks setup. Direct SQL would bypass setup-state,
+organization, claim-ownership, and shared-lock invariants.
+
+### Decision
+
+Provide the exceptional host-only command `easysynq setup release-administrator-blocker --subject
+<keycloak-subject> [--org CODE]`. It is valid only while the selected organization's setup state is
+exactly `UNINITIALIZED`. It locks the `system_config` singleton row first, then takes the shared
+per-organization administrator-set advisory lock. Under those locks it resolves the exact same-org
+user, refuses the user linked to the bootstrap claim, and removes only that user's seeded System
+Administrator assignment.
+
+The command never contacts Keycloak; creates, deletes, disables, or adopts an identity or
+`app_user`; removes another role; changes setup or claim state; consumes bootstrap proof; or grants
+replacement access. An absent named user or assignment is a no-write idempotent result. Every
+mutation-capable failure rolls back before a generic operator-safe error is emitted.
+
+Because no trusted authenticated application administrator exists at this boundary, the command
+cannot produce the normal actor-attributed application audit event. Each use therefore requires an
+independent incident/change record containing the command, operator, reason, subject, organization,
+and time. This deliberate cost is tracked in
+[`uninitialized-admin-recovery`](../debt/20260816173328-uninitialized-admin-recovery.md).
+
+### Consequences
+
+An installation blocked by an unrelated assignment can return to the owner-approved browser flow
+without erasing identity or attribution history and without weakening public bootstrap's
+administrator uniqueness check. Recovery remains a host-access procedure with an out-of-product
+audit obligation.
+
+### Alternatives
+
+Adopting the unrelated administrator into the public claim was rejected because a bootstrap proof
+must not take control of an identity without the claim marker. Removing all administrators was
+rejected as over-broad. Direct SQL was rejected because it cannot enforce the transaction protocol.
+Using `grant-role` was rejected because it creates, rather than releases, the blocker.
+
+### Payoff trigger
+
+Replace this host exception when a trusted authenticated or host-attested workflow can resolve the
+pre-existing administrator with durable in-application audit, as specified by the linked debt
+record.
