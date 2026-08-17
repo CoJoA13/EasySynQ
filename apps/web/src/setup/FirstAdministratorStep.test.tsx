@@ -478,7 +478,16 @@ test("bootstrap_credential_superseded reissues the bound normalized profile and 
   expect(screen.getByRole("button", { name: "Copy temporary password" })).toBeDisabled();
   const reissue = screen.getByRole("button", { name: "Issue a new temporary password" });
   expect(reissue).toHaveTextContent(/^Issue new password$/);
-  expect(reissue).toHaveStyle({ minHeight: "44px", maxWidth: "100%" });
+  expect(reissue).toHaveStyle({
+    minHeight: "44px",
+    minWidth: "0px",
+    maxWidth: "100%",
+    width: "100%",
+  });
+  const reissueGroup = reissue.parentElement;
+  expect(reissueGroup).not.toBeNull();
+  if (reissueGroup === null) throw new Error("Reissue action container was not rendered");
+  expect(reissueGroup).toHaveStyle({ minWidth: "0px", width: "100%" });
   await waitFor(() => expect(reissue).toHaveFocus());
   await user.click(reissue);
   await waitFor(() => expect(provisionBodies).toHaveLength(2));

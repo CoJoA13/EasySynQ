@@ -417,7 +417,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
                 password before continuing.
               </Text>
               {reissueRecovery !== "replacement-secret" && (
-                <Group justify="flex-end" wrap="wrap">
+                <Group justify="flex-end" wrap="wrap" style={{ minWidth: 0, width: "100%" }}>
                   <Button
                     ref={reissueButtonRef}
                     onClick={() => void provision(true)}
@@ -427,7 +427,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
                     aria-label={
                       reissueRecovery === "retry" ? undefined : "Issue a new temporary password"
                     }
-                    style={{ minHeight: 44, maxWidth: "100%" }}
+                    style={{ minHeight: 44, minWidth: 0, maxWidth: "100%", width: "100%" }}
                   >
                     {reissueRecovery === "retry"
                       ? "Retry issuing temporary password"
