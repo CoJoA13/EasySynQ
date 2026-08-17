@@ -5,6 +5,7 @@ import yaml
 OPENAPI = Path(__file__).resolve().parents[4] / "packages/contracts/openapi.yaml"
 DECISIONS_REGISTER = OPENAPI.parents[2] / "docs/decisions-register.md"
 API_DESIGN = OPENAPI.parents[2] / "docs/15-api-design.md"
+ADMINISTRATOR_MANUAL = OPENAPI.parents[2] / "docs/manuals/administrator-it-manual.md"
 
 
 def test_first_administrator_replaces_the_authenticated_bootstrap_contract() -> None:
@@ -116,3 +117,28 @@ def test_current_first_administrator_authority_names_the_hardened_recovery_bound
     assert "active shown credential generation" in decisions_register
     assert "bootstrap_administrator_exists" in api_design
     assert "bound first administrator" in api_design
+
+
+def test_administrator_blocker_recovery_is_narrow_and_externally_recorded() -> None:
+    manual = ADMINISTRATOR_MANUAL.read_text(encoding="utf-8")
+    recovery_start = manual.index(
+        "If an unrelated System Administrator assignment already blocks the public "
+        "first-administrator flow"
+    )
+    recovery_end = manual.index("### 5.4 ", recovery_start)
+    recovery = manual[recovery_start:recovery_end]
+
+    command = (
+        "./scripts/easysynq setup release-administrator-blocker \\\n"
+        "  --subject <keycloak-subject> --org <short-code>"
+    )
+    assert command in recovery
+    assert "exactly `UNINITIALIZED`" in recovery
+    assert "refuses the user linked to an active bootstrap claim" in recovery
+    assert "removes only the exact named user's System Administrator assignment" in recovery
+    assert "does not call Keycloak" in recovery
+    assert "resume the normal `/setup` browser flow" in recovery
+    assert "independent incident or change record" in recovery
+    assert (
+        "record the command, operator, reason, exact\nsubject, organization, and time" in recovery
+    )

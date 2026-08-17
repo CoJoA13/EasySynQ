@@ -47,6 +47,62 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text()
 
 
+def _markdown_section(content: str, heading_text: str) -> str:
+    expected_heading = re.compile(rf"^(?P<marks>#{{1,6}})\s+{re.escape(heading_text)}\s*$")
+    any_heading = re.compile(r"^(?P<marks>#{1,6})\s+")
+    heading_level: int | None = None
+    in_fence = False
+    retained: list[str] = []
+
+    for line in content.splitlines(keepends=True):
+        stripped = line.strip()
+        is_fence = stripped.startswith(("```", "~~~"))
+        if heading_level is None:
+            if not in_fence and (heading := expected_heading.match(stripped)):
+                heading_level = len(heading["marks"])
+            if is_fence:
+                in_fence = not in_fence
+            continue
+
+        next_heading = None if in_fence else any_heading.match(stripped)
+        if next_heading is not None and len(next_heading["marks"]) <= heading_level:
+            break
+        retained.append(line)
+        if is_fence:
+            in_fence = not in_fence
+
+    assert heading_level is not None, f"missing Markdown section: {heading_text}"
+    return "".join(retained)
+
+
+def _assert_fragments_in_order(content: str, fragments: tuple[str, ...]) -> None:
+    content = re.sub(r"\s+", " ", content)
+    cursor = 0
+    for fragment in fragments:
+        fragment = re.sub(r"\s+", " ", fragment)
+        position = content.find(fragment, cursor)
+        assert position >= 0, f"missing or out-of-order instruction: {fragment}"
+        cursor = position + len(fragment)
+
+
+def _assert_supported_first_admin_sequence(content: str, setup_url: str) -> None:
+    normalized_lower = re.sub(r"\s+", " ", content).lower()
+    assert "just demo-user" not in normalized_lower
+    assert "demo-password-1" not in normalized_lower
+    _assert_fragments_in_order(
+        content,
+        (
+            "mint-bootstrap",
+            f"Open {setup_url} without signing in",
+            "create the first administrator profile",
+            "copy the shown-once temporary password",
+            "acknowledge the active credential generation",
+            "sign in",
+            "change the temporary password",
+        ),
+    )
+
+
 _SETUP_SHEET_HEREDOC = re.compile(
     r'^\s*cat >"\$SETUP_FILE" <<(?P<delimiter>[A-Z][A-Z0-9_]*)\n'
     r"(?P<body>.*?)\n(?P=delimiter)\n",
@@ -845,6 +901,67 @@ def test_current_install_docs_keep_first_administrator_creation_in_app() -> None
     assert "bootstrap_credential_superseded" in setup_and_onboarding
 
 
+def test_fresh_linux_first_run_creates_the_administrator_before_dev_fixtures() -> None:
+    runbook = _read("docs/runbooks/fresh-linux-setup.md")
+    first_run = _markdown_section(runbook, "6. First-run wizard → OPERATIONAL")
+    fixture_section = _markdown_section(
+        runbook, "7. Post-bootstrap development fixtures (Keycloak persists in PostgreSQL)"
+    )
+
+    _assert_supported_first_admin_sequence(first_run, "`http://localhost/setup`")
+    assert "only after first-administrator setup is complete" in fixture_section
+    assert "just demo-user" in fixture_section
+    assert "Demo-Password-1" in fixture_section
+
+
+def test_installation_guide_first_runs_never_sign_in_with_a_demo_identity() -> None:
+    guide = _read("docs/manuals/installation-guide.md")
+    production_first_run = _markdown_section(
+        guide, "4.3 Create the first administrator in EasySynQ"
+    )
+    developer_first_run = _markdown_section(guide, "8.1 Create the first administrator")
+    developer_fixtures = _markdown_section(
+        guide, "8.2 Optional post-bootstrap development fixtures"
+    )
+
+    for section, setup_url in (
+        (production_first_run, "`https://<host>/setup`"),
+        (developer_first_run, "`http://localhost/setup`"),
+    ):
+        _assert_supported_first_admin_sequence(section, setup_url)
+
+    assert "only after first-administrator setup is complete" in developer_fixtures
+    assert "just demo-user" in developer_fixtures
+    assert "Demo-Password-1" in developer_fixtures
+
+    valid_sequence = (
+        "Run mint-bootstrap. Open `http://localhost/setup` without signing in, then create the "
+        "first administrator profile, copy the shown-once temporary password, acknowledge the "
+        "active credential generation, sign in, and change the temporary password."
+    )
+    _assert_supported_first_admin_sequence(valid_sequence, "`http://localhost/setup`")
+    unsafe_first_runs = {
+        "demo-command": f"Run just demo-user first. {valid_sequence}",
+        "fixed-demo-credential": f"Use demo / Demo-Password-1. {valid_sequence}",
+        "sign-in-before-setup": (
+            "Sign in first. Run mint-bootstrap. Open `http://localhost/setup` without signing in, "
+            "then create the first administrator profile, copy the shown-once temporary password, "
+            "acknowledge the active credential generation, and change the temporary password."
+        ),
+    }
+    rejected_mutations: dict[str, bool] = {}
+    for name, mutation in unsafe_first_runs.items():
+        try:
+            _assert_supported_first_admin_sequence(mutation, "`http://localhost/setup`")
+        except AssertionError:
+            rejected_mutations[name] = True
+        else:
+            rejected_mutations[name] = False
+    assert all(rejected_mutations.values()), (
+        f"unsupported first-run mutations bypassed the guard: {rejected_mutations}"
+    )
+
+
 def test_host_setup_exposes_release_administrator_blocker(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -858,6 +975,21 @@ def test_host_setup_exposes_release_administrator_blocker(
         text=True,
     ).stdout
     assert command in wrapper_help
+    _assert_fragments_in_order(
+        wrapper_help,
+        (
+            "Mint the one-time first-run bootstrap secret",
+            "open /setup without signing in",
+            "create the administrator profile",
+            "copy the temporary password",
+            "acknowledge the active credential generation",
+            "sign in and change the password",
+        ),
+    )
+    recovery_help = re.sub(r"\s+", " ", wrapper_help[wrapper_help.index(command) :])
+    assert "pre-operational" in recovery_help
+    assert "remove only the named unrelated System Administrator assignment" in recovery_help
+    assert "independent incident/change record" in recovery_help
 
     with pytest.raises(SystemExit) as help_exit:
         setup_cli.main(["--help"])

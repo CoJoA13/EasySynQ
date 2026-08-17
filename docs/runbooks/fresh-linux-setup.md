@@ -171,24 +171,29 @@ A fresh DB boots `setup_state = UNINITIALIZED` — the whole `/api/v1/*` returns
 until the wizard completes. A fresh volume intentionally carries no prior `OPERATIONAL` state.
 
 ```bash
-# create the identity used to activate this fresh instance
-just demo-user
-
-# mint the bootstrap token
+# mint the bootstrap secret; do not create a demo identity first
 docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
   -f infra/compose/compose.dev.yml \
   exec -T api sh -c "cd /app; uv run python -m easysynq_api.cli.setup mint-bootstrap --org DEFAULT"
 ```
 
-Then drive `http://localhost/setup` in the browser: demo Keycloak login → **org profile (short_code
-`ORG_EXAMPLE`**, legal "Example Organization", tz UTC) → WORM-governance verify → backup + **restore-drill PASS**
-→ local-accounts auth verify → **Finalize**. The "Not yet tamper-evident" finalize warning is **expected
-and non-blocking in dev** (the audit-checkpoint anchor is same-host MinIO, not off-host).
+Open `http://localhost/setup` without signing in. Enter the secret and create the first
+administrator profile. EasySynQ creates its sign-in identity; do not create one in Keycloak first.
+Next, copy the shown-once temporary password, then acknowledge the active credential generation. Only
+then sign in and change the temporary password when Keycloak prompts.
 
-## 7. Seed logins (Keycloak persists in PostgreSQL)
+Continue the wizard with **org profile (short_code `ORG_EXAMPLE`**, legal "Example Organization",
+tz UTC) → WORM-governance verify → backup + **restore-drill PASS** → local-accounts auth verify
+→ **Finalize**. The "Not yet tamper-evident" finalize warning is **expected and non-blocking in
+dev** (the audit-checkpoint anchor is same-host MinIO, not off-host).
+
+## 7. Post-bootstrap development fixtures (Keycloak persists in PostgreSQL)
+
+Run these only after first-administrator setup is complete. They are optional development fixtures,
+never a supported first-install identity or credential path.
 
 ```bash
-just demo-user        # idempotently reset demo / Demo-Password-1 (the bootstrap administrator)
+just demo-user        # idempotently reset the post-bootstrap demo / Demo-Password-1 login fixture
 just seed-personas    # priya (Author) · ken (Approver) · mara (Releaser) — the SoD trio
 ```
 

@@ -37,12 +37,14 @@ usage: easysynq <command>
                     Administrator") to a Keycloak subject directly (bypasses the
                     wizard). Idempotent.                                     [S2]
   setup mint-bootstrap [--ttl-hours N]
-                    Mint the one-time first-run bootstrap secret; open /setup,
-                    sign in, and paste it to become the first admin.        [S8a]
+                    Mint the one-time first-run bootstrap secret; open /setup without
+                    signing in, create the administrator profile, copy the temporary
+                    password, acknowledge the active credential generation, then
+                    sign in and change the password.                         [S8a]
   setup release-administrator-blocker --subject <keycloak-subject> [--org CODE]
-                    Host-only pre-operational recovery: remove only the named
-                    unrelated System Administrator assignment. Record an
-                    independent incident/change record.                 [ADR 5]
+                    Host-only pre-operational recovery: remove only the named unrelated
+                    System Administrator assignment. Record an independent
+                    incident/change record.                              [ADR 5]
   seed-personas --author <sub> --approver <sub> --releaser <sub>
                     Dev fixture: SoD-correct Priya(author)/Ken(approver)/Mara
                     (releaser) grants for the full lifecycle. Idempotent.

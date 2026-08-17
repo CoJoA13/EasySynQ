@@ -131,10 +131,11 @@ file rather than assuming it was regenerated.
 ./scripts/easysynq setup mint-bootstrap
 ```
 
-The secret is shown once and expires. Open `https://<host>/setup`, enter the secret, and create the
-first **System Administrator** in the browser. EasySynQ creates the first sign-in identity; the
-operator does not visit Keycloak or handle an identity subject. Save the shown-once temporary
-password, continue to sign in, and change the password when prompted. SMTP is not required.
+The secret is shown once and expires. Open `https://<host>/setup` without signing in, enter the
+secret, and create the first administrator profile with the **System Administrator** role. EasySynQ
+creates the sign-in identity; the operator does not visit Keycloak or handle an identity subject.
+Next, copy the shown-once temporary password and acknowledge the active credential generation. Only
+then sign in and change the temporary password when prompted. SMTP is not required.
 
 ### 4.4 Complete the six setup screens
 
@@ -254,13 +255,33 @@ Then run:
 ```bash
 just setup
 just up s
-just demo-user
+```
+
+### 8.1 Create the first administrator
+
+Mint the setup secret from the running stack:
+
+```bash
 ./scripts/easysynq setup mint-bootstrap
 ```
 
-Review the developer runbook's DB-role, Keycloak DB, and audit-sink requirements too. Open
-`http://localhost/setup`, complete the setup gates using the demo identity, then use `demo` /
-`Demo-Password-1`.
+Open `http://localhost/setup` without signing in. Enter the secret and create the first
+administrator profile. EasySynQ creates the sign-in identity; do not create a fixed or demo account
+first. Next, copy the shown-once temporary password and acknowledge the active credential generation.
+Only then sign in and change the temporary password when prompted, and complete the remaining setup
+gates through `OPERATIONAL`.
+
+Review the developer runbook's DB-role, Keycloak DB, and audit-sink requirements too.
+
+### 8.2 Optional post-bootstrap development fixtures
+
+Run these only after first-administrator setup is complete. They are fixed local development
+fixtures, not supported first-install identities or credentials:
+
+```bash
+just demo-user       # demo / Demo-Password-1
+just seed-personas   # priya / ken / mara separation-of-duties fixtures
+```
 
 `just seed-personas` additionally creates the development author/approver/releaser identities needed
 to demonstrate separation of duties.
