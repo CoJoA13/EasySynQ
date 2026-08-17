@@ -363,7 +363,7 @@ the final exact-set authority/OpenAPI guard rejects those mutations.
 | `job-mswlg4ft-b05efb99` | `bash scripts/test-first-admin-keycloak.sh` | Exit 0; 1/1 live Chromium test; 2.6s; one worker; zero retries; exact project `easysynq-first-admin-32b1b175ba35` removed its containers, volumes, network, and six local images. |
 
 The API unit/integration jobs were rerun after the final runtime negative-counter fix. Contract, Vitest,
-synthetic Chromium, and narrow live evidence remain accepted final-tree evidence because commits
+synthetic Chromium, and narrow live evidence were accepted for that tree because commits
 `4ea6e78c5edf52a2666a6bee1130ace34ab19b56` and
 `1f6f12def9ddb539711ceb4b382e3e28f4c1f87e` changed no API/OpenAPI response, contract, web/browser,
 provider, installation, or exercised live-flow surface. No failed, cancelled, partial, unavailable,
@@ -382,6 +382,16 @@ deprecations in 548.61s; durable Vitest job `job-msx9sx1s-0e95eae6` exited 0 wit
 retries. These runs cover the safe host-recovery and split collision copy plus trusted-remint
 admission-budget reset/rollback; API unit, contract, migration, hash, CI-topology, and residual evidence
 remain unchanged.
+
+### Final responsive-browser reconciliation — 2026-08-17
+
+The later responsive first-administrator corrections do change the web/browser surface, so the earlier
+synthetic Chromium job is historical rather than final-tree proof for that change. After
+`d091ee58aa05b5590f42fe395e22062137ccb38e`, the final local
+`npm --prefix apps/web run test:browser` cohort passed 40/40 Chromium tests with one worker and zero
+retries. Replacement CI run `32040002549` completed all fifteen expanded checks successfully, including
+`web browser (Chromium)` and aggregate `web`, corroborating the final corrected tree. API unit, contract,
+migration, hash, CI-topology, and residual evidence remain unchanged.
 
 ### Static, contract, topology, and review verdict
 

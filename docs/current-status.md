@@ -116,8 +116,12 @@ The populated migration gate passed 1/1 and independently exercised `0087 -> 008
 `0088 -> 0087 -> 0088`, with the registered PostgreSQL Testcontainers deprecation. Final
 recovery/install cohorts passed 8 recovery integrations, 3 CLI/wrapper dispatch tests, and 15
 supported-install/first-admin guards.
-The complete synthetic browser job `job-mswm9e51-7a34ed2b` remained valid because the later fixes changed
-no web/browser surface and passed 40/40 Chromium tests in 16.4 seconds with one worker and zero retries.
+The earlier synthetic browser job `job-mswm9e51-7a34ed2b` passed 40/40 Chromium tests in 16.4 seconds
+with one worker and zero retries for its then-tested tree. After responsive first-administrator corrections
+through `d091ee58aa05b5590f42fe395e22062137ccb38e`, the final local
+`npm --prefix apps/web run test:browser` cohort again passed 40/40 Chromium tests with one worker and zero
+retries. CI run `32040002549` corroborated that final tree: all fifteen expanded checks, including
+`web browser (Chromium)` and aggregate `web`, completed successfully.
 
 The separate narrow live job `job-mswlg4ft-b05efb99` remained valid because the later fixes did not change
 its exercised identity/provider flow. It passed 1/1 Chromium test in 2.6 seconds with one worker and zero

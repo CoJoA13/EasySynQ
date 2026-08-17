@@ -117,7 +117,7 @@ large-chunk advisory. Executable workflow parsing remains eleven jobs and fiftee
 Fresh post-review durable backend suites passed 1,835 API unit tests with one expected release-ceremony
 image-digest skip (`job-mswq4zse-b59b5405`, 30.33s) and 1,162 integration tests with two expected
 shared-database skips, 284 deselected, and three registered Testcontainers deprecations
-(`job-mswq94op-73d090ea`, 828.02s). Unaffected final-tree evidence remains valid: all 284 published
+(`job-mswq94op-73d090ea`, 828.02s). The then-current final-tree evidence included all 284 published
 response schemas (`job-mswlweou-9b17e09e`), all 267 Vitest files/1,944 tests
 (`job-mswm2hb9-92fba980`), and 40/40 synthetic Chromium tests with one worker and zero retries
 (`job-mswm9e51-7a34ed2b`). The narrow live job `job-mswlg4ft-b05efb99` passed 1/1 Chromium test in 2.6
@@ -132,6 +132,11 @@ three registered Testcontainers deprecations in 548.61s; Vitest job `job-msx9sx1
 Chromium cohort passed 40/40 with one worker and zero retries. Those fresh runs cover the bounded host
 recovery/collision guidance and trusted-remint admission-budget reset/rollback corrections; API unit,
 contract, migration, hash, CI-topology, and residual evidence remain unchanged.
+
+After the responsive first-administrator correction `d091ee58aa05b5590f42fe395e22062137ccb38e`, the final
+local `npm --prefix apps/web run test:browser` cohort passed 40/40 Chromium tests with one worker and zero
+retries. Replacement CI run `32040002549` completed all fifteen expanded checks successfully, including
+`web browser (Chromium)` and aggregate `web`; this is the final-tree browser evidence for that correction.
 
 Whole-branch review produced focused correction rounds before the final clean verdict. The initial
 implementation review closed backup-helper, rate-limit concurrency/TTL, reset-authority, expired replay,
