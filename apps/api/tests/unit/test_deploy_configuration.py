@@ -94,15 +94,9 @@ def _assert_supported_first_admin_sequence(content: str, setup_url: str) -> None
     setup_position = normalized.find(setup_instruction)
     assert setup_position >= 0, f"missing public setup instruction: {setup_instruction}"
     before_setup = normalized[:setup_position]
-    sign_in_directive = re.compile(
-        r"(?:^|[.!?]\s+)"
-        r"(?:(?:first|next|then|now),?\s+)?"
-        r"(?:(?:you|the operator)\s+(?:must|should|need(?:s)? to)\s+)?"
-        r"(?:sign|log)\s+in\b",
-        re.IGNORECASE,
-    )
-    assert sign_in_directive.search(before_setup) is None, (
-        "supported first-admin setup must not direct sign-in before public /setup"
+    pre_setup_sign_in = re.compile(r"\b(?:sign[\s-]+in|log[\s-]+in|login)\b", re.IGNORECASE)
+    assert pre_setup_sign_in.search(before_setup) is None, (
+        "supported first-admin section must not mention sign-in before public /setup"
     )
     _assert_fragments_in_order(
         content,
@@ -959,6 +953,11 @@ def test_installation_guide_first_runs_never_sign_in_with_a_demo_identity() -> N
         "demo-command": f"Run just demo-user first. {valid_sequence}",
         "fixed-demo-credential": f"Use demo / Demo-Password-1. {valid_sequence}",
         "sign-in-before-setup": f"Sign in first. {valid_sequence}",
+        "reviewer-before-please-sign-in": (f"Before setup, please sign in. {valid_sequence}"),
+        "reviewer-to-continue-sign-in": f"To continue, sign in. {valid_sequence}",
+        "hyphenated-sign-in": f"Complete sign-in first. {valid_sequence}",
+        "log-in-before-setup": f"Before setup, log in. {valid_sequence}",
+        "login-before-setup": f"Use the login first. {valid_sequence}",
     }
     rejected_mutations: dict[str, bool] = {}
     for name, mutation in unsafe_first_runs.items():
