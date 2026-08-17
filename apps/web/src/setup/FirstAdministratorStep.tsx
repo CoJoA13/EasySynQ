@@ -70,6 +70,26 @@ function provisionError(error: unknown): PresentedError {
         };
       }
     }
+    if (error.code === "bootstrap_administrator_exists") {
+      return {
+        heading: "Administrator was not created",
+        message:
+          "An existing System Administrator assignment blocks public setup. Run the documented host release-administrator-blocker recovery, then try again.",
+      };
+    }
+    if (error.code === "user_exists") {
+      return {
+        heading: "Administrator was not created",
+        message:
+          "The bound username belongs to an unrelated identity. Changing the username here cannot recover this claim. Ask a host identity administrator to resolve the collision.",
+      };
+    }
+    if (error.code === "keycloak_email_exists") {
+      return {
+        heading: "Administrator was not created",
+        message: "That email belongs to another identity. Keep the bound username and enter another email.",
+      };
+    }
     if (error.code === "bootstrap_expired") {
       return {
         heading: "Administrator was not created",
@@ -90,13 +110,6 @@ function provisionError(error: unknown): PresentedError {
       return {
         heading: "Administrator was not created",
         message: "Check the administrator details and try again.",
-      };
-    }
-    if (error.code === "user_exists" || error.code === "keycloak_email_exists") {
-      return {
-        heading: "Administrator was not created",
-        message:
-          "That username or email belongs to another identity. Use a different value and try again.",
       };
     }
     if (
@@ -411,11 +424,14 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
                     loading={pending === "reissue"}
                     disabled={pending !== null}
                     aria-busy={pending === "reissue" || undefined}
-                    style={{ minHeight: 44 }}
+                    aria-label={
+                      reissueRecovery === "retry" ? undefined : "Issue a new temporary password"
+                    }
+                    style={{ minHeight: 44, maxWidth: "100%" }}
                   >
                     {reissueRecovery === "retry"
                       ? "Retry issuing temporary password"
-                      : "Issue a new temporary password"}
+                      : "Issue new password"}
                   </Button>
                 </Group>
               )}

@@ -477,6 +477,8 @@ test("bootstrap_credential_superseded reissues the bound normalized profile and 
   ).toHaveTextContent("no longer current");
   expect(screen.getByRole("button", { name: "Copy temporary password" })).toBeDisabled();
   const reissue = screen.getByRole("button", { name: "Issue a new temporary password" });
+  expect(reissue).toHaveTextContent(/^Issue new password$/);
+  expect(reissue).toHaveStyle({ minHeight: "44px", maxWidth: "100%" });
   await waitFor(() => expect(reissue).toHaveFocus());
   await user.click(reissue);
   await waitFor(() => expect(provisionBodies).toHaveLength(2));
@@ -816,9 +818,19 @@ test.each([
   ],
   ["validation_error", 422, "Check the administrator details and try again."],
   [
+    "bootstrap_administrator_exists",
+    409,
+    "An existing System Administrator assignment blocks public setup. Run the documented host release-administrator-blocker recovery, then try again.",
+  ],
+  [
     "user_exists",
     409,
-    "That username or email belongs to another identity. Use a different value and try again.",
+    "The bound username belongs to an unrelated identity. Changing the username here cannot recover this claim. Ask a host identity administrator to resolve the collision.",
+  ],
+  [
+    "keycloak_email_exists",
+    409,
+    "That email belongs to another identity. Keep the bound username and enter another email.",
   ],
   [
     "keycloak_unavailable",
@@ -850,6 +862,8 @@ test.each([
     const heading = await screen.findByRole("heading", { name: "Administrator was not created" });
     await waitFor(() => expect(heading).toHaveFocus());
     expect(screen.getByText(message)).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(`unsafe title ${leakedSubject}`);
+    expect(document.body).not.toHaveTextContent(`unsafe detail ${leakedSubject}`);
     expect(document.body).not.toHaveTextContent(leakedSubject);
     if (code === "keycloak_unavailable") expect(await axe(view.container)).toHaveNoViolations();
   },
