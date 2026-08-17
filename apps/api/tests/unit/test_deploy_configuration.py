@@ -840,6 +840,10 @@ def test_current_install_docs_keep_first_administrator_creation_in_app() -> None
         }
     )
 
+    setup_and_onboarding = _read("docs/08-setup-and-onboarding.md")
+    assert "current setup secret" in setup_and_onboarding
+    assert "bootstrap_credential_superseded" in setup_and_onboarding
+
 
 def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     compose = _read("infra/compose/compose.yml")

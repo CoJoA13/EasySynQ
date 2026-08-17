@@ -3,6 +3,8 @@ from pathlib import Path
 import yaml
 
 OPENAPI = Path(__file__).resolve().parents[4] / "packages/contracts/openapi.yaml"
+DECISIONS_REGISTER = OPENAPI.parents[2] / "docs/decisions-register.md"
+API_DESIGN = OPENAPI.parents[2] / "docs/15-api-design.md"
 
 
 def test_first_administrator_replaces_the_authenticated_bootstrap_contract() -> None:
@@ -105,3 +107,12 @@ def test_first_administrator_response_never_publishes_keycloak_identity() -> Non
         schemas["FirstAdministratorProblem"]["properties"]["code"]["enum"]
         == schemas["Problem"]["properties"]["code"]["enum"]
     )
+
+
+def test_current_first_administrator_authority_names_the_hardened_recovery_boundary() -> None:
+    decisions_register = DECISIONS_REGISTER.read_text(encoding="utf-8")
+    api_design = API_DESIGN.read_text(encoding="utf-8")
+
+    assert "active shown credential generation" in decisions_register
+    assert "bootstrap_administrator_exists" in api_design
+    assert "bound first administrator" in api_design

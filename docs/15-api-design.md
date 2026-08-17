@@ -847,8 +847,8 @@ current gate. Rows explicitly labeled Future below are not mounted.
 |---|---|---|
 | GET / PATCH | `/admin/config` | **S-rec-3 (as built):** post-OPERATIONAL org toggles on `system_config` (today `capture_pre_release_templates`, doc 06 §4.2). Gated on the SYSTEM-domain `config.update` (admin-only; R35); audited `CONFIG_UPDATED` (object_type `config`). |
 | GET | `/setup/state` | Public minimal read of `system_config.setup_state`; the SPA uses it to choose wizard vs shell. |
-| POST | `/setup/administrator` | Public only while setup is `UNINITIALIZED`. A valid one-time setup secret creates or recovers the single bound first administrator; the response contains the administrator projection plus a generated `temporary_password` with `password_delivery: shown_once`. It never includes a Keycloak subject. Invalid/expired proof is 403; bound, advanced, not-ready, or collision state is 409; Keycloak failure is 422/502/503; attempts are rate-limited. |
-| POST | `/setup/administrator/acknowledge` | Public setup-secret proof acknowledging receipt of the shown-once temporary password. It consumes the secret and advances setup to `IN_SETUP`; it never returns a password. |
+| POST | `/setup/administrator` | Public only while setup is `UNINITIALIZED`. Body: `{secret, username, display_name, email?, first_name?, last_name?}`. A valid one-time setup secret creates (`201`) or recovers/reissues (`200`) the single bound first administrator. Success returns `{administrator, temporary_password, credential_receipt, password_delivery: "shown_once"}`; neither the projection nor any problem contains a Keycloak subject. Corrected optional profile values apply only to the bound first administrator, and the canonical bound username cannot change. |
+| POST | `/setup/administrator/acknowledge` | Public body: `{secret, credential_receipt}`. It acknowledges the active shown credential generation, consumes the secret, and advances setup to `IN_SETUP`, returning `{setup_state: "IN_SETUP", admin_user_id}` without a password or receipt. The matching already-consumed secret/receipt replay is idempotent, including after expiry. |
 | GET | `/setup` | Sensitive setup/gate detail, backed by `organization`, `system_config`, `storage_config`, and `backup_policy`; gated on `config.read`. |
 | PATCH | `/setup/org-profile` | Requires `config.update`; updates `organization.legal_name`, `short_code`, and `timezone`. There is no profile table. |
 | POST | `/setup/verify-storage` | Requires `storage.manage`; runs the G-B WORM probe and persists `storage_config.worm_verified_at`/`object_lock_mode`. Bucket/endpoint values remain deployment configuration. |
@@ -866,6 +866,28 @@ First-administrator audit events are truthful system-actor events because no use
 `ADMIN_BOOTSTRAPPED` when the EasySynQ user and role commit, `USER_CREDENTIAL_ISSUED` after
 Keycloak accepts the temporary password, and `BOOTSTRAP_CONSUMED` on acknowledgement. None records
 the setup secret, temporary password, claim marker, or Keycloak subject.
+
+**First-administrator public recovery and errors.** The supported flow stays in `/setup`; an operator
+does not open the Keycloak administration console. Operators do not handle an identity subject.
+
+- `403 bootstrap_invalid` covers missing, invalid, and expired unconsumed setup proofs without
+  distinguishing them. While the password remains current, the operator can enter a reminted current setup
+  secret and retry acknowledgment with the same receipt; this does not reset or discard the password.
+- `409 bootstrap_credential_superseded` consumes nothing and identifies only that the submitted receipt is
+  not the active password generation. The UI marks the shown password stale and offers an explicit reissue;
+  the successful response atomically replaces the visible password and receipt.
+- `409 bootstrap_administrator_exists` refuses claim creation, profile persistence, credential issuance,
+  and acknowledgment when any System Administrator other than the claim-linked user exists. Public setup
+  never adopts or resets that unrelated identity; recovery is the host break-glass procedure.
+- `409 bootstrap_identity_bound` reports the canonical username already bound to the claim;
+  `bootstrap_not_ready` covers incomplete claim, user, role, or credential state; and
+  `setup_already_complete` covers a valid proof presented after setup advanced.
+- A redacted `422 validation_error` permits corrected profile input. A definitive rejection before any
+  identity or application state exists releases the unowned claim; once the identity is bound, retries may
+  reconcile only its display name, email, first name, and last name and retain the claim on failure.
+- `429 rate_limited` is the bounded failed-proof limit. `502 keycloak_unavailable` and the documented `503`
+  dependency/configuration failures are retryable without selecting a second administrator. Neither a
+  problem response nor an acknowledgment retry response reveals the current password or credential receipt.
 
 ### 8.18 Backup setup and restore drill (`/setup/*`)
 

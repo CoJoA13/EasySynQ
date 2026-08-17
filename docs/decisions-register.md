@@ -2002,6 +2002,23 @@ The owner selected one no-SMTP browser flow for every fresh installation.
    secrets. Existing `OPERATIONAL` and legitimately `IN_SETUP` installations do not re-enter
    bootstrap and lose no identity data.
 
+**Clarification (S-first-admin-review-hardening, 2026-08-16).** Rule 4 acknowledges the **active shown credential generation**,
+not merely a username or any password previously issued for it. Each successful
+temporary-password issue rotates a high-entropy credential receipt; only its SHA-256 digest is persisted,
+and acknowledgment requires both the current setup secret and the receipt returned with the active shown
+credential generation. Reminting an expired setup secret does not itself reset or discard the current
+password: the reminted proof may acknowledge that same generation. A stale receipt returns `409
+bootstrap_credential_superseded`, consumes nothing, and requires an explicit reissue, which invalidates
+the previous password and receipt.
+
+After a valid setup proof is established, public bootstrap continues only when no System Administrator
+assignment exists other than the user linked to the active claim; otherwise it refuses with `409
+bootstrap_administrator_exists` and neither adopts nor modifies the unrelated administrator. A retry may
+correct display name, email, first name, or last name only for the exact bound first administrator, while
+the canonical bound username remains fixed. A definitive create-time validation rejection may release a
+claim only while no identity, linked user, or issued credential is owned by it; every ambiguous or
+identity-owning state retains the claim and the non-deletion rule.
+
 **Compatibility.** R65 permits replacing the provisional authenticated `POST /setup/bootstrap`
 contract in place. The replacement, every repository consumer, generated contract, installer,
 fixture, and current manual must migrate atomically; no compatibility shim is required.

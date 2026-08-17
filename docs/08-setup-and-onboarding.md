@@ -129,8 +129,23 @@ flowchart TD
 **Current bootstrap boundary.** While the instance is `UNINITIALIZED`, `/setup` presents the public
 first-administrator form. A valid setup secret is the only pre-authentication authority: EasySynQ
 creates the first Keycloak identity, assigns the System Administrator role, and shows a generated
-temporary password once. The operator saves it, acknowledges it, signs in, and changes it when
-prompted. The normal path never opens Keycloak, handles an identity subject, or requires SMTP.
+temporary password once. The browser also receives a volatile credential receipt for that password
+generation and sends it with acknowledgment; the receipt is not shown as an operator task or kept in
+browser storage. The operator saves the password, acknowledges it, signs in, and changes it when prompted.
+The normal path never opens the Keycloak administration console, handles an identity subject, or requires
+SMTP.
+
+**Current credential recovery.** An ordinary acknowledgment or network failure leaves the password
+visible for **Retry acknowledgment**. If the setup proof has expired or been replaced, entering the
+reminted **current setup secret** acknowledges the same still-current password and receipt without
+discarding the current password or issuing another one. A `409 bootstrap_credential_superseded` response
+marks the displayed password as no longer current and exposes **Issue a new temporary password**; only a
+successful reissue replaces the visible password and receipt. A `409 bootstrap_administrator_exists`
+response means an unrelated System Administrator assignment already exists, so the public flow refuses to
+claim, update, reset, grant, or acknowledge an identity; follow the documented host break-glass procedure.
+Display name, email, first name, and last name may be corrected on retry only for the bound first
+administrator. Once a username is bound it cannot be replaced, and a validation failure may allow a new
+identity only when no identity or application state was created.
 
 **Cross-cutting wizard behaviors (apply to every screen):**
 
@@ -161,18 +176,19 @@ sequenceDiagram
     Avery->>Web: secret + identity profile
     Web->>PG: compare hash, check TTL & durable claim
     PG-->>Web: create/recover identity; show temporary password once
-    Avery->>Web: acknowledge saved password
-    Note over Web,PG: Secret marked CONSUMED on acknowledgement.<br/>Brute-force throttled; TTL expiry forces re-issue via CLI.
+    Avery->>Web: acknowledge saved password + active receipt
+    Note over Web,PG: Secret marked CONSUMED on acknowledgement.<br/>Brute-force throttled; TTL expiry requires a current setup secret.
 ```
 
 | Captures | Validates | Notes |
 |---|---|---|
-| Bootstrap secret + administrator profile | Hash match; not expired (TTL, default 24h); username trimmed and canonicalized to lowercase before one durable claim; rate-limited | Secret is **never** stored in plaintext; only a salted hash + TTL live in PG. A successful provision returns a temporary password once; acknowledgement consumes the secret. |
+| Bootstrap secret + administrator profile | Hash match; not expired (TTL, default 24h); username trimmed and canonicalized to lowercase before one durable claim; rate-limited | Secret is **never** stored in plaintext; only a salted hash + TTL live in PG. A successful provision returns a temporary password and volatile credential receipt once; acknowledgment of that active generation consumes the secret. |
 | (display only) Instance version, build digest, sizing profile (S/M; L reserved), host health summary | Read-only; confirms the operator is on the right instance | Surfaces the aggregate `/readyz` result so Avery starts from a known-good baseline. |
 
 **Outcome.** The first administrator is provisioned in `INVITED` state. The temporary password is
-shown once; acknowledgement advances the instance to `IN_SETUP` and is audit-logged as
-`BOOTSTRAP_CONSUMED`.
+shown once; acknowledgment sends `{secret, credential_receipt}`, advances the instance to `IN_SETUP`,
+and is audit-logged as `BOOTSTRAP_CONSUMED`. A matching already-consumed replay is idempotent, including
+after that same secret expires; it never returns a password or receipt.
 
 ---
 
@@ -188,13 +204,17 @@ shown once; acknowledgement advances the instance to `IN_SETUP` and is audit-log
 | Acknowledge the **Admin-Outside-the-QMS notice** | Required checkbox: "I understand this account holds full SYSTEM permissions and does NOT author or approve QMS content by default." | Makes the separation-of-duties principle an explicit, audited acceptance, not fine print. |
 
 **On completion:** the `System Administrator` permission bundle (seeded, system-scope, **no QMS
-content capabilities**) is assigned. After password acknowledgement the **bootstrap secret is
-permanently consumed**, the instance transitions to `IN_SETUP`, and the browser starts real sign-in.
+content capabilities**) is assigned. After password acknowledgment for the active shown credential
+generation, the **bootstrap secret is permanently consumed**, the instance transitions to `IN_SETUP`,
+and the browser starts real sign-in.
 The auditable sequence includes `BOOTSTRAP_IDENTITY_CLAIMED`, `USER_CREATED`,
 `ADMIN_BOOTSTRAPPED`, `USER_CREDENTIAL_ISSUED`, and `BOOTSTRAP_CONSUMED`; the first-admin events
 use the system actor because the administrator has not authenticated yet.
 
-> **Multiple admins.** Only one is required to proceed, but Step 1 offers an inline "Add a second administrator now (recommended)" so the install is not single-admin fragile. Additional admins can also be added later in §9.
+> **Multiple admins.** The public first-administrator step creates exactly one administrator and refuses
+> to continue if an unrelated System Administrator assignment already exists. After sign-in, create any
+> additional administrators through Administration → Users and the separately guarded role-assignment
+> flow (§11 and §15.2).
 
 ---
 
