@@ -931,7 +931,7 @@ requires. Run the smallest ordinary-user case first, then its full file:
 
 ```bash
 cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
-  tests/integration/test_users_provision.py -k provision_user_success -q
+  tests/integration/test_users_provision.py::test_provision_creates_the_account_the_row_and_the_credential -q
 cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
   tests/integration/test_users_provision.py -q
 ```
