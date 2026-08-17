@@ -7908,6 +7908,7 @@ export interface operations {
                 };
             };
             403: components["responses"]["ProblemResponse"];
+            409: components["responses"]["ProblemResponse"];
         };
     };
     provisionFirstAdministrator: {
@@ -8014,6 +8015,7 @@ export interface operations {
                 };
             };
             403: components["responses"]["ProblemResponse"];
+            409: components["responses"]["ProblemResponse"];
             422: components["responses"]["ProblemResponse"];
         };
     };
@@ -8051,6 +8053,7 @@ export interface operations {
                 };
             };
             403: components["responses"]["ProblemResponse"];
+            409: components["responses"]["ProblemResponse"];
             /** @description The vault bucket does not enforce WORM (worm_not_enforced). */
             422: {
                 headers: {
@@ -8105,6 +8108,7 @@ export interface operations {
                 };
             };
             403: components["responses"]["ProblemResponse"];
+            409: components["responses"]["ProblemResponse"];
             /** @description Invalid/non-absolute/root-equivalent/URI-looking destination (backup_destination_invalid), failed preliminary API-context probe (backup_destination_unreachable), invalid schedule or retention, or wal_pitr_enabled=true (wal_pitr_unavailable). */
             422: {
                 headers: {
@@ -8175,6 +8179,7 @@ export interface operations {
                 };
             };
             403: components["responses"]["ProblemResponse"];
+            409: components["responses"]["ProblemResponse"];
             422: components["responses"]["ProblemResponse"];
         };
     };

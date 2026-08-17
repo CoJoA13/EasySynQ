@@ -623,7 +623,7 @@ async def test_setup_mutation_rechecks_fresh_state_under_lock_after_probe(
 
     assert retained_configs
     assert response.status_code == 409, response.text
-    assert response.json()["code"] == "setup_incomplete"
+    assert response.json()["code"] == "setup_already_complete"
     async with get_sessionmaker()() as session:
         assert await session.scalar(select(StorageConfig.id)) is None
         assert (
@@ -2918,14 +2918,20 @@ async def test_finalize_blocked_then_operational_lifts_latch(
     assert done.json()["setup_state"] == "OPERATIONAL"
     assert done.json()["finalized_at"]
 
+    replay = await app_client.post("/api/v1/setup/finalize", headers=h)
+    assert replay.status_code == 409
+    assert replay.json()["code"] == "setup_already_complete"
+
     async with get_sessionmaker()() as s:
-        finalized = await s.scalar(
-            select(AuditEvent.id).where(
-                AuditEvent.event_type == EventType.SETUP_FINALIZED,
-                AuditEvent.actor_id == admin_id,
+        finalized = (
+            await s.scalars(
+                select(AuditEvent.id).where(
+                    AuditEvent.event_type == EventType.SETUP_FINALIZED,
+                    AuditEvent.actor_id == admin_id,
+                )
             )
-        )
-    assert finalized is not None
+        ).all()
+    assert len(finalized) == 1
 
     # The latch has lifted: the QMS surface answers normally (200 filtered list), not 423.
     lifted = await app_client.get("/api/v1/documents", headers=h)

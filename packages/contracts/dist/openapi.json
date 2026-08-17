@@ -253,6 +253,9 @@
           },
           "403": {
             "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
           }
         }
       }
@@ -410,6 +413,9 @@
           "403": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "422": {
             "$ref": "#/components/responses/ProblemResponse"
           }
@@ -474,6 +480,9 @@
             }
           },
           "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {
@@ -579,6 +588,9 @@
             }
           },
           "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {
@@ -687,6 +699,9 @@
             }
           },
           "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {

@@ -305,6 +305,12 @@ async def _load_config(
 
 def _require_acknowledged_setup(cfg: SystemConfig) -> None:
     """Deny every authenticated setup seam until the credential receipt advanced the latch."""
+    if cfg.setup_state is SetupState.OPERATIONAL:
+        raise ProblemException(
+            status=409,
+            code="setup_already_complete",
+            title="Setup is already complete",
+        )
     if cfg.setup_state is not SetupState.IN_SETUP or cfg.bootstrap_consumed_at is None:
         raise ProblemException(
             status=409,
