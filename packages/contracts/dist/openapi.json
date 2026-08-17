@@ -257,63 +257,124 @@
         }
       }
     },
-    "/setup/bootstrap": {
+    "/setup/administrator": {
       "post": {
         "tags": [
           "setup"
         ],
-        "operationId": "bootstrapSetup",
-        "summary": "Consume the one-time install secret and grant the caller System Administrator (the bootstrap-of-trust). Authenticated, but outside the PEP — the secret authorizes it.",
+        "operationId": "provisionFirstAdministrator",
+        "summary": "Provision or recover the first administrator using the one-time setup secret.",
+        "security": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "secret"
-                ],
-                "properties": {
-                  "secret": {
-                    "type": "string"
-                  }
-                }
+                "$ref": "#/components/schemas/FirstAdministratorRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "The caller is now System Administrator; setup_state advanced to IN_SETUP.",
+            "description": "Recovery or temporary-password reissue for the bound first administrator.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "setup_state",
-                    "admin_user_id"
-                  ],
-                  "properties": {
-                    "setup_state": {
-                      "type": "string"
-                    },
-                    "admin_user_id": {
-                      "type": "string",
-                      "format": "uuid"
-                    }
-                  }
+                  "$ref": "#/components/schemas/FirstAdministratorProvisioned"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "First administrator created and a temporary password shown once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirstAdministratorProvisioned"
                 }
               }
             }
           },
           "403": {
-            "$ref": "#/components/responses/ProblemResponse"
+            "description": "Missing, expired, or invalid bootstrap secret; all return bootstrap_invalid.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           },
           "409": {
-            "$ref": "#/components/responses/ProblemResponse"
+            "description": "Setup advanced, identity bound/not ready, an unrelated administrator exists, or a username collision occurred.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
+          },
+          "422": {
+            "description": "Validation failure or Keycloak rejection.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           },
           "429": {
-            "$ref": "#/components/responses/ProblemResponse"
+            "description": "Bootstrap rate limit exceeded.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
+          },
+          "502": {
+            "description": "Keycloak unavailable.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
+          },
+          "503": {
+            "description": "Keycloak admin configuration is missing, bootstrap rate limiting is unavailable, or required bootstrap state persistence failed.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
+          }
+        }
+      }
+    },
+    "/setup/administrator/acknowledge": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "operationId": "acknowledgeFirstAdministrator",
+        "summary": "Acknowledge receipt of the first administrator temporary password.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BootstrapAcknowledgeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bootstrap consumed and setup advanced to IN_SETUP, or idempotent success for a matching already-consumed secret, including after expiry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootstrapAcknowledgeResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or invalid bootstrap secret, or an expired unconsumed bootstrap secret; all return bootstrap_invalid.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
+          },
+          "409": {
+            "description": "Setup advanced, identity not ready, an unrelated administrator exists, or the credential generation was superseded.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
+          },
+          "422": {
+            "description": "Validation failure or Keycloak rejection.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
+          },
+          "429": {
+            "description": "Bootstrap rate limit exceeded.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
+          },
+          "502": {
+            "description": "Keycloak unavailable.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
+          },
+          "503": {
+            "description": "Bootstrap rate limiting is unavailable.",
+            "$ref": "#/components/responses/FirstAdministratorProblemResponse"
           }
         }
       }
@@ -1035,7 +1096,8 @@
                 ],
                 "properties": {
                   "username": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Trimmed and canonicalized to lowercase before Keycloak provisioning."
                   },
                   "display_name": {
                     "type": [
@@ -1231,7 +1293,7 @@
           "users"
         ],
         "operationId": "issueTemporaryPassword",
-        "summary": "Issue a fresh temporary password for a linked user, returned once (S-user-create). Repairs a provision whose credential step failed, and replaces scripts/new-keycloak-user.sh as the password-reset path. Needs user.create; resetting the credential of a user who holds any system-domain permission additionally requires system tier (two-tier guard, R35).",
+        "summary": "Issue a fresh temporary password for a linked user, returned once (S-user-create). Repairs a provision whose credential step failed, and replaces scripts/new-keycloak-user.sh as the password-reset path. Needs user.create; resetting every existing linked user unconditionally requires a system-tier caller in addition (R64), regardless of the target's permissions.",
         "parameters": [
           {
             "name": "user_id",
@@ -1280,7 +1342,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {
-            "description": "two_tier_violation (target holds system-domain permissions; credential reset needs a system-tier caller).",
+            "description": "two_tier_violation (every existing linked user credential reset unconditionally requires a system-tier caller under R64).",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -14026,6 +14088,16 @@
           }
         }
       },
+      "FirstAdministratorProblemResponse": {
+        "description": "A first-administrator setup error, without Keycloak identity details.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/FirstAdministratorProblem"
+            }
+          }
+        }
+      },
       "AuditTransition": {
         "description": "The audit after the FSM transition.",
         "content": {
@@ -14070,6 +14142,161 @@
           "version": {
             "type": "string",
             "example": "0.1.0"
+          }
+        }
+      },
+      "FirstAdministratorRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "secret",
+          "username",
+          "display_name"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "description": "Trimmed and canonicalized to lowercase before the bootstrap claim is bound."
+          },
+          "display_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": ".*\\S.*"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 320
+          },
+          "first_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          },
+          "last_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          }
+        }
+      },
+      "FirstAdministratorSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "email",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INVITED"
+            ]
+          }
+        }
+      },
+      "FirstAdministratorProvisioned": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "administrator",
+          "temporary_password",
+          "credential_receipt",
+          "password_delivery"
+        ],
+        "properties": {
+          "administrator": {
+            "$ref": "#/components/schemas/FirstAdministratorSummary"
+          },
+          "temporary_password": {
+            "type": "string"
+          },
+          "credential_receipt": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "password_delivery": {
+            "type": "string",
+            "enum": [
+              "shown_once"
+            ]
+          }
+        }
+      },
+      "BootstrapAcknowledgeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "secret",
+          "credential_receipt"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "credential_receipt": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          }
+        }
+      },
+      "BootstrapAcknowledgeResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "setup_state",
+          "admin_user_id"
+        ],
+        "properties": {
+          "setup_state": {
+            "type": "string",
+            "enum": [
+              "IN_SETUP"
+            ]
+          },
+          "admin_user_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -14155,9 +14382,13 @@
               "backup_destination_invalid",
               "backup_destination_unreachable",
               "backup_not_configured",
+              "bootstrap_administrator_exists",
               "bootstrap_already_consumed",
+              "bootstrap_credential_superseded",
               "bootstrap_expired",
+              "bootstrap_identity_bound",
               "bootstrap_invalid",
+              "bootstrap_not_ready",
               "capa_already_spawned",
               "capa_approval_in_progress",
               "capa_close_incomplete",
@@ -14291,6 +14522,12 @@
               "null"
             ]
           },
+          "bound_username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "errors": {
             "type": [
               "array",
@@ -14335,6 +14572,211 @@
               "null"
             ],
             "description": "On keycloak_username_exists_unlinked: the existing Keycloak account's subject to link instead of creating a new one."
+          }
+        }
+      },
+      "FirstAdministratorProblem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "ack_obligation_lapsed",
+              "ack_superseded",
+              "already_archived",
+              "already_authorized",
+              "already_disposed",
+              "already_on_hold",
+              "audit_close_blocked",
+              "audit_finding_audit_closed",
+              "auth_unavailable",
+              "authorization_in_progress",
+              "backup_destination_invalid",
+              "backup_destination_unreachable",
+              "backup_not_configured",
+              "bootstrap_administrator_exists",
+              "bootstrap_already_consumed",
+              "bootstrap_credential_superseded",
+              "bootstrap_expired",
+              "bootstrap_identity_bound",
+              "bootstrap_invalid",
+              "bootstrap_not_ready",
+              "capa_already_spawned",
+              "capa_approval_in_progress",
+              "capa_close_incomplete",
+              "capa_not_verified",
+              "capa_terminal",
+              "commit_blocked",
+              "compliance_mode_denies_destroy",
+              "conflict",
+              "create_target_managed_subtype",
+              "create_target_not_new",
+              "dcr_approval_in_progress",
+              "dcr_approver_conflict",
+              "dcr_effectivity_pending",
+              "dcr_impact_not_editable",
+              "dcr_no_approvers",
+              "dcr_not_assessable",
+              "dcr_not_cancellable",
+              "dcr_not_closable",
+              "dcr_not_editable",
+              "dcr_not_implementable",
+              "dcr_not_in_approval",
+              "dcr_not_routable",
+              "dependency_unavailable",
+              "document_not_approved",
+              "dual_control_same_actor",
+              "evidence_frozen",
+              "finding_already_corrected",
+              "finding_not_improvable",
+              "finding_superseded",
+              "impact_not_assessed",
+              "improvement_not_editable",
+              "improvement_transition_invalid",
+              "initiative_not_authorizable",
+              "internal_error",
+              "invalid_audit_transition",
+              "invalid_capa_transition",
+              "invalid_class",
+              "invalid_hour",
+              "invalid_mode",
+              "invalid_quiet_hours",
+              "invalid_state_transition",
+              "invalid_time",
+              "invalid_timezone",
+              "invalid_transition",
+              "keycloak_email_exists",
+              "keycloak_not_configured",
+              "keycloak_unavailable",
+              "keycloak_username_exists_unlinked",
+              "last_admin",
+              "leadership_authorization_required",
+              "legal_hold_active",
+              "lock_conflict",
+              "name_taken",
+              "ncr_already_dispositioned",
+              "no_approved_draft",
+              "no_bootstrap_secret",
+              "no_controlled_rendition",
+              "not_a_leadership_artifact",
+              "not_archived",
+              "not_editable",
+              "not_found",
+              "not_on_hold",
+              "not_open",
+              "obsoletion_blocked",
+              "on_legal_hold",
+              "output_not_actionable",
+              "output_not_improvable",
+              "pack_evidence_destroyed",
+              "pack_unavailable",
+              "permission_denied",
+              "program_archived",
+              "rate_limited",
+              "rendition_pending",
+              "retain_permanent",
+              "review_close_blocked",
+              "review_not_open_to_close",
+              "review_not_tracking",
+              "revision_chain_reconstruction_unsupported",
+              "role_missing",
+              "role_not_seeded",
+              "setup_already_complete",
+              "setup_gates_unsatisfied",
+              "setup_incomplete",
+              "setup_not_initialized",
+              "signing_key_unavailable",
+              "sod_self_disposition",
+              "sod_self_verify",
+              "sod_violation",
+              "source_bytes_in_foreign_bucket",
+              "staged_source_unavailable",
+              "staging_version_required",
+              "step_up_required",
+              "storage_unavailable",
+              "system_default_protected",
+              "system_policy_protected",
+              "target_kind_deferred",
+              "token_expired",
+              "token_invalid",
+              "two_tier_violation",
+              "unauthenticated",
+              "unknown_filter",
+              "upload_identity_mismatch",
+              "use_legal_hold_endpoint",
+              "user_exists",
+              "user_not_linked",
+              "validation_error",
+              "version_already_linked",
+              "version_not_approved",
+              "wal_pitr_unavailable",
+              "worm_destroy_request_open",
+              "worm_lock_unexpired",
+              "worm_not_enforced",
+              "worm_required"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bound_username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       },

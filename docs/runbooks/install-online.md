@@ -60,25 +60,28 @@ not deployed. See doc 03 §7 for sizing.
      exec -T proxy cat /data/caddy/pki/authorities/local/root.crt > easysynq-root-ca.crt
    ```
 
-4. **Create the first sign-in identity, then run the setup wizard** at
-   `https://<host>/setup`. The bootstrap secret grants EasySynQ administration but does not create a
-   Keycloak password. Create or federate the intended administrator identity first; see
-   [Installation Guide §4.3](../manuals/installation-guide.md#43-create-the-first-sign-in-identity).
+4. **Create the first administrator in the setup wizard** at `https://<host>/setup`.
 
-   1. Operator runs `./scripts/easysynq setup mint-bootstrap` → paste the one-time secret to become the first
-      **System Administrator**.
-   2. **Organization** profile (legal name / short code / timezone).
-   3. **Storage** — *Verify storage* (the WORM probe, gate **G-B**). The `documents` bucket MUST be
+   1. Run `./scripts/easysynq setup mint-bootstrap`, then enter its one-time secret, the
+      administrator username, and profile in the browser. EasySynQ creates the first identity; do
+      not visit Keycloak or copy an identity subject.
+   2. Save the shown-once temporary password, continue to sign in, and replace that password when
+      Keycloak requires it. SMTP is not required.
+   3. **Organization** profile (legal name / short code / timezone).
+   4. **Storage** — *Verify storage* (the WORM probe, gate **G-B**). The `documents` bucket MUST be
       object-lock-enabled — see [minio-object-lock-prereq.md](minio-object-lock-prereq.md).
-   4. **Backup** — set a destination, then *Run backup + restore-test drill*; finalize is blocked
+   5. **Backup** — set a destination, then *Run backup + restore-test drill*; finalize is blocked
       until it PASSES (gate **G-C** / AC#5). See [backup-restore.md](backup-restore.md).
-   5. **Authentication** — pick a method + ack MFA, then *Verify authentication* (gate **G-D**).
-   6. **Finalize** → `OPERATIONAL`; the 423 setup latch lifts.
+   6. **Authentication** — pick a method + ack MFA, then *Verify authentication* (gate **G-D**).
+   7. **Finalize** → `OPERATIONAL`; the 423 setup latch lifts.
 
    An **upgrade of a running install** seeds `OPERATIONAL` automatically — no wizard.
 
-5. **Users & Roles** — sign in as System Administrator → `/admin/users` to invite users (paste their
-   Keycloak `sub`; they go `INVITED`→`ACTIVE` on first login), assign seeded roles, enable/disable.
+5. **Users & Roles** — sign in as System Administrator → **Administration → Users** to create later
+   users. `user.create` creates the account; `user.update` edits it; assigning roles separately
+   requires `permission.grant`, and a system-tier guard controls password reset. Each temporary
+   password is shown once and changes at first sign-in. `POST /users` and host subject tools are
+   break-glass/orphan-adoption paths, not the normal install flow.
 
 ## First upgrade from the legacy H2 Keycloak service
 

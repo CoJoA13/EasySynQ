@@ -2173,6 +2173,39 @@ export interface DocumentControlRegister {
   rows: RegisterRow[];
 }
 
+// ---- S-first-admin-provisioning (Task 6): public setup identity bootstrap ----
+
+// POST /api/v1/setup/administrator body. The setup secret is proof for this one public operation;
+// neither it nor the response credential may enter a query/mutation cache or browser storage.
+export interface FirstAdministratorRequest {
+  secret: string;
+  username: string;
+  display_name: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+}
+
+export interface FirstAdministratorSummary {
+  id: string;
+  username: string;
+  display_name: string;
+  email: string | null;
+  status: "INVITED";
+}
+
+export interface FirstAdministratorProvisioned {
+  administrator: FirstAdministratorSummary;
+  temporary_password: string;
+  credential_receipt: string;
+  password_delivery: "shown_once";
+}
+
+export interface BootstrapAcknowledgeResponse {
+  setup_state: "IN_SETUP";
+  admin_user_id: string;
+}
+
 // ---- S-user-create (Task 7): in-app Keycloak user provisioning — pinned to api/users.py
 // (_represent / UserProvision / provision_user's response) ----
 

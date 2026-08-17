@@ -19,6 +19,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 
+from easysynq_api.api import authz as authz_api
 from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.audit_event import AuditEvent
@@ -35,6 +36,7 @@ from easysynq_api.services.authz import (
     gather_grants,
     revoke_removes_last_admin,
 )
+from easysynq_api.services.authz.admin_guard import lock_admin_set
 
 pytestmark = pytest.mark.integration
 
@@ -321,6 +323,78 @@ async def test_per_user_deny_beats_role_allow(
 
 
 # --- two-tier grant guard (R35) ---------------------------------------------------------
+
+
+async def test_system_administrator_assignment_waits_for_admin_set_lock(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _assign_role(subj.admin, "System Administrator")
+    target_id = await _ensure_user_id(subj.sam)
+    headers = _auth(token_factory, subj.admin)
+    roles = (await app_client.get("/api/v1/roles", headers=headers)).json()
+    role_id = next(role["id"] for role in roles if role["name"] == "System Administrator")
+
+    async with get_sessionmaker()() as blocker:
+        org_id = await blocker.scalar(select(Organization.id).order_by(Organization.created_at))
+        assert org_id is not None
+        await lock_admin_set(blocker, org_id)
+
+        attempted = asyncio.Event()
+
+        async def observed_lock(session: object, candidate_org_id: uuid.UUID) -> None:
+            attempted.set()
+            await lock_admin_set(session, candidate_org_id)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(authz_api, "lock_admin_set", observed_lock, raising=False)
+        request = asyncio.create_task(
+            app_client.post(
+                f"/api/v1/users/{target_id}/roles",
+                headers=headers,
+                json={"role_id": role_id},
+            )
+        )
+        lock_attempt = asyncio.create_task(attempted.wait())
+        done, _ = await asyncio.wait(
+            {request, lock_attempt}, timeout=2, return_when=asyncio.FIRST_COMPLETED
+        )
+        assert lock_attempt in done, "admin grant mutated without acquiring the shared lock"
+        assert request.done() is False
+        await blocker.rollback()
+
+    response = await asyncio.wait_for(request, timeout=2)
+    assert response.status_code == 201, response.text
+
+
+async def test_ordinary_role_assignment_does_not_take_admin_set_lock(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _assign_role(subj.admin, "System Administrator")
+    target_id = await _ensure_user_id(subj.sam)
+    headers = _auth(token_factory, subj.admin)
+    roles = (await app_client.get("/api/v1/roles", headers=headers)).json()
+    role_id = next(role["id"] for role in roles if role["name"] == "Author")
+    attempts = 0
+
+    async def observed_lock(session: object, org_id: uuid.UUID) -> None:
+        nonlocal attempts
+        attempts += 1
+        await lock_admin_set(session, org_id)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(authz_api, "lock_admin_set", observed_lock, raising=False)
+    response = await app_client.post(
+        f"/api/v1/users/{target_id}/roles",
+        headers=headers,
+        json={"role_id": role_id},
+    )
+
+    assert response.status_code == 201, response.text
+    assert attempts == 0
 
 
 async def test_two_tier_violation(

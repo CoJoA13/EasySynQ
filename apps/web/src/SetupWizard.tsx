@@ -2,11 +2,9 @@ import {
   Alert,
   Button,
   Checkbox,
-  Code,
   Container,
   Group,
   List,
-  PasswordInput,
   SegmentedControl,
   Stack,
   Stepper,
@@ -17,6 +15,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ApiError, apiGet, apiSend } from "./lib/api";
+import { FirstAdministratorStep } from "./setup/FirstAdministratorStep";
 
 interface SetupDetail {
   setup_state: string;
@@ -50,27 +49,32 @@ const browserTz = (): string => {
 };
 
 // The first-run wizard (S8a–S8c). Shown whenever setup_state != OPERATIONAL. Resumable: the active
-// step is derived from the live setup state + gates (doc 08 §2): bootstrap → org → storage → backup
-// → auth → finalize.
+// step is derived from the public setup state and authenticated gates (doc 08 §2): administrator →
+// org → storage → backup → auth → finalize.
+interface SetupWizardProps {
+  setupState: "UNINITIALIZED" | "IN_SETUP";
+  token: string | null;
+  login: () => Promise<void> | void;
+  onBootstrapAcknowledged: () => Promise<void>;
+  onFinalized: () => Promise<void>;
+}
+
 export function SetupWizard({
+  setupState,
   token,
   login,
+  onBootstrapAcknowledged,
   onFinalized,
-}: {
-  token: string | null;
-  login: () => void;
-  onFinalized: () => Promise<void>;
-}) {
+}: SetupWizardProps) {
   const [testRunning, setTestRunning] = useState(false);
   const detail = useQuery({
     queryKey: ["setup-detail", token],
     queryFn: () => apiGet<SetupDetail>("/api/v1/setup", token),
-    enabled: !!token,
+    enabled: setupState === "IN_SETUP" && token !== null,
     // While the async restore-test drill runs, poll so G-C flips in the UI without a manual refresh.
     refetchInterval: testRunning ? 3000 : false,
   });
 
-  const [secret, setSecret] = useState("");
   const [legalName, setLegalName] = useState("");
   const [shortCode, setShortCode] = useState("");
   const [timezone, setTimezone] = useState(browserTz());
@@ -81,7 +85,6 @@ export function SetupWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const state = detail.data?.setup_state ?? "UNINITIALIZED";
   const orgSet = detail.data?.gates?.["G-E"] ?? false;
   const wormVerified = detail.data?.gates?.["G-B"] ?? false;
   const restorePassed = detail.data?.gates?.["G-C"] ?? false;
@@ -90,7 +93,7 @@ export function SetupWizard({
   const restoreResult = detail.data?.backup?.last_restore_test_result ?? null;
   // Resumable step order (doc 08 R4: org → storage → backup → auth → finalize).
   const active =
-    token && state === "IN_SETUP"
+    token && setupState === "IN_SETUP"
       ? !orgSet
         ? 1
         : !wormVerified
@@ -128,15 +131,6 @@ export function SetupWizard({
       setBusy(false);
     }
   };
-
-  const activate = (): Promise<void> =>
-    run(
-      () => apiSend("POST", "/api/v1/setup/bootstrap", token, { secret }),
-      () => {
-        setSecret("");
-        void detail.refetch();
-      },
-    );
 
   const saveOrg = (): Promise<void> =>
     run(
@@ -208,37 +202,27 @@ export function SetupWizard({
         )}
 
         <Stepper active={active}>
-          <Stepper.Step label="Activate" description="Bootstrap admin">
+          <Stepper.Step label="Administrator" description="Create account">
             <Stack gap="md" mt="md">
-              {!token ? (
-                <>
-                  <Text size="sm">
-                    Sign in with your identity provider, then enter the one-time install secret
-                    (printed by <Code>easysynq setup mint-bootstrap</Code>) to become the first
-                    administrator.
-                  </Text>
-                  <Group>
-                    <Button onClick={login}>Sign in to begin</Button>
-                  </Group>
-                </>
+              {setupState === "UNINITIALIZED" ? (
+                <FirstAdministratorStep onAcknowledged={onBootstrapAcknowledged} />
               ) : (
-                <>
-                  <Text size="sm">
-                    Paste the one-time install secret from{" "}
-                    <Code>easysynq setup mint-bootstrap</Code>. You become the first System
-                    Administrator.
-                  </Text>
-                  <PasswordInput
-                    label="Install secret"
-                    value={secret}
-                    onChange={(e) => setSecret(e.currentTarget.value)}
-                  />
-                  <Group>
-                    <Button onClick={() => void activate()} loading={busy} disabled={!secret}>
-                      Activate
-                    </Button>
-                  </Group>
-                </>
+                <Alert color="blue" aria-live="polite">
+                  <Stack gap="sm">
+                    <Title order={2} size="h3">
+                      Sign in to continue setup
+                    </Title>
+                    <Text size="sm">
+                      The first administrator is ready. Sign in with that account to complete the
+                      remaining setup checks.
+                    </Text>
+                    <Group>
+                      <Button onClick={() => void login()} style={{ minHeight: 44 }}>
+                        Try sign-in again
+                      </Button>
+                    </Group>
+                  </Stack>
+                </Alert>
               )}
             </Stack>
           </Stepper.Step>

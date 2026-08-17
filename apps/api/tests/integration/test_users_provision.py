@@ -1,8 +1,8 @@
 """S-user-create integration proofs — in-app Keycloak provisioning and credential issuance.
 
-No live Keycloak (D1): ``api.users._kc_client`` is monkeypatched to build the real
-``KeycloakProvisioningClient`` over an ``httpx.MockTransport``, so the endpoint exercises its true
-code path against a scripted identity service.
+No live Keycloak (D1): the shared ``identity_provisioning.keycloak_client`` factory is monkeypatched
+to build the real ``KeycloakProvisioningClient`` over an ``httpx.MockTransport``, so the endpoint
+exercises its true code path against a scripted identity service.
 
 Shared-DB discipline: every assertion is scoped to rows this test created, or is a delta. The suite
 shares one session database, so absolute counts are invalid.
@@ -19,6 +19,8 @@ test; and (2) a role grant during provisioning is fully audited, in an order an 
 
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -38,6 +40,8 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.domain.identity.temp_password import MIN_LENGTH
+from easysynq_api.services.authz.admin_guard import lock_admin_set
+from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.services.keycloak_provisioning import KeycloakProvisioningClient
 
 from . import s5_helpers as s5
@@ -46,6 +50,18 @@ from .test_vault import _auth, _ensure_user
 pytestmark = pytest.mark.integration
 
 _ADMIN = "System Administrator"
+_RECONCILED_USER_PROFILE = {
+    "attributes": [
+        {"name": "email"},
+        {"name": "firstName"},
+        {"name": "lastName"},
+        {
+            "name": "easysynqBootstrapClaim",
+            "permissions": {"view": ["admin"], "edit": ["admin"]},
+            "multivalued": False,
+        },
+    ]
+}
 
 # CONFIRMED production bug, found by these two tests (not a test defect) — see the report for full
 # detail. In BOTH handlers' `except Exception: await session.rollback(); logger.warning(...,
@@ -88,11 +104,13 @@ def _install_kc(
     """Script the identity service. ``existing`` makes the username resolve to that subject.
     ``password_status`` scripts the ``reset-password`` leg — a non-204 fails it AFTER the account
     lookup/create has already succeeded, to exercise a post-commit Keycloak failure."""
-    calls: dict[str, list[object]] = {"password": []}
+    calls: dict[str, list[object]] = {"password": [], "created": []}
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path.endswith("/openid-connect/token"):
             return httpx.Response(200, json={"access_token": "t"})
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(200, json=_RECONCILED_USER_PROFILE)
         if request.method == "GET" and request.url.path.endswith("/users"):
             if lookup_status != 200:
                 return httpx.Response(lookup_status, json={"error": "boom"})
@@ -101,6 +119,7 @@ def _install_kc(
                 return httpx.Response(200, json=[])
             return httpx.Response(200, json=[{"id": existing, "username": username}])
         if request.method == "POST" and request.url.path.endswith("/users"):
+            calls["created"].append(json.loads(request.content))
             if create_status != 201:
                 return httpx.Response(create_status, json=create_body or {})
             return httpx.Response(
@@ -122,7 +141,7 @@ def _install_kc(
             _transport=httpx.MockTransport(handler),
         )
 
-    monkeypatch.setattr(users_api, "_kc_client", factory)
+    monkeypatch.setattr(identity_provisioning, "keycloak_client", factory)
     return calls
 
 
@@ -138,6 +157,8 @@ def _install_kc_race(monkeypatch: pytest.MonkeyPatch, *, winner_subject: str) ->
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path.endswith("/openid-connect/token"):
             return httpx.Response(200, json={"access_token": "t"})
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(200, json=_RECONCILED_USER_PROFILE)
         if request.method == "GET" and request.url.path.endswith("/users"):
             calls["lookup"] += 1
             username = request.url.params["username"]
@@ -157,7 +178,44 @@ def _install_kc_race(monkeypatch: pytest.MonkeyPatch, *, winner_subject: str) ->
             _transport=httpx.MockTransport(handler),
         )
 
-    monkeypatch.setattr(users_api, "_kc_client", factory)
+    monkeypatch.setattr(identity_provisioning, "keycloak_client", factory)
+
+
+def _install_kc_classifier_known_race_then_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch, *, winner_subject: str
+) -> None:
+    """The Keycloak transport's conflict classifier finds the exact subject, then a later lookup
+    fails. Ordinary provisioning must use the classified subject instead of creating this third
+    lookup failure path; bootstrap still re-reads to validate its marker."""
+    calls = {"lookup": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "t"})
+        if request.method == "GET" and request.url.path.endswith("/users/profile"):
+            return httpx.Response(200, json=_RECONCILED_USER_PROFILE)
+        if request.method == "GET" and request.url.path.endswith("/users"):
+            calls["lookup"] += 1
+            username = request.url.params["username"]
+            if calls["lookup"] == 1:
+                return httpx.Response(200, json=[])
+            if calls["lookup"] == 2:
+                return httpx.Response(200, json=[{"id": winner_subject, "username": username}])
+            return httpx.Response(503, json={"error": "transient lookup failure"})
+        if request.method == "POST" and request.url.path.endswith("/users"):
+            return httpx.Response(409, json={"errorMessage": "User exists with same username"})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    def factory() -> KeycloakProvisioningClient:
+        return KeycloakProvisioningClient(
+            base_url="http://kc",
+            realm="easysynq",
+            admin_user="admin",
+            admin_password="secret",
+            _transport=httpx.MockTransport(handler),
+        )
+
+    monkeypatch.setattr(identity_provisioning, "keycloak_client", factory)
 
 
 async def _app_user_count() -> int:
@@ -296,6 +354,120 @@ async def test_provision_creates_the_account_the_row_and_the_credential(
         assert event is not None
         # Secrets hygiene: the password must never reach an audit payload.
         assert body["temporary_password"] not in str(event.after)
+
+
+async def test_admin_role_provisioning_locks_before_keycloak_identity_creation(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _install_kc(monkeypatch, new_subject=_sub("locked-admin-provision"))
+    headers = await _admin(token_factory)
+    admin_role_id = await _role_id(_ADMIN)
+    org_id = await s5.default_org_id()
+
+    async with get_sessionmaker()() as blocker:
+        await lock_admin_set(blocker, org_id)
+        attempted = asyncio.Event()
+
+        async def observed_lock(session: object, candidate_org_id: uuid.UUID) -> None:
+            attempted.set()
+            await lock_admin_set(session, candidate_org_id)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(users_api, "lock_admin_set", observed_lock, raising=False)
+        request = asyncio.create_task(
+            app_client.post(
+                "/api/v1/users/provision",
+                headers=headers,
+                json={
+                    "username": _sub("admin-provision"),
+                    "role_ids": [str(admin_role_id)],
+                },
+            )
+        )
+        lock_attempt = asyncio.create_task(attempted.wait())
+        done, _ = await asyncio.wait(
+            {request, lock_attempt}, timeout=2, return_when=asyncio.FIRST_COMPLETED
+        )
+        assert lock_attempt in done, "admin provisioning reached Keycloak without the shared lock"
+        assert request.done() is False
+        assert calls["created"] == []
+        await blocker.rollback()
+
+    response = await asyncio.wait_for(request, timeout=2)
+    assert response.status_code == 201, response.text
+
+
+async def test_ordinary_role_provisioning_does_not_take_admin_set_lock(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_kc(monkeypatch, new_subject=_sub("ordinary-role-provision"))
+    headers = await _admin(token_factory)
+    author_role_id = await _role_id("Author")
+    attempts = 0
+
+    async def observed_lock(session: object, org_id: uuid.UUID) -> None:
+        nonlocal attempts
+        attempts += 1
+        await lock_admin_set(session, org_id)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(users_api, "lock_admin_set", observed_lock, raising=False)
+    response = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": _sub("author-provision"), "role_ids": [str(author_role_id)]},
+    )
+
+    assert response.status_code == 201, response.text
+    assert attempts == 0
+
+
+async def test_ordinary_provisioning_never_sends_a_bootstrap_marker(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary user creation is never eligible for bootstrap recovery ownership."""
+    calls = _install_kc(monkeypatch, new_subject=_sub("no-bootstrap-marker"))
+    headers = await _admin(token_factory)
+    username = f"ordinary-{uuid.uuid4().hex[:6]}"
+
+    resp = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": username},
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert calls["created"] == [
+        {
+            "username": username,
+            "enabled": True,
+        }
+    ]
+
+
+async def test_ordinary_provisioning_canonicalizes_mixed_case_username(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _install_kc(monkeypatch, new_subject=_sub("canonical-username"))
+    headers = await _admin(token_factory)
+    submitted = f"  Mixed.User-{uuid.uuid4().hex[:6]}  "
+    display_name = "Mixed Case Display"
+
+    response = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": submitted, "display_name": display_name},
+    )
+
+    assert response.status_code == 201, response.text
+    assert calls["created"][0]["username"] == submitted.strip().lower()
+    assert response.json()["user"]["display_name"] == display_name
 
 
 async def test_unlinked_username_collision_returns_the_subject_for_the_link_path(
@@ -541,6 +713,43 @@ async def test_create_conflict_race_finds_linked_subject_returns_user_exists(
     body = resp.json()
     assert body["code"] == "user_exists"
     assert "keycloak_subject" not in body
+
+
+@pytest.mark.parametrize(
+    ("linked", "expected_code"),
+    [
+        (False, "keycloak_username_exists_unlinked"),
+        (True, "user_exists"),
+    ],
+)
+async def test_classifier_known_conflict_preserves_the_linked_or_unlinked_affordance(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+    linked: bool,
+    expected_code: str,
+) -> None:
+    subject = _sub("classifier-known")
+    if linked:
+        async with get_sessionmaker()() as session:
+            await _ensure_user(session, subject)
+            await session.commit()
+    _install_kc_classifier_known_race_then_lookup_fails(monkeypatch, winner_subject=subject)
+    headers = await _admin(token_factory)
+
+    resp = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": f"classifier-known-{uuid.uuid4().hex[:6]}"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["code"] == expected_code
+    if linked:
+        assert "keycloak_subject" not in body
+    else:
+        assert body["keycloak_subject"] == subject
 
 
 async def test_duplicate_email_returns_keycloak_email_exists(
@@ -869,6 +1078,25 @@ async def test_reset_credential_of_an_unprivileged_target_still_requires_system_
         # — this caller never attempted a grant, and recording it as one would misfile the trail.
         assert event.after["permission_key"] == "user.reset_credential"
         assert event.after["permission_key"] != "permission.grant"
+
+
+async def test_reset_guard_refuses_user_create_only_caller_regardless_of_target_roles(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R64 gates the caller's tier, so a target's content role cannot relax the refusal."""
+    calls = _install_kc(monkeypatch)
+    caller_sub = _sub("resetcaller-content-target")
+    await _grant_user_create_only(caller_sub)
+    headers = _auth(token_factory, caller_sub)
+    target_id = await s5.grant_role(_sub("reset-content-target"), "Approver")
+
+    resp = await app_client.post(f"/api/v1/users/{target_id}/temporary-password", headers=headers)
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["code"] == "two_tier_violation"
+    assert calls["password"] == []
 
 
 async def test_reset_credential_of_a_system_domain_target_requires_system_tier(

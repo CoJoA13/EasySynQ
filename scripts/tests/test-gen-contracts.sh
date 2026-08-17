@@ -55,6 +55,51 @@ assert_all_cwds() {
   if [ "$got" = "$want" ]; then ok "$label"; else bad "$label (want $want, got ${got:-<none>})"; fi
 }
 
+assert_codegen_formatter_sequence() {
+  local label="$1" file="$2"
+  if awk '
+    /^argv=run datamodel-codegen / {
+      if (waiting != 0) bad = 1
+      waiting = 1
+      codegen += 1
+      next
+    }
+    $0 == "argv=run ruff format src/easysynq_api/_generated/models.py" {
+      if (waiting != 1) bad = 1
+      waiting = 0
+      formatter += 1
+      next
+    }
+    END {
+      if (bad || waiting != 0 || codegen != 3 || formatter != 3) exit 1
+    }
+  ' "$file"; then
+    ok "$label"
+  else
+    bad "$label"
+  fi
+}
+
+assert_exact_one_final_lf() {
+  local label="$1" file="$2"
+  if node -e '
+    const fs = require("node:fs");
+    const bytes = fs.readFileSync(process.argv[1]);
+    const length = bytes.length;
+    process.exit(
+      length > 0 &&
+      bytes[length - 1] === 0x0a &&
+      (length === 1 || (bytes[length - 2] !== 0x0a && bytes[length - 2] !== 0x0d))
+        ? 0
+        : 1,
+    );
+  ' "$file"; then
+    ok "$label"
+  else
+    bad "$label"
+  fi
+}
+
 hash_artifacts() {
   sha256sum \
     "$FIXTURE/packages/contracts/dist/openapi.json" \
@@ -111,7 +156,7 @@ case "\${1:-}" in
       shift
     done
     mkdir -p "\$(dirname "\$output")"
-    printf '{"fixture":"contract"}\\n' >"\$output"
+    printf '%s' '{"fixture":"contract"}' >"\$output"
     ;;
   *) exit 64 ;;
 esac
@@ -142,6 +187,9 @@ set -euo pipefail
   printf 'argv=%s\\n' "\$*"
   printf '%s\\n' '--'
 } >>"$RECORDS/uv.log"
+if [ "\${1:-}" = 'run' ] && [ "\${2:-}" = 'ruff' ] && [ "\${3:-}" = 'format' ]; then
+  exit 0
+fi
 output=''
 disable_timestamp=false
 while [ "\$#" -gt 0 ]; do
@@ -191,6 +239,9 @@ git -C "$UNRELATED" init -q
 
 run_generator "$FIXTURE"
 assert_exit "root caller completes" 0 "$RUN_CODE"
+assert_exact_one_final_lf \
+  "bundled JSON ends in exactly one LF after a no-newline Redocly output" \
+  "$FIXTURE/packages/contracts/dist/openapi.json"
 ROOT_HASHES="$(hash_artifacts)"
 
 run_generator "$FIXTURE/packages/contracts"
@@ -210,6 +261,9 @@ assert_count "lint receives exact repository-relative config and spec paths" "$R
 assert_count "bundle receives exact repository-relative config and output paths" "$RECORDS/redocly.log" "argv=bundle --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml -o packages/contracts/dist/openapi.json" 3
 assert_count "OpenAPI TypeScript receives repository-relative input and output paths" "$RECORDS/openapi-typescript.log" "argv=packages/contracts/dist/openapi.json -o apps/web/src/api/_generated/schema.d.ts" 3
 assert_contains_count "datamodel-codegen disables timestamps" "$RECORDS/uv.log" "--disable-timestamp" 3
+assert_contains_count "generated Python declares only its three required Ruff exemptions" "$RECORDS/uv.log" "--custom-file-header # ruff: noqa: E501, RUF001, S105" 3
+assert_count "generated Python is normalized through the repository Ruff formatter" "$RECORDS/uv.log" "argv=run ruff format src/easysynq_api/_generated/models.py" 3
+assert_codegen_formatter_sequence "each datamodel codegen is immediately followed by exactly one Ruff formatter" "$RECORDS/uv.log"
 if [ ! -e "$RECORDS/npx.log" ]; then ok "Redocly and OpenAPI TypeScript never execute through npx"; else bad "Redocly and OpenAPI TypeScript never execute through npx"; fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

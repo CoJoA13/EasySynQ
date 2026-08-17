@@ -2,7 +2,7 @@
 
 The operator mints a high-entropy single-use secret (``easysynq setup mint-bootstrap``); its
 **salted** hash is stored on ``system_config`` and the plaintext is shown once. The public
-``/setup/bootstrap`` endpoint verifies a presented secret against that hash. No DB here — these are
+``/setup/administrator`` flow verifies a presented secret against that hash. No DB here — these are
 pure, unit-testable helpers; storage + TTL + single-use live in ``service.py``.
 """
 

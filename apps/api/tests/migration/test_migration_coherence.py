@@ -19,6 +19,7 @@ import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from psycopg import sql
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
@@ -39,6 +40,17 @@ _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
 _RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
 _ROLE_ASSIGNMENT_USER_INDEX = "ix_role_assignment_user_id"
 _RECORD_PAGE_INDEX = "ix_record_org_id_captured_at_id_desc"
+_BOOTSTRAP_ADMIN_USER_INDEX = "ix_system_config_bootstrap_admin_user_id"
+_BOOTSTRAP_ADMIN_USER_FK = "fk_system_config_bootstrap_admin_user_id_app_user"
+_BOOTSTRAP_RECEIPT_HASH = "a" * 64
+_BOOTSTRAP_CLAIM_COLUMNS = (
+    "bootstrap_admin_claim_id",
+    "bootstrap_admin_username",
+    "bootstrap_admin_user_id",
+    "bootstrap_claimed_at",
+    "bootstrap_credential_issued_at",
+)
+_BOOTSTRAP_RECEIPT_COLUMN = "bootstrap_credential_receipt_hash"
 _EXPECTED_RETENTION_GRANTS = {
     ("Internal Auditor", "retention.read"),
     ("QMS Owner", "retention.manage"),
@@ -156,6 +168,49 @@ def _table_indexes(connection: sa.Connection, table_name: str) -> set[str]:
     }
 
 
+def _table_columns(connection: sa.Connection, table_name: str) -> set[str]:
+    return {
+        str(name)
+        for name in connection.execute(
+            sa.text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = :table_name"
+            ),
+            {"table_name": table_name},
+        ).scalars()
+    }
+
+
+def _table_constraints(connection: sa.Connection, table_name: str) -> set[str]:
+    return {
+        str(name)
+        for name in connection.execute(
+            sa.text(
+                "SELECT conname FROM pg_constraint WHERE conrelid = CAST(:table_name AS regclass)"
+            ),
+            {"table_name": table_name},
+        ).scalars()
+    }
+
+
+def _column_check_constraints(
+    connection: sa.Connection,
+    table_name: str,
+    column_name: str,
+) -> set[str]:
+    return {
+        str(name)
+        for name in connection.execute(
+            sa.text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conrelid = CAST(:table_name AS regclass) AND contype = 'c' "
+                "AND pg_get_constraintdef(oid) LIKE :column_pattern"
+            ),
+            {"table_name": table_name, "column_pattern": f"%{column_name}%"},
+        ).scalars()
+    }
+
+
 def _index_definition(connection: sa.Connection, index_name: str) -> str | None:
     return connection.execute(
         sa.text(
@@ -202,6 +257,7 @@ def test_populated_historical_transitions_and_head_repairs(
         monkeypatch.setenv("DATABASE_URL_SYNC", scratch_url)
         get_settings.cache_clear()
         config = _config()
+        assert ScriptDirectory.from_config(config).get_heads() == ["0088_bootstrap_credential"]
         engine = sa.create_engine(scratch_url)
         try:
             # 0004: role assignments and permission overrides must preserve their full FK closure.
@@ -908,6 +964,267 @@ def test_populated_historical_transitions_and_head_repairs(
             with engine.connect() as connection:
                 assert _table_indexes(connection, "record") == head_indexes
                 assert _index_definition(connection, _RECORD_PAGE_INDEX) == index_definition
+
+            # 0087 and 0088 are proved as separate populated boundaries. First preserve a stable
+            # snapshot of the pre-existing organization, setup singleton, and linked user.
+            with engine.connect() as connection:
+                identity_setup = connection.execute(
+                    sa.text(
+                        "SELECT sc.org_id, sc.setup_state::text, o.short_code, "
+                        "u.id, u.keycloak_subject, u.display_name "
+                        "FROM system_config sc JOIN organization o ON o.id = sc.org_id "
+                        "JOIN app_user u ON u.id = :user WHERE sc.org_id = :org"
+                    ),
+                    {"org": org_id, "user": user_id},
+                ).one()
+
+            # 0087 -> 0086 -> 0087: populate the claim at 0087, prove the downgrade removes only
+            # claim schema, then prove re-upgrade recreates nullable claim state without data.
+            command.downgrade(config, "0086_record_page_index")
+            command.upgrade(config, "0087_first_admin_bootstrap")
+            claim_id_0087 = uuid.uuid4()
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "UPDATE system_config SET bootstrap_admin_claim_id = :claim_id, "
+                        "bootstrap_admin_username = 'first-admin', "
+                        "bootstrap_admin_user_id = :user, bootstrap_claimed_at = now(), "
+                        "bootstrap_credential_issued_at = now() WHERE org_id = :org"
+                    ),
+                    {"claim_id": claim_id_0087, "user": user_id, "org": org_id},
+                )
+                claim_state_0087 = connection.execute(
+                    sa.text(
+                        "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
+                        "bootstrap_admin_user_id, bootstrap_claimed_at, "
+                        "bootstrap_credential_issued_at FROM system_config WHERE org_id = :org"
+                    ),
+                    {"org": org_id},
+                ).one()
+            with engine.connect() as connection:
+                assert all(
+                    _column_nullable(connection, "system_config", column) == "YES"
+                    for column in _BOOTSTRAP_CLAIM_COLUMNS
+                )
+                assert (
+                    _column_nullable(connection, "system_config", _BOOTSTRAP_RECEIPT_COLUMN) is None
+                )
+                assert _BOOTSTRAP_ADMIN_USER_INDEX in _table_indexes(connection, "system_config")
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT confdeltype FROM pg_constraint "
+                            "WHERE conrelid = 'system_config'::regclass "
+                            "AND conname = :constraint"
+                        ),
+                        {"constraint": _BOOTSTRAP_ADMIN_USER_FK},
+                    ).scalar_one()
+                    == "r"
+                )
+                assert claim_state_0087[:3] == (claim_id_0087, "first-admin", user_id)
+                columns_0087 = _table_columns(connection, "system_config")
+                indexes_0087 = _table_indexes(connection, "system_config")
+                constraints_0087 = _table_constraints(connection, "system_config")
+
+            command.downgrade(config, "0086_record_page_index")
+            with engine.connect() as connection:
+                assert all(
+                    _column_nullable(connection, "system_config", column) is None
+                    for column in _BOOTSTRAP_CLAIM_COLUMNS
+                )
+                assert (
+                    _column_nullable(connection, "system_config", _BOOTSTRAP_RECEIPT_COLUMN) is None
+                )
+                assert _BOOTSTRAP_ADMIN_USER_INDEX not in _table_indexes(
+                    connection, "system_config"
+                )
+                assert _table_columns(connection, "system_config") == columns_0087 - set(
+                    _BOOTSTRAP_CLAIM_COLUMNS
+                )
+                assert _table_indexes(connection, "system_config") == indexes_0087 - {
+                    _BOOTSTRAP_ADMIN_USER_INDEX
+                }
+                assert _table_constraints(connection, "system_config") == constraints_0087 - {
+                    _BOOTSTRAP_ADMIN_USER_FK
+                }
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT count(*) FROM pg_constraint "
+                            "WHERE conrelid = 'system_config'::regclass "
+                            "AND conname = :constraint"
+                        ),
+                        {"constraint": _BOOTSTRAP_ADMIN_USER_FK},
+                    ).scalar_one()
+                    == 0
+                )
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT sc.org_id, sc.setup_state::text, o.short_code, "
+                            "u.id, u.keycloak_subject, u.display_name "
+                            "FROM system_config sc JOIN organization o ON o.id = sc.org_id "
+                            "JOIN app_user u ON u.id = :user WHERE sc.org_id = :org"
+                        ),
+                        {"org": org_id, "user": user_id},
+                    ).one()
+                    == identity_setup
+                )
+
+            command.upgrade(config, "0087_first_admin_bootstrap")
+            with engine.connect() as connection:
+                assert all(
+                    _column_nullable(connection, "system_config", column) == "YES"
+                    for column in _BOOTSTRAP_CLAIM_COLUMNS
+                )
+                assert (
+                    _column_nullable(connection, "system_config", _BOOTSTRAP_RECEIPT_COLUMN) is None
+                )
+                assert _BOOTSTRAP_ADMIN_USER_INDEX in _table_indexes(connection, "system_config")
+                assert _table_columns(connection, "system_config") == columns_0087
+                assert _table_indexes(connection, "system_config") == indexes_0087
+                assert _table_constraints(connection, "system_config") == constraints_0087
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT count(*) FROM pg_constraint "
+                            "WHERE conrelid = 'system_config'::regclass "
+                            "AND conname = :constraint"
+                        ),
+                        {"constraint": _BOOTSTRAP_ADMIN_USER_FK},
+                    ).scalar_one()
+                    == 1
+                )
+                assert connection.execute(
+                    sa.text(
+                        "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
+                        "bootstrap_admin_user_id, bootstrap_claimed_at, "
+                        "bootstrap_credential_issued_at FROM system_config WHERE org_id = :org"
+                    ),
+                    {"org": org_id},
+                ).one() == (None, None, None, None, None)
+
+            # 0088 -> 0087 -> 0088: repopulate the 0087 claim first, add and populate only receipt
+            # storage at 0088, then prove the claim survives both directions unchanged.
+            claim_id_0088 = uuid.uuid4()
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "UPDATE system_config SET bootstrap_admin_claim_id = :claim_id, "
+                        "bootstrap_admin_username = 'first-admin-retry', "
+                        "bootstrap_admin_user_id = :user, bootstrap_claimed_at = now(), "
+                        "bootstrap_credential_issued_at = now() WHERE org_id = :org"
+                    ),
+                    {"claim_id": claim_id_0088, "user": user_id, "org": org_id},
+                )
+                claim_state_0088 = connection.execute(
+                    sa.text(
+                        "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
+                        "bootstrap_admin_user_id, bootstrap_claimed_at, "
+                        "bootstrap_credential_issued_at FROM system_config WHERE org_id = :org"
+                    ),
+                    {"org": org_id},
+                ).one()
+
+            command.upgrade(config, "0088_bootstrap_credential")
+            with engine.begin() as connection:
+                assert (
+                    _column_nullable(connection, "system_config", _BOOTSTRAP_RECEIPT_COLUMN)
+                    == "YES"
+                )
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
+                            "bootstrap_admin_user_id, bootstrap_claimed_at, "
+                            "bootstrap_credential_issued_at FROM system_config WHERE org_id = :org"
+                        ),
+                        {"org": org_id},
+                    ).one()
+                    == claim_state_0088
+                )
+                columns_0088 = _table_columns(connection, "system_config")
+                indexes_0088 = _table_indexes(connection, "system_config")
+                constraints_0088 = _table_constraints(connection, "system_config")
+                receipt_checks_0088 = _column_check_constraints(
+                    connection, "system_config", _BOOTSTRAP_RECEIPT_COLUMN
+                )
+                assert columns_0088 == columns_0087 | {_BOOTSTRAP_RECEIPT_COLUMN}
+                assert indexes_0088 == indexes_0087
+                assert len(receipt_checks_0088) == 1
+                assert constraints_0088 == constraints_0087 | receipt_checks_0088
+                connection.execute(
+                    sa.text(
+                        "UPDATE system_config SET bootstrap_credential_receipt_hash = :digest "
+                        "WHERE org_id = :org"
+                    ),
+                    {"digest": _BOOTSTRAP_RECEIPT_HASH, "org": org_id},
+                )
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT bootstrap_credential_receipt_hash FROM system_config "
+                            "WHERE org_id = :org"
+                        ),
+                        {"org": org_id},
+                    ).scalar_one()
+                    == _BOOTSTRAP_RECEIPT_HASH
+                )
+
+            command.downgrade(config, "0087_first_admin_bootstrap")
+            with engine.connect() as connection:
+                assert (
+                    _column_nullable(connection, "system_config", _BOOTSTRAP_RECEIPT_COLUMN) is None
+                )
+                assert all(
+                    _column_nullable(connection, "system_config", column) == "YES"
+                    for column in _BOOTSTRAP_CLAIM_COLUMNS
+                )
+                assert _table_columns(connection, "system_config") == columns_0087
+                assert _table_indexes(connection, "system_config") == indexes_0087
+                assert _table_constraints(connection, "system_config") == constraints_0087
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
+                            "bootstrap_admin_user_id, bootstrap_claimed_at, "
+                            "bootstrap_credential_issued_at FROM system_config WHERE org_id = :org"
+                        ),
+                        {"org": org_id},
+                    ).one()
+                    == claim_state_0088
+                )
+
+            command.upgrade(config, "0088_bootstrap_credential")
+            with engine.connect() as connection:
+                assert (
+                    _column_nullable(connection, "system_config", _BOOTSTRAP_RECEIPT_COLUMN)
+                    == "YES"
+                )
+                assert _table_columns(connection, "system_config") == columns_0088
+                assert _table_indexes(connection, "system_config") == indexes_0088
+                assert _table_constraints(connection, "system_config") == constraints_0088
+                assert connection.execute(
+                    sa.text(
+                        "SELECT bootstrap_admin_claim_id, bootstrap_admin_username, "
+                        "bootstrap_admin_user_id, bootstrap_claimed_at, "
+                        "bootstrap_credential_issued_at, bootstrap_credential_receipt_hash "
+                        "FROM system_config WHERE org_id = :org"
+                    ),
+                    {"org": org_id},
+                ).one() == (*claim_state_0088, None)
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT sc.org_id, sc.setup_state::text, o.short_code, "
+                            "u.id, u.keycloak_subject, u.display_name "
+                            "FROM system_config sc JOIN organization o ON o.id = sc.org_id "
+                            "JOIN app_user u ON u.id = :user WHERE sc.org_id = :org"
+                        ),
+                        {"org": org_id, "user": user_id},
+                    ).one()
+                    == identity_setup
+                )
             command.check(config)
         finally:
             engine.dispose()

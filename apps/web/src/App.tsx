@@ -99,16 +99,22 @@ function AppContent() {
     setFinalizationVerification("error");
   };
 
+  const verifyBootstrapAcknowledgment = async (): Promise<void> => {
+    await setupState.refetch({ cancelRefetch: false });
+  };
+
   const setupValue = setupState.data?.setup_state;
   const operational = setupValue === "OPERATIONAL";
   const preOperational = setupValue === "UNINITIALIZED" || setupValue === "IN_SETUP";
+  const authenticationRequired = setupValue === "IN_SETUP" || operational;
 
   // Tokens live in memory only (lib/auth), so every reload starts logged-out. When the install is
-  // operational and we hold no token, bounce through Keycloak to re-authenticate (seamless while the
-  // SSO session is live). A one-shot sessionStorage flag stops a failed sign-in from looping.
+  // authentication is required and we hold no token, bounce through Keycloak to authenticate
+  // (seamless while the SSO session is live). A one-shot sessionStorage flag stops a failed sign-in
+  // from looping. UNINITIALIZED remains public so the first native administrator can be created.
   useEffect(() => {
     if (status.kind !== "ready" || setupState.status !== "success") return;
-    if (operational && !token) {
+    if (authenticationRequired && !token) {
       if (!sessionStorage.getItem("es_auth_redirect")) {
         sessionStorage.setItem("es_auth_redirect", "1");
         void login();
@@ -116,7 +122,7 @@ function AppContent() {
     } else if (token) {
       sessionStorage.removeItem("es_auth_redirect");
     }
-  }, [status.kind, operational, token, login, setupState.status]);
+  }, [status.kind, authenticationRequired, token, login, setupState.status]);
 
   if (status.kind !== "ready") {
     return (
@@ -203,8 +209,16 @@ function AppContent() {
           element={
             operational ? (
               <Navigate to="/" replace />
+            ) : setupValue === "UNINITIALIZED" || setupValue === "IN_SETUP" ? (
+              <SetupWizard
+                setupState={setupValue}
+                token={token}
+                login={login}
+                onBootstrapAcknowledged={verifyBootstrapAcknowledgment}
+                onFinalized={verifyFinalization}
+              />
             ) : (
-              <SetupWizard token={token} login={login} onFinalized={verifyFinalization} />
+              <Navigate to="/" replace />
             )
           }
         />

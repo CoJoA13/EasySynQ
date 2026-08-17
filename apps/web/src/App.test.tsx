@@ -39,7 +39,8 @@ function AppWithAuth({ auth }: { auth: AuthState }) {
 }
 
 const SETUP_MUTATION_PATHS = [
-  ["post", "/api/v1/setup/bootstrap"],
+  ["post", "/api/v1/setup/administrator"],
+  ["post", "/api/v1/setup/administrator/acknowledge"],
   ["patch", "/api/v1/setup/org-profile"],
   ["post", "/api/v1/setup/verify-storage"],
   ["post", "/api/v1/setup/configure-backup"],
@@ -360,18 +361,163 @@ test("OPERATIONAL without a token preserves the sign-in redirect latch", async (
   expect(sessionStorage.getItem("es_auth_redirect")).toBe("1");
 });
 
-test.each(["UNINITIALIZED", "IN_SETUP"] as const)(
-  "%s without a token redirects to the existing setup wizard",
-  async (setup_state) => {
-    const login = vi.fn(async () => undefined);
-    server.use(http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state })));
+test("UNINITIALIZED without a token renders administrator creation and does not start login", async () => {
+  const login = vi.fn(async () => undefined);
+  let setupDetailReads = 0;
+  server.use(
+    http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state: "UNINITIALIZED" })),
+    http.get("/api/v1/setup", () => {
+      setupDetailReads += 1;
+      return HttpResponse.json({});
+    }),
+  );
 
-    renderWithProviders(<App />, { route: "/library", auth: noTokenAuth(login) });
+  renderWithProviders(<App />, { route: "/library", auth: noTokenAuth(login) });
 
-    expect(await screen.findByRole("heading", { name: "Welcome to EasySynQ" })).toBeInTheDocument();
-    expect(login).not.toHaveBeenCalled();
-  },
-);
+  expect(
+    await screen.findByRole("heading", { name: "Create the first administrator" }),
+  ).toBeInTheDocument();
+  expect(login).not.toHaveBeenCalled();
+  expect(setupDetailReads).toBe(0);
+});
+
+test("IN_SETUP without a token uses the existing latch and starts login exactly once", async () => {
+  const login = vi.fn(async () => undefined);
+  let setupDetailReads = 0;
+  server.use(
+    http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state: "IN_SETUP" })),
+    http.get("/api/v1/setup", () => {
+      setupDetailReads += 1;
+      return HttpResponse.json({});
+    }),
+  );
+
+  renderWithProviders(<App />, { route: "/library", auth: noTokenAuth(login) });
+
+  expect(await screen.findByRole("heading", { name: "Sign in to continue setup" })).toBeInTheDocument();
+  await waitFor(() => expect(login).toHaveBeenCalledTimes(1));
+  expect(sessionStorage.getItem("es_auth_redirect")).toBe("1");
+  expect(setupDetailReads).toBe(0);
+  expect(screen.queryByRole("heading", { name: "Create the first administrator" })).toBeNull();
+});
+
+test("administrator acknowledgment refetches setup state and starts login exactly once", async () => {
+  const user = userEvent.setup();
+  const login = vi.fn(async () => undefined);
+  let stateReads = 0;
+  let setupDetailReads = 0;
+  server.use(
+    http.get("/api/v1/setup/state", () => {
+      stateReads += 1;
+      return HttpResponse.json({
+        setup_state: stateReads === 1 ? "UNINITIALIZED" : "IN_SETUP",
+      });
+    }),
+    http.get("/api/v1/setup", () => {
+      setupDetailReads += 1;
+      return HttpResponse.json({});
+    }),
+    http.post("/api/v1/setup/administrator", () =>
+      HttpResponse.json(
+        {
+          administrator: {
+            id: "ad000001-0001-0001-0001-000000000001",
+            username: "first.admin",
+            display_name: "First Administrator",
+            email: null,
+            status: "INVITED",
+          },
+          temporary_password: "New-Only-Temporary-Password-8",
+          password_delivery: "shown_once",
+        },
+        { status: 201 },
+      ),
+    ),
+    http.post("/api/v1/setup/administrator/acknowledge", () =>
+      HttpResponse.json({
+        setup_state: "IN_SETUP",
+        admin_user_id: "ad000001-0001-0001-0001-000000000001",
+      }),
+    ),
+  );
+
+  renderWithProviders(<App />, { route: "/setup", auth: noTokenAuth(login) });
+  await user.type(await screen.findByLabelText(/^Setup secret/), "one-time-setup-secret");
+  await user.type(screen.getByLabelText(/^Username/), "first.admin");
+  await user.type(screen.getByLabelText(/^Display name/), "First Administrator");
+  await user.click(screen.getByRole("button", { name: "Create administrator" }));
+  await user.click(
+    await screen.findByRole("button", { name: "I’ve saved it — Continue to sign in" }),
+  );
+
+  await waitFor(() => expect(login).toHaveBeenCalledTimes(1));
+  expect(stateReads).toBe(2);
+  expect(setupDetailReads).toBe(0);
+  expect(sessionStorage.getItem("es_auth_redirect")).toBe("1");
+});
+
+test("acknowledgment state-refetch failure stays on App recovery without login until Retry succeeds", async () => {
+  const user = userEvent.setup();
+  const login = vi.fn(async () => undefined);
+  let stateReads = 0;
+  server.use(
+    http.get("/api/v1/setup/state", () => {
+      stateReads += 1;
+      if (stateReads === 1) return HttpResponse.json({ setup_state: "UNINITIALIZED" });
+      if (stateReads === 2) {
+        return HttpResponse.json({ detail: "unavailable" }, { status: 503 });
+      }
+      return HttpResponse.json({ setup_state: "IN_SETUP" });
+    }),
+    http.post("/api/v1/setup/administrator", () =>
+      HttpResponse.json(
+        {
+          administrator: {
+            id: "ad000001-0001-0001-0001-000000000001",
+            username: "first.admin",
+            display_name: "First Administrator",
+            email: null,
+            status: "INVITED",
+          },
+          temporary_password: "New-Only-Temporary-Password-8",
+          password_delivery: "shown_once",
+        },
+        { status: 201 },
+      ),
+    ),
+    http.post("/api/v1/setup/administrator/acknowledge", () =>
+      HttpResponse.json({
+        setup_state: "IN_SETUP",
+        admin_user_id: "ad000001-0001-0001-0001-000000000001",
+      }),
+    ),
+  );
+
+  renderWithProviders(<App />, { route: "/setup", auth: noTokenAuth(login) });
+  await user.type(await screen.findByLabelText(/^Setup secret/), "one-time-setup-secret");
+  await user.type(screen.getByLabelText(/^Username/), "first.admin");
+  await user.type(screen.getByLabelText(/^Display name/), "First Administrator");
+  await user.click(screen.getByRole("button", { name: "Create administrator" }));
+  await user.click(
+    await screen.findByRole("button", { name: "I’ve saved it — Continue to sign in" }),
+  );
+
+  expect(
+    await screen.findByRole("heading", { name: "Setup status is unavailable" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry setup status" })).toBeNull();
+  expect(screen.queryByText("New-Only-Temporary-Password-8")).toBeNull();
+  expect(document.body).not.toHaveTextContent("one-time-setup-secret");
+  expect(stateReads).toBe(2);
+  expect(login).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+
+  await waitFor(() => expect(login).toHaveBeenCalledTimes(1));
+  expect(stateReads).toBe(3);
+  expect(sessionStorage.getItem("es_auth_redirect")).toBe("1");
+});
 
 test("setup state retry performs one additional read and recovers to the shell", async () => {
   const user = userEvent.setup();

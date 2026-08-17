@@ -27,17 +27,16 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import get_settings
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models.app_user import AppUser, UserStatus
 from ..db.models.audit_event import AuditEvent
 from ..db.models.role import Role, RoleAssignment
 from ..db.session import get_session
 from ..domain.authz.types import ResourceContext
-from ..domain.identity.temp_password import generate_temporary_password
 from ..logging import request_id_var
 from ..problems import ProblemCode, ProblemException
 from ..services.authz import (
+    SYSTEM_ADMIN_ROLE,
     AuthzAuditSink,
     assert_can_assign_role,
     assert_can_reset_credential,
@@ -45,13 +44,13 @@ from ..services.authz import (
     enforce,
     get_authz_audit_sink,
     invalidate_user_permissions,
+    lock_admin_set,
     require,
 )
-from ..services.backup.realm_export import realm_name_from_issuer
+from ..services.identity import provisioning as identity_provisioning
 from ..services.keycloak_provisioning import (
     KeycloakConflict,
     KeycloakNotConfigured,
-    KeycloakProvisioningClient,
     KeycloakRejected,
     KeycloakUnavailable,
 )
@@ -219,18 +218,7 @@ async def list_users(
     return [_represent(u, names.get(u.id, [])) for u in users]
 
 
-def _kc_client() -> KeycloakProvisioningClient:
-    settings = get_settings()
-    return KeycloakProvisioningClient(
-        base_url=settings.keycloak_admin_url,
-        realm=realm_name_from_issuer(settings.oidc_issuer),
-        admin_user=settings.keycloak_admin_user,
-        admin_password=settings.keycloak_admin_password,
-    )
-
-
-@router.post("/users/provision", status_code=status.HTTP_201_CREATED)
-async def provision_user(
+async def _provision_user(
     request: Request,
     body: UserProvision,
     caller: AppUser = Depends(_user_create),
@@ -253,7 +241,7 @@ async def provision_user(
     and the fix is to reissue a password, never to retry create (it would only collide on the
     username) and never to delete the Keycloak account.
     """
-    username = body.username.strip()
+    username = identity_provisioning.canonicalize_username(body.username)
     if not username:
         raise ProblemException(
             status=422, code="validation_error", title="username must not be empty"
@@ -290,21 +278,26 @@ async def provision_user(
         for role_id in role_ids:
             await assert_can_assign_role(session, sink, caller, role_id)
 
-    password = generate_temporary_password(username)
+    if SYSTEM_ADMIN_ROLE in role_names.values():
+        # Keep the administrator set stable from the first external identity read through the
+        # transaction that persists the user and role assignment. Ordinary role grants do not
+        # contend on this lock.
+        await lock_admin_set(session, caller.org_id)
 
-    async with _kc_client() as kc:
+    async with identity_provisioning.keycloak_client() as kc:
         try:
-            lookup = await kc.find_user_by_username(username)
-            if lookup.found:
-                assert lookup.subject is not None  # noqa: S101 — found=True only with a subject
-                await _raise_username_conflict(session, lookup.subject)
-
-            subject = await kc.create_user(
-                username=username,
-                email=body.email,
-                first_name=body.first_name,
-                last_name=body.last_name,
+            identity = await identity_provisioning.ensure_credentialless_identity(
+                kc,
+                identity_provisioning.IdentityProfile(
+                    username=username,
+                    email=body.email,
+                    first_name=body.first_name,
+                    last_name=body.last_name,
+                ),
             )
+            subject = identity.subject
+        except identity_provisioning.IdentityUsernameExists as exc:
+            await _raise_username_conflict(session, exc.subject)
         except KeycloakNotConfigured as exc:
             raise ProblemException(
                 status=503,
@@ -396,7 +389,6 @@ async def provision_user(
         names = await _role_names_by_user(session, caller.org_id, [user.id])
         response: dict[str, Any] = {
             "user": _represent(user, names.get(user.id, [])),
-            "temporary_password": password,
             "password_delivery": "shown_once",
         }
 
@@ -405,7 +397,9 @@ async def provision_user(
         # retrying create (which would just collide on the now-existing username) and never by
         # deleting the Keycloak account.
         try:
-            await kc.set_temporary_password(subject=subject, password=password)
+            password = await identity_provisioning.issue_temporary_credential(
+                kc, subject=subject, username=username
+            )
         except KeycloakUnavailable as exc:
             raise ProblemException(
                 status=502,
@@ -417,6 +411,7 @@ async def provision_user(
                     "temporary password for this user instead."
                 ),
             ) from exc
+        response["temporary_password"] = password
 
         # The credential is now live — record that truthfully as its own event, separate from
         # USER_CREATED (whose `after` above no longer claims one exists): audit_event is append-only
@@ -445,7 +440,7 @@ async def provision_user(
                 after={"credential_issued": True},
             )
             await session.commit()
-        except Exception:
+        except Exception:  # noqa: BLE001, RUF100 — R64 audit writes are deliberately non-fatal.
             await session.rollback()
             logger.warning(
                 "users.credential_issued_audit_failed",
@@ -454,6 +449,23 @@ async def provision_user(
             )
 
     return response
+
+
+@router.post("/users/provision", status_code=status.HTTP_201_CREATED)
+async def provision_user(
+    request: Request,
+    body: UserProvision,
+    caller: AppUser = Depends(_user_create),
+    session: AsyncSession = Depends(get_session),
+    sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+) -> dict[str, Any]:
+    try:
+        return await _provision_user(request, body, caller, session, sink)
+    except Exception:
+        # An administrator-role request may own the transaction advisory lock across Keycloak.
+        # End its transaction here on every failure instead of relying on dependency teardown.
+        await session.rollback()
+        raise
 
 
 @router.get("/users/{user_id}")
@@ -565,11 +577,9 @@ async def issue_temporary_password(
     Two jobs: it repairs a provision that committed the row but failed to set the credential, and
     it removes the last operational reason to run ``scripts/new-keycloak-user.sh``. Gated on
     ``user.create`` — issuing a credential is the same authority as creating the account — but
-    resetting an EXISTING user's credential is not always equivalent to creating a brand-new
-    unprivileged one: a caller who could reset a System Administrator's password could sign in as
-    them (the realm enforces no MFA). ``assert_can_reset_credential`` (R35's two-tier guard, the
-    same one ``assert_can_assign_role`` uses) therefore additionally requires a system-tier caller
-    whenever the target holds any system-domain permission.
+    resetting an EXISTING user's credential is not equivalent to creating a new identity. Under
+    R64, resetting every existing linked user unconditionally requires a system-tier caller in
+    addition to ``user.create``, regardless of the target's current permissions.
     """
     target = await _get_user(session, user_id, caller.org_id)
     if not target.keycloak_subject:
@@ -578,17 +588,18 @@ async def issue_temporary_password(
             code="user_not_linked",
             title="That user has no linked sign-in account",
         )
-    # Two-tier guard (R35) BEFORE generating a password or touching Keycloak: a content-tier
-    # `user.create` holder must not be able to take over a system-tier account by resetting its
-    # credential (see the guard's own docstring for the account-takeover rationale).
+    # R64's unconditional system-tier guard runs BEFORE generating a password or touching
+    # Keycloak. A content-tier `user.create` holder must not be able to take over any existing
+    # linked account by resetting its credential, regardless of the target's current authority.
     await assert_can_reset_credential(session, sink, caller, target)
     # `app_user` does not store the Keycloak username, so the closest identifier we hold is passed
     # to the policy guard. The generated value is 20 random characters and cannot collide with any
     # username in practice — the check is a belt-and-braces guard, not the primary defence.
-    password = generate_temporary_password(target.display_name or "")
     try:
-        async with _kc_client() as kc:
-            await kc.set_temporary_password(subject=target.keycloak_subject, password=password)
+        async with identity_provisioning.keycloak_client() as kc:
+            password = await identity_provisioning.issue_temporary_credential(
+                kc, subject=target.keycloak_subject, username=target.display_name or ""
+            )
     except KeycloakNotConfigured as exc:
         raise ProblemException(
             status=503,
@@ -624,7 +635,7 @@ async def issue_temporary_password(
             after={"credential_issued": True},
         )
         await session.commit()
-    except Exception:
+    except Exception:  # noqa: BLE001, RUF100 — R64 audit writes are deliberately non-fatal.
         await session.rollback()
         logger.warning(
             "users.credential_issued_audit_failed",

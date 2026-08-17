@@ -1,15 +1,15 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-15"
+as_of: "2026-08-16"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-records-read-console"
-migration_head: "0086"
-next_migration: "0087"
-api_unit_tests: 1729
-web_test_files: 266
-web_tests: 1912
-contract_tests: 283
-integration_passed: 1080
+last_shipped_slice: "S-first-admin-provisioning"
+migration_head: "0088"
+next_migration: "0089"
+api_unit_tests: 1835
+web_test_files: 267
+web_tests: 1946
+contract_tests: 284
+integration_passed: 1163
 integration_skipped: 2
 ci_jobs: 11
 ci_checks: 15
@@ -26,49 +26,52 @@ authority and it is not runtime discovery: binding decisions live in
 
 The original MVP foundation and the ISO 9001 workflow families are delivered. The routed SPA covers the
 main document, workflow, compliance, reporting, audit, ingestion, drift, objective, management-review,
-DCR, improvement, risk, context, interested-party, identity-provisioning, and read-only Records surfaces.
-Retention Policy and Evidence Pack management remain without dedicated SPA routes.
+DCR, improvement, risk, context, interested-party, identity-provisioning, first-run setup, and read-only
+Records surfaces. Retention Policy and Evidence Pack management remain without dedicated SPA routes.
 
-The last shipped slice adds an Evidence Operations Records register at `/records` and a dedicated
-`/records/:recordId` detail route. `GET /records` now returns an authorization-correct cursor page ordered
-by `(captured_at DESC, id DESC)`, with identifier/title search and the existing record-type, disposition,
-legal-hold, source-document, and captured-by filters. Cursors bind their normalized query, hidden candidates
-do not leak into counts or cursor boundaries, and all repository consumers—including the CAPA evidence
-picker—consume the page envelope. List and detail labels remain independently authorization-gated.
+The latest completed slice removes normal first-install dependence on the Keycloak console, a Keycloak
+subject, or the retired fixed-`qmsadmin` helper. While setup is `UNINITIALIZED`, `/setup` accepts the
+one-time EasySynQ bootstrap proof, creates and links the first Keycloak identity and EasySynQ user, assigns
+the seeded System Administrator role, and displays a generated temporary password once. The SPA retains
+the associated credential receipt only in volatile component memory and submits it during acknowledgment.
+Provisioning authority ends outside `UNINITIALIZED`; the public acknowledgment route additionally
+accepts only the narrowly fenced matching replay of a completed claim while setup is `IN_SETUP`. The active
+receipt, current setup proof, complete claim, exact administrator assignment, and absence of an unrelated
+administrator are all required before consumption. A reminted setup proof can acknowledge the same
+still-displayed password generation; a superseded receipt consumes nothing and requires explicit password
+reissue.
+Keycloak forces a password replacement at first sign-in. Incomplete or mismatched replays fail closed.
 
-The register preserves its search/filter state in the URL, exposes one semantic table with native record
-links, and restores the filtered cursor page on browser Back. Detail presentation groups provenance,
-lifecycle, correction lineage, structured values, evidence, evidence-for links, and rendition state.
-Evidence and rendition activations request fresh presigned URLs without forwarding the EasySynQ bearer
-token. The slice is read-only: it adds no capture, correction, evidence-link, legal-hold, disposition,
-retention, WORM-destroy, permission, role, or Keycloak mutation.
+Public bootstrap refuses an unrelated System Administrator assignment without exposing whether one exists
+before the setup proof is validated. A host operator may recover only while setup is `UNINITIALIZED` by
+running `easysynq setup release-administrator-blocker` for one exact Keycloak subject. The command refuses
+the claim owner, removes only that user's System Administrator assignment, preserves the identity, user,
+other roles, and history, and requires an independent incident/change record. Supported fresh-install
+instructions never create or sign in as a demo identity before the browser creates the first administrator.
 
-Migration `0086` adds only the deterministic Records page-order index. The required responsive Chromium
-cohort now includes the Records register and detail route alongside the prior nine shared registers. It
-retains the dedicated authenticated test entry, central fail-closed fixtures, Chromium-only engine, one
-worker, zero retries, and synthetic rather than live-stack boundary. Detailed shipped behavior and evidence
-remain in [`slice-history.md`](slice-history.md#s-records-read-console--evidence-operations-read-console).
+All supported usernames are trimmed and canonicalized to lowercase before claim binding, Keycloak
+lookup/create, response projection, and ordinary `/users/provision` handling. Display names retain their
+case. Later users continue to be created from Administration → Users with `user.create`; role assignment
+still additionally requires `permission.grant`, editing uses `user.update`, and every credential reset of
+another linked user requires both `user.create` and the unconditional system-tier guard under R64. SMTP and
+activation email are not required.
 
-A 2026-08-15 final-review reconciliation hardens that shipped boundary without changing the migration or
-the frontmatter baseline/counts. Record read tuples now include source Quality Objective process bindings
-on scalar, batch, and evidence-pack paths; only source-less corrections inherit a predecessor binding;
-pack classification retains lifecycle predicates; and candidate/detail base rows are anchored to the
-caller's tenant and `RECORD` kind. R59 now governs pinned source-version labels independently from the
-mandatory source-document read. Cursor identity preserves exact trimmed Unicode, empty cursors fail
-canonical validation, and only the canonical cursor-specific `422` activates first-page recovery.
-A separate bounded remediation restores PROCESS evidence-pack parity through a process-unbound,
-source-backed correction bridge: the bridge remains unselected, while a later source-less correction can
-inherit the first non-empty ancestor tuple exactly as the Records list and detail gates do.
+Migrations `0087_first_admin_bootstrap` and `0088_bootstrap_credential` add nullable,
+upgrade-compatible claim/link and credential-receipt digest state. The plaintext receipt, bootstrap proof,
+and temporary password are never persisted or logged. The cross-system workflow never deletes a Keycloak
+user as compensation and serializes proof admission, exact administrator-set checks, marker-owned profile
+reconciliation, and credential issuance. Failed-proof accounting uses one atomic expiring Redis update,
+rejects malformed negative reader state, and is rechecked inside the PostgreSQL singleton lock so racing
+invalid attempts share the same limit. Detailed behavior and evidence remain in
+[`slice-history.md`](slice-history.md#s-first-admin-provisioning--first-administrator-without-keycloak-administration).
 
-The Records rail entry remains unconditional because SYSTEM permission inventory cannot represent
-PROCESS-scoped `record.read`; row filtering remains the security boundary. The register adopts Clear,
-chip, Back, and Forward URL changes without stale settled-search replay. The separate remediation also
-cancels a pending local search when another criterion or Clear all makes URL state authoritative. Source
-lookup opens with a safe blank row-filtered query, keeps typed query separate from selected display, and
-retains a selected id/label pair already returned by that endpoint when a later result page omits it;
-unseen source ids and missing captured-by selections stay neutral. Maximum search/evidence labels plus
-Download, Next, and recovery actions remain bounded with 44 CSS-pixel targets at 320 CSS pixels. No write
-capability was added.
+The application API has exactly nine bearer-free operations in three bounded authorization categories:
+public health/metadata/setup routing (`GET /healthz`, `GET /readyz`, `GET /auth/config`, and
+`GET /setup/state`); bootstrap-secret-authorized mutations (`POST /setup/administrator` and
+`POST /setup/administrator/acknowledge`); and signed-capability-authorized verification/share access
+(`GET /verify`, `GET /evidence-packs/shared`, and `GET /evidence-packs/shared/download`). The capability
+routes remain authorized and scope-bounded, not anonymous QMS-content access; ordinary operations, QMS
+content, and customer/site data remain authenticated and authorized.
 
 ## Runtime truth
 
@@ -90,41 +93,62 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
 the facts it freshly verifies; partial or unavailable checks must be reported as such. The implementation
-compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; the Records
-slice did not rewrite that field merely because its branch SHA differs.
+compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; this slice does
+not rewrite that implementation-evidence field merely because its branch SHA differs.
 
-Fresh 2026-08-15 durable evidence measured the complete suites. API unit job
-`job-msue53tc-802a4b3f` collected 1,730 items and finished with 1,729 passed and one release-ceremony skip
-in 24.83 seconds. API integration job `job-msuas7j6-0af5ad42` collected 1,365 items and finished with
-1,080 passed, two shared-database management-review skips, 283 deselected, and three testcontainers import
-deprecations in 536.15 seconds. Published response-contract job `job-msu7ej4l-c1c3bbea` passed all 283
-selected response schemas with the same three deprecations. Web job `job-msu6hrki-0c62b2a0` passed all
-266 Vitest files and 1,912 tests in 284.82 seconds; stderr retained Node's repeated `localStorage`
-experimental warning.
+Fresh 2026-08-17 durable evidence measured the complete affected inventories after the first-administrator
+PR review fixes.
+API unit job `job-mswq4zse-b59b5405` passed 1,835 tests with one expected release-ceremony image-digest
+skip in 30.33 seconds. API integration job `job-msx8jger-0e1559da` passed 1,163 tests with two expected
+shared-database skips, 284 contract-marked tests deselected, and three registered Testcontainers import
+deprecations in 548.61 seconds. Published response-contract job `job-mswlweou-9b17e09e` remained valid
+because the later fixes changed no API/OpenAPI/response surface; it passed all 284 schemas with the same
+three deprecations in 251.84 seconds. Web job `job-msx9sx1s-0e95eae6` passed all 267 Vitest files and
+1,946 tests in 308.83 seconds with the known Node
+`localStorage` diagnostics.
 
-The populated migration coherence/downgrade/re-upgrade job passed 1/1 with the PostgreSQL testcontainers
-deprecation, and the focused Records Docker-backed selection passed 62 tests with PostgreSQL, MinIO, and
-Redis testcontainers deprecations. Focused Records unit coverage passed 95 tests, and the affected web
-selection passed 10 files/124 tests. The exact browser command rebuilt the isolated entry and passed 38/38
-Chromium tests in 14.7 seconds with one worker and zero retries.
+The bounded PR review fixes cover the first-administrator blocker host-recovery guidance, separate bound
+username/email collision guidance, and trusted-remint admission-budget reset/rollback; the fresh complete
+inventories exercised their owning web and setup integration suites without changing API unit, contract,
+migration, hash, CI-topology, or residual evidence.
 
-Static and contract gates were also fresh: Ruff format reported 743 files already formatted; Ruff lint
-passed; mypy found no issues in 441 source files; web ESLint exited 0; the production TypeScript/Vite build
-transformed 1,106 modules and completed with only the existing large-chunk advisory; contract generation
-and lint were in sync at SHA-256
-`6acfcd63d6967a6294ce1f1a45cd5df833fe2e7c431f3f46a77f69598b24ccda`; and Alembic reported only
-`0086_record_page_index (head)`, making `0087` next.
+The populated migration gate passed 1/1 and independently exercised `0087 -> 0086 -> 0087` and
+`0088 -> 0087 -> 0088`, with the registered PostgreSQL Testcontainers deprecation. Final
+recovery/install cohorts passed 8 recovery integrations, 3 CLI/wrapper dispatch tests, and 15
+supported-install/first-admin guards.
+The earlier synthetic browser job `job-mswm9e51-7a34ed2b` passed 40/40 Chromium tests in 16.4 seconds
+with one worker and zero retries for its then-tested tree. After responsive first-administrator corrections
+through `d091ee58aa05b5590f42fe395e22062137ccb38e`, the final local
+`npm --prefix apps/web run test:browser` cohort again passed 40/40 Chromium tests with one worker and zero
+retries. CI run `32040002549` corroborated that final tree: all fifteen expanded checks, including
+`web browser (Chromium)` and aggregate `web`, completed successfully.
 
-The broad contributor doctor remained diagnostic rather than a false failure for these exact commands: it
-saw unsupported host Node 26, did not recognize the uv-managed Python 3.12.13 selected by `uv run`, and
-reported the intentionally absent repository `.env`. The commands above nevertheless completed in their
-own declared environments. PostgreSQL client `pg_dump` and `pg_restore` 16.14 were present for the green
-integration rerun.
+The separate narrow live job `job-mswlg4ft-b05efb99` remained valid because the later fixes did not change
+its exercised identity/provider flow. It passed 1/1 Chromium test in 2.6 seconds with one worker and zero
+retries against fresh Docker-backed API, PostgreSQL, object store, Redis, and Keycloak services. It proved
+mixed-case input returned and bound the canonical lowercase username, mandatory password replacement
+succeeded, and the obsolete temporary password was rejected from a clean browser context. Teardown removed
+the exact `easysynq-first-admin-32b1b175ba35` project's containers, volumes, network, and six local images.
 
-Firefox, WebKit, actual assistive-technology sessions, live backend/database/object-store/Keycloak
-acceptance, a deployed Docker-backed application acceptance, deployment, and disposable Fedora proof did
-not run and are not described as passed. Docker-backed pytest fixtures and the populated migration
-round-trip are claimed only to the exact gates recorded above.
+Static and contract gates were also fresh: Ruff format reported 750 files already formatted; Ruff lint
+passed; mypy found no issues in 444 source files; web ESLint exited 0; and the production TypeScript/Vite
+build transformed 1,107 modules with only the existing large-chunk advisory. Contract checking was in sync
+at SHA-256 `5ab98c4a060563a8d1ea4fd2c57eba5a7a2923d69b52bd9ef623d6a528f98a58`;
+Alembic reported only `0088_bootstrap_credential (head)`, making `0089` next. Executable workflow parsing
+still finds eleven job definitions and fifteen expanded aggregate/leaf checks.
+
+The final requirements/security whole-branch review found no Critical issue, fixed its authority,
+current-comment, negative-Redis-state, and exact bearer-free allowlist findings in commits
+`4ea6e78c5edf52a2666a6bee1130ace34ab19b56` and
+`1f6f12def9ddb539711ceb4b382e3e28f4c1f87e`, and the scoped final re-review reported no unresolved
+Critical or Important finding. No owner-visible residual closure contract changed.
+
+Firefox, WebKit, actual assistive-technology sessions, SMTP delivery, deployment, general live acceptance
+beyond the narrow first-administrator flow, and disposable Fedora proof did not run and are not described
+as passed. Docker-backed pytest fixtures and both populated migration boundaries are claimed only to their
+exact gates. Known passing diagnostics are the registered Testcontainers deprecations, expected suite
+skips, Node `localStorage` warnings, the Vite large-chunk advisory, and `NO_COLOR`/`FORCE_COLOR` warnings
+from the synthetic browser job.
 
 ## CI topology
 

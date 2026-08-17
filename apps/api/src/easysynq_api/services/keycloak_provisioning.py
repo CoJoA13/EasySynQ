@@ -20,7 +20,9 @@ Two behaviours are inherited from ``scripts/new-keycloak-user.sh`` and are load-
 
 from __future__ import annotations
 
+import copy
 import types
+import uuid
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -28,6 +30,13 @@ from urllib.parse import quote
 import httpx
 
 _TIMEOUT = 15.0
+BOOTSTRAP_CLAIM_ATTRIBUTE = "easysynqBootstrapClaim"
+_OPTIONAL_USER_PROFILE_FIELDS = ("email", "firstName", "lastName")
+_BOOTSTRAP_CLAIM_PROFILE_ATTRIBUTE: dict[str, Any] = {
+    "name": BOOTSTRAP_CLAIM_ATTRIBUTE,
+    "permissions": {"view": ["admin"], "edit": ["admin"]},
+    "multivalued": False,
+}
 
 
 class KeycloakProvisioningError(RuntimeError):
@@ -61,23 +70,26 @@ class KeycloakConflict(KeycloakProvisioningError):
 
 
 class KeycloakRejected(KeycloakProvisioningError):
-    """Keycloak refused the create as invalid input — a 4xx other than 409 (an invalid email, or a
-    value the realm's user-profile validation rejects). Distinct from ``KeycloakUnavailable``: the
-    dependency IS reachable and retrying the same, unchanged form cannot succeed. ``detail`` is a
-    bounded, sanitised explanation built by ``_bounded_message`` — never the raw response body."""
+    """Keycloak refused profile input that cannot succeed unchanged.
+
+    Create uses this for a 4xx other than 409; exact claimed-profile reconciliation also uses it
+    for the provider's 400/409 validation responses. Distinct from ``KeycloakUnavailable``: the
+    dependency is reachable. ``detail`` is always bounded and sanitised, never a raw body.
+    """
 
     def __init__(self, detail: str) -> None:
         self.detail = detail
         super().__init__(detail)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class UserLookup:
     """A DEFINITIVE lookup outcome. A failure raises instead of being represented here, so a
     caller cannot mistake "we could not tell" for "absent"."""
 
     found: bool
     subject: str | None = None
+    bootstrap_claim_id: str | None = None
 
 
 class KeycloakProvisioningClient:
@@ -171,7 +183,11 @@ class KeycloakProvisioningClient:
             # Re-verify: `exact=true` guards against contains-match hazards;
             # never act on an account we did not ask for.
             if item.get("username") == username and isinstance(item.get("id"), str):
-                return UserLookup(found=True, subject=item["id"])
+                return UserLookup(
+                    found=True,
+                    subject=item["id"],
+                    bootstrap_claim_id=_bootstrap_claim_id(item),
+                )
         if body:
             # A NON-EMPTY response with no exact match is a lookup FAILURE, not absence: Keycloak
             # normalizes usernames (lowercases them), so provisioning `JDoe` when `jdoe` already
@@ -191,6 +207,149 @@ class KeycloakProvisioningClient:
             )
         return UserLookup(found=False)
 
+    async def ensure_optional_user_profile_fields(self) -> None:
+        """Reconcile Keycloak's profile policy with EasySynQ's optional identity fields.
+
+        Keycloak's implicit default profile requires email and both name fields for ordinary
+        users. EasySynQ deliberately permits all three to be absent, so leaving that default in
+        place makes Keycloak add VERIFY_PROFILE after the required password update. Preserve the
+        complete realm profile document, remove only the ``required`` member from those exact
+        built-ins, and define the bootstrap marker as a managed admin-only attribute. Keycloak's
+        default unmanaged-attribute policy silently drops unknown attributes, while broadening that
+        policy would expose unrelated attributes. The admin endpoint has whole-document PUT
+        semantics, so an already-reconciled profile is deliberately left untouched.
+        """
+        headers = await self._headers()
+        client = self._client
+        if client is None:
+            raise KeycloakUnavailable("Client not initialized; use async context manager")
+        path = f"/admin/realms/{self._realm}/users/profile"
+        try:
+            response = await client.get(path, headers=headers)
+            response.raise_for_status()
+            profile = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise KeycloakUnavailable(f"Keycloak user-profile read failed: {exc}") from exc
+
+        if not isinstance(profile, dict):
+            raise KeycloakUnavailable("Keycloak user-profile response was not an object")
+        attributes = profile.get("attributes")
+        if not isinstance(attributes, list):
+            raise KeycloakUnavailable("Keycloak user-profile attributes were not a list")
+
+        found = {name: False for name in _OPTIONAL_USER_PROFILE_FIELDS}
+        marker_position: int | None = None
+        changed = False
+        for position, attribute in enumerate(attributes):
+            if not isinstance(attribute, dict) or not isinstance(attribute.get("name"), str):
+                raise KeycloakUnavailable("Keycloak user-profile attribute was malformed")
+            name = attribute["name"]
+            if name == BOOTSTRAP_CLAIM_ATTRIBUTE:
+                if marker_position is not None:
+                    raise KeycloakUnavailable(
+                        "Keycloak user-profile contained duplicate bootstrap marker attribute"
+                    )
+                marker_position = position
+                continue
+            if name not in found:
+                continue
+            if found[name]:
+                raise KeycloakUnavailable(
+                    f"Keycloak user-profile contained duplicate built-in attribute {name!r}"
+                )
+            found[name] = True
+            if "required" in attribute:
+                del attribute["required"]
+                changed = True
+
+        missing = [name for name, present in found.items() if not present]
+        if missing:
+            raise KeycloakUnavailable(
+                f"Keycloak user-profile omitted built-in attributes {missing!r}"
+            )
+        if marker_position is None:
+            attributes.append(copy.deepcopy(_BOOTSTRAP_CLAIM_PROFILE_ATTRIBUTE))
+            changed = True
+        elif attributes[marker_position] != _BOOTSTRAP_CLAIM_PROFILE_ATTRIBUTE:
+            attributes[marker_position] = copy.deepcopy(_BOOTSTRAP_CLAIM_PROFILE_ATTRIBUTE)
+            changed = True
+        if not changed:
+            return
+
+        try:
+            response = await client.put(path, headers=headers, json=profile)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise KeycloakUnavailable(f"Keycloak user-profile update failed: {exc}") from exc
+
+    async def reconcile_claimed_user_profile(
+        self,
+        *,
+        subject: str,
+        username: str,
+        bootstrap_claim_id: uuid.UUID,
+        email: str | None,
+        first_name: str | None,
+        last_name: str | None,
+    ) -> None:
+        """Reconcile only an exactly marker-owned bootstrap identity's approved profile fields.
+
+        Keycloak's user update has whole-representation semantics and no compare-and-swap token.
+        Read and deep-copy the complete representation so provider-managed content survives, then
+        assign only the four fields approved by the bootstrap recovery contract. Failure text is
+        deliberately generic because the subject and marker are recovery capabilities that must
+        not escape through an exception or public problem response.
+        """
+        headers = await self._headers()
+        client = self._client
+        if client is None:
+            raise KeycloakUnavailable("Client not initialized; use async context manager")
+        subject_path = quote(subject, safe="")
+        path = f"/admin/realms/{self._realm}/users/{subject_path}"
+        try:
+            response = await client.get(path, headers=headers)
+        except httpx.HTTPError:
+            raise KeycloakUnavailable("Keycloak claimed-profile read failed") from None
+        if response.status_code != 200:
+            raise KeycloakUnavailable("Keycloak claimed-profile read failed")
+        try:
+            representation = response.json()
+        except ValueError:
+            raise KeycloakUnavailable("Keycloak claimed-profile response was unusable") from None
+        if not isinstance(representation, dict):
+            raise KeycloakUnavailable("Keycloak claimed-profile response was unusable")
+
+        try:
+            marker = _bootstrap_claim_id(representation)
+        except KeycloakUnavailable:
+            raise KeycloakUnavailable("Keycloak claimed-profile ownership was unusable") from None
+        if (
+            representation.get("id") != subject
+            or representation.get("username") != username
+            or marker != str(bootstrap_claim_id)
+        ):
+            raise KeycloakUnavailable("Keycloak claimed-profile ownership was unusable")
+
+        approved_fields = {
+            "email": email,
+            "emailVerified": email is not None,
+            "firstName": first_name,
+            "lastName": last_name,
+        }
+        if all(representation.get(key) == value for key, value in approved_fields.items()):
+            return
+
+        updated = copy.deepcopy(representation)
+        updated.update(approved_fields)
+        try:
+            response = await client.put(path, headers=headers, json=updated)
+        except httpx.HTTPError:
+            raise KeycloakUnavailable("Keycloak claimed-profile update failed") from None
+        if response.status_code in (400, 409):
+            raise KeycloakRejected("Keycloak rejected the claimed-profile update")
+        if not 200 <= response.status_code < 300:
+            raise KeycloakUnavailable("Keycloak claimed-profile update failed")
+
     async def create_user(
         self,
         *,
@@ -198,6 +357,7 @@ class KeycloakProvisioningClient:
         email: str | None,
         first_name: str | None,
         last_name: str | None,
+        bootstrap_claim_id: uuid.UUID | None = None,
     ) -> str:
         headers = await self._headers()
         client = self._client
@@ -214,6 +374,8 @@ class KeycloakProvisioningClient:
             payload["firstName"] = first_name
         if last_name:
             payload["lastName"] = last_name
+        if bootstrap_claim_id is not None:
+            payload["attributes"] = {BOOTSTRAP_CLAIM_ATTRIBUTE: [str(bootstrap_claim_id)]}
         try:
             response = await client.post(
                 f"/admin/realms/{self._realm}/users", headers=headers, json=payload
@@ -286,6 +448,26 @@ class KeycloakProvisioningClient:
         except httpx.HTTPError as exc:
             # The message must never interpolate `password`.
             raise KeycloakUnavailable(f"Keycloak set-password failed: {exc}") from exc
+
+
+def _bootstrap_claim_id(item: dict[str, Any]) -> str | None:
+    """Read the exact Keycloak list-valued recovery marker or fail closed."""
+    if "attributes" not in item:
+        return None
+    attributes = item["attributes"]
+    if not isinstance(attributes, dict):
+        raise KeycloakUnavailable("Keycloak bootstrap marker was malformed")
+    if BOOTSTRAP_CLAIM_ATTRIBUTE not in attributes:
+        return None
+    marker = attributes[BOOTSTRAP_CLAIM_ATTRIBUTE]
+    if (
+        not isinstance(marker, list)
+        or len(marker) != 1
+        or not isinstance(marker[0], str)
+        or not marker[0]
+    ):
+        raise KeycloakUnavailable("Keycloak bootstrap marker was malformed")
+    return marker[0]
 
 
 def _conflict_field(response: httpx.Response) -> str:

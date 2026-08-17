@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "fmt": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "test": "vitest run",
-    "test:browser": "npm run build:browser && playwright test"
+    "test:browser": "npm run build:browser && playwright test",
+    "test:first-admin-live": "playwright test --config playwright.live.config.ts"
   },
   "dependencies": {
     "@mantine/core": "^7.13.0",

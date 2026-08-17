@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["vite/client", "vitest/globals", "node", "@playwright/test"]
   },
-  "include": ["src", "e2e", "playwright.config.ts"]
+  "include": ["src", "e2e", "e2e-live", "playwright.config.ts", "playwright.live.config.ts"]
 }

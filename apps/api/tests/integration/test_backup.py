@@ -25,6 +25,7 @@ from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.backup_policy import BackupPolicy
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services import backup as backup_service
+from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.tasks.app import app as celery_app
 
 from . import s5_helpers as s5
@@ -32,12 +33,21 @@ from .test_setup import (
     _auth,
     _bootstrap,
     _bootstrap_through_storage,
+    _FakeKeycloak,
     _org_id,
     _reset_uninitialized,
     _sub,
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture
+def _backup_keycloak(monkeypatch: pytest.MonkeyPatch) -> _FakeKeycloak:
+    """Give backup setup tests an explicit fake for the shared identity boundary."""
+    fake = _FakeKeycloak()
+    monkeypatch.setattr(identity_provisioning, "keycloak_client", lambda: fake)
+    return fake
 
 
 def _s3_client() -> object:
@@ -64,7 +74,9 @@ async def _insert_backup_policy(org_id: uuid.UUID, destination: str) -> None:
 
 
 async def test_configure_backup_requires_permission(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _backup_keycloak: _FakeKeycloak,
 ) -> None:
     """configure-backup is gated on backup.configure — a non-admin is 403; the admin writes the
     policy + a BACKUP_CONFIGURED audit row."""
@@ -77,8 +89,7 @@ async def test_configure_backup_requires_permission(
     )
     assert forbidden.status_code == 403
 
-    h = _auth(token_factory, _sub("cfg"))
-    body = await _bootstrap(app_client, h, secret)
+    h, body = await _bootstrap(app_client, token_factory, secret, "cfg")
     admin_id = uuid.UUID(body["admin_user_id"])
     ok = await app_client.post(
         "/api/v1/setup/configure-backup", headers=h, json={"destination": dest}
@@ -100,13 +111,14 @@ async def test_configure_backup_requires_permission(
 
 
 async def test_configure_backup_rejects_unwritable_destination(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _backup_keycloak: _FakeKeycloak,
 ) -> None:
     """A destination that cannot be created/written is a 422 (live reachability check, doc 08 §8.1)
     — not a silent success that would later fail the nightly backup."""
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("baddest"))
-    await _bootstrap(app_client, h, secret)
+    h, _ = await _bootstrap(app_client, token_factory, secret, "baddest")
 
     # A path whose PARENT is a regular file → makedirs fails regardless of uid (robust in CI/root).
     fd, parent_file = tempfile.mkstemp(prefix="easysynq-notadir-")
@@ -123,11 +135,12 @@ async def test_configure_backup_rejects_unwritable_destination(
 
 
 async def test_configure_backup_rejects_bad_cron(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _backup_keycloak: _FakeKeycloak,
 ) -> None:
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("badcron"))
-    await _bootstrap(app_client, h, secret)
+    h, _ = await _bootstrap(app_client, token_factory, secret, "badcron")
     dest = tempfile.mkdtemp(prefix="easysynq-cron-")
     r = await app_client.post(
         "/api/v1/setup/configure-backup",
@@ -138,13 +151,14 @@ async def test_configure_backup_rejects_bad_cron(
 
 
 async def test_configure_backup_rejects_wal_pitr(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _backup_keycloak: _FakeKeycloak,
 ) -> None:
     """wal_pitr_enabled is a recorded forward-seam; continuous WAL/PITR is S11/v1.x (D-6) — setting
     it true is a 422, so the scope boundary is enforced rather than silently accepted."""
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("walpitr"))
-    await _bootstrap(app_client, h, secret)
+    h, _ = await _bootstrap(app_client, token_factory, secret, "walpitr")
     dest = tempfile.mkdtemp(prefix="easysynq-wal-")
     r = await app_client.post(
         "/api/v1/setup/configure-backup",
@@ -166,24 +180,27 @@ async def test_run_restore_test_requires_permission(
 
 
 async def test_run_restore_test_requires_configured_backup(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _backup_keycloak: _FakeKeycloak,
 ) -> None:
     """An admin who has not configured a backup gets 409 backup_not_configured (no drill run)."""
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("nocfgrun"))
-    await _bootstrap(app_client, h, secret)
+    h, _ = await _bootstrap(app_client, token_factory, secret, "nocfgrun")
     r = await app_client.post("/api/v1/setup/run-restore-test", headers=h)
     assert r.status_code == 409
     assert r.json()["code"] == "backup_not_configured"
 
 
 async def test_run_restore_test_uses_fixture_redis(
-    app_client: AsyncClient, token_factory: Callable[..., str], _redis: str
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _redis: str,
+    _backup_keycloak: _FakeKeycloak,
 ) -> None:
     """The collection-bound Celery singleton enqueues through the integration Redis container."""
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("fixture-redis"))
-    await _bootstrap(app_client, h, secret)
+    h, _ = await _bootstrap(app_client, token_factory, secret, "fixture-redis")
     await _insert_backup_policy(
         await _org_id(), tempfile.mkdtemp(prefix="easysynq-restore-enqueue-")
     )
@@ -196,7 +213,9 @@ async def test_run_restore_test_uses_fixture_redis(
 
 
 async def test_durable_backup_writes_verified_archive(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _backup_keycloak: _FakeKeycloak,
 ) -> None:
     """`easysynq backup run` (run_scheduled_backups) writes a checksum-valid archive to the
     configured destination — the durable artifact (pg_dump + blob manifest)."""
@@ -216,7 +235,9 @@ async def test_durable_backup_writes_verified_archive(
 
 
 async def test_drill_tears_down_scratch_namespace(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _backup_keycloak: _FakeKeycloak,
 ) -> None:
     """After a PASS drill, no scratch DB lingers and the scratch-bucket prefix is emptied — the
     drill never leaves immutable/locked residue (R37) or orphaned scratch databases."""

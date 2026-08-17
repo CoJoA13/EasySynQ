@@ -1,12 +1,10 @@
-"""Break-glass guard: an org must always retain at least one ACTIVE System Administrator.
+"""Shared serialization protocol for an organization's System Administrator assignment set.
 
-Two admin surfaces can remove the last one — role revocation (``DELETE /users/{id}/roles/{aid}``)
-and user deactivation (``PATCH /users/{id}`` → DISABLED). A per-path check-then-mutate RACES: two
-concurrent transactions (one disabling admin A, one revoking admin B's System-Administrator role)
-each still see the other active and both commit → a self-hosted lockout the spec forbids (doc 08
-§9.1). So BOTH paths take ONE org-scoped transaction advisory lock BEFORE counting admins and
-before the mutating delete/disable — serialising the count+mutation across both paths. The lock is
-transaction-scoped: it auto-releases when the request's transaction commits or rolls back.
+Every supported runtime writer that inserts or removes a System Administrator assignment takes one
+per-org transaction advisory lock before observing or mutating that set. That includes generic API
+grants, in-app user provisioning, host break-glass, bootstrap, role revocation, and user disable.
+Ordinary roles short-circuit without the lock. The lock is transaction-scoped and releases when the
+writer commits or rolls back.
 """
 
 from __future__ import annotations
@@ -16,17 +14,21 @@ import uuid
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.role import Role, RoleAssignment
 
-# The seeded role that carries the system-administration bundle (the appliance's qmsadmin holds it).
+# The seeded role whose assignments are governed by the shared System Administrator invariant.
 SYSTEM_ADMIN_ROLE = "System Administrator"
 
 # A per-org transaction-scoped advisory-lock namespace for the admin set. Two-arg (ns, oid) form,
 # distinct from the register-head locks (7710100/1/2 — risk/context/interested-parties) and the
 # single-arg global LOCK_* Beat keys (see services/common/pg_locks.py).
 _ADMIN_SET_LOCK_NS = 7710110
+_ADMIN_SET_LOCK_SQL = text(
+    "SELECT pg_advisory_xact_lock(CAST(:ns AS integer), CAST(:oid AS integer))"
+)
 
 
 def _org_admin_lock_oid(org_id: uuid.UUID) -> int:
@@ -35,17 +37,24 @@ def _org_admin_lock_oid(org_id: uuid.UUID) -> int:
     return int.from_bytes(hashlib.blake2b(org_id.bytes, digest_size=4).digest(), "big", signed=True)
 
 
+def _admin_set_lock_params(org_id: uuid.UUID) -> dict[str, int]:
+    return {"ns": _ADMIN_SET_LOCK_NS, "oid": _org_admin_lock_oid(org_id)}
+
+
 async def lock_admin_set(session: AsyncSession, org_id: uuid.UUID) -> None:
-    """Take the org-scoped transaction advisory lock that serialises every path which can remove
-    the last active System Administrator. It MUST be held across the admin count AND the mutating
-    delete/disable, in the SAME transaction — the lock releases only when that transaction ends."""
+    """Serialize every supported mutation of the org's System Administrator assignment set."""
     await session.execute(
         # Cast to int4 so PG binds the two-arg pg_advisory_xact_lock(int, int) overload (a Python
         # int would otherwise bind as bigint, for which no two-arg form exists) — the context/risk
         # register-head-lock idiom.
-        text("SELECT pg_advisory_xact_lock(CAST(:ns AS integer), CAST(:oid AS integer))"),
-        {"ns": _ADMIN_SET_LOCK_NS, "oid": _org_admin_lock_oid(org_id)},
+        _ADMIN_SET_LOCK_SQL,
+        _admin_set_lock_params(org_id),
     )
+
+
+def lock_admin_set_sync(session: Session, org_id: uuid.UUID) -> None:
+    """Synchronous companion for host CLIs, sharing the exact lock key and transaction scope."""
+    session.execute(_ADMIN_SET_LOCK_SQL, _admin_set_lock_params(org_id))
 
 
 async def _active_admin_user_ids(

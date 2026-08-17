@@ -1,11 +1,9 @@
-"""Setup use-cases — bootstrap-of-trust, org profile, finalize + the gate registry (S8a, doc 08).
+"""Setup configuration, finalize, and gate-registry use-cases (S8a, doc 08).
 
-The flow: an operator mints a bootstrap secret (``cli/setup.py``), the first user POSTs it to the
-public ``/setup/bootstrap`` (outside the PEP) and is granted ``System Administrator`` — breaking the
-deny-by-default chicken-and-egg; then that admin sets the org profile and finalizes, flipping the
-``setup_state`` latch ``UNINITIALIZED → IN_SETUP → OPERATIONAL``. Finalize re-checks the registered
-:data:`GATES` live (doc 08 §14.2). S8a registers **G-A** (admin) + **G-E** (org); **G-B** (WORM),
-**G-C/AC#5** (restore-drill), **G-D** (auth) append to ``GATES`` in S8b/S8c.
+The secret-authorized first-administrator state machine lives in ``administrator.py``. After the
+operator acknowledges that credential, the administrator sets the remaining configuration and
+finalizes, flipping the ``setup_state`` latch ``IN_SETUP → OPERATIONAL``. Finalize re-checks the
+registered :data:`GATES` live (doc 08 §14.2).
 
 Audit rows are appended directly (object types ``config``/``user``) and commit atomically with the
 state change — the app role holds INSERT on ``audit_event`` (S6); the chain-linker picks them up.
@@ -45,7 +43,6 @@ from ..audit.checkpoint import tamper_evidence_attested
 from ..backup import configure_backup_destination_check
 from ..vault import storage
 from . import auth_check
-from .bootstrap import verify_secret
 
 _OBJECT_LOCK_MODES = frozenset({"GOVERNANCE", "COMPLIANCE"})
 _AUTH_METHODS = frozenset({"LOCAL", "FEDERATED"})
@@ -59,6 +56,30 @@ _SHORT_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{1,31}$")
 _RL_KEY = "setup:bootstrap:fails"
 _RL_MAX = 5
 _RL_WINDOW_SECONDS = 900  # 5 attempts / 15 min (doc 08 §4)
+_RL_RECORD_FAILURE_LUA = """
+local window = tonumber(ARGV[1])
+if not window or window < 1 or window ~= math.floor(window) then
+  return redis.error_reply('invalid bootstrap rate-limit window')
+end
+
+local raw = redis.call('GET', KEYS[1])
+local count = 0
+if raw then
+  count = tonumber(raw)
+  if not count or count < 0 or count ~= math.floor(count) then
+    return redis.error_reply('malformed bootstrap failure counter')
+  end
+end
+
+local remaining = redis.call('TTL', KEYS[1])
+if remaining < 1 then
+  remaining = window
+end
+
+local next_count = count + 1
+redis.call('SET', KEYS[1], tostring(next_count), 'EX', remaining)
+return next_count
+"""
 
 
 def _now() -> datetime.datetime:
@@ -103,7 +124,7 @@ def _emit(
     )
 
 
-# --- rate limit (best-effort; never blocks the happy path if Redis is down) -------------
+# --- bootstrap rate limit (fail closed while bootstrap authority is active) -------------
 
 
 def _redis() -> Any:
@@ -114,26 +135,41 @@ async def _check_rate_limit() -> None:
     try:
         async with _redis() as client:
             fails = await client.get(_RL_KEY)
-        if fails is not None and int(fails) >= _RL_MAX:
-            raise ProblemException(
-                status=429,
-                code="rate_limited",
-                title="Too many bootstrap attempts; try again later",
-            )
+        if fails is not None:
+            failure_count = int(fails)
+            if failure_count < 0:
+                raise ValueError("malformed bootstrap failure counter")
+            if failure_count >= _RL_MAX:
+                raise ProblemException(
+                    status=429,
+                    code="rate_limited",
+                    title="Too many bootstrap attempts; try again later",
+                )
     except ProblemException:
         raise
-    except Exception:  # noqa: BLE001 — best-effort: a Redis outage must not brick bootstrap
-        logger.warning("setup.bootstrap: rate-limit check skipped (redis unavailable)")
+    except Exception as exc:
+        raise ProblemException(
+            status=503,
+            code="dependency_unavailable",
+            title="Bootstrap rate limiting is unavailable",
+        ) from exc
 
 
 async def _record_failure() -> None:
     try:
         async with _redis() as client:
-            count = await client.incr(_RL_KEY)
-            if count == 1:
-                await client.expire(_RL_KEY, _RL_WINDOW_SECONDS)
-    except Exception:  # noqa: BLE001
-        logger.warning("setup.bootstrap: failed to record a bootstrap failure (redis unavailable)")
+            await client.eval(
+                _RL_RECORD_FAILURE_LUA,
+                1,
+                _RL_KEY,
+                str(_RL_WINDOW_SECONDS),
+            )
+    except Exception as exc:
+        raise ProblemException(
+            status=503,
+            code="dependency_unavailable",
+            title="Bootstrap rate limiting is unavailable",
+        ) from exc
 
 
 async def _reset_failures() -> None:
@@ -282,77 +318,6 @@ async def get_setup_detail(session: AsyncSession, actor: AppUser) -> dict[str, A
     }
 
 
-async def bootstrap_admin(session: AsyncSession, actor: AppUser, secret: str) -> dict[str, Any]:
-    """Consume the one-time bootstrap secret and grant the caller System Administrator (the
-    bootstrap-of-trust). Single-use + TTL'd; transitions UNINITIALIZED → IN_SETUP."""
-    await _check_rate_limit()
-    cfg = await _load_config(session, actor.org_id, lock=True)
-
-    if cfg.setup_state == SetupState.OPERATIONAL:
-        raise ProblemException(
-            status=409, code="setup_already_complete", title="Setup is already complete"
-        )
-    if cfg.bootstrap_secret_hash is None:
-        raise ProblemException(
-            status=409,
-            code="no_bootstrap_secret",
-            title="No bootstrap secret has been minted (run: easysynq setup mint-bootstrap)",
-        )
-    if cfg.bootstrap_consumed_at is not None:
-        raise ProblemException(
-            status=409, code="bootstrap_already_consumed", title="The bootstrap secret was used"
-        )
-    if cfg.bootstrap_expires_at is not None and _now() > cfg.bootstrap_expires_at:
-        raise ProblemException(
-            status=403, code="bootstrap_expired", title="The bootstrap secret has expired"
-        )
-    if not verify_secret(secret, cfg.bootstrap_secret_hash):
-        await _record_failure()
-        raise ProblemException(
-            status=403, code="bootstrap_invalid", title="Invalid bootstrap secret"
-        )
-
-    role = await session.scalar(
-        select(Role).where(Role.org_id == actor.org_id, Role.name == SYSTEM_ADMIN_ROLE)
-    )
-    if role is None:  # pragma: no cover - the role is seeded in 0004
-        raise ProblemException(
-            status=500, code="role_missing", title="System Administrator role is not seeded"
-        )
-    already = await session.scalar(
-        select(RoleAssignment.id).where(
-            RoleAssignment.user_id == actor.id, RoleAssignment.role_id == role.id
-        )
-    )
-    if already is None:
-        session.add(
-            RoleAssignment(org_id=actor.org_id, user_id=actor.id, role_id=role.id, bound_scope=None)
-        )
-
-    cfg.bootstrap_consumed_at = _now()
-    if cfg.setup_state == SetupState.UNINITIALIZED:
-        cfg.setup_state = SetupState.IN_SETUP
-
-    _emit(
-        session,
-        event_type="BOOTSTRAP_CONSUMED",
-        actor=actor,
-        object_type=AuditObjectType.config,
-        object_id=actor.org_id,
-    )
-    _emit(
-        session,
-        event_type="ADMIN_BOOTSTRAPPED",
-        actor=actor,
-        object_type=AuditObjectType.user,
-        object_id=actor.id,
-        after={"role": SYSTEM_ADMIN_ROLE},
-    )
-    await session.commit()
-    await _reset_failures()
-    return {"setup_state": cfg.setup_state.value, "admin_user_id": str(actor.id)}
-
-
 async def set_org_profile(
     session: AsyncSession, actor: AppUser, *, legal_name: str, short_code: str, timezone: str
 ) -> dict[str, Any]:
@@ -428,9 +393,8 @@ async def verify_storage(
             title="The vault bucket does not enforce WORM object-lock",
             detail=probe.detail,
         )
-    # Serialize per-org setup mutations on the system_config singleton (matches bootstrap_admin /
-    # finalize_setup) so a concurrent same-org verify-storage can't lose the check-then-insert race
-    # on storage_config's UNIQUE(org_id) and surface an unhandled IntegrityError.
+    # Serialize per-org setup mutations on the system_config singleton (matching the administrator
+    # state machine / finalize) so concurrent verification cannot lose the check-then-insert race.
     await _load_config(session, actor.org_id, lock=True)
     cfg = await session.scalar(select(StorageConfig).where(StorageConfig.org_id == actor.org_id))
     if cfg is None:

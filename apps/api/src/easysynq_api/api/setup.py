@@ -1,32 +1,32 @@
 """The first-run setup wizard surface (slice S8a, doc 08).
 
 All routes are latch-exempt (``main.py`` lets ``/api/v1/setup*`` through while ``setup_state !=
-OPERATIONAL``). ``/setup/state`` is **public** so the SPA can route before sign-in; ``/setup``
-requires ``config.read`` because it exposes configuration and gate diagnostics. Only
-``/setup/bootstrap`` runs outside the PEP (the bootstrap secret — not a grant — authorizes becoming
-the first admin, breaking the deny-by-default chicken-and-egg); config-mutating steps require
-``config.update`` (held by the just-granted System Administrator).
+OPERATIONAL``). ``/setup/state`` and the two first-administrator operations are public: the
+bootstrap secret is their complete pre-authentication authority. ``/setup`` requires
+``config.read`` because it exposes configuration and gate diagnostics; later configuration steps
+use the permissions held by the newly provisioned System Administrator.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Response, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth.dependencies import get_current_user
 from ..db.models.app_user import AppUser
 from ..db.session import get_session
 from ..services.authz import require
 from ..services.setup import (
-    bootstrap_admin,
+    FirstAdministratorProfile,
+    acknowledge_first_administrator,
     configure_auth,
     configure_backup,
     finalize_setup,
     get_setup_detail,
     get_setup_state,
+    provision_first_administrator,
     set_org_profile,
     trigger_restore_test,
     verify_storage,
@@ -44,8 +44,26 @@ _backup_configure = require("backup.configure")
 _restore_run = require("restore.run")
 
 
-class BootstrapRequest(BaseModel):
-    secret: str
+class FirstAdministratorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    secret: str = Field(min_length=1, max_length=512)
+    username: str = Field(min_length=1, max_length=255)
+    display_name: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")
+    email: str | None = Field(default=None, max_length=320)
+    first_name: str | None = Field(default=None, max_length=255)
+    last_name: str | None = Field(default=None, max_length=255)
+
+
+class BootstrapAcknowledgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    secret: str = Field(min_length=1, max_length=512)
+    credential_receipt: str = Field(
+        min_length=43,
+        max_length=43,
+        pattern=r"^[A-Za-z0-9_-]{43}$",
+    )
 
 
 class OrgProfileUpdate(BaseModel):
@@ -90,15 +108,50 @@ async def setup_detail_endpoint(
     return await get_setup_detail(session, caller)
 
 
-@router.post("/setup/bootstrap")
-async def setup_bootstrap_endpoint(
-    body: BootstrapRequest,
-    caller: AppUser = Depends(get_current_user),
+@router.post("/setup/administrator")
+async def setup_administrator_endpoint(
+    body: FirstAdministratorRequest,
+    response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Consume the one-time install secret and grant the caller System Administrator (doc 08 §4-5).
-    Authenticated but OUTSIDE the PEP — the secret authorizes the first-admin grant."""
-    return await bootstrap_admin(session, caller, body.secret)
+    """Provision or recover the one administrator bound by the bootstrap secret."""
+    result = await provision_first_administrator(
+        session,
+        secret=body.secret,
+        profile=FirstAdministratorProfile(
+            username=body.username,
+            display_name=body.display_name,
+            email=body.email,
+            first_name=body.first_name,
+            last_name=body.last_name,
+        ),
+    )
+    response.status_code = status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+    return {
+        "administrator": {
+            "id": str(result.admin_user_id),
+            "username": result.username,
+            "display_name": result.display_name,
+            "email": result.email,
+            "status": "INVITED",
+        },
+        "temporary_password": result.temporary_password,
+        "credential_receipt": result.credential_receipt,
+        "password_delivery": "shown_once",
+    }
+
+
+@router.post("/setup/administrator/acknowledge")
+async def setup_administrator_acknowledge_endpoint(
+    body: BootstrapAcknowledgeRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    """Acknowledge receipt of the volatile password and advance the setup latch."""
+    return await acknowledge_first_administrator(
+        session,
+        secret=body.secret,
+        credential_receipt=body.credential_receipt,
+    )
 
 
 @router.patch("/setup/org-profile")

@@ -301,13 +301,13 @@ The user representation backs `app_user`. It carries a nullable `manager_id` (se
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
 | GET | `/users` | `user.read` | — | Filter `status`, `email`, `is_guest`, `manager_id`. Sort `display_name`, `created_at`. |
-| POST | `/users` | `user.create` | ✓ | Links an existing Keycloak subject (`keycloak_subject`) to a new `app_user` row, status begins `INVITED`; does **not** create the Keycloak account — see `POST /users/provision` below to create both together. Optional `manager_id`. |
-| POST | `/users/provision` | `user.create` | — | Creates the Keycloak sign-in account AND the `INVITED` `app_user` row in one call (S-user-create), returning a generated temporary password shown once (`password_delivery: shown_once`). Non-empty `role_ids` additionally needs `permission.grant` (SoD-guarded via `assert_can_assign_role`). 409 `keycloak_username_exists_unlinked` carries `keycloak_subject` so the caller can link instead via `POST /users`; 409 `user_exists` / `keycloak_email_exists`; 502 `keycloak_unavailable` (incl. the created-but-no-password case); 503 `keycloak_not_configured`. |
+| POST | `/users` | `user.create` | ✓ | **Break-glass/orphan adoption only.** Links an existing Keycloak subject (`keycloak_subject`) to a new `app_user` row, status begins `INVITED`; does **not** create the Keycloak account. Normal later-user creation uses `POST /users/provision`; this endpoint is for a controlled recovery after an external or partially failed identity creation. |
+| POST | `/users/provision` | `user.create` | — | Trims and canonicalizes the username to lowercase, then creates the Keycloak sign-in account AND the `INVITED` `app_user` row in one call (S-user-create), returning a generated temporary password shown once (`password_delivery: shown_once`). Non-empty `role_ids` additionally needs `permission.grant` (SoD-guarded via `assert_can_assign_role`). 409 `keycloak_username_exists_unlinked` carries `keycloak_subject` so the caller can link instead via `POST /users`; 409 `user_exists` / `keycloak_email_exists`; 502 `keycloak_unavailable` (incl. the created-but-no-password case); 503 `keycloak_not_configured`. |
 | GET | `/users/{id}` | `user.read` | — | `expand=roles,overrides,manager`. |
 | PATCH | `/users/{id}` | `user.update` | — | `display_name`, attributes, `manager_id`, `status` (`ACTIVE/LOCKED/DISABLED`). `If-Match`. |
 | POST | `/users/{id}/retire` | `user.update` | ✓ | `status→RETIRED`; PII anonymizable while `id`/`audit` chain stays intact (`14 §12`, `12 §9.4`). **Never hard-deleted** (attribution integrity). |
 | POST | `/users/{id}/guest-grant` | `permission.grant` | ✓ | Time-boxed external-auditor access: `{ evidence_pack_id, valid_until, ip_allow?, read_only:true }` (`14 §3` `guest_grant`). |
-| POST | `/users/{id}/temporary-password` | `user.create` | — | Reissues a generated temporary password for an existing linked user, shown once (`password_delivery: shown_once`, S-user-create) — repairs a provision whose credential step failed and replaces `scripts/new-keycloak-user.sh` as the password-reset path. Resetting the credential of a user who holds any system-domain permission additionally requires a system-tier caller (two-tier guard, R35, `assert_can_reset_credential`) — an unprivileged target needs only `user.create`. 409 `user_not_linked` if the user has no linked Keycloak subject; 422 `two_tier_violation` if a content-tier caller targets a system-domain-privileged user; 502 `keycloak_unavailable`; 503 `keycloak_not_configured`. |
+| POST | `/users/{id}/temporary-password` | `user.create` + system tier | — | Reissues a generated temporary password for an existing linked user, shown once (`password_delivery: shown_once`, S-user-create) — repairs a provision whose credential step failed and replaces `scripts/new-keycloak-user.sh` as the password-reset path. Under R64, resetting every existing linked user unconditionally requires a system-tier caller in addition to `user.create`, regardless of the target's permissions (`assert_can_reset_credential`). 409 `user_not_linked` if the user has no linked Keycloak subject; 422 `two_tier_violation` if the caller is not system-tier; 502 `keycloak_unavailable`; 503 `keycloak_not_configured`. |
 
 ### 8.2 Roles (`/roles`)
 
@@ -847,7 +847,8 @@ current gate. Rows explicitly labeled Future below are not mounted.
 |---|---|---|
 | GET / PATCH | `/admin/config` | **S-rec-3 (as built):** post-OPERATIONAL org toggles on `system_config` (today `capture_pre_release_templates`, doc 06 §4.2). Gated on the SYSTEM-domain `config.update` (admin-only; R35); audited `CONFIG_UPDATED` (object_type `config`). |
 | GET | `/setup/state` | Public minimal read of `system_config.setup_state`; the SPA uses it to choose wizard vs shell. |
-| POST | `/setup/bootstrap` | Authenticated but deliberately outside the PEP: the single-use install secret authorizes the first System Administrator grant and breaks the deny-by-default bootstrap cycle. |
+| POST | `/setup/administrator` | Public only while setup is `UNINITIALIZED`. Body: `{secret, username, display_name, email?, first_name?, last_name?}`. A valid one-time setup secret creates (`201`) or recovers/reissues (`200`) the single bound first administrator. Success returns `{administrator, temporary_password, credential_receipt, password_delivery: "shown_once"}`; neither the projection nor any problem contains a Keycloak subject. Corrected optional profile values apply only to the bound first administrator, and the canonical bound username cannot change. |
+| POST | `/setup/administrator/acknowledge` | Public body: `{secret, credential_receipt}`. It acknowledges the active shown credential generation, consumes the secret, and advances setup to `IN_SETUP`, returning `{setup_state: "IN_SETUP", admin_user_id}` without a password or receipt. The matching already-consumed secret/receipt replay is idempotent, including after expiry. |
 | GET | `/setup` | Sensitive setup/gate detail, backed by `organization`, `system_config`, `storage_config`, and `backup_policy`; gated on `config.read`. |
 | PATCH | `/setup/org-profile` | Requires `config.update`; updates `organization.legal_name`, `short_code`, and `timezone`. There is no profile table. |
 | POST | `/setup/verify-storage` | Requires `storage.manage`; runs the G-B WORM probe and persists `storage_config.worm_verified_at`/`object_lock_mode`. Bucket/endpoint values remain deployment configuration. |
@@ -859,6 +860,34 @@ current gate. Rows explicitly labeled Future below are not mounted.
 | GET | `/admin/drift/status` | **S-drift-3:** latest `drift_scan` per kind + D1 blob coverage + the D4 headline. Gated on the SYSTEM-domain `drift.read` (R41); pure read, no scan trigger. |
 | GET | `/admin/drift/superseded-copies` | **S-drift-3 (D4, R11):** outstanding EXPORTED/PRINTED copies of now-Superseded/Obsolete versions (`limit`/`offset`; totals over the full set). The only detection leg reaching copies outside the mirror; the public `/verify` token is the per-copy resolution. |
 | POST | `/admin/export` | **Future design; not mounted.** A portable whole-vault export for migration/decommission remains distinct from scoped Evidence Packs and backups (R33). |
+
+First-administrator audit events are truthful system-actor events because no user has authenticated:
+`BOOTSTRAP_IDENTITY_CLAIMED` when the durable claim is made, `USER_CREATED` and
+`ADMIN_BOOTSTRAPPED` when the EasySynQ user and role commit, `USER_CREDENTIAL_ISSUED` after
+Keycloak accepts the temporary password, and `BOOTSTRAP_CONSUMED` on acknowledgement. None records
+the setup secret, temporary password, claim marker, or Keycloak subject.
+
+**First-administrator public recovery and errors.** The supported flow stays in `/setup`; an operator
+does not open the Keycloak administration console. Operators do not handle an identity subject.
+
+- `403 bootstrap_invalid` covers missing, invalid, and expired unconsumed setup proofs without
+  distinguishing them. While the password remains current, the operator can enter a reminted current setup
+  secret and retry acknowledgment with the same receipt; this does not reset or discard the password.
+- `409 bootstrap_credential_superseded` consumes nothing and identifies only that the submitted receipt is
+  not the active password generation. The UI marks the shown password stale and offers an explicit reissue;
+  the successful response atomically replaces the visible password and receipt.
+- `409 bootstrap_administrator_exists` refuses claim creation, profile persistence, credential issuance,
+  and acknowledgment when any System Administrator other than the claim-linked user exists. Public setup
+  never adopts or resets that unrelated identity; recovery is the host break-glass procedure.
+- `409 bootstrap_identity_bound` reports the canonical username already bound to the claim;
+  `bootstrap_not_ready` covers incomplete claim, user, role, or credential state; and
+  `setup_already_complete` covers a valid proof presented after setup advanced.
+- A redacted `422 validation_error` permits corrected profile input. A definitive rejection before any
+  identity or application state exists releases the unowned claim; once the identity is bound, retries may
+  reconcile only its display name, email, first name, and last name and retain the claim on failure.
+- `429 rate_limited` is the bounded failed-proof limit. `502 keycloak_unavailable` and the documented `503`
+  dependency/configuration failures are retryable without selecting a second administrator. Neither a
+  problem response nor an acknowledgment retry response reveals the current password or credential receipt.
 
 ### 8.18 Backup setup and restore drill (`/setup/*`)
 

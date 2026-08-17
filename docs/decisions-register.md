@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R65) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, and R65 locks the temporary pre-production compatibility posture.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R66) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, and R66 locks browser-first first-administrator provisioning inside setup.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R65
+## Part 3 — Resolutions R1–R66
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1965,6 +1965,70 @@ ADR 0004 records the alternatives and consequences.
 contributors to this register and needs no duplicate mutable compatibility rule.
 
 Bumps the resolutions range **R1–R64 → R1–R65**.
+
+### R66 — First-administrator identity is provisioned inside setup — 2026-08-15
+
+First-run identity handling was inconsistent with the shipped in-app user provisioning surface:
+ordinary install paths required a separately created Keycloak identity before bootstrap, while the
+appliance created fixed `qmsadmin` credentials and wrote the temporary password to a setup sheet.
+The owner selected one no-SMTP browser flow for every fresh installation.
+
+**Normative rules.**
+
+1. **One in-app bootstrap.** While setup is `UNINITIALIZED`, a valid, unexpired EasySynQ bootstrap
+   secret authorizes creation of exactly one first-administrator identity. The operator never needs
+   a Keycloak console, Keycloak user script, or Keycloak subject.
+2. **R64 ordering and non-deletion apply.** The Keycloak account is created without a credential; the
+   EasySynQ user and System Administrator assignment commit; only then is the temporary password set.
+   EasySynQ never deletes a Keycloak account as compensation.
+3. **Durable single-identity recovery.** The first accepted operation binds a durable claim to one
+   username. Retries, response-loss recovery, and a reminted setup secret may recover or reset only
+   that bound identity. An unrelated Keycloak collision fails closed, and concurrency may not create
+   a second claim, user, or administrator grant.
+4. **Show once, then acknowledge.** The generated temporary password is returned once and stored
+   nowhere. A lost response is repaired by issuing a new temporary password, which invalidates the
+   previous value. Operator acknowledgment consumes the bootstrap secret, transitions setup to
+   `IN_SETUP`, clears browser-held secrets, and starts Keycloak sign-in; Keycloak requires a password
+   change at first sign-in.
+5. **Truthful pre-authentication audit.** Bootstrap provisioning uses `actor_type=system` and a NULL
+   actor because the administrator has not authenticated. Claim, user creation, administrator grant,
+   credential issuance, and bootstrap consumption are recorded only after each event occurs; no
+   credential, bootstrap secret, claim marker, or Keycloak subject enters an audit payload.
+6. **Post-setup separation is unchanged.** `user.create` creates accounts, `user.update` edits them,
+   `permission.grant` separately gates role assignment, and R64’s system-tier guard remains mandatory
+   for resetting another existing user’s credential. No new permission key is introduced.
+7. **Install-path convergence.** New install paths create no fixed human Keycloak account and write no
+   human password to a setup sheet. Internal Keycloak service credentials remain installation
+   secrets. Existing `OPERATIONAL` and legitimately `IN_SETUP` installations do not re-enter
+   bootstrap and lose no identity data.
+
+**Clarification (S-first-admin-review-hardening, 2026-08-16).** Rule 4 acknowledges the **active shown credential generation**,
+not merely a username or any password previously issued for it. Each successful
+temporary-password issue rotates a high-entropy credential receipt; only its SHA-256 digest is persisted,
+and acknowledgment requires both the current setup secret and the receipt returned with the active shown
+credential generation. Reminting an expired setup secret does not itself reset or discard the current
+password: the reminted proof may acknowledge that same generation. A stale receipt returns `409
+bootstrap_credential_superseded`, consumes nothing, and requires an explicit reissue, which invalidates
+the previous password and receipt.
+
+After a valid setup proof is established, public bootstrap continues only when no System Administrator
+assignment exists other than the user linked to the active claim; otherwise it refuses with `409
+bootstrap_administrator_exists` and neither adopts nor modifies the unrelated administrator. A retry may
+correct display name, email, first name, or last name only for the exact bound first administrator, while
+the canonical bound username remains fixed. A definitive create-time validation rejection may release a
+claim only while no identity, linked user, or issued credential is owned by it; every ambiguous or
+identity-owning state retains the claim and the non-deletion rule.
+
+**Compatibility.** R65 permits replacing the provisional authenticated `POST /setup/bootstrap`
+contract in place. The replacement, every repository consumer, generated contract, installer,
+fixture, and current manual must migrate atomically; no compatibility shim is required.
+
+**Back-propagation:**
+[`S-first-admin-provisioning`](superpowers/specs/2026-08-15-s-first-admin-provisioning-design.md),
+[ADR 0005](adr/0005-provision-first-administrator-in-setup.md), docs 08/15, current installation
+manuals/runbooks, and the appliance setup handoff.
+
+Bumps the resolutions range **R1–R65 → R1–R66**.
 
 ---
 

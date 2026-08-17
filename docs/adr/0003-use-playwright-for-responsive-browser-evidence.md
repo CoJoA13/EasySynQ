@@ -78,3 +78,20 @@ one worker, zero retries, and the synthetic frontend boundary rather than a live
 This focused-cohort expansion does not otherwise fire the payoff trigger. Production-auth browser
 acceptance, a material non-Chromium divergence, and a reason to revisit fixture ownership, worker count,
 or the live-stack boundary remain unproven.
+
+## Reassessment — 2026-08-16
+
+The first-administrator slice now adds a separate, narrow production-auth acceptance that starts the
+real Compose stack, provisions through the public setup form, completes Keycloak's mandatory password
+replacement, returns to authenticated setup, and rejects the obsolete temporary credential. The
+repository therefore no longer lacks live-stack and production-auth browser evidence altogether.
+
+That identity acceptance does not replace or absorb the responsive register gate. Responsive geometry,
+focus, forced-colors, recovery, and semantic checks remain on the dedicated authenticated test entry
+with centrally owned fail-closed fixtures, Chromium only, one worker, and zero retries. Keeping these
+two suites separate prevents identity-stack lifecycle and credentials from weakening the deterministic
+responsive cohort while letting each gate test its own boundary directly.
+
+The production-auth and live-stack parts of the previous payoff trigger are satisfied by the new
+acceptance. The remaining reassessment triggers are a material non-Chromium divergence or expansion
+beyond the focused responsive cohort.

@@ -8,6 +8,7 @@ from .admin_guard import (
     SYSTEM_ADMIN_ROLE,
     disable_removes_last_admin,
     lock_admin_set,
+    lock_admin_set_sync,
     revoke_removes_last_admin,
 )
 from .audit import AuthzAuditEvent, AuthzAuditSink, CapturingAuthzAuditSink, LoggingAuthzAuditSink
@@ -47,6 +48,7 @@ __all__ = [
     "granted_permission_keys",
     "invalidate_user_permissions",
     "lock_admin_set",
+    "lock_admin_set_sync",
     "require",
     "revoke_removes_last_admin",
 ]

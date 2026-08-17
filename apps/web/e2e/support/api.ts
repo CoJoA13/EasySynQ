@@ -53,6 +53,18 @@ const primaryRecordId = primaryRecord.id;
 export const MAXIMUM_RECORD_SEARCH = "Q".repeat(200);
 export const MAXIMUM_RECORD_TITLE = "Preventive-maintenance-schedule".repeat(8);
 export const MAXIMUM_EVIDENCE_FILENAME = `${"evidence".repeat(31)}.pdf`;
+export const MAXIMUM_FIRST_ADMIN_SECRET = "s".repeat(512);
+export const MAXIMUM_FIRST_ADMIN_USERNAME = "u".repeat(255);
+export const MAXIMUM_FIRST_ADMIN_DISPLAY_NAME = "D".repeat(255);
+export const MAXIMUM_FIRST_ADMIN_EMAIL = `${"e".repeat(308)}@example.com`;
+export const MAXIMUM_FIRST_ADMIN_FIRST_NAME = "F".repeat(255);
+export const MAXIMUM_FIRST_ADMIN_LAST_NAME = "L".repeat(255);
+export const LONG_FIRST_ADMIN_TEMPORARY_PASSWORD = "P".repeat(512);
+export const MAXIMUM_FIRST_ADMIN_RECEIPT = "R".repeat(43);
+export const REMINTED_FIRST_ADMIN_SECRET = "C".repeat(512);
+export const REISSUE_FIRST_ADMIN_SECRET = "N".repeat(512);
+export const REISSUED_FIRST_ADMIN_RECEIPT = "Z".repeat(43);
+export const REISSUED_FIRST_ADMIN_TEMPORARY_PASSWORD = "Q".repeat(512);
 
 const maximumRecordsFixture = {
   ...recordsFixture,
@@ -124,6 +136,235 @@ async function fulfillJson(route: Route, body: unknown): Promise<void> {
 
 function requestKey(method: string, pathname: string): string {
   return `${method.toUpperCase()} ${pathname}`;
+}
+
+function hasExactJsonBody(actual: unknown, expected: Record<string, unknown>): boolean {
+  if (actual === null || typeof actual !== "object" || Array.isArray(actual)) return false;
+  const record = actual as Record<string, unknown>;
+  const expectedEntries = Object.entries(expected);
+  return (
+    Object.keys(record).length === expectedEntries.length &&
+    expectedEntries.every(([key, value]) => record[key] === value)
+  );
+}
+
+export async function installFirstAdministratorApi(page: Page): Promise<RequestCount> {
+  const requestCounts = new Map<string, number>();
+  let provisionAttempts = 0;
+  let acknowledgmentAttempts = 0;
+  let acknowledged = false;
+
+  await page.route("**/*", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const method = request.method().toUpperCase();
+
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      await route.continue();
+      return;
+    }
+
+    if (url.origin !== HARNESS_ORIGIN) {
+      await route.abort("blockedbyclient");
+      throw new Error(`Unexpected external request: ${method} ${request.url()}`);
+    }
+
+    if (!url.pathname.startsWith("/api/")) {
+      await route.continue();
+      return;
+    }
+
+    const key = requestKey(method, url.pathname);
+    requestCounts.set(key, (requestCounts.get(key) ?? 0) + 1);
+
+    if (method === "GET" && url.pathname === "/api/v1/setup/state" && url.search === "") {
+      await fulfillJson(route, { setup_state: acknowledged ? "IN_SETUP" : "UNINITIALIZED" });
+      return;
+    }
+
+    if (
+      method === "POST" &&
+      url.pathname === "/api/v1/setup/administrator" &&
+      url.search === "" &&
+      request.headers().authorization === undefined
+    ) {
+      const profile = {
+        username: MAXIMUM_FIRST_ADMIN_USERNAME,
+        display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
+        email: MAXIMUM_FIRST_ADMIN_EMAIL,
+        first_name: MAXIMUM_FIRST_ADMIN_FIRST_NAME,
+        last_name: MAXIMUM_FIRST_ADMIN_LAST_NAME,
+      };
+      const body = request.postDataJSON();
+      if (
+        provisionAttempts === 0 &&
+        hasExactJsonBody(body, { secret: MAXIMUM_FIRST_ADMIN_SECRET, ...profile })
+      ) {
+        provisionAttempts += 1;
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            administrator: {
+              id: "ad000001-0001-0001-0001-000000000001",
+              username: MAXIMUM_FIRST_ADMIN_USERNAME,
+              display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
+              email: MAXIMUM_FIRST_ADMIN_EMAIL,
+              status: "INVITED",
+            },
+            temporary_password: LONG_FIRST_ADMIN_TEMPORARY_PASSWORD,
+            credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+            password_delivery: "shown_once",
+          }),
+        });
+        return;
+      }
+      if (
+        provisionAttempts === 1 &&
+        hasExactJsonBody(body, { secret: REMINTED_FIRST_ADMIN_SECRET, ...profile })
+      ) {
+        provisionAttempts += 1;
+        await route.fulfill({
+          status: 403,
+          contentType: "application/problem+json",
+          body: JSON.stringify({
+            code: "bootstrap_invalid",
+            title: "Synthetic invalid bootstrap proof",
+          }),
+        });
+        return;
+      }
+      if (
+        provisionAttempts === 2 &&
+        hasExactJsonBody(body, { secret: REISSUE_FIRST_ADMIN_SECRET, ...profile })
+      ) {
+        provisionAttempts += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            administrator: {
+              id: "ad000001-0001-0001-0001-000000000001",
+              username: MAXIMUM_FIRST_ADMIN_USERNAME,
+              display_name: MAXIMUM_FIRST_ADMIN_DISPLAY_NAME,
+              email: MAXIMUM_FIRST_ADMIN_EMAIL,
+              status: "INVITED",
+            },
+            temporary_password: REISSUED_FIRST_ADMIN_TEMPORARY_PASSWORD,
+            credential_receipt: REISSUED_FIRST_ADMIN_RECEIPT,
+            password_delivery: "shown_once",
+          }),
+        });
+        return;
+      }
+    }
+
+    if (
+      method === "POST" &&
+      url.pathname === "/api/v1/setup/administrator/acknowledge" &&
+      url.search === "" &&
+      request.headers().authorization === undefined
+    ) {
+      const body = request.postDataJSON();
+      if (
+        acknowledgmentAttempts === 0 &&
+        hasExactJsonBody(body, {
+          secret: MAXIMUM_FIRST_ADMIN_SECRET,
+          credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+        })
+      ) {
+        acknowledgmentAttempts += 1;
+        await route.fulfill({
+          status: 503,
+          contentType: "application/problem+json",
+          body: JSON.stringify({
+            code: "keycloak_unavailable",
+            title: "Synthetic acknowledgment outage",
+          }),
+        });
+        return;
+      }
+      if (
+        acknowledgmentAttempts === 1 &&
+        hasExactJsonBody(body, {
+          secret: MAXIMUM_FIRST_ADMIN_SECRET,
+          credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+        })
+      ) {
+        acknowledgmentAttempts += 1;
+        await route.fulfill({
+          status: 403,
+          contentType: "application/problem+json",
+          body: JSON.stringify({
+            code: "bootstrap_invalid",
+            title: "Synthetic invalid bootstrap proof",
+          }),
+        });
+        return;
+      }
+      if (
+        acknowledgmentAttempts === 2 &&
+        hasExactJsonBody(body, {
+          secret: REMINTED_FIRST_ADMIN_SECRET,
+          credential_receipt: MAXIMUM_FIRST_ADMIN_RECEIPT,
+        })
+      ) {
+        acknowledgmentAttempts += 1;
+        await route.fulfill({
+          status: 409,
+          contentType: "application/problem+json",
+          body: JSON.stringify({
+            code: "bootstrap_credential_superseded",
+            title: "Synthetic credential supersession",
+          }),
+        });
+        return;
+      }
+      if (
+        acknowledgmentAttempts === 3 &&
+        hasExactJsonBody(body, {
+          secret: REISSUE_FIRST_ADMIN_SECRET,
+          credential_receipt: REISSUED_FIRST_ADMIN_RECEIPT,
+        })
+      ) {
+        acknowledgmentAttempts += 1;
+        acknowledged = true;
+        await fulfillJson(route, {
+          setup_state: "IN_SETUP",
+          admin_user_id: "ad000001-0001-0001-0001-000000000001",
+        });
+        return;
+      }
+    }
+
+    if (
+      acknowledged &&
+      method === "GET" &&
+      url.pathname === "/api/v1/setup" &&
+      url.search === "" &&
+      request.headers().authorization === "Bearer browser-test-token"
+    ) {
+      await fulfillJson(route, {
+        setup_state: "IN_SETUP",
+        gates: { "G-A": true, "G-E": false, "G-B": false, "G-C": false, "G-D": false },
+        org_profile: { legal_name: null, short_code: null, timezone: null },
+        backup: {
+          configured: false,
+          destination: null,
+          last_restore_test_at: null,
+          last_restore_test_result: null,
+        },
+        auth: { configured: false, method: null, last_test_at: null },
+        tamper_evident: false,
+      });
+      return;
+    }
+
+    await route.abort("failed");
+    throw new Error(`Unexpected API request: ${method} ${request.url()}`);
+  });
+
+  return (method, pathname) => requestCounts.get(requestKey(method, pathname)) ?? 0;
 }
 
 export async function installRegisterApi(

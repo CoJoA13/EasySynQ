@@ -266,36 +266,92 @@ paths:
               schema: { $ref: "#/components/schemas/SetupDetail" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
 
-  /setup/bootstrap:
+  /setup/administrator:
     post:
       tags: [setup]
-      operationId: bootstrapSetup
-      summary: >-
-        Consume the one-time install secret and grant the caller System Administrator
-        (the bootstrap-of-trust). Authenticated, but outside the PEP — the secret authorizes it.
+      operationId: provisionFirstAdministrator
+      summary: Provision or recover the first administrator using the one-time setup secret.
+      security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [secret]
-              properties:
-                secret: { type: string }
+            schema: { $ref: "#/components/schemas/FirstAdministratorRequest" }
       responses:
         "200":
-          description: The caller is now System Administrator; setup_state advanced to IN_SETUP.
+          description: Recovery or temporary-password reissue for the bound first administrator.
           content:
             application/json:
-              schema:
-                type: object
-                required: [setup_state, admin_user_id]
-                properties:
-                  setup_state: { type: string }
-                  admin_user_id: { type: string, format: uuid }
-        "403": { $ref: "#/components/responses/ProblemResponse" }
-        "409": { $ref: "#/components/responses/ProblemResponse" }
-        "429": { $ref: "#/components/responses/ProblemResponse" }
+              schema: { $ref: "#/components/schemas/FirstAdministratorProvisioned" }
+        "201":
+          description: First administrator created and a temporary password shown once.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FirstAdministratorProvisioned" }
+        "403":
+          description: Missing, expired, or invalid bootstrap secret; all return bootstrap_invalid.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "409":
+          description: >-
+            Setup advanced, identity bound/not ready, an unrelated administrator exists, or a
+            username collision occurred.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "422":
+          description: Validation failure or Keycloak rejection.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "429":
+          description: Bootstrap rate limit exceeded.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "502":
+          description: Keycloak unavailable.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "503":
+          description: >-
+            Keycloak admin configuration is missing, bootstrap rate limiting is unavailable, or
+            required bootstrap state persistence failed.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+
+  /setup/administrator/acknowledge:
+    post:
+      tags: [setup]
+      operationId: acknowledgeFirstAdministrator
+      summary: Acknowledge receipt of the first administrator temporary password.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BootstrapAcknowledgeRequest" }
+      responses:
+        "200":
+          description: >-
+            Bootstrap consumed and setup advanced to IN_SETUP, or idempotent success for a matching
+            already-consumed secret, including after expiry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BootstrapAcknowledgeResponse" }
+        "403":
+          description: >-
+            Missing or invalid bootstrap secret, or an expired unconsumed bootstrap secret; all
+            return bootstrap_invalid.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "409":
+          description: >-
+            Setup advanced, identity not ready, an unrelated administrator exists, or the credential
+            generation was superseded.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "422":
+          description: Validation failure or Keycloak rejection.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "429":
+          description: Bootstrap rate limit exceeded.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "502":
+          description: Keycloak unavailable.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
+        "503":
+          description: Bootstrap rate limiting is unavailable.
+          $ref: "#/components/responses/FirstAdministratorProblemResponse"
 
   /setup/org-profile:
     patch:
@@ -683,7 +739,9 @@ paths:
               type: object
               required: [username]
               properties:
-                username: { type: string }
+                username:
+                  type: string
+                  description: Trimmed and canonicalized to lowercase before Keycloak provisioning.
                 display_name: { type: [string, "null"] }
                 email: { type: [string, "null"] }
                 first_name: { type: [string, "null"] }
@@ -769,8 +827,8 @@ paths:
       summary: >-
         Issue a fresh temporary password for a linked user, returned once (S-user-create). Repairs a
         provision whose credential step failed, and replaces scripts/new-keycloak-user.sh as the
-        password-reset path. Needs user.create; resetting the credential of a user who holds any
-        system-domain permission additionally requires system tier (two-tier guard, R35).
+        password-reset path. Needs user.create; resetting every existing linked user unconditionally
+        requires a system-tier caller in addition (R64), regardless of the target's permissions.
       parameters:
         - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -791,8 +849,8 @@ paths:
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422":
           description: >-
-            two_tier_violation (target holds system-domain permissions; credential reset needs a
-            system-tier caller).
+            two_tier_violation (every existing linked user credential reset unconditionally requires
+            a system-tier caller under R64).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -6943,6 +7001,11 @@ components:
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+    FirstAdministratorProblemResponse:
+      description: A first-administrator setup error, without Keycloak identity details.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/FirstAdministratorProblem" }
     AuditTransition:
       description: The audit after the FSM transition.
       content:
@@ -6963,6 +7026,67 @@ components:
         status: { type: string, enum: [ok] }
         service: { type: string, example: api }
         version: { type: string, example: "0.1.0" }
+
+    FirstAdministratorRequest:
+      type: object
+      additionalProperties: false
+      required: [secret, username, display_name]
+      properties:
+        secret: { type: string, minLength: 1, maxLength: 512 }
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Trimmed and canonicalized to lowercase before the bootstrap claim is bound.
+        display_name: { type: string, minLength: 1, maxLength: 255, pattern: ".*\\S.*" }
+        email: { type: [string, "null"], maxLength: 320 }
+        first_name: { type: [string, "null"], maxLength: 255 }
+        last_name: { type: [string, "null"], maxLength: 255 }
+
+    FirstAdministratorSummary:
+      type: object
+      additionalProperties: false
+      required: [id, username, display_name, email, status]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+        email: { type: [string, "null"] }
+        status: { type: string, enum: [INVITED] }
+
+    FirstAdministratorProvisioned:
+      type: object
+      additionalProperties: false
+      required: [administrator, temporary_password, credential_receipt, password_delivery]
+      properties:
+        administrator: { $ref: "#/components/schemas/FirstAdministratorSummary" }
+        temporary_password: { type: string }
+        credential_receipt:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{43}$"
+        password_delivery: { type: string, enum: [shown_once] }
+
+    BootstrapAcknowledgeRequest:
+      type: object
+      additionalProperties: false
+      required: [secret, credential_receipt]
+      properties:
+        secret: { type: string, minLength: 1, maxLength: 512 }
+        credential_receipt:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{43}$"
+
+    BootstrapAcknowledgeResponse:
+      type: object
+      additionalProperties: false
+      required: [setup_state, admin_user_id]
+      properties:
+        setup_state: { type: string, enum: [IN_SETUP] }
+        admin_user_id: { type: string, format: uuid }
 
     DependencyStatus:
       type: object
@@ -6998,7 +7122,7 @@ components:
         code:
           type: string
           description: Stable machine-readable error code clients branch on.
-          enum:
+          enum: &problem_code_enum
             - ack_obligation_lapsed
             - ack_superseded
             - already_archived
@@ -7012,9 +7136,13 @@ components:
             - backup_destination_invalid
             - backup_destination_unreachable
             - backup_not_configured
+            - bootstrap_administrator_exists
             - bootstrap_already_consumed
+            - bootstrap_credential_superseded
             - bootstrap_expired
+            - bootstrap_identity_bound
             - bootstrap_invalid
+            - bootstrap_not_ready
             - capa_already_spawned
             - capa_approval_in_progress
             - capa_close_incomplete
@@ -7131,6 +7259,7 @@ components:
         detail: { type: [string, "null"] }
         instance: { type: [string, "null"] }
         request_id: { type: [string, "null"] }
+        bound_username: { type: [string, "null"] }
         errors:
           type: [array, "null"]
           items:
@@ -7150,6 +7279,31 @@ components:
         keycloak_subject:
           type: [string, "null"]
           description: "On keycloak_username_exists_unlinked: the existing Keycloak account's subject to link instead of creating a new one."
+
+    FirstAdministratorProblem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum: *problem_code_enum
+        detail: { type: [string, "null"] }
+        instance: { type: [string, "null"] }
+        request_id: { type: [string, "null"] }
+        bound_username: { type: [string, "null"] }
+        errors:
+          type: [array, "null"]
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              field: { type: string }
+              code: { type: string }
+              message: { type: string }
 
     AuthConfig:
       type: object

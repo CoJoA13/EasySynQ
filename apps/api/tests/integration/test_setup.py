@@ -8,21 +8,26 @@ first-run flow is deterministic regardless of order.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import hashlib
 import shutil
 import tempfile
+import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 import redis.asyncio as aioredis
 from httpx import AsyncClient
 from sqlalchemy import delete, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from easysynq_api.config import get_settings
-from easysynq_api.db.models._audit_enums import EventType
-from easysynq_api.db.models.app_user import AppUser
+from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
+from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.backup_policy import BackupPolicy
 from easysynq_api.db.models.organization import Organization
@@ -30,8 +35,16 @@ from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.storage_config import StorageConfig
 from easysynq_api.db.models.system_config import SetupState, SystemConfig
 from easysynq_api.db.models.working_calendar import WorkingCalendar
-from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.db.session import get_engine, get_sessionmaker
+from easysynq_api.problems import ProblemException
 from easysynq_api.services import backup as backup_service
+from easysynq_api.services.identity import provisioning as identity_provisioning
+from easysynq_api.services.keycloak_provisioning import (
+    KeycloakConflict,
+    KeycloakRejected,
+    KeycloakUnavailable,
+    UserLookup,
+)
 from easysynq_api.services.setup import service as setup_service
 from easysynq_api.services.setup.bootstrap import mint_secret
 from easysynq_api.services.vault import storage
@@ -47,6 +60,188 @@ def _sub(prefix: str) -> str:
     return f"kc-{prefix}-{uuid.uuid4().hex[:10]}"
 
 
+@dataclass(slots=True)
+class _FakeIdentity:
+    subject: str
+    marker: str | None
+    email: str | None
+    first_name: str | None
+    last_name: str | None
+    unrelated_fields: dict[str, object] = field(
+        default_factory=lambda: {
+            "requiredActions": ["UPDATE_PASSWORD"],
+            "federationLink": "directory-provider",
+            "employeeId": ["E-100"],
+        }
+    )
+
+
+@dataclass(slots=True)
+class _PasswordResetBarrier:
+    entered: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+    active: int = 0
+    max_active: int = 0
+
+
+@dataclass(slots=True)
+class _CreateRejectionBarrier:
+    entered: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@dataclass(slots=True)
+class _FakeKeycloak:
+    accounts: dict[str, _FakeIdentity] = field(default_factory=dict)
+    passwords: dict[str, list[str]] = field(default_factory=dict)
+    operations: list[str] = field(default_factory=list)
+    lookup_error: Exception | None = None
+    fail_after_create: bool = False
+    password_error: Exception | None = None
+    password_barrier: _PasswordResetBarrier | None = None
+    rejection_detail_template: str | None = None
+    rejection_barrier: _CreateRejectionBarrier | None = None
+    rejection_revalidation: UserLookup | Exception | None = None
+    create_rejected: bool = False
+    profile_rejection_detail_template: str | None = None
+
+    async def __aenter__(self) -> _FakeKeycloak:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def ensure_optional_user_profile_fields(self) -> None:
+        self.operations.append("profile")
+
+    async def find_user_by_username(self, username: str) -> UserLookup:
+        self.operations.append("lookup")
+        if self.lookup_error is not None:
+            raise self.lookup_error
+        if self.create_rejected and self.rejection_revalidation is not None:
+            if isinstance(self.rejection_revalidation, Exception):
+                raise self.rejection_revalidation
+            return self.rejection_revalidation
+        account = self.accounts.get(username)
+        if account is None:
+            return UserLookup(found=False)
+        return UserLookup(True, account.subject, account.marker)
+
+    async def create_user(
+        self,
+        *,
+        username: str,
+        email: str | None,
+        first_name: str | None,
+        last_name: str | None,
+        bootstrap_claim_id: uuid.UUID | None = None,
+    ) -> str:
+        self.operations.append("create")
+        if username in self.accounts:
+            account = self.accounts[username]
+            raise KeycloakConflict("username", "duplicate", keycloak_subject=account.subject)
+        if email is not None and any(account.email == email for account in self.accounts.values()):
+            raise KeycloakConflict("email", "duplicate")
+        rejection_detail_template = self.rejection_detail_template
+        if rejection_detail_template is not None:
+            if self.rejection_barrier is not None:
+                await self.rejection_barrier.entered.put(username)
+                await self.rejection_barrier.release.wait()
+            self.create_rejected = True
+            raise KeycloakRejected(
+                rejection_detail_template.format(
+                    claim=bootstrap_claim_id,
+                    username=username,
+                    email=email,
+                )
+            )
+        subject = f"subject:{username}"
+        self.accounts[username] = _FakeIdentity(
+            subject=subject,
+            marker=str(bootstrap_claim_id) if bootstrap_claim_id is not None else None,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+        )
+        if self.fail_after_create:
+            raise KeycloakUnavailable("create result was uncertain")
+        return subject
+
+    async def reconcile_claimed_user_profile(
+        self,
+        *,
+        subject: str,
+        username: str,
+        bootstrap_claim_id: uuid.UUID,
+        email: str | None,
+        first_name: str | None,
+        last_name: str | None,
+    ) -> None:
+        self.operations.append("reconcile")
+        account = self.accounts.get(username)
+        if (
+            account is None
+            or account.subject != subject
+            or account.marker != str(bootstrap_claim_id)
+        ):
+            raise KeycloakUnavailable("claimed identity ownership could not be established")
+        rejection = self.profile_rejection_detail_template
+        if rejection is not None:
+            raise KeycloakRejected(
+                rejection.format(
+                    subject=subject,
+                    claim=bootstrap_claim_id,
+                    username=username,
+                    email=email,
+                )
+            )
+        account.email = email
+        account.first_name = first_name
+        account.last_name = last_name
+
+    async def set_temporary_password(self, *, subject: str, password: str) -> None:
+        if self.password_error is not None:
+            raise self.password_error
+        if self.password_barrier is not None:
+            barrier = self.password_barrier
+            barrier.active += 1
+            barrier.max_active = max(barrier.max_active, barrier.active)
+            await barrier.entered.put(subject)
+            try:
+                await barrier.release.wait()
+            finally:
+                barrier.active -= 1
+        self.passwords.setdefault(subject, []).append(password)
+
+    def add_account(
+        self,
+        username: str,
+        *,
+        marker: str | None = None,
+        email: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+    ) -> str:
+        subject = f"unrelated:{username}"
+        self.accounts[username] = _FakeIdentity(
+            subject,
+            marker,
+            email,
+            first_name,
+            last_name,
+        )
+        return subject
+
+
+@pytest.fixture(autouse=True)
+def _setup_keycloak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> _FakeKeycloak:
+    fake = _FakeKeycloak()
+    monkeypatch.setattr(identity_provisioning, "keycloak_client", lambda: fake)
+    return fake
+
+
 async def _reset_uninitialized() -> str:
     """Reset the singleton install to a clean UNINITIALIZED state with a fresh secret; return it."""
     secret, stored = mint_secret()
@@ -57,6 +252,12 @@ async def _reset_uninitialized() -> str:
         cfg.bootstrap_consumed_at = None
         cfg.bootstrap_secret_hash = stored
         cfg.bootstrap_expires_at = setup_service._now() + datetime.timedelta(hours=1)
+        cfg.bootstrap_admin_claim_id = None
+        cfg.bootstrap_admin_username = None
+        cfg.bootstrap_admin_user_id = None
+        cfg.bootstrap_claimed_at = None
+        cfg.bootstrap_credential_issued_at = None
+        cfg.bootstrap_credential_receipt_hash = None
         cfg.auth_method = None  # reset G-D (S8c) so it starts unsatisfied
         cfg.auth_test_login_ok = None
         cfg.auth_test_login_at = None
@@ -105,10 +306,74 @@ async def _pass_auth_gate() -> None:
         await s.commit()
 
 
-async def _bootstrap(client: AsyncClient, h: dict[str, str], secret: str) -> dict:
-    r = await client.post("/api/v1/setup/bootstrap", headers=h, json={"secret": secret})
-    assert r.status_code == 200, r.text
-    return r.json()
+async def _provision(
+    client: AsyncClient,
+    secret: str,
+    username: str,
+    *,
+    email: str | None = None,
+    display_name: str | None = None,
+    first_name: str | None = "First",
+    last_name: str | None = "Administrator",
+) -> Any:
+    return await client.post(
+        "/api/v1/setup/administrator",
+        json={
+            "secret": secret,
+            "username": username,
+            "display_name": display_name or f"Administrator {username}",
+            "email": email,
+            "first_name": first_name,
+            "last_name": last_name,
+        },
+    )
+
+
+async def _bootstrap(
+    client: AsyncClient,
+    token_factory: Callable[..., str],
+    secret: str,
+    prefix: str,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    username = _sub(prefix)
+    provision = await _provision(client, secret, username)
+    assert provision.status_code in {200, 201}, provision.text
+    provisioned = provision.json()
+    assert provisioned["temporary_password"]
+    acknowledged = await client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={
+            "secret": secret,
+            "credential_receipt": provisioned["credential_receipt"],
+        },
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+    body = {**provisioned, **acknowledged.json()}
+    return _auth(token_factory, f"subject:{username}"), body
+
+
+async def _config() -> SystemConfig:
+    async with get_sessionmaker()() as session:
+        return (await session.execute(select(SystemConfig))).scalar_one()
+
+
+async def _establish_claim_only(
+    client: AsyncClient,
+    keycloak: _FakeKeycloak,
+    *,
+    secret: str,
+    username: str,
+) -> None:
+    keycloak.lookup_error = KeycloakUnavailable("claim-only lookup outage")
+    try:
+        response = await _provision(client, secret, username)
+    finally:
+        keycloak.lookup_error = None
+    assert response.status_code == 502, response.text
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
+    assert cfg.bootstrap_admin_user_id is None
 
 
 async def _verify_storage(client: AsyncClient, h: dict[str, str], mode: str = "GOVERNANCE") -> dict:
@@ -140,28 +405,26 @@ async def test_latch_blocks_qms_until_operational(
 async def test_bootstrap_grants_first_admin_and_audits(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """The secret grants the caller System Administrator + advances to IN_SETUP, writing the
-    BOOTSTRAP_CONSUMED + ADMIN_BOOTSTRAPPED audit rows — the in-app replacement for grant-role."""
+    """The public secret flow creates, grants, then acknowledges the first administrator."""
     secret = await _reset_uninitialized()
-    sub = _sub("admin")
-    h = _auth(token_factory, sub)
 
-    body = await _bootstrap(app_client, h, secret)
+    h, body = await _bootstrap(app_client, token_factory, secret, "admin")
     assert body["setup_state"] == "IN_SETUP"
     admin_id = uuid.UUID(body["admin_user_id"])
+    org_id = await _org_id()
 
     async with get_sessionmaker()() as s:
         assigned = await s.scalar(
             select(RoleAssignment.id)
             .join(Role, RoleAssignment.role_id == Role.id)
             .join(AppUser, RoleAssignment.user_id == AppUser.id)
-            .where(AppUser.keycloak_subject == sub, Role.name == _ADMIN)
+            .where(AppUser.id == admin_id, Role.name == _ADMIN)
         )
         assert assigned is not None
         consumed = await s.scalar(
             select(AuditEvent.id).where(
                 AuditEvent.event_type == EventType.BOOTSTRAP_CONSUMED,
-                AuditEvent.actor_id == admin_id,
+                AuditEvent.object_id == org_id,
             )
         )
         bootstrapped = await s.scalar(
@@ -172,6 +435,7 @@ async def test_bootstrap_grants_first_admin_and_audits(
         )
     assert consumed is not None
     assert bootstrapped is not None
+    assert h["Authorization"].startswith("Bearer ")
 
 
 async def test_setup_detail_requires_config_read(
@@ -186,8 +450,7 @@ async def test_setup_detail_requires_config_read(
     assert denied.status_code == 403
     assert denied.json()["code"] == "permission_denied"
 
-    admin_headers = _auth(token_factory, _sub("setup-detail-admin"))
-    await _bootstrap(app_client, admin_headers, secret)
+    admin_headers, _ = await _bootstrap(app_client, token_factory, secret, "setup-detail-admin")
     detail = await app_client.get("/api/v1/setup", headers=admin_headers)
 
     assert detail.status_code == 200
@@ -198,16 +461,1856 @@ async def test_bootstrap_rejects_wrong_secret_and_replay(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("x"))
+    username = _sub("x")
 
-    bad = await app_client.post("/api/v1/setup/bootstrap", headers=h, json={"secret": "wrong"})
+    bad = await _provision(app_client, "wrong", username)
     assert bad.status_code == 403
     assert bad.json()["code"] == "bootstrap_invalid"
 
-    await _bootstrap(app_client, h, secret)  # consumes it
-    replay = await app_client.post("/api/v1/setup/bootstrap", headers=h, json={"secret": secret})
+    await _bootstrap(app_client, token_factory, secret, "x")  # consumes it
+    replay = await _provision(app_client, secret, username)
     assert replay.status_code == 409
-    assert replay.json()["code"] == "bootstrap_already_consumed"
+    assert replay.json()["code"] == "setup_already_complete"
+
+
+async def test_first_administrator_credential_receipt_rotates_and_stale_receipt_is_rejected(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("response-loss")
+
+    first = await _provision(app_client, secret, username)
+    first_identity_operations = list(_setup_keycloak.operations)
+    second = await _provision(app_client, secret, username)
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 200, second.text
+    first_body = first.json()
+    second_body = second.json()
+    assert set(first_body) == {
+        "administrator",
+        "temporary_password",
+        "credential_receipt",
+        "password_delivery",
+    }
+    assert first_body["administrator"]["username"] == username
+    assert first_body["administrator"]["status"] == "INVITED"
+    assert first_body["password_delivery"] == "shown_once"
+    assert first_body["temporary_password"] != second_body["temporary_password"]
+    assert first_body["credential_receipt"] != second_body["credential_receipt"]
+    assert "keycloak_subject" not in first.text
+    assert first_identity_operations == [
+        "profile",
+        "lookup",
+        "profile",
+        "lookup",
+        "create",
+        "reconcile",
+    ]
+    subject = f"subject:{username}"
+    assert _setup_keycloak.passwords[subject] == [
+        first_body["temporary_password"],
+        second_body["temporary_password"],
+    ]
+    cfg = await _config()
+    assert cfg.setup_state is SetupState.UNINITIALIZED
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
+    assert cfg.bootstrap_admin_user_id == uuid.UUID(first_body["administrator"]["id"])
+    assert (
+        cfg.bootstrap_credential_receipt_hash
+        == hashlib.sha256(second_body["credential_receipt"].encode("utf-8")).hexdigest()
+    )
+    assert first_body["credential_receipt"] != cfg.bootstrap_credential_receipt_hash
+    assert second_body["credential_receipt"] != cfg.bootstrap_credential_receipt_hash
+
+    stale = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={
+            "secret": secret,
+            "credential_receipt": first_body["credential_receipt"],
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "bootstrap_credential_superseded"
+    assert "credential_receipt" not in stale.json()
+    assert (await _config()).setup_state is SetupState.UNINITIALIZED
+
+    current = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={
+            "secret": secret,
+            "credential_receipt": second_body["credential_receipt"],
+        },
+    )
+    assert current.status_code == 200, current.text
+
+
+async def test_locked_singleton_refreshes_expire_on_commit_false_identity_map(
+    app_client: AsyncClient,
+) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    del app_client
+    await _reset_uninitialized()
+    async with get_sessionmaker()() as stale_session:
+        stale = await administrator_service._locked_singleton(stale_session)
+        assert stale.setup_state is SetupState.UNINITIALIZED
+        await stale_session.commit()
+
+        async with get_sessionmaker()() as advancing_session:
+            current = await administrator_service._locked_singleton(advancing_session)
+            current.setup_state = SetupState.IN_SETUP
+            current.bootstrap_consumed_at = setup_service._now()
+            await advancing_session.commit()
+
+        refreshed = await administrator_service._locked_singleton(stale_session)
+        assert refreshed is stale
+        assert refreshed.setup_state is SetupState.IN_SETUP
+        assert refreshed.bootstrap_consumed_at is not None
+        await stale_session.rollback()
+
+
+async def test_credential_reset_is_serialized_against_acknowledgment(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("credential-fence")
+    initial = await _provision(app_client, secret, username)
+    assert initial.status_code == 201
+    subject = f"subject:{username}"
+
+    barrier = _PasswordResetBarrier()
+    _setup_keycloak.password_barrier = barrier
+    first_reissue = asyncio.create_task(
+        _provision(app_client, secret, username), name="credential-reissue-one"
+    )
+    second_reissue = asyncio.create_task(
+        _provision(app_client, secret, username), name="credential-reissue-two"
+    )
+    await asyncio.wait_for(barrier.entered.get(), timeout=2)
+    acknowledgment = asyncio.create_task(
+        app_client.post(
+            "/api/v1/setup/administrator/acknowledge",
+            json={
+                "secret": secret,
+                "credential_receipt": initial.json()["credential_receipt"],
+            },
+        ),
+        name="acknowledge-between-resets",
+    )
+
+    acknowledgment_was_blocked = False
+    try:
+        await asyncio.wait_for(asyncio.shield(acknowledgment), timeout=0.25)
+    except TimeoutError:
+        acknowledgment_was_blocked = True
+    finally:
+        barrier.release.set()
+
+    acknowledged = await asyncio.wait_for(acknowledgment, timeout=2)
+    reissued = await asyncio.wait_for(asyncio.gather(first_reissue, second_reissue), timeout=2)
+
+    assert acknowledgment_was_blocked is True
+    assert acknowledged.status_code == 409
+    assert acknowledged.json()["code"] == "bootstrap_credential_superseded"
+    assert barrier.max_active == 1
+    assert {response.status_code for response in reissued} <= {200, 409}
+    assert (await _config()).setup_state is SetupState.UNINITIALIZED
+    active_digest = (await _config()).bootstrap_credential_receipt_hash
+    active = next(
+        response.json()
+        for response in reissued
+        if response.status_code == 200
+        and hashlib.sha256(response.json()["credential_receipt"].encode("utf-8")).hexdigest()
+        == active_digest
+    )
+    final_acknowledgment = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": active["credential_receipt"]},
+    )
+    assert final_acknowledgment.status_code == 200, final_acknowledgment.text
+    assert len(_setup_keycloak.passwords[subject]) == 3
+
+
+async def test_bootstrap_credential_issuance_serializes_break_glass_admin_grant(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import grant_role as grant_role_cli
+    from easysynq_api.services.authz import admin_guard
+
+    secret = await _reset_uninitialized()
+    barrier = _PasswordResetBarrier()
+    _setup_keycloak.password_barrier = barrier
+    bootstrap = asyncio.create_task(_provision(app_client, secret, _sub("bootstrap-lock")))
+    await asyncio.wait_for(barrier.entered.get(), timeout=2)
+
+    lock_attempted = threading.Event()
+    grant_finished = threading.Event()
+
+    def observed_lock(session: object, org_id: uuid.UUID) -> None:
+        lock_attempted.set()
+        admin_guard.lock_admin_set_sync(session, org_id)  # type: ignore[attr-defined, arg-type]
+
+    def run_grant() -> str:
+        try:
+            return grant_role_cli.grant_role(_sub("racing-break-glass"))
+        finally:
+            grant_finished.set()
+
+    monkeypatch.setattr(grant_role_cli, "lock_admin_set_sync", observed_lock, raising=False)
+    competing_grant = asyncio.create_task(asyncio.to_thread(run_grant))
+    attempted_before_release = await asyncio.to_thread(lock_attempted.wait, 0.5)
+    finished_before_release = grant_finished.is_set()
+    barrier.release.set()
+
+    provisioned = await asyncio.wait_for(bootstrap, timeout=2)
+    grant_result = await asyncio.wait_for(competing_grant, timeout=2)
+
+    assert attempted_before_release is True
+    assert finished_before_release is False
+    assert provisioned.status_code == 201, provisioned.text
+    assert "assigned" in grant_result
+
+
+async def test_break_glass_ordinary_role_grant_does_not_take_admin_set_lock(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import grant_role as grant_role_cli
+
+    del app_client
+    await _reset_uninitialized()
+    attempts = 0
+
+    def observed_lock(_session: object, _org_id: uuid.UUID) -> None:
+        nonlocal attempts
+        attempts += 1
+
+    monkeypatch.setattr(grant_role_cli, "lock_admin_set_sync", observed_lock, raising=False)
+    result = grant_role_cli.grant_role(_sub("ordinary-break-glass"), "Author")
+
+    assert "assigned" in result
+    assert attempts == 0
+
+
+async def test_first_administrator_acknowledgment_is_idempotent_for_same_secret(
+    app_client: AsyncClient,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("ack-replay")
+    async with get_sessionmaker()() as session:
+        consumed_before = await session.scalar(
+            select(AuditEvent.id)
+            .where(AuditEvent.event_type == EventType.BOOTSTRAP_CONSUMED)
+            .order_by(AuditEvent.id.desc())
+            .limit(1)
+        )
+    consumed_before = consumed_before or 0
+    provisioned = await _provision(app_client, secret, username)
+    provisioned_body = provisioned.json()
+    admin_id = uuid.UUID(provisioned_body["administrator"]["id"])
+
+    first = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
+    )
+    second = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert (
+        first.json()
+        == second.json()
+        == {
+            "setup_state": "IN_SETUP",
+            "admin_user_id": str(admin_id),
+        }
+    )
+    async with get_sessionmaker()() as session:
+        consumed = (
+            (
+                await session.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.event_type == EventType.BOOTSTRAP_CONSUMED,
+                        AuditEvent.object_id == (await _org_id()),
+                        AuditEvent.id > consumed_before,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(consumed) == 1
+
+
+async def test_acknowledgment_replay_accepts_matching_consumed_secret_after_expiry(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("ack-expired-replay")
+    provisioned = await _provision(app_client, secret, username)
+    provisioned_body = provisioned.json()
+    admin_id = provisioned_body["administrator"]["id"]
+    first = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
+    )
+    password_count = len(_setup_keycloak.passwords[f"subject:{username}"])
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.bootstrap_expires_at = setup_service._now() - datetime.timedelta(minutes=1)
+        await session.commit()
+
+    replay = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == {"setup_state": "IN_SETUP", "admin_user_id": admin_id}
+    assert len(_setup_keycloak.passwords[f"subject:{username}"]) == password_count
+
+
+async def test_expired_consumed_acknowledgment_mismatch_is_generic_and_counted(
+    app_client: AsyncClient,
+) -> None:
+    secret = await _reset_uninitialized()
+    provisioned = await _provision(app_client, secret, _sub("ack-expired-wrong"))
+    assert provisioned.status_code == 201
+    credential_receipt = provisioned.json()["credential_receipt"]
+    assert (
+        await app_client.post(
+            "/api/v1/setup/administrator/acknowledge",
+            json={"secret": secret, "credential_receipt": credential_receipt},
+        )
+    ).status_code == 200
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.bootstrap_expires_at = setup_service._now() - datetime.timedelta(minutes=1)
+        await session.commit()
+
+    denied = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": "wrong", "credential_receipt": credential_receipt},
+    )
+
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "bootstrap_invalid"
+    assert denied.json()["title"] == "Invalid bootstrap secret"
+    assert "IN_SETUP" not in denied.text
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        assert await client.get(setup_service._RL_KEY) == "1"
+
+
+@pytest.mark.parametrize("broken_state", ["incomplete_claim", "missing_assignment"])
+async def test_expired_consumed_acknowledgment_replay_preserves_fail_closed_checks(
+    app_client: AsyncClient,
+    broken_state: str,
+) -> None:
+    secret = await _reset_uninitialized()
+    provisioned = await _provision(app_client, secret, _sub(f"ack-expired-{broken_state}"))
+    provisioned_body = provisioned.json()
+    admin_id = uuid.UUID(provisioned_body["administrator"]["id"])
+    assert (
+        await app_client.post(
+            "/api/v1/setup/administrator/acknowledge",
+            json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
+        )
+    ).status_code == 200
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.bootstrap_expires_at = setup_service._now() - datetime.timedelta(minutes=1)
+        if broken_state == "incomplete_claim":
+            cfg.bootstrap_credential_issued_at = None
+        else:
+            await session.execute(delete(RoleAssignment).where(RoleAssignment.user_id == admin_id))
+        await session.commit()
+
+    replay = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": provisioned_body["credential_receipt"]},
+    )
+
+    assert replay.status_code == 409
+    assert replay.json()["code"] == "bootstrap_not_ready"
+
+
+async def test_reminted_secret_recovers_pending_claim_and_advanced_setup_refuses_remint(
+    app_client: AsyncClient,
+) -> None:
+    from easysynq_api.cli.setup import mint_bootstrap
+
+    secret = await _reset_uninitialized()
+    username = _sub("remint")
+    issued = await _provision(app_client, secret, username)
+    assert issued.status_code == 201
+    before = await _config()
+    claim_id = before.bootstrap_admin_claim_id
+    admin_user_id = before.bootstrap_admin_user_id
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.bootstrap_expires_at = setup_service._now() - datetime.timedelta(minutes=1)
+        await session.commit()
+
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        await client.set(
+            setup_service._RL_KEY,
+            str(setup_service._RL_MAX),
+            ex=setup_service._RL_WINDOW_SECONDS,
+        )
+
+    replacement = mint_bootstrap()
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        assert await client.get(setup_service._RL_KEY) is None
+    recovered = await _provision(app_client, replacement, username)
+
+    assert recovered.status_code == 200, recovered.text
+    after = await _config()
+    assert after.bootstrap_admin_claim_id == claim_id
+    assert after.bootstrap_admin_username == username
+    assert after.bootstrap_admin_user_id == admin_user_id
+
+    acknowledged = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={
+            "secret": replacement,
+            "credential_receipt": recovered.json()["credential_receipt"],
+        },
+    )
+    assert acknowledged.status_code == 200
+    stored_hash = (await _config()).bootstrap_secret_hash
+    with pytest.raises(SystemExit, match="UNINITIALIZED"):
+        mint_bootstrap()
+    assert (await _config()).bootstrap_secret_hash == stored_hash
+
+
+async def test_remint_redis_reset_failure_rolls_back_replacement_proof(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+
+    del app_client
+    await _reset_uninitialized()
+    before = await _config()
+    original_hash = before.bootstrap_secret_hash
+    original_expiry = before.bootstrap_expires_at
+
+    def unavailable() -> None:
+        raise SystemExit("bootstrap failure counter could not be reset")
+
+    monkeypatch.setattr(setup_cli, "_clear_bootstrap_failure_budget", unavailable)
+
+    with pytest.raises(SystemExit, match="failure counter could not be reset"):
+        setup_cli.mint_bootstrap()
+
+    after = await _config()
+    assert after.bootstrap_secret_hash == original_hash
+    assert after.bootstrap_expires_at == original_expiry
+
+
+async def test_remint_cannot_commit_after_racing_acknowledgment(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    del _setup_keycloak
+    secret = await _reset_uninitialized()
+    username = _sub("remint-race")
+    provisioned = await _provision(app_client, secret, username)
+    assert provisioned.status_code == 201
+    original_hash = (await _config()).bootstrap_secret_hash
+    replacement_secret, replacement_hash = mint_secret()
+    assignment_checked = asyncio.Event()
+    allow_acknowledgment = asyncio.Event()
+    mint_called = threading.Event()
+    real_assignment_exists = administrator_service._admin_assignment_exists
+
+    async def pause_acknowledgment_assignment(
+        session: Any, *, org_id: uuid.UUID, user_id: uuid.UUID
+    ) -> bool:
+        assignment_checked.set()
+        await allow_acknowledgment.wait()
+        return await real_assignment_exists(session, org_id=org_id, user_id=user_id)
+
+    def observed_mint_secret() -> tuple[str, str]:
+        mint_called.set()
+        return replacement_secret, replacement_hash
+
+    def run_remint() -> tuple[str, str]:
+        try:
+            return "minted", setup_cli.mint_bootstrap()
+        except SystemExit as exc:
+            return "refused", str(exc)
+
+    monkeypatch.setattr(
+        administrator_service,
+        "_admin_assignment_exists",
+        pause_acknowledgment_assignment,
+    )
+    monkeypatch.setattr(setup_cli, "mint_secret", observed_mint_secret)
+    acknowledgment = asyncio.create_task(
+        app_client.post(
+            "/api/v1/setup/administrator/acknowledge",
+            json={
+                "secret": secret,
+                "credential_receipt": provisioned.json()["credential_receipt"],
+            },
+        )
+    )
+    await asyncio.wait_for(assignment_checked.wait(), timeout=2)
+    remint = asyncio.create_task(asyncio.to_thread(run_remint))
+    mint_ran_before_acknowledgment = await asyncio.to_thread(mint_called.wait, 0.5)
+    allow_acknowledgment.set()
+
+    acknowledged = await asyncio.wait_for(acknowledgment, timeout=2)
+    remint_outcome = await asyncio.wait_for(remint, timeout=2)
+    final_cfg = await _config()
+
+    assert acknowledged.status_code == 200
+    assert mint_ran_before_acknowledgment is False
+    assert remint_outcome == (
+        "refused",
+        "bootstrap can only be minted while setup is UNINITIALIZED",
+    )
+    assert final_cfg.setup_state is SetupState.IN_SETUP
+    assert final_cfg.bootstrap_secret_hash == original_hash
+
+
+async def test_different_bound_username_discloses_only_username_after_valid_secret(
+    app_client: AsyncClient,
+) -> None:
+    secret = await _reset_uninitialized()
+    bound = _sub("bound")
+    other = _sub("other")
+    assert (await _provision(app_client, secret, bound)).status_code == 201
+
+    response = await _provision(app_client, secret, other)
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["code"] == "bootstrap_identity_bound"
+    assert body["bound_username"] == bound
+    assert "claim" not in response.text.lower()
+    assert "subject:" not in response.text
+    assert secret not in response.text
+
+
+async def test_break_glass_administrator_blocks_public_claim(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+
+    secret = await _reset_uninitialized()
+    grant_role(_sub("existing-admin"))
+
+    response = await _provision(app_client, secret, _sub("second-admin"))
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "bootstrap_administrator_exists"
+    assert (await _config()).bootstrap_admin_claim_id is None
+    assert _setup_keycloak.accounts == {}
+
+
+async def test_release_administrator_blocker_removes_only_the_exact_assignment(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.cli.setup import release_administrator_blocker
+
+    secret = await _reset_uninitialized()
+    subject = _sub("release-blocker")
+    grant_role(subject)
+    grant_role(subject, "Author")
+    claim_id = uuid.uuid4()
+    hidden_claim_username = _sub("hidden-claim-owner")
+    history_marker = uuid.uuid4().hex
+
+    async with get_sessionmaker()() as session:
+        org = (await session.execute(select(Organization))).scalar_one()
+        user = await session.scalar(
+            select(AppUser).where(AppUser.org_id == org.id, AppUser.keycloak_subject == subject)
+        )
+        assert user is not None
+        user.display_name = "Unrelated pre-operational administrator"
+        user.email = "unrelated-admin@example.invalid"
+        user.status = UserStatus.LOCKED
+        user.mfa_enrolled = True
+        user.is_guest = True
+        cfg = await session.get(SystemConfig, org.id)
+        assert cfg is not None
+        cfg.bootstrap_admin_claim_id = claim_id
+        cfg.bootstrap_admin_username = hidden_claim_username
+        admin_role_id = await session.scalar(
+            select(Role.id).where(Role.org_id == org.id, Role.name == _ADMIN)
+        )
+        assert admin_role_id is not None
+        session.add(
+            RoleAssignment(
+                org_id=org.id,
+                user_id=user.id,
+                role_id=admin_role_id,
+                bound_scope={"source": "supported-duplicate"},
+            )
+        )
+        event = AuditEvent(
+            org_id=org.id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=user.id,
+            actor_type=ActorType.user,
+            event_type=EventType.USER_STATUS_CHANGED,
+            object_type=AuditObjectType.user,
+            object_id=user.id,
+            after={"history_marker": history_marker},
+        )
+        session.add(event)
+        await session.flush()
+        user_id = user.id
+        event_id = event.id
+        assignment_rows = (
+            await session.execute(
+                select(Role.name, RoleAssignment.id)
+                .join(RoleAssignment, RoleAssignment.role_id == Role.id)
+                .where(RoleAssignment.org_id == org.id, RoleAssignment.user_id == user.id)
+            )
+        ).all()
+        admin_assignment_ids = {
+            assignment_id for role_name, assignment_id in assignment_rows if role_name == _ADMIN
+        }
+        author_assignment_ids = {
+            assignment_id for role_name, assignment_id in assignment_rows if role_name == "Author"
+        }
+        await session.commit()
+
+    blocked = await _provision(app_client, secret, _sub("public-first-admin"))
+    assert blocked.status_code == 409
+    assert blocked.json()["code"] == "bootstrap_administrator_exists"
+    assert _setup_keycloak.operations == []
+
+    result = release_administrator_blocker(subject)
+
+    assert subject in result
+    assert "released" in result.lower()
+    assert str(claim_id) not in result
+    assert hidden_claim_username not in result
+    assert secret not in result
+    assert _setup_keycloak.operations == []
+    async with get_sessionmaker()() as session:
+        user = await session.get(AppUser, user_id)
+        assert user is not None
+        assert user.keycloak_subject == subject
+        assert user.display_name == "Unrelated pre-operational administrator"
+        assert user.email == "unrelated-admin@example.invalid"
+        assert user.status is UserStatus.LOCKED
+        assert user.mfa_enrolled is True
+        assert user.is_guest is True
+        assignments_after = {
+            role_name: assignment_id
+            for role_name, assignment_id in (
+                await session.execute(
+                    select(Role.name, RoleAssignment.id)
+                    .join(RoleAssignment, RoleAssignment.role_id == Role.id)
+                    .where(RoleAssignment.user_id == user_id)
+                )
+            ).all()
+        }
+        preserved_event = await session.scalar(
+            select(AuditEvent).where(AuditEvent.id == event_id, AuditEvent.actor_id == user_id)
+        )
+
+    assert len(admin_assignment_ids) == 2
+    assert len(author_assignment_ids) == 1
+    assert assignments_after == {"Author": next(iter(author_assignment_ids))}
+    assert preserved_event is not None
+    assert preserved_event.after == {"history_marker": history_marker}
+
+
+async def test_release_administrator_blocker_refuses_the_claim_linked_user_without_mutation(
+    app_client: AsyncClient,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.cli.setup import release_administrator_blocker
+
+    del app_client
+    await _reset_uninitialized()
+    subject = _sub("claim-owned-blocker")
+    hidden_username = _sub("claim-owner")
+    claim_id = uuid.uuid4()
+    grant_role(subject)
+    async with get_sessionmaker()() as session:
+        user = await session.scalar(select(AppUser).where(AppUser.keycloak_subject == subject))
+        assert user is not None
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.bootstrap_admin_user_id = user.id
+        cfg.bootstrap_admin_claim_id = claim_id
+        cfg.bootstrap_admin_username = hidden_username
+        assignment_id = await session.scalar(
+            select(RoleAssignment.id)
+            .join(Role, Role.id == RoleAssignment.role_id)
+            .where(RoleAssignment.user_id == user.id, Role.name == _ADMIN)
+        )
+        await session.commit()
+
+    with pytest.raises(SystemExit) as refused:
+        release_administrator_blocker(subject)
+
+    detail = str(refused.value)
+    assert subject in detail
+    assert str(claim_id) not in detail
+    assert hidden_username not in detail
+    async with get_sessionmaker()() as session:
+        assert await session.get(RoleAssignment, assignment_id) is not None
+
+
+@pytest.mark.parametrize(
+    "setup_state",
+    [SetupState.IN_SETUP, SetupState.OPERATIONAL],
+    ids=["in-setup", "completed"],
+)
+async def test_release_administrator_blocker_refuses_advanced_setup_without_mutation(
+    app_client: AsyncClient,
+    setup_state: SetupState,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.cli.setup import release_administrator_blocker
+
+    del app_client
+    await _reset_uninitialized()
+    subject = _sub("advanced-setup-blocker")
+    grant_role(subject)
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        cfg.setup_state = setup_state
+        assignment_id = await session.scalar(
+            select(RoleAssignment.id)
+            .join(Role, Role.id == RoleAssignment.role_id)
+            .join(AppUser, AppUser.id == RoleAssignment.user_id)
+            .where(AppUser.keycloak_subject == subject, Role.name == _ADMIN)
+        )
+        await session.commit()
+
+    with pytest.raises(SystemExit) as refused:
+        release_administrator_blocker(subject)
+
+    assert subject in str(refused.value)
+    assert setup_state.value not in str(refused.value)
+    async with get_sessionmaker()() as session:
+        assert await session.get(RoleAssignment, assignment_id) is not None
+
+
+async def test_release_administrator_blocker_is_idempotent_for_absent_user_or_assignment(
+    app_client: AsyncClient,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.cli.setup import release_administrator_blocker
+
+    del app_client
+    await _reset_uninitialized()
+    absent_subject = _sub("absent-blocker")
+    ordinary_subject = _sub("ordinary-user")
+    grant_role(ordinary_subject, "Author")
+
+    first_absent = release_administrator_blocker(absent_subject)
+    second_absent = release_administrator_blocker(absent_subject)
+    first_ordinary = release_administrator_blocker(ordinary_subject)
+    second_ordinary = release_administrator_blocker(ordinary_subject)
+
+    for subject, result in (
+        (absent_subject, first_absent),
+        (absent_subject, second_absent),
+        (ordinary_subject, first_ordinary),
+        (ordinary_subject, second_ordinary),
+    ):
+        assert subject in result
+        assert "nothing released" in result.lower()
+    async with get_sessionmaker()() as session:
+        assert (
+            await session.scalar(
+                select(AppUser.id).where(AppUser.keycloak_subject == absent_subject)
+            )
+            is None
+        )
+        ordinary = await session.scalar(
+            select(AppUser).where(AppUser.keycloak_subject == ordinary_subject)
+        )
+        assert ordinary is not None
+        roles = set(
+            (
+                await session.execute(
+                    select(Role.name)
+                    .join(RoleAssignment, RoleAssignment.role_id == Role.id)
+                    .where(RoleAssignment.user_id == ordinary.id)
+                )
+            ).scalars()
+        )
+    assert roles == {"Author"}
+
+
+async def test_release_administrator_blocker_locks_singleton_before_admin_set(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session
+
+    from easysynq_api.cli import setup as setup_cli
+    from easysynq_api.cli.grant_role import grant_role
+    from easysynq_api.services.authz import admin_guard
+
+    del app_client
+    await _reset_uninitialized()
+    subject = _sub("lock-order-blocker")
+    grant_role(subject)
+    singleton_was_locked = False
+
+    def observe_admin_lock(session: Session, org_id: uuid.UUID) -> None:
+        nonlocal singleton_was_locked
+        competing_engine = create_engine(get_settings().sync_dsn)
+        try:
+            with Session(competing_engine) as competing:
+                with pytest.raises(OperationalError):
+                    competing.scalar(
+                        select(SystemConfig)
+                        .where(SystemConfig.org_id == org_id)
+                        .with_for_update(nowait=True)
+                    )
+            singleton_was_locked = True
+        finally:
+            competing_engine.dispose()
+        admin_guard.lock_admin_set_sync(session, org_id)
+
+    monkeypatch.setattr(setup_cli, "lock_admin_set_sync", observe_admin_lock, raising=False)
+
+    setup_cli.release_administrator_blocker(subject)
+
+    assert singleton_was_locked is True
+
+
+@pytest.mark.parametrize("failure_phase", ["flush", "commit"])
+async def test_release_administrator_blocker_rolls_back_flush_or_commit_failure(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: str,
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+    from easysynq_api.cli.grant_role import grant_role
+
+    del app_client
+    await _reset_uninitialized()
+    subject = _sub("rollback-blocker")
+    provider_detail = f"provider-detail-{uuid.uuid4()}"
+    grant_role(subject)
+    async with get_sessionmaker()() as session:
+        assignment_id = await session.scalar(
+            select(RoleAssignment.id)
+            .join(Role, Role.id == RoleAssignment.role_id)
+            .join(AppUser, AppUser.id == RoleAssignment.user_id)
+            .where(AppUser.keycloak_subject == subject, Role.name == _ADMIN)
+        )
+
+    original_flush = setup_cli.Session.flush
+    original_rollback = setup_cli.Session.rollback
+    rollback_called = False
+
+    def observed_rollback(session: Any) -> None:
+        nonlocal rollback_called
+        rollback_called = True
+        original_rollback(session)
+
+    def failed_flush(session: Any, *args: Any, **kwargs: Any) -> None:
+        original_flush(session, *args, **kwargs)
+        raise RuntimeError(provider_detail)
+
+    def failed_commit(_session: Any) -> None:
+        raise RuntimeError(provider_detail)
+
+    with monkeypatch.context() as failure_injection:
+        failure_injection.setattr(setup_cli.Session, "rollback", observed_rollback)
+        failure_injection.setattr(
+            setup_cli.Session,
+            failure_phase,
+            failed_flush if failure_phase == "flush" else failed_commit,
+        )
+
+        with pytest.raises(SystemExit) as failed:
+            setup_cli.release_administrator_blocker(subject)
+
+    assert rollback_called is True
+    assert subject in str(failed.value)
+    assert provider_detail not in str(failed.value)
+    async with get_sessionmaker()() as session:
+        assert await session.get(RoleAssignment, assignment_id) is not None
+
+
+async def test_unrelated_administrator_blocks_pending_claim_without_releasing_it(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    from easysynq_api.cli.grant_role import grant_role
+
+    secret = await _reset_uninitialized()
+    bound_username = _sub("bound-admin")
+    await _establish_claim_only(
+        app_client,
+        _setup_keycloak,
+        secret=secret,
+        username=bound_username,
+    )
+    before = await _config()
+    grant_role(_sub("unrelated-admin"))
+
+    response = await _provision(app_client, secret, bound_username)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "bootstrap_administrator_exists"
+    after = await _config()
+    assert after.bootstrap_admin_claim_id == before.bootstrap_admin_claim_id
+    assert after.bootstrap_admin_username == bound_username
+
+
+async def test_claim_owned_administrator_can_reissue_and_acknowledge(
+    app_client: AsyncClient,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("claim-admin")
+
+    created = await _provision(app_client, secret, username)
+    reissued = await _provision(app_client, secret, username)
+    acknowledged = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": reissued.json()["credential_receipt"]},
+    )
+
+    assert created.status_code == 201, created.text
+    assert reissued.status_code == 200, reissued.text
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["setup_state"] == "IN_SETUP"
+
+
+async def test_first_administrator_canonicalizes_mixed_case_username_end_to_end(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    submitted = f"  Mixed.Admin-{uuid.uuid4().hex[:8]}  "
+    canonical = submitted.strip().lower()
+
+    first = await _provision(app_client, secret, submitted)
+    retried = await _provision(app_client, secret, submitted.swapcase())
+
+    assert first.status_code == 201, first.text
+    assert retried.status_code == 200, retried.text
+    assert first.json()["administrator"]["username"] == canonical
+    assert retried.json()["administrator"]["username"] == canonical
+    cfg = await _config()
+    assert cfg.bootstrap_admin_username == canonical
+    assert set(_setup_keycloak.accounts) == {canonical}
+    async with get_sessionmaker()() as session:
+        claimed = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_type == EventType.BOOTSTRAP_IDENTITY_CLAIMED,
+                AuditEvent.object_id == cfg.org_id,
+                AuditEvent.after["username"].as_string() == canonical,
+            )
+        )
+    assert claimed is not None
+
+
+@pytest.mark.parametrize("marker", [None, "00000000-0000-0000-0000-000000000001"])
+async def test_unrelated_username_collision_retains_claim(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    marker: str | None,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("collision")
+    _setup_keycloak.add_account(username, marker=marker)
+
+    collision = await _provision(app_client, secret, username)
+
+    assert collision.status_code == 409
+    assert collision.json()["code"] == "user_exists"
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
+    assert cfg.bootstrap_admin_user_id is None
+    assert cfg.bootstrap_credential_issued_at is None
+    assert _setup_keycloak.operations[:2] == ["profile", "lookup"]
+
+
+async def test_reliable_email_collision_retains_claim(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    email = "duplicate@example.local"
+    _setup_keycloak.add_account(_sub("email-owner"), email=email)
+
+    username = _sub("email-collision")
+    collision = await _provision(app_client, secret, username, email=email)
+
+    assert collision.status_code == 409
+    assert collision.json()["code"] == "keycloak_email_exists"
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
+
+
+async def test_keycloak_rejection_detail_never_echoes_marker_or_profile(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("rejected-profile")
+    email = "rejected-profile@example.local"
+    _setup_keycloak.rejection_detail_template = (
+        "upstream echoed claim={claim}; username={username}; email={email}"
+    )
+
+    response = await _provision(app_client, secret, username, email=email)
+
+    assert response.status_code == 422
+    body = response.json()
+    cfg = await _config()
+    assert body["code"] == "validation_error"
+    assert body["title"] == "The identity provider rejected the administrator profile"
+    assert "detail" not in body
+    assert secret not in response.text
+    assert username not in response.text
+    assert email not in response.text
+    assert str(cfg.bootstrap_admin_claim_id) not in response.text
+
+
+async def test_keycloak_rejection_releases_unowned_claim_and_allows_corrected_identity(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    _setup_keycloak.rejection_detail_template = "definitive profile rejection"
+
+    rejected = await _provision(app_client, secret, "rejected-admin")
+
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "validation_error"
+    assert (await _config()).bootstrap_admin_claim_id is None
+    assert _setup_keycloak.accounts == {}
+
+    _setup_keycloak.rejection_detail_template = None
+    corrected = await _provision(app_client, secret, "corrected-admin")
+    assert corrected.status_code == 201, corrected.text
+
+
+async def test_keycloak_rejection_revalidation_found_marker_retains_claim(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("rejected-marker-race")
+    await _establish_claim_only(
+        app_client,
+        _setup_keycloak,
+        secret=secret,
+        username=username,
+    )
+    before = await _config()
+    assert before.bootstrap_admin_claim_id is not None
+    _setup_keycloak.rejection_detail_template = "definitive profile rejection"
+    _setup_keycloak.rejection_revalidation = UserLookup(
+        True,
+        f"external:{username}",
+        str(before.bootstrap_admin_claim_id),
+    )
+
+    rejected = await _provision(app_client, secret, username)
+
+    assert rejected.status_code == 422, rejected.text
+    after = await _config()
+    assert after.bootstrap_admin_claim_id == before.bootstrap_admin_claim_id
+    assert after.bootstrap_admin_username == username
+
+
+async def test_keycloak_rejection_revalidation_outage_retains_claim(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("rejected-revalidation-outage")
+    _setup_keycloak.rejection_detail_template = "definitive profile rejection"
+    _setup_keycloak.rejection_revalidation = KeycloakUnavailable("revalidation unavailable")
+
+    rejected = await _provision(app_client, secret, username)
+
+    assert rejected.status_code == 502, rejected.text
+    assert rejected.json()["code"] == "keycloak_unavailable"
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
+
+
+async def test_same_claim_request_cannot_create_while_rejection_is_in_flight(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    secret = await _reset_uninitialized()
+    username = _sub("same-claim-rejection-race")
+    barrier = _CreateRejectionBarrier()
+    _setup_keycloak.rejection_detail_template = "first request rejected"
+    _setup_keycloak.rejection_barrier = barrier
+
+    first = asyncio.create_task(_provision(app_client, secret, username))
+    await asyncio.wait_for(barrier.entered.get(), timeout=2)
+    _setup_keycloak.rejection_detail_template = None
+    singleton_acquired = asyncio.Event()
+    real_locked_singleton = administrator_service._locked_singleton
+
+    async def observe_second_singleton(session: Any) -> SystemConfig:
+        cfg = await real_locked_singleton(session)
+        if asyncio.current_task() is second:
+            singleton_acquired.set()
+        return cfg
+
+    monkeypatch.setattr(administrator_service, "_locked_singleton", observe_second_singleton)
+    second = asyncio.create_task(_provision(app_client, secret, username))
+    acquired_before_release = False
+    try:
+        await asyncio.wait_for(singleton_acquired.wait(), timeout=0.25)
+        acquired_before_release = True
+    except TimeoutError:
+        pass
+    finally:
+        barrier.release.set()
+
+    rejected = await asyncio.wait_for(first, timeout=2)
+    created = await asyncio.wait_for(second, timeout=2)
+
+    assert acquired_before_release is False
+    assert rejected.status_code == 422, rejected.text
+    assert created.status_code == 201, created.text
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_user_id is not None
+
+
+async def test_lookup_outage_retains_claim_and_fails_closed(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("malformed-marker")
+    _setup_keycloak.lookup_error = KeycloakUnavailable("bootstrap marker was malformed")
+
+    response = await _provision(app_client, secret, username)
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "keycloak_unavailable"
+    assert _setup_keycloak.operations == ["profile", "lookup"]
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
+
+
+async def test_malformed_marker_retains_claim_and_fails_closed(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("malformed-marker")
+    _setup_keycloak.add_account(username, marker="not-a-uuid")
+
+    response = await _provision(app_client, secret, username)
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "keycloak_unavailable"
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_username == username
+
+
+async def test_uncertain_create_retains_claim_and_retry_adopts_marked_identity(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("uncertain-create")
+    _setup_keycloak.fail_after_create = True
+
+    uncertain = await _provision(app_client, secret, username)
+
+    assert uncertain.status_code == 502
+    claimed = await _config()
+    assert claimed.bootstrap_admin_claim_id is not None
+    assert claimed.bootstrap_admin_user_id is None
+    assert _setup_keycloak.accounts[username].marker == str(claimed.bootstrap_admin_claim_id)
+
+    _setup_keycloak.fail_after_create = False
+    recovered = await _provision(app_client, secret, username)
+    assert recovered.status_code == 200, recovered.text
+
+
+async def test_database_failure_after_marked_create_retries_same_identity(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    secret = await _reset_uninitialized()
+    username = _sub("db-failure")
+    real_builder = administrator_service._bootstrap_audit_event
+
+    def fail_user_created(**kwargs: Any) -> AuditEvent:
+        if kwargs["event_type"] is EventType.USER_CREATED:
+            raise RuntimeError("forced user-state database failure")
+        return real_builder(**kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(administrator_service, "_bootstrap_audit_event", fail_user_created)
+        with pytest.raises(RuntimeError, match="forced user-state database failure"):
+            await _provision(app_client, secret, username)
+
+    claimed = await _config()
+    assert claimed.bootstrap_admin_claim_id is not None
+    assert claimed.bootstrap_admin_user_id is None
+    assert _setup_keycloak.accounts[username].marker == str(claimed.bootstrap_admin_claim_id)
+    recovered = await _provision(app_client, secret, username)
+    assert recovered.status_code == 200, recovered.text
+
+
+async def test_claimed_retry_reconciles_corrected_profile_in_both_stores(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("corrected-profile")
+    original_email = "original@example.local"
+    corrected_email = "corrected@example.local"
+    _setup_keycloak.fail_after_create = True
+
+    uncertain = await _provision(
+        app_client,
+        secret,
+        username,
+        email=original_email,
+        display_name="Original Administrator",
+        first_name="Original",
+        last_name="Administrator",
+    )
+
+    assert uncertain.status_code == 502, uncertain.text
+    claimed = await _config()
+    assert claimed.bootstrap_admin_claim_id is not None
+    original_unrelated = dict(_setup_keycloak.accounts[username].unrelated_fields)
+    _setup_keycloak.fail_after_create = False
+
+    recovered = await _provision(
+        app_client,
+        secret,
+        username,
+        email=corrected_email,
+        display_name="Corrected Administrator",
+        first_name="Corrected",
+        last_name=None,
+    )
+
+    assert recovered.status_code == 200, recovered.text
+    account = _setup_keycloak.accounts[username]
+    assert account.marker == str(claimed.bootstrap_admin_claim_id)
+    assert account.email == corrected_email
+    assert account.first_name == "Corrected"
+    assert account.last_name is None
+    assert account.unrelated_fields == original_unrelated
+    current = await _config()
+    assert current.bootstrap_admin_user_id is not None
+    async with get_sessionmaker()() as session:
+        user = await session.get(AppUser, current.bootstrap_admin_user_id)
+    assert user is not None
+    assert user.display_name == "Corrected Administrator"
+    assert user.email == corrected_email
+
+
+async def test_concurrent_profile_retries_converge_on_one_complete_profile(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("concurrent-profile")
+    initial = await _provision(app_client, secret, username)
+    assert initial.status_code == 201, initial.text
+    profiles = {
+        (
+            "Profile Alpha",
+            "alpha@example.local",
+            "Alpha",
+            "Administrator",
+        ),
+        (
+            "Profile Beta",
+            "beta@example.local",
+            "Beta",
+            None,
+        ),
+    }
+
+    retries = await asyncio.gather(
+        _provision(
+            app_client,
+            secret,
+            username,
+            display_name="Profile Alpha",
+            email="alpha@example.local",
+            first_name="Alpha",
+            last_name="Administrator",
+        ),
+        _provision(
+            app_client,
+            secret,
+            username,
+            display_name="Profile Beta",
+            email="beta@example.local",
+            first_name="Beta",
+            last_name=None,
+        ),
+    )
+
+    assert {response.status_code for response in retries} == {200}
+    cfg = await _config()
+    assert cfg.bootstrap_admin_user_id is not None
+    async with get_sessionmaker()() as session:
+        user = await session.get(AppUser, cfg.bootstrap_admin_user_id)
+    assert user is not None
+    account = _setup_keycloak.accounts[username]
+    final_profile = (
+        user.display_name,
+        account.email,
+        account.first_name,
+        account.last_name,
+    )
+    assert final_profile in profiles
+    assert user.email == account.email
+    assert account.marker == str(cfg.bootstrap_admin_claim_id)
+
+
+async def test_rejected_claimed_profile_update_retains_claim_redacts_and_recovers(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("rejected-claimed-profile")
+    _setup_keycloak.fail_after_create = True
+    uncertain = await _provision(
+        app_client,
+        secret,
+        username,
+        email="original@example.local",
+        first_name="Original",
+        last_name="Administrator",
+    )
+    assert uncertain.status_code == 502, uncertain.text
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    account = _setup_keycloak.accounts[username]
+    marker = account.marker
+    unrelated = dict(account.unrelated_fields)
+
+    _setup_keycloak.fail_after_create = False
+    rejected_email = "provider-rejected@example.local"
+    _setup_keycloak.profile_rejection_detail_template = (
+        "rejected subject={subject}; claim={claim}; username={username}; email={email}"
+    )
+    rejected = await _provision(
+        app_client,
+        secret,
+        username,
+        email=rejected_email,
+        display_name="Rejected Projection",
+        first_name="Rejected",
+        last_name=None,
+    )
+
+    assert rejected.status_code == 422, rejected.text
+    body = rejected.json()
+    assert body["title"] == "The identity provider rejected the administrator profile"
+    assert body["status"] == 422
+    assert body["code"] == "validation_error"
+    assert "detail" not in body
+    assert username not in rejected.text
+    assert rejected_email not in rejected.text
+    assert str(cfg.bootstrap_admin_claim_id) not in rejected.text
+    retained = await _config()
+    assert retained.bootstrap_admin_claim_id == cfg.bootstrap_admin_claim_id
+    assert retained.bootstrap_admin_user_id is None
+    assert account.marker == marker
+    assert account.email == "original@example.local"
+    assert account.first_name == "Original"
+    assert account.last_name == "Administrator"
+    assert account.unrelated_fields == unrelated
+
+    _setup_keycloak.profile_rejection_detail_template = None
+    corrected = await _provision(
+        app_client,
+        secret,
+        username,
+        email="accepted@example.local",
+        display_name="Accepted Projection",
+        first_name="Accepted",
+        last_name=None,
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert account.email == "accepted@example.local"
+    assert account.first_name == "Accepted"
+    assert account.last_name is None
+
+
+async def test_password_failure_keeps_linked_user_and_role_for_retry(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("password-failure")
+    _setup_keycloak.password_error = KeycloakUnavailable("password endpoint unavailable")
+
+    failed = await _provision(app_client, secret, username)
+
+    assert failed.status_code == 502
+    cfg = await _config()
+    assert cfg.bootstrap_admin_user_id is not None
+    assert cfg.bootstrap_credential_issued_at is None
+    async with get_sessionmaker()() as session:
+        assigned = await session.scalar(
+            select(RoleAssignment.id)
+            .join(Role, Role.id == RoleAssignment.role_id)
+            .where(
+                RoleAssignment.user_id == cfg.bootstrap_admin_user_id,
+                Role.name == _ADMIN,
+            )
+        )
+    assert assigned is not None
+
+    _setup_keycloak.password_error = None
+    recovered = await _provision(app_client, secret, username)
+    assert recovered.status_code == 200, recovered.text
+
+
+async def test_credential_audit_savepoint_failure_preserves_acknowledgeable_receipt_state(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    secret = await _reset_uninitialized()
+    username = _sub("audit-failure")
+    real_builder = administrator_service._bootstrap_audit_event
+
+    def fail_credential_audit(**kwargs: Any) -> AuditEvent:
+        event = real_builder(**kwargs)
+        if event.event_type is EventType.USER_CREDENTIAL_ISSUED:
+            event.actor_type = None  # type: ignore[assignment]  # force DB INSERT failure
+        return event
+
+    monkeypatch.setattr(administrator_service, "_bootstrap_audit_event", fail_credential_audit)
+    response = await _provision(app_client, secret, username)
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    cfg = await _config()
+    assert cfg.bootstrap_admin_user_id is not None
+    assert cfg.bootstrap_credential_issued_at is not None
+    assert (
+        cfg.bootstrap_credential_receipt_hash
+        == hashlib.sha256(body["credential_receipt"].encode("utf-8")).hexdigest()
+    )
+    async with get_sessionmaker()() as session:
+        credential_audit = await session.scalar(
+            select(AuditEvent.id).where(
+                AuditEvent.event_type == EventType.USER_CREDENTIAL_ISSUED,
+                AuditEvent.object_id == cfg.bootstrap_admin_user_id,
+            )
+        )
+    assert credential_audit is None
+    log_text = caplog.text
+    assert secret not in log_text
+    assert body["temporary_password"] not in log_text
+    assert body["credential_receipt"] not in log_text
+    assert f"subject:{username}" not in log_text
+    assert str(cfg.bootstrap_admin_user_id) in log_text
+    acknowledged = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": body["credential_receipt"]},
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+
+
+async def test_receipt_state_commit_failure_returns_no_credential_and_retry_rotates(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    secret = await _reset_uninitialized()
+    username = _sub("receipt-state-commit")
+    receipts = iter(("A" * 43, "B" * 43))
+
+    def deterministic_receipt() -> tuple[str, str]:
+        receipt = next(receipts)
+        return receipt, hashlib.sha256(receipt.encode("utf-8")).hexdigest()
+
+    real_commit = AsyncSession.commit
+    real_flush = AsyncSession.flush
+    real_rollback = AsyncSession.rollback
+    dialect = get_engine().sync_engine.dialect
+    real_do_commit = dialect.do_commit
+    failed_once = False
+    receipt_state_flushed = False
+    target_async_commit_calls = 0
+    target_commit_boundary_calls = 0
+    failed_commit_rollback_completed = False
+
+    async def observe_receipt_state_flush(
+        session: AsyncSession, objects: Sequence[Any] | None = None
+    ) -> None:
+        nonlocal receipt_state_flushed
+        await real_flush(session, objects=objects)
+        receipt_state_flushed = any(
+            isinstance(value, SystemConfig)
+            and value.bootstrap_credential_receipt_hash is not None
+            and value.bootstrap_credential_issued_at is not None
+            for value in session.identity_map.values()
+        )
+
+    def fail_first_target_commit(dbapi_connection: Any) -> None:
+        nonlocal failed_once, target_commit_boundary_calls
+        if receipt_state_flushed and not failed_once:
+            target_commit_boundary_calls += 1
+            failed_once = True
+            raise RuntimeError("forced receipt-state dialect commit failure")
+        real_do_commit(dbapi_connection)
+
+    async def observe_real_async_commit(session: AsyncSession) -> None:
+        nonlocal target_async_commit_calls
+        has_receipt_state = any(
+            isinstance(value, SystemConfig)
+            and value.bootstrap_credential_receipt_hash is not None
+            and value.bootstrap_credential_issued_at is not None
+            for value in session.identity_map.values()
+        )
+        if has_receipt_state and not session.in_nested_transaction():
+            target_async_commit_calls += 1
+        await real_commit(session)
+
+    async def observe_failed_commit_rollback(session: AsyncSession) -> None:
+        nonlocal failed_commit_rollback_completed
+        await real_rollback(session)
+        if failed_once:
+            failed_commit_rollback_completed = True
+
+    monkeypatch.setattr(
+        administrator_service,
+        "_new_credential_receipt",
+        deterministic_receipt,
+        raising=False,
+    )
+    monkeypatch.setattr(AsyncSession, "flush", observe_receipt_state_flush)
+    monkeypatch.setattr(dialect, "do_commit", fail_first_target_commit)
+    monkeypatch.setattr(AsyncSession, "commit", observe_real_async_commit)
+    monkeypatch.setattr(AsyncSession, "rollback", observe_failed_commit_rollback)
+
+    failed = await _provision(app_client, secret, username)
+
+    assert failed_once is True
+    assert receipt_state_flushed is True
+    assert target_async_commit_calls == 1
+    assert target_commit_boundary_calls == 1
+    assert failed_commit_rollback_completed is True
+    assert failed.status_code == 503, failed.text
+    assert failed.json()["code"] == "dependency_unavailable"
+    assert "temporary_password" not in failed.text
+    assert "credential_receipt" not in failed.text
+    assert "A" * 43 not in failed.text
+    first_password = _setup_keycloak.passwords[f"subject:{username}"][-1]
+    assert first_password not in failed.text
+    assert secret not in failed.text
+    after_failure = await _config()
+    assert after_failure.bootstrap_credential_issued_at is None
+    assert after_failure.bootstrap_credential_receipt_hash is None
+    assert "A" * 43 not in caplog.text
+    assert first_password not in caplog.text
+    assert secret not in caplog.text
+
+    retried = await _provision(app_client, secret, username)
+
+    assert retried.status_code == 200, retried.text
+    body = retried.json()
+    assert body["credential_receipt"] == "B" * 43
+    assert body["credential_receipt"] != "A" * 43
+    assert _setup_keycloak.passwords[f"subject:{username}"][-1] != first_password
+    current = await _config()
+    assert current.bootstrap_credential_issued_at is not None
+    assert (
+        current.bootstrap_credential_receipt_hash
+        == hashlib.sha256(body["credential_receipt"].encode("utf-8")).hexdigest()
+    )
+    acknowledged = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": body["credential_receipt"]},
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+
+
+async def test_acknowledgment_requires_issued_credential_and_admin_assignment(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    secret = await _reset_uninitialized()
+    username = _sub("ack-not-ready")
+    _setup_keycloak.password_error = KeycloakUnavailable("password endpoint unavailable")
+    assert (await _provision(app_client, secret, username)).status_code == 502
+    comparisons = 0
+
+    def observed_receipt_match(_receipt: str, _stored_digest: str | None) -> bool:
+        nonlocal comparisons
+        comparisons += 1
+        return True
+
+    monkeypatch.setattr(
+        administrator_service,
+        "_receipt_matches",
+        observed_receipt_match,
+        raising=False,
+    )
+
+    response = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": "x" * 43},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "bootstrap_not_ready"
+    assert comparisons == 0
+    assert (await _config()).setup_state is SetupState.UNINITIALIZED
+
+
+async def test_linked_claim_is_never_released_after_marker_conflict(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("linked-conflict")
+    assert (await _provision(app_client, secret, username)).status_code == 201
+    before = await _config()
+    _setup_keycloak.accounts[username].marker = str(uuid.uuid4())
+
+    collision = await _provision(app_client, secret, username)
+
+    assert collision.status_code == 409
+    assert collision.json()["code"] == "user_exists"
+    after = await _config()
+    assert after.bootstrap_admin_claim_id == before.bootstrap_admin_claim_id
+    assert after.bootstrap_admin_user_id == before.bootstrap_admin_user_id
+    assert after.bootstrap_credential_issued_at is not None
+
+
+async def test_bootstrap_rate_limit_dependency_outage_fails_closed_before_claim(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = await _reset_uninitialized()
+
+    def unavailable_redis() -> Any:
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(setup_service, "_redis", unavailable_redis)
+    response = await _provision(app_client, secret, _sub("redis-outage"))
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "dependency_unavailable"
+    assert (await _config()).bootstrap_admin_claim_id is None
+
+
+async def test_non_uninitialized_state_denies_provisioning_even_with_bearer(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+) -> None:
+    secret = await _reset_uninitialized()
+    _, body = await _bootstrap(app_client, token_factory, secret, "advanced")
+
+    response = await app_client.post(
+        "/api/v1/setup/administrator",
+        headers=_auth(token_factory, _sub("irrelevant-bearer")),
+        json={
+            "secret": secret,
+            "username": _sub("second-admin"),
+            "display_name": "Second Administrator",
+        },
+    )
+
+    assert body["setup_state"] == "IN_SETUP"
+    assert response.status_code == 409
+    assert response.json()["code"] == "setup_already_complete"
+
+
+async def test_first_administrator_audit_order_actor_and_payload_secrecy(
+    app_client: AsyncClient,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("audit-order")
+    async with get_sessionmaker()() as session:
+        baseline = await session.scalar(
+            select(AuditEvent.id).order_by(AuditEvent.id.desc()).limit(1)
+        )
+    baseline = baseline or 0
+    provisioned = await _provision(app_client, secret, username)
+    password = provisioned.json()["temporary_password"]
+    credential_receipt = provisioned.json()["credential_receipt"]
+    admin_id = uuid.UUID(provisioned.json()["administrator"]["id"])
+    acknowledged = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": credential_receipt},
+    )
+    assert acknowledged.status_code == 200
+    cfg = await _config()
+    subject = f"subject:{username}"
+
+    async with get_sessionmaker()() as session:
+        events = (
+            (
+                await session.execute(
+                    select(AuditEvent)
+                    .where(
+                        AuditEvent.id > baseline,
+                        AuditEvent.event_type.in_(
+                            {
+                                EventType.BOOTSTRAP_IDENTITY_CLAIMED,
+                                EventType.USER_CREATED,
+                                EventType.ADMIN_BOOTSTRAPPED,
+                                EventType.USER_CREDENTIAL_ISSUED,
+                                EventType.BOOTSTRAP_CONSUMED,
+                            }
+                        ),
+                    )
+                    .order_by(AuditEvent.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert [event.event_type for event in events] == [
+        EventType.BOOTSTRAP_IDENTITY_CLAIMED,
+        EventType.USER_CREATED,
+        EventType.ADMIN_BOOTSTRAPPED,
+        EventType.USER_CREDENTIAL_ISSUED,
+        EventType.BOOTSTRAP_CONSUMED,
+    ]
+    for event in events:
+        assert event.actor_type.value == "system"
+        assert event.actor_id is None
+        assert event.org_id == cfg.org_id
+        assert (
+            set(event.after or {})
+            <= {
+                EventType.BOOTSTRAP_IDENTITY_CLAIMED: {"username"},
+                EventType.USER_CREATED: {"status", "email", "provisioning"},
+                EventType.ADMIN_BOOTSTRAPPED: {"role"},
+                EventType.USER_CREDENTIAL_ISSUED: {"credential_issued"},
+                EventType.BOOTSTRAP_CONSUMED: set(),
+            }[event.event_type]
+        )
+        rendered = repr(event.after)
+        assert secret not in rendered
+        assert password not in rendered
+        assert credential_receipt not in rendered
+        assert subject not in rendered
+        assert str(cfg.bootstrap_admin_claim_id) not in rendered
+    assert events[1].object_id == admin_id
+
+
+async def test_concurrent_first_administrator_requests_converge_on_single_state(
+    app_client: AsyncClient,
+) -> None:
+    import asyncio
+
+    secret = await _reset_uninitialized()
+    username = _sub("concurrent")
+    async with get_sessionmaker()() as session:
+        claimed_before = await session.scalar(
+            select(AuditEvent.id)
+            .where(AuditEvent.event_type == EventType.BOOTSTRAP_IDENTITY_CLAIMED)
+            .order_by(AuditEvent.id.desc())
+            .limit(1)
+        )
+    claimed_before = claimed_before or 0
+
+    first, second = await asyncio.gather(
+        _provision(app_client, secret, username),
+        _provision(app_client, secret, username),
+    )
+
+    assert {first.status_code, second.status_code} == {200, 201}
+    cfg = await _config()
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert cfg.bootstrap_admin_user_id is not None
+    async with get_sessionmaker()() as session:
+        users = (
+            (
+                await session.execute(
+                    select(AppUser.id).where(AppUser.keycloak_subject == f"subject:{username}")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assignments = (
+            (
+                await session.execute(
+                    select(RoleAssignment.id)
+                    .join(Role, Role.id == RoleAssignment.role_id)
+                    .where(
+                        RoleAssignment.user_id == cfg.bootstrap_admin_user_id, Role.name == _ADMIN
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        claimed = (
+            (
+                await session.execute(
+                    select(AuditEvent.id).where(
+                        AuditEvent.event_type == EventType.BOOTSTRAP_IDENTITY_CLAIMED,
+                        AuditEvent.id > claimed_before,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert users == [cfg.bootstrap_admin_user_id]
+    assert len(assignments) == 1
+    assert len(claimed) == 1
 
 
 async def test_org_profile_requires_admin(
@@ -221,8 +2324,7 @@ async def test_org_profile_requires_admin(
     forbidden = await app_client.patch("/api/v1/setup/org-profile", headers=h_other, json=payload)
     assert forbidden.status_code == 403
 
-    h_admin = _auth(token_factory, _sub("admin"))
-    await _bootstrap(app_client, h_admin, secret)
+    h_admin, _ = await _bootstrap(app_client, token_factory, secret, "admin")
     ok = await app_client.patch("/api/v1/setup/org-profile", headers=h_admin, json=payload)
     assert ok.status_code == 200, ok.text
     assert ok.json()["short_code"] == "ACME"
@@ -248,8 +2350,7 @@ async def test_org_profile_rejects_default_short_code(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("admin"))
-    await _bootstrap(app_client, h, secret)
+    h, _ = await _bootstrap(app_client, token_factory, secret, "admin")
     r = await app_client.patch(
         "/api/v1/setup/org-profile",
         headers=h,
@@ -363,8 +2464,7 @@ async def test_finalize_blocked_then_operational_lifts_latch(
     """[HEADLINE] Finalize is blocked until G-E (org profile) passes; once it does, the latch flips
     to OPERATIONAL (SETUP_FINALIZED audited) and the QMS surface is no longer 423."""
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("fin"))
-    body = await _bootstrap(app_client, h, secret)  # G-A satisfied
+    h, body = await _bootstrap(app_client, token_factory, secret, "fin")  # G-A satisfied
     admin_id = uuid.UUID(body["admin_user_id"])
 
     blocked = await app_client.post("/api/v1/setup/finalize", headers=h)
@@ -415,45 +2515,185 @@ async def test_latch_exemptions_are_boundary_anchored(
 
 
 async def test_bootstrap_rate_limit_locks_out(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
 ) -> None:
     """The brute-force throttle: 5 failed attempts each 403, the 6th is 429 rate_limited."""
     await _reset_uninitialized()
-    h = _auth(token_factory, _sub("rl"))
+    username = _sub("rl")
     for _ in range(5):
-        bad = await app_client.post("/api/v1/setup/bootstrap", headers=h, json={"secret": "wrong"})
+        bad = await _provision(app_client, "wrong", username)
         assert bad.status_code == 403, bad.text
-    locked = await app_client.post("/api/v1/setup/bootstrap", headers=h, json={"secret": "wrong"})
+    locked = await _provision(app_client, "wrong", username)
     assert locked.status_code == 429
     assert locked.json()["code"] == "rate_limited"
 
 
+async def test_concurrent_invalid_bootstrap_attempts_stop_at_limit(
+    app_client: AsyncClient,
+    _setup_keycloak: _FakeKeycloak,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every racing request passes the fast pre-lock check; lock-time admission still limits the
+    serialized invalid proofs to exactly the configured failure budget."""
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    await _reset_uninitialized()
+    request_count = setup_service._RL_MAX + 3
+    outer_arrivals: set[asyncio.Task[Any]] = set()
+    all_outer_arrived = asyncio.Event()
+    real_check = administrator_service._check_rate_limit
+
+    async def synchronize_outer_checks() -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        if task not in outer_arrivals:
+            outer_arrivals.add(task)
+            if len(outer_arrivals) == request_count:
+                all_outer_arrived.set()
+            await asyncio.wait_for(all_outer_arrived.wait(), timeout=2)
+        await real_check()
+
+    monkeypatch.setattr(administrator_service, "_check_rate_limit", synchronize_outer_checks)
+    responses = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                _provision(app_client, "wrong", _sub(f"rl-race-{index}"))
+                for index in range(request_count)
+            )
+        ),
+        timeout=10,
+    )
+
+    assert [response.status_code for response in responses].count(403) == setup_service._RL_MAX
+    assert [response.status_code for response in responses].count(429) == 3
+    assert {response.json()["code"] for response in responses} == {
+        "bootstrap_invalid",
+        "rate_limited",
+    }
+    assert _setup_keycloak.operations == []
+
+
+@pytest.mark.parametrize("endpoint", ["provision", "acknowledge"])
+async def test_bootstrap_rate_limit_is_rechecked_after_singleton_lock(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+) -> None:
+    """Both public proof endpoints admit again only after the singleton lock is held."""
+    from easysynq_api.services.setup import administrator as administrator_service
+
+    await _reset_uninitialized()
+    events: list[str] = []
+    real_check = administrator_service._check_rate_limit
+    real_lock = administrator_service._locked_singleton
+    real_request_proof = administrator_service._validate_request_proof
+    real_acknowledgment_proof = administrator_service._validate_acknowledgment_proof
+
+    async def observed_check() -> None:
+        events.append("rate")
+        await real_check()
+
+    async def observed_lock(session: Any) -> SystemConfig:
+        cfg = await real_lock(session)
+        events.append("locked")
+        return cfg
+
+    async def observed_request_proof(cfg: SystemConfig, secret: str) -> None:
+        events.append("proof")
+        await real_request_proof(cfg, secret)
+
+    async def observed_acknowledgment_proof(cfg: SystemConfig, secret: str) -> None:
+        events.append("proof")
+        await real_acknowledgment_proof(cfg, secret)
+
+    monkeypatch.setattr(administrator_service, "_check_rate_limit", observed_check)
+    monkeypatch.setattr(administrator_service, "_locked_singleton", observed_lock)
+    monkeypatch.setattr(administrator_service, "_validate_request_proof", observed_request_proof)
+    monkeypatch.setattr(
+        administrator_service,
+        "_validate_acknowledgment_proof",
+        observed_acknowledgment_proof,
+    )
+
+    if endpoint == "provision":
+        response = await _provision(app_client, "wrong", _sub("rl-order"))
+    else:
+        response = await app_client.post(
+            "/api/v1/setup/administrator/acknowledge",
+            json={"secret": "wrong", "credential_receipt": "x" * 43},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "bootstrap_invalid"
+    assert events == ["rate", "locked", "rate", "proof"]
+
+
+async def test_atomic_failure_counter_repairs_legacy_no_ttl_and_preserves_live_ttl(
+    app_client: AsyncClient,
+) -> None:
+    del app_client
+    await _reset_uninitialized()
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        await client.set(setup_service._RL_KEY, "2", ex=120)
+        live_before = await client.ttl(setup_service._RL_KEY)
+
+    await setup_service._record_failure()
+
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        assert await client.get(setup_service._RL_KEY) == "3"
+        live_after = await client.ttl(setup_service._RL_KEY)
+        assert 0 < live_after <= live_before
+        assert live_after >= live_before - 2
+        await client.set(setup_service._RL_KEY, "4")
+        assert await client.ttl(setup_service._RL_KEY) == -1
+
+    await setup_service._record_failure()
+
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        assert await client.get(setup_service._RL_KEY) == "5"
+        repaired_ttl = await client.ttl(setup_service._RL_KEY)
+    assert setup_service._RL_WINDOW_SECONDS - 2 <= repaired_ttl <= setup_service._RL_WINDOW_SECONDS
+
+
+async def test_atomic_failure_counter_rejects_malformed_state_fail_closed(
+    app_client: AsyncClient,
+) -> None:
+    del app_client
+    await _reset_uninitialized()
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        await client.set(setup_service._RL_KEY, "not-an-integer")
+
+    with pytest.raises(ProblemException) as excinfo:
+        await setup_service._record_failure()
+
+    assert excinfo.value.status == 503
+    assert excinfo.value.code == "dependency_unavailable"
+
+
 async def test_bootstrap_rejects_expired_secret(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
 ) -> None:
     secret = await _reset_uninitialized()
     async with get_sessionmaker()() as s:
         cfg = (await s.execute(select(SystemConfig))).scalar_one()
         cfg.bootstrap_expires_at = setup_service._now() - datetime.timedelta(minutes=1)
         await s.commit()
-    h = _auth(token_factory, _sub("exp"))
-    r = await app_client.post("/api/v1/setup/bootstrap", headers=h, json={"secret": secret})
+    r = await _provision(app_client, secret, _sub("exp"))
     assert r.status_code == 403
-    assert r.json()["code"] == "bootstrap_expired"
+    assert r.json()["code"] == "bootstrap_invalid"
 
 
 async def test_bootstrap_rejects_when_no_secret_minted(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
 ) -> None:
     await _reset_uninitialized()
     async with get_sessionmaker()() as s:
         cfg = (await s.execute(select(SystemConfig))).scalar_one()
         cfg.bootstrap_secret_hash = None
         await s.commit()
-    h = _auth(token_factory, _sub("ns"))
-    r = await app_client.post("/api/v1/setup/bootstrap", headers=h, json={"secret": "anything"})
-    assert r.status_code == 409
-    assert r.json()["code"] == "no_bootstrap_secret"
+    r = await _provision(app_client, "anything", _sub("ns"))
+    assert r.status_code == 403
+    assert r.json()["code"] == "bootstrap_invalid"
 
 
 async def test_grant_role_break_glass_still_works(
@@ -498,8 +2738,7 @@ async def test_verify_storage_passes_and_satisfies_g_b(
     """[HEADLINE S8b] verify-storage proves WORM, sets worm_verified_at + a WORM_VERIFIED audit row,
     and flips gate G-B (the live finalize gate)."""
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("worm"))
-    body = await _bootstrap(app_client, h, secret)
+    h, body = await _bootstrap(app_client, token_factory, secret, "worm")
     admin_id = uuid.UUID(body["admin_user_id"])
 
     res = await _verify_storage(app_client, h, "GOVERNANCE")
@@ -540,8 +2779,7 @@ async def test_finalize_blocked_on_g_b_until_worm_verified(
     """With G-A + G-E satisfied but WORM not yet verified, finalize is blocked on G-B; verifying
     storage then lets it finalize."""
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("gb"))
-    await _bootstrap(app_client, h, secret)
+    h, _ = await _bootstrap(app_client, token_factory, secret, "gb")
     await app_client.patch(
         "/api/v1/setup/org-profile",
         headers=h,
@@ -565,8 +2803,7 @@ async def test_verify_storage_rerun_updates_in_place(
     """Re-running verify-storage (resumable wizard: re-click / switch mode) UPDATEs the single
     storage_config row in place — not a second INSERT (which would 500 on UNIQUE(org_id))."""
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub("rerun"))
-    await _bootstrap(app_client, h, secret)
+    h, _ = await _bootstrap(app_client, token_factory, secret, "rerun")
 
     await _verify_storage(app_client, h, "GOVERNANCE")
     async with get_sessionmaker()() as s:
@@ -600,8 +2837,7 @@ async def _bootstrap_through_storage(
 ) -> tuple[dict[str, str], uuid.UUID]:
     """reset → bootstrap (G-A) → org (G-E) → verify-storage (G-B). Returns (headers, admin_id)."""
     secret = await _reset_uninitialized()
-    h = _auth(token_factory, _sub(sub))
-    body = await _bootstrap(app_client, h, secret)
+    h, body = await _bootstrap(app_client, token_factory, secret, sub)
     await app_client.patch(
         "/api/v1/setup/org-profile",
         headers=h,
@@ -845,7 +3081,6 @@ async def test_configure_auth_rejects_bad_method(
 ) -> None:
     secret = await _reset_uninitialized()
     await _stub_auth_probe(monkeypatch, ok=True)
-    h = _auth(token_factory, _sub("badmethod"))
-    await _bootstrap(app_client, h, secret)
+    h, _ = await _bootstrap(app_client, token_factory, secret, "badmethod")
     r = await app_client.post("/api/v1/setup/configure-auth", headers=h, json={"method": "WAT"})
     assert r.status_code == 422

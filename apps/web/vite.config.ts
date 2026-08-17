@@ -25,7 +25,7 @@ export default defineConfig({
     globals: true,
     css: true,
     setupFiles: ["./src/test/setup.ts"],
-    exclude: [...configDefaults.exclude, "e2e/**"],
+    exclude: [...configDefaults.exclude, "e2e/**", "e2e-live/**"],
     // The default parallel forks pool intermittently mass-fails the full run with
     // "document is not defined" when multiple jsdom environments tear down concurrently.
     // Run the whole suite in a single fork (serial files) for a deterministic signal —

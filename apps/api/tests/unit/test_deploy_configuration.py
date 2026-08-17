@@ -7,8 +7,10 @@ plaintext MinIO, every browser URL is supplied together, and Keycloak's live sto
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from fnmatch import fnmatchcase
@@ -30,7 +32,9 @@ ROOT = _repo_root()
 BROWSER_ONLY_CONTEXT_ROOTS = frozenset(
     {
         "e2e",
+        "e2e-live",
         "playwright.config.ts",
+        "playwright.live.config.ts",
         "tsconfig.browser.json",
         ".playwright-dist",
         "playwright-report",
@@ -41,6 +45,277 @@ BROWSER_ONLY_CONTEXT_ROOTS = frozenset(
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text()
+
+
+def _markdown_section(content: str, heading_text: str) -> str:
+    expected_heading = re.compile(rf"^(?P<marks>#{{1,6}})\s+{re.escape(heading_text)}\s*$")
+    any_heading = re.compile(r"^(?P<marks>#{1,6})\s+")
+    heading_level: int | None = None
+    in_fence = False
+    retained: list[str] = []
+
+    for line in content.splitlines(keepends=True):
+        stripped = line.strip()
+        is_fence = stripped.startswith(("```", "~~~"))
+        if heading_level is None:
+            if not in_fence and (heading := expected_heading.match(stripped)):
+                heading_level = len(heading["marks"])
+            if is_fence:
+                in_fence = not in_fence
+            continue
+
+        next_heading = None if in_fence else any_heading.match(stripped)
+        if next_heading is not None and len(next_heading["marks"]) <= heading_level:
+            break
+        retained.append(line)
+        if is_fence:
+            in_fence = not in_fence
+
+    assert heading_level is not None, f"missing Markdown section: {heading_text}"
+    return "".join(retained)
+
+
+def _assert_fragments_in_order(content: str, fragments: tuple[str, ...]) -> None:
+    content = re.sub(r"\s+", " ", content)
+    cursor = 0
+    for fragment in fragments:
+        fragment = re.sub(r"\s+", " ", fragment)
+        position = content.find(fragment, cursor)
+        assert position >= 0, f"missing or out-of-order instruction: {fragment}"
+        cursor = position + len(fragment)
+
+
+def _assert_supported_first_admin_sequence(content: str, setup_url: str) -> None:
+    normalized = re.sub(r"\s+", " ", content)
+    normalized_lower = re.sub(r"\s+", " ", content).lower()
+    assert "just demo-user" not in normalized_lower
+    assert "demo-password-1" not in normalized_lower
+    setup_instruction = f"Open {setup_url} without signing in"
+    setup_position = normalized.find(setup_instruction)
+    assert setup_position >= 0, f"missing public setup instruction: {setup_instruction}"
+    before_setup = normalized[:setup_position]
+    pre_setup_sign_in = re.compile(r"\b(?:sign[\s-]+in|log[\s-]+in|login)\b", re.IGNORECASE)
+    assert pre_setup_sign_in.search(before_setup) is None, (
+        "supported first-admin section must not mention sign-in before public /setup"
+    )
+    _assert_fragments_in_order(
+        content,
+        (
+            "mint-bootstrap",
+            setup_instruction,
+            "create the first administrator profile",
+            "copy the shown-once temporary password",
+            "acknowledge the active credential generation",
+            "sign in",
+            "change the temporary password",
+        ),
+    )
+
+
+_SETUP_SHEET_HEREDOC = re.compile(
+    r'^\s*cat >"\$SETUP_FILE" <<(?P<delimiter>[A-Z][A-Z0-9_]*)\n'
+    r"(?P<body>.*?)\n(?P=delimiter)\n",
+    re.MULTILINE | re.DOTALL,
+)
+_SETUP_SHEET_LINES = (
+    "Application URL: https://${HOSTNAME_DEFAULT}/setup",
+    "Your one-time setup secret (EasySynQ):",
+    "${secret}",
+    "Single-use, 24h. Re-mint: easysynq-status --remint",
+    "1. Then create the first administrator in /setup with the setup secret.",
+    "2. Save the shown-once temporary password and continue to sign in.",
+    "3. Then sign in, replace the password, and complete the remaining setup gates.",
+)
+_POST_READY_HANDOFF_SHA256 = "d4358d2540b30f050cade40d6f63cb1e78e892665f099e5e9f11d89b2d79423f"
+_BREAK_GLASS_OR_ORPHAN_RECOVERY_SECTION = re.compile(
+    r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:break[- ]glass\b|orphan(?:ed)?\s+(?:adoption|recovery)\b)",
+    re.IGNORECASE,
+)
+_NEUTRAL_INLINE_CODE_IDENTIFIER = re.compile(
+    r"`(?:user\.create|user\.update|permission\.grant|/users/provision)`"
+)
+_SAFE_NEGATIVE_NORMAL_FLOW_PHRASES = (
+    re.compile(
+        r"\b(?:do\s+not|does\s+not|don't|never)\s+(?:create|add|make|provision)\b[^.\n]{0,120}"
+        r"\bkeycloak\b[^.\n]{0,80}\b(?:user|identity|account)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:do\s+)?not\s+(?:open|visit)\s+keycloak\b(?:\s+(?:or|and)\s+"
+        r"(?:copy|paste|enter|supply|provide|handle|ask\s+for)\s+(?:an?\s+)?"
+        r"(?:identity\s+)?subjects?\b)?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:do\s+not|don't|never)\s+(?:copy|paste|enter|supply|provide|handle|ask\s+for)"
+        r"\b[^.\n]{0,120}\b(?:identity\s+)?subjects?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\boperator\s+does\s+not\s+create\b[^.\n]{0,120}\bkeycloak\b"
+        r"[^.\n]{0,80}\b(?:or|and)\s+copy\b[^.\n]{0,80}\bsubjects?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:the\s+)?normal(?:\s+install)?\s+path\s+never\s+opens?\s+keycloak\b"
+        r"(?:,?\s*(?:handles?|copies?|pastes?|asks?\s+for)\s+(?:an?\s+)?"
+        r"(?:identity\s+)?subjects?\b)?",
+        re.IGNORECASE,
+    ),
+)
+_PATH_VALUED_EXECUTABLE_AT_COMMAND_POSITION = re.compile(
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*[\"']?"
+    r"(?P<path>[^\s\"']*/[^\s\"']+)"
+)
+_PATH_VALUED_PYTHON_INTERPRETER = re.compile(r"(?:^|/)python(?:3)?$")
+_ALLOWED_POST_READY_PYTHON = re.compile(
+    r"(?:\bpython(?:3)?\b|/(?:[^/\s\"']+/)*python(?:3)?[\"']?)\s+-m\s+"
+    r"easysynq_api\.cli\.(?:setup\s+mint-bootstrap|keycloak_redirect)\b"
+)
+_NORMAL_FLOW_KEYCLOAK_CREATION = re.compile(
+    r"(?<![-\w])(?:create|add|make|provision)\b[^.\n]{0,120}\b(?:"
+    r"keycloak(?![-\w])[^.\n]{0,80}\b(?:user|identity|account)\b|"
+    r"(?:user|identity|account)\b[^.\n]{0,80}\b(?:in|on|via)\s+keycloak(?![-\w])|"
+    r"(?:intended|first)\b[^.\n]{0,60}\b(?:administrator|admin)\b"
+    r"[^.\n]{0,60}\b(?:identity|account)\b"
+    r")",
+    re.IGNORECASE,
+)
+_NORMAL_FLOW_SUBJECT_HANDOFF = re.compile(
+    r"\b(?:copy|paste|enter|supply|provide|handle)\b[^.\n]{0,120}"
+    r"\b(?:keycloak\s+)?(?:subject|sub)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_setup_sheet(provisioner: str) -> str:
+    matches = list(_SETUP_SHEET_HEREDOC.finditer(provisioner))
+    assert len(matches) == 1, "provisioner must write exactly one EASYSYNQ-SETUP.txt heredoc"
+    return matches[0]["body"]
+
+
+def _assert_setup_sheet_is_secret_only(setup_sheet: str) -> None:
+    """Keep the hand-off file a narrowly-scoped browser bootstrap secret, never a login record."""
+    nonempty_lines = tuple(line.strip() for line in setup_sheet.splitlines() if line.strip())
+    assert nonempty_lines == _SETUP_SHEET_LINES, (
+        "EASYSYNQ-SETUP.txt may contain only the app URL, one-time setup secret, expiry/remint, "
+        "and browser setup steps"
+    )
+
+    variable_names = {
+        braced or bare
+        for braced, bare in re.findall(
+            r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))",
+            setup_sheet,
+        )
+    }
+    assert variable_names == {"HOSTNAME_DEFAULT", "secret"}, (
+        "EASYSYNQ-SETUP.txt may interpolate only the host URL and one-time setup secret"
+    )
+    assert "$(" not in setup_sheet, "EASYSYNQ-SETUP.txt must not execute shell substitutions"
+
+
+def _post_ready_handoff_segment(provisioner: str) -> str:
+    ready_marker = '[ "$ok" -eq 1 ] || { log "readyz never went green"; exit 1; }'
+    return provisioner[provisioner.index(ready_marker) + len(ready_marker) :]
+
+
+def _assert_approved_post_ready_handoff(post_ready_handoff: str) -> None:
+    """Authoritative review lock; semantic checks below are diagnostic defense-in-depth only."""
+    normalized_handoff = post_ready_handoff.replace("\r\n", "\n").replace("\r", "\n")
+    actual_sha256 = hashlib.sha256(normalized_handoff.encode()).hexdigest()
+    assert actual_sha256 == _POST_READY_HANDOFF_SHA256, (
+        "post-ready appliance handoff changed; reviewer must explicitly update the "
+        "approved SHA-256: "
+        f"{actual_sha256}"
+    )
+
+
+def _post_ready_provision_actions(provisioner: str) -> str:
+    return _SETUP_SHEET_HEREDOC.sub("", _post_ready_handoff_segment(provisioner))
+
+
+def _assert_no_human_identity_actions(post_ready_actions: str) -> None:
+    """Diagnostic defense-in-depth; the raw post-ready handoff fingerprint is authoritative."""
+    normalized_actions = re.sub(r"\\[ \t]*\r?\n[ \t]*", " ", post_ready_actions)
+    forbidden_mechanisms = (
+        r"\bkcadm(?:\.sh)?\b[^\n]*\bcreate\s+users?\b",
+        r"\bkcadm(?:\.sh)?\b[^\n]*\b(?:set|reset)-password\b",
+        r"\b(?:useradd|adduser|usermod|passwd|chpasswd)\b",
+        r"\b(?:create|new|add)[-_](?:keycloak[-_])?user\b",
+        r"\b(?:bash|sh|python3?)\b[^\n]*(?:create|new)[-_](?:keycloak[-_])?user(?:\.sh)?\b",
+        r"\b(?:curl|http|wget)\b[^\n]*(?:/admin/realms/[^\s]*/users|/users\b)",
+        r"[\"'](?:username|password|credentials?)[\"']\s*:",
+        r"\b(?:--username|--new-password|--password)\b",
+        r"\b(?:username|user_name|login_name)\s*=\s*(?!\$?\{?KEYCLOAK_ADMIN\b)",
+        r"(?m)^\s*(?!KEYCLOAK_ADMIN(?:_PASSWORD)?\b)[A-Z_]*"
+        r"(?:USERNAME|PASSWORD|CREDENTIAL)[A-Z_]*\s*=",
+    )
+    for pattern in forbidden_mechanisms:
+        assert not re.search(pattern, normalized_actions, re.IGNORECASE), (
+            "post-ready appliance actions must not create a human identity or set its credential: "
+            f"{pattern}"
+        )
+
+    for statement in re.split(r"(?:\n|&&|\|\||;)", normalized_actions):
+        if not statement.strip():
+            continue
+        assert not re.search(
+            r"(?:^|\s)(?:/bin/)?(?:bash|sh|source)\b|(?:^|\s)\.\s+|"
+            r"(?:^|[\s\"'])(?:\$\{?APP_DIR\}?/)?scripts/",
+            statement,
+        ), f"post-ready appliance actions must not run an unapproved helper: {statement}"
+        path_match = _PATH_VALUED_EXECUTABLE_AT_COMMAND_POSITION.search(statement)
+        if path_match:
+            executable_path = path_match["path"].rstrip("\"'")
+            assert _PATH_VALUED_PYTHON_INTERPRETER.search(executable_path) and (
+                _ALLOWED_POST_READY_PYTHON.search(statement)
+            ), f"post-ready appliance actions must not run an unapproved helper: {statement}"
+        for _ in re.finditer(r"\bpython(?:3)?\b", statement):
+            assert _ALLOWED_POST_READY_PYTHON.search(statement), (
+                f"unapproved Python helper in post-ready appliance actions: {statement}"
+            )
+
+
+def _normal_flow_doc_text(content: str) -> str:
+    retained: list[str] = []
+    exception_heading_level: int | None = None
+    for line in content.splitlines():
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading:
+            heading_level = len(heading[1])
+            if exception_heading_level is not None and heading_level <= exception_heading_level:
+                exception_heading_level = None
+            if _BREAK_GLASS_OR_ORPHAN_RECOVERY_SECTION.search(heading[2]):
+                exception_heading_level = heading_level
+        if exception_heading_level is not None:
+            continue
+        retained.append(line)
+    return "\n".join(retained)
+
+
+def _strip_tightly_bound_safe_negatives(instruction: str) -> str:
+    for safe_phrase in _SAFE_NEGATIVE_NORMAL_FLOW_PHRASES:
+        instruction = safe_phrase.sub("", instruction)
+    return instruction
+
+
+def _assert_no_retired_normal_flow_docs(current_docs: dict[str, str]) -> None:
+    for path, content in current_docs.items():
+        normal_flow = _normal_flow_doc_text(content)
+        assert "/setup/bootstrap" not in normal_flow.lower(), (
+            f"{path} documents the retired normal-flow bootstrap endpoint"
+        )
+        for sentence in re.split(r"(?<=[.!?])\s+|\n", normal_flow):
+            instruction = _NEUTRAL_INLINE_CODE_IDENTIFIER.sub("", sentence)
+            instruction = instruction.replace("**", "")
+            instruction = _strip_tightly_bound_safe_negatives(instruction)
+            assert not _NORMAL_FLOW_KEYCLOAK_CREATION.search(instruction), (
+                f"{path} directs normal installation through Keycloak-user creation"
+            )
+            assert not _NORMAL_FLOW_SUBJECT_HANDOFF.search(instruction), (
+                f"{path} directs normal installation to copy or handle an identity subject"
+            )
 
 
 def _assert_no_protected_dockerignore_reinclusions(
@@ -297,6 +572,147 @@ def test_web_image_invariant_rejects_exact_descendant_and_wildcard_reinclusions(
     )
 
 
+def test_first_admin_live_harness_owns_only_its_validated_stack_and_env() -> None:
+    harness_path = ROOT / "scripts/test-first-admin-keycloak.sh"
+    assert harness_path.exists(), "the live first-administrator runner must be repository-owned"
+    harness = harness_path.read_text(encoding="utf-8")
+
+    assert 'ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"' in harness
+    assert 'ENV_FILE="$ROOT/.env"' in harness
+    assert 'if [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; then' in harness
+    assert "live acceptance refuses an existing .env" in harness
+    assert 'PROJECT="easysynq-first-admin-$(openssl rand -hex 6)"' in harness
+    assert "^easysynq-first-admin-[a-z0-9]+$" in harness
+
+    compose_definition = harness[
+        harness.index("COMPOSE=(") : harness.index(")", harness.index("COMPOSE=("))
+    ]
+    assert "docker compose" in compose_definition
+    assert '-p "$PROJECT"' in compose_definition
+    assert '--env-file "$ENV_FILE"' in compose_definition
+    assert "infra/compose/compose.yml" in compose_definition
+    assert "infra/compose/compose.s.yml" in compose_definition
+    assert "infra/compose/compose.dev.yml" in compose_definition
+    assert harness.count("docker compose") == 1, (
+        "every Compose operation must use the one project-scoped argv"
+    )
+
+    trap_offset = harness.index("trap cleanup EXIT INT TERM")
+    startup_offset = harness.index('"${COMPOSE[@]}" up -d --build')
+    assert trap_offset < startup_offset
+    cleanup = harness[harness.index("cleanup() {") : trap_offset]
+    assert 'validate_project "$PROJECT"' in cleanup
+    assert '[ "$stack_started" -eq 1 ]' in cleanup
+    assert '"${COMPOSE[@]}" down -v --remove-orphans --rmi local' in cleanup
+    assert cleanup.count('"${COMPOSE[@]}" down') == 1
+    assert "docker image" not in cleanup
+    assert "docker rmi" not in cleanup
+    assert '"${COMPOSE[@]}" logs --no-color --tail 200 api keycloak proxy' in cleanup
+    assert '[ "$env_created" -eq 1 ]' in cleanup
+    assert '[ "$ENV_FILE" = "$ROOT/.env" ]' in cleanup
+    assert 'unlink -- "$ENV_FILE"' in cleanup
+    assert 'elif [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; then' in cleanup
+
+    assert 'EASYSYNQ_ENV_ONLY=1 "$ROOT/scripts/install.sh" s' in harness
+    assert 'stack_started=1\n"${COMPOSE[@]}" up -d --build' in harness
+    assert 'curl -fsS "$APP_ORIGIN/readyz"' in harness
+    assert "easysynq_api.cli.keycloak_redirect" in harness
+    assert "easysynq_api.cli.setup import mint_bootstrap" in harness
+    assert "npm --prefix apps/web run test:first-admin-live" in harness
+    for variable in (
+        "EASYSYNQ_LIVE_BASE_URL",
+        "EASYSYNQ_LIVE_SETUP_SECRET",
+        "EASYSYNQ_LIVE_USERNAME",
+        "EASYSYNQ_LIVE_NEW_PASSWORD",
+    ):
+        assert f'{variable}="${{' in harness
+
+    assert "just down" not in harness
+    assert "rm -" not in harness
+    assert "rm " not in harness
+    assert not re.search(r"\b(?:rm|unlink)\b[^\n]*[?*\[]", harness)
+    assert "nohup" not in harness
+    assert "set -x" not in harness
+
+
+def test_first_admin_live_playwright_is_secret_safe_and_single_worker() -> None:
+    config_path = ROOT / "apps/web/playwright.live.config.ts"
+    spec_path = ROOT / "apps/web/e2e-live/first-admin.spec.ts"
+    assert config_path.exists(), "the live Playwright config must be separate from synthetic tests"
+    assert spec_path.exists(), "the real first-administrator flow must have a narrow live spec"
+    config = config_path.read_text(encoding="utf-8")
+    spec = spec_path.read_text(encoding="utf-8")
+
+    assert "process.env.EASYSYNQ_LIVE_BASE_URL" in config
+    assert 'throw new Error("EASYSYNQ_LIVE_BASE_URL is required")' in config
+    assert 'testDir: "./e2e-live"' in config
+    assert "workers: 1" in config
+    assert "retries: 0" in config
+    assert 'name: "chromium"' in config
+    assert 'browserName: "chromium"' in config
+    assert 'trace: "off"' in config
+    assert 'screenshot: "off"' in config
+    assert 'video: "off"' in config
+    assert "webServer:" not in config
+    assert "firefox" not in config.lower()
+    assert "webkit" not in config.lower()
+
+    assert 'test("first administrator completes the required Keycloak password update"' in spec
+    assert "const value = process.env[name]" in spec
+    for variable in (
+        "EASYSYNQ_LIVE_BASE_URL",
+        "EASYSYNQ_LIVE_SETUP_SECRET",
+        "EASYSYNQ_LIVE_USERNAME",
+        "EASYSYNQ_LIVE_NEW_PASSWORD",
+    ):
+        assert f'requiredEnvironment("{variable}")' in spec
+    assert "browser.newContext()" in spec
+    assert "getByLabel(/^Setup secret/)" in spec
+    assert 'getByRole("heading"' in spec
+    assert 'name: "Temporary password — shown once"' in spec
+    assert "credential_receipt: string" in spec
+    assert "const credentialReceipt = provisioned.credential_receipt" in spec
+    assert "credential_receipt: credentialReceipt" in spec
+    assert "async function installLiveOriginGuard" in spec
+    assert spec.count("await installLiveOriginGuard(") == 2
+    assert "url.origin !== liveOrigin" in spec
+    assert "live acceptance blocked unexpected external request" in spec
+    assert "const sensitiveValues = [" in spec
+    assert spec.count("await expectSensitiveValuesNotRetained(") == 3
+    assert 'input[name="username"]' in spec
+    assert 'input[name="password-new"]' in spec
+    assert spec.count('getByRole("button", { name: "Sign In", exact: true })') == 2
+    assert spec.count('getByRole("button", { name: "Submit", exact: true })') == 1
+    assert 'input[type="submit"]' not in spec
+    assert 'getByLabel("Legal name", { exact: true })' in spec
+    assert 'input[name="password"]' in spec
+    assert spec.count('getByText("Invalid username or password.", { exact: true })') == 1
+    assert "#input-error" not in spec
+    assert "[role='alert']" not in spec
+    assert ".alert-error" not in spec
+    assert "console." not in spec
+    assert "testInfo.attach" not in spec
+    assert "screenshot(" not in spec
+    assert "tracing." not in spec
+    assert not re.search(r"(?:localStorage|sessionStorage)\.setItem\([^\n]*credentialReceipt", spec)
+    assert not re.search(r"(?:goto|waitForURL)\([^\n]*credentialReceipt", spec)
+
+
+def test_first_admin_live_package_and_typecheck_boundaries_are_isolated() -> None:
+    package = json.loads(_read("apps/web/package.json"))
+    vite = _read("apps/web/vite.config.ts")
+    browser_tsconfig = json.loads(_read("apps/web/tsconfig.browser.json"))
+    dockerignore = _read("apps/web/.dockerignore").splitlines()
+
+    assert package["scripts"]["test:first-admin-live"] == (
+        "playwright test --config playwright.live.config.ts"
+    )
+    assert '"e2e-live/**"' in vite
+    assert "e2e-live" in browser_tsconfig["include"]
+    assert "playwright.live.config.ts" in browser_tsconfig["include"]
+    assert {"e2e-live", "playwright.live.config.ts"}.issubset(dockerignore)
+
+
 def test_production_requires_one_consistent_browser_edge() -> None:
     production = _read("infra/compose/compose.production.yml")
     caddy = _read("infra/compose/caddy/Caddyfile.production")
@@ -357,6 +773,315 @@ def test_appliance_propagates_qr_share_and_deep_link_origins() -> None:
     assert "up_needs_keycloak_migration" in compose_helper
     assert 'targets+=("$arg")' in compose_helper
     assert '[ "$target" = "keycloak" ]' in compose_helper
+
+
+def test_appliance_first_administrator_setup_sheet_uses_in_app_provisioning() -> None:
+    provisioner = _read("infra/appliance/provision/easysynq-provision.sh")
+    setup_helper = ROOT / "infra/appliance/provision/bin/easysynq-create-user"
+    post_ready_handoff = _post_ready_handoff_segment(provisioner)
+
+    _assert_approved_post_ready_handoff(post_ready_handoff)
+
+    setup_sheet = _extract_setup_sheet(provisioner)
+    _assert_setup_sheet_is_secret_only(setup_sheet)
+    _assert_no_human_identity_actions(_post_ready_provision_actions(provisioner))
+
+    for unsafe_line in (
+        "Administrator username: alternate-admin",
+        "Temporary password: alternate-password-123",
+        "    ${first_admin_password}",
+    ):
+        with pytest.raises(AssertionError):
+            _assert_setup_sheet_is_secret_only(
+                "Application URL: https://${HOSTNAME_DEFAULT}/setup\n"
+                "Your one-time setup secret (EasySynQ):\n"
+                "    ${secret}\n"
+                f"{unsafe_line}\n"
+            )
+
+    unsafe_actions = {
+        "single-line-kcadm-create": "kcadm.sh create users -r easysynq -s username=alternate-admin",
+        "single-line-kcadm-password": (
+            "kcadm.sh set-password -r easysynq --username alternate-admin --new-password secret"
+        ),
+        "os-user-create": "useradd alternate-admin",
+        "os-password-set": "passwd alternate-admin",
+        "retired-helper": "easysynq-create-user alternate-admin",
+        "named-keycloak-helper": "bash scripts/new-keycloak-user.sh alternate-admin",
+        "credential-payload": (
+            'curl -d \'{"username": "alternate-admin", "credentials": [{"value": "secret"}]}\''
+        ),
+        "multiline-kcadm-create": "kcadm.sh \\\n  create \\\n  users -r easysynq",
+        "multiline-curl-credential": (
+            "curl \\\n"
+            "  https://keycloak.example/admin/realms/easysynq/users/123/reset-password \\\n"
+            "  -X PUT"
+        ),
+        "renamed-helper": "bash scripts/seed-initial-account.sh",
+        "direct-renamed-helper": '"$APP_DIR/scripts/seed-initial-account.sh"',
+        "relative-direct-helper": "./scripts/seed-initial-account.sh",
+        "absolute-direct-helper": "/opt/easysynq/scripts/seed-initial-account.sh",
+        "parent-relative-direct-helper": "../seed-initial-account.sh",
+        "relative-bin-direct-helper": "./bin/seed-initial-account.sh",
+        "absolute-bin-direct-helper": "/opt/easysynq/bin/seed-initial-account.sh",
+        "venv-python-arbitrary-module": "/opt/easysynq/.venv/bin/python -m site",
+        "mixed-pipeline-python": (
+            "/opt/easysynq/.venv/bin/python -m site | "
+            "python -m easysynq_api.cli.setup mint-bootstrap"
+        ),
+        "sudo-helper": "sudo /opt/easysynq/bin/seed-initial-account.sh",
+        "env-helper": "env X=y ./bin/seed-initial-account.sh",
+        "command-helper": "command /opt/easysynq/bin/seed-initial-account.sh",
+    }
+    # The semantic parser remains exercised as diagnostic defense-in-depth; the fingerprint below
+    # is authoritative because Bash pipelines and modifiers are outside this lightweight parser.
+    for unsafe_action in unsafe_actions.values():
+        with pytest.raises(AssertionError):
+            _assert_approved_post_ready_handoff(f"{post_ready_handoff}\n{unsafe_action}\n")
+
+    _assert_no_human_identity_actions(
+        "KEYCLOAK_ADMIN=service-admin\n"
+        "KEYCLOAK_ADMIN_PASSWORD=internal-secret\n"
+        "kcadm.sh update clients/easysynq-web -s 'redirectUris=[\"https://app.example/*\"]'\n"
+        "python -m easysynq_api.cli.keycloak_redirect --origin https://app.example\n"
+    )
+    _assert_no_human_identity_actions('echo "see ./scripts/seed-initial-account.sh"')
+    _assert_no_human_identity_actions('echo "see /opt/easysynq/bin/seed-initial-account.sh"')
+    _assert_no_human_identity_actions(
+        '"/opt/easysynq/.venv/bin/python" -m easysynq_api.cli.setup mint-bootstrap'
+    )
+
+    assert 'install -m 600 -o easysynq -g easysynq /dev/null "$SETUP_FILE"' in provisioner
+    assert not setup_helper.exists()
+
+
+def test_current_install_docs_keep_first_administrator_creation_in_app() -> None:
+    current_docs = (
+        "docs/runbooks/appliance-install.md",
+        "docs/runbooks/install-online.md",
+        "docs/runbooks/install-ubuntu-server.md",
+        "docs/manuals/installation-guide.md",
+        "docs/manuals/administrator-it-manual.md",
+        "docs/08-setup-and-onboarding.md",
+        "docs/15-api-design.md",
+        "docs/dev-workflow.md",
+    )
+
+    _assert_no_retired_normal_flow_docs({path: _read(path) for path in current_docs})
+
+    unsafe_normal_flow = {
+        "plain-keycloak-user": "Create a Keycloak user before opening EasySynQ.",
+        "administrator-identity": "Create or federate the intended administrator identity first.",
+        "subject-copy": "Copy the Keycloak subject and paste it into the setup form.",
+        "retired-endpoint": "Use POST /setup/bootstrap to create the first administrator.",
+        "inline-code-instruction": "Run `create a Keycloak user` before opening EasySynQ.",
+        "deceptive-negation": "Do not delay: create a Keycloak user before opening EasySynQ.",
+        "line-mentions-break-glass": "This is not break-glass: create a Keycloak user.",
+        "normal-heading-next-to-break-glass": (
+            "## Normal installation (not break-glass)\n"
+            "Create a Keycloak user before opening EasySynQ.\n"
+            "## Break-glass recovery\n"
+            "Create a Keycloak user only to recover an orphan.\n"
+        ),
+    }
+    rejected_docs: dict[str, bool] = {}
+    for name, content in unsafe_normal_flow.items():
+        try:
+            _assert_no_retired_normal_flow_docs({"docs/current-install.md": content})
+        except AssertionError:
+            rejected_docs[name] = True
+        else:
+            rejected_docs[name] = False
+    assert all(rejected_docs.values()), (
+        f"normal-flow documentation mutations bypassed the guard: {rejected_docs}"
+    )
+
+    _assert_no_retired_normal_flow_docs(
+        {
+            "docs/current-install.md": (
+                "## Break-glass and orphan recovery\n"
+                "Create a Keycloak user and copy the Keycloak subject.\n"
+            )
+        }
+    )
+
+    setup_and_onboarding = _read("docs/08-setup-and-onboarding.md")
+    assert "current setup secret" in setup_and_onboarding
+    assert "bootstrap_credential_superseded" in setup_and_onboarding
+
+
+def test_fresh_linux_first_run_creates_the_administrator_before_dev_fixtures() -> None:
+    runbook = _read("docs/runbooks/fresh-linux-setup.md")
+    first_run = _markdown_section(runbook, "6. First-run wizard → OPERATIONAL")
+    fixture_section = _markdown_section(
+        runbook, "7. Post-bootstrap development fixtures (Keycloak persists in PostgreSQL)"
+    )
+
+    _assert_supported_first_admin_sequence(first_run, "`http://localhost/setup`")
+    assert "only after first-administrator setup is complete" in fixture_section
+    assert "just demo-user" in fixture_section
+    assert "Demo-Password-1" in fixture_section
+
+
+def test_installation_guide_first_runs_never_sign_in_with_a_demo_identity() -> None:
+    guide = _read("docs/manuals/installation-guide.md")
+    production_first_run = _markdown_section(
+        guide, "4.3 Create the first administrator in EasySynQ"
+    )
+    developer_first_run = _markdown_section(guide, "8.1 Create the first administrator")
+    developer_fixtures = _markdown_section(
+        guide, "8.2 Optional post-bootstrap development fixtures"
+    )
+
+    for section, setup_url in (
+        (production_first_run, "`https://<host>/setup`"),
+        (developer_first_run, "`http://localhost/setup`"),
+    ):
+        _assert_supported_first_admin_sequence(section, setup_url)
+
+    assert "only after first-administrator setup is complete" in developer_fixtures
+    assert "just demo-user" in developer_fixtures
+    assert "Demo-Password-1" in developer_fixtures
+
+    valid_sequence = (
+        "Run mint-bootstrap. Open `http://localhost/setup` without signing in, then create the "
+        "first administrator profile, copy the shown-once temporary password, acknowledge the "
+        "active credential generation, sign in, and change the temporary password."
+    )
+    _assert_supported_first_admin_sequence(valid_sequence, "`http://localhost/setup`")
+    unsafe_first_runs = {
+        "demo-command": f"Run just demo-user first. {valid_sequence}",
+        "fixed-demo-credential": f"Use demo / Demo-Password-1. {valid_sequence}",
+        "sign-in-before-setup": f"Sign in first. {valid_sequence}",
+        "reviewer-before-please-sign-in": (f"Before setup, please sign in. {valid_sequence}"),
+        "reviewer-to-continue-sign-in": f"To continue, sign in. {valid_sequence}",
+        "hyphenated-sign-in": f"Complete sign-in first. {valid_sequence}",
+        "log-in-before-setup": f"Before setup, log in. {valid_sequence}",
+        "login-before-setup": f"Use the login first. {valid_sequence}",
+    }
+    rejected_mutations: dict[str, bool] = {}
+    for name, mutation in unsafe_first_runs.items():
+        try:
+            _assert_supported_first_admin_sequence(mutation, "`http://localhost/setup`")
+        except AssertionError:
+            rejected_mutations[name] = True
+        else:
+            rejected_mutations[name] = False
+    assert all(rejected_mutations.values()), (
+        f"unsupported first-run mutations bypassed the guard: {rejected_mutations}"
+    )
+
+
+def test_host_setup_exposes_release_administrator_blocker(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+
+    command = "release-administrator-blocker --subject <keycloak-subject> [--org CODE]"
+    wrapper_help = subprocess.run(  # noqa: S603 - fixed repository-owned executable
+        [str(ROOT / "scripts/easysynq"), "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert command in wrapper_help
+    _assert_fragments_in_order(
+        wrapper_help,
+        (
+            "Mint the one-time first-run bootstrap secret",
+            "open /setup without signing in",
+            "create the administrator profile",
+            "copy the temporary password",
+            "acknowledge the active credential generation",
+            "sign in and change the password",
+        ),
+    )
+    recovery_help = re.sub(r"\s+", " ", wrapper_help[wrapper_help.index(command) :])
+    assert "pre-operational" in recovery_help
+    assert "remove only the named unrelated System Administrator assignment" in recovery_help
+    assert "independent incident/change record" in recovery_help
+
+    with pytest.raises(SystemExit) as help_exit:
+        setup_cli.main(["--help"])
+    assert help_exit.value.code == 0
+    setup_help = capsys.readouterr().out
+    assert "release-administrator-blocker" in setup_help
+
+
+def test_setup_cli_dispatches_release_administrator_blocker_values(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+
+    received: list[tuple[str, str]] = []
+
+    def observed_release(subject: str, org_short_code: str) -> str:
+        received.append((subject, org_short_code))
+        return "stubbed release result"
+
+    monkeypatch.setattr(setup_cli, "release_administrator_blocker", observed_release)
+
+    result = setup_cli.main(
+        [
+            "release-administrator-blocker",
+            "--subject",
+            "subject:test-dispatch",
+            "--org",
+            "RECOVERY",
+        ]
+    )
+
+    assert result == 0
+    assert received == [("subject:test-dispatch", "RECOVERY")]
+    assert capsys.readouterr().out.splitlines() == [
+        "stubbed release result",
+        "Record this host recovery in an independent incident/change record.",
+    ]
+
+
+def test_host_wrapper_forwards_release_administrator_blocker_argv(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    captured_argv = tmp_path / "docker-argv"
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$EASYSYNQ_CAPTURE"\n')
+    fake_docker.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["EASYSYNQ_CAPTURE"] = str(captured_argv)
+
+    subprocess.run(  # noqa: S603 - repository wrapper with a controlled fake docker executable
+        [
+            str(ROOT / "scripts/easysynq"),
+            "setup",
+            "release-administrator-blocker",
+            "--subject",
+            "subject:wrapper-dispatch",
+            "--org",
+            "RECOVERY",
+        ],
+        check=True,
+        env=env,
+    )
+
+    assert captured_argv.read_text().splitlines()[-13:] == [
+        "run",
+        "--rm",
+        "api",
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "easysynq_api.cli.setup",
+        "release-administrator-blocker",
+        "--subject",
+        "subject:wrapper-dispatch",
+        "--org",
+        "RECOVERY",
+    ]
 
 
 def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
