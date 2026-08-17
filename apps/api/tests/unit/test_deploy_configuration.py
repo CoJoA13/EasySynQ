@@ -866,6 +866,82 @@ def test_host_setup_exposes_release_administrator_blocker(
     assert "release-administrator-blocker" in setup_help
 
 
+def test_setup_cli_dispatches_release_administrator_blocker_values(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+
+    received: list[tuple[str, str]] = []
+
+    def observed_release(subject: str, org_short_code: str) -> str:
+        received.append((subject, org_short_code))
+        return "stubbed release result"
+
+    monkeypatch.setattr(setup_cli, "release_administrator_blocker", observed_release)
+
+    result = setup_cli.main(
+        [
+            "release-administrator-blocker",
+            "--subject",
+            "subject:test-dispatch",
+            "--org",
+            "RECOVERY",
+        ]
+    )
+
+    assert result == 0
+    assert received == [("subject:test-dispatch", "RECOVERY")]
+    assert capsys.readouterr().out.splitlines() == [
+        "stubbed release result",
+        "Record this host recovery in an independent incident/change record.",
+    ]
+
+
+def test_host_wrapper_forwards_release_administrator_blocker_argv(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    captured_argv = tmp_path / "docker-argv"
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$EASYSYNQ_CAPTURE"\n')
+    fake_docker.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["EASYSYNQ_CAPTURE"] = str(captured_argv)
+
+    subprocess.run(  # noqa: S603 - repository wrapper with a controlled fake docker executable
+        [
+            str(ROOT / "scripts/easysynq"),
+            "setup",
+            "release-administrator-blocker",
+            "--subject",
+            "subject:wrapper-dispatch",
+            "--org",
+            "RECOVERY",
+        ],
+        check=True,
+        env=env,
+    )
+
+    assert captured_argv.read_text().splitlines()[-13:] == [
+        "run",
+        "--rm",
+        "api",
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "easysynq_api.cli.setup",
+        "release-administrator-blocker",
+        "--subject",
+        "subject:wrapper-dispatch",
+        "--org",
+        "RECOVERY",
+    ]
+
+
 def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     compose = _read("infra/compose/compose.yml")
     image = _read("infra/compose/keycloak/Dockerfile")
