@@ -184,20 +184,29 @@ Applied to **local** accounts (federated accounts inherit the directory/IdP poli
 | Absolute session lifetime | ≤ 12 h then full re-auth | Keycloak |
 | Forced global logout | Avery can invalidate all sessions for a user (e.g., offboarding); API enforces via `session_invalidated_at` watermark even within an access token's TTL | API + Keycloak |
 | External auditor (Olsen) | Time-boxed account: session and grant both carry `valid_until`; expiry forcibly ends access and disables the account | API + Keycloak |
-| Anti-automation on auth | CAPTCHA-style challenge after N failures for Keycloak authentication; the bounded public health/setup exceptions use the separate controls in §2.6 | Keycloak + API |
+| Anti-automation on auth | CAPTCHA-style challenge after N failures for Keycloak authentication; the bounded bearer-free operations use the separate controls in §2.6 | Keycloak + API |
 
 Every authentication event — success, failure, lockout, MFA challenge result, logout, token refresh anomaly, admin session revocation — is emitted to the EasySynQ audit trail (§4) in addition to Keycloak's own event log, so security forensics live in one tamper-evident place.
 
-### 2.6 Bounded public health and first-run setup exceptions
+### 2.6 Bounded bearer-free application API operations
 
 QMS content, customer/site data, and ordinary application operations remain authenticated and
-authorized. The bounded public application API exceptions are `GET /healthz`, `GET /readyz`, and
-`GET /setup/state`, plus the first-run mutations `POST /setup/administrator` and
-`POST /setup/administrator/acknowledge`. Both setup mutations require the bootstrap secret, use
-generic denial and atomic rate limiting, accept secrets only in request bodies and never in URLs,
-and return no protected QMS content. These exceptions do not loosen the authentication or
-authorization requirements for sensitive setup detail, later setup gates, QMS content, or ordinary
-operations.
+authorized. Exactly nine application API operations omit a bearer JWT, in three bounded categories:
+
+- **public health/metadata/setup routing:** `GET /healthz`, `GET /readyz`, `GET /auth/config`, and
+  `GET /setup/state`;
+- **bootstrap-secret-authorized mutations:** `POST /setup/administrator` and
+  `POST /setup/administrator/acknowledge`; and
+- **signed-capability-authorized access:** `GET /verify`, `GET /evidence-packs/shared`, and
+  `GET /evidence-packs/shared/download`.
+
+No other application API operation is bearer-free. Both setup mutations require the bootstrap
+secret, use generic denial and atomic rate limiting, accept secrets only in request bodies and never
+in URLs, and return no protected QMS content. The signed-capability routes verify a signed token and,
+for evidence-pack shares, the revocable persisted share state on every request; that is authorized
+capability access, not anonymous QMS-content access. These exceptions do not loosen the
+authentication or authorization requirements for sensitive setup detail, later setup gates, QMS
+content, customer/site data, or ordinary operations.
 
 ---
 
@@ -597,7 +606,7 @@ This makes WORM the rule and destruction the audited, dual-controlled exception 
 | **A07 Identification & Auth Failures** | Keycloak brute-force lockout, MFA (TOTP/WebAuthn), PKCE, short-lived tokens with rotation, in-memory token storage, idle/absolute session limits, forced global logout, breached-password screening. |
 | **A08 Software & Data Integrity Failures** | Content-addressed immutable blobs, WORM object-lock, hash-chained signed audit, transactional audit-with-action, restore-time chain verification, pinned images. |
 | **A09 Logging & Monitoring Failures** | Tamper-evident audit of all security/content events, OpenTelemetry metrics, auth-failure/integrity-failure/backup-failure alerts, audit chain-verify job, separate operational logs vs. compliance audit. |
-| **A10 SSRF** | No user-supplied URL fetching in core flows; outbound egress restricted to admin-designated endpoints (IdP/SMTP/backup/registry); renderer is fed local blobs only and network-restricted. The bounded public health/setup API exceptions in §2.6 accept no user-supplied target URL and return no protected QMS content. |
+| **A10 SSRF** | No user-supplied URL fetching in core flows; outbound egress restricted to admin-designated endpoints (IdP/SMTP/backup/registry); renderer is fed local blobs only and network-restricted. The exact bearer-free operations in §2.6 accept no user-supplied target URL; setup returns no protected QMS content, while signed-capability responses remain token-authorized and scope-bounded. |
 
 ### 10.3 Notable residual risks & honest posture
 

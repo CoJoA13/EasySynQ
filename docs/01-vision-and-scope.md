@@ -69,9 +69,25 @@ Stating these prevents scope creep and protects the calm-UX promise. *Not now* d
 | N5 | **Real-time multi-user co-editing.** | The control model is check-out/check-in (one editor at a time). Concurrent co-authoring conflicts with controlled versioning. |
 | N6 | **Operational quality data analytics** (SPC charts, defect-rate trending, supplier scorecards). | EasySynQ governs the *system* (documents, records, improvement loop), not shop-floor measurement analytics. |
 | N7 | **Project/task management or general workflow engine.** | Workflows are QMS-specific (approval, audit, CAPA). Not a generic BPM tool. |
-| N8 | **Public/anonymous access to QMS content, customer/site data, ordinary application operations, or a customer-facing portal.** | Those surfaces remain authenticated and authorized; external auditors get scoped, time-bounded accounts. The only bounded public application API exceptions are health checks and first-run setup, which disclose no protected QMS content. |
+| N8 | **Public/anonymous access to QMS content, customer/site data, ordinary application operations, or a general customer-facing portal.** | Those surfaces remain authenticated and authorized; external auditors get scoped, time-bounded accounts. The exact bearer-free operations below are narrowly authorized exceptions, not anonymous public QMS-content access. |
 | N9 | **Automated regulatory interpretation / "auto-compliance" judgments.** | The tool organizes evidence and structure; it does not assert that the org *is* compliant. Humans decide. |
 | N10 | **Native mobile apps.** | Responsive web only for v1. |
+
+### N8 — bounded bearer-free application API operations
+
+Exactly nine application API operations omit a bearer JWT, in three bounded categories:
+
+- **public health/metadata/setup routing:** `GET /healthz`, `GET /readyz`, `GET /auth/config`, and
+  `GET /setup/state`;
+- **bootstrap-secret-authorized mutations:** `POST /setup/administrator` and
+  `POST /setup/administrator/acknowledge`; and
+- **signed-capability-authorized access:** `GET /verify`, `GET /evidence-packs/shared`, and
+  `GET /evidence-packs/shared/download`.
+
+The signed-capability routes verify a signed token whose encoded or persisted scope bounds the
+response; that is authorized capability access, not anonymous QMS-content access. This bounded list
+does not create a general customer portal or loosen authentication and authorization for ordinary
+QMS content, customer/site data, or application operations.
 
 ---
 

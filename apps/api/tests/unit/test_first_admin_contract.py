@@ -1,5 +1,7 @@
+import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 OPENAPI = Path(__file__).resolve().parents[4] / "packages/contracts/openapi.yaml"
@@ -8,6 +10,26 @@ API_DESIGN = OPENAPI.parents[2] / "docs/15-api-design.md"
 ADMINISTRATOR_MANUAL = OPENAPI.parents[2] / "docs/manuals/administrator-it-manual.md"
 VISION_SCOPE = OPENAPI.parents[2] / "docs/01-vision-and-scope.md"
 SECURITY_AUDIT = OPENAPI.parents[2] / "docs/12-security-and-audit.md"
+
+BEARER_FREE_OPERATIONS = frozenset(
+    {
+        ("GET", "/healthz"),
+        ("GET", "/readyz"),
+        ("GET", "/auth/config"),
+        ("GET", "/setup/state"),
+        ("POST", "/setup/administrator"),
+        ("POST", "/setup/administrator/acknowledge"),
+        ("GET", "/verify"),
+        ("GET", "/evidence-packs/shared"),
+        ("GET", "/evidence-packs/shared/download"),
+    }
+)
+HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options", "trace"})
+METHOD_PATH_TOKEN = re.compile(
+    r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE)\s+(/[A-Za-z0-9_{}:/-]+)"
+)
+VISION_BEARER_FREE_HEADING = "### N8 — bounded bearer-free application API operations"
+SECURITY_BEARER_FREE_HEADING = "### 2.6 Bounded bearer-free application API operations"
 
 CURRENT_FIRST_ADMIN_SOURCES = {
     "bootstrap secret helper": (
@@ -37,6 +59,30 @@ def _markdown_section(document: str, heading: str) -> str:
     return document[start : start + len(heading) + next_heading]
 
 
+def _normalize_prose(text: str) -> str:
+    return " ".join(text.replace("`", "").split())
+
+
+def _method_path_tokens(text: str) -> frozenset[tuple[str, str]]:
+    return frozenset((match[1].upper(), match[2]) for match in METHOD_PATH_TOKEN.finditer(text))
+
+
+def _openapi_bearer_free_operations(spec: dict[str, object]) -> frozenset[tuple[str, str]]:
+    paths = spec["paths"]
+    assert isinstance(paths, dict)
+    operations: set[tuple[str, str]] = set()
+    for path, path_item in paths.items():
+        assert isinstance(path, str)
+        assert isinstance(path_item, dict)
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            assert isinstance(operation, dict)
+            if operation.get("security") == []:
+                operations.add((method.upper(), path))
+    return frozenset(operations)
+
+
 def _assert_bounded_public_application_api_authority(
     vision_scope: str,
     security_audit: str,
@@ -52,26 +98,37 @@ def _assert_bounded_public_application_api_authority(
         "no anonymous endpoints",
         "no anonymous/public endpoints",
     )
-    current_authority = "\n".join((n8, anti_automation, ssrf))
+    assert VISION_BEARER_FREE_HEADING in vision_scope
+    vision_exception = _markdown_section(vision_scope, VISION_BEARER_FREE_HEADING)
+    assert SECURITY_BEARER_FREE_HEADING in security_audit
+    security_exception = _markdown_section(security_audit, SECURITY_BEARER_FREE_HEADING)
+
+    current_authority = "\n".join((n8, vision_exception, anti_automation, security_exception, ssrf))
     for claim in legacy_absolute_claims:
         assert claim not in current_authority
 
-    bounded_heading = "### 2.6 Bounded public health and first-run setup exceptions"
-    assert bounded_heading in security_audit
-    bounded_exception = _markdown_section(security_audit, bounded_heading)
-    normalized_exception = " ".join(bounded_exception.replace("`", "").split())
+    normalized_vision_boundary = _normalize_prose(n8)
+    normalized_security_boundary = _normalize_prose(security_exception)
+    for representation in (normalized_vision_boundary, normalized_security_boundary):
+        for required_scope in (
+            "QMS content",
+            "customer/site data",
+            "ordinary application operations",
+        ):
+            assert required_scope in representation
+        assert "remain authenticated and authorized" in representation
 
-    for required_scope in ("QMS content", "customer/site data", "ordinary application operations"):
-        assert required_scope in n8
-
-    for route in (
-        "GET /healthz",
-        "GET /readyz",
-        "GET /setup/state",
-        "POST /setup/administrator",
-        "POST /setup/administrator/acknowledge",
-    ):
-        assert route in normalized_exception
+    for representation in (vision_exception, security_exception):
+        assert _method_path_tokens(representation) == BEARER_FREE_OPERATIONS
+        for category in (
+            "public health/metadata/setup routing",
+            "bootstrap-secret-authorized mutations",
+            "signed-capability-authorized access",
+        ):
+            assert category in representation
+        normalized_representation = _normalize_prose(representation)
+        assert "authorized capability access" in normalized_representation
+        assert "not anonymous QMS-content access" in normalized_representation
 
     for required_safeguard in (
         "bootstrap secret",
@@ -80,13 +137,14 @@ def _assert_bounded_public_application_api_authority(
         "never in URLs",
         "no protected QMS content",
     ):
-        assert required_safeguard in normalized_exception
+        assert required_safeguard in normalized_security_boundary
 
 
 def test_first_administrator_replaces_the_authenticated_bootstrap_contract() -> None:
     spec = yaml.safe_load(OPENAPI.read_text(encoding="utf-8"))
     paths = spec["paths"]
     schemas = spec["components"]["schemas"]
+    assert _openapi_bearer_free_operations(spec) == BEARER_FREE_OPERATIONS
     assert "/setup/bootstrap" not in paths
     provision = paths["/setup/administrator"]["post"]
     acknowledge = paths["/setup/administrator/acknowledge"]["post"]
@@ -199,6 +257,68 @@ def test_current_authority_bounds_public_access_to_health_and_first_run_setup() 
         VISION_SCOPE.read_text(encoding="utf-8"),
         SECURITY_AUDIT.read_text(encoding="utf-8"),
     )
+
+
+def test_authority_guard_rejects_an_extra_bearer_free_operation_claim() -> None:
+    vision_scope = VISION_SCOPE.read_text(encoding="utf-8")
+    security_audit = SECURITY_AUDIT.read_text(encoding="utf-8")
+    heading = SECURITY_BEARER_FREE_HEADING
+    assert heading in security_audit
+    mutated_security = security_audit.replace(
+        heading,
+        f"{heading}\n\nPublic `GET /documents` is also bearer-free.",
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_bounded_public_application_api_authority(vision_scope, mutated_security)
+
+
+@pytest.mark.parametrize(
+    ("target", "boundary", "replacement"),
+    (
+        (
+            "vision",
+            "Those surfaces remain authenticated and authorized",
+            "Those surfaces remain available",
+        ),
+        (
+            "security",
+            "operations remain authenticated and\nauthorized",
+            "operations remain governed",
+        ),
+    ),
+)
+def test_authority_guard_rejects_loss_of_authenticated_boundary(
+    target: str,
+    boundary: str,
+    replacement: str,
+) -> None:
+    vision_scope = VISION_SCOPE.read_text(encoding="utf-8")
+    security_audit = SECURITY_AUDIT.read_text(encoding="utf-8")
+    if target == "vision":
+        assert boundary in vision_scope
+        vision_scope = vision_scope.replace(boundary, replacement, 1)
+    else:
+        assert boundary in security_audit
+        security_audit = security_audit.replace(boundary, replacement, 1)
+
+    with pytest.raises(AssertionError):
+        _assert_bounded_public_application_api_authority(vision_scope, security_audit)
+
+
+def test_openapi_guard_rejects_a_tenth_bearer_free_operation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = yaml.safe_load(OPENAPI.read_text(encoding="utf-8"))
+    spec["paths"]["/documents"]["get"]["security"] = []
+    mutated_openapi = tmp_path / "openapi.yaml"
+    mutated_openapi.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
+    monkeypatch.setitem(globals(), "OPENAPI", mutated_openapi)
+
+    with pytest.raises(AssertionError):
+        test_first_administrator_replaces_the_authenticated_bootstrap_contract()
 
 
 def test_current_first_administrator_source_comments_name_only_live_invariants() -> None:
