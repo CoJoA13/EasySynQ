@@ -25,6 +25,7 @@ import argparse
 import datetime
 from collections.abc import Sequence
 
+import redis
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,15 @@ from ..db.models.role import Role, RoleAssignment
 from ..db.models.system_config import SetupState, SystemConfig
 from ..services.authz.admin_guard import SYSTEM_ADMIN_ROLE, lock_admin_set_sync
 from ..services.setup.bootstrap import mint_secret
+from ..services.setup.service import _RL_KEY
+
+
+def _clear_bootstrap_failure_budget() -> None:
+    try:
+        with redis.Redis.from_url(get_settings().redis_url, decode_responses=True) as client:
+            client.delete(_RL_KEY)
+    except Exception:  # noqa: BLE001 - trusted recovery must redact Redis/provider detail
+        raise SystemExit("bootstrap failure counter could not be reset") from None
 
 
 def mint_bootstrap(org_short_code: str = "DEFAULT", ttl_hours: int = 24) -> str:
@@ -58,6 +68,11 @@ def mint_bootstrap(org_short_code: str = "DEFAULT", ttl_hours: int = 24) -> str:
             if cfg.setup_state is not SetupState.UNINITIALIZED:
                 raise SystemExit("bootstrap can only be minted while setup is UNINITIALIZED")
             secret, stored_hash = mint_secret()
+            try:
+                _clear_bootstrap_failure_budget()
+            except SystemExit:
+                session.rollback()
+                raise
             cfg.bootstrap_secret_hash = stored_hash
             cfg.bootstrap_expires_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
                 hours=ttl_hours

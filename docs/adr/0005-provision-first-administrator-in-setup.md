@@ -412,3 +412,38 @@ Using `grant-role` was rejected because it creates, rather than releases, the bl
 Replace this host exception when a trusted authenticated or host-attested workflow can resolve the
 pre-existing administrator with durable in-application audit, as specified by the linked debt
 record.
+
+## 2026-08-17 amendment — trusted remint resets bootstrap admission failures
+
+### Context
+
+The global Redis bootstrap-failure budget belongs to the active proof admission boundary, but a
+trusted host remint rotates the proof hash and expiry in PostgreSQL. Without coordinating the two,
+the old proof's exhausted Redis budget can outlive the PostgreSQL rotation and reject the valid
+replacement proof before it can recover its pending claim.
+
+### Decision
+
+While holding the locked `system_config` row in the uncommitted trusted-remint transaction, the host
+command deletes the canonical global Redis failure key and waits for Redis to acknowledge that
+deletion before it assigns and commits the replacement hash and expiry. Redis/provider failure is
+redacted to an operator-safe error; deletion failure explicitly rolls back the database transaction
+and prints no replacement proof.
+
+### Consequences
+
+A valid reminted proof starts with an empty bootstrap admission budget and can recover the same
+claim under the existing singleton-lock protocol. A commit failure after Redis deletion can allow
+attempts for the old proof to be recorded again, but cannot publish new bootstrap authority. The
+cross-store ordering is intentionally non-atomic and remains a recovery-boundary limitation.
+
+### Alternatives
+
+Generation-scoped Redis keys were rejected because the current global admission state has no atomic
+generation rotation with the PostgreSQL proof. Post-commit best-effort deletion was rejected because
+it could publish replacement authority while leaving a valid proof rate-limited.
+
+### Payoff trigger
+
+Replace this ordering with one transactional admission/proof store, or generation-scoped state with
+atomic rotation.

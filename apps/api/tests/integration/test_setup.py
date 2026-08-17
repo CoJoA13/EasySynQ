@@ -861,7 +861,16 @@ async def test_reminted_secret_recovers_pending_claim_and_advanced_setup_refuses
         cfg.bootstrap_expires_at = setup_service._now() - datetime.timedelta(minutes=1)
         await session.commit()
 
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        await client.set(
+            setup_service._RL_KEY,
+            str(setup_service._RL_MAX),
+            ex=setup_service._RL_WINDOW_SECONDS,
+        )
+
     replacement = mint_bootstrap()
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        assert await client.get(setup_service._RL_KEY) is None
     recovered = await _provision(app_client, replacement, username)
 
     assert recovered.status_code == 200, recovered.text
@@ -882,6 +891,31 @@ async def test_reminted_secret_recovers_pending_claim_and_advanced_setup_refuses
     with pytest.raises(SystemExit, match="UNINITIALIZED"):
         mint_bootstrap()
     assert (await _config()).bootstrap_secret_hash == stored_hash
+
+
+async def test_remint_redis_reset_failure_rolls_back_replacement_proof(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+
+    del app_client
+    await _reset_uninitialized()
+    before = await _config()
+    original_hash = before.bootstrap_secret_hash
+    original_expiry = before.bootstrap_expires_at
+
+    def unavailable() -> None:
+        raise SystemExit("bootstrap failure counter could not be reset")
+
+    monkeypatch.setattr(setup_cli, "_clear_bootstrap_failure_budget", unavailable)
+
+    with pytest.raises(SystemExit, match="failure counter could not be reset"):
+        setup_cli.mint_bootstrap()
+
+    after = await _config()
+    assert after.bootstrap_secret_hash == original_hash
+    assert after.bootstrap_expires_at == original_expiry
 
 
 async def test_remint_cannot_commit_after_racing_acknowledgment(
