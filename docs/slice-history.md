@@ -125,6 +125,14 @@ seconds with one worker and zero retries, completed mandatory password replaceme
 obsolete temporary password. Teardown removed the exact `easysynq-first-admin-32b1b175ba35` project's
 containers, volumes, network, and six local images.
 
+Fresh 2026-08-17 PR-review-fix verification reran the changed complete inventories: integration job
+`job-msx8jger-0e1559da` passed 1,163 tests with two expected shared-database skips, 284 deselected, and
+three registered Testcontainers deprecations in 548.61s; Vitest job `job-msx9sx1s-0e95eae6` passed all
+267 files and 1,946 tests in 308.83s with only the known Node `localStorage` diagnostics. The final
+Chromium cohort passed 40/40 with one worker and zero retries. Those fresh runs cover the bounded host
+recovery/collision guidance and trusted-remint admission-budget reset/rollback corrections; API unit,
+contract, migration, hash, CI-topology, and residual evidence remain unchanged.
+
 Whole-branch review produced focused correction rounds before the final clean verdict. The initial
 implementation review closed backup-helper, rate-limit concurrency/TTL, reset-authority, expired replay,
 username canonicalization, contract-generation, and response/documentation findings. Review hardening then

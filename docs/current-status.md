@@ -7,9 +7,9 @@ migration_head: "0088"
 next_migration: "0089"
 api_unit_tests: 1835
 web_test_files: 267
-web_tests: 1944
+web_tests: 1946
 contract_tests: 284
-integration_passed: 1162
+integration_passed: 1163
 integration_skipped: 2
 ci_jobs: 11
 ci_checks: 15
@@ -96,15 +96,21 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; this slice does
 not rewrite that implementation-evidence field merely because its branch SHA differs.
 
-Fresh 2026-08-16 durable evidence measured the complete backend suites after the final runtime review fix.
+Fresh 2026-08-17 durable evidence measured the complete affected inventories after the first-administrator
+PR review fixes.
 API unit job `job-mswq4zse-b59b5405` passed 1,835 tests with one expected release-ceremony image-digest
-skip in 30.33 seconds. API integration job `job-mswq94op-73d090ea` passed 1,162 tests with two expected
+skip in 30.33 seconds. API integration job `job-msx8jger-0e1559da` passed 1,163 tests with two expected
 shared-database skips, 284 contract-marked tests deselected, and three registered Testcontainers import
-deprecations in 828.02 seconds. Published response-contract job `job-mswlweou-9b17e09e` remained valid
+deprecations in 548.61 seconds. Published response-contract job `job-mswlweou-9b17e09e` remained valid
 because the later fixes changed no API/OpenAPI/response surface; it passed all 284 schemas with the same
-three deprecations in 251.84 seconds. Web job `job-mswm2hb9-92fba980` likewise remained valid because no
-web surface changed; it passed all 267 Vitest files and 1,944 tests in 299.02 seconds with the known Node
+three deprecations in 251.84 seconds. Web job `job-msx9sx1s-0e95eae6` passed all 267 Vitest files and
+1,946 tests in 308.83 seconds with the known Node
 `localStorage` diagnostics.
+
+The bounded PR review fixes cover the first-administrator blocker host-recovery guidance, separate bound
+username/email collision guidance, and trusted-remint admission-budget reset/rollback; the fresh complete
+inventories exercised their owning web and setup integration suites without changing API unit, contract,
+migration, hash, CI-topology, or residual evidence.
 
 The populated migration gate passed 1/1 and independently exercised `0087 -> 0086 -> 0087` and
 `0088 -> 0087 -> 0088`, with the registered PostgreSQL Testcontainers deprecation. Final

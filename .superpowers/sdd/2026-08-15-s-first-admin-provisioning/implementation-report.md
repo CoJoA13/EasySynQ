@@ -369,6 +369,20 @@ synthetic Chromium, and narrow live evidence remain accepted final-tree evidence
 provider, installation, or exercised live-flow surface. No failed, cancelled, partial, unavailable,
 skipped, deselected, warning-bearing, or retried result is upgraded beyond the exact scope above.
 
+### PR review-fix verification — 2026-08-17
+
+After commits `34e58e3143a369f0b003d99adcf0e509f7b9aca8` and
+`4365476160ebb34d567c30c995b6a1339d42e40e`, fresh final evidence replaced only the affected complete
+inventory totals: durable integration job `job-msx8jger-0e1559da` ran
+`env UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest tests/integration -m integration` and exited 0
+with 1,163 passed, 2 expected shared-database skips, 284 deselected, and three registered Testcontainers
+deprecations in 548.61s; durable Vitest job `job-msx9sx1s-0e95eae6` exited 0 with 267/267 files and
+1,946/1,946 tests in 308.83s and only the known Node `localStorage` warnings. The fresh final
+`npm --prefix apps/web run test:browser` cohort passed 40/40 Chromium tests in 16.3s, one worker, zero
+retries. These runs cover the safe host-recovery and split collision copy plus trusted-remint
+admission-budget reset/rollback; API unit, contract, migration, hash, CI-topology, and residual evidence
+remain unchanged.
+
 ### Static, contract, topology, and review verdict
 
 Ruff format reported 750 files already formatted; Ruff lint passed; strict mypy found no issues in 444
