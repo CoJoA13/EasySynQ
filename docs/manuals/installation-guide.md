@@ -140,7 +140,8 @@ then sign in and change the temporary password when prompted. SMTP is not requir
 ### 4.4 Complete the six setup screens
 
 1. **Create administrator** — enter the one-time secret and administrator profile, save the
-   shown-once temporary password, then sign in and change it.
+   shown-once temporary password, acknowledge the active credential generation, then sign in and
+   change the temporary password.
 2. **Organization** — legal name, short code, and IANA timezone. The timezone governs effective
    dates and business-day scheduling.
 3. **Storage** — choose WORM mode and run the live object-lock probe. Finalization is blocked until

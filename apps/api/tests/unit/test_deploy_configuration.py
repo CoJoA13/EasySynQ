@@ -86,14 +86,29 @@ def _assert_fragments_in_order(content: str, fragments: tuple[str, ...]) -> None
 
 
 def _assert_supported_first_admin_sequence(content: str, setup_url: str) -> None:
+    normalized = re.sub(r"\s+", " ", content)
     normalized_lower = re.sub(r"\s+", " ", content).lower()
     assert "just demo-user" not in normalized_lower
     assert "demo-password-1" not in normalized_lower
+    setup_instruction = f"Open {setup_url} without signing in"
+    setup_position = normalized.find(setup_instruction)
+    assert setup_position >= 0, f"missing public setup instruction: {setup_instruction}"
+    before_setup = normalized[:setup_position]
+    sign_in_directive = re.compile(
+        r"(?:^|[.!?]\s+)"
+        r"(?:(?:first|next|then|now),?\s+)?"
+        r"(?:(?:you|the operator)\s+(?:must|should|need(?:s)? to)\s+)?"
+        r"(?:sign|log)\s+in\b",
+        re.IGNORECASE,
+    )
+    assert sign_in_directive.search(before_setup) is None, (
+        "supported first-admin setup must not direct sign-in before public /setup"
+    )
     _assert_fragments_in_order(
         content,
         (
             "mint-bootstrap",
-            f"Open {setup_url} without signing in",
+            setup_instruction,
             "create the first administrator profile",
             "copy the shown-once temporary password",
             "acknowledge the active credential generation",
@@ -943,11 +958,7 @@ def test_installation_guide_first_runs_never_sign_in_with_a_demo_identity() -> N
     unsafe_first_runs = {
         "demo-command": f"Run just demo-user first. {valid_sequence}",
         "fixed-demo-credential": f"Use demo / Demo-Password-1. {valid_sequence}",
-        "sign-in-before-setup": (
-            "Sign in first. Run mint-bootstrap. Open `http://localhost/setup` without signing in, "
-            "then create the first administrator profile, copy the shown-once temporary password, "
-            "acknowledge the active credential generation, and change the temporary password."
-        ),
+        "sign-in-before-setup": f"Sign in first. {valid_sequence}",
     }
     rejected_mutations: dict[str, bool] = {}
     for name, mutation in unsafe_first_runs.items():
