@@ -166,7 +166,7 @@ class SystemConfig(Base):
         nullable=True,
     )
     # First-run bootstrap secret (S8a, doc 08 §4): an operator-minted, single-use, TTL'd install
-    # secret that gates the public /setup/bootstrap → first-admin grant (bootstrap-of-trust). The
+    # secret that gates public /setup/administrator state (bootstrap-of-trust). The
     # hash is salted (``<salt_hex>:<sha256(salt+secret)_hex>``); the plaintext is never stored.
     bootstrap_secret_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     bootstrap_expires_at: Mapped[datetime.datetime | None] = mapped_column(

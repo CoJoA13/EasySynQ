@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.role import Role, RoleAssignment
 
-# The seeded role that carries the system-administration bundle (the appliance's qmsadmin holds it).
+# The seeded role whose assignments are governed by the shared System Administrator invariant.
 SYSTEM_ADMIN_ROLE = "System Administrator"
 
 # A per-org transaction-scoped advisory-lock namespace for the admin set. Two-arg (ns, oid) form,

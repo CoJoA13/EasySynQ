@@ -6,6 +6,81 @@ OPENAPI = Path(__file__).resolve().parents[4] / "packages/contracts/openapi.yaml
 DECISIONS_REGISTER = OPENAPI.parents[2] / "docs/decisions-register.md"
 API_DESIGN = OPENAPI.parents[2] / "docs/15-api-design.md"
 ADMINISTRATOR_MANUAL = OPENAPI.parents[2] / "docs/manuals/administrator-it-manual.md"
+VISION_SCOPE = OPENAPI.parents[2] / "docs/01-vision-and-scope.md"
+SECURITY_AUDIT = OPENAPI.parents[2] / "docs/12-security-and-audit.md"
+
+CURRENT_FIRST_ADMIN_SOURCES = {
+    "bootstrap secret helper": (
+        OPENAPI.parents[2] / "apps/api/src/easysynq_api/services/setup/bootstrap.py",
+        "/setup/administrator",
+        ("/setup/bootstrap",),
+    ),
+    "system configuration model": (
+        OPENAPI.parents[2] / "apps/api/src/easysynq_api/db/models/system_config.py",
+        "/setup/administrator",
+        ("/setup/bootstrap",),
+    ),
+    "administrator-set guard": (
+        OPENAPI.parents[2] / "apps/api/src/easysynq_api/services/authz/admin_guard.py",
+        "System Administrator",
+        ("qmsadmin",),
+    ),
+}
+
+
+def _markdown_section(document: str, heading: str) -> str:
+    start = document.index(heading)
+    remaining = document[start + len(heading) :]
+    next_heading = remaining.find("\n## ")
+    if next_heading == -1:
+        return document[start:]
+    return document[start : start + len(heading) + next_heading]
+
+
+def _assert_bounded_public_application_api_authority(
+    vision_scope: str,
+    security_audit: str,
+) -> None:
+    n8 = next(line for line in vision_scope.splitlines() if line.startswith("| N8 |"))
+    anti_automation = next(
+        line for line in security_audit.splitlines() if "Anti-automation on auth" in line
+    )
+    ssrf = next(line for line in security_audit.splitlines() if "**A10 SSRF**" in line)
+
+    legacy_absolute_claims = (
+        "All access is authenticated and authorized",
+        "no anonymous endpoints",
+        "no anonymous/public endpoints",
+    )
+    current_authority = "\n".join((n8, anti_automation, ssrf))
+    for claim in legacy_absolute_claims:
+        assert claim not in current_authority
+
+    bounded_heading = "### 2.6 Bounded public health and first-run setup exceptions"
+    assert bounded_heading in security_audit
+    bounded_exception = _markdown_section(security_audit, bounded_heading)
+    normalized_exception = " ".join(bounded_exception.replace("`", "").split())
+
+    for required_scope in ("QMS content", "customer/site data", "ordinary application operations"):
+        assert required_scope in n8
+
+    for route in (
+        "GET /healthz",
+        "GET /readyz",
+        "GET /setup/state",
+        "POST /setup/administrator",
+        "POST /setup/administrator/acknowledge",
+    ):
+        assert route in normalized_exception
+
+    for required_safeguard in (
+        "bootstrap secret",
+        "generic denial",
+        "atomic rate limiting",
+        "never in URLs",
+        "no protected QMS content",
+    ):
+        assert required_safeguard in normalized_exception
 
 
 def test_first_administrator_replaces_the_authenticated_bootstrap_contract() -> None:
@@ -117,6 +192,21 @@ def test_current_first_administrator_authority_names_the_hardened_recovery_bound
     assert "active shown credential generation" in decisions_register
     assert "bootstrap_administrator_exists" in api_design
     assert "bound first administrator" in api_design
+
+
+def test_current_authority_bounds_public_access_to_health_and_first_run_setup() -> None:
+    _assert_bounded_public_application_api_authority(
+        VISION_SCOPE.read_text(encoding="utf-8"),
+        SECURITY_AUDIT.read_text(encoding="utf-8"),
+    )
+
+
+def test_current_first_administrator_source_comments_name_only_live_invariants() -> None:
+    for label, (path, required, retired) in CURRENT_FIRST_ADMIN_SOURCES.items():
+        source = path.read_text(encoding="utf-8")
+        assert required in source, f"{label} does not name the current invariant"
+        for term in retired:
+            assert term not in source, f"{label} retains retired current-source term {term}"
 
 
 def test_administrator_blocker_recovery_is_narrow_and_externally_recorded() -> None:

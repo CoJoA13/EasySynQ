@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from easysynq_api.db.models._audit_enums import EVENT_TYPE_VALUES, EventType
+from easysynq_api.problems import ProblemException
 from easysynq_api.services.setup import service as setup_service
 from easysynq_api.services.setup.bootstrap import mint_secret, verify_secret
 
@@ -82,6 +83,20 @@ class _AtomicFailureRedis:
         raise RuntimeError("injected expiry failure")
 
 
+class _RateLimitRedis:
+    def __init__(self, stored_counter: str | None) -> None:
+        self.stored_counter = stored_counter
+
+    async def __aenter__(self) -> _RateLimitRedis:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def get(self, _key: str) -> str | None:
+        return self.stored_counter
+
+
 async def test_failure_counter_uses_one_atomic_redis_script(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -96,3 +111,16 @@ async def test_failure_counter_uses_one_atomic_redis_script(
     assert "EX" in script
     assert numkeys == 1
     assert args == (setup_service._RL_KEY, str(setup_service._RL_WINDOW_SECONDS))
+
+
+async def test_rate_limit_rejects_negative_counter_as_dependency_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(setup_service, "_redis", lambda: _RateLimitRedis("-1"))
+
+    with pytest.raises(ProblemException) as excinfo:
+        await setup_service._check_rate_limit()
+
+    assert excinfo.value.status == 503
+    assert excinfo.value.code == "dependency_unavailable"
+    assert excinfo.value.title == "Bootstrap rate limiting is unavailable"

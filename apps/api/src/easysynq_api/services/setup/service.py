@@ -135,12 +135,16 @@ async def _check_rate_limit() -> None:
     try:
         async with _redis() as client:
             fails = await client.get(_RL_KEY)
-        if fails is not None and int(fails) >= _RL_MAX:
-            raise ProblemException(
-                status=429,
-                code="rate_limited",
-                title="Too many bootstrap attempts; try again later",
-            )
+        if fails is not None:
+            failure_count = int(fails)
+            if failure_count < 0:
+                raise ValueError("malformed bootstrap failure counter")
+            if failure_count >= _RL_MAX:
+                raise ProblemException(
+                    status=429,
+                    code="rate_limited",
+                    title="Too many bootstrap attempts; try again later",
+                )
     except ProblemException:
         raise
     except Exception as exc:
