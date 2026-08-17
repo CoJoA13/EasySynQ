@@ -1,13 +1,4 @@
-import {
-  Alert,
-  Button,
-  Group,
-  PasswordInput,
-  Stack,
-  Text,
-  TextInput,
-  Title,
-} from "@mantine/core";
+import { Alert, Button, Group, PasswordInput, Stack, Text, TextInput, Title } from "@mantine/core";
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { ShowOncePassword } from "../admin/ShowOncePassword";
@@ -38,7 +29,9 @@ interface PresentedError {
 }
 
 type AcknowledgeRecovery = "retry" | "replacement-secret" | "superseded" | null;
-type ReissueRecovery = "retry" | "replacement-secret" | null;
+type ReissueRetry =
+  "retry" | "retry-keycloak" | "retry-keycloak-not-configured" | "retry-dependency";
+type ReissueRecovery = ReissueRetry | "replacement-secret" | null;
 type RetainedAdministratorProfile = Omit<FirstAdministratorRequest, "secret">;
 
 const EMPTY_FORM: FirstAdministratorForm = {
@@ -87,7 +80,8 @@ function provisionError(error: unknown): PresentedError {
     if (error.code === "keycloak_email_exists") {
       return {
         heading: "Administrator was not created",
-        message: "That email belongs to another identity. Keep the bound username and enter another email.",
+        message:
+          "That email belongs to another identity. Keep the bound username and enter another email.",
       };
     }
     if (error.code === "bootstrap_expired") {
@@ -112,15 +106,25 @@ function provisionError(error: unknown): PresentedError {
         message: "Check the administrator details and try again.",
       };
     }
-    if (
-      error.code === "keycloak_unavailable" ||
-      error.code === "keycloak_not_configured" ||
-      error.code === "dependency_unavailable"
-    ) {
+    if (error.code === "keycloak_unavailable") {
       return {
         heading: "Administrator was not created",
         message:
           "The identity service is unavailable. Restore Keycloak connectivity, then try again.",
+      };
+    }
+    if (error.code === "keycloak_not_configured") {
+      return {
+        heading: "Administrator was not created",
+        message:
+          "Identity provisioning is not configured. Configure EasySynQ’s Keycloak connection, then try again.",
+      };
+    }
+    if (error.code === "dependency_unavailable") {
+      return {
+        heading: "Administrator was not created",
+        message:
+          "A required EasySynQ service is unavailable. Check service health, then try again.",
       };
     }
     if (error.code === "rate_limited") {
@@ -141,6 +145,29 @@ function provisionError(error: unknown): PresentedError {
     message: "EasySynQ could not create the administrator. Check the details and try again.",
   };
 }
+
+function reissueRetry(error: unknown): ReissueRetry {
+  if (error instanceof ApiError) {
+    if (error.code === "keycloak_unavailable") return "retry-keycloak";
+    if (error.code === "keycloak_not_configured") return "retry-keycloak-not-configured";
+    if (error.code === "dependency_unavailable") return "retry-dependency";
+  }
+  return "retry";
+}
+
+function isReissueRetry(recovery: ReissueRecovery): recovery is ReissueRetry {
+  return recovery !== null && recovery !== "replacement-secret";
+}
+
+const REISSUE_RETRY_GUIDANCE: Record<ReissueRetry, string> = {
+  retry: "Check EasySynQ service health, then retry.",
+  "retry-keycloak":
+    "The identity service is unavailable. Restore Keycloak connectivity, then retry.",
+  "retry-keycloak-not-configured":
+    "Identity provisioning is not configured. Configure EasySynQ’s Keycloak connection, then retry.",
+  "retry-dependency":
+    "A required EasySynQ service is unavailable. Check service health, then retry.",
+};
 
 export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorStepProps) {
   const [form, setForm] = useState<FirstAdministratorForm>(EMPTY_FORM);
@@ -196,9 +223,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
   };
 
   const canSubmit =
-    form.secret.trim() !== "" &&
-    form.username.trim() !== "" &&
-    form.displayName.trim() !== "";
+    form.secret.trim() !== "" && form.username.trim() !== "" && form.displayName.trim() !== "";
 
   const provision = async (reissue = false): Promise<void> => {
     if (inFlightRef.current) return;
@@ -258,7 +283,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
             setReissueRecovery("replacement-secret");
           });
         } else {
-          setReissueRecovery("retry");
+          setReissueRecovery(reissueRetry(caught));
         }
       } else {
         setError(provisionError(caught));
@@ -353,12 +378,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
           />
         </fieldset>
         {pending === "acknowledge" && (
-          <Alert
-            color="blue"
-            role="status"
-            aria-live="polite"
-            aria-label="Saving password receipt"
-          >
+          <Alert color="blue" role="status" aria-live="polite" aria-label="Saving password receipt">
             Saving your receipt before sign-in…
           </Alert>
         )}
@@ -369,8 +389,8 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
             aria-live="assertive"
             aria-label="Password receipt was not saved"
           >
-            EasySynQ could not save your receipt. The password remains visible; retry before
-            signing in.
+            EasySynQ could not save your receipt. The password remains visible; retry before signing
+            in.
           </Alert>
         )}
         {acknowledgeRecovery === "replacement-secret" && (
@@ -395,7 +415,11 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
                 autoComplete="off"
                 value={form.secret}
                 styles={INPUT_STYLES}
-                visibilityToggleButtonProps={{ style: { minHeight: 44, minWidth: 44 } }}
+                visibilityToggleButtonProps={{
+                  "aria-label": "Show or hide current setup secret for acknowledgment",
+                  tabIndex: 0,
+                  style: { minHeight: 44, minWidth: 44 },
+                }}
                 onChange={(event) => updateForm("secret", event.currentTarget.value)}
               />
             </Stack>
@@ -425,11 +449,11 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
                     disabled={pending !== null}
                     aria-busy={pending === "reissue" || undefined}
                     aria-label={
-                      reissueRecovery === "retry" ? undefined : "Issue a new temporary password"
+                      isReissueRetry(reissueRecovery) ? undefined : "Issue a new temporary password"
                     }
                     style={{ minHeight: 44, minWidth: 0, maxWidth: "100%", width: "100%" }}
                   >
-                    {reissueRecovery === "retry"
+                    {isReissueRetry(reissueRecovery)
                       ? "Retry issuing temporary password"
                       : "Issue new password"}
                   </Button>
@@ -438,7 +462,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
             </Stack>
           </Alert>
         )}
-        {acknowledgeRecovery === "superseded" && reissueRecovery === "retry" && (
+        {acknowledgeRecovery === "superseded" && isReissueRetry(reissueRecovery) && (
           <Alert
             color="red"
             role="alert"
@@ -446,7 +470,7 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
             aria-label="New temporary password was not issued"
           >
             EasySynQ could not issue a replacement password. The stale password remains unusable.
-            Retry when the identity service is available.
+            {` ${REISSUE_RETRY_GUIDANCE[reissueRecovery]}`}
           </Alert>
         )}
         {acknowledgeRecovery === "superseded" && reissueRecovery === "replacement-secret" && (
@@ -471,7 +495,11 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
                 autoComplete="off"
                 value={form.secret}
                 styles={INPUT_STYLES}
-                visibilityToggleButtonProps={{ style: { minHeight: 44, minWidth: 44 } }}
+                visibilityToggleButtonProps={{
+                  "aria-label": "Show or hide current setup secret for password reissue",
+                  tabIndex: 0,
+                  style: { minHeight: 44, minWidth: 44 },
+                }}
                 onChange={(event) => updateForm("secret", event.currentTarget.value)}
               />
               <Group justify="flex-end" wrap="wrap" style={{ minWidth: 0, width: "100%" }}>
@@ -513,7 +541,10 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
             <Text size="sm">{error.message}</Text>
             {error.boundUsername && (
               <Text size="sm">
-                Bound username: <Text component="span" fw={700}>{error.boundUsername}</Text>
+                Bound username:{" "}
+                <Text component="span" fw={700}>
+                  {error.boundUsername}
+                </Text>
               </Text>
             )}
           </Stack>
@@ -526,6 +557,11 @@ export function FirstAdministratorStep({ onAcknowledged }: FirstAdministratorSte
         autoComplete="off"
         value={form.secret}
         styles={INPUT_STYLES}
+        visibilityToggleButtonProps={{
+          "aria-label": "Show or hide setup secret",
+          tabIndex: 0,
+          style: { minHeight: 44, minWidth: 44 },
+        }}
         onChange={(event) => updateForm("secret", event.currentTarget.value)}
       />
       <TextInput

@@ -146,6 +146,23 @@ function renderStep(
   };
 }
 
+async function expectKeyboardVisibilityToggle(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+  input: HTMLInputElement,
+): Promise<void> {
+  const toggle = screen.getByRole("button", { name });
+  expect(toggle).toHaveAttribute("tabindex", "0");
+  expect(toggle).toHaveStyle({ minHeight: "44px", minWidth: "44px" });
+  expect(input).toHaveAttribute("type", "password");
+  toggle.focus();
+  expect(toggle).toHaveFocus();
+  await user.keyboard(" ");
+  expect(input).toHaveAttribute("type", "text");
+  await user.keyboard(" ");
+  expect(input).toHaveAttribute("type", "password");
+}
+
 beforeAll(() => {
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
@@ -186,6 +203,68 @@ test("renders the native first-administrator profile form and requires nonblank 
   await user.type(screen.getByLabelText(/^Username/), "   ");
   await user.type(screen.getByLabelText(/^Display name/), "   ");
   expect(submit).toBeDisabled();
+  expect(await axe(view.container)).toHaveNoViolations();
+});
+
+test("names and keyboard-enables every 44px setup-secret visibility action", async () => {
+  let provisionCalls = 0;
+  let acknowledgeCalls = 0;
+  server.use(
+    http.post("/api/v1/setup/administrator", () => {
+      provisionCalls += 1;
+      if (provisionCalls === 1) return HttpResponse.json(PROVISIONED, { status: 201 });
+      return HttpResponse.json(
+        { code: "bootstrap_invalid", title: "unsafe reissue secret detail" },
+        { status: 403 },
+      );
+    }),
+    http.post("/api/v1/setup/administrator/acknowledge", () => {
+      acknowledgeCalls += 1;
+      return HttpResponse.json(
+        acknowledgeCalls === 1
+          ? { code: "bootstrap_invalid", title: "unsafe acknowledgment detail" }
+          : {
+              code: "bootstrap_credential_superseded",
+              title: "unsafe supersession detail",
+            },
+        { status: acknowledgeCalls === 1 ? 403 : 409 },
+      );
+    }),
+  );
+  const user = userEvent.setup();
+  const view = renderStep();
+  const initialSecret = screen.getByLabelText(/^Setup secret/, {
+    selector: "input",
+  }) as HTMLInputElement;
+  await expectKeyboardVisibilityToggle(user, "Show or hide setup secret", initialSecret);
+  expect(await axe(view.container)).toHaveNoViolations();
+
+  await fillRequiredForm(user);
+  await user.click(screen.getByRole("button", { name: "Create administrator" }));
+  await user.click(
+    await screen.findByRole("button", { name: "I’ve saved it — Continue to sign in" }),
+  );
+  const acknowledgmentSecret = (await screen.findByLabelText(/^Current setup secret/, {
+    selector: "input",
+  })) as HTMLInputElement;
+  await expectKeyboardVisibilityToggle(
+    user,
+    "Show or hide current setup secret for acknowledgment",
+    acknowledgmentSecret,
+  );
+  expect(await axe(view.container)).toHaveNoViolations();
+
+  await user.type(acknowledgmentSecret, CURRENT_SETUP_SECRET);
+  await user.click(screen.getByRole("button", { name: "Retry with current setup secret" }));
+  await user.click(await screen.findByRole("button", { name: "Issue a new temporary password" }));
+  const reissueSecret = (await screen.findByLabelText(/^Current setup secret/, {
+    selector: "input",
+  })) as HTMLInputElement;
+  await expectKeyboardVisibilityToggle(
+    user,
+    "Show or hide current setup secret for password reissue",
+    reissueSecret,
+  );
   expect(await axe(view.container)).toHaveNoViolations();
 });
 
@@ -405,9 +484,7 @@ test("bootstrap_invalid keeps the password and retries the same receipt with a f
   window.dispatchEvent(duringReplacementAcknowledgment);
   expect(duringReplacementAcknowledgment.defaultPrevented).toBe(true);
   expect(screen.getByText(TEMPORARY_PASSWORD)).toBeInTheDocument();
-  expect(
-    screen.getByRole("button", { name: "Retry with current setup secret" }),
-  ).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Retry with current setup secret" })).toBeDisabled();
   expect(provisionCalls).toBe(1);
 
   await act(async () => {
@@ -657,6 +734,72 @@ test("a failed reissue names the response-loss error and retries the retained ca
   expect(await axe(view.container)).toHaveNoViolations();
 });
 
+test.each([
+  [
+    "keycloak_unavailable",
+    502,
+    "The identity service is unavailable. Restore Keycloak connectivity, then retry.",
+  ],
+  [
+    "keycloak_not_configured",
+    503,
+    "Identity provisioning is not configured. Configure EasySynQ’s Keycloak connection, then retry.",
+  ],
+  [
+    "dependency_unavailable",
+    503,
+    "A required EasySynQ service is unavailable. Check service health, then retry.",
+  ],
+] as const)(
+  "maps reissue %s to safe service-specific recovery copy",
+  async (code, status, expectedGuidance) => {
+    const leakedSubject = "reissue-sensitive-keycloak-subject";
+    let provisionCalls = 0;
+    server.use(
+      http.post("/api/v1/setup/administrator", () => {
+        provisionCalls += 1;
+        if (provisionCalls === 1) return HttpResponse.json(PROVISIONED, { status: 201 });
+        return HttpResponse.json(
+          {
+            code,
+            title: `unsafe reissue title ${leakedSubject}`,
+            detail: `unsafe reissue detail ${leakedSubject}`,
+            keycloak_subject: leakedSubject,
+          },
+          { status },
+        );
+      }),
+      http.post("/api/v1/setup/administrator/acknowledge", () =>
+        HttpResponse.json(
+          { code: "bootstrap_credential_superseded", title: "unsafe supersession detail" },
+          { status: 409 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    const view = renderStep();
+    await fillRequiredForm(user);
+    await user.click(screen.getByRole("button", { name: "Create administrator" }));
+    await user.click(
+      await screen.findByRole("button", { name: "I’ve saved it — Continue to sign in" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Issue a new temporary password" }));
+
+    const recovery = await screen.findByRole("alert", {
+      name: "New temporary password was not issued",
+    });
+    expect(recovery).toHaveTextContent(expectedGuidance);
+    expect(recovery).not.toHaveTextContent(`unsafe reissue title ${leakedSubject}`);
+    expect(recovery).not.toHaveTextContent(`unsafe reissue detail ${leakedSubject}`);
+    expect(recovery).not.toHaveTextContent(leakedSubject);
+    if (code === "dependency_unavailable") {
+      expect(recovery).not.toHaveTextContent("identity service");
+      expect(recovery).not.toHaveTextContent("Keycloak");
+    }
+    expect(await axe(view.container)).toHaveNoViolations();
+  },
+);
+
 test("bootstrap_invalid during reissue requires a focused current secret for the next provision only", async () => {
   const provisionBodies: unknown[] = [];
   const acknowledgeBodies: unknown[] = [];
@@ -860,6 +1003,16 @@ test.each([
     502,
     "The identity service is unavailable. Restore Keycloak connectivity, then try again.",
   ],
+  [
+    "keycloak_not_configured",
+    503,
+    "Identity provisioning is not configured. Configure EasySynQ’s Keycloak connection, then try again.",
+  ],
+  [
+    "dependency_unavailable",
+    503,
+    "A required EasySynQ service is unavailable. Check service health, then try again.",
+  ],
 ] as const)(
   "maps %s to safe actionable copy without identity-provider details",
   async (code, status, message) => {
@@ -888,7 +1041,13 @@ test.each([
     expect(document.body).not.toHaveTextContent(`unsafe title ${leakedSubject}`);
     expect(document.body).not.toHaveTextContent(`unsafe detail ${leakedSubject}`);
     expect(document.body).not.toHaveTextContent(leakedSubject);
-    if (code === "keycloak_unavailable") expect(await axe(view.container)).toHaveNoViolations();
+    if (
+      code === "keycloak_unavailable" ||
+      code === "keycloak_not_configured" ||
+      code === "dependency_unavailable"
+    ) {
+      expect(await axe(view.container)).toHaveNoViolations();
+    }
   },
 );
 
