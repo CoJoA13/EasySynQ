@@ -13,6 +13,9 @@ import redis.asyncio as aioredis
 
 from .config import get_settings
 
+BOOTSTRAP_REDIS_CONNECT_TIMEOUT_SECONDS = 2.0
+BOOTSTRAP_REDIS_READ_TIMEOUT_SECONDS = 2.0
+
 
 def redis_client(*, decode_responses: bool = False) -> Any:
     """A new async Redis client bound to ``settings.redis_url``. Supports both ``async with`` and a
@@ -20,4 +23,14 @@ def redis_client(*, decode_responses: bool = False) -> Any:
     callers; the readiness ping + the perm-epoch incr leave bytes (the prior behaviour)."""
     return aioredis.from_url(  # type: ignore[no-untyped-call]
         get_settings().redis_url, decode_responses=decode_responses
+    )
+
+
+def bootstrap_redis_client(*, decode_responses: bool = False) -> Any:
+    """A dedicated fail-fast client for bootstrap calls that may run under PostgreSQL locks."""
+    return aioredis.from_url(  # type: ignore[no-untyped-call]
+        get_settings().redis_url,
+        decode_responses=decode_responses,
+        socket_connect_timeout=BOOTSTRAP_REDIS_CONNECT_TIMEOUT_SECONDS,
+        socket_timeout=BOOTSTRAP_REDIS_READ_TIMEOUT_SECONDS,
     )

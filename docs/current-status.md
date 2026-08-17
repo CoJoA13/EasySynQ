@@ -1,6 +1,6 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-16"
+as_of: "2026-08-17"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
 last_shipped_slice: "S-first-admin-provisioning"
 migration_head: "0088"

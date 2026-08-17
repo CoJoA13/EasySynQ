@@ -702,16 +702,37 @@ async def _issue_and_record_credential(
     identity: CredentiallessIdentity,
     client: Any,
 ) -> tuple[str, str]:
-    cfg = await _locked_singleton(session)
-    _assert_claim(cfg, claim_id=claim_id, username=username)
-    await lock_admin_set(session, cfg.org_id)
-    await _assert_only_claim_administrator(session, cfg)
-    if cfg.bootstrap_admin_user_id != user_id:
-        raise ProblemException(
-            status=409,
-            code="bootstrap_not_ready",
-            title="The linked first administrator no longer matches",
-        )
+    while True:
+        cfg = await _locked_singleton(session)
+        _assert_claim(cfg, claim_id=claim_id, username=username)
+        await lock_admin_set(session, cfg.org_id)
+        await _assert_only_claim_administrator(session, cfg)
+        if cfg.bootstrap_admin_user_id != user_id:
+            raise ProblemException(
+                status=409,
+                code="bootstrap_not_ready",
+                title="The linked first administrator no longer matches",
+            )
+        if cfg.bootstrap_credential_receipt_hash is None:
+            break
+
+        # A password reset is irreversible relative to PostgreSQL. Publish a durable pending
+        # generation before touching Keycloak so rollback after the reset cannot resurrect the
+        # prior receipt for an inactive password. Retaining issued_at distinguishes recovery from
+        # the never-issued initial state; acknowledgment still performs the constant-time receipt
+        # comparison against NULL and reports the generation as superseded.
+        cfg.bootstrap_credential_receipt_hash = None
+        try:
+            await session.commit()
+        except Exception as exc:
+            await session.rollback()
+            raise ProblemException(
+                status=503,
+                code="dependency_unavailable",
+                title="Required bootstrap state could not be persisted",
+            ) from exc
+        # The commit releases both locks. Reacquire in canonical order and revalidate every
+        # invariant; a concurrent issuer may have promoted another active generation meanwhile.
 
     # The network call stays inside this row-lock boundary so acknowledgment and remint cannot
     # pass the issuance generation. See docs/debt/20260815215020-bootstrap-credential-lock.md.

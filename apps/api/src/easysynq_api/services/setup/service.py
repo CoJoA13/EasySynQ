@@ -38,7 +38,7 @@ from ...db.models.system_config import SetupState, SystemConfig
 from ...db.models.working_calendar import WorkingCalendar
 from ...logging import request_id_var
 from ...problems import ProblemException
-from ...redis_client import redis_client
+from ...redis_client import bootstrap_redis_client
 from ..audit.checkpoint import tamper_evidence_attested
 from ..backup import configure_backup_destination_check
 from ..vault import storage
@@ -56,6 +56,29 @@ _SHORT_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{1,31}$")
 _RL_KEY = "setup:bootstrap:fails"
 _RL_MAX = 5
 _RL_WINDOW_SECONDS = 900  # 5 attempts / 15 min (doc 08 §4)
+_RL_CHECK_LUA = """
+local window = tonumber(ARGV[1])
+if not window or window < 1 or window ~= math.floor(window) then
+  return redis.error_reply('invalid bootstrap rate-limit window')
+end
+
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return 0
+end
+local count = tonumber(raw)
+if not count or count < 0 or count ~= math.floor(count) then
+  return redis.error_reply('malformed bootstrap failure counter')
+end
+
+local remaining = redis.call('TTL', KEYS[1])
+if remaining == -1 then
+  redis.call('EXPIRE', KEYS[1], window)
+elseif remaining == -2 then
+  return 0
+end
+return count
+"""
 _RL_RECORD_FAILURE_LUA = """
 local window = tonumber(ARGV[1])
 if not window or window < 1 or window ~= math.floor(window) then
@@ -128,23 +151,28 @@ def _emit(
 
 
 def _redis() -> Any:
-    return redis_client(decode_responses=True)
+    return bootstrap_redis_client(decode_responses=True)
 
 
 async def _check_rate_limit() -> None:
     try:
         async with _redis() as client:
-            fails = await client.get(_RL_KEY)
-        if fails is not None:
-            failure_count = int(fails)
-            if failure_count < 0:
-                raise ValueError("malformed bootstrap failure counter")
-            if failure_count >= _RL_MAX:
-                raise ProblemException(
-                    status=429,
-                    code="rate_limited",
-                    title="Too many bootstrap attempts; try again later",
+            failure_count = int(
+                await client.eval(
+                    _RL_CHECK_LUA,
+                    1,
+                    _RL_KEY,
+                    str(_RL_WINDOW_SECONDS),
                 )
+            )
+        if failure_count < 0:
+            raise ValueError("malformed bootstrap failure counter")
+        if failure_count >= _RL_MAX:
+            raise ProblemException(
+                status=429,
+                code="rate_limited",
+                title="Too many bootstrap attempts; try again later",
+            )
     except ProblemException:
         raise
     except Exception as exc:
@@ -264,13 +292,25 @@ async def _load_config(
 ) -> SystemConfig:
     stmt = select(SystemConfig).where(SystemConfig.org_id == org_id)
     if lock:
-        stmt = stmt.with_for_update()
+        # A request may already hold this ORM identity from its pre-probe guard. Refresh it while
+        # taking the row lock so a concurrent setup transition cannot be hidden by cached state.
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     cfg = (await session.execute(stmt)).scalar_one_or_none()
     if cfg is None:  # pragma: no cover - 0012 seeds the singleton row
         raise ProblemException(
             status=409, code="setup_not_initialized", title="System is not initialized for setup"
         )
     return cfg
+
+
+def _require_acknowledged_setup(cfg: SystemConfig) -> None:
+    """Deny every authenticated setup seam until the credential receipt advanced the latch."""
+    if cfg.setup_state is not SetupState.IN_SETUP or cfg.bootstrap_consumed_at is None:
+        raise ProblemException(
+            status=409,
+            code="setup_incomplete",
+            title="Acknowledge the first-administrator credential before continuing setup",
+        )
 
 
 # --- use-cases --------------------------------------------------------------------------
@@ -285,6 +325,7 @@ async def get_setup_state(session: AsyncSession) -> SetupState:
 
 async def get_setup_detail(session: AsyncSession, actor: AppUser) -> dict[str, Any]:
     cfg = await _load_config(session, actor.org_id)
+    _require_acknowledged_setup(cfg)
     org = await session.get(Organization, actor.org_id)
     policy = await session.scalar(select(BackupPolicy).where(BackupPolicy.org_id == actor.org_id))
     return {
@@ -322,6 +363,8 @@ async def set_org_profile(
     session: AsyncSession, actor: AppUser, *, legal_name: str, short_code: str, timezone: str
 ) -> dict[str, Any]:
     """Set the org profile (G-E); timezone is authoritative for effective dates (R8)."""
+    cfg = await _load_config(session, actor.org_id, lock=True)
+    _require_acknowledged_setup(cfg)
     legal_name = legal_name.strip()
     short_code = short_code.strip().upper()
     if not legal_name:
@@ -378,6 +421,7 @@ async def verify_storage(
     """Verify the vault bucket enforces WORM (gate G-B, doc 08 §7) and record the result + the
     operator's object-lock-mode choice (D-7). PASS sets ``storage_config.worm_verified_at`` + emits
     WORM_VERIFIED; a bucket that does NOT enforce WORM is a 422 (the gate signal stays null)."""
+    _require_acknowledged_setup(await _load_config(session, actor.org_id))
     mode = object_lock_mode.strip().upper()
     if mode not in _OBJECT_LOCK_MODES:
         raise ProblemException(
@@ -395,13 +439,16 @@ async def verify_storage(
         )
     # Serialize per-org setup mutations on the system_config singleton (matching the administrator
     # state machine / finalize) so concurrent verification cannot lose the check-then-insert race.
-    await _load_config(session, actor.org_id, lock=True)
-    cfg = await session.scalar(select(StorageConfig).where(StorageConfig.org_id == actor.org_id))
-    if cfg is None:
-        cfg = StorageConfig(org_id=actor.org_id)
-        session.add(cfg)
-    cfg.worm_verified_at = _now()
-    cfg.object_lock_mode = mode
+    setup_cfg = await _load_config(session, actor.org_id, lock=True)
+    _require_acknowledged_setup(setup_cfg)
+    storage_cfg = await session.scalar(
+        select(StorageConfig).where(StorageConfig.org_id == actor.org_id)
+    )
+    if storage_cfg is None:
+        storage_cfg = StorageConfig(org_id=actor.org_id)
+        session.add(storage_cfg)
+    storage_cfg.worm_verified_at = _now()
+    storage_cfg.object_lock_mode = mode
     _emit(
         session,
         event_type="WORM_VERIFIED",
@@ -471,6 +518,7 @@ async def configure_backup(
             code="wal_pitr_unavailable",
             title="WAL/PITR is reserved for a later release (D-6); leave wal_pitr_enabled false",
         )
+    _require_acknowledged_setup(await _load_config(session, actor.org_id))
     ok, detail = await asyncio.to_thread(configure_backup_destination_check, destination)
     if not ok:
         raise ProblemException(
@@ -482,7 +530,8 @@ async def configure_backup(
 
     # Serialize per-org setup mutations on the system_config singleton (matches verify_storage) so a
     # concurrent same-org configure-backup cannot lose the check-then-insert race on UNIQUE(org_id).
-    await _load_config(session, actor.org_id, lock=True)
+    cfg = await _load_config(session, actor.org_id, lock=True)
+    _require_acknowledged_setup(cfg)
     policy = await session.scalar(select(BackupPolicy).where(BackupPolicy.org_id == actor.org_id))
     if policy is None:
         policy = BackupPolicy(org_id=actor.org_id)
@@ -521,6 +570,8 @@ async def trigger_restore_test(session: AsyncSession, actor: AppUser) -> dict[st
     finds it held, and SKIPS without persisting — so ``last_restore_test_result`` is unchanged and a
     poller sees no new result (the operator simply re-runs). The endpoint still returns 202; the
     enqueue succeeded, the drill just deduplicated against the in-flight one."""
+    cfg = await _load_config(session, actor.org_id, lock=True)
+    _require_acknowledged_setup(cfg)
     policy = await session.scalar(
         select(BackupPolicy.id).where(BackupPolicy.org_id == actor.org_id)
     )
@@ -530,6 +581,10 @@ async def trigger_restore_test(session: AsyncSession, actor: AppUser) -> dict[st
             code="backup_not_configured",
             title="Configure a backup destination before running the restore-test",
         )
+    # The locked, freshly refreshed guard authorizes this enqueue attempt. Release the singleton
+    # before entering Celery/Kombu: broker waits are outside PostgreSQL's lock boundary, so a
+    # blackholed broker cannot block setup/finalization database progress.
+    await session.commit()
     # Lazy import — tasks import services, so importing at module top would risk a cycle.
     from ...tasks.backup import backup_restore_test
 
@@ -554,6 +609,7 @@ async def configure_auth(
     the org. A failed probe → 422 ``auth_unavailable`` + AUTH_TEST_LOGIN_FAILED (signal stays null →
     no false-PASS). MFA is a logged acknowledgement only (enforcement is the reserved Part-11 seam,
     D3); local break-glass login is never disabled here, so the org cannot be locked out."""
+    _require_acknowledged_setup(await _load_config(session, actor.org_id))
     method = method.strip().upper()
     if method not in _AUTH_METHODS:
         raise ProblemException(
@@ -565,6 +621,7 @@ async def configure_auth(
     )
     if not verified:
         cfg = await _load_config(session, actor.org_id, lock=True)
+        _require_acknowledged_setup(cfg)
         cfg.auth_test_login_at = _now()
         cfg.auth_test_login_ok = False
         _emit(
@@ -586,6 +643,7 @@ async def configure_auth(
     # Serialize per-org setup mutations on the system_config singleton (matches verify_storage /
     # configure_backup) so a concurrent same-org configure-auth can't race the read-then-write.
     cfg = await _load_config(session, actor.org_id, lock=True)
+    _require_acknowledged_setup(cfg)
     cfg.auth_method = method
     cfg.auth_test_login_ok = True
     cfg.auth_test_login_at = _now()
@@ -616,10 +674,7 @@ async def configure_auth(
 async def finalize_setup(session: AsyncSession, actor: AppUser) -> dict[str, Any]:
     """Re-check the registered gates live and flip the latch to OPERATIONAL (doc 08 §14)."""
     cfg = await _load_config(session, actor.org_id, lock=True)
-    if cfg.setup_state == SetupState.OPERATIONAL:
-        raise ProblemException(
-            status=409, code="setup_already_complete", title="Setup is already complete"
-        )
+    _require_acknowledged_setup(cfg)
 
     status = await _gate_status(session, actor.org_id)
     failed = [

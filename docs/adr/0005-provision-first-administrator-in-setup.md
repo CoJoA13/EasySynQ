@@ -447,3 +447,73 @@ it could publish replacement authority while leaving a valid proof rate-limited.
 
 Replace this ordering with one transactional admission/proof store, or generation-scoped state with
 atomic rotation.
+
+## 2026-08-17 amendment — pending credential fence and acknowledged setup boundary
+
+### Context
+
+The active receipt digest was written in the same PostgreSQL transaction that followed the Keycloak
+password reset. On reissue, a failure committing that digest rolled PostgreSQL back to the prior active
+receipt even though Keycloak had already invalidated its password. A queued acknowledgment could then
+consume bootstrap authority for an unusable credential. Separately, the provisioned administrator could
+authenticate before acknowledgment and reach every latch-exempt authenticated setup route, including
+finalization, while setup still remained `UNINITIALIZED`.
+
+Bootstrap Redis reads and trusted-remint deletion could also wait without a bound while holding the
+singleton row, and admission returned a threshold legacy counter before repairing its missing TTL.
+
+### Decision
+
+Use the existing nullable credential receipt digest as a pending-generation fence. Before every reissue,
+while holding the singleton row and administrator-set locks, clear an active digest and commit that null
+state before resetting the Keycloak password. Retain the prior non-null issuance timestamp because a
+credential really was issued; the null digest means no generation is currently acknowledgeable. The
+commit releases both locks, so the issuer reacquires them in canonical singleton-then-administrator order
+and revalidates the claim, linked user, and administrator set. If another issuer promoted an active digest
+in the interval, repeat the pending transition before any reset. Hold both locks from a confirmed pending
+state through reset and promotion of the new digest. A post-reset promotion failure rolls back to the
+durable pending state, making every old receipt fail as `bootstrap_credential_superseded`; retry may reset
+and promote safely. Initial issuance already begins with a null digest and needs no extra pending commit.
+
+Every authenticated setup detail, organization, storage, backup, restore-test, authentication, and
+finalization service now requires exact `IN_SETUP` state plus non-null `bootstrap_consumed_at`. Guards run
+before external probes or enqueueing and are repeated under the singleton lock before state-changing
+commits. Locked rereads force a fresh ORM population so a cached pre-probe state cannot hide a concurrent
+transition. Restore-test enqueue authorization linearizes at that locked guard, then commits the read-only
+transaction before calling Celery so an unbounded broker wait cannot retain the singleton lock; a later
+state transition does not revoke the already-authorized enqueue attempt. Provisioning and login alone
+therefore cannot bypass receipt acknowledgment.
+
+Bootstrap-specific asynchronous and synchronous Redis clients use finite connect and read timeouts
+without changing unrelated Redis clients. Admission atomically validates the failure counter and repairs
+a no-TTL legacy key before applying the threshold. Timeout failures remain redacted and fail closed; a
+lock-owning database transaction rolls back before returning.
+
+### Consequences
+
+Post-reset database failure can suppress a password response but cannot revive acknowledgment authority
+for an inactive password. A pending generation is recoverable by the same claim and current setup proof,
+without a migration or public-contract change. Authenticated setup cannot advance or expose its sensitive
+detail until credential acknowledgment records consumption. Bootstrap Redis outages have a bounded lock
+cost, and legacy threshold counters expire instead of locking the installation indefinitely.
+
+The extra pending commit adds one database round trip to reissue and the Keycloak reset still runs while
+database locks are held. Those existing complexity and latency costs remain tracked in
+[`bootstrap-credential-receipt-state`](../debt/20260816092041-bootstrap-credential-receipt-state.md),
+[`bootstrap-credential-lock`](../debt/20260815215020-bootstrap-credential-lock.md), and
+[`bootstrap-admission-identity-coupling`](../debt/20260816024758-bootstrap-admission-identity-coupling.md).
+
+### Alternatives
+
+Restoring the prior receipt after failure was rejected because it can acknowledge an inactive password.
+Clearing both receipt digest and issuance timestamp was rejected because it would misrepresent a real
+prior issuance as never issued and return the wrong recovery state. Adding a generation column or new
+enum was unnecessary: the existing nullable digest expresses pending safely under the established lock
+protocol. Guarding only finalization was rejected because earlier authenticated setup reads, probes,
+writes, and enqueueing would still bypass the acknowledgment boundary.
+
+### Payoff trigger
+
+Replace the pending digest and lock-held reset when credential delivery and EasySynQ acknowledgment share
+a transactionally attested provider boundary. Remove the setup-service guard only if a future approved
+state machine provides an equivalent authenticated proof that the active credential was acknowledged.

@@ -38,5 +38,5 @@ def configure_logging(level: str = "INFO") -> None:
     root.handlers = [handler]
     root.setLevel(level.upper())
     # quiet noisy libraries to WARNING unless we're debugging
-    for noisy in ("uvicorn.access", "botocore", "urllib3"):
+    for noisy in ("uvicorn.access", "botocore", "urllib3", "httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(max(logging.WARNING, root.level))
