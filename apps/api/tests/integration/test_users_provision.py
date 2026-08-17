@@ -51,7 +51,16 @@ pytestmark = pytest.mark.integration
 
 _ADMIN = "System Administrator"
 _RECONCILED_USER_PROFILE = {
-    "attributes": [{"name": "email"}, {"name": "firstName"}, {"name": "lastName"}]
+    "attributes": [
+        {"name": "email"},
+        {"name": "firstName"},
+        {"name": "lastName"},
+        {
+            "name": "easysynqBootstrapClaim",
+            "permissions": {"view": ["admin"], "edit": ["admin"]},
+            "multivalued": False,
+        },
+    ]
 }
 
 # CONFIRMED production bug, found by these two tests (not a test defect) — see the report for full
