@@ -871,7 +871,7 @@ If the harness script did not change, omit it from `git add` and state that expl
 
 ---
 
-### Task 7: Converge authority, full evidence, and review threads
+### Task 7: Converge binding authority and current API documentation
 
 **Files:**
 
@@ -880,16 +880,14 @@ If the harness script did not change, omit it from `git add` and state that expl
 - Modify: `docs/15-api-design.md`
 - Modify: `apps/api/tests/unit/test_first_admin_contract.py`
 - Modify: `apps/api/tests/unit/test_deploy_configuration.py`
-- Modify: `.superpowers/sdd/2026-08-15-s-first-admin-provisioning/implementation-report.md`
-- Modify only with fresh full evidence: `docs/current-status.md`
-- Modify only with fresh full evidence: `docs/slice-history.md`
-- Verify unchanged unless an owner-visible residual changes: `docs/open-residuals.md`
+- Modify: `apps/api/tests/integration/test_users_provision.py`
+- Append evidence: `.superpowers/sdd/2026-08-16-s-first-admin-review-hardening/task-7-report.md`
 
 **Interfaces:**
 
 - R66 clarifies that acknowledgment binds the active shown credential generation.
 - Current docs describe reminted-secret acknowledgment, superseded-password reissue, unrelated-admin refusal, and marker-scoped profile correction without provider internals.
-- Evidence records exact fresh counts and boundaries; `baseline_commit` remains unchanged.
+- The ordinary-user integration fixture uses the same managed Keycloak marker profile as production.
 
 - [ ] **Step 1: Add executable documentation RED**
 
@@ -925,7 +923,237 @@ Add a dated R66 clarification matching the approved design. Update docs 08 and 1
 and response shapes, stable errors, recovery states, and no-Keycloak-console operator wording. Do not
 copy mutable test totals into manuals or change any owner-visible residual state.
 
-- [ ] **Step 3: Run all short/affected final-tree gates**
+- [ ] **Step 3: Converge the ordinary-user managed-profile fixture**
+
+Keep the production Keycloak profile unchanged. Extend the existing test fixture with the exact
+admin-only, non-multivalued `easysynqBootstrapClaim` attribute that production reconciliation now
+requires. Run the smallest ordinary-user case first, then its full file:
+
+```bash
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/integration/test_users_provision.py -k provision_user_success -q
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/integration/test_users_provision.py -q
+```
+
+- [ ] **Step 4: Verify and commit the Task 7 authority phase**
+
+Run the focused documentation contract, Ruff, mypy, authority, site-data, and diff checks. Append the
+RED/GREEN and fixture-convergence evidence to the Task 7 report. Commit the fixture independently from
+the authority prose so the scopes remain reviewable:
+
+```bash
+git add apps/api/tests/integration/test_users_provision.py
+git commit -m "test: converge managed Keycloak profile fixture"
+
+git add docs/decisions-register.md docs/08-setup-and-onboarding.md docs/15-api-design.md \
+  apps/api/tests/unit/test_first_admin_contract.py \
+  apps/api/tests/unit/test_deploy_configuration.py
+git commit -m "docs: clarify first-admin credential recovery"
+```
+
+---
+
+### Task 8: Add the host-only pre-operational administrator recovery command
+
+**Files:**
+
+- Modify: `apps/api/src/easysynq_api/cli/setup.py`
+- Modify: `scripts/easysynq`
+- Modify: `apps/api/tests/integration/test_setup.py`
+- Modify: `apps/api/tests/unit/test_deploy_configuration.py`
+- Modify: `docs/manuals/administrator-it-manual.md`
+- Modify: `docs/adr/0005-provision-first-administrator-in-setup.md`
+- Read and preserve: `docs/debt/20260816173328-uninitialized-admin-recovery.md`
+- Append evidence: `.superpowers/sdd/2026-08-16-s-first-admin-review-hardening/task-8-report.md`
+
+**Interfaces:**
+
+- Add `easysynq setup release-administrator-blocker --subject <keycloak-subject> [--org CODE]`.
+- The command is host-only, requires an independent incident/change record, and is valid only while
+  the organization is exactly `UNINITIALIZED`.
+- It removes only the named unrelated user's `System Administrator` assignment. It never deletes or
+  disables the Keycloak identity or `app_user`, removes another role, advances setup, adopts a claim,
+  consumes bootstrap proof, or grants a role.
+- Lock order is `system_config` singleton row `FOR UPDATE` then the per-organization administrator
+  advisory lock. All failure paths roll back.
+
+- [ ] **Step 1: Add focused RED tests for recovery semantics**
+
+Add real-database tests that prove:
+
+- the exact unrelated administrator assignment blocks public bootstrap before recovery;
+- recovery removes only that one assignment while preserving the `app_user`, Keycloak subject,
+  display name, status, non-administrator assignments, and historical database rows;
+- the claim-linked administrator is refused without mutation;
+- `IN_SETUP` and `COMPLETED` are refused without mutation;
+- an absent named user or already-absent assignment is safely repeatable and creates no persistent row;
+- the singleton lock is taken before `lock_admin_set_sync`;
+- an injected flush/commit failure rolls back the assignment removal; and
+- result/error text does not disclose claim IDs, secrets, passwords, provider details, or unrelated
+  administrator identities.
+
+Add a structural deployment test that initially fails because the host wrapper/help and setup CLI do
+not expose `release-administrator-blocker`.
+
+Run RED before implementation:
+
+```bash
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/integration/test_setup.py -k 'release_administrator_blocker' -q
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/unit/test_deploy_configuration.py -k 'administrator_blocker' -q
+```
+
+- [ ] **Step 2: Implement the minimal transactional command**
+
+In `cli/setup.py`, add a sync one-shot operation that:
+
+1. resolves the exact organization;
+2. locks its `SystemConfig` row with `populate_existing=True`;
+3. requires `SetupState.UNINITIALIZED`;
+4. acquires `lock_admin_set_sync(session, org.id)`;
+5. resolves the exact same-organization `AppUser` by Keycloak subject;
+6. refuses when `bootstrap_admin_user_id` is that user;
+7. resolves the seeded `System Administrator` role and exact assignment;
+8. deletes only that assignment and commits once; and
+9. rolls back every mutation-capable exception before emitting a generic operator-safe failure.
+
+Do not call Keycloak and do not create an `app_user`, role, or assignment. The no-user/no-assignment
+paths return a generic idempotent result without a persistent write. Add the argparse subcommand and
+host-wrapper help. Document the independent incident/change-record requirement and the exact refusal
+boundaries in the administrator manual. Amend ADR 0005 with the approved recovery boundary and link
+the already-registered debt record; do not register duplicate debt.
+
+- [ ] **Step 3: Run GREEN and affected transaction gates**
+
+Run the focused tests first, then the setup integration file and relevant static checks:
+
+```bash
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/integration/test_setup.py -k 'release_administrator_blocker' -q
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/unit/test_deploy_configuration.py -k 'administrator_blocker' -q
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest tests/integration/test_setup.py -q
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run ruff check \
+  src/easysynq_api/cli/setup.py tests/integration/test_setup.py \
+  tests/unit/test_deploy_configuration.py
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run mypy src
+```
+
+- [ ] **Step 4: Review and commit recovery independently**
+
+Obtain requirements and security/transaction review. Explicitly inspect lock ordering, rollback after
+ORM deletion, organization scoping, idempotency, claim-owner refusal, output redaction, and preservation
+of identity/history/non-admin roles. Append the report, then commit only the reviewed recovery scope:
+
+```bash
+git add apps/api/src/easysynq_api/cli/setup.py scripts/easysynq \
+  apps/api/tests/integration/test_setup.py \
+  apps/api/tests/unit/test_deploy_configuration.py \
+  docs/manuals/administrator-it-manual.md \
+  docs/adr/0005-provision-first-administrator-in-setup.md
+git commit -m "feat: recover blocked first-admin setup"
+```
+
+---
+
+### Task 9: Converge supported install paths and both migration boundaries
+
+**Files:**
+
+- Modify: `docs/runbooks/fresh-linux-setup.md`
+- Modify: `docs/manuals/installation-guide.md`
+- Modify: `scripts/easysynq`
+- Modify: `apps/api/tests/unit/test_deploy_configuration.py`
+- Modify: `apps/api/tests/unit/test_first_admin_contract.py`
+- Modify: `apps/api/tests/migration/test_migration_coherence.py`
+- Append evidence: `.superpowers/sdd/2026-08-16-s-first-admin-review-hardening/task-9-report.md`
+
+**Interfaces:**
+
+- Supported fresh installs never create a fixed/demo Keycloak identity before first-admin setup.
+- Operators mint the setup secret, open `/setup` without signing in, create the first administrator,
+  show/copy the temporary password, acknowledge the active credential generation, then sign in and
+  complete the required password change.
+- `just demo-user` remains only an explicitly labeled post-bootstrap development fixture, not part of
+  the supported first-install path.
+- Populated migration evidence independently covers `0087 -> 0086 -> 0087` and
+  `0088 -> 0087 -> 0088`.
+
+- [ ] **Step 1: Add install-path and migration RED tests**
+
+Extend executable documentation guards to reject `just demo-user`, fixed demo credentials, and
+sign-in-before-setup language in the supported Fedora/installation first-run sections. Require the
+exact `/setup` order and the host recovery command in the operator manual and CLI help.
+
+Extend populated migration coherence so one test proves both boundaries independently:
+
+1. at 0087, populate the claim/user binding, downgrade to 0086, prove only the 0087 claim columns,
+   foreign key, and index are removed while organization/user/setup base rows remain, then re-upgrade
+   to 0087 and prove nullable claim state is recreated cleanly;
+2. repopulate the 0087 claim, upgrade to 0088, populate the receipt digest, downgrade to 0087 and
+   prove the claim survives while only receipt storage disappears, then re-upgrade to 0088 and prove
+   the nullable receipt column returns without fabricating a digest.
+
+Run RED before document/test convergence:
+
+```bash
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/unit/test_deploy_configuration.py tests/unit/test_first_admin_contract.py \
+  -k 'fresh_linux or installation or first_admin or administrator_blocker' -q
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/migration/test_migration_coherence.py -k populated -q
+```
+
+- [ ] **Step 2: Update supported install and recovery guidance**
+
+Remove the pre-bootstrap demo-user step from both supported install paths and correct the host CLI
+help. Keep demo identity creation only in its clearly labeled post-bootstrap developer-fixture section.
+Document `release-administrator-blocker` as a narrow pre-operational break-glass tool requiring an
+independent incident/change record; do not present SQL, Keycloak-console manipulation, role deletion,
+or identity deletion as a normal recovery path.
+
+- [ ] **Step 3: Implement and verify both populated migration proofs**
+
+Change only migration coherence tests; do not alter revision source. Run the focused populated test,
+then the full migration test file and confirm Alembic has exactly one 0088 head:
+
+```bash
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/migration/test_migration_coherence.py -k populated -q
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest \
+  tests/migration/test_migration_coherence.py -q
+cd apps/api && UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run alembic heads
+```
+
+- [ ] **Step 4: Review and commit acceptance convergence**
+
+Review the supported install sequence and both populated downgrade/upgrade boundaries independently.
+Run Ruff, authority, site-data, and diff checks. Append the report and commit the bounded acceptance
+scope:
+
+```bash
+git add docs/runbooks/fresh-linux-setup.md docs/manuals/installation-guide.md \
+  scripts/easysynq apps/api/tests/unit/test_deploy_configuration.py \
+  apps/api/tests/unit/test_first_admin_contract.py \
+  apps/api/tests/migration/test_migration_coherence.py
+git commit -m "test: close first-admin acceptance gaps"
+```
+
+---
+
+### Task 10: Run final evidence, re-review the whole branch, and converge current truth
+
+**Files:**
+
+- Modify: `.superpowers/sdd/2026-08-15-s-first-admin-provisioning/implementation-report.md`
+- Modify only with fresh full evidence: `docs/current-status.md`
+- Modify only with fresh full evidence: `docs/slice-history.md`
+- Verify unchanged unless an owner-visible residual changes: `docs/open-residuals.md`
+- Append evidence: `.superpowers/sdd/2026-08-16-s-first-admin-review-hardening/task-10-report.md`
+
+- [ ] **Step 1: Run all short/affected final-tree gates**
 
 Run:
 
@@ -945,11 +1173,14 @@ git diff --check origin/main...HEAD
 Require Ruff, mypy, ESLint, build, contract, 0088 head, authority, site-data, and diff checks to pass.
 Record known diagnostics without upgrading them into coverage claims.
 
-- [ ] **Step 4: Run full suites sequentially as durable jobs**
+- [ ] **Step 2: Run full suites sequentially as durable jobs**
 
-Use these exact workloads, never overlapping Docker-heavy live/integration:
+Use these exact workloads, never overlapping Docker-heavy live/integration. Because Task 8 modifies the
+setup CLI module used by the live harness, obtain one fresh final-tree live proof before the full
+integration suite:
 
 ```bash
+bash scripts/test-first-admin-keycloak.sh
 cd apps/api && env UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest tests/unit -m unit
 cd apps/api && env UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest tests/integration -m integration
 cd apps/api && env UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest tests/integration/test_contract_response_schemas.py -m contract
@@ -960,31 +1191,41 @@ npm --prefix apps/web run test:browser
 Retrieve bounded results and record exact files/tests/passed/skipped counts, one-worker Chromium
 count, elapsed time, and diagnostics. A failed, cancelled, partial, or unavailable job is not a pass.
 
-- [ ] **Step 5: Perform two independent whole-branch reviews**
+- [ ] **Step 3: Perform two independent whole-branch re-reviews**
 
 Review `origin/main...HEAD` against R64–R66 and both approved designs. Requirements review covers all
-five findings, migration, contract, compatibility, install/browser/live behavior, and evidence truth.
+prior findings, both migration boundaries, recovery safety, contract, compatibility,
+install/browser/live behavior, and evidence truth.
 Security/code-quality review explicitly covers row-lock/commit/savepoint ordering, ORM expiry and
 rollback, stale receipt constant-time behavior, administrator existence disclosure, Keycloak marker
 and full-representation validation, external-update debt, secret/log/cache/storage boundaries, and
-live cleanup. Resolve every Critical/Important finding with a focused RED/GREEN round; do not merely
-document an unfixed merge blocker.
+live cleanup. It also reviews recovery organization scoping, lock order, exact-role removal,
+claim-owner refusal, rollback, idempotency, and identity/history preservation. Resolve every
+Critical/Important finding with a focused RED/GREEN round; do not merely document an unfixed merge
+blocker.
 
-- [ ] **Step 6: Update evidence only from accepted fresh results**
+- [ ] **Step 4: Update evidence only from accepted fresh results**
 
 Append a dated review-hardening section to the implementation report. Update `current-status.md` and
 the top Identity Onboarding slice-history entry only with freshly retrieved counts, migration head
 0088/next 0089, contract hash, and required Chromium/live evidence. Keep `baseline_commit` unchanged.
 Leave `open-residuals.md` byte-identical unless an existing `RES-*` closure contract was actually met.
+Record the supported-install and host-recovery compatibility decisions without claiming SMTP,
+Firefox/WebKit, actual assistive-technology use, deployment, general live acceptance, or disposable
+Fedora proof.
 
-- [ ] **Step 7: Run post-document gates and cleanup checks**
+- [ ] **Step 5: Run post-document gates and exact cleanup checks**
 
 Re-run authority, site-data, contracts-check, Alembic head, changed-range diff, and the static gates
 affected by documentation/generated changes. Confirm feature worktree clean except intended staged
 files; primary checkout still contains only unrelated `.superdesign/`; `.env`, Playwright artifacts,
 and exact live-project Docker resources are absent; unrelated `/tmp` worktree records remain untouched.
+Before deleting generated Playwright artifacts, validate the exact three paths
+`apps/web/.playwright-dist`, `apps/web/playwright-report`, and `apps/web/test-results`, confirm none is a
+symlink/reparse point, and remove only those disposable outputs. Report that removal as non-recoverable
+generated-test cleanup.
 
-- [ ] **Step 8: Commit final evidence without pushing**
+- [ ] **Step 6: Commit final evidence without pushing**
 
 Stage only the reviewed authority/evidence files and commit:
 
@@ -1014,4 +1255,7 @@ all commits and evidence to the owner; do not push or resolve GitHub threads unt
 - [ ] Full API unit, integration, contract, Vitest, and Chromium totals are freshly recorded or explicitly left unchanged when not rerun.
 - [ ] Ruff, mypy, ESLint, build, contracts, authority, site-data, and diff gates pass on the final tree.
 - [ ] Two independent whole-branch reviews have no unresolved Critical or Important finding.
+- [ ] Supported first-install docs never create or sign in as a demo identity before `/setup` first-admin creation.
+- [ ] Host-only blocker recovery is `UNINITIALIZED`-only, exact-subject, claim-owner refusing, transactionally rolled back on failure, and removes only the named System Administrator assignment.
+- [ ] Populated `0087 -> 0086 -> 0087` and `0088 -> 0087 -> 0088` migration proofs both pass.
 - [ ] No `.env`, Playwright artifact, live Docker resource, secret, site data, unrelated worktree edit, push, merge, deployment, or GitHub-thread mutation remains.
