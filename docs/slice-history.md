@@ -47,13 +47,14 @@ owner-approved [`design`](superpowers/specs/2026-08-15-s-first-admin-provisionin
 Keycloak bootstrap with an in-app first-run flow.
 
 On a fresh installation, `/setup` now creates the first Keycloak identity and EasySynQ user, assigns the
-seeded System Administrator role, and presents a generated temporary password once. Keycloak requires the
-administrator to replace that credential at first sign-in. Provisioning authority exists only while setup
-is `UNINITIALIZED`, accepts the one-time expiring EasySynQ bootstrap proof instead of a bearer token, and
-never returns a Keycloak subject. After successful acknowledgment, the SPA clears its volatile credential
-state. The public acknowledgment route additionally accepts only the narrowly fenced matching replay of a
-completed claim while setup is `IN_SETUP`; an unconsumed expired proof, incomplete claim, missing
-administrator assignment, or mismatch still fails closed.
+seeded System Administrator role, and presents a generated temporary password and credential receipt once.
+Keycloak requires the administrator to replace that credential at first sign-in. Provisioning authority
+exists only while setup is `UNINITIALIZED`, accepts the one-time expiring EasySynQ bootstrap proof instead
+of a bearer token, and never returns a Keycloak subject. After successful acknowledgment, the SPA clears
+its volatile credential, receipt, proof, and profile state. The public acknowledgment route additionally
+accepts only the narrowly fenced matching replay of a completed claim while setup is `IN_SETUP`; an
+unconsumed expired proof, stale receipt, incomplete claim, unrelated administrator assignment, or mismatch
+still fails closed.
 
 A durable singleton claim and opaque Keycloak recovery marker make partial cross-system failure retryable
 without deleting an identity or selecting a second administrator. The flow creates the Keycloak identity
@@ -61,7 +62,16 @@ without a credential, commits the EasySynQ user and role state, then sets the te
 events record only completed state changes and contain no proof, password, service credential, recovery
 marker, or subject. Failed-proof accounting uses an atomic expiring Redis operation, and both public
 endpoints recheck the limit inside the PostgreSQL singleton lock so concurrent invalid requests consume one
-serialized budget.
+serialized budget. A malformed negative Redis reader value now fails closed as the existing redacted
+dependency-unavailable problem.
+
+Review hardening binds acknowledgment to the active password generation: each successful reset rotates a
+high-entropy receipt and persists only its SHA-256 digest. A reminted setup proof can acknowledge the same
+still-visible password and receipt; a stale receipt consumes nothing and exposes an explicit reissue path.
+A definitive create-time validation rejection releases only a claim that owns no identity, user, or
+credential, while ambiguous and identity-owning states retain it. Recovery retries may reconcile display
+name and optional profile fields only on the exact marker-owned Keycloak identity and linked EasySynQ user,
+preserving every unrelated Keycloak representation field.
 
 The shared supported username is now `strip().lower()` before bootstrap claim binding, Keycloak
 lookup/create, response/audit projection, and ordinary `/users/provision`; display-name case is preserved.
@@ -72,56 +82,75 @@ built-in email, first-name, and last-name profile fields are reconciled to optio
 unrelated policy fields.
 
 Migration `0087_first_admin_bootstrap` adds nullable claim id, bound username, linked user, claimed-at, and
-credential-issued-at state plus the additive audit enum value; the proof hash and consumed timestamp remain
-the pre-existing bootstrap fields from migration `0012`. Existing installations read the new claim state
-as no pending claim. The populated coherence proof passed upgrade/downgrade/re-upgrade and Alembic reported
-the single `0087` head with `0088` next. The old authenticated `POST /setup/bootstrap`, direct
-`bootstrap_admin` helper, fixed `qmsadmin` appliance creation, and human password in the setup sheet are
-removed atomically under R65; all supported install paths now converge on the browser flow.
+credential-issued-at state plus the additive audit enum value; migration `0088_bootstrap_credential` adds
+the nullable bounded receipt digest. The proof hash and consumed timestamp remain the pre-existing
+bootstrap fields from migration `0012`. Existing installations read the new state as no pending claim or
+receipt. The populated coherence proof independently passed `0087 -> 0086 -> 0087` and
+`0088 -> 0087 -> 0088`; Alembic reported the single `0088` head with `0089` next. The old authenticated
+`POST /setup/bootstrap`, direct `bootstrap_admin` helper, fixed `qmsadmin` appliance creation, and human
+password in the setup sheet are removed atomically under R65; supported production and developer first-run
+sections now open public `/setup`, create and acknowledge the first administrator, and sign in only
+afterward.
+
+If an unrelated System Administrator assignment blocks setup, the host-only `easysynq setup
+release-administrator-blocker --subject <keycloak-subject> [--org CODE]` command is available only while
+setup is `UNINITIALIZED`. Under the singleton-then-administrator lock order it refuses the claim owner and
+removes only the exact subject's System Administrator assignment while preserving the Keycloak identity,
+EasySynQ user, other roles, and historical attribution. It requires an independent incident/change record.
 
 OpenAPI, generated API/web artifacts, and the contract lock were regenerated through the repository
 command. The canonical bundle ends in exactly one LF and hashes to
-`b0bf7d0ac437a85cd171096520fb9499e608577d45bb861fec0a8ad53065f78d`. The generator now runs the pinned
+`5ab98c4a060563a8d1ea4fd2c57eba5a7a2923d69b52bd9ef623d6a528f98a58`. The generator now runs the pinned
 Ruff formatter and emits only the generated model's required `E501`, `RUF001`, and `S105` exemptions, so
 repeated generation, contract checking, and commit hooks agree byte-for-byte. The paid
 `generated-contract-eof-hook` debt record was deleted.
 
-Fresh focused evidence passed 153 API tests, 98 setup/users/backup integration tests, the 1/1 populated
-migration proof, 5 web files/87 tests, and 40/40 synthetic Chromium tests with one worker and zero retries.
-Fresh static evidence passed Ruff format over 750 files, Ruff lint, strict mypy over 444 source files, web
-ESLint, and a production build of 1,107 modules with only the known large-chunk advisory. The executable CI
-workflow remains eleven jobs and fifteen expanded checks.
+Fresh focused evidence passed the populated 1/1 migration proof, 8 exact-subject recovery integrations, 3
+CLI/wrapper dispatch tests, and 15 supported-install/first-admin guards. The final review fixes additionally
+passed 211 setup/authority/content units, 6 real-Redis integration tests, and 189 exact bearer-free
+authority/deployment/content tests. Fresh static evidence passed Ruff format over 750 files, Ruff lint,
+strict mypy over 444 source files, web ESLint, and a production build of 1,107 modules with only the known
+large-chunk advisory. Executable workflow parsing remains eleven jobs and fifteen expanded checks.
 
-Durable complete suites passed 1,789 API unit tests with one expected release-only image-digest skip; 1,137
-integration tests with two shared-database skips, 284 deselected, and three known testcontainers
-deprecations; all 284 published response schemas; and all 267 Vitest files/1,940 tests. Vitest retained only
-Node's known `localStorage` warning. The narrow live job `job-msvic4ai-947a887c` passed 1/1 Chromium test in
-2.8 seconds with one worker and zero retries: it submitted a mixed-case username, asserted the canonical
-lowercase response, completed mandatory password replacement with that username, and rejected the obsolete
-temporary password from a clean context. Teardown removed the exact Compose project's containers, volumes,
-network, and all six local images. Known diagnostics were npm's expected `using --force` warning inside the
-isolated build, `NO_COLOR`/`FORCE_COLOR`, and the Vite chunk advisory.
+Fresh post-review durable backend suites passed 1,835 API unit tests with one expected release-ceremony
+image-digest skip (`job-mswq4zse-b59b5405`, 30.33s) and 1,162 integration tests with two expected
+shared-database skips, 284 deselected, and three registered Testcontainers deprecations
+(`job-mswq94op-73d090ea`, 828.02s). Unaffected final-tree evidence remains valid: all 284 published
+response schemas (`job-mswlweou-9b17e09e`), all 267 Vitest files/1,944 tests
+(`job-mswm2hb9-92fba980`), and 40/40 synthetic Chromium tests with one worker and zero retries
+(`job-mswm9e51-7a34ed2b`). The narrow live job `job-mswlg4ft-b05efb99` passed 1/1 Chromium test in 2.6
+seconds with one worker and zero retries, completed mandatory password replacement, and rejected the
+obsolete temporary password. Teardown removed the exact `easysynq-first-admin-32b1b175ba35` project's
+containers, volumes, network, and six local images.
 
-Whole-branch review produced two correction rounds before the final clean verdict. The first complete
-integration run exposed eight stale backup bootstrap helpers; they were moved to the first-administrator
-contract with an explicit fake shared identity provider. Requirements/security review then found a
-concurrent rate-limit bypass, non-atomic Redis TTL handling, stale reset wording, expired consumed-proof
-replay failure, mixed-case identity stranding, and generated-contract EOF/hook drift. Focused RED/GREEN
-proofs closed each finding. A final minor review caught two remaining response/doc permission descriptions;
-their two focused regressions passed after correction. Independent requirements and security reviewers then
-reported no Critical, Important, or Minor findings.
+Whole-branch review produced focused correction rounds before the final clean verdict. The initial
+implementation review closed backup-helper, rate-limit concurrency/TTL, reset-authority, expired replay,
+username canonicalization, contract-generation, and response/documentation findings. Review hardening then
+closed stale-receipt consumption, unrelated-administrator, claim-release, profile-reconciliation,
+reminted-proof/reissue, supported-install, recovery, and populated-migration acceptance gaps. The final
+requirements/security pass found one authority conflict and two Minor current-source/malformed-counter
+issues; commit `4ea6e78c5edf52a2666a6bee1130ace34ab19b56` corrected them. Its scoped review found one remaining
+Important guard weakness; owner-authorized commit `1f6f12def9ddb539711ceb4b382e3e28f4c1f87e` documented and
+enforced the exact nine-operation bearer-free allowlist. The final scoped re-review reported no unresolved
+Critical or Important finding.
 
-The deliberate cross-system claim state machine, credential-issuance row lock, non-CAS Keycloak profile
-reconciliation, required-live-gate CI omission, and Chromium-only responsive cohort remain registered debt.
-The new `bootstrap-admission-identity-coupling` record mirrors ADR 0005's custom Redis admission and
-Keycloak-compatible canonicalization decision. No owner-visible `RES-*` closure contract changed, so
+Those nine application API operations are categorized as public health/metadata/setup routing
+(`GET /healthz`, `GET /readyz`, `GET /auth/config`, `GET /setup/state`), bootstrap-secret-authorized
+mutations (`POST /setup/administrator`, `POST /setup/administrator/acknowledge`), and
+signed-capability-authorized access (`GET /verify`, `GET /evidence-packs/shared`,
+`GET /evidence-packs/shared/download`). Signed share access remains authorized and scope-bounded; ordinary
+operations, QMS content, and customer/site data stay authenticated and authorized.
+
+The deliberate cross-system claim state machine, credential-receipt/issuance row lock, provider-call lock
+duration, non-CAS Keycloak profile reconciliation, bootstrap admission coupling, host-only uninitialized
+administrator recovery, required-live-gate CI omission, and Chromium-only responsive cohort remain
+registered debt. No owner-visible `RES-*` closure contract changed, so
 [`open-residuals.md`](open-residuals.md) remains unchanged.
 
 No SMTP delivery, Firefox, WebKit, NVDA, JAWS, VoiceOver, Orca, or other actual assistive-technology session
-ran. No deployment, general Keycloak administration UI, external identity federation, broader deployed
-application acceptance, or disposable Fedora proof is claimed. The live-stack claim is limited to the
-first-administrator flow, and the Docker-backed pytest and migration claims are limited to the exact gates
-above.
+ran. No deployment, general live acceptance beyond the narrow first-administrator flow, or disposable
+Fedora proof is claimed. The Docker-backed pytest, Keycloak, and populated migration claims are limited to
+the exact gates above.
 
 ## PROGRAMME 1 — frontend resilience and accessibility
 

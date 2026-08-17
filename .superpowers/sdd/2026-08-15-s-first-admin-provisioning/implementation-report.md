@@ -254,6 +254,116 @@ Critical, Important, or Minor finding. Commit `8926c00ab95a1d89d9f4310b3668dc22d
 Ruff format, strict mypy, EOF/whitespace/merge/large-file guards, hardcoded-secret detection, repository
 authority, and OpenAPI lint hooks.
 
+## Review-hardening convergence — 2026-08-16
+
+The approved S-first-admin-review-hardening work refined the completed slice without changing its
+browser-first, no-SMTP outcome or R64 ordering/non-deletion boundary.
+
+### Observable and security corrections
+
+- Every successful temporary-password reset rotates a high-entropy `credential_receipt`; only its SHA-256
+  digest is persisted. Provision returns the plaintext receipt beside the shown-once password, and the SPA
+  retains both only in component memory. Acknowledgment proves the current setup secret and active receipt
+  in constant time. A stale receipt returns `bootstrap_credential_superseded`, consumes nothing, and
+  requires explicit reissue; a reminted setup secret can acknowledge the same still-current generation.
+- Public bootstrap refuses every System Administrator assignment other than the user linked to the active
+  claim, and performs that check only after the generic-denial setup proof boundary. It cannot be used as
+  an administrator-existence oracle. A definitive create-time validation rejection releases only an
+  unowned claim; timeouts, conflicts, marked identities, linked users, and ambiguous states retain it.
+- Recovery retries keep the canonical username fixed and reconcile normalized display/profile values only
+  on the exact marker-owned Keycloak identity and linked EasySynQ user. The whole-representation update
+  preserves every unrelated Keycloak field, required action, federation link, custom attribute, and
+  bootstrap marker.
+- Supported production and developer first-install sections open public `/setup`, create the first
+  administrator, save the shown credential, acknowledge its active generation, and only then sign in and
+  change the temporary password. Demo fixture creation remains explicitly post-bootstrap.
+- Host-only recovery uses `easysynq setup release-administrator-blocker` with an exact subject and optional
+  organization code. It requires `UNINITIALIZED`, locks singleton then administrator set, refuses the claim owner,
+  removes only the named user's System Administrator assignment, preserves the identity/user/other
+  roles/history, rolls back on failure, and requires an independent incident/change record.
+- The application API has exactly nine bearer-free operations in three authorization categories: public
+  health/metadata/setup routing (`GET /healthz`, `GET /readyz`, `GET /auth/config`, `GET /setup/state`);
+  bootstrap-secret-authorized mutations (`POST /setup/administrator`,
+  `POST /setup/administrator/acknowledge`); and signed-capability-authorized access (`GET /verify`,
+  `GET /evidence-packs/shared`, `GET /evidence-packs/shared/download`). Capability routes are authorized and
+  scope-bounded, not anonymous QMS-content access. Ordinary operations, QMS content, and customer/site data
+  remain authenticated and authorized.
+
+Migration `0088_bootstrap_credential` adds the nullable bounded receipt digest. The populated coherence
+proof independently traversed `0087 -> 0086 -> 0087` and `0088 -> 0087 -> 0088`, preserving identity and
+setup state and restoring nullable storage without fabricating claim or receipt values. Alembic reports one
+`0088_bootstrap_credential` head, making `0089` next.
+
+### Focused final-tree evidence
+
+```text
+release-administrator-blocker integration selector
+=> 8 passed, 70 deselected; 3 registered Testcontainers deprecations
+
+administrator-blocker CLI/wrapper selector
+=> 3 passed, 79 deselected
+
+fresh-linux/install/first-admin/administrator-blocker content selector
+=> 15 passed, 72 deselected
+
+populated migration coherence
+=> 1 passed; registered PostgreSQL Testcontainers deprecation
+
+final authority/comment/negative-counter fix cohorts
+=> 211 setup/authority/content units and 6 real-Redis integrations passed
+
+exact nine-operation authority/OpenAPI guard cohort
+=> 189 authority/deployment/content tests passed
+```
+
+The negative Redis-counter regression first failed because `-1` bypassed `_check_rate_limit`, then passed
+after malformed negative reader state was routed through the existing redacted
+`503 dependency_unavailable` boundary. The exact bearer-free guard mutations first demonstrated that an
+added public `/documents` claim or removed authenticated boundary could pass the prior presence-only guard;
+the final exact-set authority/OpenAPI guard rejects those mutations.
+
+### Accepted durable evidence
+
+| Job | Exact workload | Accepted result |
+| --- | --- | --- |
+| `job-mswq4zse-b59b5405` | `env UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest tests/unit -m unit` | Exit 0; 1,835 passed; 1 expected release-ceremony image-digest skip; 30.33s. |
+| `job-mswq94op-73d090ea` | `env UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest tests/integration -m integration` | Exit 0; 1,162 passed; 2 expected shared-database skips; 284 deselected; 3 registered Testcontainers deprecations; 828.02s. |
+| `job-mswlweou-9b17e09e` | `env UV_CACHE_DIR=/tmp/easysynq-uv-cache uv run pytest tests/integration/test_contract_response_schemas.py -m contract` | Exit 0; 284/284 passed; 3 registered Testcontainers deprecations; 251.84s. |
+| `job-mswm2hb9-92fba980` | `npm --prefix apps/web test` | Exit 0; 267/267 files and 1,944/1,944 tests; 299.02s; known Node `localStorage` diagnostics. |
+| `job-mswm9e51-7a34ed2b` | `npm --prefix apps/web run test:browser` | Exit 0; 40/40 Chromium tests; 16.4s; one worker; zero retries; known Vite chunk, Node `localStorage`, and `NO_COLOR` diagnostics. |
+| `job-mswlg4ft-b05efb99` | `bash scripts/test-first-admin-keycloak.sh` | Exit 0; 1/1 live Chromium test; 2.6s; one worker; zero retries; exact project `easysynq-first-admin-32b1b175ba35` removed its containers, volumes, network, and six local images. |
+
+The API unit/integration jobs were rerun after the final runtime negative-counter fix. Contract, Vitest,
+synthetic Chromium, and narrow live evidence remain accepted final-tree evidence because commits
+`4ea6e78c5edf52a2666a6bee1130ace34ab19b56` and
+`1f6f12def9ddb539711ceb4b382e3e28f4c1f87e` changed no API/OpenAPI response, contract, web/browser,
+provider, installation, or exercised live-flow surface. No failed, cancelled, partial, unavailable,
+skipped, deselected, warning-bearing, or retried result is upgraded beyond the exact scope above.
+
+### Static, contract, topology, and review verdict
+
+Ruff format reported 750 files already formatted; Ruff lint passed; strict mypy found no issues in 444
+source files; web ESLint and the production TypeScript/Vite build passed, transforming 1,107 modules with
+the existing large-chunk advisory. Contract checking is in sync at SHA-256
+`5ab98c4a060563a8d1ea4fd2c57eba5a7a2923d69b52bd9ef623d6a528f98a58`. Executable CI parsing finds 11
+job definitions and 15 expanded checks.
+
+The final whole-branch review reported no Critical finding and raised one authority Important plus two
+Minor current-source/malformed-counter findings. Commit `4ea6e78c5edf52a2666a6bee1130ace34ab19b56`
+closed those findings; its scoped review found one remaining Important guard weakness. The owner authorized
+one narrow correction, and commit `1f6f12def9ddb539711ceb4b382e3e28f4c1f87e` documented and enforced the
+exact nine-operation allowlist. The final scoped requirements/security re-review reported no unresolved
+Critical or Important finding.
+
+The implementation compatibility baseline remains
+`1dcbc2bc12b14e11f037a657d44659412a7a39c0`. Existing `OPERATIONAL` and legitimate `IN_SETUP`
+installations retain their upgrade path; no compatibility shim revives the provisional endpoint or fixed
+demo administrator. No owner-visible `RES-*` closure contract changed, so `docs/open-residuals.md` remains
+byte-identical.
+
+No SMTP delivery, Firefox, WebKit, actual assistive-technology session, deployment, general live acceptance
+beyond the narrow first-administrator flow, or disposable Fedora proof was run or claimed.
+
 ## Debt and residual state
 
 Open, deliberate debt:
