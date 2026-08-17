@@ -7,11 +7,26 @@ import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, expect, test, vi } from "vitest";
 import { App, LegacyImportRedirect } from "./App";
 import { AuthContext, type AuthState } from "./lib/auth";
+import type { FirstAdministratorProvisioned } from "./lib/types";
 import { server } from "./test/msw/server";
 import { recordsFixture } from "./test/msw/handlers";
 import { renderWithProviders, TEST_AUTH } from "./test/render";
 
 const routeCrash = vi.hoisted(() => ({ library: false }));
+
+const APP_FIRST_ADMIN_RECEIPT = "R".repeat(43);
+const APP_FIRST_ADMIN_PROVISIONED: FirstAdministratorProvisioned = {
+  administrator: {
+    id: "ad000001-0001-0001-0001-000000000001",
+    username: "first.admin",
+    display_name: "First Administrator",
+    email: null,
+    status: "INVITED",
+  },
+  temporary_password: "New-Only-Temporary-Password-8",
+  credential_receipt: APP_FIRST_ADMIN_RECEIPT,
+  password_delivery: "shown_once",
+};
 
 vi.mock("./features/library/LibraryPage", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./features/library/LibraryPage")>();
@@ -394,7 +409,9 @@ test("IN_SETUP without a token uses the existing latch and starts login exactly 
 
   renderWithProviders(<App />, { route: "/library", auth: noTokenAuth(login) });
 
-  expect(await screen.findByRole("heading", { name: "Sign in to continue setup" })).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { name: "Sign in to continue setup" }),
+  ).toBeInTheDocument();
   await waitFor(() => expect(login).toHaveBeenCalledTimes(1));
   expect(sessionStorage.getItem("es_auth_redirect")).toBe("1");
   expect(setupDetailReads).toBe(0);
@@ -406,6 +423,7 @@ test("administrator acknowledgment refetches setup state and starts login exactl
   const login = vi.fn(async () => undefined);
   let stateReads = 0;
   let setupDetailReads = 0;
+  let acknowledgeBody: unknown;
   server.use(
     http.get("/api/v1/setup/state", () => {
       stateReads += 1;
@@ -418,27 +436,15 @@ test("administrator acknowledgment refetches setup state and starts login exactl
       return HttpResponse.json({});
     }),
     http.post("/api/v1/setup/administrator", () =>
-      HttpResponse.json(
-        {
-          administrator: {
-            id: "ad000001-0001-0001-0001-000000000001",
-            username: "first.admin",
-            display_name: "First Administrator",
-            email: null,
-            status: "INVITED",
-          },
-          temporary_password: "New-Only-Temporary-Password-8",
-          password_delivery: "shown_once",
-        },
-        { status: 201 },
-      ),
+      HttpResponse.json(APP_FIRST_ADMIN_PROVISIONED, { status: 201 }),
     ),
-    http.post("/api/v1/setup/administrator/acknowledge", () =>
-      HttpResponse.json({
+    http.post("/api/v1/setup/administrator/acknowledge", async ({ request }) => {
+      acknowledgeBody = await request.json();
+      return HttpResponse.json({
         setup_state: "IN_SETUP",
         admin_user_id: "ad000001-0001-0001-0001-000000000001",
-      }),
-    ),
+      });
+    }),
   );
 
   renderWithProviders(<App />, { route: "/setup", auth: noTokenAuth(login) });
@@ -454,12 +460,17 @@ test("administrator acknowledgment refetches setup state and starts login exactl
   expect(stateReads).toBe(2);
   expect(setupDetailReads).toBe(0);
   expect(sessionStorage.getItem("es_auth_redirect")).toBe("1");
+  expect(acknowledgeBody).toEqual({
+    secret: "one-time-setup-secret",
+    credential_receipt: APP_FIRST_ADMIN_RECEIPT,
+  });
 });
 
 test("acknowledgment state-refetch failure stays on App recovery without login until Retry succeeds", async () => {
   const user = userEvent.setup();
   const login = vi.fn(async () => undefined);
   let stateReads = 0;
+  let acknowledgeBody: unknown;
   server.use(
     http.get("/api/v1/setup/state", () => {
       stateReads += 1;
@@ -470,27 +481,15 @@ test("acknowledgment state-refetch failure stays on App recovery without login u
       return HttpResponse.json({ setup_state: "IN_SETUP" });
     }),
     http.post("/api/v1/setup/administrator", () =>
-      HttpResponse.json(
-        {
-          administrator: {
-            id: "ad000001-0001-0001-0001-000000000001",
-            username: "first.admin",
-            display_name: "First Administrator",
-            email: null,
-            status: "INVITED",
-          },
-          temporary_password: "New-Only-Temporary-Password-8",
-          password_delivery: "shown_once",
-        },
-        { status: 201 },
-      ),
+      HttpResponse.json(APP_FIRST_ADMIN_PROVISIONED, { status: 201 }),
     ),
-    http.post("/api/v1/setup/administrator/acknowledge", () =>
-      HttpResponse.json({
+    http.post("/api/v1/setup/administrator/acknowledge", async ({ request }) => {
+      acknowledgeBody = await request.json();
+      return HttpResponse.json({
         setup_state: "IN_SETUP",
         admin_user_id: "ad000001-0001-0001-0001-000000000001",
-      }),
-    ),
+      });
+    }),
   );
 
   renderWithProviders(<App />, { route: "/setup", auth: noTokenAuth(login) });
@@ -511,6 +510,10 @@ test("acknowledgment state-refetch failure stays on App recovery without login u
   expect(document.body).not.toHaveTextContent("one-time-setup-secret");
   expect(stateReads).toBe(2);
   expect(login).not.toHaveBeenCalled();
+  expect(acknowledgeBody).toEqual({
+    secret: "one-time-setup-secret",
+    credential_receipt: APP_FIRST_ADMIN_RECEIPT,
+  });
 
   await user.click(screen.getByRole("button", { name: "Try again" }));
 
@@ -627,10 +630,12 @@ test("operational app renders the shell + Library at /library", async () => {
 
 test("operational app routes /records through the shell and calls the row-filtered API", async () => {
   let calls = 0;
-  server.use(http.get("/api/v1/records", () => {
-    calls += 1;
-    return HttpResponse.json(recordsFixture);
-  }));
+  server.use(
+    http.get("/api/v1/records", () => {
+      calls += 1;
+      return HttpResponse.json(recordsFixture);
+    }),
+  );
   renderWithProviders(<App />, { route: "/records" });
   expect(await screen.findByRole("heading", { name: "Records" })).toBeInTheDocument();
   expect(await screen.findByRole("link", { name: /open record REC-000041/i })).toBeInTheDocument();
@@ -639,10 +644,12 @@ test("operational app routes /records through the shell and calls the row-filter
 
 test("direct /records route remains API-enforced without a client-side rail gate", async () => {
   let calls = 0;
-  server.use(http.get("/api/v1/records", () => {
-    calls += 1;
-    return HttpResponse.json({ data: [], page: { limit: 50, returned: 0, next_cursor: null } });
-  }));
+  server.use(
+    http.get("/api/v1/records", () => {
+      calls += 1;
+      return HttpResponse.json({ data: [], page: { limit: 50, returned: 0, next_cursor: null } });
+    }),
+  );
   renderWithProviders(<App />, { route: "/records" });
   expect(await screen.findByText("No records yet")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Records" })).toHaveAttribute("href", "/records");

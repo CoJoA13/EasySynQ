@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 
 import httpx
 import pytest
 
+from easysynq_api.logging import configure_logging
 from easysynq_api.services.keycloak_provisioning import (
     BOOTSTRAP_CLAIM_ATTRIBUTE,
     KeycloakConflict,
@@ -57,6 +59,64 @@ def _claimed_user_representation(claim: uuid.UUID) -> dict[str, object]:
         "createdTimestamp": 1_700_000_000_000,
         "access": {"manage": True},
     }
+
+
+async def test_real_httpx_logs_never_disclose_keycloak_subjects(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    claim = uuid.uuid4()
+    subject = "sensitive-keycloak-subject-90817"
+    password = "Sensitive-Temporary-Password-90817!"
+    representation = _claimed_user_representation(claim)
+    representation["id"] = subject
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "GET":
+            return httpx.Response(200, json=representation)
+        if request.method == "PUT":
+            return httpx.Response(204)
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    root = logging.getLogger()
+    prior_root_handlers = list(root.handlers)
+    prior_root_level = root.level
+    configured_loggers = tuple(
+        logging.getLogger(name)
+        for name in ("uvicorn.access", "botocore", "urllib3", "httpx", "httpcore")
+    )
+    transport_loggers = configured_loggers[-2:]
+    prior_configured_levels = [logger.level for logger in configured_loggers]
+    temporary_handlers: list[logging.Handler] = []
+    try:
+        configure_logging("INFO")
+        temporary_handlers = [
+            handler for handler in root.handlers if handler not in prior_root_handlers
+        ]
+        async with _client(handler) as kc:
+            await kc.reconcile_claimed_user_profile(
+                subject=subject,
+                username="first.admin",
+                bootstrap_claim_id=claim,
+                email="changed@example.local",
+                first_name="Changed",
+                last_name="Administrator",
+            )
+            await kc.set_temporary_password(subject=subject, password=password)
+        rendered = capsys.readouterr().out
+        assert subject not in rendered
+        assert f"/users/{subject}" not in rendered
+        assert password not in rendered
+        assert all(logger.getEffectiveLevel() >= logging.WARNING for logger in transport_loggers)
+    finally:
+        root.handlers = prior_root_handlers
+        root.setLevel(prior_root_level)
+        for logger, level in zip(configured_loggers, prior_configured_levels, strict=True):
+            logger.setLevel(level)
+        for handler in temporary_handlers:
+            handler.close()
 
 
 async def test_claimed_user_profile_preserves_every_unapproved_field() -> None:

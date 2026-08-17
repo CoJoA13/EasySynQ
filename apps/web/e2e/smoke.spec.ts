@@ -61,6 +61,14 @@ async function expectExactActionTarget(locator: Locator): Promise<void> {
   await expectInsideNarrowViewport(locator);
 }
 
+async function expectExactVisibilityTarget(locator: Locator): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.width).toBe(44);
+  expect(box!.height).toBe(44);
+  await expectInsideNarrowViewport(locator);
+}
+
 async function expectForcedColorsFocus(locator: Locator): Promise<void> {
   await expect(locator).toBeFocused();
   expect(
@@ -146,6 +154,7 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   expect(await page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
 
   const secret = page.getByLabel(/^Setup secret/);
+  const secretVisibility = page.getByRole("button", { name: "Show or hide setup secret" });
   const username = page.getByLabel(/^Username/);
   const displayName = page.getByLabel(/^Display name/);
   const email = page.getByLabel("Email", { exact: true });
@@ -164,7 +173,16 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await firstName.fill(MAXIMUM_FIRST_ADMIN_FIRST_NAME);
   await lastName.fill(MAXIMUM_FIRST_ADMIN_LAST_NAME);
 
-  await username.focus();
+  await secret.focus();
+  await page.keyboard.press("Tab");
+  await expectForcedColorsFocus(secretVisibility);
+  await expectExactVisibilityTarget(secretVisibility);
+  await page.keyboard.press("Space");
+  await expect(secret).toHaveAttribute("type", "text");
+  await page.keyboard.press("Space");
+  await expect(secret).toHaveAttribute("type", "password");
+  await page.keyboard.press("Tab");
+  await expect(username).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(displayName).toBeFocused();
   await page.keyboard.press("Tab");
@@ -179,6 +197,7 @@ test("first administrator setup is resilient at 320px in forced colors", async (
 
   for (const control of [
     secret,
+    secretVisibility,
     username,
     displayName,
     email,
@@ -260,6 +279,9 @@ test("first administrator setup is resilient at 320px in forced colors", async (
 
   const invalidAlert = page.getByRole("alert", { name: "Current setup secret required" });
   const replacementSecret = page.getByRole("textbox", { name: "Current setup secret" });
+  const replacementSecretVisibility = page.getByRole("button", {
+    name: "Show or hide current setup secret for acknowledgment",
+  });
   const retryWithCurrentSecret = page.getByRole("button", {
     name: "Retry with current setup secret",
   });
@@ -268,6 +290,13 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await expect(copy).toBeEnabled();
   await expectLoginCalls(page, 0);
   await replacementSecret.fill(REMINTED_FIRST_ADMIN_SECRET);
+  await page.keyboard.press("Tab");
+  await expectForcedColorsFocus(replacementSecretVisibility);
+  await expectExactVisibilityTarget(replacementSecretVisibility);
+  await page.keyboard.press("Space");
+  await expect(replacementSecret).toHaveAttribute("type", "text");
+  await page.keyboard.press("Space");
+  await expect(replacementSecret).toHaveAttribute("type", "password");
   await retryWithCurrentSecret.focus();
   await expectForcedColorsFocus(retryWithCurrentSecret);
   await expectExactActionTarget(retryWithCurrentSecret);
@@ -295,6 +324,9 @@ test("first administrator setup is resilient at 320px in forced colors", async (
     name: "Current setup secret required for reissue",
   });
   const reissueSecret = page.getByRole("textbox", { name: "Current setup secret" });
+  const reissueSecretVisibility = page.getByRole("button", {
+    name: "Show or hide current setup secret for password reissue",
+  });
   const retryReissue = page.getByRole("button", {
     name: "Retry issuing with current setup secret",
   });
@@ -302,6 +334,13 @@ test("first administrator setup is resilient at 320px in forced colors", async (
   await expect(reissueSecret).toBeFocused();
   await expect(copy).toBeDisabled();
   await reissueSecret.fill(REISSUE_FIRST_ADMIN_SECRET);
+  await page.keyboard.press("Tab");
+  await expectForcedColorsFocus(reissueSecretVisibility);
+  await expectExactVisibilityTarget(reissueSecretVisibility);
+  await page.keyboard.press("Space");
+  await expect(reissueSecret).toHaveAttribute("type", "text");
+  await page.keyboard.press("Space");
+  await expect(reissueSecret).toHaveAttribute("type", "password");
   await retryReissue.focus();
   await expectForcedColorsFocus(retryReissue);
   await expectExactActionTarget(retryReissue);

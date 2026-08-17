@@ -34,6 +34,10 @@ from ..db.models.app_user import AppUser
 from ..db.models.organization import Organization
 from ..db.models.role import Role, RoleAssignment
 from ..db.models.system_config import SetupState, SystemConfig
+from ..redis_client import (
+    BOOTSTRAP_REDIS_CONNECT_TIMEOUT_SECONDS,
+    BOOTSTRAP_REDIS_READ_TIMEOUT_SECONDS,
+)
 from ..services.authz.admin_guard import SYSTEM_ADMIN_ROLE, lock_admin_set_sync
 from ..services.setup.bootstrap import mint_secret
 from ..services.setup.service import _RL_KEY
@@ -41,7 +45,12 @@ from ..services.setup.service import _RL_KEY
 
 def _clear_bootstrap_failure_budget() -> None:
     try:
-        with redis.Redis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        with redis.Redis.from_url(
+            get_settings().redis_url,
+            decode_responses=True,
+            socket_connect_timeout=BOOTSTRAP_REDIS_CONNECT_TIMEOUT_SECONDS,
+            socket_timeout=BOOTSTRAP_REDIS_READ_TIMEOUT_SECONDS,
+        ) as client:
             client.delete(_RL_KEY)
     except Exception:  # noqa: BLE001 - trusted recovery must redact Redis/provider detail
         raise SystemExit("bootstrap failure counter could not be reset") from None

@@ -14,6 +14,12 @@ created: 2026-08-16
 
 ADR 0005 deliberately couples bootstrap admission to a custom Redis Lua counter plus PostgreSQL singleton serialization, and defines EasySynQ local usernames by Keycloak-compatible strip-and-lowercase canonicalization. This keeps racing invalid proofs within one expiring budget and makes identity retries recoverable on the supported provider, but it adds datastore-specific admission logic and identity-provider normalization knowledge to the application boundary. Revisit both mechanisms when admission can use one transactional store or a supported identity provider exposes different documented canonicalization or atomic limiter semantics.
 
+Admission now also atomically repairs a legacy threshold counter that has no TTL before returning its
+rate-limit denial. Dedicated bootstrap Redis clients bound connect and read waits, including the
+trusted-remint deletion performed under the singleton lock; unrelated shared Redis clients retain their
+existing semantics. These bounds and the repair close failure modes but do not remove the cross-store
+coupling tracked here.
+
 ## 2026-08-17 — trusted remint cross-store ordering
 
 Trusted remint now deletes the canonical Redis bootstrap-failure key while holding the

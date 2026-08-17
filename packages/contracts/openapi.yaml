@@ -265,6 +265,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SetupDetail" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
 
   /setup/administrator:
     post:
@@ -370,6 +371,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OrgProfileUpdate" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
   /setup/verify-storage:
@@ -400,6 +402,7 @@ paths:
                   object_lock_mode: { type: string }
                   retain_until: { type: [string, "null"], format: date-time }
         "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
         "422":
           description: The vault bucket does not enforce WORM (worm_not_enforced).
           content:
@@ -454,6 +457,7 @@ paths:
                   cron: { type: string }
                   detail: { type: string }
         "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
         "422":
           description: >-
             Invalid/non-absolute/root-equivalent/URI-looking destination
@@ -514,6 +518,7 @@ paths:
                   method: { type: string }
                   detail: { type: string }
         "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
   /setup/finalize:

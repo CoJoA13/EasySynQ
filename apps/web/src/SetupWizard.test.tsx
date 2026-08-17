@@ -2,9 +2,23 @@ import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { expect, test, vi } from "vitest";
+import type { FirstAdministratorProvisioned } from "./lib/types";
 import { SetupWizard } from "./SetupWizard";
 import { renderWithProviders } from "./test/render";
 import { server } from "./test/msw/server";
+
+const PROVISIONED_FIRST_ADMINISTRATOR: FirstAdministratorProvisioned = {
+  administrator: {
+    id: "ad000001-0001-0001-0001-000000000001",
+    username: "first.admin",
+    display_name: "First Administrator",
+    email: null,
+    status: "INVITED",
+  },
+  temporary_password: "New-Only-Temporary-Password-8",
+  credential_receipt: "R".repeat(43),
+  password_delivery: "shown_once",
+};
 
 test("UNINITIALIZED renders public administrator creation without login or sensitive setup detail", async () => {
   const user = userEvent.setup();
@@ -16,20 +30,7 @@ test("UNINITIALIZED renders public administrator creation without login or sensi
       return HttpResponse.json({});
     }),
     http.post("/api/v1/setup/administrator", () =>
-      HttpResponse.json(
-        {
-          administrator: {
-            id: "ad000001-0001-0001-0001-000000000001",
-            username: "first.admin",
-            display_name: "First Administrator",
-            email: null,
-            status: "INVITED",
-          },
-          temporary_password: "New-Only-Temporary-Password-8",
-          password_delivery: "shown_once",
-        },
-        { status: 201 },
-      ),
+      HttpResponse.json(PROVISIONED_FIRST_ADMINISTRATOR, { status: 201 }),
     ),
   );
 
@@ -79,7 +80,9 @@ test("IN_SETUP without a token renders named sign-in recovery without the public
     />,
   );
 
-  expect(await screen.findByRole("heading", { name: "Sign in to continue setup" })).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { name: "Sign in to continue setup" }),
+  ).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Create the first administrator" })).toBeNull();
   expect(detailReads).toBe(0);
   expect(login).not.toHaveBeenCalled();

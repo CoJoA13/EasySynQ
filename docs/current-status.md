@@ -1,6 +1,6 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-16"
+as_of: "2026-08-17"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
 last_shipped_slice: "S-first-admin-provisioning"
 migration_head: "0088"
@@ -132,8 +132,8 @@ the exact `easysynq-first-admin-32b1b175ba35` project's containers, volumes, net
 
 Static and contract gates were also fresh: Ruff format reported 750 files already formatted; Ruff lint
 passed; mypy found no issues in 444 source files; web ESLint exited 0; and the production TypeScript/Vite
-build transformed 1,107 modules with only the existing large-chunk advisory. Contract checking was in sync
-at SHA-256 `5ab98c4a060563a8d1ea4fd2c57eba5a7a2923d69b52bd9ef623d6a528f98a58`;
+build transformed 1,107 modules with only the existing large-chunk advisory. Contract checking is in sync
+at SHA-256 `bec600ffcc53e6f73871c46e0a52ae520902a50e78e1b1e72d1265927cebb90b`;
 Alembic reported only `0088_bootstrap_credential (head)`, making `0089` next. Executable workflow parsing
 still finds eleven job definitions and fifteen expanded aggregate/leaf checks.
 

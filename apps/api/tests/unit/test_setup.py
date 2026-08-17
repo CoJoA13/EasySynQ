@@ -93,7 +93,7 @@ class _RateLimitRedis:
     async def __aexit__(self, *_args: object) -> None:
         return None
 
-    async def get(self, _key: str) -> str | None:
+    async def eval(self, _script: str, _numkeys: int, _key: str, _window: str) -> str | None:
         return self.stored_counter
 
 

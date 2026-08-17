@@ -457,6 +457,249 @@ async def test_setup_detail_requires_config_read(
     assert {"gates", "org_profile", "backup", "auth", "tamper_evident"} <= set(detail.json())
 
 
+async def test_authenticated_setup_surface_requires_credential_acknowledgment(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provisioned administrator may authenticate, but no authenticated setup seam may read,
+    mutate, enqueue, or finalize until the active password receipt is acknowledged."""
+    from easysynq_api.tasks import backup as backup_tasks
+
+    secret = await _reset_uninitialized()
+    username = _sub("pre-ack-setup")
+    provisioned = await _provision(app_client, secret, username)
+    assert provisioned.status_code == 201, provisioned.text
+    headers = _auth(token_factory, f"subject:{username}")
+    side_effects: list[str] = []
+
+    async def observed_worm_probe() -> storage.WormProbeResult:
+        side_effects.append("worm_probe")
+        return storage.WormProbeResult(
+            verified=True,
+            retain_until=setup_service._now() + datetime.timedelta(days=1),
+            detail="stubbed WORM proof",
+        )
+
+    def observed_backup_probe(_destination: str) -> tuple[bool, str]:
+        side_effects.append("backup_probe")
+        return True, "stubbed backup path"
+
+    async def observed_auth_probe(
+        _issuer: str, _discovery_url: str | None = None
+    ) -> tuple[bool, str]:
+        side_effects.append("auth_probe")
+        return True, "stubbed identity provider"
+
+    def observed_restore_enqueue(*_args: str) -> None:
+        side_effects.append("restore_enqueue")
+
+    monkeypatch.setattr(storage, "worm_probe", observed_worm_probe)
+    monkeypatch.setattr(
+        setup_service,
+        "configure_backup_destination_check",
+        observed_backup_probe,
+    )
+    monkeypatch.setattr(setup_service.auth_check, "probe_oidc_discovery", observed_auth_probe)
+    monkeypatch.setattr(backup_tasks.backup_restore_test, "delay", observed_restore_enqueue)
+
+    responses = {
+        "detail": await app_client.get("/api/v1/setup", headers=headers),
+        "org_profile": await app_client.patch(
+            "/api/v1/setup/org-profile",
+            headers=headers,
+            json={"legal_name": "Pre Ack", "short_code": "PREACK", "timezone": "UTC"},
+        ),
+        "storage": await app_client.post(
+            "/api/v1/setup/verify-storage",
+            headers=headers,
+            json={"object_lock_mode": "GOVERNANCE"},
+        ),
+        "backup": await app_client.post(
+            "/api/v1/setup/configure-backup",
+            headers=headers,
+            json={"destination": "/var/lib/easysynq/backups"},
+        ),
+        "restore": await app_client.post(
+            "/api/v1/setup/run-restore-test",
+            headers=headers,
+        ),
+        "auth": await app_client.post(
+            "/api/v1/setup/configure-auth",
+            headers=headers,
+            json={"method": "LOCAL", "mfa_acknowledged": True},
+        ),
+        "finalize": await app_client.post("/api/v1/setup/finalize", headers=headers),
+    }
+
+    for seam, response in responses.items():
+        assert response.status_code == 409, (seam, response.text)
+        assert response.json()["code"] == "setup_incomplete", (seam, response.text)
+    assert side_effects == []
+
+    async with get_sessionmaker()() as session:
+        cfg = (await session.execute(select(SystemConfig))).scalar_one()
+        org = (await session.execute(select(Organization))).scalar_one()
+        setup_audits = (
+            await session.scalars(
+                select(AuditEvent.id).where(
+                    AuditEvent.event_type.in_(
+                        (
+                            EventType.ORG_PROFILE_SET,
+                            EventType.WORM_VERIFIED,
+                            EventType.BACKUP_CONFIGURED,
+                            EventType.AUTH_CONFIGURED,
+                            EventType.AUTH_TEST_LOGIN_OK,
+                            EventType.SETUP_FINALIZED,
+                        )
+                    )
+                )
+            )
+        ).all()
+        assert cfg.setup_state is SetupState.UNINITIALIZED
+        assert cfg.bootstrap_consumed_at is None
+        assert cfg.auth_method is None
+        assert cfg.auth_test_login_at is None
+        assert org.short_code == "DEFAULT"
+        assert await session.scalar(select(StorageConfig.id)) is None
+        assert await session.scalar(select(BackupPolicy.id)) is None
+        assert setup_audits == []
+
+
+async def test_setup_mutation_rechecks_fresh_state_under_lock_after_probe(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent finalization cannot be hidden by the request session's identity map."""
+    secret = await _reset_uninitialized()
+    headers, _ = await _bootstrap(app_client, token_factory, secret, "probe-state-race")
+    async with get_sessionmaker()() as session:
+        worm_audits_before = set(
+            (
+                await session.scalars(
+                    select(AuditEvent.id).where(AuditEvent.event_type == EventType.WORM_VERIFIED)
+                )
+            ).all()
+        )
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+    retained_configs: list[SystemConfig] = []
+    real_guard = setup_service._require_acknowledged_setup
+
+    def retaining_guard(cfg: SystemConfig) -> None:
+        # Keep the first ORM instance strongly referenced so the locked re-read must refresh it;
+        # correctness must not depend on SQLAlchemy's weak identity-map entry being collected.
+        retained_configs.append(cfg)
+        real_guard(cfg)
+
+    async def delayed_worm_probe() -> storage.WormProbeResult:
+        probe_started.set()
+        await release_probe.wait()
+        return storage.WormProbeResult(
+            verified=True,
+            retain_until=setup_service._now() + datetime.timedelta(days=1),
+            detail="stubbed WORM proof",
+        )
+
+    monkeypatch.setattr(storage, "worm_probe", delayed_worm_probe)
+    monkeypatch.setattr(setup_service, "_require_acknowledged_setup", retaining_guard)
+    request = asyncio.create_task(
+        app_client.post(
+            "/api/v1/setup/verify-storage",
+            headers=headers,
+            json={"object_lock_mode": "GOVERNANCE"},
+        )
+    )
+    await asyncio.wait_for(probe_started.wait(), timeout=2)
+    async with get_sessionmaker()() as concurrent_session:
+        cfg = (await concurrent_session.execute(select(SystemConfig))).scalar_one()
+        cfg.setup_state = SetupState.OPERATIONAL
+        cfg.finalized_at = setup_service._now()
+        await concurrent_session.commit()
+    release_probe.set()
+
+    response = await asyncio.wait_for(request, timeout=2)
+
+    assert retained_configs
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "setup_already_complete"
+    async with get_sessionmaker()() as session:
+        assert await session.scalar(select(StorageConfig.id)) is None
+        assert (
+            set(
+                (
+                    await session.scalars(
+                        select(AuditEvent.id).where(
+                            AuditEvent.event_type == EventType.WORM_VERIFIED
+                        )
+                    )
+                ).all()
+            )
+            == worm_audits_before
+        )
+
+
+async def test_restore_enqueue_releases_singleton_lock_before_broker_wait(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blackholed task broker cannot extend the setup singleton lock indefinitely."""
+    import psycopg
+
+    from easysynq_api.services.backup.dsn import conn_kwargs
+    from easysynq_api.tasks import backup as backup_tasks
+
+    secret = await _reset_uninitialized()
+    _, body = await _bootstrap(app_client, token_factory, secret, "restore-broker-lock")
+    admin_id = uuid.UUID(body["admin_user_id"])
+    async with get_sessionmaker()() as session:
+        actor = await session.get(AppUser, admin_id)
+        assert actor is not None
+        session.add(
+            BackupPolicy(
+                org_id=actor.org_id,
+                destination=tempfile.gettempdir(),
+                cron="0 2 * * *",
+            )
+        )
+        await session.commit()
+
+    raw_marker = "blackholed-broker-sensitive-detail"
+    singleton_was_released = False
+
+    def blackholed_enqueue(*_args: str) -> None:
+        nonlocal singleton_was_released
+        try:
+            with (
+                psycopg.connect(
+                    **conn_kwargs(get_settings().sync_dsn),
+                    autocommit=True,
+                ) as connection,
+                connection.cursor() as cursor,
+            ):
+                cursor.execute("SELECT org_id FROM system_config FOR UPDATE NOWAIT")
+                singleton_was_released = cursor.fetchone() is not None
+        except psycopg.errors.LockNotAvailable:
+            singleton_was_released = False
+        threading.Event().wait(0.01)
+        raise TimeoutError(raw_marker)
+
+    monkeypatch.setattr(backup_tasks.backup_restore_test, "delay", blackholed_enqueue)
+
+    with pytest.raises(TimeoutError, match=raw_marker):
+        async with get_sessionmaker()() as session:
+            actor = await session.get(AppUser, admin_id)
+            assert actor is not None
+            await setup_service.trigger_restore_test(session, actor)
+
+    assert singleton_was_released is True
+    async with get_sessionmaker()() as session:
+        await session.execute(select(SystemConfig).with_for_update(nowait=True))
+        await session.rollback()
+
+
 async def test_bootstrap_rejects_wrong_secret_and_replay(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
@@ -916,6 +1159,75 @@ async def test_remint_redis_reset_failure_rolls_back_replacement_proof(
     after = await _config()
     assert after.bootstrap_secret_hash == original_hash
     assert after.bootstrap_expires_at == original_expiry
+
+
+async def test_remint_blackholed_redis_is_bounded_redacted_and_releases_lock(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api.cli import setup as setup_cli
+
+    del app_client
+    await _reset_uninitialized()
+    before = await _config()
+    original_hash = before.bootstrap_secret_hash
+    original_expiry = before.bootstrap_expires_at
+    raw_marker = "redis-blackhole-sensitive-provider-detail"
+    calls: list[dict[str, Any]] = []
+
+    class HangingRedis:
+        def __init__(self, options: dict[str, Any]) -> None:
+            self.options = options
+
+        def __enter__(self) -> HangingRedis:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def delete(self, _key: str) -> None:
+            timeout = self.options.get("socket_timeout")
+            if not isinstance(timeout, (int, float)) or timeout <= 0:
+                raise TimeoutError(raw_marker)
+            threading.Event().wait(timeout)
+            raise TimeoutError(raw_marker)
+
+    def blackholed_from_url(_url: str, **kwargs: Any) -> HangingRedis:
+        calls.append(kwargs)
+        return HangingRedis(kwargs)
+
+    monkeypatch.setattr(
+        setup_cli,
+        "BOOTSTRAP_REDIS_CONNECT_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        setup_cli,
+        "BOOTSTRAP_REDIS_READ_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    monkeypatch.setattr(setup_cli.redis.Redis, "from_url", blackholed_from_url)
+
+    with pytest.raises(SystemExit) as excinfo:
+        setup_cli.mint_bootstrap()
+
+    assert str(excinfo.value) == "bootstrap failure counter could not be reset"
+    assert raw_marker not in str(excinfo.value)
+    assert len(calls) == 1
+    assert calls[0]["decode_responses"] is True
+    assert calls[0]["socket_connect_timeout"] == 0.01
+    assert calls[0]["socket_timeout"] == 0.01
+    after = await _config()
+    assert after.bootstrap_secret_hash == original_hash
+    assert after.bootstrap_expires_at == original_expiry
+    async with get_sessionmaker()() as session:
+        locked = (
+            await session.execute(select(SystemConfig).with_for_update(nowait=True))
+        ).scalar_one()
+        assert locked.bootstrap_secret_hash == original_hash
+        await session.rollback()
 
 
 async def test_remint_cannot_commit_after_racing_acknowledgment(
@@ -1969,11 +2281,30 @@ async def test_receipt_state_commit_failure_returns_no_credential_and_retry_rota
 
     secret = await _reset_uninitialized()
     username = _sub("receipt-state-commit")
-    receipts = iter(("A" * 43, "B" * 43))
+    receipts = iter(("R" * 43, "S" * 43, "T" * 43))
 
     def deterministic_receipt() -> tuple[str, str]:
         receipt = next(receipts)
         return receipt, hashlib.sha256(receipt.encode("utf-8")).hexdigest()
+
+    monkeypatch.setattr(
+        administrator_service,
+        "_new_credential_receipt",
+        deterministic_receipt,
+        raising=False,
+    )
+    initial = await _provision(app_client, secret, username)
+    assert initial.status_code == 201, initial.text
+    initial_body = initial.json()
+    assert initial_body["credential_receipt"] == "R" * 43
+    first_password = initial_body["temporary_password"]
+    initial_state = await _config()
+    first_issued_at = initial_state.bootstrap_credential_issued_at
+    assert first_issued_at is not None
+    assert (
+        initial_state.bootstrap_credential_receipt_hash
+        == hashlib.sha256(initial_body["credential_receipt"].encode("utf-8")).hexdigest()
+    )
 
     real_commit = AsyncSession.commit
     real_flush = AsyncSession.flush
@@ -2014,7 +2345,7 @@ async def test_receipt_state_commit_failure_returns_no_credential_and_retry_rota
             and value.bootstrap_credential_issued_at is not None
             for value in session.identity_map.values()
         )
-        if has_receipt_state and not session.in_nested_transaction():
+        if receipt_state_flushed and has_receipt_state and not session.in_nested_transaction():
             target_async_commit_calls += 1
         await real_commit(session)
 
@@ -2024,12 +2355,6 @@ async def test_receipt_state_commit_failure_returns_no_credential_and_retry_rota
         if failed_once:
             failed_commit_rollback_completed = True
 
-    monkeypatch.setattr(
-        administrator_service,
-        "_new_credential_receipt",
-        deterministic_receipt,
-        raising=False,
-    )
     monkeypatch.setattr(AsyncSession, "flush", observe_receipt_state_flush)
     monkeypatch.setattr(dialect, "do_commit", fail_first_target_commit)
     monkeypatch.setattr(AsyncSession, "commit", observe_real_async_commit)
@@ -2046,24 +2371,42 @@ async def test_receipt_state_commit_failure_returns_no_credential_and_retry_rota
     assert failed.json()["code"] == "dependency_unavailable"
     assert "temporary_password" not in failed.text
     assert "credential_receipt" not in failed.text
-    assert "A" * 43 not in failed.text
-    first_password = _setup_keycloak.passwords[f"subject:{username}"][-1]
-    assert first_password not in failed.text
+    assert "S" * 43 not in failed.text
+    second_password = _setup_keycloak.passwords[f"subject:{username}"][-1]
+    assert second_password != first_password
+    assert second_password not in failed.text
     assert secret not in failed.text
+
+    stale = await app_client.post(
+        "/api/v1/setup/administrator/acknowledge",
+        json={"secret": secret, "credential_receipt": initial_body["credential_receipt"]},
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["code"] == "bootstrap_credential_superseded"
+
     after_failure = await _config()
-    assert after_failure.bootstrap_credential_issued_at is None
+    assert after_failure.setup_state is SetupState.UNINITIALIZED
+    assert after_failure.bootstrap_consumed_at is None
+    assert after_failure.bootstrap_credential_issued_at == first_issued_at
     assert after_failure.bootstrap_credential_receipt_hash is None
-    assert "A" * 43 not in caplog.text
+    assert "S" * 43 not in caplog.text
     assert first_password not in caplog.text
+    assert second_password not in caplog.text
     assert secret not in caplog.text
 
     retried = await _provision(app_client, secret, username)
 
     assert retried.status_code == 200, retried.text
     body = retried.json()
-    assert body["credential_receipt"] == "B" * 43
-    assert body["credential_receipt"] != "A" * 43
-    assert _setup_keycloak.passwords[f"subject:{username}"][-1] != first_password
+    assert body["credential_receipt"] == "T" * 43
+    assert body["credential_receipt"] not in {
+        initial_body["credential_receipt"],
+        "S" * 43,
+    }
+    assert _setup_keycloak.passwords[f"subject:{username}"][-1] not in {
+        first_password,
+        second_password,
+    }
     current = await _config()
     assert current.bootstrap_credential_issued_at is not None
     assert (
@@ -2148,6 +2491,87 @@ async def test_bootstrap_rate_limit_dependency_outage_fails_closed_before_claim(
     assert response.status_code == 503
     assert response.json()["code"] == "dependency_unavailable"
     assert (await _config()).bootstrap_admin_claim_id is None
+
+
+async def test_blackholed_bootstrap_redis_is_bounded_redacted_and_releases_lock(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easysynq_api import redis_client as redis_client_module
+
+    secret = await _reset_uninitialized()
+    raw_marker = "redis-blackhole-sensitive-provider-detail"
+    calls: list[dict[str, Any]] = []
+
+    class ObservedRedis:
+        def __init__(self, options: dict[str, Any], *, hang: bool) -> None:
+            self.options = options
+            self.hang = hang
+
+        async def __aenter__(self) -> ObservedRedis:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def _read(self) -> int | None:
+            if not self.hang:
+                return 0
+            timeout = self.options.get("socket_timeout")
+            if not isinstance(timeout, (int, float)) or timeout <= 0:
+                raise TimeoutError(raw_marker)
+            try:
+                await asyncio.wait_for(asyncio.Event().wait(), timeout=timeout)
+            except TimeoutError:
+                raise TimeoutError(raw_marker) from None
+            raise AssertionError("the simulated blackhole must not complete")
+
+        async def get(self, _key: str) -> int | None:
+            return await self._read()
+
+        async def eval(self, _script: str, _numkeys: int, *_args: str) -> int | None:
+            return await self._read()
+
+    def observed_from_url(_url: str, **kwargs: Any) -> ObservedRedis:
+        calls.append(kwargs)
+        return ObservedRedis(kwargs, hang=len(calls) == 2)
+
+    monkeypatch.setattr(
+        redis_client_module,
+        "BOOTSTRAP_REDIS_CONNECT_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        redis_client_module,
+        "BOOTSTRAP_REDIS_READ_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    monkeypatch.setattr(redis_client_module.aioredis, "from_url", observed_from_url)
+
+    response = await _provision(app_client, secret, _sub("redis-blackhole"))
+
+    assert response.status_code == 503, response.text
+    body = response.json()
+    assert {key: body[key] for key in ("type", "title", "status", "code")} == {
+        "type": "https://errors.easysynq.local/dependency_unavailable",
+        "title": "Bootstrap rate limiting is unavailable",
+        "status": 503,
+        "code": "dependency_unavailable",
+    }
+    assert set(body) == {"type", "title", "status", "code", "instance", "request_id"}
+    assert raw_marker not in response.text
+    assert len(calls) == 2
+    assert all(call["decode_responses"] is True for call in calls)
+    assert all(call["socket_connect_timeout"] == 0.01 for call in calls)
+    assert all(call["socket_timeout"] == 0.01 for call in calls)
+    async with get_sessionmaker()() as session:
+        locked = (
+            await session.execute(select(SystemConfig).with_for_update(nowait=True))
+        ).scalar_one()
+        assert locked.bootstrap_admin_claim_id is None
+        await session.rollback()
 
 
 async def test_non_uninitialized_state_denies_provisioning_even_with_bearer(
@@ -2375,6 +2799,9 @@ async def test_set_org_profile_preserves_customized_calendar_tz(
         orig_org_tz = org.timezone
         orig_legal_name = org.legal_name
         orig_short_code = org.short_code
+        cfg = (await s.execute(select(SystemConfig))).scalar_one()
+        orig_setup_state = cfg.setup_state
+        orig_bootstrap_consumed_at = cfg.bootstrap_consumed_at
         cal = (
             await s.execute(
                 select(WorkingCalendar).where(
@@ -2409,6 +2836,9 @@ async def test_set_org_profile_preserves_customized_calendar_tz(
                 .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
                 .values(timezone=custom_tz)
             )
+            cfg = (await s.execute(select(SystemConfig))).scalar_one()
+            cfg.setup_state = SetupState.IN_SETUP
+            cfg.bootstrap_consumed_at = setup_service._now()
             await s.commit()
 
         # Call set_org_profile with a different org tz.  The customized calendar tz must be
@@ -2450,6 +2880,9 @@ async def test_set_org_profile_preserves_customized_calendar_tz(
                 org_row.legal_name = orig_legal_name
                 org_row.short_code = orig_short_code
                 org_row.timezone = orig_org_tz
+            cfg = (await s.execute(select(SystemConfig))).scalar_one()
+            cfg.setup_state = orig_setup_state
+            cfg.bootstrap_consumed_at = orig_bootstrap_consumed_at
             await s.execute(
                 update(WorkingCalendar)
                 .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
@@ -2485,14 +2918,20 @@ async def test_finalize_blocked_then_operational_lifts_latch(
     assert done.json()["setup_state"] == "OPERATIONAL"
     assert done.json()["finalized_at"]
 
+    replay = await app_client.post("/api/v1/setup/finalize", headers=h)
+    assert replay.status_code == 409
+    assert replay.json()["code"] == "setup_already_complete"
+
     async with get_sessionmaker()() as s:
-        finalized = await s.scalar(
-            select(AuditEvent.id).where(
-                AuditEvent.event_type == EventType.SETUP_FINALIZED,
-                AuditEvent.actor_id == admin_id,
+        finalized = (
+            await s.scalars(
+                select(AuditEvent.id).where(
+                    AuditEvent.event_type == EventType.SETUP_FINALIZED,
+                    AuditEvent.actor_id == admin_id,
+                )
             )
-        )
-    assert finalized is not None
+        ).all()
+    assert len(finalized) == 1
 
     # The latch has lifted: the QMS surface answers normally (200 filtered list), not 423.
     lifted = await app_client.get("/api/v1/documents", headers=h)
@@ -2651,6 +3090,26 @@ async def test_atomic_failure_counter_repairs_legacy_no_ttl_and_preserves_live_t
 
     async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
         assert await client.get(setup_service._RL_KEY) == "5"
+        repaired_ttl = await client.ttl(setup_service._RL_KEY)
+    assert setup_service._RL_WINDOW_SECONDS - 2 <= repaired_ttl <= setup_service._RL_WINDOW_SECONDS
+
+
+async def test_rate_limit_admission_repairs_threshold_legacy_counter_without_ttl(
+    app_client: AsyncClient,
+) -> None:
+    del app_client
+    await _reset_uninitialized()
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        await client.set(setup_service._RL_KEY, str(setup_service._RL_MAX))
+        assert await client.ttl(setup_service._RL_KEY) == -1
+
+    with pytest.raises(ProblemException) as excinfo:
+        await setup_service._check_rate_limit()
+
+    assert excinfo.value.status == 429
+    assert excinfo.value.code == "rate_limited"
+    async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as client:
+        assert await client.get(setup_service._RL_KEY) == str(setup_service._RL_MAX)
         repaired_ttl = await client.ttl(setup_service._RL_KEY)
     assert setup_service._RL_WINDOW_SECONDS - 2 <= repaired_ttl <= setup_service._RL_WINDOW_SECONDS
 

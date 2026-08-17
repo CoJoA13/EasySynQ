@@ -29,3 +29,28 @@ def test_redis_client_threads_decode_responses_and_settings_url(
 
     assert [c["decode_responses"] for c in calls] == [False, True]
     assert all(c["url"] == rc.get_settings().redis_url for c in calls)
+
+
+def test_bootstrap_redis_client_bounds_connect_and_read_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def _fake_from_url(url: str, **kwargs: Any) -> str:
+        calls.append({"url": url, **kwargs})
+        return "bootstrap-client"
+
+    monkeypatch.setattr(rc.aioredis, "from_url", _fake_from_url)
+
+    assert rc.bootstrap_redis_client(decode_responses=True) == "bootstrap-client"
+
+    assert calls == [
+        {
+            "url": rc.get_settings().redis_url,
+            "decode_responses": True,
+            "socket_connect_timeout": rc.BOOTSTRAP_REDIS_CONNECT_TIMEOUT_SECONDS,
+            "socket_timeout": rc.BOOTSTRAP_REDIS_READ_TIMEOUT_SECONDS,
+        }
+    ]
+    assert 0 < rc.BOOTSTRAP_REDIS_CONNECT_TIMEOUT_SECONDS <= 5
+    assert 0 < rc.BOOTSTRAP_REDIS_READ_TIMEOUT_SECONDS <= 5
