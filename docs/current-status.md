@@ -32,12 +32,14 @@ Records surfaces. Retention Policy and Evidence Pack management remain without d
 The latest completed slice removes normal first-install dependence on the Keycloak console, a Keycloak
 subject, or the retired fixed-`qmsadmin` helper. While setup is `UNINITIALIZED`, `/setup` accepts the
 one-time EasySynQ bootstrap proof, creates and links the first Keycloak identity and EasySynQ user, assigns
-the seeded System Administrator role, and displays a generated temporary password and credential receipt
-once. Provisioning authority ends outside `UNINITIALIZED`; the public acknowledgment route additionally
+the seeded System Administrator role, and displays a generated temporary password once. The SPA retains
+the associated credential receipt only in volatile component memory and submits it during acknowledgment.
+Provisioning authority ends outside `UNINITIALIZED`; the public acknowledgment route additionally
 accepts only the narrowly fenced matching replay of a completed claim while setup is `IN_SETUP`. The active
 receipt, current setup proof, complete claim, exact administrator assignment, and absence of an unrelated
-administrator are all required before consumption. A reminted setup proof can acknowledge the same shown
-credential generation; a superseded receipt consumes nothing and requires explicit password reissue.
+administrator are all required before consumption. A reminted setup proof can acknowledge the same
+still-displayed password generation; a superseded receipt consumes nothing and requires explicit password
+reissue.
 Keycloak forces a password replacement at first sign-in. Incomplete or mismatched replays fail closed.
 
 Public bootstrap refuses an unrelated System Administrator assignment without exposing whether one exists

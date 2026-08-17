@@ -47,7 +47,8 @@ owner-approved [`design`](superpowers/specs/2026-08-15-s-first-admin-provisionin
 Keycloak bootstrap with an in-app first-run flow.
 
 On a fresh installation, `/setup` now creates the first Keycloak identity and EasySynQ user, assigns the
-seeded System Administrator role, and presents a generated temporary password and credential receipt once.
+seeded System Administrator role, and presents a generated temporary password once. The SPA retains the
+associated credential receipt only in volatile component memory and submits it during acknowledgment.
 Keycloak requires the administrator to replace that credential at first sign-in. Provisioning authority
 exists only while setup is `UNINITIALIZED`, accepts the one-time expiring EasySynQ bootstrap proof instead
 of a bearer token, and never returns a Keycloak subject. After successful acknowledgment, the SPA clears
@@ -67,7 +68,8 @@ dependency-unavailable problem.
 
 Review hardening binds acknowledgment to the active password generation: each successful reset rotates a
 high-entropy receipt and persists only its SHA-256 digest. A reminted setup proof can acknowledge the same
-still-visible password and receipt; a stale receipt consumes nothing and exposes an explicit reissue path.
+still-visible password using the receipt retained in volatile component memory; a stale receipt consumes
+nothing and exposes an explicit reissue path.
 A definitive create-time validation rejection releases only a claim that owns no identity, user, or
 credential, while ambiguous and identity-owning states retain it. Recovery retries may reconcile display
 name and optional profile fields only on the exact marker-owned Keycloak identity and linked EasySynQ user,

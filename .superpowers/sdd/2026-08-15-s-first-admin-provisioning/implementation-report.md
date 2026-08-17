@@ -77,9 +77,11 @@ later failure.
 - Email, first name, and last name remain optional. EasySynQ removes only their `required` flags from the
   supported Keycloak profile and preserves unrelated attributes and validators.
 
-## Commits
+## Original provisioning-phase commits
 
-The implementation branch contains these exact reviewed commits after `origin/main`:
+The original S-first-admin-provisioning phase contains these exact reviewed commits after `origin/main`,
+through its Task 9 convergence at `8926c00ab95a1d89d9f4310b3668dc22dedb4b6c`. This bounded inventory
+deliberately stops before the later evidence and review-hardening range recorded below:
 
 - Design/plan: `1b778ccbe23ef049925a917839d7c645581184eb`,
   `e4c5e6994f75861c4dfb77f9d2e5b2beee641fa9`.
@@ -259,6 +261,33 @@ authority, and OpenAPI lint hooks.
 The approved S-first-admin-review-hardening work refined the completed slice without changing its
 browser-first, no-SMTP outcome or R64 ordering/non-deletion boundary.
 
+### Review-hardening commit inventory
+
+The contiguous post-provisioning evidence and review-hardening range is
+`8926c00ab95a1d89d9f4310b3668dc22dedb4b6c..37e9463768b0a2745c92a694f049459fc6a17d7f`
+in Git's exclusive/inclusive range notation. Its exact inventory is:
+
+- Original evidence and narrow UI correction: `e906c97e3d8ca2fe3a2817ef17ae9c36e5d1f46c`,
+  `b40dcf9394cd002e4f6fa679cecd538d9cb012ec`.
+- Review design and plan: `d1f22c0418b04d52d77cde0bfd6ba8d3a4c897ee`,
+  `f7b78f973766cc1344a60d6f8eb966445599d121`.
+- Credential, authority, concurrency, and profile hardening:
+  `abf975b0c7b3933d4b1637c09da8598694bd77bf`, `b086dbc1b2afe97b7b2fe885d4fc8ac34168f2dd`,
+  `1572b7b43129c595b242cfb399bae85a596626a9`, `065368dfed944e3591b5b64417864955164cc42c`,
+  `5b7820b92e86f413c09eea7421e91594688cb2bf`, `b734f5421487048121d492172a5a5d90f4f16190`,
+  `2ff3fe5f3961cf60781027a9616e77253ed79964`.
+- Recovery and acceptance convergence: `e2c2d2538ede2a9cd3e8de10b7d42babb4e3f9d2`,
+  `c379ea3afd07434585e2ab52c165a427f971bef8`, `b9e56e1c43a59928f10b14d64b3ab5e481f3204a`,
+  `b5647740bfe95025c036976d2697698101dec6ae`, `fc60cecf300f2f0480ff56c063e4b8a67fa9a39a`,
+  `2c163a99861343efdb6cf1f1eb84dc168fe350d5`, `e42b79ddef53dc067abe4c6abe0a53921a695d89`,
+  `b7c7825c5df0835c1e540bb7dcf4c880f8af246c`, `fe2ed1d8e05899c7b58d060ff9c1d6badca3e0bc`,
+  `d04dce0726a29ac007e75f332c861cd7e5fecd24`, `240365b512f5df14a9bcc678e90d09e321cf42a7`,
+  `557a3f0cde1c5f5aaf77b4ee019297523335fb18`, `c2b0793eea856828a789c1f6f1bdf0aa4154fc6f`,
+  `9e6f01ea0ebdb5406c6bdf09869f83f87b38eef4`.
+- Final review corrections and evidence: `4ea6e78c5edf52a2666a6bee1130ace34ab19b56`,
+  `1f6f12def9ddb539711ceb4b382e3e28f4c1f87e`,
+  `37e9463768b0a2745c92a694f049459fc6a17d7f`.
+
 ### Observable and security corrections
 
 - Every successful temporary-password reset rotates a high-entropy `credential_receipt`; only its SHA-256
@@ -370,8 +399,10 @@ Open, deliberate debt:
 
 - `20260815194752-bootstrap-claim-state-machine` — staged Keycloak/PostgreSQL recovery until one
   transactional identity boundary exists.
-- `20260815215020-bootstrap-credential-lock` — singleton row lock across the Keycloak password reset until
-  a fenced issuance generation exists.
+- `20260815215020-bootstrap-credential-lock` — singleton row lock spans the Keycloak password reset and
+  receipt/state commit. The receipt fence rejects a completed stale generation but does not make the
+  external reset and PostgreSQL state transition atomic; a pending/active generation protocol or
+  transactional provider boundary remains the closure path.
 - `20260816010910-keycloak-profile-reconciliation` — non-CAS whole-profile Keycloak update.
 - `20260816024758-bootstrap-admission-identity-coupling` — custom Redis admission plus supported-provider
   lowercase identity knowledge, mirrored from ADR 0005.
@@ -413,6 +444,6 @@ claim apply only to the exact commands above.
 
 ## Handoff boundary
 
-The isolated feature branch is ready for its final evidence commit and owner handoff. No push, PR, merge,
-deployment, worktree removal, or pruning is authorized by this report. The primary checkout's pre-existing
-`.superdesign/` state and unrelated prunable `/tmp` worktree records remain outside the slice.
+The reviewed evidence is committed on the isolated feature branch and awaits owner handoff. No push, PR,
+merge, deployment, worktree removal, or pruning is authorized by this report. The primary checkout's
+pre-existing `.superdesign/` state and unrelated prunable `/tmp` worktree records remain outside the slice.
