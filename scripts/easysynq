@@ -3,8 +3,85 @@
 # upgrade, migration, setup, and break-glass administration commands.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-COMPOSE=(docker compose --env-file "$ROOT/.env" -f "$ROOT/infra/compose/compose.yml")
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+ENV_FILE="$ROOT/.env"
+BASE_COMPOSE_FILE="$ROOT/infra/compose/compose.yml"
+COMPOSE=()
+
+env_value() {
+  local key="$1"
+  grep -m1 -E "^${key}[[:space:]]*=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- \
+    | sed -E \
+      "s/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//; s/^\"(.*)\"$/\\1/; s/^'(.*)'$/\\1/" \
+    || true
+}
+
+load_compose() {
+  [ "${#COMPOSE[@]}" -eq 0 ] || return 0
+
+  local project="${COMPOSE_PROJECT_NAME:-}"
+  local config_output config_set config_file existing
+  local seen base_found=0
+  local -a config_sets=() config_files=()
+
+  if [ -z "$project" ]; then
+    project="$(env_value COMPOSE_PROJECT_NAME)"
+  fi
+  project="${project:-easysynq}"
+
+  if ! config_output="$(
+    docker ps \
+      --filter "label=com.docker.compose.project=${project}" \
+      --format '{{.Label "com.docker.compose.project.config_files"}}'
+  )"; then
+    echo "easysynq: could not inspect the running Compose deployment for project ${project}" >&2
+    exit 1
+  fi
+
+  while IFS= read -r config_set; do
+    [ -n "$config_set" ] || continue
+    seen=0
+    for existing in "${config_sets[@]}"; do
+      if [ "$existing" = "$config_set" ]; then
+        seen=1
+        break
+      fi
+    done
+    [ "$seen" -eq 1 ] || config_sets+=("$config_set")
+  done <<< "$config_output"
+
+  if [ "${#config_sets[@]}" -eq 0 ]; then
+    echo "easysynq: no running Compose deployment found for project ${project}" >&2
+    exit 1
+  fi
+  if [ "${#config_sets[@]}" -gt 1 ]; then
+    echo "easysynq: running containers disagree on the Compose file set for project ${project}" >&2
+    exit 1
+  fi
+
+  IFS=',' read -r -a config_files <<< "${config_sets[0]}"
+  COMPOSE=(docker compose --env-file "$ENV_FILE")
+  for config_file in "${config_files[@]}"; do
+    if [ ! -f "$config_file" ] || [ ! -r "$config_file" ]; then
+      echo "easysynq: active Compose file is unavailable: ${config_file}" >&2
+      exit 1
+    fi
+    if [[ "$config_file" -ef "$BASE_COMPOSE_FILE" ]]; then
+      base_found=1
+    fi
+    COMPOSE+=(-f "$config_file")
+  done
+
+  if [ "$base_found" -ne 1 ]; then
+    echo "easysynq: running project ${project} does not belong to this EasySynQ checkout" >&2
+    exit 1
+  fi
+}
+
+compose_run() {
+  load_compose
+  "${COMPOSE[@]}" run --rm --no-deps "$@"
+}
 
 usage() {
   cat <<'EOF'
@@ -55,7 +132,7 @@ EOF
 cmd="${1:-}"; shift || true
 case "$cmd" in
   migrate)
-    "${COMPOSE[@]}" run --rm migrate
+    compose_run migrate
     ;;
   grant-role)
     sub="${1:-}"
@@ -69,42 +146,42 @@ case "$cmd" in
       role="$1"
       shift
     fi
-    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.grant_role \
+    compose_run api uv run python -m easysynq_api.cli.grant_role \
       --subject "$sub" --role "$role" "$@"
     ;;
   seed-personas)
     # Dev fixture: SoD-correct author/approver/releaser grants (S-web-5 demo). `just seed-personas`
     # wraps this and also provisions the matching Keycloak logins. Idempotent.
-    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.seed_personas "$@"
+    compose_run api uv run python -m easysynq_api.cli.seed_personas "$@"
     ;;
   setup)
     # First-run bootstrap (S8a): e.g. `easysynq setup mint-bootstrap [--ttl-hours 24]`.
-    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.setup "$@"
+    compose_run api uv run python -m easysynq_api.cli.setup "$@"
     ;;
   backup)
     # S8b2: durable backup (`backup run`) + the restore-into-scratch drill (`backup restore-test`,
     # gate G-C). Runs on the WORKER (it carries postgresql-client + the owner DATABASE_URL_SYNC).
-    "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.backup "$@"
+    compose_run worker uv run python -m easysynq_api.cli.backup "$@"
     ;;
   restore)
     # S11 (R37): restore integrity verification in a scratch target (checkpoint-not-ahead +
     # restored-chain re-verify). PASS still depends on the configured source object store; the
     # flattened scratch copy is not cutover-ready and is retained only for inspection/discard.
     # Runs on the WORKER (OWNER DATABASE_URL_SYNC + postgresql-client).
-    "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.restore "$@"
+    compose_run worker uv run python -m easysynq_api.cli.restore "$@"
     ;;
   upgrade)
     # S11: non-self-contained pre-upgrade archive -> Alembic -> readiness health-gate. The archive
     # has no object bytes and is not a disaster-recovery set. Runs on the WORKER.
-    "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.upgrade "$@"
+    compose_run worker uv run python -m easysynq_api.cli.upgrade "$@"
     ;;
   mirror)
-    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.mirror "$@"
+    compose_run api uv run python -m easysynq_api.cli.mirror "$@"
     ;;
   blob)
     # S-drift-3 (D1): rolling/--full blob integrity re-hash under LOCK_BLOB_VERIFY. Runs on the
     # WORKER (the same internal-read path the Beat task uses; exit 1 on a FAILED infra scan).
-    "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.blob "$@"
+    compose_run worker uv run python -m easysynq_api.cli.blob "$@"
     ;;
   ""|-h|--help|help)
     usage

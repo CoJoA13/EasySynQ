@@ -1040,18 +1040,51 @@ def test_setup_cli_dispatches_release_administrator_blocker_values(
     ]
 
 
-def test_host_wrapper_forwards_release_administrator_blocker_argv(
+def _host_wrapper_fake_docker(
     tmp_path: Path,
-) -> None:
+    active_config_labels: str,
+) -> tuple[dict[str, str], Path]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     captured_argv = tmp_path / "docker-argv"
     fake_docker = fake_bin / "docker"
-    fake_docker.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$EASYSYNQ_CAPTURE"\n')
+    fake_docker.write_text(
+        """#!/bin/sh
+if [ "$1" = "ps" ]; then
+  if [ "${EASYSYNQ_PS_EXIT:-0}" -ne 0 ]; then
+    exit "$EASYSYNQ_PS_EXIT"
+  fi
+  printf '%s\n' "$EASYSYNQ_ACTIVE_CONFIG_FILES"
+  exit 0
+fi
+printf '%s\n' "$@" > "$EASYSYNQ_CAPTURE"
+"""
+    )
     fake_docker.chmod(0o755)
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
     env["EASYSYNQ_CAPTURE"] = str(captured_argv)
+    env["EASYSYNQ_ACTIVE_CONFIG_FILES"] = active_config_labels
+    env["COMPOSE_PROJECT_NAME"] = "easysynq-wrapper-test"
+    return env, captured_argv
+
+
+def test_host_wrapper_uses_active_deployment_compose_files(
+    tmp_path: Path,
+) -> None:
+    site_overlay = tmp_path / "compose.site.yml"
+    site_overlay.write_text("services: {}\n")
+    active_compose_files = [
+        ROOT / "infra/compose/compose.yml",
+        ROOT / "infra/compose/compose.s.yml",
+        ROOT / "infra/compose/compose.dev.yml",
+        site_overlay,
+    ]
+    active_config_label = ",".join(map(str, active_compose_files))
+    env, captured_argv = _host_wrapper_fake_docker(
+        tmp_path,
+        f"{active_config_label}\n{active_config_label}",
+    )
 
     subprocess.run(  # noqa: S603 - repository wrapper with a controlled fake docker executable
         [
@@ -1067,9 +1100,14 @@ def test_host_wrapper_forwards_release_administrator_blocker_argv(
         env=env,
     )
 
-    assert captured_argv.read_text().splitlines()[-13:] == [
+    assert captured_argv.read_text().splitlines() == [
+        "compose",
+        "--env-file",
+        str(ROOT / ".env"),
+        *[item for path in active_compose_files for item in ("-f", str(path))],
         "run",
         "--rm",
+        "--no-deps",
         "api",
         "uv",
         "run",
@@ -1082,6 +1120,323 @@ def test_host_wrapper_forwards_release_administrator_blocker_argv(
         "--org",
         "RECOVERY",
     ]
+
+
+def test_host_wrapper_runs_worker_without_starting_dependencies(
+    tmp_path: Path,
+) -> None:
+    active_compose_files = [
+        ROOT / "infra/compose/compose.yml",
+        ROOT / "infra/compose/compose.s.yml",
+        ROOT / "infra/compose/compose.dev.yml",
+    ]
+    env, captured_argv = _host_wrapper_fake_docker(
+        tmp_path,
+        ",".join(map(str, active_compose_files)),
+    )
+
+    subprocess.run(  # noqa: S603 - repository wrapper with a controlled fake docker executable
+        [str(ROOT / "scripts/easysynq"), "backup", "--help"],
+        check=True,
+        env=env,
+    )
+
+    assert captured_argv.read_text().splitlines() == [
+        "compose",
+        "--env-file",
+        str(ROOT / ".env"),
+        *[item for path in active_compose_files for item in ("-f", str(path))],
+        "run",
+        "--rm",
+        "--no-deps",
+        "worker",
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "easysynq_api.cli.backup",
+        "--help",
+    ]
+
+
+def test_host_wrapper_reads_compose_project_name_from_env_file(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "checkout"
+    wrapper = checkout / "scripts/easysynq"
+    compose_dir = checkout / "infra/compose"
+    wrapper.parent.mkdir(parents=True)
+    compose_dir.mkdir(parents=True)
+    wrapper.write_text((ROOT / "scripts/easysynq").read_text())
+    wrapper.chmod(0o755)
+    (checkout / ".env").write_text("COMPOSE_PROJECT_NAME = 'custom-project' # selected\n")
+    base = compose_dir / "compose.yml"
+    overlay = compose_dir / "compose.site.yml"
+    base.write_text("name: easysynq\nservices: {}\n")
+    overlay.write_text("services: {}\n")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    captured_argv = tmp_path / "docker-argv"
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+if [ "$1" = "ps" ]; then
+  for arg in "$@"; do
+    if [ "$arg" = "label=com.docker.compose.project=custom-project" ]; then
+      printf '%s\n' "$EASYSYNQ_ACTIVE_CONFIG_FILES"
+      exit 0
+    fi
+  done
+  exit 43
+fi
+printf '%s\n' "$@" > "$EASYSYNQ_CAPTURE"
+"""
+    )
+    fake_docker.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("COMPOSE_PROJECT_NAME", None)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["EASYSYNQ_CAPTURE"] = str(captured_argv)
+    env["EASYSYNQ_ACTIVE_CONFIG_FILES"] = f"{base},{overlay}"
+
+    subprocess.run(  # noqa: S603 - copied repository wrapper with controlled fake docker
+        [str(wrapper), "backup", "--help"],
+        check=True,
+        env=env,
+    )
+
+    assert captured_argv.read_text().splitlines() == [
+        "compose",
+        "--env-file",
+        str(checkout / ".env"),
+        "-f",
+        str(base),
+        "-f",
+        str(overlay),
+        "run",
+        "--rm",
+        "--no-deps",
+        "worker",
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "easysynq_api.cli.backup",
+        "--help",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("invocation_uses_symlink", "label_uses_symlink"),
+    [(True, False), (False, True)],
+    ids=["symlinked-invocation", "symlinked-label"],
+)
+def test_host_wrapper_accepts_equivalent_active_checkout_paths(
+    tmp_path: Path,
+    invocation_uses_symlink: bool,
+    label_uses_symlink: bool,
+) -> None:
+    checkout = tmp_path / "checkout"
+    wrapper = checkout / "scripts/easysynq"
+    compose_dir = checkout / "infra/compose"
+    wrapper.parent.mkdir(parents=True)
+    compose_dir.mkdir(parents=True)
+    wrapper.write_text((ROOT / "scripts/easysynq").read_text())
+    wrapper.chmod(0o755)
+    (checkout / ".env").write_text("")
+    base = compose_dir / "compose.yml"
+    base.write_text("name: easysynq\nservices: {}\n")
+    linked_checkout = tmp_path / "linked-checkout"
+    linked_checkout.symlink_to(checkout, target_is_directory=True)
+    invocation_checkout = linked_checkout if invocation_uses_symlink else checkout
+    label_checkout = linked_checkout if label_uses_symlink else checkout
+    active_base = label_checkout / "infra/compose/compose.yml"
+    env, captured_argv = _host_wrapper_fake_docker(tmp_path, str(active_base))
+
+    subprocess.run(  # noqa: S603 - copied repository wrapper with controlled fake docker
+        [str(invocation_checkout / "scripts/easysynq"), "backup", "--help"],
+        check=True,
+        env=env,
+    )
+
+    assert captured_argv.read_text().splitlines() == [
+        "compose",
+        "--env-file",
+        str(checkout / ".env"),
+        "-f",
+        str(active_base),
+        "run",
+        "--rm",
+        "--no-deps",
+        "worker",
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "easysynq_api.cli.backup",
+        "--help",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("command", "service"),
+    [
+        (["migrate"], "migrate"),
+        (["grant-role", "subject:wrapper-test"], "api"),
+        (["seed-personas"], "api"),
+        (["setup", "--help"], "api"),
+        (["backup", "--help"], "worker"),
+        (["restore", "--help"], "worker"),
+        (["upgrade", "--help"], "worker"),
+        (["mirror", "--help"], "api"),
+        (["blob", "--help"], "worker"),
+    ],
+)
+def test_host_wrapper_operational_commands_never_start_dependencies(
+    tmp_path: Path,
+    command: list[str],
+    service: str,
+) -> None:
+    base = ROOT / "infra/compose/compose.yml"
+    env, captured_argv = _host_wrapper_fake_docker(tmp_path, str(base))
+
+    subprocess.run(  # noqa: S603 - repository wrapper with controlled fake docker
+        [str(ROOT / "scripts/easysynq"), *command],
+        check=True,
+        env=env,
+    )
+
+    argv = captured_argv.read_text().splitlines()
+    run_index = argv.index("run")
+    assert argv[run_index : run_index + 4] == ["run", "--rm", "--no-deps", service]
+
+
+def test_host_wrapper_help_does_not_require_docker(tmp_path: Path) -> None:
+    env, captured_argv = _host_wrapper_fake_docker(tmp_path, "")
+    env["EASYSYNQ_PS_EXIT"] = "42"
+
+    result = subprocess.run(  # noqa: S603 - repository wrapper with controlled fake docker
+        [str(ROOT / "scripts/easysynq"), "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.stdout.startswith("usage: easysynq <command>\n")
+    assert result.stderr == ""
+    assert not captured_argv.exists()
+
+
+def test_host_wrapper_fails_when_no_deployment_is_running(
+    tmp_path: Path,
+) -> None:
+    env, captured_argv = _host_wrapper_fake_docker(tmp_path, "")
+
+    result = subprocess.run(  # noqa: S603 - repository wrapper with controlled fake docker
+        [str(ROOT / "scripts/easysynq"), "backup", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == (
+        "easysynq: no running Compose deployment found for project easysynq-wrapper-test\n"
+    )
+    assert not captured_argv.exists()
+
+
+def test_host_wrapper_fails_when_running_containers_disagree_on_compose_files(
+    tmp_path: Path,
+) -> None:
+    base = ROOT / "infra/compose/compose.yml"
+    dev = ROOT / "infra/compose/compose.dev.yml"
+    small = f"{base},{ROOT / 'infra/compose/compose.s.yml'},{dev}"
+    medium = f"{base},{ROOT / 'infra/compose/compose.m.yml'},{dev}"
+    env, captured_argv = _host_wrapper_fake_docker(tmp_path, f"{small}\n{medium}")
+
+    result = subprocess.run(  # noqa: S603 - repository wrapper with controlled fake docker
+        [str(ROOT / "scripts/easysynq"), "backup", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == (
+        "easysynq: running containers disagree on the Compose file set for project "
+        "easysynq-wrapper-test\n"
+    )
+    assert not captured_argv.exists()
+
+
+def test_host_wrapper_fails_when_docker_cannot_inspect_the_deployment(
+    tmp_path: Path,
+) -> None:
+    env, captured_argv = _host_wrapper_fake_docker(tmp_path, "")
+    env["EASYSYNQ_PS_EXIT"] = "42"
+
+    result = subprocess.run(  # noqa: S603 - repository wrapper with controlled fake docker
+        [str(ROOT / "scripts/easysynq"), "backup", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == (
+        "easysynq: could not inspect the running Compose deployment for project "
+        "easysynq-wrapper-test\n"
+    )
+    assert not captured_argv.exists()
+
+
+def test_host_wrapper_fails_when_an_active_compose_file_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    missing_overlay = tmp_path / "missing-compose.yml"
+    active_config_label = f"{ROOT / 'infra/compose/compose.yml'},{missing_overlay}"
+    env, captured_argv = _host_wrapper_fake_docker(tmp_path, active_config_label)
+
+    result = subprocess.run(  # noqa: S603 - repository wrapper with controlled fake docker
+        [str(ROOT / "scripts/easysynq"), "backup", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == (f"easysynq: active Compose file is unavailable: {missing_overlay}\n")
+    assert not captured_argv.exists()
+
+
+def test_host_wrapper_fails_when_the_running_project_belongs_to_another_checkout(
+    tmp_path: Path,
+) -> None:
+    foreign_compose = tmp_path / "compose.yml"
+    foreign_compose.write_text("name: easysynq\nservices: {}\n")
+    env, captured_argv = _host_wrapper_fake_docker(tmp_path, str(foreign_compose))
+
+    result = subprocess.run(  # noqa: S603 - repository wrapper with controlled fake docker
+        [str(ROOT / "scripts/easysynq"), "backup", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == (
+        "easysynq: running project easysynq-wrapper-test does not belong to this "
+        "EasySynQ checkout\n"
+    )
+    assert not captured_argv.exists()
 
 
 def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
