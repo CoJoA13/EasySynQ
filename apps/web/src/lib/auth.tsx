@@ -322,9 +322,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async (): Promise<void> => {
     const manager = await loadManager(new AbortController().signal);
-    await manager.removeUser();
-    setUser(null);
     await manager.signoutRedirect();
+    setUser(null);
   }, [loadManager]);
 
   const value: AuthState = {
