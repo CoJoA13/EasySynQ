@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type User, UserManager } from "oidc-client-ts";
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { AuthProvider, safeReturnTo, useAuth } from "./auth";
@@ -12,6 +12,8 @@ const {
   signinRedirect,
   signinRedirectCallback,
   getUser,
+  removeUser,
+  signoutRedirect,
   addUserLoaded,
   removeUserLoaded,
   emitUserLoaded,
@@ -23,6 +25,8 @@ const {
     signinRedirect: vi.fn<() => Promise<void>>(async () => undefined),
     signinRedirectCallback: vi.fn(async () => null as unknown),
     getUser: vi.fn(async () => null as unknown),
+    removeUser: vi.fn<() => Promise<void>>(async () => undefined),
+    signoutRedirect: vi.fn<() => Promise<void>>(async () => undefined),
     addUserLoaded: vi.fn((handler: (user: unknown) => void) => {
       userLoadedHandler = handler;
       return () => {
@@ -45,8 +49,8 @@ vi.mock("oidc-client-ts", () => ({
     this.signinRedirectCallback = signinRedirectCallback;
     this.getUser = getUser;
     this.events = { addUserLoaded };
-    this.removeUser = vi.fn();
-    this.signoutRedirect = vi.fn();
+    this.removeUser = removeUser;
+    this.signoutRedirect = signoutRedirect;
   }),
   InMemoryWebStorage: vi.fn(),
   WebStorageStateStore: vi.fn(),
@@ -59,6 +63,10 @@ beforeEach(() => {
   signinRedirectCallback.mockResolvedValue(null);
   getUser.mockReset();
   getUser.mockResolvedValue(null);
+  removeUser.mockReset();
+  removeUser.mockResolvedValue(undefined);
+  signoutRedirect.mockReset();
+  signoutRedirect.mockResolvedValue(undefined);
   addUserLoaded.mockClear();
   removeUserLoaded.mockClear();
   resetUserLoaded();
@@ -90,6 +98,28 @@ function LoginProbe() {
     <button type="button" onClick={login}>
       login
     </button>
+  );
+}
+function LogoutProbe() {
+  const { logout } = useAuth();
+  const [outcome, setOutcome] = useState<"idle" | "redirected" | "failed">("idle");
+
+  async function startLogout() {
+    try {
+      await logout();
+      setOutcome("redirected");
+    } catch {
+      setOutcome("failed");
+    }
+  }
+
+  return (
+    <>
+      <button type="button" onClick={() => void startLogout()}>
+        logout
+      </button>
+      <span>logout:{outcome}</span>
+    </>
   );
 }
 function ActionsProbe() {
@@ -137,6 +167,17 @@ function renderAuthActions() {
         <Probe />
         <ActionsProbe />
         <LocationProbe />
+      </AuthProvider>
+    </MemoryRouter>,
+  );
+}
+
+function renderAuthLogout() {
+  return render(
+    <MemoryRouter initialEntries={["/"]}>
+      <AuthProvider>
+        <Probe />
+        <LogoutProbe />
       </AuthProvider>
     </MemoryRouter>,
   );
@@ -277,6 +318,35 @@ it("login() stashes the current path in the OIDC returnTo state", async () => {
   expect(signinRedirect).toHaveBeenCalledWith({
     state: { returnTo: "/settings/notifications?x=1" },
   });
+});
+
+it("starts RP sign-out while oidc-client still has the current user", async () => {
+  getUser.mockResolvedValue({ access_token: "current-token" } as User);
+  let oidcUserAvailable = true;
+  removeUser.mockImplementation(async () => {
+    oidcUserAvailable = false;
+  });
+  signoutRedirect.mockImplementation(async () => {
+    if (!oidcUserAvailable) throw new Error("current OIDC user was removed before sign-out");
+  });
+  renderAuthLogout();
+  await screen.findByText(/token:current-token/);
+
+  await userEvent.click(screen.getByRole("button", { name: "logout" }));
+
+  await waitFor(() => expect(screen.getByText("logout:redirected")).toBeInTheDocument());
+});
+
+it("keeps the active auth state when sign-out redirect initiation fails", async () => {
+  getUser.mockResolvedValue({ access_token: "current-token" } as User);
+  signoutRedirect.mockRejectedValue(new Error("redirect unavailable"));
+  renderAuthLogout();
+  await screen.findByText(/token:current-token/);
+
+  await userEvent.click(screen.getByRole("button", { name: "logout" }));
+
+  await waitFor(() => expect(screen.getByText("logout:failed")).toBeInTheDocument());
+  expect(screen.getByText(/token:current-token/)).toBeInTheDocument();
 });
 
 it("classifies a redirect rejection without exposing raw details", async () => {
