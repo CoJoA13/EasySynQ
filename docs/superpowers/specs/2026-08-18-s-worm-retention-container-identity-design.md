@@ -1,6 +1,6 @@
 # Design — atomic `S-worm-retention` + `S-container-identity`
 
-> **Status:** owner-approved design, pending written-spec review and implementation plan.
+> **Status:** owner-approved design and owner-approved implementation boundary.
 > **Date:** 2026-08-18 · **Repo commit at design time:** `1737821` · **Migration head:**
 > `0088_bootstrap_credential` · **Next revision:** `0089`
 > **Authority:** the merged execution-order design in
@@ -9,8 +9,9 @@
 > owner decisions recorded here.
 > **Release boundary:** WORM retention and container capability separation are one implementation PR,
 > one release candidate, and one acceptance verdict. Neither half may ship alone.
-> **Implementation authority:** this document authorizes no production edit by itself. The owner must
-> review this committed specification and explicitly approve the later task-level implementation plan.
+> **Implementation authority:** the owner reviewed this specification and explicitly approved the
+> task-level implementation plan, including D15 and D16, on 2026-08-18. Production edits remain governed
+> by that plan and its review checkpoints.
 
 ---
 
@@ -81,8 +82,10 @@ The owner approved these decisions interactively on 2026-08-18.
 | **D10 — permanent retention** | How does `PERMANENT` map to storage? | A legal hold on the exact version in addition to GOVERNANCE retention. R27 alone may remove it after revalidating dual control. |
 | **D11 — R27 authority witness** | Can the executor trust approval rows written through the ordinary API credential? | No. A separate browser-facing R27 authorizer with its own Keycloak audience and signing key produces the two non-forgeable attestations. |
 | **D12 — recovery safety** | May authorized R27 bytes be erased before a verified replacement recovery generation excludes them? | No. Execution remains visibly `WAITING_FOR_RECOVERY_GENERATION` until a separately signed generation attestation passes. |
-| **D13 — hold application** | Must a permanent owner wait on an asynchronous hold service? | No. The ordinary vault principal may set legal hold only to `ON`, enforced by MinIO policy; it verifies synchronously before owner commit. Only R27 may request `OFF`. |
+| **D13 — hold application** | Must a permanent owner wait on an asynchronous hold service? | No. The ordinary vault principal may set legal hold only to `ON`, enforced by MinIO policy; it verifies synchronously before owner commit. That principal can never request `OFF`. |
 | **D14 — R27 approver root** | Can API-provisioned identities become R27 approvers through ordinary application grants? | No. R27 additionally requires a host/bootstrap-controlled Keycloak realm role and WebAuthn step-up that the API provisioning account cannot grant or satisfy. |
+| **D15 — ordinary hold release authority** | How can a non-permanent domain hold be released without giving the API or R27 a second authority path? | The API creates only a non-authoritative intent. A host-invoked, DB-only `hold-release-authorizer` authorizes its exact canonical digest after explicit confirmation; a distinct no-ingress, no-delete, no-bypass `hold-maintenance` service independently rechecks every owner before exact-version `OFF`. Permanent owners remain R27-only. |
+| **D16 — R27 manifest lifetime** | How long may a two-person signed R27 manifest wait for recovery-generation proof? | `R27_MANIFEST_TTL_SECONDS` defaults to 86,400 seconds and is validated to 300–604,800 seconds. This is separate from the at-most-120-second action token; expiry requires fresh two-person authorization, never extension or reuse. |
 
 ### 2.1 Selected architecture — database-backed maintenance plane
 
@@ -90,6 +93,13 @@ The API writes typed, durable non-authoritative work intents and returns their s
 maintenance service claims work from PostgreSQL, revalidates independently witnessed authority, performs
 one allow-listed operation, and records the result. Privileged executors do not consume the ordinary Redis
 queue and expose no API-reachable port.
+
+Ordinary domain hold release uses two purpose-separated database handoffs. The API can create and display
+a typed `PENDING_AUTHORIZATION` intent, but that row is not authority. A host operator invokes a bounded
+`hold-release-authorizer` one-shot that reconstructs and confirms the exact canonical digest before
+recording immutable authorization. A separate `hold-maintenance` process can claim only that authorized
+operation, rechecks the complete live owner set, and uses an OFF-only, no-bypass MinIO principal. Neither
+service can consume or create R27 authority, and R27 cannot consume an ordinary hold authorization.
 
 R27 user authority deliberately follows a separate path. A browser-facing `r27-authorizer` is routed by
 Caddy on a network the main API does not join. The browser obtains a distinct audience-bound Keycloak
@@ -137,7 +147,7 @@ The implementation is incomplete unless all invariants below hold together.
 | **WR-1 — exact target identity** | Every committed WORM owner resolves to one durable `(bucket, key, VersionId)` whose physical coordinates and content digest are immutable after assertion. All WORM reads, verification, recovery, hold, and destructive calls specify that version. Rebuildable non-WORM derivatives retain their separate contract. |
 | **WR-2 — protection before visibility** | No Document source version, Record WORM evidence owner, permanent generated artifact owner, or ingestion WORM success becomes active or visible until the exact target version's required retention and legal-hold state read back successfully. |
 | **WR-3 — maximum owner obligation** | One shared physical version is retained through the maximum obligation of every live owner plus the proposed owner. Deduplication is never a reason to skip retention. |
-| **WR-4 — monotone storage** | Normal paths may set or extend retention and may enable a required hold. They never shorten retention, remove a hold, or bypass GOVERNANCE. |
+| **WR-4 — monotone storage** | Normal storage paths may set or extend retention and may enable a required hold. They never shorten retention, remove a hold, or bypass GOVERNANCE. Ordinary domain hold release exists only through the D15 authority split; permanent release remains R27-only. |
 | **WR-5 — safe external/DB ordering** | Remote over-retention before a database rollback is safe and reconcilable. No active owner/policy obligation may commit ahead of verified physical protection. A proposed longer revision remains explicitly pending for old owners until synchronization. |
 | **WR-6 — GOVERNANCE truth** | Setup, stored configuration, MinIO bucket state, per-version calls, documentation, and diagnostics all say and enforce GOVERNANCE. COMPLIANCE is not a selectable or silently converted mode. |
 | **WR-7 — permanent means held** | A `PERMANENT` owner or active domain legal hold keeps the exact physical version under legal hold. No scheduled disposition clears it. |
@@ -148,9 +158,10 @@ The implementation is incomplete unless all invariants below hold together.
 | **WR-12 — pack/erase serialization** | Pack sealing holds the organization-scoped shared lock; R27 finalization holds its exclusive side. No pack can cross the signed destruction manifest or verified replacement-generation boundary. |
 | **WR-13 — recovery generation first** | R27 physical invalidation/deletion cannot complete until a replacement recovery generation, built after the signed manifest and excluding every target/derivative, is independently verified. Missing support leaves the request pending, not bypassed. |
 | **WR-14 — destructive target revalidation** | A signed manifest is not enough to trust a mutable locator. Immediately before any hold removal or bypass, R27 independently reads and hashes the signed exact version and compares it with the immutable Blob digest; any mismatch fails before a destructive storage call. |
+| **WR-15 — ordinary hold release is exact** | A main-API row cannot authorize physical `OFF`. Only a host-confirmed authorization over one canonical operation digest plus a fresh `hold-maintenance` owner recheck may release a non-permanent hold on one exact version. A permanent or still-required hold fails closed. |
 | **CI-1 — no ordinary bypass** | API, general worker, Beat, web, and migration containers never receive MinIO root or `s3:BypassGovernanceRetention`. |
 | **CI-2 — no indirect privileged submission** | The API cannot authenticate to a privileged queue, invoke privileged service code, or provide an executable command payload. It can only create schema-validated domain intents through authorized application behavior. |
-| **CI-3 — purpose-separated credentials** | R27, audit signing, backup/restore, migration, Keycloak bootstrap, and ordinary runtime capabilities use separate principals and secret mounts. No combined maintenance credential bundle exists. |
+| **CI-3 — purpose-separated credentials** | Ordinary hold authorization, ordinary hold maintenance, R27, audit signing, backup/restore, migration, Keycloak bootstrap/reconciliation, and ordinary runtime capabilities use separate principals and secret mounts. No combined maintenance credential bundle exists. |
 | **CI-4 — non-root runtime** | Every long-running application and web container runs with a pinned non-zero UID/GID, dropped capabilities, `no-new-privileges`, and only declared writable paths. |
 | **CI-5 — no runtime secret generation race** | Persistent signing and verification keys are generated once before concurrent services start. A service never falls back to an ephemeral key because a shared path is absent or unwritable. |
 | **CI-6 — trusted-host boundary** | Docker-group/root-equivalent host administrators remain trusted and explicitly outside container-compromise containment. No documentation claims otherwise. |
@@ -176,13 +187,16 @@ set. A shared image is not a shared capability.
 | **general `worker`** | Application DB role; ordinary vault/mirror access; ordinary Redis tasks; only the mounts needed by its allow-listed jobs. | DB owner; MinIO root/bypass; R27 execution; backup key; audit private key; Keycloak bootstrap admin. |
 | **`beat`** | Ordinary Redis scheduling only. | DB owner, application storage credentials, R27, backup, Keycloak, and signing secrets. It schedules no privileged operation. |
 | **`retention-maintenance`** | Narrow retention-operation DB role; ordinary non-bypass vault principal; bounded polling schedule. | R27 authorizer/executor keys; MinIO root/bypass; legal-hold removal; backup, audit-signing, or Keycloak authority; Redis. |
+| **`hold-release-authorizer` (one-shot)** | Host-invoked narrow authorization DB role; reconstruct and display one canonical hold-release digest; explicit operator confirmation; immutable authorization write. | MinIO, Redis, ingress, R27 authority, application mutation, bulk/wildcard authorization, delete, bypass, or retention authority. |
+| **`hold-maintenance`** | Narrow authorized-hold-operation DB role; exact-version lock inspection; legal-hold `OFF` principal constrained to the ordinary WORM domains; bounded polling schedule. | Redis, ingress, DB owner, R27 authority/key, object data read/write, delete, retention write/shortening, Governance bypass, backup, audit-signing, or Keycloak authority. |
 | **`r27-authorizer`** | Dedicated-audience Keycloak validation including `r27-approver` and fresh WebAuthn context; `record.dispose` evaluation; narrow R27-authority DB role; R27 attestation private key; canonical manifest and approval endpoints routed directly from Caddy. | Main API network; Redis; MinIO credentials; recovery-generation signer; Keycloak role-mapping administration; backup or audit authority. |
 | **`r27-maintenance`** | Narrow R27 database role; exact-version records/documents policy; legal-hold transition and GOVERNANCE-bypass credential; audit result write. | Redis, inbound port, DB owner, backup key, audit signing key, Keycloak admin, arbitrary bucket administration. |
 | **recovery verifier key manager (one-shot)** | Host-invoked narrow DB role for audited install/retire/revoke of recovery **public** keys only. | Long-running process, network ingress, recovery private key, MinIO, Redis, application/R27 mutation, or witness signing. |
 | **`audit-signer`** | Narrow checkpoint database role; audit private key; its own internal schedule/intent claimant. | Redis, MinIO root/bypass, backup key, Keycloak admin, general application mutation. |
 | **`backup-maintenance`** | Bounded database export/restore role, backup encryption key, backup/scratch mounts, scoped Keycloak export identity, typed backup intent/schedule. | R27 bypass, audit private key, general Redis work, MinIO administration unless a later backup design explicitly grants a narrower storage leg. |
 | **`migrate`** | Database-owner DSN for the bounded migration process. | All S3, Keycloak, audit, backup, ordinary application, and Redis secrets. |
-| **Keycloak bootstrap/init** | Bootstrap administrator secret only for bounded bootstrap/reconciliation. | Application, R27, audit, and backup credentials. The bootstrap secret is not a steady-state API credential. |
+| **Keycloak bootstrap/init** | Bootstrap administrator secret only for initial dependency bootstrap. | Application, storage, R27, audit, and backup credentials. The bootstrap secret is not a steady-state API credential. |
+| **`keycloak-reconcile` (one-shot)** | Bootstrap administrator plus the exact generated ordinary-provisioning, backup-export, and R27-role-manager client secrets for fixed realm/client/role/flow reconciliation and bounded positive/negative probes. | Application DB/storage, R27 attestation or execution, audit, backup encryption, Redis, runtime ingress, or arbitrary operator-supplied realm/client/role/flow targets. |
 | **MinIO bootstrap/init** | MinIO root and policy/user-provisioning authority. | Application database, Keycloak, audit, and backup credentials. Root is never copied into an application service. |
 | **`web`** | Static assets and unprivileged HTTP listener. | Application secrets, Node development runtime, database/storage credentials, writable application state. |
 
@@ -200,6 +214,18 @@ principal is forbidden. The design relies on MinIO's documented condition-key su
 then treats the live pinned-version denial proof as authority over prose documentation:
 [MinIO policy action reference](https://min.io/docs/minio/kubernetes/eks/administration/identity-access-management/policy-based-access-control.html).
 
+### 4.1.1 Ordinary hold-release vault policy
+
+The `hold-maintenance` MinIO principal is smaller than the ordinary vault principal. It may inspect legal
+hold state and request `OFF` only for the exact VersionId of a host-authorized ordinary release. It cannot
+read or write object bytes, list objects or versions, set hold `ON`, read or change retention, delete any
+object, or pass `s3:BypassGovernanceRetention`. The service still revalidates authorization and every live
+owner under lock because IAM cannot prove the domain release contract.
+
+The implementation must prove the pinned MinIO release can enforce the OFF-only condition with live allow
+and denial tests. If it cannot, implementation stops for owner review; it does not grant an unconditional
+`s3:PutObjectLegalHold`, borrow the R27 principal, or add bypass/delete capability.
+
 ### 4.2 R27 vault policy
 
 The R27 principal is restricted to exact-version lock inspection, legal-hold transition, and deletion in
@@ -214,6 +240,13 @@ bounded batches, and `FOR UPDATE SKIP LOCKED` or an equivalently proven single-c
 cannot provide a module name, shell string, bucket, or object key as an arbitrary command. Target
 coordinates are resolved from authoritative rows and rechecked against the requesting organization.
 
+For ordinary hold release, the application role may insert a schema-validated
+`PENDING_AUTHORIZATION` intent and read its safe status, but cannot write authorization, claim work, or
+record physical results. The host-invoked `hold-release-authorizer` role alone can write immutable
+authorization bound to the reconstructed canonical operation digest and advance it to `AUTHORIZED`.
+`hold-maintenance` alone can claim that authorization, revalidate all owners, and record the exact
+verified `OFF` result. Those roles cannot assume one another, and neither can read or mutate R27 authority.
+
 The ordinary application role becomes read-only for R27 request/approval attestations, signed manifests,
 replacement-generation witnesses, R27 final disposition events, and privileged purge markers. The
 `r27-authorizer` alone writes accepted human authority; `r27-maintenance` alone writes final execution
@@ -223,7 +256,8 @@ inserting or changing a row with the ordinary application credential cannot crea
 The application role may insert a complete newly asserted WORM Blob as part of the protected owner
 transaction, but it cannot update or delete an asserted WORM Blob. Database column grants and triggers
 reserve monotone retain-until/verification updates to `retention-maintenance`, and reserve R27 result and
-hold-release state to `r27-maintenance`; neither role may rewrite physical coordinates or content identity.
+purge state to `r27-maintenance`. Ordinary verified hold-release state is reserved to `hold-maintenance`;
+no maintenance role may rewrite physical coordinates or content identity.
 The comprehensive later `S-db-grants` slice remains deferred, but these WORM and R27 grants are part of
 this atomic boundary and cannot be deferred with it.
 
@@ -350,10 +384,12 @@ trusted-host boundary and is never treated as runtime authorization.
 
 Mutable assertion state is narrowly separated from immutable identity. `retention-maintenance` can only
 ratchet retain-until and corresponding verification fields forward and can record verified hold `ON`;
-constraints reject a shorter date or an `OFF` transition. `r27-maintenance` can record a verified hold
-release and exact purge result only for its already claimed signed request. It still cannot alter the
-target coordinates, digest, mode, or original assertion. Historical rows and purge evidence remain rather
-than deleting or repointing a Blob after physical disposition.
+constraints reject a shorter date or an `OFF` transition. `hold-maintenance` can record verified hold
+`OFF` only for its claimed, host-authorized ordinary operation after the owner recheck; it cannot record
+permanent release or a purge. `r27-maintenance` can record a verified permanent hold release and exact
+purge result only for its already claimed signed request. Neither can alter the target coordinates,
+digest, mode, or original assertion. Historical rows and purge evidence remain rather than deleting or
+repointing a Blob after physical disposition.
 
 ### 5.3 owner obligations
 
@@ -432,10 +468,23 @@ principal; a live negative test is release-blocking. A failure leaves no active 
 idempotent retry through the existing create/check-in/import operation rather than a new half-visible
 Document or Record state.
 
-Hold removal is asynchronous and typed. Its durable operation binds organization, exact version,
-owner/hold authority, actor, idempotency identity, attempts, and result. A normal domain hold release may
-remove the physical hold only when no other WORM owner requires it. A permanent owner requires the signed
-R27 chain. A generic operation row is never authority by itself.
+Ordinary hold removal is asynchronous and typed. An authorized API request creates a closed
+`HOLD_RELEASE_V1` operation in `PENDING_AUTHORIZATION`; its canonical bytes/digest bind organization,
+Record, immutable Blob digest and exact VersionId, initiating application actor, normalized release basis,
+owner-snapshot digest, issue time, and idempotency identity. The request audit and operation are durable,
+but neither row authorizes physical `OFF`.
+
+The supported host command accepts one operation UUID, starts the DB-only `hold-release-authorizer`,
+reconstructs the canonical bytes from authoritative rows, verifies the original authority and current
+logical release, displays a bounded summary, refuses permanent/cross-organization/stale operations, and
+requires explicit confirmation. Its immutable authorization binds the exact digest and advances only the
+unchanged row to `AUTHORIZED`; there is no browser/API authorization route or bulk/wildcard mode.
+
+`hold-maintenance` claims only `AUTHORIZED` work, rechecks every current owner under the physical lock,
+and sets legal hold `OFF` for that exact VersionId only when no surviving owner still requires it. It reads
+the result back before recording `VERIFIED`. A changed target, stale authorization, permanent owner, or
+surviving hold requirement fails closed. Its principal cannot delete, bypass Governance, change retention,
+or consume R27 authority; R27 cannot consume an ordinary hold authorization.
 
 ### 5.7 R27 attestations, recovery witness, and exact markers
 
@@ -445,6 +494,12 @@ requester, approver, immutable Blob SHA-256 plus exact WORM `(bucket,key,Version
 pack/artifact inventory and excluded-set digest, issued/expiry times, the complete accepted OIDC claim set
 from §4.4, and the expected pre-execution state. Requester and approver are distinct Keycloak subjects and
 application users. Any changed field invalidates verification.
+
+The canonical manifest expires after `R27_MANIFEST_TTL_SECONDS`, which defaults to 86,400 seconds and is
+validated to 300–604,800 seconds. This is independent of the at-most-120-second OIDC action-token lifetime.
+Expiry is rechecked before every state transition and external action. A manifest that expires while
+waiting for recovery generation becomes stale and requires a new canonical manifest plus two fresh human
+authorizations; the prior manifest is never extended, refreshed, or reused.
 
 The ordinary application role has read-only access to accepted R27 authority rows and no access to the
 authorizer private key. `r27-maintenance` receives only the pinned public key. Key rotation preserves the
@@ -591,7 +646,27 @@ active policy plus the visible longer proposed revision, preserves completed ove
 remaining work. Retry is idempotent and uses bounded backoff. After every current target verifies, one
 transaction promotes the proposal to active and marks the operation `VERIFIED`.
 
-### 7.3 R27 authorization, recovery gate, and purge
+### 7.3 ordinary domain hold release
+
+The main API checks `record.hold.manage`, resolves the exact asserted WORM target, canonicalizes
+`HOLD_RELEASE_V1`, appends the immutable request audit, and returns `202 PENDING_AUTHORIZATION`. It cannot
+authorize, claim, or complete the operation. The browser displays safe state and never offers an authorize
+control.
+
+The host invokes `./scripts/easysynq hold-release authorize --operation-id UUID`. That bounded wrapper
+passes only the dedicated DB secret to the one-shot authorizer, supplies the trusted host-operator
+identity, and requires an exact confirmation. Non-interactive use additionally supplies the expected
+digest. The one-shot rebuilds and verifies the operation before recording immutable authorization; it has
+no MinIO credential.
+
+`hold-maintenance` atomically claims only the resulting `AUTHORIZED` row. Under the same sorted physical
+locking discipline as other WORM changes, it reloads the immutable target and complete owner registry,
+rejects any permanent or surviving hold obligation, uses the OFF-only principal for one exact VersionId,
+and verifies the physical result. On ambiguity or failure it records a bounded `FAILED` state and retries
+only after all authorization and owner checks pass again; it never deletes, bypasses, or broadens the
+target.
+
+### 7.4 R27 authorization, recovery gate, and purge
 
 The main API may display read-only R27 state but cannot request, approve, sign, execute, or directly mutate
 accepted R27 authority. The static browser obtains the separate authorizer token and sends request/approval
@@ -646,13 +721,13 @@ boolean, service credential, database actor ID, or prior attempt is never enough
 remains pending/failed with bounded diagnostics and an operational alert; it is not silently converted to
 success.
 
-### 7.4 audit signing
+### 7.5 audit signing
 
 The audit signer owns the persistent private key and its database-backed schedule/state. API and general
 workers may verify with the public key but cannot sign. Key material is generated once during installation,
 mounted read-only, and never synthesized ephemerally because a path is missing.
 
-### 7.5 backup/restore
+### 7.6 backup/restore
 
 Backup and restore run through their purpose-specific service or bounded one-shot profile. Manual requests
 become typed database intents; scheduled work is owned by that service rather than ordinary Beat. No
@@ -666,6 +741,8 @@ the later backup-content, destination, restore-target, or recovery-generation sl
 The public/admin contract distinguishes at least:
 
 - accepted and pending physical synchronization;
+- ordinary hold release pending host authorization, authorized, running, failed, cancelled before start,
+  and physically verified;
 - signed R27 authority waiting for a verified replacement recovery generation;
 - retrying after a transient storage or dependency failure;
 - terminal failure requiring operator action;
@@ -700,9 +777,11 @@ contains non-secret configuration and is not mounted wholesale into runtime serv
 
 Required splits include:
 
-- MinIO root/bootstrap versus ordinary vault versus R27;
-- database owner versus application versus narrowly required maintenance roles;
-- Keycloak bootstrap administrator versus scoped provisioning/export accounts;
+- MinIO root/bootstrap versus ordinary ON-only vault versus ordinary OFF-only hold maintenance versus R27;
+- database owner versus application versus hold authorizer, hold maintenance, and every other narrowly
+  required maintenance role;
+- Keycloak bootstrap administrator/reconciler versus scoped provisioning, export, and R27-role-manager
+  accounts;
 - dedicated-audience R27 authorizer OIDC client and its attestation private/public key split;
 - empty recovery-generation verifier registry plus host-only one-shot key-manager credential; a future
   recovery installer activates only its public key, while neither a production nor test private key is
@@ -759,8 +838,9 @@ Installation performs, in order:
 2. generate secret/key material without printing it;
 3. initialize fresh volume ownership;
 4. start PostgreSQL, MinIO, Redis, and Keycloak dependencies;
-5. provision MinIO users/policies and the scoped Keycloak identities/client/role/authentication flow,
-   leaving `r27-approver` with no automatic runtime-API membership;
+5. provision MinIO users/policies, then run the bounded post-ready Keycloak reconciler to install the
+   generated scoped-client secrets, identities, R27 client/role, and authentication flow, leaving
+   `r27-approver` with no automatic runtime-API membership;
 6. run target migration `0089` with only the DB-owner secret;
 7. start purpose-separated non-root runtime services;
 8. run readiness/doctor checks that verify actual policy, identity, and secret absence; and
@@ -840,6 +920,7 @@ load-bearing predicate has a safe mutation or equivalent negative control.
 | **Document policy reaches storage** | **RED** | Document-type default and installation fallback both produce exact-version read-back at check-in. Bucket default alone cannot satisfy the test. |
 | **Event anchor** | **RED** | Unknown event uses capture date; later event extends; an earlier computed date never shortens. |
 | **Permanent hold** | **RED** | `PERMANENT` becomes active only after exact-version legal hold reads `ON`; scheduled disposition cannot remove it. |
+| **Ordinary hold release** | **RED** | An API-created or app-forged row cannot authorize `OFF`; the host one-shot alone can authorize an unchanged canonical digest, and only `hold-maintenance` can release one non-permanent exact version after a fresh owner recheck. Permanent/surviving owners, cross-role claims, delete, bypass, retention change, and broader MinIO actions are denied. |
 | **Pending extension resume** | **RED** | Inject failure after some exact versions extend; active values remain old, proposed values stay visible, new captures use the longer maximum, restart resumes, and final activation occurs only after all targets verify. |
 | **Normal bypass denial** | **RED** | Real MinIO denies explicit Governance bypass to the ordinary principal while preserving allowed promote/read/extend behavior. |
 | **API-side R27 absence** | **RED** | Main API has read-only R27 authority access, cannot reach authorizer/executor, cannot call bypass code, and cannot send privileged Redis work. |
@@ -891,6 +972,10 @@ Additional targeted gates cover:
 - controlled-document, Record, ingestion, generated-artifact, disposition, and policy-extension
   integrations;
 - real MinIO VersionId, retention, legal-hold, IAM denial, and exact-delete behavior;
+- real database roles and MinIO principals proving the API cannot forge ordinary hold authorization, the
+  host one-shot binds only the unchanged canonical digest, hold maintenance rechecks every owner, the
+  OFF-only principal can release one eligible exact version, and every permanent/cross-role/delete/bypass/
+  retention/broader-storage attempt is denied;
 - real application-role PostgreSQL mutation denial for asserted WORM identity plus owner-only tamper
   fixtures proving exact-version SHA mismatch stops before every destructive MinIO call;
 - separate Testcontainers PostgreSQL fixtures for: empty `0088 -> 0089`; populated legacy refusal with
@@ -904,7 +989,8 @@ Additional targeted gates cover:
   test-signed exact-version execution;
 - rendered Compose for every S/M development/production/appliance combination;
 - live effective UID/GID, read-only filesystem, writable-path, restart, and secret-readability checks;
-- Keycloak scoped service-account behavior without bootstrap-admin leakage;
+- bounded Keycloak reconciliation, three distinct generated confidential-client credentials, scoped
+  positive probes, wrong/swapped-secret and privilege denials, and no bootstrap-admin leakage into runtime;
 - web static-image build/runtime behavior; and
 - current CI's actual required job/check inventory rather than a historical count.
 
@@ -970,9 +1056,21 @@ The walkthrough is release-blocking for this slice and uses only synthetic data.
 3. Exercise an unresolved event basis, then record its real event and show extension without shortening.
 4. Stop the retention processor, request a policy extension, show visible pending state, restart it, and
    show verified completion.
-5. Create a permanent owner and show legal hold `ON` for the exact version.
+5. Create a temporary domain hold and show legal hold `ON` for the exact version.
 
-### 13.4 R27 boundary and deliberate recovery gate
+### 13.4 ordinary hold-release boundary
+
+1. Request release through the supported UI/API and show `PENDING_AUTHORIZATION` while the physical exact
+   version remains held.
+2. With the application DB role, attempt to forge authorization or advance the operation and show denial.
+3. Run the exact host authorization command for that one operation, confirm its bounded digest summary,
+   and show the state becomes `AUTHORIZED` without a MinIO call.
+4. Let `hold-maintenance` recheck owners, set `OFF` for the exact VersionId, and read back `VERIFIED`; show
+   its principal cannot delete, bypass Governance, alter retention, or affect another version.
+5. Separately create a permanent owner and show the ordinary authorizer refuses it and legal hold remains
+   `ON`.
+
+### 13.5 R27 boundary and deliberate recovery gate
 
 1. Show ordinary deletion and ordinary Governance bypass fail.
 2. Complete the two-person flow directly against `r27-authorizer` with the dedicated audience and show
@@ -992,7 +1090,7 @@ The walkthrough is release-blocking for this slice and uses only synthetic data.
 Successful production live deletion, derivative invalidation, and newer-version survival become mandatory
 acceptance for `S-recovery-generation`, when a real signed replacement generation can satisfy the gate.
 
-### 13.5 browser and profile parity
+### 13.6 browser and profile parity
 
 Walk through login, Documents, Approvals, Records, the separate R27 authorization flow, and every affected
 pending/failure status exposed by the web surface. Prove authorizer tokens do not travel to the ordinary
@@ -1028,6 +1126,7 @@ The implementation PR states:
 - intentionally deferred programme work; and
 - every partial, skipped, unavailable, or failed check.
 
-This committed specification must receive explicit owner review before an implementation plan is written.
-The later plan must map each invariant and acceptance proof to concrete files, tasks, commands, checkpoints,
-and rollback/refusal behavior without weakening this design.
+The owner approved this amended specification and its task-level implementation plan on 2026-08-18. That
+plan maps each invariant and acceptance proof to concrete files, tasks, commands, checkpoints, and
+rollback/refusal behavior without weakening this design; implementation must follow it serially and stop
+at every named owner-review condition.
