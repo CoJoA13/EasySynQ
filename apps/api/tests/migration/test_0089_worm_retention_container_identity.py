@@ -678,8 +678,11 @@ def test_recovery_witness_requires_distinct_nonblank_generation_identity(
                 connection.execute(sa.text("SET LOCAL session_replication_role = replica"))
                 connection.execute(statement, values)
 
-            for blank_identity in ("", "   "):
-                with pytest.raises(sa.exc.IntegrityError):
+            unexpectedly_accepted: list[str] = []
+            for case_number, blank_identity in enumerate(
+                ("", "   ", "\t", "\n", "\r", " \t\r\n "), start=1
+            ):
+                try:
                     with engine.begin() as connection:
                         connection.execute(sa.text("SET LOCAL session_replication_role = replica"))
                         connection.execute(
@@ -689,9 +692,19 @@ def test_recovery_witness_requires_distinct_nonblank_generation_identity(
                                 "id": uuid.uuid4(),
                                 "witness_nonce": uuid.uuid4().hex + "a" * 11,
                                 "request_id": uuid.uuid4(),
+                                "manifest_sha256": f"{case_number:064x}",
+                                "generation_id": f"internal-generation-{case_number}",
                                 "generation_identity": blank_identity,
                             },
                         )
+                except sa.exc.IntegrityError as error:
+                    assert (
+                        error.orig.diag.constraint_name
+                        == "ck_recovery_generation_witness_generation_identity_nonblank"
+                    )
+                    continue
+                unexpectedly_accepted.append(repr(blank_identity))
+            assert unexpectedly_accepted == []
         finally:
             engine.dispose()
 

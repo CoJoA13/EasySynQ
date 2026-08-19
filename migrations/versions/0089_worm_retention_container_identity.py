@@ -967,7 +967,7 @@ def _create_recovery_authority() -> None:
             name="sha256_shape",
         ),
         sa.CheckConstraint(
-            "length(btrim(generation_identity)) BETWEEN 1 AND 255",
+            "generation_identity ~ '[^[:space:]]'",
             name="generation_identity_nonblank",
         ),
         sa.CheckConstraint("result = 'VERIFIED'", name="result_verified"),

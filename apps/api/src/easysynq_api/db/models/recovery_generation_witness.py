@@ -39,7 +39,7 @@ class RecoveryGenerationWitness(Base):
             name="sha256_shape",
         ),
         CheckConstraint(
-            "length(btrim(generation_identity)) BETWEEN 1 AND 255",
+            "generation_identity ~ '[^[:space:]]'",
             name="generation_identity_nonblank",
         ),
         CheckConstraint("result = 'VERIFIED'", name="result_verified"),
