@@ -4,6 +4,7 @@ import datetime
 import uuid
 
 from sqlalchemy import (
+    CHAR,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -35,6 +36,7 @@ class RetentionOperationTarget(Base):
             "length(object_version_id) BETWEEN 1 AND 1024",
             name="object_version_id_length",
         ),
+        CheckConstraint("blob_sha256 ~ '^[0-9a-f]{64}$'", name="blob_sha256_shape"),
         CheckConstraint("attempt_count >= 0", name="attempt_nonnegative"),
     )
 
@@ -45,7 +47,7 @@ class RetentionOperationTarget(Base):
         nullable=False,
     )
     blob_sha256: Mapped[str] = mapped_column(
-        Text, ForeignKey("blob.sha256", ondelete="RESTRICT"), nullable=False
+        CHAR(64), ForeignKey("blob.sha256", ondelete="RESTRICT"), nullable=False
     )
     bucket: Mapped[str] = mapped_column(Text, nullable=False)
     object_key: Mapped[str] = mapped_column(Text, nullable=False)

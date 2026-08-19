@@ -38,6 +38,10 @@ class RecoveryGenerationWitness(Base):
             "manifest_sha256 ~ '^[0-9a-f]{64}$' AND excluded_set_sha256 ~ '^[0-9a-f]{64}$'",
             name="sha256_shape",
         ),
+        CheckConstraint(
+            "length(btrim(generation_identity)) BETWEEN 1 AND 255",
+            name="generation_identity_nonblank",
+        ),
         CheckConstraint("result = 'VERIFIED'", name="result_verified"),
     )
 
@@ -58,6 +62,7 @@ class RecoveryGenerationWitness(Base):
     )
     manifest_sha256: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     generation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    generation_identity: Mapped[str] = mapped_column(String(255), nullable=False)
     excluded_set_sha256: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     result: Mapped[str] = mapped_column(String(16), nullable=False)
     canonical_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)

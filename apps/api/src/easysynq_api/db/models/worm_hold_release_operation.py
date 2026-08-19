@@ -39,6 +39,7 @@ class WormHoldReleaseOperation(Base):
             "length(normalized_release_basis) BETWEEN 1 AND 4000",
             name="release_basis_length",
         ),
+        CheckConstraint("blob_sha256 ~ '^[0-9a-f]{64}$'", name="blob_sha256_shape"),
         CheckConstraint(
             "canonical_sha256 ~ '^[0-9a-f]{64}$' AND owner_snapshot_sha256 ~ '^[0-9a-f]{64}$'",
             name="sha256_shape",
@@ -54,7 +55,7 @@ class WormHoldReleaseOperation(Base):
         UUID(as_uuid=True), ForeignKey("record.id", ondelete="RESTRICT"), nullable=False
     )
     blob_sha256: Mapped[str] = mapped_column(
-        Text, ForeignKey("blob.sha256", ondelete="RESTRICT"), nullable=False
+        CHAR(64), ForeignKey("blob.sha256", ondelete="RESTRICT"), nullable=False
     )
     object_version_id: Mapped[str] = mapped_column(Text, nullable=False)
     initiated_by_user_id: Mapped[uuid.UUID] = mapped_column(

@@ -33,11 +33,11 @@ from easysynq_api.db.models.disposition_event import DispositionEvent
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.evidence_blob import EvidenceBlob
 from easysynq_api.db.models.pending_blob_purge import PendingBlobPurge
+from easysynq_api.db.models.r27_request import R27Request as WormDestroyRequest
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.retention_policy import RetentionPolicy
 from easysynq_api.db.models.storage_config import StorageConfig
 from easysynq_api.db.models.system_config import SystemConfig
-from easysynq_api.db.models.worm_destroy_request import WormDestroyRequest
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.records import disposition, sweep_due_records
 from easysynq_api.services.records import service as records_service

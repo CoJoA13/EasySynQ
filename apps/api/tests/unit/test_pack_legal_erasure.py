@@ -13,8 +13,8 @@ from easysynq_api.db.models._record_enums import RecordDispositionState
 from easysynq_api.db.models._retention_enums import DispositionAction
 from easysynq_api.db.models.disposition_event import DispositionEvent
 from easysynq_api.db.models.evidence_pack import EvidencePack
+from easysynq_api.db.models.r27_request import R27Request as WormDestroyRequest
 from easysynq_api.db.models.record import Record
-from easysynq_api.db.models.worm_destroy_request import WormDestroyRequest
 from easysynq_api.problems import ProblemException
 from easysynq_api.services.packs.repository import _pack_invalidation_closure
 from easysynq_api.services.records.disposition import (

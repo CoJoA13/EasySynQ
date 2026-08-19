@@ -26,6 +26,14 @@ class R27Attestation(Base):
         UniqueConstraint("challenge_id", name="uq_r27_attestation_challenge_id"),
         UniqueConstraint("request_id", "action", name="uq_r27_attestation_request_id_action"),
         CheckConstraint("canonical_sha256 ~ '^[0-9a-f]{64}$'", name="canonical_sha256_shape"),
+        CheckConstraint(
+            "jsonb_typeof(audience) = 'array' "
+            "AND jsonb_array_length(audience) > 0 "
+            "AND NOT jsonb_path_exists("
+            'audience, \'$[*] ? (@.type() != "string" || @ like_regex "^\\\\s*$")\''
+            ")",
+            name="audience_nonempty_string_array",
+        ),
         CheckConstraint("expires_at > issued_at", name="expiry_after_issue"),
     )
 
@@ -52,7 +60,7 @@ class R27Attestation(Base):
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     session_id: Mapped[str] = mapped_column(String(255), nullable=False)
     token_jti: Mapped[str] = mapped_column(String(255), nullable=False)
-    audience: Mapped[str] = mapped_column(String(255), nullable=False)
+    audience: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     authorized_party: Mapped[str] = mapped_column(String(255), nullable=False)
     acr: Mapped[str] = mapped_column(String(255), nullable=False)
     auth_time: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)

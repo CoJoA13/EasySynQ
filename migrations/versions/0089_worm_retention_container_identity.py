@@ -348,7 +348,7 @@ def _create_retention_operations() -> None:
         "retention_operation_target",
         _uuid_pk(),
         sa.Column("operation_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("blob_sha256", sa.Text(), nullable=False),
+        sa.Column("blob_sha256", sa.CHAR(length=64), nullable=False),
         sa.Column("bucket", sa.Text(), nullable=False),
         sa.Column("object_key", sa.Text(), nullable=False),
         sa.Column("object_version_id", sa.Text(), nullable=False),
@@ -385,6 +385,10 @@ def _create_retention_operations() -> None:
             "length(object_version_id) BETWEEN 1 AND 1024",
             name="object_version_id_length",
         ),
+        sa.CheckConstraint(
+            "blob_sha256 ~ '^[0-9a-f]{64}$'",
+            name="blob_sha256_shape",
+        ),
         sa.CheckConstraint("attempt_count >= 0", name="attempt_nonnegative"),
     )
 
@@ -395,7 +399,7 @@ def _create_hold_release() -> None:
         _uuid_pk(),
         sa.Column("org_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("record_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("blob_sha256", sa.Text(), nullable=False),
+        sa.Column("blob_sha256", sa.CHAR(length=64), nullable=False),
         sa.Column("object_version_id", sa.Text(), nullable=False),
         sa.Column("initiated_by_user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("idempotency_key", sa.String(length=128), nullable=False),
@@ -439,6 +443,10 @@ def _create_hold_release() -> None:
         sa.CheckConstraint(
             "length(normalized_release_basis) BETWEEN 1 AND 4000",
             name="release_basis_length",
+        ),
+        sa.CheckConstraint(
+            "blob_sha256 ~ '^[0-9a-f]{64}$'",
+            name="blob_sha256_shape",
         ),
         sa.CheckConstraint(
             "canonical_sha256 ~ '^[0-9a-f]{64}$' AND owner_snapshot_sha256 ~ '^[0-9a-f]{64}$'",
@@ -806,7 +814,7 @@ def _create_r27_challenge_and_keys() -> None:
         sa.Column("subject", sa.String(length=255), nullable=False),
         sa.Column("session_id", sa.String(length=255), nullable=False),
         sa.Column("token_jti", sa.String(length=255), nullable=False),
-        sa.Column("audience", sa.String(length=255), nullable=False),
+        sa.Column("audience", postgresql.JSONB(), nullable=False),
         sa.Column("authorized_party", sa.String(length=255), nullable=False),
         sa.Column("acr", sa.String(length=255), nullable=False),
         sa.Column("auth_time", sa.DateTime(timezone=True), nullable=False),
@@ -824,6 +832,14 @@ def _create_r27_challenge_and_keys() -> None:
         sa.CheckConstraint(
             "canonical_sha256 ~ '^[0-9a-f]{64}$'",
             name="canonical_sha256_shape",
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(audience) = 'array' "
+            "AND jsonb_array_length(audience) > 0 "
+            "AND NOT jsonb_path_exists("
+            'audience, \'$[*] ? (@.type() != "string" || @ like_regex "^\\\\s*$")\''
+            ")",
+            name="audience_nonempty_string_array",
         ),
         sa.CheckConstraint("expires_at > issued_at", name="expiry_after_issue"),
     )
@@ -909,6 +925,7 @@ def _create_recovery_authority() -> None:
         sa.Column("request_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("manifest_sha256", sa.CHAR(length=64), nullable=False),
         sa.Column("generation_id", sa.String(length=255), nullable=False),
+        sa.Column("generation_identity", sa.String(length=255), nullable=False),
         sa.Column("excluded_set_sha256", sa.CHAR(length=64), nullable=False),
         sa.Column("result", sa.String(length=16), nullable=False),
         sa.Column("canonical_bytes", sa.LargeBinary(), nullable=False),
@@ -948,6 +965,10 @@ def _create_recovery_authority() -> None:
         sa.CheckConstraint(
             "manifest_sha256 ~ '^[0-9a-f]{64}$' AND excluded_set_sha256 ~ '^[0-9a-f]{64}$'",
             name="sha256_shape",
+        ),
+        sa.CheckConstraint(
+            "length(btrim(generation_identity)) BETWEEN 1 AND 255",
+            name="generation_identity_nonblank",
         ),
         sa.CheckConstraint("result = 'VERIFIED'", name="result_verified"),
     )
