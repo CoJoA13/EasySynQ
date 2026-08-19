@@ -62,6 +62,10 @@ _MIGRATION_MANAGED_INDEXES = frozenset(
         "ix_awareness_event_pending",  # S-notify-5a claim scan
         "uq_notification_dedup_awareness",  # S-notify-5a version-discriminated dedup
         "uq_working_calendar_one_default",  # S-notify-6 at-most-one-default-per-org
+        "uq_blob_worm_physical_identity",  # 0089 exact version identity when present
+        "uq_retention_revision_policy_proposed",  # 0089 one pending policy revision
+        "uq_retention_revision_config_proposed",  # 0089 one pending minimum revision
+        "uq_r27_request_open",  # 0089 one nonterminal R27 request per Record
     }
 )
 

@@ -16,6 +16,8 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -35,6 +37,7 @@ from ._vault_enums import (
     change_significance_enum,
     version_state_enum,
 )
+from ._worm_enums import RetentionAuthorityKind, retention_authority_kind_enum
 
 
 class DocumentVersion(Base):
@@ -52,6 +55,13 @@ class DocumentVersion(Base):
             "document_id",
             unique=True,
             postgresql_where=text("version_state = 'Effective'::version_state"),
+        ),
+        CheckConstraint(
+            "(retention_authority_kind = 'POLICY' AND retention_policy_id IS NOT NULL "
+            "AND document_worm_config_id IS NULL) OR "
+            "(retention_authority_kind = 'INSTALLATION_MINIMUM' "
+            "AND retention_policy_id IS NULL AND document_worm_config_id IS NOT NULL)",
+            name="retention_authority_shape",
         ),
     )
 
@@ -73,6 +83,22 @@ class DocumentVersion(Base):
     version_state: Mapped[VersionState] = mapped_column(
         version_state_enum, default=VersionState.Draft, nullable=False
     )
+    retention_authority_kind: Mapped[RetentionAuthorityKind] = mapped_column(
+        retention_authority_kind_enum, nullable=False
+    )
+    retention_policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("retention_policy.id", ondelete="RESTRICT"), nullable=True
+    )
+    document_worm_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "document_worm_config.id",
+            ondelete="RESTRICT",
+            name="fk_document_version_worm_config_id_document_worm_config",
+        ),
+        nullable=True,
+    )
+    retention_basis_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     source_blob_sha256: Mapped[str] = mapped_column(
         Text, ForeignKey("blob.sha256", ondelete="RESTRICT"), nullable=False
     )

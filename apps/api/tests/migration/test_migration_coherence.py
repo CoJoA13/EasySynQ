@@ -257,7 +257,9 @@ def test_populated_historical_transitions_and_head_repairs(
         monkeypatch.setenv("DATABASE_URL_SYNC", scratch_url)
         get_settings.cache_clear()
         config = _config()
-        assert ScriptDirectory.from_config(config).get_heads() == ["0088_bootstrap_credential"]
+        assert ScriptDirectory.from_config(config).get_heads() == [
+            "0089_worm_retention_container_identity"
+        ]
         engine = sa.create_engine(scratch_url)
         try:
             # 0004: role assignments and permission overrides must preserve their full FK closure.
@@ -758,7 +760,8 @@ def test_populated_historical_transitions_and_head_repairs(
                 ).one()
                 assert downgraded[0] == "SEALED"
                 assert "legal erasure" in downgraded[1]
-            command.upgrade(config, "head")
+            # This populated historical fixture intentionally stops before clean-only 0089.
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 reupgraded = connection.execute(
                     sa.text(
@@ -848,7 +851,7 @@ def test_populated_historical_transitions_and_head_repairs(
                 assert _ROLE_ASSIGNMENT_USER_INDEX not in _table_indexes(
                     connection, "role_assignment"
                 )
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _column_nullable(connection, "document_version", "change_summary") is None
                 assert _RECORD_SOURCE_DOCUMENT_INDEX in _table_indexes(connection, "record")
@@ -866,7 +869,7 @@ def test_populated_historical_transitions_and_head_repairs(
             with engine.connect() as connection:
                 assert _retention_grants(connection) == _EXPECTED_RETENTION_GRANTS
                 assert _CANONICAL_CHECK in _process_edge_checks(connection)
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _process_edge_checks(connection) == {_CANONICAL_CHECK}
 
@@ -880,7 +883,7 @@ def test_populated_historical_transitions_and_head_repairs(
                         "CHECK (from_process_id <> to_process_id)"
                     )
                 )
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _process_edge_checks(connection) == {_CANONICAL_CHECK}
 
@@ -889,7 +892,7 @@ def test_populated_historical_transitions_and_head_repairs(
                 connection.execute(
                     sa.text(f"ALTER TABLE process_edge DROP CONSTRAINT {_CANONICAL_CHECK}")
                 )
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _process_edge_checks(connection) == {_CANONICAL_CHECK}
 
@@ -933,7 +936,7 @@ def test_populated_historical_transitions_and_head_repairs(
                     assert phase == expected, number  # historical split restored exactly
                 assert phases["8"] == "DO"
                 assert "split across PLAN" in _clause7_intent(connection, framework_id)
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 phases = _clause_phases(connection, framework_id)
                 sevens = {n: p for n, p in phases.items() if n == "7" or n.startswith("7.")}
@@ -960,7 +963,7 @@ def test_populated_historical_transitions_and_head_repairs(
                 assert head_indexes - downgraded_indexes == {_RECORD_PAGE_INDEX}
                 assert downgraded_indexes == head_indexes - {_RECORD_PAGE_INDEX}
                 assert _index_definition(connection, _RECORD_PAGE_INDEX) is None
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _table_indexes(connection, "record") == head_indexes
                 assert _index_definition(connection, _RECORD_PAGE_INDEX) == index_definition
@@ -1225,7 +1228,14 @@ def test_populated_historical_transitions_and_head_repairs(
                     ).one()
                     == identity_setup
                 )
-            command.check(config)
+            # 0089 is deliberately clean-only, while this historical-transition fixture is
+            # intentionally populated. Prove head coherence on a separate empty installation.
+            with _scratch_database(postgres_admin_url) as clean_url:
+                monkeypatch.setenv("DATABASE_URL", clean_url)
+                monkeypatch.setenv("DATABASE_URL_SYNC", clean_url)
+                get_settings.cache_clear()
+                command.upgrade(config, "0089_worm_retention_container_identity")
+                command.check(config)
         finally:
             engine.dispose()
             get_settings.cache_clear()

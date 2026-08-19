@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, asc, delete, desc, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -39,11 +40,11 @@ from ...db.models.evidence_pack import EvidencePack
 from ...db.models.framework import Framework
 from ...db.models.pending_blob_purge import PendingBlobPurge
 from ...db.models.process import Process
+from ...db.models.r27_request import R27Request
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.storage_config import StorageConfig
 from ...db.models.system_config import SystemConfig
-from ...db.models.worm_destroy_request import WormDestroyRequest
 from ..vault import repository as vault_repo
 from .listing import (
     RecordListCriteria,
@@ -51,6 +52,12 @@ from .listing import (
     escape_ilike_literal,
     normalize_record_search,
 )
+
+if TYPE_CHECKING:
+    # Later atomic-slice tasks replace the legacy repository behavior; Task 1 swaps its ORM only.
+    WormDestroyRequest = Any
+else:
+    WormDestroyRequest = R27Request
 
 SYSTEM_DEFAULT_POLICY_NAME = "System Default Retention"
 SEALED_PACK_POLICY_NAME = "Sealed Evidence Pack Retention"

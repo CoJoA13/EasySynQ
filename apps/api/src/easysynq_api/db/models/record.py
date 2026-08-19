@@ -100,6 +100,9 @@ class Record(Base):
         UUID(as_uuid=True), ForeignKey("retention_policy.id", ondelete="RESTRICT"), nullable=False
     )
     retention_basis_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    retention_basis_provisional: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), default=False, nullable=False
+    )
     disposition_state: Mapped[RecordDispositionState] = mapped_column(
         record_disposition_state_enum,
         server_default=text("'ACTIVE'"),

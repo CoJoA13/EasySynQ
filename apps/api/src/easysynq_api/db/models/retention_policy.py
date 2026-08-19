@@ -23,7 +23,17 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,7 +48,10 @@ from ._retention_enums import (
 
 class RetentionPolicy(Base):
     __tablename__ = "retention_policy"
-    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_retention_policy_org_id_name"),)
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_retention_policy_org_id_name"),
+        CheckConstraint("active_revision_no >= 1", name="active_revision_positive"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
@@ -60,6 +73,9 @@ class RetentionPolicy(Base):
         Boolean, server_default=text("false"), nullable=False
     )
     worm_lock_period: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active_revision_no: Mapped[int] = mapped_column(
+        Integer, server_default=text("1"), default=1, nullable=False
+    )
     # S-rec-4 (doc 06 §5.1, doc 15 §8.16): soft-archive. A hard DELETE is blocked by 3 RESTRICT FKs
     # (record / document_type / disposition_event), so retirement = ``active=false``. An archived
     # policy stops auto-attaching to NEW captures (the resolver's record_type/clause/process tiers

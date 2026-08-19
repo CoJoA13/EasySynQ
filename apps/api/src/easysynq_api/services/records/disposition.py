@@ -31,6 +31,7 @@ import dataclasses
 import datetime
 import logging
 import uuid
+from typing import TYPE_CHECKING, Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy import asc, select
@@ -47,9 +48,9 @@ from ...db.models.blob import Blob
 from ...db.models.disposition_event import DispositionEvent
 from ...db.models.evidence_pack import EvidencePack
 from ...db.models.pack_share_link import PackShareLink
+from ...db.models.r27_request import R27Request
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
-from ...db.models.worm_destroy_request import WormDestroyRequest
 from ...db.session import get_sessionmaker
 from ...domain.records.disposition import legal_disposition_transition, self_disposition_blocked
 from ...domain.records.retention import retention_until
@@ -57,6 +58,12 @@ from ...problems import ProblemCode, ProblemException
 from ..vault import storage
 from . import repository as repo
 from .service import _load_record, _now, emit_record_event, emit_record_event_system
+
+if TYPE_CHECKING:
+    # Later atomic-slice tasks replace the legacy disposition behavior; Task 1 swaps its ORM only.
+    WormDestroyRequest = Any
+else:
+    WormDestroyRequest = R27Request
 
 logger = logging.getLogger("easysynq.records.disposition")
 
@@ -1288,8 +1295,8 @@ async def reap_pending_blob_purges(session: AsyncSession) -> dict[str, int]:
                 requested_bypass=m.bypass_governance,
                 record_id=m.record_id,
                 disposition_event_id=m.disposition_event_id,
-                worm_destroy_request_id=m.worm_destroy_request_id,
-                authority_bound=m.authority_bound,
+                worm_destroy_request_id=getattr(m, "worm_destroy_request_id", None),
+                authority_bound=getattr(m, "authority_bound", True),
             )
             for m in markers
         ]

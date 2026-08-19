@@ -1,80 +1,83 @@
-"""A durable, authority-bound marker for reaper-driven S3 erasure.
-
-When a record is disposed under a DESTROY action, its last-referenced evidence blob's ``blob`` row +
-``evidence_blob`` links are deleted and the DISPOSED tombstone is committed FIRST; the physical S3
-purge is a separate, idempotent, reaper-driven follow-up (Batch 5). This row is the to-be-purged
-marker that survives a crash between that commit and the purge, so ``reap_pending_blob_purges`` can
-finish the erasure. Deleting the ``blob`` row at commit (not after the purge) keeps
-blob-row-iff-bytes safe for backups — a backup never sees a ``blob`` row whose bytes are gone; the
-leaked bytes this marker tracks are reclaimed out-of-band.
-
-Issue #360 binds every new marker to the exact immutable ``disposition_event`` that authorized the
-DESTROY and, for the R27 legal-order hatch, its executed ``worm_destroy_request``. The reaper
-derives governance-bypass authority from those rows; the marker's boolean is never authority by
-itself. ``authority_bound=false`` is reserved for rows that predate migration 0081. The app role
-has column-scoped INSERT/UPDATE grants that prevent it from selecting legacy mode or mutating any
-security-sensitive field after creation while preserving the reaper's ``FOR UPDATE SKIP LOCKED``
-claim.
-"""
+"""Exact-version, authority-bound durable physical purge marker."""
 
 from __future__ import annotations
 
 import datetime
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base
+from ._worm_enums import MaintenanceState, maintenance_state_enum
 
 
 class PendingBlobPurge(Base):
     __tablename__ = "pending_blob_purge"
     __table_args__ = (
         CheckConstraint(
-            """
-            NOT authority_bound
-            OR (
-                record_id IS NOT NULL
-                AND disposition_event_id IS NOT NULL
-                AND (NOT bypass_governance OR worm_destroy_request_id IS NOT NULL)
-            )
-            """,
+            "record_id IS NOT NULL AND disposition_event_id IS NOT NULL "
+            "AND (NOT bypass_governance OR "
+            "(r27_request_id IS NOT NULL AND r27_execution_id IS NOT NULL))",
             name="authority_shape",
         ),
+        CheckConstraint(
+            "length(object_version_id) BETWEEN 1 AND 1024",
+            name="object_version_id_length",
+        ),
+        CheckConstraint("attempt_count >= 0", name="attempt_nonnegative"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organization.id", ondelete="RESTRICT"), nullable=False
     )
-    # The destroyed blob's hash — log/dedup only; NOT an FK (its blob row is deleted at the same
-    # commit that inserts this marker).
     sha256: Mapped[str] = mapped_column(Text, nullable=False)
     bucket: Mapped[str] = mapped_column(Text, nullable=False)
     object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    object_version_id: Mapped[str] = mapped_column(Text, nullable=False)
     bypass_governance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    record_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("record.id", ondelete="RESTRICT"), nullable=True
+    record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("record.id", ondelete="RESTRICT"), nullable=False
     )
-    disposition_event_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("disposition_event.id", ondelete="RESTRICT"), nullable=True
+    disposition_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("disposition_event.id", ondelete="RESTRICT"), nullable=False
     )
-    worm_destroy_request_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey(
-            "worm_destroy_request.id",
-            ondelete="RESTRICT",
-            name="fk_pending_blob_purge_worm_request",
-        ),
-        nullable=True,
+    r27_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("r27_request.id", ondelete="RESTRICT"), nullable=True
     )
-    # Server-controlled upgrade discriminator: existing rows are backfilled false by 0081; new
-    # app-role inserts cannot name this column and therefore receive true.
-    authority_bound: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("true"), nullable=False
+    r27_execution_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("r27_execution.id", ondelete="RESTRICT"), nullable=True
+    )
+    state: Mapped[MaintenanceState] = mapped_column(
+        maintenance_state_enum,
+        server_default=text("'PENDING'"),
+        default=MaintenanceState.PENDING,
+        nullable=False,
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, server_default=text("0"), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    claimed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
