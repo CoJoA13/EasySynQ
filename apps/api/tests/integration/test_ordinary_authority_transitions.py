@@ -2149,3 +2149,148 @@ def test_hold_result_refuses_new_logical_hold_after_claim(
         owner.dispose()
         authorizer.dispose()
         maintenance.dispose()
+
+
+def test_ordinary_purge_limit_prefilters_ineligible_oldest_marker(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    retention = _engine(database_authority_dsns, "easysynq_retention")
+    try:
+        with owner.begin() as connection:
+            invalid_seed = _seed_ordinary_owner(connection)
+            valid_seed = _seed_ordinary_owner(connection)
+        with retention.begin() as connection:
+            invalid_marker = connection.execute(
+                sa.text("SELECT easysynq_enqueue_ordinary_exact_purge(:record,:event,:sha)"),
+                {
+                    "record": invalid_seed.record_id,
+                    "event": invalid_seed.disposition_event_id,
+                    "sha": invalid_seed.blob_sha256,
+                },
+            ).scalar_one()
+            valid_marker = connection.execute(
+                sa.text("SELECT easysynq_enqueue_ordinary_exact_purge(:record,:event,:sha)"),
+                {
+                    "record": valid_seed.record_id,
+                    "event": valid_seed.disposition_event_id,
+                    "sha": valid_seed.blob_sha256,
+                },
+            ).scalar_one()
+        with owner.begin() as connection:
+            connection.execute(
+                sa.text("UPDATE disposition_event SET action='ARCHIVE_COLD' WHERE id=:event"),
+                {"event": invalid_seed.disposition_event_id},
+            )
+            connection.execute(
+                sa.text(
+                    "UPDATE pending_blob_purge SET created_at=CASE id "
+                    "WHEN :invalid THEN clock_timestamp()-interval '2 hours' "
+                    "ELSE clock_timestamp()-interval '1 hour' END "
+                    "WHERE id IN (:invalid,:valid)"
+                ),
+                {"invalid": invalid_marker, "valid": valid_marker},
+            )
+        snapshot_sql = sa.text(
+            "SELECT to_jsonb(marker) FROM pending_blob_purge marker WHERE id=:id"
+        )
+        with owner.connect() as connection:
+            invalid_before = connection.execute(snapshot_sql, {"id": invalid_marker}).scalar_one()
+
+        with retention.begin() as connection:
+            claimed = (
+                connection.execute(
+                    sa.text(
+                        "SELECT marker_id FROM "
+                        "easysynq_claim_ordinary_exact_purges(1,clock_timestamp())"
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        assert claimed == [valid_marker]
+        with owner.connect() as connection:
+            assert (
+                connection.execute(snapshot_sql, {"id": invalid_marker}).scalar_one()
+                == invalid_before
+            )
+            assert (
+                connection.execute(
+                    sa.text("SELECT state::text FROM pending_blob_purge WHERE id=:id"),
+                    {"id": valid_marker},
+                ).scalar_one()
+                == "RUNNING"
+            )
+    finally:
+        owner.dispose()
+        retention.dispose()
+
+
+def test_hold_release_limit_prefilters_ineligible_oldest_operation(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    authorizer = _engine(database_authority_dsns, "easysynq_hold_authorizer")
+    maintenance = _engine(database_authority_dsns, "easysynq_hold_maintenance")
+    try:
+        with owner.begin() as connection:
+            invalid_seed = _seed_ordinary_owner(connection)
+            valid_seed = _seed_ordinary_owner(connection)
+            invalid_operation, invalid_digest = _insert_hold_operation(connection, invalid_seed)
+            valid_operation, valid_digest = _insert_hold_operation(connection, valid_seed)
+        with authorizer.begin() as connection:
+            _authorize(connection, invalid_operation, invalid_digest)
+            _authorize(connection, valid_operation, valid_digest)
+        with owner.begin() as connection:
+            _add_owner(
+                connection,
+                invalid_seed,
+                logical_hold=True,
+                policy_duration="P1Y",
+            )
+            connection.execute(
+                sa.text(
+                    "UPDATE worm_hold_release_operation SET created_at=CASE id "
+                    "WHEN :invalid THEN clock_timestamp()-interval '2 hours' "
+                    "ELSE clock_timestamp()-interval '1 hour' END "
+                    "WHERE id IN (:invalid,:valid)"
+                ),
+                {"invalid": invalid_operation, "valid": valid_operation},
+            )
+        snapshot_sql = sa.text(
+            "SELECT to_jsonb(operation) FROM worm_hold_release_operation operation WHERE id=:id"
+        )
+        with owner.connect() as connection:
+            invalid_before = connection.execute(
+                snapshot_sql, {"id": invalid_operation}
+            ).scalar_one()
+
+        with maintenance.begin() as connection:
+            claimed = (
+                connection.execute(
+                    sa.text(
+                        "SELECT operation_id FROM easysynq_claim_hold_releases(1,clock_timestamp())"
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        assert claimed == [valid_operation]
+        with owner.connect() as connection:
+            assert (
+                connection.execute(snapshot_sql, {"id": invalid_operation}).scalar_one()
+                == invalid_before
+            )
+            assert (
+                connection.execute(
+                    sa.text("SELECT state::text FROM worm_hold_release_operation WHERE id=:id"),
+                    {"id": valid_operation},
+                ).scalar_one()
+                == "RUNNING"
+            )
+    finally:
+        owner.dispose()
+        authorizer.dispose()
+        maintenance.dispose()

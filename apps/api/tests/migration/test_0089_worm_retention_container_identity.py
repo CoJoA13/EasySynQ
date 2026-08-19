@@ -16,6 +16,13 @@ from alembic.config import Config
 from psycopg import sql
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
+from tests.migration.test_0089_database_authority_roundtrip import (
+    _TARGET_ROLES,
+    _direct_acl_signature,
+)
+from tests.migration.test_0089_database_authority_roundtrip import (
+    _snapshot as _authority_snapshot,
+)
 
 from easysynq_api.config import get_settings
 from easysynq_api.readiness import MIGRATIONS_DIR
@@ -155,6 +162,50 @@ def _schema_signature(connection: sa.Connection) -> tuple[tuple[object, ...], ..
         )
     )
     return tuple(tuple(row) for row in rows)
+
+
+def _support_rows_signature(connection: sa.Connection) -> tuple[tuple[str, str], ...]:
+    rows: list[tuple[str, str]] = []
+    for table, statement in (
+        (
+            "organization",
+            "SELECT to_jsonb(support_row)::text AS payload FROM public.organization "
+            "AS support_row ORDER BY to_jsonb(support_row)::text",
+        ),
+        (
+            "app_user",
+            "SELECT to_jsonb(support_row)::text AS payload FROM public.app_user "
+            "AS support_row ORDER BY to_jsonb(support_row)::text",
+        ),
+        (
+            "retention_policy",
+            "SELECT to_jsonb(support_row)::text AS payload FROM public.retention_policy "
+            "AS support_row ORDER BY to_jsonb(support_row)::text",
+        ),
+        (
+            "retention_revision",
+            "SELECT to_jsonb(support_row)::text AS payload FROM public.retention_revision "
+            "AS support_row ORDER BY to_jsonb(support_row)::text",
+        ),
+        (
+            "documented_information",
+            "SELECT to_jsonb(support_row)::text AS payload "
+            "FROM public.documented_information AS support_row "
+            "ORDER BY to_jsonb(support_row)::text",
+        ),
+        (
+            "record",
+            "SELECT to_jsonb(support_row)::text AS payload FROM public.record "
+            "AS support_row ORDER BY to_jsonb(support_row)::text",
+        ),
+        (
+            "blob",
+            "SELECT to_jsonb(support_row)::text AS payload FROM public.blob "
+            "AS support_row ORDER BY to_jsonb(support_row)::text",
+        ),
+    ):
+        rows.extend((table, str(row.payload)) for row in connection.execute(sa.text(statement)))
+    return tuple(rows)
 
 
 def _create_hold_release_operation(
@@ -557,6 +608,116 @@ _POPULATED_0089_SEEDS: tuple[tuple[str, Callable[[sa.Connection], None]], ...] =
     ("retention_operation", _seed_populated_retention_operation),
     ("r27_authorizer_key", _seed_populated_r27_authorizer_key),
     ("audit_maintenance_schedule", _seed_populated_audit_schedule),
+)
+
+
+def _seed_provisional_record_only(
+    connection: sa.Connection,
+) -> tuple[str, dict[str, object]]:
+    org_id = connection.execute(
+        sa.text("SELECT id FROM organization ORDER BY created_at LIMIT 1")
+    ).scalar_one()
+    framework_id = connection.execute(
+        sa.text("SELECT id FROM framework ORDER BY id LIMIT 1")
+    ).scalar_one()
+    user_id = uuid.uuid4()
+    policy_id = connection.execute(
+        sa.text("SELECT id FROM retention_policy WHERE org_id=:org ORDER BY created_at LIMIT 1"),
+        {"org": org_id},
+    ).scalar_one()
+    record_id = uuid.uuid4()
+    connection.execute(
+        sa.text(
+            "INSERT INTO app_user(id,org_id,keycloak_subject,display_name) "
+            "VALUES (:id,:org,:subject,'Downgrade provisional actor')"
+        ),
+        {"id": user_id, "org": org_id, "subject": f"downgrade-provisional-{user_id}"},
+    )
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO documented_information
+                (id,org_id,framework_id,kind,identifier,title,owner_user_id,
+                 current_state,is_singleton,classification,
+                 acknowledgement_required,created_by)
+            VALUES
+                (:id,:org,:framework,'RECORD',:identifier,'Provisional downgrade record',:user,
+                 'Draft',false,'Internal',false,:user)
+            """
+        ),
+        {
+            "id": record_id,
+            "org": org_id,
+            "framework": framework_id,
+            "identifier": f"DOWNGRADE-{record_id}",
+            "user": user_id,
+        },
+    )
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO record
+                (id,org_id,record_type,captured_by,retention_policy_id,
+                 retention_basis_provisional)
+            VALUES (:id,:org,'EVIDENCE',:user,:policy,true)
+            """
+        ),
+        {"id": record_id, "org": org_id, "user": user_id, "policy": policy_id},
+    )
+    return (
+        "SELECT retention_basis_provisional FROM record WHERE id=:id",
+        {"id": record_id},
+    )
+
+
+def _seed_nondefault_policy_revision_only(
+    connection: sa.Connection,
+) -> tuple[str, dict[str, object]]:
+    policy_id = connection.execute(
+        sa.text("SELECT id FROM retention_policy ORDER BY created_at LIMIT 1")
+    ).scalar_one()
+    connection.execute(
+        sa.text("UPDATE retention_policy SET active_revision_no=2 WHERE id=:id"),
+        {"id": policy_id},
+    )
+    return (
+        "SELECT active_revision_no FROM retention_policy WHERE id=:id",
+        {"id": policy_id},
+    )
+
+
+def _seed_nonworm_object_version_only(
+    connection: sa.Connection,
+) -> tuple[str, dict[str, object]]:
+    org_id = connection.execute(
+        sa.text("SELECT id FROM organization ORDER BY created_at LIMIT 1")
+    ).scalar_one()
+    sha256 = uuid.uuid4().hex * 2
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO blob
+                (sha256,org_id,size_bytes,mime_type,bucket,object_key,
+                 object_version_id,worm_locked,sse)
+            VALUES
+                (:sha,:org,1,'application/octet-stream','nonworm-version',:key,
+                 'opaque-nonworm-version',false,false)
+            """
+        ),
+        {"sha": sha256, "org": org_id, "key": f"nonworm/{sha256}"},
+    )
+    return (
+        "SELECT object_version_id FROM blob WHERE sha256=:sha",
+        {"sha": sha256},
+    )
+
+
+_DROPPED_FIELD_SEEDS: tuple[
+    tuple[str, Callable[[sa.Connection], tuple[str, dict[str, object]]]], ...
+] = (
+    ("record_retention_basis_provisional", _seed_provisional_record_only),
+    ("retention_policy_active_revision_no", _seed_nondefault_policy_revision_only),
+    ("nonworm_blob_object_version_id", _seed_nonworm_object_version_only),
 )
 
 
@@ -1022,6 +1183,53 @@ def test_populated_0089_refuses_downgrade_without_schema_change(
             with engine.connect() as connection:
                 assert _revision(connection) == _REVISION
                 assert _schema_signature(connection) == before
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("field_kind", "seed"),
+    _DROPPED_FIELD_SEEDS,
+    ids=lambda value: str(value),
+)
+def test_field_only_0089_state_refuses_downgrade_atomically(
+    postgres_admin_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    field_kind: str,
+    seed: Callable[[sa.Connection], tuple[str, dict[str, object]]],
+) -> None:
+    del field_kind
+    with _scratch_database(postgres_admin_url) as scratch_url:
+        _point_at(monkeypatch, scratch_url)
+        config = _config()
+        command.upgrade(config, _REVISION)
+        engine = sa.create_engine(scratch_url)
+        try:
+            with engine.begin() as connection:
+                probe_sql, probe_parameters = seed(connection)
+            with engine.connect() as connection:
+                before_authority = _authority_snapshot(connection)
+                before_direct_acls = tuple(
+                    (role, _direct_acl_signature(connection, role)) for role in _TARGET_ROLES
+                )
+                before_support = _support_rows_signature(connection)
+                before_value = connection.execute(sa.text(probe_sql), probe_parameters).scalar_one()
+
+            with pytest.raises(Exception, match=_DOWNGRADE_REFUSAL):
+                command.downgrade(config, _BASE_REVISION)
+
+            with engine.connect() as connection:
+                assert _revision(connection) == _REVISION
+                assert _authority_snapshot(connection) == before_authority
+                assert (
+                    tuple((role, _direct_acl_signature(connection, role)) for role in _TARGET_ROLES)
+                    == before_direct_acls
+                )
+                assert _support_rows_signature(connection) == before_support
+                assert (
+                    connection.execute(sa.text(probe_sql), probe_parameters).scalar_one()
+                    == before_value
+                )
         finally:
             engine.dispose()
 

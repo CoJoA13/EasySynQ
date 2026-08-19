@@ -22,7 +22,8 @@ class R27RoleMembershipOperation(Base):
             "(state='AUDITED' AND audit_event_id IS NOT NULL AND completed_at IS NOT NULL "
             "AND error_code IS NULL AND error_detail IS NULL) OR "
             "(state='FAILED' AND audit_event_id IS NULL AND completed_at IS NOT NULL "
-            "AND btrim(error_code)<>'' AND length(error_code)<=64 "
+            "AND error_code IS NOT NULL AND btrim(error_code)<>'' "
+            "AND length(error_code)<=64 "
             "AND length(COALESCE(error_detail,''))<=512)",
             name="state_shape",
         ),

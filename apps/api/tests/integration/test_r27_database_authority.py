@@ -2680,3 +2680,96 @@ def test_authority_functions_reject_unbounded_observation_times_without_writes(
     finally:
         owner_engine.dispose()
         role_engine.dispose()
+
+
+def test_role_membership_failed_state_requires_nonnull_error_code_in_database(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = sa.create_engine(database_authority_dsns["owner"])
+    operation_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    try:
+        with owner.begin() as connection:
+            org_id = connection.execute(
+                sa.text("SELECT id FROM organization ORDER BY created_at LIMIT 1")
+            ).scalar_one()
+            connection.execute(
+                sa.text(
+                    "INSERT INTO app_user(id,org_id,keycloak_subject,display_name) "
+                    "VALUES (:id,:org,:subject,'Role state-shape actor')"
+                ),
+                {"id": user_id, "org": org_id, "subject": f"role-shape-{user_id}"},
+            )
+        valid_operation_id = uuid.uuid4()
+        with owner.connect() as connection:
+            transaction = connection.begin()
+            try:
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO r27_role_membership_operation
+                            (id,user_id,org_id,action,operator_identity,state,
+                             requested_at,completed_at,error_code,error_detail)
+                        VALUES
+                            (:id,:user,:org,'ASSIGN','host-role-manager','FAILED',
+                             clock_timestamp(),clock_timestamp(),'HOST_DENIED','valid failure')
+                        """
+                    ),
+                    {"id": valid_operation_id, "user": user_id, "org": org_id},
+                )
+                assert connection.execute(
+                    sa.text(
+                        "SELECT state,error_code FROM r27_role_membership_operation WHERE id=:id"
+                    ),
+                    {"id": valid_operation_id},
+                ).one() == ("FAILED", "HOST_DENIED")
+            finally:
+                transaction.rollback()
+
+        with owner.connect() as connection:
+            transaction = connection.begin()
+            try:
+                with pytest.raises(sa.exc.IntegrityError, match="state_shape"):
+                    connection.execute(
+                        sa.text(
+                            """
+                            INSERT INTO r27_role_membership_operation
+                                (id,user_id,org_id,action,operator_identity,state,
+                                 requested_at,completed_at,error_code,error_detail)
+                            VALUES
+                                (:id,:user,:org,'ASSIGN','host-role-manager','FAILED',
+                                 clock_timestamp(),clock_timestamp(),NULL,'missing code')
+                            """
+                        ),
+                        {"id": operation_id, "user": user_id, "org": org_id},
+                    )
+            finally:
+                transaction.rollback()
+        with owner.connect() as connection:
+            assert not connection.execute(
+                sa.text("SELECT EXISTS (SELECT 1 FROM r27_role_membership_operation WHERE id=:id)"),
+                {"id": operation_id},
+            ).scalar_one()
+    finally:
+        owner.dispose()
+
+
+def test_role_membership_model_requires_nonnull_failed_error_code() -> None:
+    from easysynq_api.db.models.r27_role_membership_operation import (
+        R27RoleMembershipOperation,
+    )
+
+    constraints = {
+        constraint.name: " ".join(str(constraint.sqltext).split())
+        for constraint in R27RoleMembershipOperation.__table__.constraints
+        if isinstance(constraint, sa.CheckConstraint)
+    }
+    assert constraints["ck_r27_role_membership_operation_state_shape"] == (
+        "(state='REQUESTED' AND audit_event_id IS NULL AND completed_at IS NULL "
+        "AND error_code IS NULL AND error_detail IS NULL) OR "
+        "(state='AUDITED' AND audit_event_id IS NOT NULL AND completed_at IS NOT NULL "
+        "AND error_code IS NULL AND error_detail IS NULL) OR "
+        "(state='FAILED' AND audit_event_id IS NULL AND completed_at IS NOT NULL "
+        "AND error_code IS NOT NULL AND btrim(error_code)<>'' AND length(error_code)<=64 "
+        "AND length(COALESCE(error_detail,''))<=512)"
+    )

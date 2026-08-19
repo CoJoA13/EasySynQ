@@ -1439,7 +1439,8 @@ def _create_maintenance_intent() -> None:
             "(state='AUDITED' AND audit_event_id IS NOT NULL AND completed_at IS NOT NULL "
             "AND error_code IS NULL AND error_detail IS NULL) OR "
             "(state='FAILED' AND audit_event_id IS NULL AND completed_at IS NOT NULL "
-            "AND btrim(error_code)<>'' AND length(error_code)<=64 "
+            "AND error_code IS NOT NULL AND btrim(error_code)<>'' "
+            "AND length(error_code)<=64 "
             "AND length(COALESCE(error_detail,''))<=512)",
             name="state_shape",
         ),
@@ -2593,6 +2594,11 @@ def _create_authority_transition_functions() -> None:
         manifest_sql="m",
         now_sql="v_now",
     )
+    finalization_candidate_human_authority = _r27_human_authority_sql(
+        request_sql="r",
+        manifest_sql="m",
+        now_sql="clock_timestamp()",
+    )
     r27_source = _r27_exact_source_sql(
         request_sql="request",
         execution_sql="e",
@@ -2640,9 +2646,15 @@ def _create_authority_transition_functions() -> None:
                 FROM (
                     SELECT p.id,p.created_at
                     FROM public.pending_blob_purge p
+                    JOIN public.disposition_event source_disposition
+                      ON source_disposition.id=p.disposition_event_id
+                    JOIN public.record source_record ON source_record.id=p.record_id
+                    JOIN public.blob source_blob ON source_blob.sha256=p.sha256
                     WHERE NOT p.bypass_governance
                       AND p.r27_request_id IS NULL AND p.r27_execution_id IS NULL
                       AND p.state IN ('PENDING','FAILED')
+                      AND {ordinary_source}
+                      AND NOT {ordinary_live_owner}
                     ORDER BY p.created_at,p.id
                     FOR UPDATE OF p SKIP LOCKED
                     LIMIT p_limit
@@ -2721,7 +2733,7 @@ def _create_authority_transition_functions() -> None:
             END""",
         "easysynq_authorize_hold_release(uuid,text,text,timestamptz)": f"""
             DECLARE v_org uuid; v_record uuid; v_sha text; v_audit bigint;
-                    v_now timestamptz:=clock_timestamp();
+                    v_now timestamptz;
             BEGIN
                 IF p_id IS NULL OR p_digest IS NULL OR p_identity IS NULL OR p_at IS NULL OR btrim(p_identity)='' THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
                 SELECT o.org_id,o.record_id,o.blob_sha256 INTO v_org,v_record,v_sha
@@ -2740,6 +2752,7 @@ def _create_authority_transition_functions() -> None:
                 IF NOT FOUND OR {locked_hold_obligation} THEN
                     RAISE EXCEPTION 'hold_release_authorization_refused';
                 END IF;
+                v_now:=clock_timestamp();
                 INSERT INTO public.audit_event(org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
                 VALUES(v_org,v_now,'system','RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED','record',v_record,'record','ordinary-hold-release-authorized',jsonb_build_object('operator_identity',p_identity,'operation_id',p_id)) RETURNING id INTO v_audit;
                 INSERT INTO public.worm_hold_release_authorization(operation_id,canonical_sha256,host_operator_identity,authorizing_audit_event_id,authorized_at,authorizer_role)
@@ -2757,7 +2770,16 @@ def _create_authority_transition_functions() -> None:
                     SELECT o.id,o.created_at
                     FROM public.worm_hold_release_operation o
                     JOIN public.worm_hold_release_authorization a ON a.operation_id=o.id
+                    JOIN public.record source_record ON source_record.id=o.record_id
+                    JOIN public.app_user initiator ON initiator.id=o.initiated_by_user_id
+                    JOIN public.blob source_blob ON source_blob.sha256=o.blob_sha256
+                    JOIN public.evidence_blob source_edge
+                      ON source_edge.record_id=o.record_id
+                     AND source_edge.blob_sha256=o.blob_sha256
                     WHERE o.state IN ('AUTHORIZED','FAILED')
+                      AND source_blob.worm_legal_hold
+                      AND {ordinary_hold_authority}
+                      AND NOT {ordinary_hold_obligation}
                     ORDER BY o.created_at,o.id
                     FOR UPDATE OF o SKIP LOCKED
                     LIMIT p_limit
@@ -2865,7 +2887,7 @@ def _create_authority_transition_functions() -> None:
         "easysynq_accept_r27_request(uuid,timestamptz)": f"""
             DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid;
                     v_challenge uuid; v_key uuid; v_audit bigint;
-                    v_now timestamptz:=clock_timestamp();
+                    v_now timestamptz;
             BEGIN
                 IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
                 SELECT k.id INTO v_key
@@ -2877,6 +2899,19 @@ def _create_authority_transition_functions() -> None:
                   AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
                 FOR SHARE OF k;
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_request_authority_refused'; END IF;
+                PERFORM 1
+                FROM public.r27_attestation a
+                JOIN public.r27_action_challenge c ON c.id=a.challenge_id
+                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
+                JOIN public.r27_request r ON r.id=a.request_id
+                JOIN public.r27_manifest m ON m.request_id=a.request_id
+                JOIN public.app_user action_user ON action_user.id=a.app_user_id
+                JOIN public.record source_record ON source_record.id=r.record_id
+                WHERE a.id=p_id AND a.action='REQUEST'
+                FOR UPDATE OF c,r
+                FOR SHARE OF a,k,m,action_user,source_record;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_request_authority_refused'; END IF;
+                v_now:=clock_timestamp();
                 SELECT a.request_id,a.app_user_id,r.org_id,r.record_id,c.id
                 INTO v_request,v_user,v_org,v_record,v_challenge
                 FROM public.r27_attestation a
@@ -2887,9 +2922,7 @@ def _create_authority_transition_functions() -> None:
                 JOIN public.app_user action_user ON action_user.id=a.app_user_id
                 JOIN public.record source_record ON source_record.id=r.record_id
                 WHERE a.id=p_id AND r.state IS NULL
-                  AND {pending_request_action}
-                FOR UPDATE OF c,r
-                FOR SHARE OF action_user,source_record;
+                  AND {pending_request_action};
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_request_authority_refused'; END IF;
                 INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
                 VALUES(v_org,v_now,'user',v_user,'RECORD_WORM_DESTROY_REQUESTED','record',v_record,'record','r27-requester-authorized',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
@@ -2904,7 +2937,7 @@ def _create_authority_transition_functions() -> None:
         "easysynq_accept_r27_approval(uuid,timestamptz)": f"""
             DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid;
                     v_challenge uuid; v_audit bigint;
-                    v_now timestamptz:=clock_timestamp();
+                    v_now timestamptz;
             BEGIN
                 IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
                 PERFORM locked_key.id
@@ -2921,6 +2954,29 @@ def _create_authority_transition_functions() -> None:
                 )
                 ORDER BY locked_key.id
                 FOR SHARE OF locked_key;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_approval_authority_refused'; END IF;
+                PERFORM 1
+                FROM public.r27_attestation a
+                JOIN public.r27_action_challenge c ON c.id=a.challenge_id
+                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
+                JOIN public.r27_request r ON r.id=a.request_id
+                JOIN public.r27_manifest m ON m.request_id=a.request_id
+                JOIN public.app_user action_user ON action_user.id=a.app_user_id
+                JOIN public.app_user requester_user ON requester_user.id=r.requester_user_id
+                JOIN public.record source_record ON source_record.id=r.record_id
+                JOIN public.r27_attestation request_attestation
+                  ON request_attestation.request_id=r.id
+                 AND request_attestation.action='REQUEST'
+                JOIN public.r27_action_challenge request_challenge
+                  ON request_challenge.id=request_attestation.challenge_id
+                JOIN public.r27_authorizer_key request_key
+                  ON request_key.id=request_attestation.authorizer_key_id
+                WHERE a.id=p_id AND a.action='APPROVE'
+                FOR UPDATE OF c,r
+                FOR SHARE OF a,k,m,action_user,requester_user,source_record,
+                             request_attestation,request_challenge,request_key;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_approval_authority_refused'; END IF;
+                v_now:=clock_timestamp();
                 SELECT a.request_id,a.app_user_id,r.org_id,r.record_id,c.id
                 INTO v_request,v_user,v_org,v_record,v_challenge
                 FROM public.r27_attestation a
@@ -2936,9 +2992,7 @@ def _create_authority_transition_functions() -> None:
                   AND a.app_user_id<>r.requester_user_id
                   AND action_user.keycloak_subject<>requester_user.keycloak_subject
                   AND {pending_approval_action}
-                  AND {prior_request_action}
-                FOR UPDATE OF c,r
-                FOR SHARE OF action_user,requester_user,source_record;
+                  AND {prior_request_action};
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_approval_authority_refused'; END IF;
                 INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
                 VALUES(v_org,v_now,'user',v_user,'RECORD_WORM_DESTROY_REQUESTED','record',v_record,'record','r27-second-approval-authorized',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
@@ -2965,6 +3019,19 @@ def _create_authority_transition_functions() -> None:
                   AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
                 FOR SHARE OF k;
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_cancel_refused'; END IF;
+                PERFORM 1
+                FROM public.r27_attestation a
+                JOIN public.r27_action_challenge c ON c.id=a.challenge_id
+                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
+                JOIN public.r27_request r ON r.id=a.request_id
+                JOIN public.r27_manifest m ON m.request_id=a.request_id
+                JOIN public.app_user action_user ON action_user.id=a.app_user_id
+                JOIN public.record source_record ON source_record.id=r.record_id
+                WHERE a.id=p_id AND a.action='CANCEL'
+                FOR UPDATE OF c,r
+                FOR SHARE OF a,k,m,action_user,source_record;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_cancel_refused'; END IF;
+                v_now:=clock_timestamp();
                 SELECT a.request_id,a.app_user_id,r.org_id,r.record_id,c.id
                 INTO v_request,v_user,v_org,v_record,v_challenge
                 FROM public.r27_attestation a
@@ -2976,9 +3043,7 @@ def _create_authority_transition_functions() -> None:
                 JOIN public.record source_record ON source_record.id=r.record_id
                 WHERE a.id=p_id
                   AND r.state IN ('WAITING_FOR_SECOND_APPROVER','WAITING_FOR_RECOVERY_GENERATION','READY_FOR_FINALIZATION')
-                  AND {pending_cancel_action}
-                FOR UPDATE OF c,r
-                FOR SHARE OF action_user,source_record;
+                  AND {pending_cancel_action};
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_cancel_refused'; END IF;
                 INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
                 VALUES(v_org,v_now,'user',v_user,'RECORD_WORM_DESTROY_CANCELLED','record',v_record,'record','r27-cancelled',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
@@ -2993,7 +3058,7 @@ def _create_authority_transition_functions() -> None:
             END""",
         "easysynq_claim_r27_finalizations(integer,timestamptz)": f"""
             DECLARE
-                v_now timestamptz:=clock_timestamp();
+                v_now timestamptz;
                 v_request uuid;
                 v_internal uuid;
                 v_public uuid;
@@ -3002,12 +3067,15 @@ def _create_authority_transition_functions() -> None:
                 v_branch text;
                 v_skipped uuid[]:=ARRAY[]::uuid[];
                 v_claimed integer:=0;
+                v_inspected integer:=0;
+                v_inspection_budget integer;
             BEGIN
                 {read_committed_guard}
                 IF p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN
                     RAISE EXCEPTION 'r27_finalization_claim_refused';
                 END IF;
-                WHILE v_claimed<p_limit LOOP
+                v_inspection_budget:=LEAST(p_limit * 10, 1000);
+                WHILE v_claimed<p_limit AND v_inspected<v_inspection_budget LOOP
                     v_request:=NULL;
                     v_internal:=NULL;
                     v_public:=NULL;
@@ -3025,6 +3093,7 @@ def _create_authority_transition_functions() -> None:
                                END AS branch,
                                r.created_at
                         FROM public.r27_request r
+                        JOIN public.r27_manifest m ON m.request_id=r.id
                         LEFT JOIN public.r27_execution existing
                           ON existing.request_id=r.id
                         WHERE NOT (r.id=ANY(v_skipped))
@@ -3037,13 +3106,57 @@ def _create_authority_transition_functions() -> None:
                             (r.state='FINALIZING' AND existing.state='FAILED'
                              AND existing.error_code IS DISTINCT FROM
                                  'RECOVERY_KEY_REVOKED'
-                             AND existing.next_attempt_at<=v_now)
+                             AND existing.next_attempt_at<=clock_timestamp())
+                          )
+                          AND {finalization_candidate_human_authority}
+                          AND EXISTS (
+                              SELECT 1
+                              FROM public.recovery_generation_witness candidate_witness
+                              JOIN public.recovery_generation_verifier_key candidate_key
+                                ON candidate_key.id=candidate_witness.key_id
+                              WHERE candidate_witness.request_id=r.id
+                                AND candidate_witness.schema_version=1
+                                AND candidate_witness.invalidated_at IS NULL
+                                AND candidate_witness.result='VERIFIED'
+                                AND candidate_witness.manifest_sha256=m.sha256
+                                AND candidate_witness.excluded_set_sha256=
+                                    m.excluded_set_sha256
+                                AND candidate_witness.issued_at>=r.approved_at
+                                AND candidate_witness.verified_at>=
+                                    candidate_witness.issued_at
+                                AND candidate_witness.verified_at<=clock_timestamp()
+                                AND candidate_key.revoked_at IS NULL
+                                AND candidate_key.not_before<=
+                                    candidate_witness.issued_at
+                                AND (
+                                    candidate_key.retired_at IS NULL
+                                    OR candidate_witness.issued_at<=
+                                       candidate_key.retired_at
+                                )
+                                AND (
+                                    (r.state='READY_FOR_FINALIZATION'
+                                     AND existing.id IS NULL
+                                     AND candidate_witness.consumed_execution_id IS NULL)
+                                    OR
+                                    (r.state='READY_FOR_FINALIZATION'
+                                     AND existing.state='FAILED'
+                                     AND existing.error_code='RECOVERY_KEY_REVOKED'
+                                     AND candidate_witness.consumed_execution_id IS NULL)
+                                    OR
+                                    (r.state='FINALIZING'
+                                     AND existing.state='FAILED'
+                                     AND existing.error_code IS DISTINCT FROM
+                                         'RECOVERY_KEY_REVOKED'
+                                     AND existing.next_attempt_at<=clock_timestamp()
+                                     AND candidate_witness.consumed_execution_id=existing.id)
+                                )
                           )
                         ORDER BY r.created_at,r.id
                         LIMIT 1
                     ) AS candidate;
                     EXIT WHEN v_request IS NULL;
                     v_skipped:=array_append(v_skipped,v_request);
+                    v_inspected:=v_inspected+1;
 
                     SELECT w.id,w.key_id
                     INTO v_witness,v_recovery_key
@@ -3092,8 +3205,31 @@ def _create_authority_transition_functions() -> None:
                     WHERE w.id=v_witness FOR UPDATE OF w;
                     CONTINUE WHEN NOT FOUND;
 
+                    PERFORM 1
+                    FROM public.r27_request locked_request
+                    JOIN public.r27_manifest locked_manifest
+                      ON locked_manifest.request_id=locked_request.id
+                    JOIN public.record locked_record
+                      ON locked_record.id=locked_request.record_id
+                    WHERE locked_request.id=v_request
+                    FOR SHARE OF locked_manifest,locked_record;
+                    CONTINUE WHEN NOT FOUND;
+                    PERFORM 1
+                    FROM public.r27_attestation locked_attestation
+                    JOIN public.r27_action_challenge locked_challenge
+                      ON locked_challenge.id=locked_attestation.challenge_id
+                    JOIN public.app_user locked_user
+                      ON locked_user.id=locked_attestation.app_user_id
+                    WHERE locked_attestation.request_id=v_request
+                      AND locked_attestation.action IN ('REQUEST','APPROVE')
+                    ORDER BY locked_attestation.action
+                    FOR SHARE OF locked_attestation,locked_challenge,locked_user;
+                    CONTINUE WHEN NOT FOUND;
+                    v_now:=clock_timestamp();
+
                     -- READ COMMITTED gives this statement a fresh snapshot after
-                    -- all lifecycle and authority locks above have been acquired.
+                    -- all lifecycle and authority locks above have been acquired;
+                    -- the one mutation timestamp is captured only after those locks.
                     PERFORM 1
                     FROM public.r27_request r
                     JOIN public.r27_manifest m ON m.request_id=r.id
@@ -3185,7 +3321,12 @@ def _create_authority_transition_functions() -> None:
             END""",
         "easysynq_fail_r27_execution(uuid,text,text,timestamptz)": """
             BEGIN
-                IF p_id IS NULL OR p_code IS NULL OR p_at IS NULL OR btrim(p_code)='' OR length(p_code)>64 OR length(COALESCE(p_detail,''))>512 THEN RAISE EXCEPTION 'r27_execution_failure_refused'; END IF;
+                IF p_id IS NULL OR p_code IS NULL OR p_at IS NULL
+                   OR p_code='RECOVERY_KEY_REVOKED'
+                   OR btrim(p_code)='' OR length(p_code)>64
+                   OR length(COALESCE(p_detail,''))>512 THEN
+                    RAISE EXCEPTION 'r27_execution_failure_refused';
+                END IF;
                 UPDATE public.r27_execution SET state='FAILED',error_code=p_code,error_detail=p_detail,
                     next_attempt_at=clock_timestamp()+interval '1 minute',updated_at=clock_timestamp()
                 WHERE execution_id=p_id AND state IN ('CLAIMED','SOURCE_COMMITTED','PURGING');
@@ -3207,10 +3348,34 @@ def _create_authority_transition_functions() -> None:
                 FROM (
                     SELECT p.id,p.created_at
                     FROM public.pending_blob_purge p
+                    JOIN public.r27_execution e ON e.id=p.r27_execution_id
+                    JOIN public.r27_request request ON request.id=e.request_id
+                    JOIN public.r27_manifest m ON m.request_id=e.request_id
+                    JOIN public.r27_manifest_target target
+                      ON target.manifest_id=m.id AND target.blob_sha256=p.sha256
+                     AND target.bucket=p.bucket AND target.object_key=p.object_key
+                     AND target.object_version_id=p.object_version_id
+                    JOIN public.blob blob
+                      ON blob.sha256=p.sha256 AND blob.org_id=p.org_id
+                     AND blob.bucket=p.bucket AND blob.object_key=p.object_key
+                     AND blob.object_version_id=p.object_version_id
+                    JOIN public.disposition_event source_disposition
+                      ON source_disposition.id=p.disposition_event_id
                     WHERE p.r27_execution_id=v_internal
+                      AND e.execution_id=p_id
                       AND p.bypass_governance
-                      AND p.r27_request_id IS NOT NULL
+                      AND p.r27_request_id=e.request_id
+                      AND p.org_id=request.org_id AND p.record_id=request.record_id
                       AND p.state IN ('PENDING','FAILED')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM public.r27_execution_target_result existing_result
+                          WHERE existing_result.execution_id=e.id
+                            AND existing_result.manifest_target_id=target.id
+                      )
+                      AND {r27_source}
+                      AND {r27_current_authority}
+                      AND NOT {r27_live_owner}
                     ORDER BY p.created_at,p.id
                     FOR UPDATE OF p SKIP LOCKED
                     LIMIT p_limit
@@ -3247,6 +3412,12 @@ def _create_authority_transition_functions() -> None:
                       AND p.r27_request_id=e.request_id
                       AND p.org_id=request.org_id AND p.record_id=request.record_id
                       AND p.state IN ('PENDING','FAILED')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM public.r27_execution_target_result existing_result
+                          WHERE existing_result.execution_id=e.id
+                            AND existing_result.manifest_target_id=target.id
+                      )
                       AND {r27_source}
                       AND {r27_current_authority}
                       AND NOT {r27_live_owner}
@@ -3305,6 +3476,12 @@ def _create_authority_transition_functions() -> None:
                   AND marker.bypass_governance
                   AND marker.state='RUNNING'
                   AND e.state IN ('SOURCE_COMMITTED','PURGING')
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM public.r27_execution_target_result existing_result
+                      WHERE existing_result.execution_id=e.id
+                        AND existing_result.manifest_target_id=target.id
+                  )
                 FOR UPDATE OF e,request,marker,blob;
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_hold_release_refused'; END IF;
                 UPDATE public.blob blob
@@ -3329,6 +3506,12 @@ def _create_authority_transition_functions() -> None:
                   AND target.blob_sha256=p_sha
                   AND target.object_version_id=p_version
                   AND marker.state='RUNNING' AND marker.bypass_governance
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM public.r27_execution_target_result existing_result
+                      WHERE existing_result.execution_id=e.id
+                        AND existing_result.manifest_target_id=target.id
+                  )
                   AND blob.sha256=target.blob_sha256
                   AND blob.org_id=request.org_id
                   AND blob.bucket=target.bucket
@@ -3380,6 +3563,12 @@ def _create_authority_transition_functions() -> None:
                   AND p.state='RUNNING'
                   AND p.bypass_governance
                   AND e.state IN ('SOURCE_COMMITTED','PURGING')
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM public.r27_execution_target_result existing_result
+                      WHERE existing_result.execution_id=e.id
+                        AND existing_result.manifest_target_id=target.id
+                  )
                 FOR UPDATE OF e,request,p,b,source_disposition;
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_purge_result_refused'; END IF;
                 UPDATE public.blob b
@@ -3404,6 +3593,12 @@ def _create_authority_transition_functions() -> None:
                   AND target.blob_sha256=p_sha
                   AND target.object_version_id=p_version
                   AND p.state='RUNNING' AND p.bypass_governance
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM public.r27_execution_target_result existing_result
+                      WHERE existing_result.execution_id=e.id
+                        AND existing_result.manifest_target_id=target.id
+                  )
                   AND b.sha256=target.blob_sha256
                   AND b.org_id=request.org_id
                   AND b.bucket=target.bucket
@@ -3743,11 +3938,29 @@ def _refuse_populated_0089_downgrade(bind: sa.Connection) -> None:
                 EXISTS (
                     SELECT 1 FROM blob
                     WHERE worm_locked
+                       OR object_version_id IS NOT NULL
+                       OR worm_enforced_mode IS NOT NULL
+                       OR worm_asserted_retain_until IS NOT NULL
+                       OR worm_asserted_at IS NOT NULL
+                       OR worm_retention_verified_at IS NOT NULL
+                       OR worm_legal_hold IS NOT NULL
+                       OR worm_legal_hold_verified_at IS NOT NULL
                        OR purged_at IS NOT NULL
                        OR purge_execution_id IS NOT NULL
                     LIMIT 1
                 )
                 OR EXISTS (SELECT 1 FROM document_worm_config LIMIT 1)
+                OR EXISTS (SELECT 1 FROM document_version LIMIT 1)
+                OR EXISTS (
+                    SELECT 1 FROM record
+                    WHERE retention_basis_provisional
+                    LIMIT 1
+                )
+                OR EXISTS (
+                    SELECT 1 FROM retention_policy
+                    WHERE active_revision_no<>1
+                    LIMIT 1
+                )
                 OR EXISTS (
                     SELECT 1
                     FROM retention_revision AS rr

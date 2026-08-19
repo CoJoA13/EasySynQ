@@ -12,6 +12,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from queue import Queue
 from time import monotonic, sleep
 
 import pytest
@@ -92,6 +93,50 @@ def _wait_for_named_lock(engine: Engine, application_name: str) -> bool:
             ).scalar_one_or_none()
         if waiting:
             return True
+        sleep(0.02)
+    return False
+
+
+def _wait_for_backend_lock(engine: Engine, backend_pid: int) -> bool:
+    deadline = monotonic() + 5
+    while monotonic() < deadline:
+        with engine.connect() as connection:
+            blocked = connection.execute(
+                sa.text("SELECT cardinality(pg_blocking_pids(:pid)) > 0"),
+                {"pid": backend_pid},
+            ).scalar_one()
+        if blocked:
+            return True
+        sleep(0.02)
+    return False
+
+
+def _wait_for_exact_blocker(engine: Engine, backend_pid: int, blocker_pid: int) -> bool:
+    deadline = monotonic() + 5
+    while monotonic() < deadline:
+        with engine.connect() as connection:
+            blocker_pids = connection.execute(
+                sa.text("SELECT pg_blocking_pids(:pid)"),
+                {"pid": backend_pid},
+            ).scalar_one()
+        if blocker_pid in blocker_pids:
+            return True
+        sleep(0.02)
+    return False
+
+
+def _wait_for_database_predicate(
+    engine: Engine,
+    statement: str,
+    parameters: dict[str, object],
+    *,
+    timeout_seconds: float = 10,
+) -> bool:
+    deadline = monotonic() + timeout_seconds
+    while monotonic() < deadline:
+        with engine.connect() as connection:
+            if connection.execute(sa.text(statement), parameters).scalar_one():
+                return True
         sleep(0.02)
     return False
 
@@ -4684,3 +4729,855 @@ def test_authorizer_key_revoke_closes_prepared_and_post_source_authority(
         authorizer.dispose()
         key_manager.dispose()
         owner.dispose()
+
+
+def _record_terminal_target_result(
+    owner: Engine,
+    maintenance: Engine,
+    source: SourceExecution,
+    result_code: str = "PHYSICAL_ERASED",
+) -> uuid.UUID:
+    if result_code == "PHYSICAL_ERASED":
+        result_id = uuid.uuid4()
+        with owner.begin() as connection:
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO r27_execution_target_result
+                        (id,execution_id,manifest_target_id,result_code,verified_at,purge_marker_id)
+                    VALUES
+                        (:id,:execution,:target,'PHYSICAL_ERASED',clock_timestamp(),:marker)
+                    """
+                ),
+                {
+                    "id": result_id,
+                    "execution": source.internal_execution_id,
+                    "target": source.request.targets[0].id,
+                    "marker": source.physical_marker_id,
+                },
+            )
+        return result_id
+
+    assert result_code == "LOGICAL_ONLY_SURVIVING_OWNER"
+    target = source.request.targets[0]
+    with owner.begin() as connection:
+        owner_record_id, owner_id = _add_r27_evidence_owner(
+            connection,
+            source,
+            target,
+            state="ACTIVE",
+        )
+    with maintenance.begin() as connection:
+        connection.execute(
+            sa.text(
+                "SELECT easysynq_record_r27_surviving_owner"
+                "(:sha,:version,:execution,clock_timestamp())"
+            ),
+            {
+                "sha": target.sha256,
+                "version": target.object_version_id,
+                "execution": source.public_execution_id,
+            },
+        )
+    with owner.begin() as connection:
+        connection.execute(
+            sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:record"),
+            {"record": owner_record_id},
+        )
+    with owner.connect() as connection:
+        result = connection.execute(
+            sa.text(
+                "SELECT id,surviving_owner_id FROM r27_execution_target_result "
+                "WHERE execution_id=:execution AND manifest_target_id=:target"
+            ),
+            {
+                "execution": source.internal_execution_id,
+                "target": source.request.targets[0].id,
+            },
+        ).one()
+    assert result.surviving_owner_id == owner_id
+    return result.id
+
+
+@pytest.mark.parametrize(
+    "result_code",
+    ("PHYSICAL_ERASED", "LOGICAL_ONLY_SURVIVING_OWNER"),
+)
+def test_r27_purge_claim_excludes_target_with_terminal_result(
+    database_authority_dsns: dict[str, str], result_code: str
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    try:
+        source = _seed_source_execution(database_authority_dsns, owner)
+        _record_terminal_target_result(owner, maintenance, source, result_code)
+        snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(marker) FROM pending_blob_purge marker WHERE id=:marker),
+              (SELECT to_jsonb(execution) FROM r27_execution execution WHERE id=:execution),
+              (SELECT to_jsonb(request) FROM r27_request request WHERE id=:request),
+              (SELECT jsonb_agg(to_jsonb(result) ORDER BY result.id)
+                 FROM r27_execution_target_result result WHERE execution_id=:execution)
+            """
+        )
+        parameters = {
+            "marker": source.physical_marker_id,
+            "execution": source.internal_execution_id,
+            "request": source.request.request_id,
+        }
+        with owner.connect() as connection:
+            before = connection.execute(snapshot_sql, parameters).one()
+
+        with maintenance.begin() as connection:
+            claimed = (
+                connection.execute(
+                    sa.text(
+                        "SELECT marker_id FROM easysynq_claim_r27_exact_purges"
+                        "(:execution,1,clock_timestamp())"
+                    ),
+                    {"execution": source.public_execution_id},
+                )
+                .scalars()
+                .all()
+            )
+
+        assert source.physical_marker_id not in claimed
+        with owner.connect() as connection:
+            assert connection.execute(snapshot_sql, parameters).one() == before
+    finally:
+        owner.dispose()
+        maintenance.dispose()
+
+
+@pytest.mark.parametrize("result_code", ("PHYSICAL_ERASED", "LOGICAL_ONLY_SURVIVING_OWNER"))
+@pytest.mark.parametrize("boundary", ("HOLD", "PHYSICAL_RESULT"))
+def test_r27_terminal_target_defensively_refuses_hold_and_physical_result(
+    database_authority_dsns: dict[str, str], boundary: str, result_code: str
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    try:
+        source = _seed_source_execution(database_authority_dsns, owner)
+        target = source.request.targets[0]
+        _record_terminal_target_result(owner, maintenance, source, result_code)
+        with owner.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "UPDATE pending_blob_purge SET state='RUNNING',claimed_at=clock_timestamp(),"
+                    "attempt_count=1,updated_at=clock_timestamp() WHERE id=:marker"
+                ),
+                {"marker": source.physical_marker_id},
+            )
+            if boundary == "PHYSICAL_RESULT":
+                connection.execute(
+                    sa.text(
+                        "UPDATE blob SET worm_legal_hold=false,"
+                        "worm_legal_hold_verified_at=clock_timestamp() WHERE sha256=:sha"
+                    ),
+                    {"sha": target.sha256},
+                )
+        snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(marker) FROM pending_blob_purge marker WHERE id=:marker),
+              (SELECT to_jsonb(blob) FROM blob blob WHERE sha256=:sha),
+              (SELECT to_jsonb(execution) FROM r27_execution execution WHERE id=:execution),
+              (SELECT to_jsonb(request) FROM r27_request request WHERE id=:request),
+              (SELECT jsonb_agg(to_jsonb(result) ORDER BY result.id)
+                 FROM r27_execution_target_result result WHERE execution_id=:execution),
+              (SELECT count(*) FROM audit_event WHERE reason='r27-exact-purge-complete')
+            """
+        )
+        parameters = {
+            "marker": source.physical_marker_id,
+            "sha": target.sha256,
+            "execution": source.internal_execution_id,
+            "request": source.request.request_id,
+        }
+        with owner.connect() as connection:
+            before = connection.execute(snapshot_sql, parameters).one()
+
+        expected_error = (
+            "r27_hold_release_refused" if boundary == "HOLD" else "r27_purge_result_refused"
+        )
+        function_name = (
+            "easysynq_record_r27_hold_release"
+            if boundary == "HOLD"
+            else "easysynq_record_r27_purge"
+        )
+        with pytest.raises(sa.exc.DBAPIError, match=expected_error):
+            with maintenance.begin() as connection:
+                connection.execute(
+                    sa.text(f"SELECT {function_name}(:sha,:version,:execution,clock_timestamp())"),
+                    {
+                        "sha": target.sha256,
+                        "version": target.object_version_id,
+                        "execution": source.public_execution_id,
+                    },
+                )
+
+        with owner.connect() as connection:
+            assert connection.execute(snapshot_sql, parameters).one() == before
+    finally:
+        owner.dispose()
+        maintenance.dispose()
+
+
+def test_generic_r27_failure_rejects_reserved_recovery_revocation_code(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    try:
+        source = _seed_source_execution(database_authority_dsns, owner)
+        snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(execution) FROM r27_execution execution WHERE id=:execution),
+              (SELECT to_jsonb(request) FROM r27_request request WHERE id=:request),
+              (SELECT to_jsonb(witness) FROM recovery_generation_witness witness WHERE id=:witness),
+              (SELECT count(*) FROM audit_event)
+            """
+        )
+        parameters = {
+            "execution": source.internal_execution_id,
+            "request": source.request.request_id,
+            "witness": source.witness_id,
+        }
+        with owner.connect() as connection:
+            before = connection.execute(snapshot_sql, parameters).one()
+
+        with pytest.raises(sa.exc.DBAPIError, match="r27_execution_failure_refused"):
+            with maintenance.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "SELECT easysynq_fail_r27_execution"
+                        "(:execution,'RECOVERY_KEY_REVOKED','forged generic failure',"
+                        "clock_timestamp())"
+                    ),
+                    {"execution": source.public_execution_id},
+                )
+
+        with owner.connect() as connection:
+            assert connection.execute(snapshot_sql, parameters).one() == before
+    finally:
+        owner.dispose()
+        maintenance.dispose()
+
+
+def test_r27_purge_limit_prefilters_ineligible_oldest_marker(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    try:
+        source = _seed_source_execution(database_authority_dsns, owner)
+        invalid_target = source.request.targets[1]
+        invalid_marker = uuid.uuid4()
+        with owner.begin() as connection:
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO pending_blob_purge
+                        (id,org_id,sha256,bucket,object_key,bypass_governance,record_id,
+                         disposition_event_id,r27_request_id,object_version_id,
+                         r27_execution_id,created_at)
+                    VALUES
+                        (:id,:org,:sha,:bucket,:key,true,:record,:event,:request,:version,
+                         :execution,clock_timestamp()-interval '2 hours')
+                    """
+                ),
+                {
+                    "id": invalid_marker,
+                    "org": source.actors.org_id,
+                    "sha": invalid_target.sha256,
+                    "bucket": invalid_target.bucket,
+                    "key": invalid_target.object_key,
+                    "record": source.actors.record_id,
+                    "event": source.disposition_event_id,
+                    "request": source.request.request_id,
+                    "version": invalid_target.object_version_id,
+                    "execution": source.internal_execution_id,
+                },
+            )
+            connection.execute(
+                sa.text(
+                    "UPDATE pending_blob_purge SET created_at=clock_timestamp()-interval '1 hour' "
+                    "WHERE id=:marker"
+                ),
+                {"marker": source.physical_marker_id},
+            )
+        snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(marker) FROM pending_blob_purge marker WHERE id=:invalid),
+              (SELECT to_jsonb(request) FROM r27_request request WHERE id=:request)
+            """
+        )
+        parameters = {
+            "invalid": invalid_marker,
+            "execution": source.internal_execution_id,
+            "request": source.request.request_id,
+        }
+        with owner.connect() as connection:
+            before = connection.execute(snapshot_sql, parameters).one()
+
+        with maintenance.begin() as connection:
+            claimed = (
+                connection.execute(
+                    sa.text(
+                        "SELECT marker_id FROM easysynq_claim_r27_exact_purges"
+                        "(:execution,1,clock_timestamp())"
+                    ),
+                    {"execution": source.public_execution_id},
+                )
+                .scalars()
+                .all()
+            )
+
+        assert claimed == [source.physical_marker_id]
+        with owner.connect() as connection:
+            assert connection.execute(snapshot_sql, parameters).one() == before
+            assert (
+                connection.execute(
+                    sa.text("SELECT state::text FROM pending_blob_purge WHERE id=:marker"),
+                    {"marker": source.physical_marker_id},
+                ).scalar_one()
+                == "RUNNING"
+            )
+            execution = connection.execute(
+                sa.text(
+                    "SELECT state::text,purge_started_at FROM r27_execution WHERE id=:execution"
+                ),
+                {"execution": source.internal_execution_id},
+            ).one()
+            assert execution.state == "PURGING"
+            assert execution.purge_started_at is not None
+    finally:
+        owner.dispose()
+        maintenance.dispose()
+
+
+def test_finalization_claim_has_explicit_inspection_budget_in_database_catalog(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    try:
+        with owner.connect() as connection:
+            definition = connection.execute(
+                sa.text(
+                    "SELECT pg_get_functiondef("
+                    "'public.easysynq_claim_r27_finalizations(integer,timestamptz)'"
+                    "::regprocedure)"
+                )
+            ).scalar_one()
+        normalized = " ".join(definition.split())
+        assert "LEAST(p_limit * 10, 1000)" in normalized
+        assert "v_inspected" in definition
+    finally:
+        owner.dispose()
+
+
+def test_finalization_claim_stops_at_exact_inspection_budget(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    invalid_candidates: list[ReadyAuthority] = []
+    valid_candidate: ReadyAuthority | None = None
+    lock_connections: list[sa.Connection] = []
+    lock_transactions: list[sa.Transaction | None] = []
+    blocker_pids: list[int] = []
+    try:
+        invalid_candidates = [
+            _make_ready_authority(database_authority_dsns, owner) for _ in range(10)
+        ]
+        valid_candidate = _make_ready_authority(database_authority_dsns, owner)
+        assert valid_candidate is not None
+        ordered_candidates = [*invalid_candidates, valid_candidate]
+        with owner.begin() as connection:
+            for index, ready in enumerate(ordered_candidates):
+                connection.execute(
+                    sa.text(
+                        "UPDATE r27_request SET created_at="
+                        "TIMESTAMPTZ '2000-01-01 00:00:00+00'+"
+                        "(:offset * interval '1 second') WHERE id=:request"
+                    ),
+                    {"offset": index, "request": ready.request.request_id},
+                )
+        request_ids = [ready.request.request_id for ready in ordered_candidates]
+        exact_snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT jsonb_agg(to_jsonb(request) ORDER BY request.id)
+                 FROM r27_request request WHERE request.id=ANY(:requests)),
+              (SELECT COALESCE(jsonb_agg(to_jsonb(execution) ORDER BY execution.id),'[]')
+                 FROM r27_execution execution WHERE execution.request_id=ANY(:requests)),
+              (SELECT jsonb_agg(to_jsonb(witness) ORDER BY witness.id)
+                 FROM recovery_generation_witness witness
+                 WHERE witness.request_id=ANY(:requests))
+            """
+        )
+        with owner.connect() as connection:
+            exact_before = connection.execute(
+                exact_snapshot_sql,
+                {"requests": request_ids},
+            ).one()
+
+        for ready in invalid_candidates:
+            lock_connection = owner.connect()
+            lock_transaction = lock_connection.begin()
+            blocker_pid = lock_connection.execute(sa.text("SELECT pg_backend_pid()"))
+            blocker_pids.append(blocker_pid.scalar_one())
+            lock_connection.execute(
+                sa.text("SELECT id FROM recovery_generation_verifier_key WHERE id=:id FOR UPDATE"),
+                {"id": ready.recovery_key_db_id},
+            ).scalar_one()
+            lock_connections.append(lock_connection)
+            lock_transactions.append(lock_transaction)
+
+        worker_pids: Queue[int] = Queue(maxsize=1)
+
+        def invoke() -> tuple[uuid.UUID, ...] | str:
+            try:
+                with maintenance.begin() as connection:
+                    connection.execute(sa.text("SET LOCAL statement_timeout='30s'"))
+                    worker_pids.put(
+                        connection.execute(sa.text("SELECT pg_backend_pid()")).scalar_one()
+                    )
+                    rows = (
+                        connection.execute(
+                            sa.text(
+                                "SELECT request_id FROM "
+                                "easysynq_claim_r27_finalizations(1,clock_timestamp())"
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                return tuple(rows)
+            except sa.exc.DBAPIError as exc:
+                return str(exc)
+
+        observed_blocks: list[bool] = []
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(invoke)
+            worker_pid = worker_pids.get(timeout=2)
+            try:
+                for index, ready in enumerate(invalid_candidates):
+                    blocked = _wait_for_exact_blocker(owner, worker_pid, blocker_pids[index])
+                    observed_blocks.append(blocked)
+                    if not blocked:
+                        break
+                    with owner.begin() as connection:
+                        connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+                        connection.execute(
+                            sa.text(
+                                "UPDATE r27_manifest SET "
+                                "issued_at=clock_timestamp()-interval '2 hours',"
+                                "expires_at=clock_timestamp()-interval '1 hour' "
+                                "WHERE id=:manifest"
+                            ),
+                            {"manifest": ready.request.manifest_id},
+                        )
+                    transaction = lock_transactions[index]
+                    assert transaction is not None
+                    transaction.commit()
+                    lock_transactions[index] = None
+            finally:
+                for transaction in lock_transactions:
+                    if transaction is not None and transaction.is_active:
+                        transaction.rollback()
+            result = future.result(timeout=10)
+
+        assert observed_blocks == [True] * 10
+        assert result == ()
+        with owner.connect() as connection:
+            assert (
+                connection.execute(
+                    exact_snapshot_sql,
+                    {"requests": request_ids},
+                ).one()
+                == exact_before
+            )
+            for ready in ordered_candidates:
+                assert (
+                    connection.execute(
+                        sa.text("SELECT state::text FROM r27_request WHERE id=:request"),
+                        {"request": ready.request.request_id},
+                    ).scalar_one()
+                    == "READY_FOR_FINALIZATION"
+                )
+                assert (
+                    connection.execute(
+                        sa.text("SELECT count(*) FROM r27_execution WHERE request_id=:request"),
+                        {"request": ready.request.request_id},
+                    ).scalar_one()
+                    == 0
+                )
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT consumed_execution_id FROM recovery_generation_witness "
+                            "WHERE id=:witness"
+                        ),
+                        {"witness": ready.witness_id},
+                    ).scalar_one_or_none()
+                    is None
+                )
+    finally:
+        for transaction in lock_transactions:
+            if transaction is not None and transaction.is_active:
+                transaction.rollback()
+        for connection in lock_connections:
+            connection.close()
+        with owner.begin() as connection:
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            for ready in [*invalid_candidates, valid_candidate]:
+                if ready is not None:
+                    connection.execute(
+                        sa.text(
+                            "UPDATE r27_request SET state='STALE',error_code='TEST_CLEANUP',"
+                            "stale_at=COALESCE(stale_at,clock_timestamp()),"
+                            "updated_at=clock_timestamp() WHERE id=:request"
+                        ),
+                        {"request": ready.request.request_id},
+                    )
+        owner.dispose()
+        maintenance.dispose()
+
+
+def test_finalization_prefilters_invalid_oldest_before_limit(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    invalid_candidates: list[ReadyAuthority] = []
+    valid: ReadyAuthority | None = None
+    try:
+        invalid_candidates = [
+            _make_ready_authority(database_authority_dsns, owner) for _ in range(11)
+        ]
+        valid = _make_ready_authority(database_authority_dsns, owner)
+        with owner.begin() as connection:
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            for offset, ready in enumerate([*invalid_candidates, valid]):
+                if ready is not valid:
+                    connection.execute(
+                        sa.text(
+                            "UPDATE r27_manifest SET "
+                            "issued_at=clock_timestamp()-interval '2 hours',"
+                            "expires_at=clock_timestamp()-interval '1 hour' "
+                            "WHERE id=:manifest"
+                        ),
+                        {"manifest": ready.request.manifest_id},
+                    )
+                connection.execute(
+                    sa.text(
+                        "UPDATE r27_request SET "
+                        "created_at=TIMESTAMPTZ '2000-01-01 00:00:00+00'+"
+                        "(:offset * interval '1 second') WHERE id=:request"
+                    ),
+                    {"offset": offset, "request": ready.request.request_id},
+                )
+        invalid_request_ids = [ready.request.request_id for ready in invalid_candidates]
+        invalid_snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT jsonb_agg(to_jsonb(request) ORDER BY request.id)
+                 FROM r27_request request WHERE request.id=ANY(:requests)),
+              (SELECT COALESCE(jsonb_agg(to_jsonb(execution) ORDER BY execution.id),'[]')
+                 FROM r27_execution execution WHERE execution.request_id=ANY(:requests)),
+              (SELECT jsonb_agg(to_jsonb(witness) ORDER BY witness.id)
+                 FROM recovery_generation_witness witness
+                 WHERE witness.request_id=ANY(:requests))
+            """
+        )
+        with owner.connect() as connection:
+            invalid_before = connection.execute(
+                invalid_snapshot_sql,
+                {"requests": invalid_request_ids},
+            ).one()
+        with maintenance.begin() as connection:
+            claimed = connection.execute(
+                sa.text("SELECT * FROM easysynq_claim_r27_finalizations(1,clock_timestamp())")
+            ).all()
+        assert [row.request_id for row in claimed] == [valid.request.request_id]
+        with owner.connect() as connection:
+            assert (
+                connection.execute(
+                    invalid_snapshot_sql,
+                    {"requests": invalid_request_ids},
+                ).one()
+                == invalid_before
+            )
+            assert (
+                connection.execute(
+                    sa.text("SELECT state::text FROM r27_execution WHERE request_id=:request"),
+                    {"request": valid.request.request_id},
+                ).scalar_one()
+                == "CLAIMED"
+            )
+    finally:
+        with owner.begin() as connection:
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            for ready in [*invalid_candidates, valid]:
+                if ready is not None:
+                    connection.execute(
+                        sa.text(
+                            "UPDATE r27_request SET state='STALE',error_code='TEST_CLEANUP',"
+                            "stale_at=COALESCE(stale_at,clock_timestamp()),"
+                            "updated_at=clock_timestamp() WHERE id=:request "
+                            "AND state<>'FINALIZING'"
+                        ),
+                        {"request": ready.request.request_id},
+                    )
+        owner.dispose()
+        maintenance.dispose()
+
+
+@pytest.mark.parametrize("action", ("REQUEST", "APPROVE", "CANCEL"))
+def test_r27_acceptance_rechecks_expiry_after_lock_wait(
+    database_authority_dsns: dict[str, str], action: str
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    authorizer = _engine(database_authority_dsns, "easysynq_r27_authorizer")
+    lock_connection: sa.Connection | None = None
+    lock_transaction: sa.Transaction | None = None
+    try:
+        actors = _seed_actors(owner)
+        key_id, _ = _install_authorizer_key(database_authority_dsns)
+        authority = _seed_request_authority(
+            owner,
+            actors,
+            key_id,
+            actions=("REQUEST", "APPROVE", "CANCEL"),
+        )
+        if action != "REQUEST":
+            with authorizer.begin() as connection:
+                connection.execute(
+                    sa.text("SELECT easysynq_accept_r27_request(:id,clock_timestamp())"),
+                    {"id": authority.attestations["REQUEST"]},
+                ).scalar_one()
+        with owner.begin() as connection:
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            connection.execute(
+                sa.text(
+                    "UPDATE r27_attestation SET issued_at=clock_timestamp(),"
+                    "auth_time=clock_timestamp()-interval '1 second',"
+                    "expires_at=clock_timestamp()+interval '5 seconds' WHERE id=:id"
+                ),
+                {"id": authority.attestations[action]},
+            )
+            connection.execute(
+                sa.text(
+                    "UPDATE r27_action_challenge SET "
+                    "created_at=clock_timestamp()-interval '1 second',"
+                    "expires_at=clock_timestamp()+interval '5 seconds' WHERE id=:id"
+                ),
+                {"id": authority.challenges[action]},
+            )
+        snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(request) FROM r27_request request WHERE id=:request),
+              (SELECT to_jsonb(challenge) FROM r27_action_challenge challenge WHERE id=:challenge),
+              (SELECT count(*) FROM audit_event)
+            """
+        )
+        parameters = {
+            "request": authority.request_id,
+            "challenge": authority.challenges[action],
+        }
+        with owner.connect() as connection:
+            before = connection.execute(snapshot_sql, parameters).one()
+
+        function_name = {
+            "REQUEST": "easysynq_accept_r27_request",
+            "APPROVE": "easysynq_accept_r27_approval",
+            "CANCEL": "easysynq_cancel_r27_request",
+        }[action]
+        application_name = f"r27-expiry-lock-{action.lower()}-{uuid.uuid4()}"
+        backend_pids: Queue[int] = Queue(maxsize=1)
+
+        def invoke() -> str | None:
+            try:
+                with authorizer.begin() as connection:
+                    connection.execute(
+                        sa.text("SELECT set_config('application_name',:name,true)"),
+                        {"name": application_name},
+                    )
+                    connection.execute(sa.text("SET LOCAL statement_timeout='15s'"))
+                    backend_pids.put(
+                        connection.execute(sa.text("SELECT pg_backend_pid()")).scalar_one()
+                    )
+                    connection.execute(
+                        sa.text(f"SELECT {function_name}(:id,clock_timestamp())"),
+                        {"id": authority.attestations[action]},
+                    ).scalar_one()
+            except sa.exc.DBAPIError as exc:
+                return str(exc)
+            return None
+
+        lock_connection = owner.connect()
+        lock_transaction = lock_connection.begin()
+        lock_connection.execute(
+            sa.text("SELECT id FROM r27_authorizer_key WHERE id=:id FOR UPDATE"),
+            {"id": authority.authorizer_key_ids[action]},
+        ).scalar_one()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(invoke)
+            blocked = _wait_for_backend_lock(owner, backend_pids.get(timeout=2))
+            if blocked:
+                with owner.connect() as connection:
+                    assert connection.execute(
+                        sa.text(
+                            "SELECT clock_timestamp()<LEAST(a.expires_at,c.expires_at) "
+                            "FROM r27_attestation a JOIN r27_action_challenge c "
+                            "ON c.id=a.challenge_id WHERE a.id=:id"
+                        ),
+                        {"id": authority.attestations[action]},
+                    ).scalar_one()
+                assert _wait_for_database_predicate(
+                    owner,
+                    "SELECT clock_timestamp()>GREATEST(a.expires_at,c.expires_at) "
+                    "FROM r27_attestation a JOIN r27_action_challenge c "
+                    "ON c.id=a.challenge_id WHERE a.id=:id",
+                    {"id": authority.attestations[action]},
+                )
+            lock_transaction.commit()
+            lock_transaction = None
+            error = future.result(timeout=6)
+
+        assert blocked, error
+        expected_error = {
+            "REQUEST": "r27_request_authority_refused",
+            "APPROVE": "r27_approval_authority_refused",
+            "CANCEL": "r27_cancel_refused",
+        }[action]
+        assert error is not None and expected_error in error
+        with owner.connect() as connection:
+            assert connection.execute(snapshot_sql, parameters).one() == before
+    finally:
+        if lock_transaction is not None and lock_transaction.is_active:
+            lock_transaction.rollback()
+        if lock_connection is not None:
+            lock_connection.close()
+        owner.dispose()
+        authorizer.dispose()
+
+
+def test_finalization_rechecks_manifest_expiry_after_key_lock_wait(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    lock_connection: sa.Connection | None = None
+    lock_transaction: sa.Transaction | None = None
+    ready: ReadyAuthority | None = None
+    try:
+        ready = _make_ready_authority(database_authority_dsns, owner)
+        with owner.begin() as connection:
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            connection.execute(
+                sa.text(
+                    "UPDATE r27_manifest SET expires_at="
+                    "clock_timestamp()+interval '5 seconds' WHERE id=:manifest"
+                ),
+                {"manifest": ready.request.manifest_id},
+            )
+        snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(request) FROM r27_request request WHERE id=:request),
+              (SELECT COALESCE(jsonb_agg(to_jsonb(execution) ORDER BY execution.id),'[]')
+                 FROM r27_execution execution WHERE request_id=:request),
+              (SELECT to_jsonb(witness) FROM recovery_generation_witness witness WHERE id=:witness),
+              (SELECT count(*) FROM audit_event)
+            """
+        )
+        parameters = {
+            "request": ready.request.request_id,
+            "witness": ready.witness_id,
+        }
+        with owner.connect() as connection:
+            before = connection.execute(snapshot_sql, parameters).one()
+        application_name = f"r27-finalization-expiry-lock-{uuid.uuid4()}"
+        backend_pids: Queue[int] = Queue(maxsize=1)
+
+        def invoke() -> tuple[uuid.UUID, ...] | str:
+            try:
+                with maintenance.begin() as connection:
+                    connection.execute(
+                        sa.text("SELECT set_config('application_name',:name,true)"),
+                        {"name": application_name},
+                    )
+                    connection.execute(sa.text("SET LOCAL statement_timeout='10s'"))
+                    backend_pids.put(
+                        connection.execute(sa.text("SELECT pg_backend_pid()")).scalar_one()
+                    )
+                    rows = (
+                        connection.execute(
+                            sa.text(
+                                "SELECT request_id FROM "
+                                "easysynq_claim_r27_finalizations(1,clock_timestamp())"
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                return tuple(rows)
+            except sa.exc.DBAPIError as exc:
+                return str(exc)
+
+        lock_connection = owner.connect()
+        lock_transaction = lock_connection.begin()
+        lock_connection.execute(
+            sa.text("SELECT id FROM recovery_generation_verifier_key WHERE id=:id FOR UPDATE"),
+            {"id": ready.recovery_key_db_id},
+        ).scalar_one()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(invoke)
+            blocked = _wait_for_backend_lock(owner, backend_pids.get(timeout=2))
+            if blocked:
+                with owner.connect() as connection:
+                    assert connection.execute(
+                        sa.text(
+                            "SELECT clock_timestamp()<expires_at "
+                            "FROM r27_manifest WHERE id=:manifest"
+                        ),
+                        {"manifest": ready.request.manifest_id},
+                    ).scalar_one()
+                assert _wait_for_database_predicate(
+                    owner,
+                    "SELECT clock_timestamp()>expires_at FROM r27_manifest WHERE id=:manifest",
+                    {"manifest": ready.request.manifest_id},
+                )
+            lock_transaction.commit()
+            lock_transaction = None
+            result = future.result(timeout=6)
+
+        assert blocked, result
+        assert result == ()
+        with owner.connect() as connection:
+            assert connection.execute(snapshot_sql, parameters).one() == before
+    finally:
+        if lock_transaction is not None and lock_transaction.is_active:
+            lock_transaction.rollback()
+        if lock_connection is not None:
+            lock_connection.close()
+        if ready is not None:
+            with owner.begin() as connection:
+                connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+                connection.execute(
+                    sa.text(
+                        "UPDATE r27_request SET state='STALE',error_code='TEST_CLEANUP',"
+                        "stale_at=COALESCE(stale_at,clock_timestamp()),"
+                        "updated_at=clock_timestamp() WHERE id=:request "
+                        "AND state='READY_FOR_FINALIZATION'"
+                    ),
+                    {"request": ready.request.request_id},
+                )
+        owner.dispose()
+        maintenance.dispose()
