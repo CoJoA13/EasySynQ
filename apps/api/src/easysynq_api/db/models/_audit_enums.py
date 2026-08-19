@@ -113,6 +113,7 @@ class EventType(enum.Enum):
     BOOTSTRAP_IDENTITY_CLAIMED = "BOOTSTRAP_IDENTITY_CLAIMED"
     # storage / WORM-verify gate (S8b, doc 08 §7) — added via ALTER TYPE … ADD VALUE in 0013.
     WORM_VERIFIED = "WORM_VERIFIED"
+    RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED = "RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED"
     # backup config + restore-test gate G-C / AC#5 (S8b2, doc 08 §8) — added via ALTER TYPE …
     # ADD VALUE in 0014. BACKUP_CONFIGURED records the policy; RESTORE_TEST_PASSED/_FAILED are the
     # drill outcome the G-C gate reads (only a PASS satisfies the gate).

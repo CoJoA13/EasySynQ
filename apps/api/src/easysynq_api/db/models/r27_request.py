@@ -38,7 +38,14 @@ class R27Request(Base):
             name="approver_neq_requester",
         ),
         CheckConstraint(
-            "state IS NULL OR requester_user_id IS NOT NULL",
+            "(state IS NULL AND requester_user_id IS NULL AND requester_audit_event_id IS NULL "
+            "AND requested_at IS NULL) OR "
+            "(state='STALE' AND ((requester_user_id IS NULL "
+            "AND requester_audit_event_id IS NULL AND requested_at IS NULL) OR "
+            "(requester_user_id IS NOT NULL AND requester_audit_event_id IS NOT NULL "
+            "AND requested_at IS NOT NULL))) OR "
+            "(state IS NOT NULL AND state<>'STALE' AND requester_user_id IS NOT NULL "
+            "AND requester_audit_event_id IS NOT NULL AND requested_at IS NOT NULL)",
             name="state_requires_requester",
         ),
         Index("ix_r27_request_record_id", "record_id"),

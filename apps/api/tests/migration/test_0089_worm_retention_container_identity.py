@@ -433,9 +433,10 @@ def _seed_populated_r27_authorizer_key(connection: sa.Connection) -> None:
         sa.text(
             """
             INSERT INTO r27_authorizer_key
-                (id, key_id, public_key, fingerprint, active_at)
+                (id, key_id, public_key, fingerprint, active_at,
+                 installed_by_identity, installed_audit_event_id)
             VALUES
-                (:id, :key_id, :public_key, :fingerprint, now())
+                (:id, :key_id, :public_key, :fingerprint, now(), 'test-operator', 1)
             """
         ),
         {

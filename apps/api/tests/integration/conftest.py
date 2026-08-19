@@ -67,6 +67,68 @@ def _swap_role(dsn: str, user: str, password: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
+DATABASE_AUTHORITY_PASSWORDS = {
+    "easysynq_app": "test-app'quote-password",
+    "easysynq_linker": r"test-linker\backslash-password",
+    "easysynq_retention": "test-retention-ñ-password",
+    "easysynq_hold_authorizer": "test-hold-authorizer-password",
+    "easysynq_hold_maintenance": "test-hold-maintenance-password",
+    "easysynq_r27_authorizer": "test-r27-authorizer-password",
+    "easysynq_r27_maintenance": "test-r27-maintenance-password",
+    "easysynq_r27_authorizer_key_manager": "test-r27-authorizer-key-manager-password",
+    "easysynq_recovery_key_manager": "test-recovery-key-manager-password",
+    "easysynq_r27_role_manager": "test-r27-role-manager-password",
+    "easysynq_audit_signer": "test-audit-signer-password",
+    "easysynq_backup": "test-backup-password",
+}
+
+_DATABASE_AUTHORITY_PASSWORD_ENV = {
+    "easysynq_app": "APP_DB_PASSWORD",
+    "easysynq_linker": "LINKER_DB_PASSWORD",
+    "easysynq_retention": "RETENTION_DB_PASSWORD",
+    "easysynq_hold_authorizer": "HOLD_AUTHORIZER_DB_PASSWORD",
+    "easysynq_hold_maintenance": "HOLD_MAINTENANCE_DB_PASSWORD",
+    "easysynq_r27_authorizer": "R27_AUTHORIZER_DB_PASSWORD",
+    "easysynq_r27_maintenance": "R27_MAINTENANCE_DB_PASSWORD",
+    "easysynq_r27_authorizer_key_manager": "R27_AUTHORIZER_KEY_MANAGER_DB_PASSWORD",
+    "easysynq_recovery_key_manager": "RECOVERY_KEY_MANAGER_DB_PASSWORD",
+    "easysynq_r27_role_manager": "R27_ROLE_MANAGER_DB_PASSWORD",
+    "easysynq_audit_signer": "AUDIT_SIGNER_DB_PASSWORD",
+    "easysynq_backup": "BACKUP_DB_PASSWORD",
+}
+
+
+@pytest.fixture
+def database_authority_dsns(
+    _pg: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, str]:
+    """Migrate a real PostgreSQL database, then return independently authenticated role DSNs."""
+    from alembic import command
+    from alembic.config import Config
+
+    from easysynq_api.config import get_settings
+    from easysynq_api.readiness import MIGRATIONS_DIR
+
+    monkeypatch.setenv("DATABASE_URL", _pg)
+    monkeypatch.setenv("DATABASE_URL_SYNC", _pg)
+    for role, env_name in _DATABASE_AUTHORITY_PASSWORD_ENV.items():
+        monkeypatch.setenv(env_name, DATABASE_AUTHORITY_PASSWORDS[role])
+    get_settings.cache_clear()
+
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    command.upgrade(config, "head")
+
+    return {
+        "owner": _pg,
+        **{
+            role: _swap_role(_pg, role, password)
+            for role, password in DATABASE_AUTHORITY_PASSWORDS.items()
+        },
+    }
+
+
 @pytest.fixture
 def dsns(_pg: str) -> dict[str, str]:
     """The owner / app / linker DSNs. Depend on ``app_under_test`` first so the roles exist (they

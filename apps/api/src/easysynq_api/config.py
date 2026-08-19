@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     # ``migrate``. CI + testcontainers use the defaults so the AC#6a role-grant proof works.
     app_db_password: str = "easysynq_app"  # noqa: S105 — dev default, overridden in prod
     linker_db_password: str = "easysynq_linker"  # noqa: S105 — dev default, overridden in prod
+    retention_db_password: str = "easysynq_retention"  # noqa: S105
+    hold_authorizer_db_password: str = "easysynq_hold_authorizer"  # noqa: S105
+    hold_maintenance_db_password: str = "easysynq_hold_maintenance"  # noqa: S105
+    r27_authorizer_db_password: str = "easysynq_r27_authorizer"  # noqa: S105
+    r27_maintenance_db_password: str = "easysynq_r27_maintenance"  # noqa: S105
+    r27_authorizer_key_manager_db_password: str = "easysynq_r27_authorizer_key_manager"  # noqa: S105
+    recovery_key_manager_db_password: str = "easysynq_recovery_key_manager"  # noqa: S105
+    r27_role_manager_db_password: str = "easysynq_r27_role_manager"  # noqa: S105
+    audit_signer_db_password: str = "easysynq_audit_signer"  # noqa: S105
+    backup_db_password: str = "easysynq_backup"  # noqa: S105
 
     # redis
     redis_url: str = "redis://localhost:6379/0"

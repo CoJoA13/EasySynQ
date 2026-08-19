@@ -35,6 +35,7 @@ class R27ExecutionState(enum.Enum):
 class R27ResultCode(enum.Enum):
     PHYSICAL_ERASED = "PHYSICAL_ERASED"
     LOGICAL_ONLY_SURVIVING_OWNER = "LOGICAL_ONLY_SURVIVING_OWNER"
+    MIXED_OUTCOME = "MIXED_OUTCOME"
 
 
 class R27DerivativeKind(enum.Enum):

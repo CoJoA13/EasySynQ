@@ -11,8 +11,10 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from psycopg import sql as psycopg_sql
 from sqlalchemy.dialects import postgresql
 
+from easysynq_api.config import get_settings
 from easysynq_api.db.models._r27_enums import R27_ENUM_VALUES
 from easysynq_api.db.models._worm_enums import WORM_ENUM_VALUES
 
@@ -27,6 +29,57 @@ _PARTIAL_INDEXES = (
     "uq_retention_revision_policy_proposed",
     "uq_retention_revision_config_proposed",
     "uq_r27_request_open",
+)
+
+APP_ROLE = "easysynq_app"
+LINKER_ROLE = "easysynq_linker"
+_AUTHORITY_ROLE_PASSWORD_FIELDS = {
+    APP_ROLE: "app_db_password",
+    LINKER_ROLE: "linker_db_password",
+    "easysynq_retention": "retention_db_password",
+    "easysynq_hold_authorizer": "hold_authorizer_db_password",
+    "easysynq_hold_maintenance": "hold_maintenance_db_password",
+    "easysynq_r27_authorizer": "r27_authorizer_db_password",
+    "easysynq_r27_maintenance": "r27_maintenance_db_password",
+    "easysynq_r27_authorizer_key_manager": "r27_authorizer_key_manager_db_password",
+    "easysynq_recovery_key_manager": "recovery_key_manager_db_password",
+    "easysynq_r27_role_manager": "r27_role_manager_db_password",
+    "easysynq_audit_signer": "audit_signer_db_password",
+    "easysynq_backup": "backup_db_password",
+}
+_NEW_AUTHORITY_ROLES = tuple(_AUTHORITY_ROLE_PASSWORD_FIELDS)[2:]
+_AUTHORITY_FUNCTION_NAMES = (
+    "easysynq_claim_retention_targets",
+    "easysynq_fail_retention_target",
+    "easysynq_ratchet_worm_assertion",
+    "easysynq_enqueue_ordinary_exact_purge",
+    "easysynq_claim_ordinary_exact_purges",
+    "easysynq_fail_ordinary_exact_purge",
+    "easysynq_record_ordinary_exact_purge",
+    "easysynq_authorize_hold_release",
+    "easysynq_claim_hold_releases",
+    "easysynq_fail_hold_release",
+    "easysynq_record_ordinary_hold_release",
+    "easysynq_accept_r27_request",
+    "easysynq_accept_r27_approval",
+    "easysynq_cancel_r27_request",
+    "easysynq_mark_r27_stale",
+    "easysynq_claim_r27_finalizations",
+    "easysynq_fail_r27_execution",
+    "easysynq_record_r27_hold_release",
+    "easysynq_claim_r27_exact_purges",
+    "easysynq_fail_r27_exact_purge",
+    "easysynq_record_r27_purge",
+    "easysynq_record_r27_surviving_owner",
+    "easysynq_install_r27_authorizer_key",
+    "easysynq_retire_r27_authorizer_key",
+    "easysynq_revoke_r27_authorizer_key",
+    "easysynq_install_recovery_verifier_key",
+    "easysynq_retire_recovery_verifier_key",
+    "easysynq_revoke_recovery_verifier_key",
+    "easysynq_begin_r27_role_membership",
+    "easysynq_complete_r27_role_membership",
+    "easysynq_fail_r27_role_membership",
 )
 
 
@@ -82,9 +135,155 @@ def _refuse_legacy_physical_owner_state(bind: sa.Connection) -> None:
         raise RuntimeError("unsupported_legacy_physical_owner_state")
 
 
+def _execute_composed(
+    bind: sa.Connection,
+    statement: psycopg_sql.Composed,
+    parameters: tuple[object, ...] = (),
+) -> None:
+    """Execute composed DDL directly through psycopg, preserving bound secrets."""
+    with bind.connection.driver_connection.cursor() as cursor:
+        cursor.execute(statement, parameters)
+
+
+def _preflight_database_authority(bind: sa.Connection) -> str:
+    owner = bind.execute(sa.text("SELECT current_user")).scalar_one()
+    schema_owner = bind.execute(
+        sa.text("SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='public'")
+    ).scalar_one()
+    database_owner = bind.execute(
+        sa.text("SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database()")
+    ).scalar_one()
+    schema_owner_is_database_owner = schema_owner == "pg_database_owner" and owner == database_owner
+    if schema_owner != owner and not schema_owner_is_database_owner:
+        raise RuntimeError("database_authority_wrong_public_schema_owner")
+
+    unexpected_default_grantors = (
+        bind.execute(
+            sa.text(
+                """
+            SELECT DISTINCT grantor.rolname
+            FROM pg_default_acl defaults
+            JOIN pg_roles grantor ON grantor.oid=defaults.defaclrole
+            JOIN pg_namespace namespace ON namespace.oid=defaults.defaclnamespace
+            CROSS JOIN LATERAL aclexplode(defaults.defaclacl) acl
+            LEFT JOIN pg_roles grantee ON grantee.oid=acl.grantee
+            WHERE namespace.nspname='public'
+              AND grantee.rolname=:app_role
+              AND grantor.rolname<>:owner
+            """
+            ),
+            {"app_role": APP_ROLE, "owner": owner},
+        )
+        .scalars()
+        .all()
+    )
+    if unexpected_default_grantors:
+        raise RuntimeError("database_authority_wrong_default_acl_grantor")
+
+    memberships = bind.execute(
+        sa.text(
+            """
+            SELECT member.rolname, granted.rolname
+            FROM pg_auth_members membership
+            JOIN pg_roles member ON member.oid=membership.member
+            JOIN pg_roles granted ON granted.oid=membership.roleid
+            WHERE member.rolname=ANY(:roles) OR granted.rolname=ANY(:roles)
+            LIMIT 1
+            """
+        ),
+        {"roles": list(_AUTHORITY_ROLE_PASSWORD_FIELDS)},
+    ).first()
+    if memberships is not None:
+        raise RuntimeError("database_authority_role_membership_refused")
+    return owner
+
+
+def _create_and_normalize_authority_roles(bind: sa.Connection) -> str:
+    owner = _preflight_database_authority(bind)
+    settings = get_settings()
+    for role, password_field in _AUTHORITY_ROLE_PASSWORD_FIELDS.items():
+        if not bind.execute(
+            sa.text("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=:role)"),
+            {"role": role},
+        ).scalar_one():
+            _execute_composed(
+                bind,
+                psycopg_sql.SQL("CREATE ROLE {} LOGIN NOINHERIT").format(
+                    psycopg_sql.Identifier(role)
+                ),
+            )
+        _execute_composed(
+            bind,
+            psycopg_sql.SQL(
+                "ALTER ROLE {} WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB "
+                "NOCREATEROLE NOREPLICATION PASSWORD {}"
+            ).format(
+                psycopg_sql.Identifier(role),
+                psycopg_sql.Literal(getattr(settings, password_field)),
+            ),
+        )
+        _execute_composed(
+            bind,
+            psycopg_sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(
+                psycopg_sql.Identifier(role)
+            ),
+        )
+
+    database_name = bind.execute(sa.text("SELECT current_database()"), {}).scalar_one()
+    _execute_composed(
+        bind,
+        psycopg_sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+            psycopg_sql.Identifier(database_name), psycopg_sql.Identifier("easysynq_backup")
+        ),
+    )
+
+    op.execute("REVOKE ALL ON SCHEMA public FROM PUBLIC")
+    op.execute(
+        f"REVOKE ALL ON blob, document_version, evidence_blob, pending_blob_purge FROM {APP_ROLE}"
+    )
+    op.execute(
+        f"REVOKE INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER "
+        f"ON audit_checkpoint,audit_checkpoint_sink FROM {APP_ROLE}"
+    )
+    op.execute(f"GRANT SELECT ON audit_checkpoint,audit_checkpoint_sink TO {APP_ROLE}")
+    op.execute(f"REVOKE EXECUTE ON FUNCTION easysynq_create_audit_partition(date) FROM {APP_ROLE}")
+    op.execute(f"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {LINKER_ROLE}")
+    op.execute(f"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {LINKER_ROLE}")
+    op.execute(f"REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM {LINKER_ROLE}")
+    _execute_composed(
+        bind,
+        psycopg_sql.SQL(
+            "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA public "
+            "REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM {}"
+        ).format(psycopg_sql.Identifier(owner), psycopg_sql.Identifier(APP_ROLE)),
+    )
+    _execute_composed(
+        bind,
+        psycopg_sql.SQL(
+            "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA public "
+            "REVOKE USAGE, SELECT ON SEQUENCES FROM {}"
+        ).format(psycopg_sql.Identifier(owner), psycopg_sql.Identifier(APP_ROLE)),
+    )
+    _execute_composed(
+        bind,
+        psycopg_sql.SQL(
+            "ALTER DEFAULT PRIVILEGES FOR ROLE {} IN SCHEMA public "
+            "REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC"
+        ).format(psycopg_sql.Identifier(owner)),
+    )
+    _execute_composed(
+        bind,
+        psycopg_sql.SQL(
+            "ALTER DEFAULT PRIVILEGES FOR ROLE {} REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC"
+        ).format(psycopg_sql.Identifier(owner)),
+    )
+    return owner
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     _refuse_legacy_physical_owner_state(bind)
+    _create_and_normalize_authority_roles(bind)
     # Alembic's historical default is VARCHAR(32); this approved revision id is longer.
     op.alter_column(
         "alembic_version",
@@ -96,6 +295,9 @@ def upgrade() -> None:
 
     for name, values in _ENUM_VALUES.items():
         postgresql.ENUM(*values, name=name).create(bind, checkfirst=True)
+    op.execute(
+        "ALTER TYPE event_type ADD VALUE IF NOT EXISTS 'RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED'"
+    )
 
     _upgrade_blob()
     _create_document_retention()
@@ -105,6 +307,7 @@ def upgrade() -> None:
     _create_r27_authority()
     _upgrade_pending_blob_purge()
     _create_maintenance_intent()
+    _create_database_authority()
 
 
 def _upgrade_blob() -> None:
@@ -648,7 +851,14 @@ def _replace_r27_request() -> None:
     op.create_check_constraint(
         op.f("ck_r27_request_state_requires_requester"),
         "r27_request",
-        "state IS NULL OR requester_user_id IS NOT NULL",
+        "(state IS NULL AND requester_user_id IS NULL AND requester_audit_event_id IS NULL "
+        "AND requested_at IS NULL) OR "
+        "(state='STALE' AND ((requester_user_id IS NULL "
+        "AND requester_audit_event_id IS NULL AND requested_at IS NULL) OR "
+        "(requester_user_id IS NOT NULL AND requester_audit_event_id IS NOT NULL "
+        "AND requested_at IS NOT NULL))) OR "
+        "(state IS NOT NULL AND state<>'STALE' AND requester_user_id IS NOT NULL "
+        "AND requester_audit_event_id IS NOT NULL AND requested_at IS NOT NULL)",
     )
     op.create_index("ix_r27_request_record_id", "r27_request", ["record_id"])
     op.execute(
@@ -788,6 +998,8 @@ def _create_r27_challenge_and_keys() -> None:
         sa.Column("active_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("retired_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("installed_by_identity", sa.String(length=255), nullable=False),
+        sa.Column("installed_audit_event_id", sa.BigInteger(), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -797,6 +1009,16 @@ def _create_r27_challenge_and_keys() -> None:
         sa.CheckConstraint(
             "fingerprint ~ '^[0-9a-f]{64}$'",
             name="fingerprint_shape",
+        ),
+        sa.CheckConstraint(
+            "installed_by_identity ~ '[^[:space:]]'",
+            name="installed_by_identity_nonblank",
+        ),
+        sa.CheckConstraint(
+            "(retired_at IS NULL OR retired_at>=active_at) "
+            "AND (revoked_at IS NULL OR revoked_at>=active_at) "
+            "AND (retired_at IS NULL OR revoked_at IS NULL OR revoked_at>=retired_at)",
+            name="lifecycle_monotone",
         ),
     )
     op.create_table(
@@ -859,6 +1081,7 @@ def _create_r27_challenge_and_keys() -> None:
         sa.Column("attempt_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column("error_code", sa.String(length=64), nullable=True),
         sa.Column("error_detail", sa.String(length=512), nullable=True),
+        sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("source_committed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("purge_started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
@@ -880,6 +1103,33 @@ def _create_r27_challenge_and_keys() -> None:
         ondelete="RESTRICT",
     )
     _create_recovery_authority()
+    for column in (
+        sa.Column("r27_request_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("r27_execution_id", postgresql.UUID(as_uuid=True), nullable=True),
+    ):
+        op.add_column("disposition_event", column)
+    op.create_foreign_key(
+        "fk_disposition_event_r27_request_id_r27_request",
+        "disposition_event",
+        "r27_request",
+        ["r27_request_id"],
+        ["id"],
+        ondelete="RESTRICT",
+    )
+    op.create_foreign_key(
+        "fk_disposition_event_r27_execution_id_r27_execution",
+        "disposition_event",
+        "r27_execution",
+        ["r27_execution_id"],
+        ["id"],
+        ondelete="RESTRICT",
+    )
+    op.create_check_constraint(
+        "ck_disposition_event_r27_authority_shape",
+        "disposition_event",
+        "(is_worm_destroy AND r27_request_id IS NOT NULL AND r27_execution_id IS NOT NULL) "
+        "OR (NOT is_worm_destroy AND r27_request_id IS NULL AND r27_execution_id IS NULL)",
+    )
 
 
 def _create_recovery_authority() -> None:
@@ -893,16 +1143,10 @@ def _create_recovery_authority() -> None:
         sa.Column("not_before", sa.DateTime(timezone=True), nullable=False),
         sa.Column("retired_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("installed_by_user_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("installed_by_identity", sa.String(length=255), nullable=False),
         sa.Column("installed_audit_event_id", sa.BigInteger(), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
-        ),
-        _fk(
-            "recovery_generation_verifier_key",
-            "installed_by_user_id",
-            "app_user",
-            name="fk_recovery_verifier_key_installed_by_app_user",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_recovery_generation_verifier_key"),
         sa.UniqueConstraint("key_id", name="uq_recovery_generation_verifier_key_key_id"),
@@ -914,6 +1158,16 @@ def _create_recovery_authority() -> None:
         sa.CheckConstraint(
             "fingerprint ~ '^[0-9a-f]{64}$'",
             name="fingerprint_shape",
+        ),
+        sa.CheckConstraint(
+            "installed_by_identity ~ '[^[:space:]]'",
+            name="installed_by_identity_nonblank",
+        ),
+        sa.CheckConstraint(
+            "(retired_at IS NULL OR retired_at>=not_before) "
+            "AND (revoked_at IS NULL OR revoked_at>=not_before) "
+            "AND (retired_at IS NULL OR revoked_at IS NULL OR revoked_at>=retired_at)",
+            name="lifecycle_monotone",
         ),
     )
     op.create_table(
@@ -933,6 +1187,9 @@ def _create_recovery_authority() -> None:
         sa.Column("issued_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("consumed_execution_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("invalidated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("invalidation_audit_event_id", sa.BigInteger(), nullable=True),
+        sa.Column("invalidation_reason", sa.String(length=64), nullable=True),
         _fk(
             "recovery_generation_witness",
             "key_id",
@@ -957,7 +1214,6 @@ def _create_recovery_authority() -> None:
             "generation_id",
             name="uq_recovery_generation_witness_manifest_generation",
         ),
-        sa.UniqueConstraint("request_id", name="uq_recovery_generation_witness_request_id"),
         sa.CheckConstraint(
             "witness_nonce ~ '^[A-Za-z0-9_-]{43}$'",
             name="nonce_shape",
@@ -971,6 +1227,16 @@ def _create_recovery_authority() -> None:
             name="generation_identity_nonblank",
         ),
         sa.CheckConstraint("result = 'VERIFIED'", name="result_verified"),
+        sa.CheckConstraint(
+            "(invalidated_at IS NULL AND invalidation_audit_event_id IS NULL "
+            "AND invalidation_reason IS NULL) OR (invalidated_at IS NOT NULL "
+            "AND invalidation_audit_event_id IS NOT NULL AND invalidation_reason='KEY_REVOKED')",
+            name="invalidation_shape",
+        ),
+    )
+    op.execute(
+        "CREATE UNIQUE INDEX uq_recovery_generation_witness_active_request "
+        "ON recovery_generation_witness(request_id) WHERE invalidated_at IS NULL"
     )
 
 
@@ -1034,8 +1300,10 @@ def _upgrade_pending_blob_purge() -> None:
         op.f("ck_pending_blob_purge_authority_shape"),
         "pending_blob_purge",
         "record_id IS NOT NULL AND disposition_event_id IS NOT NULL "
-        "AND (NOT bypass_governance OR "
-        "(r27_request_id IS NOT NULL AND r27_execution_id IS NOT NULL))",
+        "AND ((NOT bypass_governance AND r27_request_id IS NULL "
+        "AND r27_execution_id IS NULL) OR "
+        "(bypass_governance AND r27_request_id IS NOT NULL "
+        "AND r27_execution_id IS NOT NULL))",
     )
     op.create_check_constraint(
         op.f("ck_pending_blob_purge_object_version_id_length"),
@@ -1047,9 +1315,83 @@ def _upgrade_pending_blob_purge() -> None:
         "pending_blob_purge",
         "attempt_count >= 0",
     )
+    op.create_table(
+        "r27_execution_target_result",
+        _uuid_pk(),
+        sa.Column("execution_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("manifest_target_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("result_code", _enum("r27_result_code"), nullable=False),
+        sa.Column("verified_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("purge_marker_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("surviving_owner_kind", sa.String(length=32), nullable=True),
+        sa.Column("surviving_owner_id", postgresql.UUID(as_uuid=True), nullable=True),
+        _fk(
+            "r27_execution_target_result",
+            "execution_id",
+            "r27_execution",
+            name="fk_r27_target_result_execution",
+        ),
+        _fk(
+            "r27_execution_target_result",
+            "manifest_target_id",
+            "r27_manifest_target",
+            name="fk_r27_target_result_manifest_target",
+        ),
+        _fk(
+            "r27_execution_target_result",
+            "purge_marker_id",
+            "pending_blob_purge",
+            name="fk_r27_target_result_purge_marker",
+        ),
+        sa.PrimaryKeyConstraint("id", name="pk_r27_execution_target_result"),
+        sa.UniqueConstraint(
+            "execution_id", "manifest_target_id", name="uq_r27_execution_target_result"
+        ),
+        sa.CheckConstraint(
+            "(result_code='PHYSICAL_ERASED' AND purge_marker_id IS NOT NULL "
+            "AND surviving_owner_kind IS NULL AND surviving_owner_id IS NULL) OR "
+            "(result_code='LOGICAL_ONLY_SURVIVING_OWNER' AND purge_marker_id IS NULL "
+            "AND surviving_owner_kind IN ('DOCUMENT_VERSION','EVIDENCE_BLOB') "
+            "AND surviving_owner_id IS NOT NULL)",
+            name="authority_shape",
+        ),
+    )
 
 
 def _create_maintenance_intent() -> None:
+    op.create_table(
+        "r27_role_membership_operation",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("org_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("action", sa.String(length=8), nullable=False),
+        sa.Column("operator_identity", sa.String(length=255), nullable=False),
+        sa.Column("state", sa.String(length=16), nullable=False),
+        sa.Column("error_code", sa.String(length=64), nullable=True),
+        sa.Column("error_detail", sa.String(length=512), nullable=True),
+        sa.Column("requested_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("audit_event_id", sa.BigInteger(), nullable=True),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        _fk("r27_role_membership_operation", "user_id", "app_user"),
+        _fk("r27_role_membership_operation", "org_id", "organization"),
+        sa.PrimaryKeyConstraint("id", name="pk_r27_role_membership_operation"),
+        sa.CheckConstraint("action IN ('ASSIGN','REVOKE')", name="action_closed"),
+        sa.CheckConstraint("state IN ('REQUESTED','AUDITED','FAILED')", name="state_closed"),
+        sa.CheckConstraint("operator_identity ~ '[^[:space:]]'", name="operator_identity_nonblank"),
+        sa.CheckConstraint(
+            "(state='REQUESTED' AND audit_event_id IS NULL AND completed_at IS NULL "
+            "AND error_code IS NULL AND error_detail IS NULL) OR "
+            "(state='AUDITED' AND audit_event_id IS NOT NULL AND completed_at IS NOT NULL "
+            "AND error_code IS NULL AND error_detail IS NULL) OR "
+            "(state='FAILED' AND audit_event_id IS NULL AND completed_at IS NOT NULL "
+            "AND btrim(error_code)<>'' AND length(error_code)<=64 "
+            "AND length(COALESCE(error_detail,''))<=512)",
+            name="state_shape",
+        ),
+    )
     op.create_table(
         "audit_maintenance_schedule",
         _uuid_pk(),
@@ -1116,6 +1458,1243 @@ def _create_maintenance_intent() -> None:
     )
 
 
+def _create_definer_function(
+    declaration: str,
+    identity: str,
+    role: str,
+    body: str,
+) -> None:
+    parameter_list = declaration.split("(", 1)[1].split(")", 1)[0]
+    required_parameters = tuple(
+        parameter.strip().split()[0]
+        for parameter in parameter_list.split(",")
+        if parameter.strip() and parameter.strip().split()[0] != "p_detail"
+    )
+    if required_parameters:
+        required_guard = " OR ".join(f"{parameter} IS NULL" for parameter in required_parameters)
+        body = body.replace(
+            "BEGIN",
+            "BEGIN\n"
+            f"            IF {required_guard} THEN\n"
+            "                RAISE EXCEPTION 'required_argument_is_null';\n"
+            "            END IF;",
+            1,
+        )
+    for observation_parameter in (
+        "p_at",
+        "p_active_at",
+        "p_claimed_at",
+        "p_failed_at",
+        "p_verified_at",
+    ):
+        if f"{observation_parameter} timestamptz" not in declaration:
+            continue
+        observation_guard = f"""
+            IF {observation_parameter} IS NULL
+               OR {observation_parameter} < clock_timestamp() - interval '5 minutes'
+               OR {observation_parameter} > clock_timestamp() + interval '5 minutes' THEN
+                RAISE EXCEPTION 'observation_time_refused';
+            END IF;
+        """
+        body = body.replace("BEGIN", f"BEGIN\n{observation_guard}", 1)
+    op.execute(
+        f"""
+        CREATE FUNCTION public.{declaration}
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = public, pg_temp
+        AS $function$
+        {body}
+        $function$
+        """
+    )
+    op.execute(f"REVOKE ALL ON FUNCTION public.{identity} FROM PUBLIC")
+    op.execute(f"GRANT EXECUTE ON FUNCTION public.{identity} TO {role}")
+
+
+def _create_worm_guard_triggers() -> None:
+    op.execute(
+        """
+        CREATE FUNCTION public.easysynq_guard_blob_worm_identity() RETURNS trigger
+        LANGUAGE plpgsql SET search_path = public, pg_temp AS $function$
+        DECLARE v_owned boolean;
+        BEGIN
+            IF TG_OP = 'UPDATE' AND NOT OLD.worm_locked AND NEW.worm_locked THEN
+                RAISE EXCEPTION 'worm_blob_conversion_requires_insert';
+            END IF;
+            SELECT OLD.worm_locked
+                OR EXISTS (SELECT 1 FROM public.document_version v
+                           WHERE v.source_blob_sha256=OLD.sha256)
+                OR EXISTS (SELECT 1 FROM public.evidence_blob e
+                           WHERE e.blob_sha256=OLD.sha256)
+            INTO v_owned;
+            IF TG_OP = 'DELETE' AND v_owned THEN
+                RAISE EXCEPTION 'worm_blob_identity_is_immutable';
+            END IF;
+            IF TG_OP = 'UPDATE' AND v_owned AND (
+                NEW.sha256 IS DISTINCT FROM OLD.sha256
+                OR NEW.org_id IS DISTINCT FROM OLD.org_id
+                OR NEW.bucket IS DISTINCT FROM OLD.bucket
+                OR NEW.object_key IS DISTINCT FROM OLD.object_key
+                OR NEW.object_version_id IS DISTINCT FROM OLD.object_version_id
+                OR NEW.worm_locked IS DISTINCT FROM OLD.worm_locked
+                OR NEW.worm_enforced_mode IS DISTINCT FROM OLD.worm_enforced_mode
+                OR NEW.worm_asserted_retain_until IS DISTINCT FROM OLD.worm_asserted_retain_until
+                OR NEW.worm_asserted_at IS DISTINCT FROM OLD.worm_asserted_at
+            ) THEN
+                RAISE EXCEPTION 'worm_blob_identity_is_immutable';
+            END IF;
+            IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+            RETURN NEW;
+        END
+        $function$;
+        REVOKE ALL ON FUNCTION public.easysynq_guard_blob_worm_identity() FROM PUBLIC;
+        CREATE TRIGGER trg_blob_worm_identity
+        BEFORE UPDATE OR DELETE ON public.blob
+        FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_blob_worm_identity();
+        """
+    )
+    op.execute(
+        """
+        CREATE FUNCTION public.easysynq_guard_worm_owner_pointer() RETURNS trigger
+        LANGUAGE plpgsql SET search_path = public, pg_temp AS $function$
+        DECLARE v_org uuid; v_locked boolean; v_complete boolean; v_sha text;
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
+            END IF;
+            IF TG_OP = 'UPDATE' THEN
+                IF NEW.org_id IS DISTINCT FROM OLD.org_id THEN
+                    RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
+                ELSIF TG_TABLE_NAME='document_version'
+                   AND (to_jsonb(NEW)->>'source_blob_sha256')
+                       IS DISTINCT FROM (to_jsonb(OLD)->>'source_blob_sha256') THEN
+                    RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
+                ELSIF TG_TABLE_NAME='evidence_blob'
+                   AND (to_jsonb(NEW)->>'blob_sha256')
+                       IS DISTINCT FROM (to_jsonb(OLD)->>'blob_sha256') THEN
+                    RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
+                END IF;
+            END IF;
+            IF TG_OP = 'INSERT' THEN
+                IF TG_TABLE_NAME='document_version' THEN
+                    v_sha := to_jsonb(NEW)->>'source_blob_sha256';
+                ELSE
+                    v_sha := to_jsonb(NEW)->>'blob_sha256';
+                END IF;
+                SELECT b.org_id,b.worm_locked,
+                       b.object_version_id IS NOT NULL
+                       AND b.worm_enforced_mode='GOVERNANCE'
+                       AND b.worm_asserted_retain_until IS NOT NULL
+                       AND b.worm_asserted_at IS NOT NULL
+                       AND b.worm_retention_verified_at IS NOT NULL
+                       AND b.worm_legal_hold IS NOT NULL
+                       AND b.worm_legal_hold_verified_at IS NOT NULL
+                INTO v_org,v_locked,v_complete
+                FROM public.blob b WHERE b.sha256=v_sha FOR KEY SHARE;
+                IF NOT FOUND OR NOT v_locked OR NOT v_complete OR v_org<>NEW.org_id THEN
+                    RAISE EXCEPTION 'worm_owner_requires_complete_assertion';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END
+        $function$;
+        REVOKE ALL ON FUNCTION public.easysynq_guard_worm_owner_pointer() FROM PUBLIC;
+        CREATE TRIGGER trg_document_version_worm_owner
+        BEFORE INSERT OR UPDATE OR DELETE ON public.document_version
+        FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_worm_owner_pointer();
+        CREATE TRIGGER trg_evidence_blob_worm_owner
+        BEFORE INSERT OR UPDATE OR DELETE ON public.evidence_blob
+        FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_worm_owner_pointer();
+        """
+    )
+    op.execute(
+        """
+        CREATE FUNCTION public.easysynq_guard_key_registry_history() RETURNS trigger
+        LANGUAGE plpgsql SET search_path = public, pg_temp AS $function$
+        BEGIN
+            IF TG_OP='DELETE'
+               OR NEW.id IS DISTINCT FROM OLD.id
+               OR NEW.key_id IS DISTINCT FROM OLD.key_id
+               OR NEW.public_key IS DISTINCT FROM OLD.public_key
+               OR NEW.fingerprint IS DISTINCT FROM OLD.fingerprint
+               OR NEW.installed_by_identity IS DISTINCT FROM OLD.installed_by_identity
+               OR NEW.installed_audit_event_id IS DISTINCT FROM OLD.installed_audit_event_id
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at
+               OR ((to_jsonb(NEW)->'active_at') IS DISTINCT FROM
+                   (to_jsonb(OLD)->'active_at'))
+               OR (TG_TABLE_NAME='recovery_generation_verifier_key'
+                   AND ((to_jsonb(NEW)->'algorithm') IS DISTINCT FROM
+                        (to_jsonb(OLD)->'algorithm')
+                        OR (to_jsonb(NEW)->'not_before') IS DISTINCT FROM
+                           (to_jsonb(OLD)->'not_before')))
+               OR (OLD.retired_at IS NOT NULL AND NEW.retired_at IS DISTINCT FROM OLD.retired_at)
+               OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at)
+               OR (NEW.retired_at IS NOT NULL AND NEW.retired_at<OLD.created_at)
+               OR (NEW.revoked_at IS NOT NULL AND NEW.revoked_at<OLD.created_at) THEN
+                RAISE EXCEPTION 'key_registry_history_is_immutable';
+            END IF;
+            RETURN NEW;
+        END
+        $function$;
+        REVOKE ALL ON FUNCTION public.easysynq_guard_key_registry_history() FROM PUBLIC;
+        CREATE TRIGGER trg_r27_authorizer_key_history
+        BEFORE UPDATE OR DELETE ON public.r27_authorizer_key
+        FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_key_registry_history();
+        CREATE TRIGGER trg_recovery_verifier_key_history
+        BEFORE UPDATE OR DELETE ON public.recovery_generation_verifier_key
+        FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_key_registry_history();
+        """
+    )
+
+
+def _create_retention_functions() -> None:
+    _create_definer_function(
+        "easysynq_claim_retention_targets(p_limit integer,p_claimed_at timestamptz) "
+        "RETURNS TABLE(target_id uuid,operation_id uuid,blob_sha256 text,bucket text,"
+        "object_key text,object_version_id text,required_retain_until timestamptz,"
+        "required_legal_hold boolean)",
+        "easysynq_claim_retention_targets(integer,timestamptz)",
+        "easysynq_retention",
+        """
+        BEGIN
+            IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN
+                RAISE EXCEPTION 'retention_claim_limit_refused';
+            END IF;
+            RETURN QUERY
+            WITH candidates AS (
+                SELECT target.id FROM public.retention_operation_target target
+                JOIN public.retention_operation operation ON operation.id=target.operation_id
+                WHERE target.state IN ('PENDING','FAILED')
+                  AND operation.state IN ('PENDING','FAILED','RUNNING')
+                ORDER BY target.created_at,target.id
+                FOR UPDATE OF target,operation SKIP LOCKED LIMIT p_limit
+            ), claimed AS (
+                UPDATE public.retention_operation_target target
+                SET state='RUNNING',attempt_count=target.attempt_count+1,error_code=NULL,
+                    error_detail=NULL,updated_at=p_claimed_at
+                FROM candidates WHERE target.id=candidates.id
+                RETURNING target.*
+            ), parents AS (
+                UPDATE public.retention_operation operation
+                SET state='RUNNING',started_at=COALESCE(operation.started_at,p_claimed_at),
+                    updated_at=p_claimed_at
+                WHERE operation.id IN (SELECT claimed.operation_id FROM claimed)
+                  AND operation.state IN ('PENDING','FAILED','RUNNING')
+                RETURNING operation.id
+            )
+            SELECT claimed.id,claimed.operation_id,claimed.blob_sha256::text,
+                   claimed.bucket,claimed.object_key,claimed.object_version_id,
+                   claimed.required_retain_until,claimed.required_legal_hold
+            FROM claimed ORDER BY claimed.created_at,claimed.id;
+        END
+        """,
+    )
+    _create_definer_function(
+        "easysynq_fail_retention_target(p_target_id uuid,p_code text,p_detail text,"
+        "p_failed_at timestamptz) RETURNS void",
+        "easysynq_fail_retention_target(uuid,text,text,timestamptz)",
+        "easysynq_retention",
+        """
+        BEGIN
+            IF p_target_id IS NULL OR p_code IS NULL THEN
+                RAISE EXCEPTION 'required_argument_is_null';
+            END IF;
+            IF btrim(p_code)='' OR length(p_code)>64 OR length(COALESCE(p_detail,''))>512 THEN
+                RAISE EXCEPTION 'retention_failure_detail_refused';
+            END IF;
+            UPDATE public.retention_operation_target SET state='FAILED',error_code=p_code,
+                error_detail=p_detail,updated_at=p_failed_at
+            WHERE id=p_target_id AND state='RUNNING';
+            IF NOT FOUND THEN RAISE EXCEPTION 'retention_target_not_running'; END IF;
+            UPDATE public.retention_operation operation SET
+                failed_count=(SELECT count(*) FROM public.retention_operation_target target
+                              WHERE target.operation_id=operation.id AND target.state='FAILED'),
+                verified_count=(SELECT count(*) FROM public.retention_operation_target target
+                                WHERE target.operation_id=operation.id AND target.state='VERIFIED'),
+                state='FAILED',updated_at=p_failed_at
+            WHERE operation.id=(SELECT operation_id FROM public.retention_operation_target
+                                WHERE id=p_target_id);
+        END
+        """,
+    )
+    _create_definer_function(
+        "easysynq_ratchet_worm_assertion(p_blob_sha256 text,p_object_version_id text,"
+        "p_retain_until timestamptz,p_legal_hold boolean,p_verified_at timestamptz,"
+        "p_operation_id uuid) RETURNS void",
+        "easysynq_ratchet_worm_assertion(text,text,timestamptz,boolean,timestamptz,uuid)",
+        "easysynq_retention",
+        """
+        DECLARE v_target uuid;
+        BEGIN
+            IF p_blob_sha256 IS NULL OR p_object_version_id IS NULL
+               OR p_retain_until IS NULL OR p_legal_hold IS NULL
+               OR p_operation_id IS NULL THEN
+                RAISE EXCEPTION 'required_argument_is_null';
+            END IF;
+            SELECT target.id INTO v_target FROM public.retention_operation_target target
+            JOIN public.blob blob ON blob.sha256=target.blob_sha256
+            JOIN public.retention_operation operation ON operation.id=target.operation_id
+            WHERE target.operation_id=p_operation_id AND target.blob_sha256=p_blob_sha256
+              AND target.object_version_id=p_object_version_id AND target.state='RUNNING'
+              AND target.bucket=blob.bucket AND target.object_key=blob.object_key
+              AND target.object_version_id=blob.object_version_id
+              AND operation.org_id=blob.org_id
+              AND p_retain_until>=COALESCE(blob.worm_retain_until,p_retain_until)
+              AND p_retain_until>=COALESCE(target.required_retain_until,p_retain_until)
+              AND (blob.worm_legal_hold IS NOT TRUE OR p_legal_hold)
+              AND (NOT target.required_legal_hold OR p_legal_hold)
+            FOR UPDATE OF operation,target,blob;
+            IF NOT FOUND THEN RAISE EXCEPTION 'worm_retention_ratchet_refused'; END IF;
+            UPDATE public.blob blob SET worm_retain_until=p_retain_until,
+                worm_retention_verified_at=p_verified_at,worm_legal_hold=p_legal_hold,
+                worm_legal_hold_verified_at=p_verified_at
+            FROM public.retention_operation_target target
+            JOIN public.retention_operation operation ON operation.id=target.operation_id
+            WHERE target.id=v_target AND target.operation_id=p_operation_id
+              AND blob.sha256=target.blob_sha256 AND blob.sha256=p_blob_sha256
+              AND blob.bucket=target.bucket AND blob.object_key=target.object_key
+              AND blob.object_version_id=target.object_version_id
+              AND operation.org_id=blob.org_id;
+            IF NOT FOUND THEN RAISE EXCEPTION 'worm_retention_ratchet_refused'; END IF;
+            UPDATE public.retention_operation_target SET state='VERIFIED',
+                read_back_retain_until=p_retain_until,read_back_legal_hold=p_legal_hold,
+                read_back_at=p_verified_at,error_code=NULL,error_detail=NULL,updated_at=p_verified_at
+            WHERE id=v_target;
+            UPDATE public.retention_operation operation SET
+                verified_count=(SELECT count(*) FROM public.retention_operation_target target
+                                WHERE target.operation_id=operation.id AND target.state='VERIFIED'),
+                failed_count=(SELECT count(*) FROM public.retention_operation_target target
+                              WHERE target.operation_id=operation.id AND target.state='FAILED'),
+                state=CASE WHEN operation.target_count=(
+                    SELECT count(*) FROM public.retention_operation_target target
+                    WHERE target.operation_id=operation.id
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM public.retention_operation_target target
+                    WHERE target.operation_id=operation.id AND target.state<>'VERIFIED'
+                ) THEN 'VERIFIED'::retention_operation_state ELSE operation.state END,
+                completed_at=CASE WHEN operation.target_count=(
+                    SELECT count(*) FROM public.retention_operation_target target
+                    WHERE target.operation_id=operation.id
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM public.retention_operation_target target
+                    WHERE target.operation_id=operation.id AND target.state<>'VERIFIED'
+                ) THEN p_verified_at ELSE operation.completed_at END,updated_at=p_verified_at
+            WHERE operation.id=p_operation_id;
+        END
+        """,
+    )
+
+
+def _key_install_body(table: str, algorithm_column: str, scope: str) -> str:
+    return f"""
+        DECLARE v_id uuid:=gen_random_uuid(); v_org uuid; v_audit bigint;
+        BEGIN
+            IF p_key_id IS NULL OR p_public_key IS NULL OR length(p_public_key)=0
+               OR p_fingerprint IS NULL OR p_operator_identity IS NULL
+               OR btrim(p_key_id)='' OR btrim(p_operator_identity)=''
+               OR p_fingerprint !~ '^[0-9a-f]{{64}}$' THEN
+                RAISE EXCEPTION 'key_install_refused';
+            END IF;
+            SELECT id INTO v_org FROM public.organization ORDER BY id LIMIT 1;
+            IF NOT FOUND THEN RAISE EXCEPTION 'key_install_requires_organization'; END IF;
+            INSERT INTO public.audit_event
+                (org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
+            VALUES (v_org,p_active_at,'system','CONFIG_UPDATED','config',v_id,
+                    '{scope}','{scope}-installed',
+                    jsonb_build_object('operator_identity',p_operator_identity,
+                                       'key_id',p_key_id,'operation','install'))
+            RETURNING id INTO v_audit;
+            INSERT INTO public.{table}
+                (id,key_id,{algorithm_column}public_key,fingerprint,{("not_before" if table.startswith("recovery") else "active_at")},
+                 installed_by_identity,installed_audit_event_id)
+            VALUES (v_id,p_key_id,{("'ED25519'," if algorithm_column else "")}p_public_key,p_fingerprint,p_active_at,
+                    p_operator_identity,v_audit);
+            RETURN v_id;
+        END
+    """
+
+
+def _create_key_functions() -> None:
+    _create_definer_function(
+        "easysynq_install_r27_authorizer_key(p_key_id text,p_public_key bytea,"
+        "p_fingerprint text,p_active_at timestamptz,p_operator_identity text) RETURNS uuid",
+        "easysynq_install_r27_authorizer_key(text,bytea,text,timestamptz,text)",
+        "easysynq_r27_authorizer_key_manager",
+        _key_install_body("r27_authorizer_key", "", "r27-authorizer-key"),
+    )
+    _create_definer_function(
+        "easysynq_install_recovery_verifier_key(p_key_id text,p_public_key bytea,"
+        "p_fingerprint text,p_active_at timestamptz,p_operator_identity text) RETURNS uuid",
+        "easysynq_install_recovery_verifier_key(text,bytea,text,timestamptz,text)",
+        "easysynq_recovery_key_manager",
+        _key_install_body(
+            "recovery_generation_verifier_key", "algorithm,", "recovery-generation-verifier-key"
+        ),
+    )
+    for prefix, table, role, scope in (
+        (
+            "r27_authorizer",
+            "r27_authorizer_key",
+            "easysynq_r27_authorizer_key_manager",
+            "r27-authorizer-key",
+        ),
+        (
+            "recovery_verifier",
+            "recovery_generation_verifier_key",
+            "easysynq_recovery_key_manager",
+            "recovery-generation-verifier-key",
+        ),
+    ):
+        lifecycle_start = "not_before" if table.startswith("recovery") else "active_at"
+        for verb, column in (("retire", "retired_at"), ("revoke", "revoked_at")):
+            lifecycle_guard = "AND revoked_at IS NULL" if verb == "retire" else ""
+            prior_lifecycle_guard = (
+                "" if verb == "retire" else "AND (retired_at IS NULL OR p_at>=retired_at)"
+            )
+            downstream = ""
+            if verb == "revoke" and prefix == "recovery_verifier":
+                downstream = """
+                    UPDATE public.recovery_generation_witness w
+                    SET invalidated_at=p_at,invalidation_audit_event_id=v_audit,invalidation_reason='KEY_REVOKED'
+                    WHERE w.key_id=v_id AND w.invalidated_at IS NULL
+                      AND (w.consumed_execution_id IS NULL OR EXISTS (
+                          SELECT 1 FROM public.r27_execution e
+                          WHERE e.id=w.consumed_execution_id AND e.state<>'EXECUTED'));
+                    UPDATE public.r27_request r SET state='WAITING_FOR_RECOVERY_GENERATION',updated_at=clock_timestamp()
+                    WHERE r.id IN (SELECT w.request_id FROM public.recovery_generation_witness w WHERE w.key_id=v_id AND w.invalidated_at=p_at)
+                      AND r.state IN ('READY_FOR_FINALIZATION','FINALIZING');
+                    UPDATE public.r27_execution e SET state='FAILED',error_code='RECOVERY_KEY_REVOKED',
+                        error_detail='active recovery witness key revoked',next_attempt_at=NULL,updated_at=clock_timestamp()
+                    WHERE e.request_id IN (SELECT w.request_id FROM public.recovery_generation_witness w WHERE w.key_id=v_id AND w.invalidated_at=p_at)
+                      AND e.state<>'EXECUTED';
+                """
+            elif verb == "revoke" and prefix == "r27_authorizer":
+                downstream = """
+                    UPDATE public.r27_request r SET state='STALE',error_code='AUTHORIZER_KEY_REVOKED',
+                        error_detail='authorizer trust root revoked',stale_at=clock_timestamp(),updated_at=clock_timestamp()
+                    WHERE r.id IN (SELECT a.request_id FROM public.r27_attestation a WHERE a.authorizer_key_id=v_id)
+                      AND (r.state IS NULL OR r.state IN ('WAITING_FOR_SECOND_APPROVER','WAITING_FOR_RECOVERY_GENERATION','READY_FOR_FINALIZATION','FINALIZING'))
+                      AND NOT EXISTS (SELECT 1 FROM public.r27_execution e
+                                      WHERE e.request_id=r.id AND e.source_committed_at IS NOT NULL);
+                    UPDATE public.r27_execution e SET state='FAILED',error_code='AUTHORIZER_KEY_REVOKED',
+                        error_detail='authorizer trust root revoked',next_attempt_at=NULL,updated_at=clock_timestamp()
+                    WHERE e.request_id IN (SELECT a.request_id FROM public.r27_attestation a WHERE a.authorizer_key_id=v_id)
+                      AND e.state<>'EXECUTED';
+                    UPDATE public.r27_request r SET state='FAILED',error_code='AUTHORIZER_KEY_REVOKED',
+                        error_detail='authorizer trust root revoked',failed_at=clock_timestamp(),updated_at=clock_timestamp()
+                    WHERE r.id IN (SELECT a.request_id FROM public.r27_attestation a WHERE a.authorizer_key_id=v_id)
+                      AND EXISTS (SELECT 1 FROM public.r27_execution e
+                                  WHERE e.request_id=r.id AND e.source_committed_at IS NOT NULL
+                                    AND e.state='FAILED');
+                """
+            _create_definer_function(
+                f"easysynq_{verb}_{prefix}_key(p_key_id text,p_at timestamptz,"
+                "p_operator_identity text) RETURNS void",
+                f"easysynq_{verb}_{prefix}_key(text,timestamptz,text)",
+                role,
+                f"""
+                DECLARE v_id uuid; v_org uuid; v_audit bigint;
+                BEGIN
+                    IF p_key_id IS NULL OR p_at IS NULL OR p_operator_identity IS NULL OR btrim(p_operator_identity)='' THEN RAISE EXCEPTION 'key_lifecycle_refused'; END IF;
+                    UPDATE public.{table} SET {column}=p_at
+                    WHERE key_id=p_key_id AND {column} IS NULL
+                      AND ({"TRUE" if column == "retired_at" else "revoked_at IS NULL"}) {lifecycle_guard}
+                      AND p_at>={lifecycle_start} {prior_lifecycle_guard}
+                      AND p_at>=created_at AND p_at<=clock_timestamp()+interval '5 minutes'
+                    RETURNING id INTO v_id;
+                    IF NOT FOUND THEN RAISE EXCEPTION 'key_lifecycle_refused'; END IF;
+                    SELECT id INTO v_org FROM public.organization ORDER BY id LIMIT 1;
+                    INSERT INTO public.audit_event
+                        (org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
+                    VALUES (v_org,p_at,'system','CONFIG_UPDATED','config',v_id,'{scope}',
+                            '{scope}-{verb}d',jsonb_build_object(
+                                'operator_identity',p_operator_identity,'key_id',p_key_id,
+                                'operation','{verb}')) RETURNING id INTO v_audit;
+                    {downstream}
+                END
+                """,
+            )
+
+
+def _create_authority_transition_functions() -> None:
+    functions = (
+        (
+            "easysynq_enqueue_ordinary_exact_purge(p_record_id uuid,p_event_id uuid,p_blob_sha text) RETURNS uuid",
+            "easysynq_enqueue_ordinary_exact_purge(uuid,uuid,text)",
+            "easysynq_retention",
+            "uuid",
+        ),
+        (
+            "easysynq_claim_ordinary_exact_purges(p_limit integer,p_at timestamptz) RETURNS TABLE(marker_id uuid,blob_sha256 text,bucket text,object_key text,object_version_id text)",
+            "easysynq_claim_ordinary_exact_purges(integer,timestamptz)",
+            "easysynq_retention",
+            "table",
+        ),
+        (
+            "easysynq_fail_ordinary_exact_purge(p_id uuid,p_code text,p_detail text,p_at timestamptz) RETURNS void",
+            "easysynq_fail_ordinary_exact_purge(uuid,text,text,timestamptz)",
+            "easysynq_retention",
+            "void",
+        ),
+        (
+            "easysynq_record_ordinary_exact_purge(p_id uuid,p_at timestamptz) RETURNS void",
+            "easysynq_record_ordinary_exact_purge(uuid,timestamptz)",
+            "easysynq_retention",
+            "void",
+        ),
+        (
+            "easysynq_authorize_hold_release(p_id uuid,p_digest text,p_identity text,p_at timestamptz) RETURNS bigint",
+            "easysynq_authorize_hold_release(uuid,text,text,timestamptz)",
+            "easysynq_hold_authorizer",
+            "bigint",
+        ),
+        (
+            "easysynq_claim_hold_releases(p_limit integer,p_at timestamptz) RETURNS TABLE(operation_id uuid,record_id uuid,blob_sha256 text,object_version_id text)",
+            "easysynq_claim_hold_releases(integer,timestamptz)",
+            "easysynq_hold_maintenance",
+            "table",
+        ),
+        (
+            "easysynq_fail_hold_release(p_id uuid,p_code text,p_detail text,p_at timestamptz) RETURNS void",
+            "easysynq_fail_hold_release(uuid,text,text,timestamptz)",
+            "easysynq_hold_maintenance",
+            "void",
+        ),
+        (
+            "easysynq_record_ordinary_hold_release(p_sha text,p_version text,p_id uuid,p_at timestamptz) RETURNS void",
+            "easysynq_record_ordinary_hold_release(text,text,uuid,timestamptz)",
+            "easysynq_hold_maintenance",
+            "void",
+        ),
+        (
+            "easysynq_accept_r27_request(p_id uuid,p_at timestamptz) RETURNS bigint",
+            "easysynq_accept_r27_request(uuid,timestamptz)",
+            "easysynq_r27_authorizer",
+            "bigint",
+        ),
+        (
+            "easysynq_accept_r27_approval(p_id uuid,p_at timestamptz) RETURNS bigint",
+            "easysynq_accept_r27_approval(uuid,timestamptz)",
+            "easysynq_r27_authorizer",
+            "bigint",
+        ),
+        (
+            "easysynq_cancel_r27_request(p_id uuid,p_at timestamptz) RETURNS bigint",
+            "easysynq_cancel_r27_request(uuid,timestamptz)",
+            "easysynq_r27_authorizer",
+            "bigint",
+        ),
+        (
+            "easysynq_mark_r27_stale(p_id uuid,p_code text,p_detail text,p_at timestamptz) RETURNS void",
+            "easysynq_mark_r27_stale(uuid,text,text,timestamptz)",
+            "easysynq_r27_authorizer",
+            "void",
+        ),
+        (
+            "easysynq_claim_r27_finalizations(p_limit integer,p_at timestamptz) RETURNS TABLE(request_id uuid,execution_id uuid)",
+            "easysynq_claim_r27_finalizations(integer,timestamptz)",
+            "easysynq_r27_maintenance",
+            "table",
+        ),
+        (
+            "easysynq_fail_r27_execution(p_id uuid,p_code text,p_detail text,p_at timestamptz) RETURNS void",
+            "easysynq_fail_r27_execution(uuid,text,text,timestamptz)",
+            "easysynq_r27_maintenance",
+            "void",
+        ),
+        (
+            "easysynq_record_r27_hold_release(p_sha text,p_version text,p_id uuid,p_at timestamptz) RETURNS void",
+            "easysynq_record_r27_hold_release(text,text,uuid,timestamptz)",
+            "easysynq_r27_maintenance",
+            "void",
+        ),
+        (
+            "easysynq_claim_r27_exact_purges(p_id uuid,p_limit integer,p_at timestamptz) RETURNS TABLE(marker_id uuid,blob_sha256 text,bucket text,object_key text,object_version_id text)",
+            "easysynq_claim_r27_exact_purges(uuid,integer,timestamptz)",
+            "easysynq_r27_maintenance",
+            "table",
+        ),
+        (
+            "easysynq_fail_r27_exact_purge(p_execution uuid,p_marker uuid,p_code text,p_detail text,p_at timestamptz) RETURNS void",
+            "easysynq_fail_r27_exact_purge(uuid,uuid,text,text,timestamptz)",
+            "easysynq_r27_maintenance",
+            "void",
+        ),
+        (
+            "easysynq_record_r27_purge(p_sha text,p_version text,p_id uuid,p_at timestamptz) RETURNS void",
+            "easysynq_record_r27_purge(text,text,uuid,timestamptz)",
+            "easysynq_r27_maintenance",
+            "void",
+        ),
+        (
+            "easysynq_record_r27_surviving_owner(p_sha text,p_version text,p_id uuid,p_at timestamptz) RETURNS void",
+            "easysynq_record_r27_surviving_owner(text,text,uuid,timestamptz)",
+            "easysynq_r27_maintenance",
+            "void",
+        ),
+        (
+            "easysynq_begin_r27_role_membership(p_operation uuid,p_user_id uuid,p_action text,p_identity text,p_at timestamptz) RETURNS void",
+            "easysynq_begin_r27_role_membership(uuid,uuid,text,text,timestamptz)",
+            "easysynq_r27_role_manager",
+            "void",
+        ),
+        (
+            "easysynq_complete_r27_role_membership(p_operation uuid,p_at timestamptz) RETURNS bigint",
+            "easysynq_complete_r27_role_membership(uuid,timestamptz)",
+            "easysynq_r27_role_manager",
+            "bigint",
+        ),
+        (
+            "easysynq_fail_r27_role_membership(p_operation uuid,p_code text,p_detail text,p_at timestamptz) RETURNS void",
+            "easysynq_fail_r27_role_membership(uuid,text,text,timestamptz)",
+            "easysynq_r27_role_manager",
+            "void",
+        ),
+    )
+    bodies = {
+        "easysynq_enqueue_ordinary_exact_purge(uuid,uuid,text)": """
+            DECLARE v_id uuid:=gen_random_uuid();
+            BEGIN
+                IF p_record_id IS NULL OR p_event_id IS NULL OR p_blob_sha IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                INSERT INTO public.pending_blob_purge
+                    (id,org_id,record_id,disposition_event_id,sha256,bucket,object_key,
+                     object_version_id,bypass_governance,r27_request_id,r27_execution_id)
+                SELECT v_id,b.org_id,p_record_id,p_event_id,b.sha256,b.bucket,b.object_key,
+                       b.object_version_id,false,NULL,NULL
+                FROM public.evidence_blob eb JOIN public.blob b ON b.sha256=eb.blob_sha256
+                JOIN public.disposition_event de ON de.id=p_event_id AND de.record_id=p_record_id
+                    AND de.org_id=b.org_id AND de.action='DESTROY'
+                WHERE eb.record_id=p_record_id AND eb.org_id=b.org_id
+                  AND b.sha256=p_blob_sha AND NOT de.is_worm_destroy;
+                IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_exact_purge_refused'; END IF;
+                RETURN v_id;
+            END""",
+        "easysynq_claim_ordinary_exact_purges(integer,timestamptz)": """
+            BEGIN
+                IF p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'ordinary_purge_claim_refused'; END IF;
+                RETURN QUERY WITH picked AS (
+                    SELECT p.id FROM public.pending_blob_purge p WHERE NOT p.bypass_governance
+                    AND p.r27_request_id IS NULL AND p.r27_execution_id IS NULL
+                    AND p.state IN ('PENDING','FAILED') ORDER BY p.created_at,p.id
+                    FOR UPDATE SKIP LOCKED LIMIT p_limit
+                ), claimed AS (
+                    UPDATE public.pending_blob_purge p SET state='RUNNING',attempt_count=p.attempt_count+1,
+                    claimed_at=clock_timestamp(),error_code=NULL,error_detail=NULL,updated_at=clock_timestamp()
+                    FROM picked WHERE p.id=picked.id RETURNING p.*)
+                SELECT claimed.id,claimed.sha256::text,claimed.bucket,claimed.object_key,
+                       claimed.object_version_id FROM claimed;
+            END""",
+        "easysynq_fail_ordinary_exact_purge(uuid,text,text,timestamptz)": """
+            BEGIN
+                IF p_id IS NULL OR p_code IS NULL OR p_at IS NULL OR btrim(p_code)='' OR length(p_code)>64 OR length(COALESCE(p_detail,''))>512 THEN RAISE EXCEPTION 'ordinary_purge_failure_refused'; END IF;
+                UPDATE public.pending_blob_purge SET state='FAILED',error_code=p_code,error_detail=p_detail,
+                    updated_at=clock_timestamp() WHERE id=p_id AND state='RUNNING'
+                      AND NOT bypass_governance AND r27_request_id IS NULL
+                      AND r27_execution_id IS NULL;
+                IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_purge_failure_refused'; END IF;
+            END""",
+        "easysynq_record_ordinary_exact_purge(uuid,timestamptz)": """
+            BEGIN
+                IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                UPDATE public.pending_blob_purge p SET state='VERIFIED',completed_at=clock_timestamp(),updated_at=clock_timestamp()
+                WHERE p.id=p_id AND p.state='RUNNING' AND NOT p.bypass_governance
+                  AND p.r27_request_id IS NULL AND p.r27_execution_id IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM public.document_version v WHERE v.source_blob_sha256=p.sha256)
+                  AND NOT EXISTS (SELECT 1 FROM public.evidence_blob e WHERE e.blob_sha256=p.sha256 AND e.record_id<>p.record_id);
+                IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_purge_result_refused'; END IF;
+            END""",
+        "easysynq_authorize_hold_release(uuid,text,text,timestamptz)": """
+            DECLARE v_org uuid; v_record uuid; v_audit bigint;
+            BEGIN
+                IF p_id IS NULL OR p_digest IS NULL OR p_identity IS NULL OR p_at IS NULL OR btrim(p_identity)='' THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                SELECT org_id,record_id INTO v_org,v_record FROM public.worm_hold_release_operation
+                WHERE id=p_id AND state='PENDING_AUTHORIZATION' AND canonical_sha256=p_digest FOR UPDATE;
+                IF NOT FOUND THEN RAISE EXCEPTION 'hold_release_authorization_refused'; END IF;
+                INSERT INTO public.audit_event(org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
+                VALUES(v_org,clock_timestamp(),'system','RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED','record',v_record,'record','ordinary-hold-release-authorized',jsonb_build_object('operator_identity',p_identity,'operation_id',p_id)) RETURNING id INTO v_audit;
+                INSERT INTO public.worm_hold_release_authorization(operation_id,canonical_sha256,host_operator_identity,authorizing_audit_event_id,authorized_at,authorizer_role)
+                VALUES(p_id,p_digest,p_identity,v_audit,clock_timestamp(),'easysynq_hold_authorizer');
+                RETURN v_audit;
+            END""",
+        "easysynq_claim_hold_releases(integer,timestamptz)": """
+            BEGIN
+                IF p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'hold_release_claim_refused'; END IF;
+                RETURN QUERY WITH picked AS (
+                    SELECT o.id FROM public.worm_hold_release_operation o JOIN public.worm_hold_release_authorization a ON a.operation_id=o.id
+                    WHERE o.state IN ('AUTHORIZED','FAILED')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM public.evidence_blob eb
+                          JOIN public.record r ON r.id=eb.record_id
+                          JOIN public.retention_policy policy ON policy.id=r.retention_policy_id
+                          WHERE eb.blob_sha256=o.blob_sha256
+                            AND (r.legal_hold OR policy.duration='PERMANENT'
+                                 OR policy.worm_lock_period='PERMANENT')
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM public.document_version version
+                          LEFT JOIN public.retention_policy policy
+                            ON policy.id=version.retention_policy_id
+                          LEFT JOIN public.document_worm_config config
+                            ON config.id=version.document_worm_config_id
+                          WHERE version.source_blob_sha256=o.blob_sha256
+                            AND (
+                                (version.retention_authority_kind='POLICY'
+                                 AND (policy.duration='PERMANENT'
+                                      OR policy.worm_lock_period='PERMANENT'))
+                                OR
+                                (version.retention_authority_kind='INSTALLATION_MINIMUM'
+                                 AND config.active_period='PERMANENT')
+                            )
+                      )
+                    ORDER BY o.created_at,o.id FOR UPDATE OF o SKIP LOCKED LIMIT p_limit
+                ), claimed AS (
+                    UPDATE public.worm_hold_release_operation o SET state='RUNNING',attempt_count=o.attempt_count+1,
+                    started_at=COALESCE(o.started_at,clock_timestamp()),error_code=NULL,error_detail=NULL,updated_at=clock_timestamp()
+                    FROM picked WHERE o.id=picked.id RETURNING o.*)
+                SELECT claimed.id,claimed.record_id,claimed.blob_sha256::text,
+                       claimed.object_version_id FROM claimed;
+            END""",
+        "easysynq_fail_hold_release(uuid,text,text,timestamptz)": """
+            BEGIN
+                IF p_id IS NULL OR p_code IS NULL OR p_at IS NULL OR btrim(p_code)='' OR length(p_code)>64 OR length(COALESCE(p_detail,''))>512 THEN RAISE EXCEPTION 'hold_release_failure_refused'; END IF;
+                UPDATE public.worm_hold_release_operation SET state='FAILED',error_code=p_code,error_detail=p_detail,updated_at=clock_timestamp() WHERE id=p_id AND state='RUNNING';
+                IF NOT FOUND THEN RAISE EXCEPTION 'hold_release_failure_refused'; END IF;
+            END""",
+        "easysynq_record_ordinary_hold_release(text,text,uuid,timestamptz)": """
+            BEGIN
+                IF p_sha IS NULL OR p_version IS NULL OR p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                UPDATE public.blob b SET worm_legal_hold=false,worm_legal_hold_verified_at=clock_timestamp()
+                FROM public.worm_hold_release_operation o JOIN public.worm_hold_release_authorization a ON a.operation_id=o.id
+                WHERE o.id=p_id AND o.state='RUNNING' AND o.blob_sha256=p_sha AND o.object_version_id=p_version
+                  AND b.sha256=p_sha AND b.object_version_id=p_version AND b.worm_legal_hold
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.evidence_blob eb
+                      JOIN public.record r ON r.id=eb.record_id
+                      JOIN public.retention_policy policy ON policy.id=r.retention_policy_id
+                      WHERE eb.blob_sha256=o.blob_sha256
+                        AND (r.legal_hold OR policy.duration='PERMANENT'
+                             OR policy.worm_lock_period='PERMANENT')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.document_version version
+                      LEFT JOIN public.retention_policy policy
+                        ON policy.id=version.retention_policy_id
+                      LEFT JOIN public.document_worm_config config
+                        ON config.id=version.document_worm_config_id
+                      WHERE version.source_blob_sha256=o.blob_sha256
+                        AND (
+                            (version.retention_authority_kind='POLICY'
+                             AND (policy.duration='PERMANENT'
+                                  OR policy.worm_lock_period='PERMANENT'))
+                            OR
+                            (version.retention_authority_kind='INSTALLATION_MINIMUM'
+                             AND config.active_period='PERMANENT')
+                        )
+                  );
+                IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_hold_release_refused'; END IF;
+                UPDATE public.worm_hold_release_operation SET state='VERIFIED',completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=p_id;
+                INSERT INTO public.audit_event
+                    (org_id,occurred_at,actor_type,event_type,object_type,object_id,
+                     scope_ref,reason,after)
+                SELECT o.org_id,clock_timestamp(),'system','RECORD_LEGAL_HOLD_RELEASED',
+                       'record',o.record_id,'record','ordinary-hold-release-verified',
+                       jsonb_build_object('operation_id',o.id)
+                FROM public.worm_hold_release_operation o WHERE o.id=p_id;
+            END""",
+        "easysynq_mark_r27_stale(uuid,text,text,timestamptz)": """
+            BEGIN
+                IF p_id IS NULL OR p_code IS NULL OR p_at IS NULL OR btrim(p_code)='' OR length(p_code)>64 OR length(COALESCE(p_detail,''))>512 THEN RAISE EXCEPTION 'r27_stale_refused'; END IF;
+                UPDATE public.r27_request SET state='STALE',error_code=p_code,error_detail=p_detail,stale_at=clock_timestamp(),updated_at=clock_timestamp()
+                WHERE id=p_id AND (state IS NULL OR state IN ('WAITING_FOR_SECOND_APPROVER','WAITING_FOR_RECOVERY_GENERATION','READY_FOR_FINALIZATION'));
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_stale_refused'; END IF;
+            END""",
+        "easysynq_accept_r27_request(uuid,timestamptz)": """
+            DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid; v_audit bigint;
+            BEGIN
+                IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                SELECT a.request_id,a.app_user_id,r.org_id,r.record_id INTO v_request,v_user,v_org,v_record
+                FROM public.r27_attestation a JOIN public.r27_action_challenge c ON c.id=a.challenge_id
+                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
+                JOIN public.r27_request r ON r.id=a.request_id
+                JOIN public.r27_manifest m ON m.request_id=a.request_id
+                WHERE a.id=p_id AND a.action='REQUEST' AND a.permission_granted AND a.expires_at>clock_timestamp()
+                  AND k.revoked_at IS NULL AND k.active_at<=a.issued_at
+                  AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
+                  AND c.action=a.action AND c.request_id=a.request_id
+                  AND c.record_id=r.record_id AND c.manifest_sha256=m.sha256
+                  AND c.issuer=a.issuer AND c.token_jti=a.token_jti
+                  AND c.consumed_at IS NULL AND c.expires_at>clock_timestamp() AND r.state IS NULL
+                FOR UPDATE OF c,r;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_request_authority_refused'; END IF;
+                INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
+                VALUES(v_org,clock_timestamp(),'user',v_user,'RECORD_WORM_DESTROY_REQUESTED','record',v_record,'record','r27-requester-authorized',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
+                UPDATE public.r27_action_challenge SET consumed_at=clock_timestamp() WHERE id=(SELECT challenge_id FROM public.r27_attestation WHERE id=p_id);
+                UPDATE public.r27_request SET state='WAITING_FOR_SECOND_APPROVER',requester_user_id=v_user,requester_audit_event_id=v_audit,requested_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=v_request;
+                RETURN v_audit;
+            END""",
+        "easysynq_accept_r27_approval(uuid,timestamptz)": """
+            DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid; v_audit bigint;
+            BEGIN
+                IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                SELECT a.request_id,a.app_user_id,r.org_id,r.record_id INTO v_request,v_user,v_org,v_record
+                FROM public.r27_attestation a JOIN public.r27_action_challenge c ON c.id=a.challenge_id
+                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
+                JOIN public.r27_request r ON r.id=a.request_id
+                JOIN public.r27_manifest m ON m.request_id=a.request_id
+                WHERE a.id=p_id AND a.action='APPROVE' AND a.permission_granted AND a.expires_at>clock_timestamp()
+                  AND k.revoked_at IS NULL AND k.active_at<=a.issued_at
+                  AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
+                  AND c.action=a.action AND c.request_id=a.request_id
+                  AND c.record_id=r.record_id AND c.manifest_sha256=m.sha256
+                  AND c.issuer=a.issuer AND c.token_jti=a.token_jti
+                  AND c.consumed_at IS NULL AND c.expires_at>clock_timestamp() AND r.state='WAITING_FOR_SECOND_APPROVER' AND a.app_user_id<>r.requester_user_id FOR UPDATE OF c,r;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_approval_authority_refused'; END IF;
+                INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
+                VALUES(v_org,clock_timestamp(),'user',v_user,'RECORD_WORM_DESTROY_REQUESTED','record',v_record,'record','r27-second-approval-authorized',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
+                UPDATE public.r27_action_challenge SET consumed_at=clock_timestamp() WHERE id=(SELECT challenge_id FROM public.r27_attestation WHERE id=p_id);
+                UPDATE public.r27_request SET state='WAITING_FOR_RECOVERY_GENERATION',approver_user_id=v_user,approver_audit_event_id=v_audit,approved_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=v_request;
+                RETURN v_audit;
+            END""",
+        "easysynq_cancel_r27_request(uuid,timestamptz)": """
+            DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid; v_audit bigint;
+            BEGIN
+                IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                SELECT a.request_id,a.app_user_id,r.org_id,r.record_id INTO v_request,v_user,v_org,v_record FROM public.r27_attestation a
+                JOIN public.r27_action_challenge c ON c.id=a.challenge_id
+                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
+                JOIN public.r27_request r ON r.id=a.request_id
+                JOIN public.r27_manifest m ON m.request_id=a.request_id
+                WHERE a.id=p_id AND a.action='CANCEL' AND a.permission_granted
+                  AND a.expires_at>clock_timestamp() AND c.expires_at>clock_timestamp()
+                  AND k.revoked_at IS NULL AND k.active_at<=a.issued_at
+                  AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
+                  AND c.action=a.action AND c.request_id=a.request_id
+                  AND c.record_id=r.record_id AND c.manifest_sha256=m.sha256
+                  AND c.issuer=a.issuer AND c.token_jti=a.token_jti
+                  AND c.consumed_at IS NULL
+                  AND r.state IN ('WAITING_FOR_SECOND_APPROVER','WAITING_FOR_RECOVERY_GENERATION','READY_FOR_FINALIZATION') FOR UPDATE OF c,r;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_cancel_refused'; END IF;
+                INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
+                VALUES(v_org,clock_timestamp(),'user',v_user,'RECORD_WORM_DESTROY_CANCELLED','record',v_record,'record','r27-cancelled',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
+                UPDATE public.r27_action_challenge SET consumed_at=clock_timestamp() WHERE id=(SELECT challenge_id FROM public.r27_attestation WHERE id=p_id);
+                UPDATE public.r27_request SET state='CANCELLED',cancelled_by_user_id=v_user,cancellation_audit_event_id=v_audit,cancelled_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=v_request;
+                RETURN v_audit;
+            END""",
+        "easysynq_claim_r27_finalizations(integer,timestamptz)": """
+            BEGIN
+                IF p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'r27_finalization_claim_refused'; END IF;
+                RETURN QUERY WITH ready AS (
+                    SELECT r.id FROM public.r27_request r JOIN public.r27_manifest m ON m.request_id=r.id
+                    JOIN public.recovery_generation_witness w ON w.request_id=r.id AND w.invalidated_at IS NULL
+                    JOIN public.recovery_generation_verifier_key k ON k.id=w.key_id AND k.revoked_at IS NULL
+                    LEFT JOIN public.r27_execution existing ON existing.request_id=r.id
+                    WHERE ((r.state='READY_FOR_FINALIZATION' AND
+                            (existing.id IS NULL OR
+                             (existing.state='FAILED' AND existing.error_code='RECOVERY_KEY_REVOKED')))
+                       OR (r.state='FINALIZING' AND existing.state='FAILED' AND existing.next_attempt_at<=clock_timestamp()))
+                      AND m.expires_at>clock_timestamp() ORDER BY r.created_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT p_limit
+                ), made AS (
+                    INSERT INTO public.r27_execution AS execution
+                        (id,request_id,execution_id,state,claimed_at,attempt_count,updated_at)
+                    SELECT gen_random_uuid(),ready.id,gen_random_uuid(),'CLAIMED',clock_timestamp(),1,clock_timestamp() FROM ready
+                    ON CONFLICT ON CONSTRAINT uq_r27_execution_request_id DO UPDATE
+                    SET state=CASE
+                        WHEN execution.purge_started_at IS NOT NULL THEN 'PURGING'::r27_execution_state
+                        WHEN execution.source_committed_at IS NOT NULL THEN 'SOURCE_COMMITTED'::r27_execution_state
+                        ELSE 'CLAIMED'::r27_execution_state END,
+                    attempt_count=execution.attempt_count+1,error_code=NULL,error_detail=NULL,next_attempt_at=NULL,updated_at=clock_timestamp()
+                    WHERE execution.state='FAILED' AND
+                          (execution.next_attempt_at<=clock_timestamp()
+                           OR execution.error_code='RECOVERY_KEY_REVOKED')
+                    RETURNING execution.request_id,execution.execution_id,execution.id
+                ), requests AS (
+                    UPDATE public.r27_request r SET state='FINALIZING',updated_at=clock_timestamp() FROM made WHERE r.id=made.request_id RETURNING r.id
+                ), consumed AS (
+                    UPDATE public.recovery_generation_witness w SET consumed_execution_id=made.id FROM made
+                    WHERE w.request_id=made.request_id AND w.invalidated_at IS NULL
+                    RETURNING w.id)
+                SELECT made.request_id,made.execution_id FROM made;
+            END""",
+        "easysynq_fail_r27_execution(uuid,text,text,timestamptz)": """
+            BEGIN
+                IF p_id IS NULL OR p_code IS NULL OR p_at IS NULL OR btrim(p_code)='' OR length(p_code)>64 OR length(COALESCE(p_detail,''))>512 THEN RAISE EXCEPTION 'r27_execution_failure_refused'; END IF;
+                UPDATE public.r27_execution SET state='FAILED',error_code=p_code,error_detail=p_detail,
+                    next_attempt_at=clock_timestamp()+interval '1 minute',updated_at=clock_timestamp()
+                WHERE execution_id=p_id AND state IN ('CLAIMED','SOURCE_COMMITTED','PURGING');
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_execution_failure_refused'; END IF;
+            END""",
+        "easysynq_claim_r27_exact_purges(uuid,integer,timestamptz)": """
+            BEGIN
+                IF p_id IS NULL OR p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'r27_purge_claim_refused'; END IF;
+                IF NOT EXISTS (SELECT 1 FROM public.r27_execution WHERE execution_id=p_id AND state IN ('SOURCE_COMMITTED','PURGING') FOR UPDATE) THEN RAISE EXCEPTION 'r27_purge_claim_refused'; END IF;
+                RETURN QUERY WITH picked AS (
+                    SELECT p.id FROM public.pending_blob_purge p
+                    JOIN public.r27_execution e ON e.id=p.r27_execution_id
+                    JOIN public.r27_request request ON request.id=e.request_id
+                    JOIN public.r27_manifest m ON m.request_id=e.request_id
+                    JOIN public.r27_manifest_target target
+                      ON target.manifest_id=m.id AND target.blob_sha256=p.sha256
+                     AND target.bucket=p.bucket AND target.object_key=p.object_key
+                     AND target.object_version_id=p.object_version_id
+                    JOIN public.blob blob
+                      ON blob.sha256=p.sha256 AND blob.org_id=p.org_id
+                     AND blob.bucket=p.bucket AND blob.object_key=p.object_key
+                     AND blob.object_version_id=p.object_version_id
+                    WHERE e.execution_id=p_id AND p.bypass_governance
+                      AND p.r27_request_id=e.request_id
+                      AND p.org_id=request.org_id AND p.record_id=request.record_id
+                      AND p.state IN ('PENDING','FAILED')
+                    ORDER BY p.created_at,p.id
+                    FOR UPDATE OF p SKIP LOCKED LIMIT p_limit),
+                claimed AS (UPDATE public.pending_blob_purge p SET state='RUNNING',attempt_count=p.attempt_count+1,claimed_at=clock_timestamp(),error_code=NULL,error_detail=NULL,updated_at=clock_timestamp() FROM picked WHERE p.id=picked.id RETURNING p.*),
+                transitioned AS (
+                    UPDATE public.r27_execution execution
+                    SET state='PURGING',
+                        purge_started_at=COALESCE(execution.purge_started_at,clock_timestamp()),
+                        updated_at=clock_timestamp()
+                    WHERE execution.execution_id=p_id AND EXISTS (SELECT 1 FROM claimed)
+                    RETURNING execution.id)
+                SELECT claimed.id,claimed.sha256::text,claimed.bucket,claimed.object_key,
+                       claimed.object_version_id FROM claimed
+                CROSS JOIN transitioned;
+            END""",
+        "easysynq_fail_r27_exact_purge(uuid,uuid,text,text,timestamptz)": """
+            BEGIN
+                IF p_execution IS NULL OR p_marker IS NULL OR p_code IS NULL OR p_at IS NULL OR btrim(p_code)='' OR length(p_code)>64 OR length(COALESCE(p_detail,''))>512 THEN RAISE EXCEPTION 'r27_purge_failure_refused'; END IF;
+                UPDATE public.pending_blob_purge p SET state='FAILED',error_code=p_code,error_detail=p_detail,updated_at=clock_timestamp()
+                FROM public.r27_execution e WHERE e.execution_id=p_execution AND p.id=p_marker AND p.r27_execution_id=e.id AND p.bypass_governance AND p.state='RUNNING';
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_purge_failure_refused'; END IF;
+            END""",
+        "easysynq_record_r27_hold_release(text,text,uuid,timestamptz)": """
+            DECLARE v_internal uuid;
+            BEGIN
+                IF p_sha IS NULL OR p_version IS NULL OR p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                SELECT e.id INTO v_internal FROM public.r27_execution e
+                JOIN public.r27_request r ON r.id=e.request_id
+                JOIN public.r27_manifest m ON m.request_id=e.request_id
+                JOIN public.r27_manifest_target t ON t.manifest_id=m.id
+                JOIN public.blob b ON b.sha256=t.blob_sha256 AND b.org_id=r.org_id
+                  AND b.bucket=t.bucket AND b.object_key=t.object_key
+                  AND b.object_version_id=t.object_version_id
+                WHERE e.execution_id=p_id AND e.state IN ('SOURCE_COMMITTED','PURGING')
+                  AND t.blob_sha256=p_sha AND t.object_version_id=p_version
+                FOR UPDATE OF e,b;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_hold_release_refused'; END IF;
+                UPDATE public.blob SET worm_legal_hold=false,worm_legal_hold_verified_at=clock_timestamp()
+                WHERE sha256=p_sha AND object_version_id=p_version AND worm_legal_hold
+                  AND EXISTS (
+                      SELECT 1 FROM public.r27_execution e
+                      JOIN public.r27_request r ON r.id=e.request_id
+                      WHERE e.id=v_internal AND r.org_id=public.blob.org_id
+                  );
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_hold_release_refused'; END IF;
+            END""",
+        "easysynq_record_r27_purge(text,text,uuid,timestamptz)": """
+            DECLARE v_internal uuid; v_target uuid; v_marker uuid; v_org uuid;
+            BEGIN
+                IF p_sha IS NULL OR p_version IS NULL OR p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                SELECT e.id,t.id,p.id,r.org_id INTO v_internal,v_target,v_marker,v_org
+                FROM public.r27_execution e
+                JOIN public.r27_request r ON r.id=e.request_id
+                JOIN public.r27_manifest m ON m.request_id=e.request_id
+                JOIN public.r27_manifest_target t ON t.manifest_id=m.id
+                JOIN public.pending_blob_purge p ON p.r27_execution_id=e.id
+                  AND p.r27_request_id=e.request_id AND p.org_id=r.org_id
+                  AND p.record_id=r.record_id AND p.sha256=t.blob_sha256
+                  AND p.bucket=t.bucket AND p.object_key=t.object_key
+                  AND p.object_version_id=t.object_version_id
+                JOIN public.disposition_event d ON d.id=p.disposition_event_id
+                  AND d.r27_request_id=e.request_id AND d.r27_execution_id=e.id
+                  AND d.org_id=r.org_id AND d.record_id=r.record_id AND d.is_worm_destroy
+                JOIN public.blob b ON b.sha256=t.blob_sha256 AND b.org_id=r.org_id
+                  AND b.bucket=t.bucket AND b.object_key=t.object_key
+                  AND b.object_version_id=t.object_version_id
+                WHERE e.execution_id=p_id AND e.state IN ('SOURCE_COMMITTED','PURGING') AND t.blob_sha256=p_sha AND t.object_version_id=p_version
+                  AND p.state='RUNNING' AND p.bypass_governance FOR UPDATE OF e,p,b;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_purge_result_refused'; END IF;
+                UPDATE public.blob SET purged_at=clock_timestamp(),purge_execution_id=v_internal
+                WHERE sha256=p_sha AND object_version_id=p_version AND org_id=v_org;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_purge_result_refused'; END IF;
+                UPDATE public.pending_blob_purge SET state='VERIFIED',completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=v_marker;
+                INSERT INTO public.r27_execution_target_result(execution_id,manifest_target_id,result_code,verified_at,purge_marker_id)
+                VALUES(v_internal,v_target,'PHYSICAL_ERASED',clock_timestamp(),v_marker);
+                IF NOT EXISTS (SELECT 1 FROM public.r27_manifest_target t JOIN public.r27_manifest m ON m.id=t.manifest_id
+                               JOIN public.r27_execution e ON e.request_id=m.request_id WHERE e.id=v_internal
+                               AND NOT EXISTS (SELECT 1 FROM public.r27_execution_target_result rr WHERE rr.execution_id=e.id AND rr.manifest_target_id=t.id)) THEN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM public.disposition_event d
+                        JOIN public.r27_execution e ON e.id=d.r27_execution_id
+                        JOIN public.r27_request r ON r.id=e.request_id
+                        WHERE e.id=v_internal AND d.r27_request_id=e.request_id
+                          AND d.org_id=r.org_id AND d.record_id=r.record_id
+                          AND d.is_worm_destroy AND d.action='DESTROY'
+                    ) THEN RAISE EXCEPTION 'r27_source_disposition_missing'; END IF;
+                    UPDATE public.r27_execution e SET state='EXECUTED',result_code=(SELECT CASE WHEN count(*) FILTER (WHERE result_code='PHYSICAL_ERASED')=count(*) THEN 'PHYSICAL_ERASED'::r27_result_code WHEN count(*) FILTER (WHERE result_code='LOGICAL_ONLY_SURVIVING_OWNER')=count(*) THEN 'LOGICAL_ONLY_SURVIVING_OWNER'::r27_result_code ELSE 'MIXED_OUTCOME'::r27_result_code END FROM public.r27_execution_target_result WHERE execution_id=v_internal),completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE e.id=v_internal;
+                    UPDATE public.r27_request SET state='EXECUTED',updated_at=clock_timestamp() WHERE id=(SELECT request_id FROM public.r27_execution WHERE id=v_internal);
+                    INSERT INTO public.audit_event(org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
+                    SELECT r.org_id,clock_timestamp(),'system','RECORD_WORM_DESTROYED','record',r.record_id,'record','r27-exact-purge-complete',jsonb_build_object('execution_id',e.execution_id) FROM public.r27_execution e JOIN public.r27_request r ON r.id=e.request_id WHERE e.id=v_internal;
+                END IF;
+            END""",
+        "easysynq_record_r27_surviving_owner(text,text,uuid,timestamptz)": """
+            DECLARE v_internal uuid; v_target uuid; v_owner uuid; v_kind text; v_org uuid;
+            BEGIN
+                IF p_sha IS NULL OR p_version IS NULL OR p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                SELECT e.id,t.id,r.org_id INTO v_internal,v_target,v_org
+                FROM public.r27_execution e JOIN public.r27_request r ON r.id=e.request_id
+                JOIN public.r27_manifest m ON m.request_id=e.request_id
+                JOIN public.r27_manifest_target t ON t.manifest_id=m.id
+                JOIN public.blob b ON b.sha256=t.blob_sha256 AND b.org_id=r.org_id
+                  AND b.bucket=t.bucket AND b.object_key=t.object_key
+                  AND b.object_version_id=t.object_version_id
+                WHERE e.execution_id=p_id AND e.state IN ('SOURCE_COMMITTED','PURGING')
+                AND t.blob_sha256=p_sha AND t.object_version_id=p_version FOR UPDATE OF e;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_surviving_owner_refused'; END IF;
+                SELECT v.id,'DOCUMENT_VERSION' INTO v_owner,v_kind FROM public.document_version v
+                WHERE v.source_blob_sha256=p_sha AND v.org_id=v_org ORDER BY v.id LIMIT 1;
+                IF NOT FOUND THEN SELECT eb.id,'EVIDENCE_BLOB' INTO v_owner,v_kind
+                    FROM public.evidence_blob eb WHERE eb.blob_sha256=p_sha AND eb.org_id=v_org
+                    ORDER BY eb.id LIMIT 1; END IF;
+                IF v_owner IS NULL THEN RAISE EXCEPTION 'r27_surviving_owner_refused'; END IF;
+                INSERT INTO public.r27_execution_target_result(execution_id,manifest_target_id,result_code,verified_at,surviving_owner_kind,surviving_owner_id)
+                VALUES(v_internal,v_target,'LOGICAL_ONLY_SURVIVING_OWNER',clock_timestamp(),v_kind,v_owner);
+                IF NOT EXISTS (SELECT 1 FROM public.r27_manifest_target t JOIN public.r27_manifest m ON m.id=t.manifest_id
+                               JOIN public.r27_execution e ON e.request_id=m.request_id WHERE e.id=v_internal
+                               AND NOT EXISTS (SELECT 1 FROM public.r27_execution_target_result rr WHERE rr.execution_id=e.id AND rr.manifest_target_id=t.id)) THEN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM public.disposition_event d
+                        JOIN public.r27_execution e ON e.id=d.r27_execution_id
+                        JOIN public.r27_request r ON r.id=e.request_id
+                        WHERE e.id=v_internal AND d.r27_request_id=e.request_id
+                          AND d.org_id=r.org_id AND d.record_id=r.record_id
+                          AND d.is_worm_destroy AND d.action='DESTROY'
+                    ) THEN RAISE EXCEPTION 'r27_source_disposition_missing'; END IF;
+                    UPDATE public.r27_execution e SET state='EXECUTED',result_code=(SELECT CASE WHEN count(*) FILTER (WHERE result_code='PHYSICAL_ERASED')=count(*) THEN 'PHYSICAL_ERASED'::r27_result_code WHEN count(*) FILTER (WHERE result_code='LOGICAL_ONLY_SURVIVING_OWNER')=count(*) THEN 'LOGICAL_ONLY_SURVIVING_OWNER'::r27_result_code ELSE 'MIXED_OUTCOME'::r27_result_code END FROM public.r27_execution_target_result WHERE execution_id=v_internal),completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE e.id=v_internal;
+                    UPDATE public.r27_request SET state='EXECUTED',updated_at=clock_timestamp() WHERE id=(SELECT request_id FROM public.r27_execution WHERE id=v_internal);
+                    INSERT INTO public.audit_event(org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
+                    SELECT r.org_id,clock_timestamp(),'system','RECORD_WORM_DESTROYED','record',r.record_id,'record','r27-exact-purge-complete',jsonb_build_object('execution_id',e.execution_id) FROM public.r27_execution e JOIN public.r27_request r ON r.id=e.request_id WHERE e.id=v_internal;
+                END IF;
+            END""",
+        "easysynq_begin_r27_role_membership(uuid,uuid,text,text,timestamptz)": """
+            DECLARE v_org uuid;
+            BEGIN
+                IF p_operation IS NULL OR p_user_id IS NULL OR p_action IS NULL OR p_identity IS NULL OR p_at IS NULL OR p_action NOT IN ('ASSIGN','REVOKE') OR btrim(p_identity)='' THEN RAISE EXCEPTION 'role_membership_begin_refused'; END IF;
+                SELECT org_id INTO v_org FROM public.app_user WHERE id=p_user_id;
+                IF NOT FOUND THEN RAISE EXCEPTION 'role_membership_begin_refused'; END IF;
+                INSERT INTO public.r27_role_membership_operation(id,user_id,org_id,action,operator_identity,state,requested_at)
+                VALUES(p_operation,p_user_id,v_org,p_action,p_identity,'REQUESTED',clock_timestamp())
+                ON CONFLICT(id) DO NOTHING;
+                IF NOT EXISTS (SELECT 1 FROM public.r27_role_membership_operation WHERE id=p_operation AND user_id=p_user_id AND action=p_action AND operator_identity=p_identity) THEN RAISE EXCEPTION 'role_membership_idempotency_conflict'; END IF;
+            END""",
+        "easysynq_complete_r27_role_membership(uuid,timestamptz)": """
+            DECLARE v_op public.r27_role_membership_operation%ROWTYPE; v_audit bigint;
+            BEGIN
+                IF p_operation IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                SELECT * INTO v_op FROM public.r27_role_membership_operation WHERE id=p_operation FOR UPDATE;
+                IF NOT FOUND THEN RAISE EXCEPTION 'role_membership_complete_refused'; END IF;
+                IF v_op.state='AUDITED' THEN RETURN v_op.audit_event_id; END IF;
+                IF v_op.state NOT IN ('REQUESTED','FAILED') THEN RAISE EXCEPTION 'role_membership_complete_refused'; END IF;
+                INSERT INTO public.audit_event(org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
+                VALUES(v_op.org_id,clock_timestamp(),'system',CASE v_op.action WHEN 'ASSIGN' THEN 'ROLE_ASSIGN'::event_type ELSE 'ROLE_REVOKE'::event_type END,'user',v_op.user_id,'r27-approver',CASE v_op.action WHEN 'ASSIGN' THEN 'host-r27-role-assignment' ELSE 'host-r27-role-revocation' END,jsonb_build_object('operator_identity',v_op.operator_identity,'action',v_op.action,'operation_id',v_op.id)) RETURNING id INTO v_audit;
+                UPDATE public.r27_role_membership_operation SET state='AUDITED',audit_event_id=v_audit,completed_at=clock_timestamp(),error_code=NULL,error_detail=NULL WHERE id=p_operation;
+                RETURN v_audit;
+            END""",
+        "easysynq_fail_r27_role_membership(uuid,text,text,timestamptz)": """
+            BEGIN
+                IF p_operation IS NULL OR p_code IS NULL OR p_at IS NULL OR btrim(p_code)='' OR length(p_code)>64 OR length(COALESCE(p_detail,''))>512 THEN RAISE EXCEPTION 'role_membership_failure_refused'; END IF;
+                UPDATE public.r27_role_membership_operation SET state='FAILED',error_code=p_code,
+                    error_detail=p_detail,completed_at=clock_timestamp()
+                WHERE id=p_operation AND state IN ('REQUESTED','FAILED');
+                IF NOT FOUND THEN RAISE EXCEPTION 'role_membership_failure_refused'; END IF;
+            END""",
+    }
+    for declaration, identity, role, return_kind in functions:
+        del return_kind
+        body = bodies[identity]
+        _create_definer_function(declaration, identity, role, body)
+
+
+def _grant_database_authority() -> None:
+    bind = op.get_bind()
+    op.execute(f"REVOKE ALL ON public.r27_request FROM {APP_ROLE}")
+    op.execute(f"GRANT SELECT, INSERT, DELETE ON public.blob TO {APP_ROLE}")
+    op.execute(f"GRANT UPDATE (verified_at,verify_failed_at) ON public.blob TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON public.document_version TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT, INSERT ON public.evidence_blob TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT ON public.pending_blob_purge TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT, INSERT ON public.audit_event TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT, INSERT ON public.signature_event TO {APP_ROLE}")
+    op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA public TO easysynq_backup")
+    op.execute("GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO easysynq_backup")
+    op.execute(
+        "GRANT SELECT ON public.retention_operation,public.retention_operation_target,public.blob TO easysynq_retention"
+    )
+    op.execute(
+        "GRANT SELECT ON public.worm_hold_release_operation,public.blob,public.record TO easysynq_hold_authorizer,easysynq_hold_maintenance"
+    )
+    op.execute(
+        "GRANT SELECT ON public.r27_request,public.r27_manifest,public.r27_manifest_target,public.r27_attestation,public.r27_action_challenge,public.r27_authorizer_key TO easysynq_r27_authorizer"
+    )
+    op.execute(
+        "GRANT INSERT ON public.r27_request,public.r27_manifest,public.r27_manifest_target,public.r27_manifest_derivative,public.r27_attestation,public.r27_action_challenge TO easysynq_r27_authorizer"
+    )
+    op.execute(
+        "GRANT SELECT ON public.r27_request,public.r27_manifest,public.r27_manifest_target,public.r27_attestation,public.r27_execution,public.r27_execution_target_result,public.recovery_generation_witness,public.pending_blob_purge,public.blob TO easysynq_r27_maintenance"
+    )
+    op.execute("GRANT SELECT ON public.r27_authorizer_key TO easysynq_r27_authorizer_key_manager")
+    op.execute(
+        "GRANT SELECT ON public.recovery_generation_verifier_key TO easysynq_recovery_key_manager"
+    )
+    op.execute(
+        "GRANT SELECT ON public.app_user,public.r27_role_membership_operation TO easysynq_r27_role_manager"
+    )
+    op.execute(
+        "GRANT SELECT ON public.audit_event,public.organization,public.system_config,public.audit_chain_cursor,public.audit_checkpoint,public.audit_checkpoint_sink,public.audit_maintenance_schedule TO easysynq_audit_signer"
+    )
+    op.execute(
+        "GRANT INSERT ON public.audit_event,public.audit_checkpoint TO easysynq_audit_signer"
+    )
+    op.execute("GRANT USAGE,SELECT ON SEQUENCE public.audit_event_id_seq TO easysynq_audit_signer")
+    op.execute(
+        "GRANT UPDATE (prev_hash,row_hash,chained_at) ON public.audit_event TO easysynq_audit_signer"
+    )
+    op.execute("GRANT SELECT,INSERT,UPDATE ON public.audit_chain_cursor TO easysynq_audit_signer")
+    audit_children = bind.execute(
+        sa.text(
+            """
+            SELECT child.relname
+            FROM pg_inherits inheritance
+            JOIN pg_class child ON child.oid=inheritance.inhrelid
+            JOIN pg_namespace namespace ON namespace.oid=child.relnamespace
+            JOIN pg_class parent ON parent.oid=inheritance.inhparent
+            JOIN pg_namespace parent_namespace ON parent_namespace.oid=parent.relnamespace
+            WHERE namespace.nspname='public' AND parent_namespace.nspname='public'
+              AND parent.relname='audit_event'
+            """
+        )
+    ).scalars()
+    for child in audit_children:
+        _execute_composed(
+            bind,
+            psycopg_sql.SQL("REVOKE ALL ON public.{} FROM PUBLIC,{}").format(
+                psycopg_sql.Identifier(child), psycopg_sql.Identifier(LINKER_ROLE)
+            ),
+        )
+        _execute_composed(
+            bind,
+            psycopg_sql.SQL("GRANT SELECT,INSERT ON public.{} TO {},{}").format(
+                psycopg_sql.Identifier(child),
+                psycopg_sql.Identifier(APP_ROLE),
+                psycopg_sql.Identifier("easysynq_audit_signer"),
+            ),
+        )
+        _execute_composed(
+            bind,
+            psycopg_sql.SQL(
+                "GRANT UPDATE (prev_hash,row_hash,chained_at) ON public.{} TO {}"
+            ).format(
+                psycopg_sql.Identifier(child),
+                psycopg_sql.Identifier("easysynq_audit_signer"),
+            ),
+        )
+        _execute_composed(
+            bind,
+            psycopg_sql.SQL("GRANT SELECT ON public.{} TO {}").format(
+                psycopg_sql.Identifier(child), psycopg_sql.Identifier("easysynq_backup")
+            ),
+        )
+    op.execute(
+        "REVOKE EXECUTE ON FUNCTION public.easysynq_create_audit_partition(date) FROM PUBLIC"
+    )
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION public.easysynq_create_audit_partition(date) TO easysynq_audit_signer"
+    )
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION public.easysynq_create_audit_partition(p_start date)
+        RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+        SET search_path = public, pg_temp AS $function$
+        DECLARE
+            v_end date := (p_start + INTERVAL '1 month')::date;
+            v_name text := 'audit_event_' || to_char(p_start,'YYYY_MM');
+            v_from text := to_char(p_start,'YYYY-MM-DD') || ' 00:00:00+00';
+            v_to text := to_char(v_end,'YYYY-MM-DD') || ' 00:00:00+00';
+        BEGIN
+            IF p_start IS NULL OR p_start<>date_trunc('month',p_start)::date THEN
+                RAISE EXCEPTION 'audit_partition_start_refused';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                           WHERE n.nspname='public' AND c.relname=v_name AND c.relkind='r') THEN
+                EXECUTE format('CREATE TABLE public.%I PARTITION OF public.audit_event FOR VALUES FROM (%L) TO (%L)',v_name,v_from,v_to);
+                EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC,easysynq_linker',v_name);
+                EXECUTE format('GRANT SELECT,INSERT ON public.%I TO easysynq_app,easysynq_audit_signer',v_name);
+                EXECUTE format('GRANT UPDATE (prev_hash,row_hash,chained_at) ON public.%I TO easysynq_audit_signer',v_name);
+                EXECUTE format('GRANT SELECT ON public.%I TO easysynq_backup',v_name);
+            END IF;
+        END
+        $function$
+        """
+    )
+
+
+def _create_database_authority() -> None:
+    _create_worm_guard_triggers()
+    op.execute(
+        """
+        CREATE FUNCTION public.easysynq_guard_r27_result_history() RETURNS trigger
+        LANGUAGE plpgsql SET search_path = public, pg_temp AS $function$
+        BEGIN RAISE EXCEPTION 'r27_result_history_is_immutable'; END $function$;
+        REVOKE ALL ON FUNCTION public.easysynq_guard_r27_result_history() FROM PUBLIC;
+        CREATE TRIGGER trg_r27_execution_target_result_history BEFORE UPDATE OR DELETE
+        ON public.r27_execution_target_result FOR EACH ROW
+        EXECUTE FUNCTION public.easysynq_guard_r27_result_history();
+
+        CREATE FUNCTION public.easysynq_guard_recovery_witness_history() RETURNS trigger
+        LANGUAGE plpgsql SET search_path = public, pg_temp AS $function$
+        BEGIN
+            IF TG_OP='DELETE' OR NEW.id IS DISTINCT FROM OLD.id OR NEW.key_id IS DISTINCT FROM OLD.key_id
+               OR NEW.witness_nonce IS DISTINCT FROM OLD.witness_nonce OR NEW.request_id IS DISTINCT FROM OLD.request_id
+               OR NEW.manifest_sha256 IS DISTINCT FROM OLD.manifest_sha256 OR NEW.generation_id IS DISTINCT FROM OLD.generation_id
+               OR NEW.generation_identity IS DISTINCT FROM OLD.generation_identity OR NEW.excluded_set_sha256 IS DISTINCT FROM OLD.excluded_set_sha256
+               OR NEW.result IS DISTINCT FROM OLD.result OR NEW.canonical_bytes IS DISTINCT FROM OLD.canonical_bytes
+               OR NEW.signature IS DISTINCT FROM OLD.signature OR NEW.issued_at IS DISTINCT FROM OLD.issued_at
+               OR NEW.verified_at IS DISTINCT FROM OLD.verified_at
+               OR (OLD.consumed_execution_id IS NOT NULL AND NEW.consumed_execution_id IS DISTINCT FROM OLD.consumed_execution_id)
+               OR (OLD.invalidated_at IS NOT NULL AND (NEW.invalidated_at IS DISTINCT FROM OLD.invalidated_at
+                   OR NEW.invalidation_audit_event_id IS DISTINCT FROM OLD.invalidation_audit_event_id
+                   OR NEW.invalidation_reason IS DISTINCT FROM OLD.invalidation_reason)) THEN
+                RAISE EXCEPTION 'recovery_witness_history_is_immutable';
+            END IF;
+            RETURN NEW;
+        END $function$;
+        REVOKE ALL ON FUNCTION public.easysynq_guard_recovery_witness_history() FROM PUBLIC;
+        CREATE TRIGGER trg_recovery_witness_history BEFORE UPDATE OR DELETE
+        ON public.recovery_generation_witness FOR EACH ROW
+        EXECUTE FUNCTION public.easysynq_guard_recovery_witness_history();
+
+        CREATE FUNCTION public.easysynq_guard_role_membership_history() RETURNS trigger
+        LANGUAGE plpgsql SET search_path = public, pg_temp AS $function$
+        BEGIN
+            IF TG_OP='DELETE' OR NEW.id IS DISTINCT FROM OLD.id OR NEW.user_id IS DISTINCT FROM OLD.user_id
+               OR NEW.org_id IS DISTINCT FROM OLD.org_id OR NEW.action IS DISTINCT FROM OLD.action
+               OR NEW.operator_identity IS DISTINCT FROM OLD.operator_identity OR NEW.requested_at IS DISTINCT FROM OLD.requested_at
+               OR OLD.state='AUDITED' OR (OLD.audit_event_id IS NOT NULL AND NEW.audit_event_id IS DISTINCT FROM OLD.audit_event_id) THEN
+                RAISE EXCEPTION 'role_membership_history_is_immutable';
+            END IF;
+            RETURN NEW;
+        END $function$;
+        REVOKE ALL ON FUNCTION public.easysynq_guard_role_membership_history() FROM PUBLIC;
+        CREATE TRIGGER trg_role_membership_history BEFORE UPDATE OR DELETE
+        ON public.r27_role_membership_operation FOR EACH ROW
+        EXECUTE FUNCTION public.easysynq_guard_role_membership_history();
+        """
+    )
+    _create_retention_functions()
+    _create_key_functions()
+    _create_authority_transition_functions()
+    _grant_database_authority()
+
+
 def _refuse_populated_0089_downgrade(bind: sa.Connection) -> None:
     populated = bind.execute(
         sa.text(
@@ -1165,6 +2744,8 @@ def _refuse_populated_0089_downgrade(bind: sa.Connection) -> None:
                 OR EXISTS (SELECT 1 FROM r27_execution LIMIT 1)
                 OR EXISTS (SELECT 1 FROM recovery_generation_verifier_key LIMIT 1)
                 OR EXISTS (SELECT 1 FROM recovery_generation_witness LIMIT 1)
+                OR EXISTS (SELECT 1 FROM r27_execution_target_result LIMIT 1)
+                OR EXISTS (SELECT 1 FROM r27_role_membership_operation LIMIT 1)
                 OR EXISTS (SELECT 1 FROM pending_blob_purge LIMIT 1)
                 OR EXISTS (SELECT 1 FROM audit_maintenance_schedule LIMIT 1)
                 OR EXISTS (SELECT 1 FROM backup_maintenance_operation LIMIT 1)
@@ -1175,16 +2756,203 @@ def _refuse_populated_0089_downgrade(bind: sa.Connection) -> None:
         raise RuntimeError("populated_0089_downgrade_refused")
 
 
+def _drop_database_authority() -> None:
+    for table, trigger in (
+        ("blob", "trg_blob_worm_identity"),
+        ("document_version", "trg_document_version_worm_owner"),
+        ("evidence_blob", "trg_evidence_blob_worm_owner"),
+        ("r27_authorizer_key", "trg_r27_authorizer_key_history"),
+        ("recovery_generation_verifier_key", "trg_recovery_verifier_key_history"),
+        ("r27_execution_target_result", "trg_r27_execution_target_result_history"),
+        ("recovery_generation_witness", "trg_recovery_witness_history"),
+        ("r27_role_membership_operation", "trg_role_membership_history"),
+    ):
+        op.execute(f"DROP TRIGGER IF EXISTS {trigger} ON public.{table}")
+    for name in _AUTHORITY_FUNCTION_NAMES:
+        op.execute(f"DROP FUNCTION IF EXISTS public.{name}")
+    for name in (
+        "easysynq_guard_blob_worm_identity",
+        "easysynq_guard_worm_owner_pointer",
+        "easysynq_guard_key_registry_history",
+        "easysynq_guard_r27_result_history",
+        "easysynq_guard_recovery_witness_history",
+        "easysynq_guard_role_membership_history",
+    ):
+        op.execute(f"DROP FUNCTION IF EXISTS public.{name}()")
+
+
+def _restore_0088_database_authority(bind: sa.Connection) -> None:
+    settings = get_settings()
+    for role in _NEW_AUTHORITY_ROLES:
+        if bind.execute(
+            sa.text("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=:role)"),
+            {"role": role},
+        ).scalar_one():
+            _execute_composed(
+                bind,
+                psycopg_sql.SQL("DROP OWNED BY {}").format(psycopg_sql.Identifier(role)),
+            )
+            _execute_composed(
+                bind,
+                psycopg_sql.SQL("DROP ROLE {}").format(psycopg_sql.Identifier(role)),
+            )
+    for role, password in (
+        (APP_ROLE, settings.app_db_password),
+        (LINKER_ROLE, settings.linker_db_password),
+    ):
+        _execute_composed(
+            bind,
+            psycopg_sql.SQL("ALTER ROLE {} WITH LOGIN INHERIT PASSWORD {}").format(
+                psycopg_sql.Identifier(role), psycopg_sql.Literal(password)
+            ),
+        )
+    op.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+    op.execute("GRANT USAGE ON SCHEMA public TO PUBLIC")
+    op.execute(
+        f"GRANT SELECT,INSERT,UPDATE,DELETE ON blob,document_version,evidence_blob TO {APP_ROLE}"
+    )
+    op.execute(f"REVOKE UPDATE (verified_at,verify_failed_at) ON blob FROM {APP_ROLE}")
+    op.execute(f"GRANT SELECT,DELETE ON pending_blob_purge TO {APP_ROLE}")
+    op.execute(
+        f"GRANT INSERT (id,org_id,sha256,bucket,object_key,bypass_governance,record_id,"
+        f"disposition_event_id,worm_destroy_request_id) ON pending_blob_purge TO {APP_ROLE}"
+    )
+    op.execute(f"GRANT UPDATE (id) ON pending_blob_purge TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT,INSERT ON audit_event,signature_event TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT,INSERT,UPDATE,DELETE ON worm_destroy_request TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT,INSERT ON audit_checkpoint TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT,INSERT,UPDATE,DELETE ON audit_checkpoint_sink TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT ON audit_event,organization,system_config TO {LINKER_ROLE}")
+    op.execute(f"GRANT UPDATE (prev_hash,row_hash,chained_at) ON audit_event TO {LINKER_ROLE}")
+    op.execute(f"GRANT SELECT,INSERT,UPDATE ON audit_chain_cursor TO {LINKER_ROLE}")
+    op.execute(
+        f"GRANT EXECUTE ON FUNCTION easysynq_create_audit_partition(date) TO PUBLIC,{APP_ROLE}"
+    )
+    op.execute(
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+        f"GRANT SELECT,INSERT,UPDATE,DELETE ON TABLES TO {APP_ROLE}"
+    )
+    op.execute(
+        f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE,SELECT ON SEQUENCES TO {APP_ROLE}"
+    )
+    op.execute("ALTER DEFAULT PRIVILEGES GRANT EXECUTE ON FUNCTIONS TO PUBLIC")
+
+
+def _restore_0088_audit_partition_factory(bind: sa.Connection) -> None:
+    op.execute(
+        f"""
+CREATE OR REPLACE FUNCTION easysynq_create_audit_partition(p_start date)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $fn$
+DECLARE
+    v_end  date := (p_start + INTERVAL '1 month')::date;
+    v_name text := 'audit_event_' || to_char(p_start, 'YYYY_MM');
+    v_from text := to_char(p_start, 'YYYY-MM-DD') || ' 00:00:00+00';
+    v_to   text := to_char(v_end,  'YYYY-MM-DD') || ' 00:00:00+00';
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_class WHERE relname = v_name AND relkind = 'r') THEN
+        EXECUTE format(
+            'CREATE TABLE %I PARTITION OF audit_event FOR VALUES FROM (%L) TO (%L)',
+            v_name, v_from, v_to
+        );
+        -- Mirror the parent's least-privilege grants on the child (belt-and-suspenders: parent-
+        -- routed DML checks the parent, but never grant the app UPDATE/DELETE on a child either).
+        EXECUTE format('REVOKE ALL ON %I FROM {APP_ROLE}', v_name);
+        EXECUTE format('GRANT SELECT, INSERT ON %I TO {APP_ROLE}', v_name);
+        EXECUTE format('GRANT SELECT ON %I TO {LINKER_ROLE}', v_name);
+        EXECUTE format(
+            'GRANT UPDATE (prev_hash, row_hash, chained_at) ON %I TO {LINKER_ROLE}', v_name
+        );
+    END IF;
+END
+$fn$;
+        """
+    )
+    op.execute(
+        f"GRANT EXECUTE ON FUNCTION public.easysynq_create_audit_partition(date) "
+        f"TO PUBLIC,{APP_ROLE}"
+    )
+    child_names = bind.execute(
+        sa.text(
+            """
+            SELECT child.relname
+            FROM pg_inherits inheritance
+            JOIN pg_class parent ON parent.oid=inheritance.inhparent
+            JOIN pg_namespace parent_schema ON parent_schema.oid=parent.relnamespace
+            JOIN pg_class child ON child.oid=inheritance.inhrelid
+            JOIN pg_namespace child_schema ON child_schema.oid=child.relnamespace
+            WHERE parent_schema.nspname='public' AND parent.relname='audit_event'
+              AND child_schema.nspname='public'
+            """
+        )
+    ).scalars()
+    for child_name in child_names:
+        child = psycopg_sql.Identifier("public", child_name)
+        _execute_composed(
+            bind,
+            psycopg_sql.SQL("GRANT SELECT ON {} TO {}").format(
+                child, psycopg_sql.Identifier(LINKER_ROLE)
+            ),
+        )
+        _execute_composed(
+            bind,
+            psycopg_sql.SQL("GRANT UPDATE ({}) ON {} TO {}").format(
+                psycopg_sql.SQL(",").join(
+                    map(psycopg_sql.Identifier, ("prev_hash", "row_hash", "chained_at"))
+                ),
+                child,
+                psycopg_sql.Identifier(LINKER_ROLE),
+            ),
+        )
+
+
+def _restore_alembic_version_width_after_stamp() -> None:
+    """Restore 0088's typmod after Alembic replaces the long 0089 revision value."""
+    context = op.get_context()
+    existing_callbacks = context.on_version_apply_callbacks
+
+    def restore_width(*, ctx: object, step: object, heads: set[str], run_args: object) -> None:
+        del step, run_args
+        if heads != {down_revision}:
+            return
+        connection = ctx.connection
+        connection.execute(
+            sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(32)")
+        )
+
+    context.on_version_apply_callbacks = (*existing_callbacks, restore_width)
+
+
 def downgrade() -> None:
     bind = op.get_bind()
     _refuse_populated_0089_downgrade(bind)
+    _drop_database_authority()
 
     op.drop_table("backup_maintenance_operation")
     op.drop_table("audit_maintenance_schedule")
+    op.drop_table("r27_role_membership_operation")
     _downgrade_pending_blob_purge()
     op.drop_table("recovery_generation_witness")
     op.drop_table("recovery_generation_verifier_key")
     op.drop_constraint("fk_blob_purge_execution_id_r27_execution", "blob", type_="foreignkey")
+    op.drop_constraint(
+        "ck_disposition_event_r27_authority_shape", "disposition_event", type_="check"
+    )
+    op.drop_constraint(
+        "fk_disposition_event_r27_execution_id_r27_execution",
+        "disposition_event",
+        type_="foreignkey",
+    )
+    op.drop_constraint(
+        "fk_disposition_event_r27_request_id_r27_request",
+        "disposition_event",
+        type_="foreignkey",
+    )
+    op.drop_column("disposition_event", "r27_execution_id")
+    op.drop_column("disposition_event", "r27_request_id")
     op.drop_table("r27_execution")
     op.drop_table("r27_attestation")
     op.drop_table("r27_authorizer_key")
@@ -1198,12 +2966,16 @@ def downgrade() -> None:
     op.drop_table("retention_operation")
     _drop_document_retention()
     _downgrade_blob()
+    _restore_0088_database_authority(bind)
+    _restore_0088_audit_partition_factory(bind)
 
     for name in reversed(tuple(_ENUM_VALUES)):
         postgresql.ENUM(name=name).drop(bind, checkfirst=True)
+    _restore_alembic_version_width_after_stamp()
 
 
 def _downgrade_pending_blob_purge() -> None:
+    op.drop_table("r27_execution_target_result")
     for constraint, constraint_type in (
         ("ck_pending_blob_purge_attempt_nonnegative", "check"),
         ("ck_pending_blob_purge_object_version_id_length", "check"),

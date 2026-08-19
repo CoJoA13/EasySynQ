@@ -174,10 +174,12 @@ from .r27_action_challenge import R27ActionChallenge
 from .r27_attestation import R27Attestation
 from .r27_authorizer_key import R27AuthorizerKey
 from .r27_execution import R27Execution
+from .r27_execution_target_result import R27ExecutionTargetResult
 from .r27_manifest import R27Manifest
 from .r27_manifest_derivative import R27ManifestDerivative
 from .r27_manifest_target import R27ManifestTarget
 from .r27_request import R27Request
+from .r27_role_membership_operation import R27RoleMembershipOperation
 from .record import Record
 from .recovery_generation_verifier_key import RecoveryGenerationVerifierKey
 from .recovery_generation_witness import RecoveryGenerationWitness
@@ -342,12 +344,14 @@ __all__ = [
     "R27DerivativeKind",
     "R27Execution",
     "R27ExecutionState",
+    "R27ExecutionTargetResult",
     "R27Manifest",
     "R27ManifestDerivative",
     "R27ManifestTarget",
     "R27Request",
     "R27RequestState",
     "R27ResultCode",
+    "R27RoleMembershipOperation",
     "Record",
     "RecordDispositionState",
     "RecordType",

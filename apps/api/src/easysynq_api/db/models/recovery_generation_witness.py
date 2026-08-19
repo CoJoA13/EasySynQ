@@ -5,13 +5,16 @@ import uuid
 
 from sqlalchemy import (
     CHAR,
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -32,7 +35,12 @@ class RecoveryGenerationWitness(Base):
             "generation_id",
             name="uq_recovery_generation_witness_manifest_generation",
         ),
-        UniqueConstraint("request_id", name="uq_recovery_generation_witness_request_id"),
+        Index(
+            "uq_recovery_generation_witness_active_request",
+            "request_id",
+            unique=True,
+            postgresql_where=text("invalidated_at IS NULL"),
+        ),
         CheckConstraint("witness_nonce ~ '^[A-Za-z0-9_-]{43}$'", name="nonce_shape"),
         CheckConstraint(
             "manifest_sha256 ~ '^[0-9a-f]{64}$' AND excluded_set_sha256 ~ '^[0-9a-f]{64}$'",
@@ -43,6 +51,12 @@ class RecoveryGenerationWitness(Base):
             name="generation_identity_nonblank",
         ),
         CheckConstraint("result = 'VERIFIED'", name="result_verified"),
+        CheckConstraint(
+            "(invalidated_at IS NULL AND invalidation_audit_event_id IS NULL "
+            "AND invalidation_reason IS NULL) OR (invalidated_at IS NOT NULL "
+            "AND invalidation_audit_event_id IS NOT NULL AND invalidation_reason='KEY_REVOKED')",
+            name="invalidation_shape",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -78,3 +92,8 @@ class RecoveryGenerationWitness(Base):
         ),
         nullable=True,
     )
+    invalidated_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    invalidation_audit_event_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    invalidation_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)

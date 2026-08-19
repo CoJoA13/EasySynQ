@@ -28,8 +28,10 @@ class PendingBlobPurge(Base):
     __table_args__ = (
         CheckConstraint(
             "record_id IS NOT NULL AND disposition_event_id IS NOT NULL "
-            "AND (NOT bypass_governance OR "
-            "(r27_request_id IS NOT NULL AND r27_execution_id IS NOT NULL))",
+            "AND ((NOT bypass_governance AND r27_request_id IS NULL "
+            "AND r27_execution_id IS NULL) OR "
+            "(bypass_governance AND r27_request_id IS NOT NULL "
+            "AND r27_execution_id IS NOT NULL))",
             name="authority_shape",
         ),
         CheckConstraint(
