@@ -33,6 +33,26 @@ _PARTIAL_INDEXES = (
 
 APP_ROLE = "easysynq_app"
 LINKER_ROLE = "easysynq_linker"
+R27_CLIENT_ID = "easysynq-r27-authorizer"
+R27_ACR = "urn:easysynq:acr:r27-webauthn"
+_APP_BLOB_INSERT_COLUMNS = (
+    "sha256",
+    "org_id",
+    "size_bytes",
+    "mime_type",
+    "bucket",
+    "object_key",
+    "object_version_id",
+    "worm_locked",
+    "worm_enforced_mode",
+    "worm_asserted_retain_until",
+    "worm_asserted_at",
+    "worm_retain_until",
+    "worm_retention_verified_at",
+    "worm_legal_hold",
+    "worm_legal_hold_verified_at",
+    "sse",
+)
 _AUTHORITY_ROLE_PASSWORD_FIELDS = {
     APP_ROLE: "app_db_password",
     LINKER_ROLE: "linker_db_password",
@@ -195,6 +215,13 @@ def _preflight_database_authority(bind: sa.Connection) -> str:
     ).first()
     if memberships is not None:
         raise RuntimeError("database_authority_role_membership_refused")
+
+    preexisting_purpose_roles = bind.execute(
+        sa.text("SELECT rolname FROM pg_roles WHERE rolname=ANY(:roles) ORDER BY rolname"),
+        {"roles": list(_NEW_AUTHORITY_ROLES)},
+    ).scalars()
+    if next(iter(preexisting_purpose_roles), None) is not None:
+        raise RuntimeError("database_authority_preexisting_purpose_role_refused")
     return owner
 
 
@@ -208,7 +235,7 @@ def _create_and_normalize_authority_roles(bind: sa.Connection) -> str:
         ).scalar_one():
             _execute_composed(
                 bind,
-                psycopg_sql.SQL("CREATE ROLE {} LOGIN NOINHERIT").format(
+                psycopg_sql.SQL("CREATE ROLE {} LOGIN NOINHERIT NOBYPASSRLS").format(
                     psycopg_sql.Identifier(role)
                 ),
             )
@@ -216,7 +243,7 @@ def _create_and_normalize_authority_roles(bind: sa.Connection) -> str:
             bind,
             psycopg_sql.SQL(
                 "ALTER ROLE {} WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB "
-                "NOCREATEROLE NOREPLICATION PASSWORD {}"
+                "NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}"
             ).format(
                 psycopg_sql.Identifier(role),
                 psycopg_sql.Literal(getattr(settings, password_field)),
@@ -344,6 +371,11 @@ def _upgrade_blob() -> None:
          AND worm_retain_until IS NULL AND worm_retention_verified_at IS NULL
          AND worm_legal_hold IS NULL AND worm_legal_hold_verified_at IS NULL)
         """,
+    )
+    op.create_check_constraint(
+        op.f("ck_blob_purge_provenance_shape"),
+        "blob",
+        "purge_execution_id IS NULL OR purged_at IS NOT NULL",
     )
     op.execute(
         "CREATE UNIQUE INDEX uq_blob_worm_physical_identity "
@@ -597,6 +629,17 @@ def _create_retention_operations() -> None:
 
 
 def _create_hold_release() -> None:
+    hold_authority = _ordinary_hold_authority_sql(
+        operation_sql="operation",
+        record_sql="source_record",
+        blob_sql="source_blob",
+        user_sql="initiator",
+        edge_sql="source_edge",
+    )
+    hold_obligation = _hold_obligation_exists_sql(
+        org_sql="locked_org",
+        blob_sha_sql="locked_sha",
+    )
     op.create_table(
         "worm_hold_release_operation",
         _uuid_pk(),
@@ -674,68 +717,77 @@ def _create_hold_release() -> None:
         sa.PrimaryKeyConstraint("operation_id", name="pk_worm_hold_release_authorization"),
     )
     op.execute(
-        """
-        CREATE FUNCTION authorize_worm_hold_release() RETURNS trigger
-        LANGUAGE plpgsql AS $$
+        f"""
+        CREATE FUNCTION public.easysynq_guard_hold_release_authorization_insert()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SET search_path = public, pg_temp
+        AS $$
         DECLARE
-            operation_state hold_release_state;
-            operation_digest char(64);
-            record_hold boolean;
-            policy_duration text;
-            policy_worm_period text;
+            operation_id uuid;
+            locked_org uuid;
+            locked_sha text;
         BEGIN
-            SELECT operation.state,
-                   operation.canonical_sha256,
-                   record.legal_hold,
-                   policy.duration,
-                   policy.worm_lock_period
-            INTO operation_state,
-                 operation_digest,
-                 record_hold,
-                 policy_duration,
-                 policy_worm_period
-            FROM worm_hold_release_operation AS operation
-            JOIN record ON record.id = operation.record_id
-            JOIN retention_policy AS policy ON policy.id = record.retention_policy_id
+            SELECT operation.id,operation.org_id,operation.blob_sha256
+            INTO operation_id,locked_org,locked_sha
+            FROM public.worm_hold_release_operation AS operation
+            JOIN public.record AS source_record
+              ON source_record.id=operation.record_id
+            JOIN public.app_user AS initiator
+              ON initiator.id=operation.initiated_by_user_id
+            JOIN public.blob AS source_blob
+              ON source_blob.sha256=operation.blob_sha256
+            JOIN public.evidence_blob AS source_edge
+              ON source_edge.record_id=operation.record_id
+             AND source_edge.blob_sha256=operation.blob_sha256
             WHERE operation.id = NEW.operation_id
-            FOR UPDATE OF operation;
+              AND operation.state='PENDING_AUTHORIZATION'
+              AND operation.canonical_sha256=NEW.canonical_sha256
+              AND {hold_authority}
+            FOR UPDATE OF operation
+            FOR SHARE OF source_record,initiator,source_blob;
 
             IF NOT FOUND
-               OR operation_state <> 'PENDING_AUTHORIZATION'
-               OR operation_digest <> NEW.canonical_sha256
-               OR record_hold
-               OR policy_duration = 'PERMANENT'
-               OR policy_worm_period = 'PERMANENT' THEN
+               OR {hold_obligation} THEN
                 RAISE EXCEPTION 'hold_release_authorization_refused';
             END IF;
 
-            UPDATE worm_hold_release_operation
+            UPDATE public.worm_hold_release_operation
             SET state = 'AUTHORIZED', updated_at = now()
             WHERE id = NEW.operation_id;
             RETURN NEW;
         END;
-        $$
+        $$;
+        REVOKE ALL ON FUNCTION
+          public.easysynq_guard_hold_release_authorization_insert() FROM PUBLIC
         """
     )
     op.execute(
         "CREATE TRIGGER trg_worm_hold_release_authorize "
-        "BEFORE INSERT ON worm_hold_release_authorization "
-        "FOR EACH ROW EXECUTE FUNCTION authorize_worm_hold_release()"
+        "BEFORE INSERT ON public.worm_hold_release_authorization "
+        "FOR EACH ROW EXECUTE FUNCTION "
+        "public.easysynq_guard_hold_release_authorization_insert()"
     )
     op.execute(
         """
-        CREATE FUNCTION refuse_worm_hold_release_authorization_change() RETURNS trigger
-        LANGUAGE plpgsql AS $$
+        CREATE FUNCTION public.easysynq_guard_hold_release_authorization_history()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SET search_path = public, pg_temp
+        AS $$
         BEGIN
             RAISE EXCEPTION 'worm_hold_release_authorization_is_immutable';
         END;
-        $$
+        $$;
+        REVOKE ALL ON FUNCTION
+          public.easysynq_guard_hold_release_authorization_history() FROM PUBLIC
         """
     )
     op.execute(
         "CREATE TRIGGER trg_worm_hold_release_authorization_immutable "
-        "BEFORE UPDATE OR DELETE ON worm_hold_release_authorization "
-        "FOR EACH ROW EXECUTE FUNCTION refuse_worm_hold_release_authorization_change()"
+        "BEFORE UPDATE OR DELETE ON public.worm_hold_release_authorization "
+        "FOR EACH ROW EXECUTE FUNCTION "
+        "public.easysynq_guard_hold_release_authorization_history()"
     )
     op.execute(
         """
@@ -1514,6 +1566,26 @@ def _create_definer_function(
 
 def _create_worm_guard_triggers() -> None:
     op.execute(
+        f"""
+        CREATE FUNCTION public.easysynq_guard_app_disposition_insert() RETURNS trigger
+        LANGUAGE plpgsql SET search_path = public, pg_temp AS $function$
+        BEGIN
+            IF session_user='{APP_ROLE}'
+               AND (NEW.is_worm_destroy
+                    OR NEW.r27_request_id IS NOT NULL
+                    OR NEW.r27_execution_id IS NOT NULL) THEN
+                RAISE EXCEPTION 'app_r27_disposition_insert_refused';
+            END IF;
+            RETURN NEW;
+        END
+        $function$;
+        REVOKE ALL ON FUNCTION public.easysynq_guard_app_disposition_insert() FROM PUBLIC;
+        CREATE TRIGGER trg_app_disposition_insert_guard
+        BEFORE INSERT ON public.disposition_event
+        FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_app_disposition_insert();
+        """
+    )
+    op.execute(
         """
         CREATE FUNCTION public.easysynq_guard_blob_worm_identity() RETURNS trigger
         LANGUAGE plpgsql SET search_path = public, pg_temp AS $function$
@@ -1558,7 +1630,12 @@ def _create_worm_guard_triggers() -> None:
         """
         CREATE FUNCTION public.easysynq_guard_worm_owner_pointer() RETURNS trigger
         LANGUAGE plpgsql SET search_path = public, pg_temp AS $function$
-        DECLARE v_org uuid; v_locked boolean; v_complete boolean; v_sha text;
+        DECLARE
+            v_org uuid;
+            v_parent_org uuid;
+            v_locked boolean;
+            v_complete boolean;
+            v_sha text;
         BEGIN
             IF TG_OP = 'DELETE' THEN
                 RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
@@ -1567,20 +1644,35 @@ def _create_worm_guard_triggers() -> None:
                 IF NEW.org_id IS DISTINCT FROM OLD.org_id THEN
                     RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
                 ELSIF TG_TABLE_NAME='document_version'
-                   AND (to_jsonb(NEW)->>'source_blob_sha256')
-                       IS DISTINCT FROM (to_jsonb(OLD)->>'source_blob_sha256') THEN
+                   AND ((to_jsonb(NEW)->>'source_blob_sha256')
+                        IS DISTINCT FROM (to_jsonb(OLD)->>'source_blob_sha256')
+                        OR (to_jsonb(NEW)->>'document_id')
+                           IS DISTINCT FROM (to_jsonb(OLD)->>'document_id')) THEN
                     RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
                 ELSIF TG_TABLE_NAME='evidence_blob'
-                   AND (to_jsonb(NEW)->>'blob_sha256')
-                       IS DISTINCT FROM (to_jsonb(OLD)->>'blob_sha256') THEN
+                   AND ((to_jsonb(NEW)->>'blob_sha256')
+                        IS DISTINCT FROM (to_jsonb(OLD)->>'blob_sha256')
+                        OR (to_jsonb(NEW)->>'record_id')
+                           IS DISTINCT FROM (to_jsonb(OLD)->>'record_id')) THEN
                     RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
                 END IF;
             END IF;
             IF TG_OP = 'INSERT' THEN
                 IF TG_TABLE_NAME='document_version' THEN
                     v_sha := to_jsonb(NEW)->>'source_blob_sha256';
+                    SELECT parent.org_id INTO v_parent_org
+                    FROM public.documented_information parent
+                    WHERE parent.id=(to_jsonb(NEW)->>'document_id')::uuid
+                    FOR SHARE;
                 ELSE
                     v_sha := to_jsonb(NEW)->>'blob_sha256';
+                    SELECT parent.org_id INTO v_parent_org
+                    FROM public.record parent
+                    WHERE parent.id=(to_jsonb(NEW)->>'record_id')::uuid
+                    FOR SHARE;
+                END IF;
+                IF NOT FOUND OR v_parent_org IS DISTINCT FROM NEW.org_id THEN
+                    RAISE EXCEPTION 'worm_owner_requires_complete_assertion';
                 END IF;
                 SELECT b.org_id,b.worm_locked,
                        b.object_version_id IS NOT NULL
@@ -1590,9 +1682,13 @@ def _create_worm_guard_triggers() -> None:
                        AND b.worm_retention_verified_at IS NOT NULL
                        AND b.worm_legal_hold IS NOT NULL
                        AND b.worm_legal_hold_verified_at IS NOT NULL
+                       AND b.purged_at IS NULL
+                       AND b.purge_execution_id IS NULL
                 INTO v_org,v_locked,v_complete
                 FROM public.blob b WHERE b.sha256=v_sha FOR KEY SHARE;
-                IF NOT FOUND OR NOT v_locked OR NOT v_complete OR v_org<>NEW.org_id THEN
+                IF NOT FOUND OR NOT v_locked OR NOT v_complete
+                   OR v_org IS DISTINCT FROM NEW.org_id
+                   OR v_org IS DISTINCT FROM v_parent_org THEN
                     RAISE EXCEPTION 'worm_owner_requires_complete_assertion';
                 END IF;
             END IF;
@@ -1917,6 +2013,407 @@ def _create_key_functions() -> None:
             )
 
 
+def _live_owner_exists_sql(*, org_sql: str, blob_sha_sql: str, target_record_sql: str) -> str:
+    """Return the one reviewed live-owner predicate used by every purge boundary."""
+    return f"""
+        (
+            EXISTS (
+                SELECT 1
+                FROM public.document_version live_version
+                JOIN public.documented_information live_document
+                  ON live_document.id=live_version.document_id
+                 AND live_document.org_id=live_version.org_id
+                WHERE live_version.org_id={org_sql}
+                  AND live_version.source_blob_sha256={blob_sha_sql}
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM public.evidence_blob live_evidence
+                JOIN public.record live_record
+                  ON live_record.id=live_evidence.record_id
+                 AND live_record.org_id=live_evidence.org_id
+                WHERE live_evidence.org_id={org_sql}
+                  AND live_evidence.blob_sha256={blob_sha_sql}
+                  AND live_evidence.record_id<>{target_record_sql}
+                  AND live_record.disposition_state<>'DISPOSED'
+            )
+        )
+    """
+
+
+def _hold_obligation_exists_sql(*, org_sql: str, blob_sha_sql: str) -> str:
+    """Return the reviewed current hold-obligation predicate."""
+    return f"""
+        (
+            EXISTS (
+                SELECT 1
+                FROM public.evidence_blob hold_evidence
+                JOIN public.record hold_record
+                  ON hold_record.id=hold_evidence.record_id
+                 AND hold_record.org_id=hold_evidence.org_id
+                LEFT JOIN public.retention_policy hold_policy
+                  ON hold_policy.id=hold_record.retention_policy_id
+                 AND hold_policy.org_id=hold_record.org_id
+                WHERE hold_evidence.org_id={org_sql}
+                  AND hold_evidence.blob_sha256={blob_sha_sql}
+                  AND hold_record.disposition_state<>'DISPOSED'
+                  AND (
+                      hold_record.legal_hold
+                      OR hold_policy.duration='PERMANENT'
+                      OR hold_policy.worm_lock_period='PERMANENT'
+                  )
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM public.document_version hold_version
+                JOIN public.documented_information hold_document
+                  ON hold_document.id=hold_version.document_id
+                 AND hold_document.org_id=hold_version.org_id
+                LEFT JOIN public.retention_policy hold_policy
+                  ON hold_policy.id=hold_version.retention_policy_id
+                 AND hold_policy.org_id=hold_version.org_id
+                LEFT JOIN public.document_worm_config hold_config
+                  ON hold_config.id=hold_version.document_worm_config_id
+                 AND hold_config.org_id=hold_version.org_id
+                WHERE hold_version.org_id={org_sql}
+                  AND hold_version.source_blob_sha256={blob_sha_sql}
+                  AND (
+                      (
+                          hold_version.retention_authority_kind='POLICY'
+                          AND (
+                              hold_policy.duration='PERMANENT'
+                              OR hold_policy.worm_lock_period='PERMANENT'
+                          )
+                      )
+                      OR (
+                          hold_version.retention_authority_kind='INSTALLATION_MINIMUM'
+                          AND hold_config.active_period='PERMANENT'
+                      )
+                  )
+            )
+        )
+    """
+
+
+def _ordinary_hold_authority_sql(
+    *, operation_sql: str, record_sql: str, blob_sql: str, user_sql: str, edge_sql: str
+) -> str:
+    """Return the exact same-tenant ordinary hold-release tuple."""
+    return f"""
+        {operation_sql}.org_id={record_sql}.org_id
+        AND {operation_sql}.org_id={blob_sql}.org_id
+        AND {operation_sql}.org_id={user_sql}.org_id
+        AND {operation_sql}.record_id={record_sql}.id
+        AND {operation_sql}.initiated_by_user_id={user_sql}.id
+        AND {operation_sql}.blob_sha256={blob_sql}.sha256
+        AND {operation_sql}.object_version_id={blob_sql}.object_version_id
+        AND {edge_sql}.org_id={operation_sql}.org_id
+        AND {edge_sql}.record_id={operation_sql}.record_id
+        AND {edge_sql}.blob_sha256={operation_sql}.blob_sha256
+        AND {blob_sql}.worm_locked
+        AND {blob_sql}.worm_enforced_mode='GOVERNANCE'
+        AND {blob_sql}.object_version_id IS NOT NULL
+        AND {blob_sql}.worm_asserted_retain_until IS NOT NULL
+        AND {blob_sql}.worm_asserted_at IS NOT NULL
+        AND {blob_sql}.worm_retention_verified_at IS NOT NULL
+        AND {blob_sql}.worm_legal_hold IS NOT NULL
+        AND {blob_sql}.worm_legal_hold_verified_at IS NOT NULL
+        AND {blob_sql}.purged_at IS NULL
+        AND {blob_sql}.purge_execution_id IS NULL
+    """
+
+
+def _read_committed_guard_sql() -> str:
+    return """
+        IF current_setting('transaction_isolation')<>'read committed' THEN
+            RAISE EXCEPTION 'authority_requires_read_committed';
+        END IF;
+    """
+
+
+def _r27_accepted_action_sql(
+    *,
+    action: str,
+    request_sql: str,
+    manifest_sql: str,
+    user_sql: str,
+    audit_sql: str,
+    accepted_at_sql: str,
+    reason: str,
+) -> str:
+    """Return the exact persisted acceptance relation for one R27 action."""
+    return f"""
+        EXISTS (
+            SELECT 1
+            FROM public.r27_attestation accepted_attestation
+            JOIN public.r27_action_challenge accepted_challenge
+              ON accepted_challenge.id=accepted_attestation.challenge_id
+            JOIN public.r27_authorizer_key accepted_key
+              ON accepted_key.id=accepted_attestation.authorizer_key_id
+            JOIN public.app_user accepted_user
+              ON accepted_user.id=accepted_attestation.app_user_id
+            WHERE accepted_attestation.request_id={request_sql}.id
+              AND accepted_attestation.action='{action}'
+              AND accepted_attestation.app_user_id={user_sql}
+              AND accepted_attestation.permission_granted
+              AND accepted_user.org_id={request_sql}.org_id
+              AND accepted_user.keycloak_subject=accepted_attestation.subject
+              AND accepted_attestation.subject<>''
+              AND accepted_attestation.issuer=accepted_challenge.issuer
+              AND accepted_attestation.token_jti=accepted_challenge.token_jti
+              AND accepted_attestation.action=accepted_challenge.action
+              AND accepted_challenge.request_id={request_sql}.id
+              AND accepted_challenge.record_id={request_sql}.record_id
+              AND accepted_challenge.manifest_sha256={manifest_sql}.sha256
+              AND accepted_challenge.accepted_claims->>'iss'=
+                  accepted_attestation.issuer
+              AND accepted_challenge.accepted_claims->>'sub'=
+                  accepted_attestation.subject
+              AND accepted_challenge.accepted_claims->>'sid'=
+                  accepted_attestation.session_id
+              AND accepted_challenge.accepted_claims->>'jti'=
+                  accepted_attestation.token_jti
+              AND accepted_challenge.accepted_claims->>'azp'=
+                  accepted_attestation.authorized_party
+              AND accepted_challenge.accepted_claims->>'acr'=accepted_attestation.acr
+              AND accepted_attestation.audience @> '["{R27_CLIENT_ID}"]'::jsonb
+              AND accepted_attestation.authorized_party='{R27_CLIENT_ID}'
+              AND accepted_attestation.acr='{R27_ACR}'
+              AND accepted_attestation.auth_time>=
+                  accepted_attestation.issued_at-interval '120 seconds'
+              AND accepted_attestation.auth_time<=
+                  accepted_attestation.issued_at+interval '30 seconds'
+              AND accepted_attestation.expires_at-
+                  accepted_attestation.issued_at<=interval '120 seconds'
+              AND accepted_challenge.expires_at-
+                  accepted_challenge.created_at<=interval '120 seconds'
+              AND accepted_attestation.issued_at<={accepted_at_sql}
+              AND accepted_challenge.created_at<={accepted_at_sql}
+              AND {accepted_at_sql}<accepted_attestation.expires_at
+              AND {accepted_at_sql}<accepted_challenge.expires_at
+              AND accepted_challenge.consumed_at={accepted_at_sql}
+              AND accepted_key.revoked_at IS NULL
+              AND accepted_key.active_at<=accepted_attestation.issued_at
+              AND (
+                  accepted_key.retired_at IS NULL
+                  OR accepted_attestation.issued_at<=accepted_key.retired_at
+              )
+              AND EXISTS (
+                  SELECT 1
+                  FROM public.audit_event accepted_audit
+                  WHERE accepted_audit.id={audit_sql}
+                    AND accepted_audit.occurred_at={accepted_at_sql}
+                    AND accepted_audit.org_id={request_sql}.org_id
+                    AND accepted_audit.actor_type='user'
+                    AND accepted_audit.actor_id={user_sql}
+                    AND accepted_audit.on_behalf_of IS NULL
+                    AND accepted_audit.event_type='RECORD_WORM_DESTROY_REQUESTED'
+                    AND accepted_audit.object_type='record'
+                    AND accepted_audit.object_id={request_sql}.record_id
+                    AND accepted_audit.scope_ref='record'
+                    AND accepted_audit.reason='{reason}'
+                    AND accepted_audit.after->>'request_id'={request_sql}.id::text
+                    AND accepted_audit.after->>'attestation_id'=
+                        accepted_attestation.id::text
+              )
+        )
+    """
+
+
+def _r27_pending_action_sql(*, action: str, now_sql: str) -> str:
+    """Return the exact unconsumed action-token relation checked at acceptance."""
+    return f"""
+        a.action='{action}'
+        AND a.permission_granted
+        AND a.request_id=r.id
+        AND a.app_user_id=action_user.id
+        AND action_user.org_id=r.org_id
+        AND action_user.keycloak_subject=a.subject
+        AND a.subject<>''
+        AND source_record.id=r.record_id
+        AND source_record.org_id=r.org_id
+        AND c.id=a.challenge_id
+        AND c.action=a.action
+        AND c.request_id=a.request_id
+        AND c.record_id=r.record_id
+        AND c.manifest_sha256=m.sha256
+        AND c.issuer=a.issuer
+        AND c.token_jti=a.token_jti
+        AND c.accepted_claims->>'iss'=a.issuer
+        AND c.accepted_claims->>'sub'=a.subject
+        AND c.accepted_claims->>'sid'=a.session_id
+        AND c.accepted_claims->>'jti'=a.token_jti
+        AND c.accepted_claims->>'azp'=a.authorized_party
+        AND c.accepted_claims->>'acr'=a.acr
+        AND a.audience @> '["{R27_CLIENT_ID}"]'::jsonb
+        AND a.authorized_party='{R27_CLIENT_ID}'
+        AND a.acr='{R27_ACR}'
+        AND a.auth_time>=a.issued_at-interval '120 seconds'
+        AND a.auth_time<=a.issued_at+interval '30 seconds'
+        AND a.expires_at-a.issued_at<=interval '120 seconds'
+        AND c.expires_at-c.created_at<=interval '120 seconds'
+        AND a.issued_at<={now_sql}
+        AND c.created_at<={now_sql}
+        AND a.expires_at>{now_sql}
+        AND c.expires_at>{now_sql}
+        AND c.consumed_at IS NULL
+        AND m.request_id=r.id
+        AND m.schema_version=1
+        AND m.expected_state='WAITING_FOR_SECOND_APPROVER'
+        AND m.expires_at>{now_sql}
+        AND k.id=a.authorizer_key_id
+        AND k.revoked_at IS NULL
+        AND k.active_at<=a.issued_at
+        AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
+    """
+
+
+def _r27_human_authority_sql(
+    *, request_sql: str, manifest_sql: str, now_sql: str = "clock_timestamp()"
+) -> str:
+    """Return the exact persisted two-person human authority relation."""
+    request_action = _r27_accepted_action_sql(
+        action="REQUEST",
+        request_sql=request_sql,
+        manifest_sql=manifest_sql,
+        user_sql=f"{request_sql}.requester_user_id",
+        audit_sql=f"{request_sql}.requester_audit_event_id",
+        accepted_at_sql=f"{request_sql}.requested_at",
+        reason="r27-requester-authorized",
+    )
+    approval_action = _r27_accepted_action_sql(
+        action="APPROVE",
+        request_sql=request_sql,
+        manifest_sql=manifest_sql,
+        user_sql=f"{request_sql}.approver_user_id",
+        audit_sql=f"{request_sql}.approver_audit_event_id",
+        accepted_at_sql=f"{request_sql}.approved_at",
+        reason="r27-second-approval-authorized",
+    )
+    return f"""
+        {request_sql}.requester_user_id<>{request_sql}.approver_user_id
+        AND {request_sql}.requested_at<={request_sql}.approved_at
+        AND {manifest_sql}.request_id={request_sql}.id
+        AND {manifest_sql}.schema_version=1
+        AND {manifest_sql}.expected_state='WAITING_FOR_SECOND_APPROVER'
+        AND {manifest_sql}.expires_at>{now_sql}
+        AND EXISTS (
+            SELECT 1 FROM public.record current_record
+            WHERE current_record.id={request_sql}.record_id
+              AND current_record.org_id={request_sql}.org_id
+        )
+        AND {request_action}
+        AND {approval_action}
+        AND EXISTS (
+            SELECT 1
+            FROM public.r27_attestation request_identity
+            JOIN public.r27_attestation approval_identity
+              ON approval_identity.request_id=request_identity.request_id
+             AND approval_identity.action='APPROVE'
+            WHERE request_identity.request_id={request_sql}.id
+              AND request_identity.action='REQUEST'
+              AND request_identity.app_user_id={request_sql}.requester_user_id
+              AND approval_identity.app_user_id={request_sql}.approver_user_id
+              AND request_identity.subject<>approval_identity.subject
+        )
+    """
+
+
+def _r27_current_authority_sql(
+    *,
+    request_sql: str,
+    execution_sql: str,
+    manifest_sql: str,
+    now_sql: str = "clock_timestamp()",
+) -> str:
+    """Return accepted human plus consumed recovery authority for execution."""
+    human_authority = _r27_human_authority_sql(
+        request_sql=request_sql,
+        manifest_sql=manifest_sql,
+        now_sql=now_sql,
+    )
+    return f"""
+        {request_sql}.state='FINALIZING'
+        AND {human_authority}
+        AND EXISTS (
+            SELECT 1
+            FROM public.recovery_generation_witness current_witness
+            JOIN public.recovery_generation_verifier_key current_recovery_key
+              ON current_recovery_key.id=current_witness.key_id
+             AND current_recovery_key.revoked_at IS NULL
+             AND current_recovery_key.not_before<=current_witness.issued_at
+             AND (
+                 current_recovery_key.retired_at IS NULL
+                 OR current_witness.issued_at<=current_recovery_key.retired_at
+             )
+            WHERE current_witness.request_id={request_sql}.id
+              AND current_witness.schema_version=1
+              AND current_witness.invalidated_at IS NULL
+              AND current_witness.result='VERIFIED'
+              AND current_witness.manifest_sha256={manifest_sql}.sha256
+              AND current_witness.excluded_set_sha256={manifest_sql}.excluded_set_sha256
+              AND current_witness.issued_at>={request_sql}.approved_at
+              AND current_witness.verified_at>=current_witness.issued_at
+              AND current_witness.verified_at<={now_sql}
+              AND current_witness.consumed_execution_id={execution_sql}.id
+        )
+    """
+
+
+def _r27_exact_source_sql(*, request_sql: str, execution_sql: str, disposition_sql: str) -> str:
+    """Return the immutable R27 source-disposition binding."""
+    return f"""
+        {execution_sql}.request_id={request_sql}.id
+        AND {execution_sql}.state IN ('SOURCE_COMMITTED','PURGING')
+        AND {execution_sql}.source_committed_at IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+            FROM public.record source_record
+            WHERE source_record.id={request_sql}.record_id
+              AND source_record.org_id={request_sql}.org_id
+              AND source_record.disposition_state='DISPOSED'
+        )
+        AND {disposition_sql}.org_id={request_sql}.org_id
+        AND {disposition_sql}.record_id={request_sql}.record_id
+        AND {disposition_sql}.r27_request_id={request_sql}.id
+        AND {disposition_sql}.r27_execution_id={execution_sql}.id
+        AND {disposition_sql}.action='DESTROY'
+        AND {disposition_sql}.tombstone
+        AND {disposition_sql}.is_worm_destroy
+        AND {disposition_sql}.policy_id IS NULL
+        AND {disposition_sql}.derived_from_disposition_event_id IS NULL
+        AND {disposition_sql}.requested_by={request_sql}.requester_user_id
+        AND {disposition_sql}.approved_by={request_sql}.approver_user_id
+        AND {disposition_sql}.legal_basis={request_sql}.normalized_legal_basis
+    """
+
+
+def _ordinary_exact_source_sql(
+    *, marker_sql: str, disposition_sql: str, blob_sql: str, record_sql: str
+) -> str:
+    """Return the immutable ordinary-destroy source and coordinate binding."""
+    return f"""
+        {marker_sql}.org_id={record_sql}.org_id
+        AND {marker_sql}.record_id={record_sql}.id
+        AND {record_sql}.disposition_state='DISPOSED'
+        AND {marker_sql}.disposition_event_id={disposition_sql}.id
+        AND {disposition_sql}.org_id={record_sql}.org_id
+        AND {disposition_sql}.record_id={record_sql}.id
+        AND {disposition_sql}.action='DESTROY'
+        AND {disposition_sql}.tombstone
+        AND NOT {disposition_sql}.is_worm_destroy
+        AND {disposition_sql}.r27_request_id IS NULL
+        AND {disposition_sql}.r27_execution_id IS NULL
+        AND {disposition_sql}.policy_id={record_sql}.retention_policy_id
+        AND {disposition_sql}.derived_from_disposition_event_id IS NULL
+        AND {marker_sql}.sha256={blob_sql}.sha256
+        AND {marker_sql}.org_id={blob_sql}.org_id
+        AND {marker_sql}.bucket={blob_sql}.bucket
+        AND {marker_sql}.object_key={blob_sql}.object_key
+        AND {marker_sql}.object_version_id={blob_sql}.object_version_id
+    """
+
+
 def _create_authority_transition_functions() -> None:
     functions = (
         (
@@ -2052,6 +2549,69 @@ def _create_authority_transition_functions() -> None:
             "void",
         ),
     )
+    ordinary_source = _ordinary_exact_source_sql(
+        marker_sql="p",
+        disposition_sql="source_disposition",
+        blob_sql="source_blob",
+        record_sql="source_record",
+    )
+    ordinary_live_owner = _live_owner_exists_sql(
+        org_sql="p.org_id",
+        blob_sha_sql="p.sha256",
+        target_record_sql="p.record_id",
+    )
+    ordinary_hold_authority = _ordinary_hold_authority_sql(
+        operation_sql="o",
+        record_sql="source_record",
+        blob_sql="source_blob",
+        user_sql="initiator",
+        edge_sql="source_edge",
+    )
+    ordinary_hold_obligation = _hold_obligation_exists_sql(
+        org_sql="o.org_id",
+        blob_sha_sql="o.blob_sha256",
+    )
+    locked_hold_obligation = _hold_obligation_exists_sql(
+        org_sql="v_org",
+        blob_sha_sql="v_sha",
+    )
+    read_committed_guard = _read_committed_guard_sql()
+    pending_request_action = _r27_pending_action_sql(action="REQUEST", now_sql="v_now")
+    pending_approval_action = _r27_pending_action_sql(action="APPROVE", now_sql="v_now")
+    pending_cancel_action = _r27_pending_action_sql(action="CANCEL", now_sql="v_now")
+    prior_request_action = _r27_accepted_action_sql(
+        action="REQUEST",
+        request_sql="r",
+        manifest_sql="m",
+        user_sql="r.requester_user_id",
+        audit_sql="r.requester_audit_event_id",
+        accepted_at_sql="r.requested_at",
+        reason="r27-requester-authorized",
+    )
+    finalization_human_authority = _r27_human_authority_sql(
+        request_sql="r",
+        manifest_sql="m",
+        now_sql="v_now",
+    )
+    r27_source = _r27_exact_source_sql(
+        request_sql="request",
+        execution_sql="e",
+        disposition_sql="source_disposition",
+    )
+    r27_current_authority = _r27_current_authority_sql(
+        request_sql="request",
+        execution_sql="e",
+        manifest_sql="m",
+    )
+    r27_live_owner = _live_owner_exists_sql(
+        org_sql="request.org_id",
+        blob_sha_sql="target.blob_sha256",
+        target_record_sql="request.record_id",
+    )
+    r27_hold_obligation = _hold_obligation_exists_sql(
+        org_sql="request.org_id",
+        blob_sha_sql="target.blob_sha256",
+    )
     bodies = {
         "easysynq_enqueue_ordinary_exact_purge(uuid,uuid,text)": """
             DECLARE v_id uuid:=gen_random_uuid();
@@ -2070,18 +2630,51 @@ def _create_authority_transition_functions() -> None:
                 IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_exact_purge_refused'; END IF;
                 RETURN v_id;
             END""",
-        "easysynq_claim_ordinary_exact_purges(integer,timestamptz)": """
+        "easysynq_claim_ordinary_exact_purges(integer,timestamptz)": f"""
+            DECLARE v_ids uuid[];
             BEGIN
+                {read_committed_guard}
                 IF p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'ordinary_purge_claim_refused'; END IF;
-                RETURN QUERY WITH picked AS (
-                    SELECT p.id FROM public.pending_blob_purge p WHERE NOT p.bypass_governance
-                    AND p.r27_request_id IS NULL AND p.r27_execution_id IS NULL
-                    AND p.state IN ('PENDING','FAILED') ORDER BY p.created_at,p.id
-                    FOR UPDATE SKIP LOCKED LIMIT p_limit
+                SELECT array_agg(locked.id ORDER BY locked.created_at,locked.id)
+                INTO v_ids
+                FROM (
+                    SELECT p.id,p.created_at
+                    FROM public.pending_blob_purge p
+                    WHERE NOT p.bypass_governance
+                      AND p.r27_request_id IS NULL AND p.r27_execution_id IS NULL
+                      AND p.state IN ('PENDING','FAILED')
+                    ORDER BY p.created_at,p.id
+                    FOR UPDATE OF p SKIP LOCKED
+                    LIMIT p_limit
+                ) AS locked;
+                IF COALESCE(cardinality(v_ids),0)=0 THEN RETURN; END IF;
+                PERFORM 1
+                FROM public.pending_blob_purge p
+                JOIN public.blob source_blob ON source_blob.sha256=p.sha256
+                WHERE p.id=ANY(v_ids)
+                  AND p.org_id=source_blob.org_id
+                  AND p.bucket=source_blob.bucket
+                  AND p.object_key=source_blob.object_key
+                  AND p.object_version_id=source_blob.object_version_id
+                ORDER BY source_blob.sha256,p.id
+                FOR UPDATE OF source_blob;
+                RETURN QUERY WITH valid AS (
+                    SELECT p.id
+                    FROM public.pending_blob_purge p
+                    JOIN public.disposition_event source_disposition
+                      ON source_disposition.id=p.disposition_event_id
+                    JOIN public.record source_record ON source_record.id=p.record_id
+                    JOIN public.blob source_blob ON source_blob.sha256=p.sha256
+                    WHERE p.id=ANY(v_ids)
+                      AND p.state IN ('PENDING','FAILED')
+                      AND NOT p.bypass_governance
+                      AND p.r27_request_id IS NULL AND p.r27_execution_id IS NULL
+                      AND {ordinary_source}
+                      AND NOT {ordinary_live_owner}
                 ), claimed AS (
                     UPDATE public.pending_blob_purge p SET state='RUNNING',attempt_count=p.attempt_count+1,
                     claimed_at=clock_timestamp(),error_code=NULL,error_detail=NULL,updated_at=clock_timestamp()
-                    FROM picked WHERE p.id=picked.id RETURNING p.*)
+                    FROM valid WHERE p.id=valid.id RETURNING p.*)
                 SELECT claimed.id,claimed.sha256::text,claimed.bucket,claimed.object_key,
                        claimed.object_version_id FROM claimed;
             END""",
@@ -2094,64 +2687,115 @@ def _create_authority_transition_functions() -> None:
                       AND r27_execution_id IS NULL;
                 IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_purge_failure_refused'; END IF;
             END""",
-        "easysynq_record_ordinary_exact_purge(uuid,timestamptz)": """
+        "easysynq_record_ordinary_exact_purge(uuid,timestamptz)": f"""
+            DECLARE v_marker uuid;
             BEGIN
+                {read_committed_guard}
                 IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
-                UPDATE public.pending_blob_purge p SET state='VERIFIED',completed_at=clock_timestamp(),updated_at=clock_timestamp()
+                SELECT p.id INTO v_marker
+                FROM public.pending_blob_purge p
+                JOIN public.blob source_blob ON source_blob.sha256=p.sha256
                 WHERE p.id=p_id AND p.state='RUNNING' AND NOT p.bypass_governance
                   AND p.r27_request_id IS NULL AND p.r27_execution_id IS NULL
-                  AND NOT EXISTS (SELECT 1 FROM public.document_version v WHERE v.source_blob_sha256=p.sha256)
-                  AND NOT EXISTS (SELECT 1 FROM public.evidence_blob e WHERE e.blob_sha256=p.sha256 AND e.record_id<>p.record_id);
+                  AND p.org_id=source_blob.org_id
+                  AND p.bucket=source_blob.bucket
+                  AND p.object_key=source_blob.object_key
+                  AND p.object_version_id=source_blob.object_version_id
+                FOR UPDATE OF p,source_blob;
+                IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_purge_result_refused'; END IF;
+                UPDATE public.blob source_blob
+                SET purged_at=clock_timestamp(),purge_execution_id=NULL
+                FROM public.pending_blob_purge p,
+                     public.disposition_event source_disposition,
+                     public.record source_record
+                WHERE p.id=v_marker AND source_blob.sha256=p.sha256
+                  AND p.state='RUNNING' AND NOT p.bypass_governance
+                  AND p.r27_request_id IS NULL AND p.r27_execution_id IS NULL
+                  AND {ordinary_source}
+                  AND NOT {ordinary_live_owner};
+                IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_purge_result_refused'; END IF;
+                UPDATE public.pending_blob_purge
+                SET state='VERIFIED',completed_at=clock_timestamp(),updated_at=clock_timestamp()
+                WHERE id=v_marker AND state='RUNNING';
                 IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_purge_result_refused'; END IF;
             END""",
-        "easysynq_authorize_hold_release(uuid,text,text,timestamptz)": """
-            DECLARE v_org uuid; v_record uuid; v_audit bigint;
+        "easysynq_authorize_hold_release(uuid,text,text,timestamptz)": f"""
+            DECLARE v_org uuid; v_record uuid; v_sha text; v_audit bigint;
+                    v_now timestamptz:=clock_timestamp();
             BEGIN
                 IF p_id IS NULL OR p_digest IS NULL OR p_identity IS NULL OR p_at IS NULL OR btrim(p_identity)='' THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
-                SELECT org_id,record_id INTO v_org,v_record FROM public.worm_hold_release_operation
-                WHERE id=p_id AND state='PENDING_AUTHORIZATION' AND canonical_sha256=p_digest FOR UPDATE;
-                IF NOT FOUND THEN RAISE EXCEPTION 'hold_release_authorization_refused'; END IF;
+                SELECT o.org_id,o.record_id,o.blob_sha256 INTO v_org,v_record,v_sha
+                FROM public.worm_hold_release_operation o
+                JOIN public.record source_record ON source_record.id=o.record_id
+                JOIN public.app_user initiator ON initiator.id=o.initiated_by_user_id
+                JOIN public.blob source_blob ON source_blob.sha256=o.blob_sha256
+                JOIN public.evidence_blob source_edge
+                  ON source_edge.record_id=o.record_id
+                 AND source_edge.blob_sha256=o.blob_sha256
+                WHERE o.id=p_id AND o.state='PENDING_AUTHORIZATION'
+                  AND o.canonical_sha256=p_digest
+                  AND {ordinary_hold_authority}
+                FOR UPDATE OF o
+                FOR SHARE OF source_record,initiator,source_blob;
+                IF NOT FOUND OR {locked_hold_obligation} THEN
+                    RAISE EXCEPTION 'hold_release_authorization_refused';
+                END IF;
                 INSERT INTO public.audit_event(org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
-                VALUES(v_org,clock_timestamp(),'system','RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED','record',v_record,'record','ordinary-hold-release-authorized',jsonb_build_object('operator_identity',p_identity,'operation_id',p_id)) RETURNING id INTO v_audit;
+                VALUES(v_org,v_now,'system','RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED','record',v_record,'record','ordinary-hold-release-authorized',jsonb_build_object('operator_identity',p_identity,'operation_id',p_id)) RETURNING id INTO v_audit;
                 INSERT INTO public.worm_hold_release_authorization(operation_id,canonical_sha256,host_operator_identity,authorizing_audit_event_id,authorized_at,authorizer_role)
-                VALUES(p_id,p_digest,p_identity,v_audit,clock_timestamp(),'easysynq_hold_authorizer');
+                VALUES(p_id,p_digest,p_identity,v_audit,v_now,'easysynq_hold_authorizer');
                 RETURN v_audit;
             END""",
-        "easysynq_claim_hold_releases(integer,timestamptz)": """
+        "easysynq_claim_hold_releases(integer,timestamptz)": f"""
+            DECLARE v_ids uuid[];
             BEGIN
+                {read_committed_guard}
                 IF p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'hold_release_claim_refused'; END IF;
-                RETURN QUERY WITH picked AS (
-                    SELECT o.id FROM public.worm_hold_release_operation o JOIN public.worm_hold_release_authorization a ON a.operation_id=o.id
+                SELECT array_agg(locked.id ORDER BY locked.created_at,locked.id)
+                INTO v_ids
+                FROM (
+                    SELECT o.id,o.created_at
+                    FROM public.worm_hold_release_operation o
+                    JOIN public.worm_hold_release_authorization a ON a.operation_id=o.id
                     WHERE o.state IN ('AUTHORIZED','FAILED')
-                      AND NOT EXISTS (
-                          SELECT 1 FROM public.evidence_blob eb
-                          JOIN public.record r ON r.id=eb.record_id
-                          JOIN public.retention_policy policy ON policy.id=r.retention_policy_id
-                          WHERE eb.blob_sha256=o.blob_sha256
-                            AND (r.legal_hold OR policy.duration='PERMANENT'
-                                 OR policy.worm_lock_period='PERMANENT')
-                      )
-                      AND NOT EXISTS (
-                          SELECT 1 FROM public.document_version version
-                          LEFT JOIN public.retention_policy policy
-                            ON policy.id=version.retention_policy_id
-                          LEFT JOIN public.document_worm_config config
-                            ON config.id=version.document_worm_config_id
-                          WHERE version.source_blob_sha256=o.blob_sha256
-                            AND (
-                                (version.retention_authority_kind='POLICY'
-                                 AND (policy.duration='PERMANENT'
-                                      OR policy.worm_lock_period='PERMANENT'))
-                                OR
-                                (version.retention_authority_kind='INSTALLATION_MINIMUM'
-                                 AND config.active_period='PERMANENT')
-                            )
-                      )
-                    ORDER BY o.created_at,o.id FOR UPDATE OF o SKIP LOCKED LIMIT p_limit
+                    ORDER BY o.created_at,o.id
+                    FOR UPDATE OF o SKIP LOCKED
+                    LIMIT p_limit
+                ) AS locked;
+                IF COALESCE(cardinality(v_ids),0)=0 THEN RETURN; END IF;
+                PERFORM 1
+                FROM public.worm_hold_release_operation o
+                JOIN public.record source_record ON source_record.id=o.record_id
+                JOIN public.app_user initiator ON initiator.id=o.initiated_by_user_id
+                JOIN public.blob source_blob ON source_blob.sha256=o.blob_sha256
+                JOIN public.evidence_blob source_edge
+                  ON source_edge.record_id=o.record_id
+                 AND source_edge.blob_sha256=o.blob_sha256
+                WHERE o.id=ANY(v_ids)
+                  AND source_blob.worm_legal_hold
+                  AND {ordinary_hold_authority}
+                ORDER BY source_blob.sha256,o.id
+                FOR UPDATE OF source_blob
+                FOR SHARE OF source_record,initiator;
+                RETURN QUERY WITH valid AS (
+                    SELECT o.id
+                    FROM public.worm_hold_release_operation o
+                    JOIN public.worm_hold_release_authorization a ON a.operation_id=o.id
+                    JOIN public.record source_record ON source_record.id=o.record_id
+                    JOIN public.app_user initiator ON initiator.id=o.initiated_by_user_id
+                    JOIN public.blob source_blob ON source_blob.sha256=o.blob_sha256
+                    JOIN public.evidence_blob source_edge
+                      ON source_edge.record_id=o.record_id
+                     AND source_edge.blob_sha256=o.blob_sha256
+                    WHERE o.id=ANY(v_ids)
+                      AND o.state IN ('AUTHORIZED','FAILED')
+                      AND source_blob.worm_legal_hold
+                      AND {ordinary_hold_authority}
+                      AND NOT {ordinary_hold_obligation}
                 ), claimed AS (
                     UPDATE public.worm_hold_release_operation o SET state='RUNNING',attempt_count=o.attempt_count+1,
                     started_at=COALESCE(o.started_at,clock_timestamp()),error_code=NULL,error_detail=NULL,updated_at=clock_timestamp()
-                    FROM picked WHERE o.id=picked.id RETURNING o.*)
+                    FROM valid WHERE o.id=valid.id RETURNING o.*)
                 SELECT claimed.id,claimed.record_id,claimed.blob_sha256::text,
                        claimed.object_version_id FROM claimed;
             END""",
@@ -2161,46 +2805,55 @@ def _create_authority_transition_functions() -> None:
                 UPDATE public.worm_hold_release_operation SET state='FAILED',error_code=p_code,error_detail=p_detail,updated_at=clock_timestamp() WHERE id=p_id AND state='RUNNING';
                 IF NOT FOUND THEN RAISE EXCEPTION 'hold_release_failure_refused'; END IF;
             END""",
-        "easysynq_record_ordinary_hold_release(text,text,uuid,timestamptz)": """
+        "easysynq_record_ordinary_hold_release(text,text,uuid,timestamptz)": f"""
+            DECLARE v_operation uuid; v_org uuid; v_record uuid; v_sha text;
+                    v_now timestamptz:=clock_timestamp();
             BEGIN
+                {read_committed_guard}
                 IF p_sha IS NULL OR p_version IS NULL OR p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
-                UPDATE public.blob b SET worm_legal_hold=false,worm_legal_hold_verified_at=clock_timestamp()
-                FROM public.worm_hold_release_operation o JOIN public.worm_hold_release_authorization a ON a.operation_id=o.id
-                WHERE o.id=p_id AND o.state='RUNNING' AND o.blob_sha256=p_sha AND o.object_version_id=p_version
-                  AND b.sha256=p_sha AND b.object_version_id=p_version AND b.worm_legal_hold
-                  AND NOT EXISTS (
-                      SELECT 1 FROM public.evidence_blob eb
-                      JOIN public.record r ON r.id=eb.record_id
-                      JOIN public.retention_policy policy ON policy.id=r.retention_policy_id
-                      WHERE eb.blob_sha256=o.blob_sha256
-                        AND (r.legal_hold OR policy.duration='PERMANENT'
-                             OR policy.worm_lock_period='PERMANENT')
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM public.document_version version
-                      LEFT JOIN public.retention_policy policy
-                        ON policy.id=version.retention_policy_id
-                      LEFT JOIN public.document_worm_config config
-                        ON config.id=version.document_worm_config_id
-                      WHERE version.source_blob_sha256=o.blob_sha256
-                        AND (
-                            (version.retention_authority_kind='POLICY'
-                             AND (policy.duration='PERMANENT'
-                                  OR policy.worm_lock_period='PERMANENT'))
-                            OR
-                            (version.retention_authority_kind='INSTALLATION_MINIMUM'
-                             AND config.active_period='PERMANENT')
-                        )
-                  );
+                SELECT o.id,o.org_id,o.record_id,o.blob_sha256
+                INTO v_operation,v_org,v_record,v_sha
+                FROM public.worm_hold_release_operation o
+                JOIN public.worm_hold_release_authorization a ON a.operation_id=o.id
+                JOIN public.record source_record ON source_record.id=o.record_id
+                JOIN public.app_user initiator ON initiator.id=o.initiated_by_user_id
+                JOIN public.blob source_blob ON source_blob.sha256=o.blob_sha256
+                JOIN public.evidence_blob source_edge
+                  ON source_edge.record_id=o.record_id
+                 AND source_edge.blob_sha256=o.blob_sha256
+                WHERE o.id=p_id AND o.state='RUNNING'
+                  AND o.blob_sha256=p_sha AND o.object_version_id=p_version
+                  AND source_blob.worm_legal_hold
+                  AND {ordinary_hold_authority}
+                FOR UPDATE OF o,source_blob
+                FOR SHARE OF source_record,initiator;
                 IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_hold_release_refused'; END IF;
-                UPDATE public.worm_hold_release_operation SET state='VERIFIED',completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=p_id;
+                UPDATE public.blob source_blob
+                SET worm_legal_hold=false,worm_legal_hold_verified_at=v_now
+                FROM public.worm_hold_release_operation o
+                JOIN public.worm_hold_release_authorization a ON a.operation_id=o.id
+                JOIN public.record source_record ON source_record.id=o.record_id
+                JOIN public.app_user initiator ON initiator.id=o.initiated_by_user_id
+                JOIN public.evidence_blob source_edge
+                  ON source_edge.record_id=o.record_id
+                 AND source_edge.blob_sha256=o.blob_sha256
+                WHERE o.id=v_operation AND o.state='RUNNING'
+                  AND source_blob.sha256=o.blob_sha256
+                  AND source_blob.worm_legal_hold
+                  AND {ordinary_hold_authority}
+                  AND NOT {ordinary_hold_obligation};
+                IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_hold_release_refused'; END IF;
+                UPDATE public.worm_hold_release_operation
+                SET state='VERIFIED',completed_at=v_now,updated_at=v_now
+                WHERE id=v_operation AND state='RUNNING';
+                IF NOT FOUND THEN RAISE EXCEPTION 'ordinary_hold_release_refused'; END IF;
                 INSERT INTO public.audit_event
                     (org_id,occurred_at,actor_type,event_type,object_type,object_id,
                      scope_ref,reason,after)
-                SELECT o.org_id,clock_timestamp(),'system','RECORD_LEGAL_HOLD_RELEASED',
+                SELECT o.org_id,v_now,'system','RECORD_LEGAL_HOLD_RELEASED',
                        'record',o.record_id,'record','ordinary-hold-release-verified',
                        jsonb_build_object('operation_id',o.id)
-                FROM public.worm_hold_release_operation o WHERE o.id=p_id;
+                FROM public.worm_hold_release_operation o WHERE o.id=v_operation;
             END""",
         "easysynq_mark_r27_stale(uuid,text,text,timestamptz)": """
             BEGIN
@@ -2209,112 +2862,326 @@ def _create_authority_transition_functions() -> None:
                 WHERE id=p_id AND (state IS NULL OR state IN ('WAITING_FOR_SECOND_APPROVER','WAITING_FOR_RECOVERY_GENERATION','READY_FOR_FINALIZATION'));
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_stale_refused'; END IF;
             END""",
-        "easysynq_accept_r27_request(uuid,timestamptz)": """
-            DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid; v_audit bigint;
+        "easysynq_accept_r27_request(uuid,timestamptz)": f"""
+            DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid;
+                    v_challenge uuid; v_key uuid; v_audit bigint;
+                    v_now timestamptz:=clock_timestamp();
             BEGIN
                 IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
-                SELECT a.request_id,a.app_user_id,r.org_id,r.record_id INTO v_request,v_user,v_org,v_record
-                FROM public.r27_attestation a JOIN public.r27_action_challenge c ON c.id=a.challenge_id
+                SELECT k.id INTO v_key
+                FROM public.r27_attestation a
                 JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
-                JOIN public.r27_request r ON r.id=a.request_id
-                JOIN public.r27_manifest m ON m.request_id=a.request_id
-                WHERE a.id=p_id AND a.action='REQUEST' AND a.permission_granted AND a.expires_at>clock_timestamp()
-                  AND k.revoked_at IS NULL AND k.active_at<=a.issued_at
+                WHERE a.id=p_id AND a.action='REQUEST'
+                  AND k.revoked_at IS NULL
+                  AND k.active_at<=a.issued_at
                   AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
-                  AND c.action=a.action AND c.request_id=a.request_id
-                  AND c.record_id=r.record_id AND c.manifest_sha256=m.sha256
-                  AND c.issuer=a.issuer AND c.token_jti=a.token_jti
-                  AND c.consumed_at IS NULL AND c.expires_at>clock_timestamp() AND r.state IS NULL
-                FOR UPDATE OF c,r;
+                FOR SHARE OF k;
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_request_authority_refused'; END IF;
-                INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
-                VALUES(v_org,clock_timestamp(),'user',v_user,'RECORD_WORM_DESTROY_REQUESTED','record',v_record,'record','r27-requester-authorized',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
-                UPDATE public.r27_action_challenge SET consumed_at=clock_timestamp() WHERE id=(SELECT challenge_id FROM public.r27_attestation WHERE id=p_id);
-                UPDATE public.r27_request SET state='WAITING_FOR_SECOND_APPROVER',requester_user_id=v_user,requester_audit_event_id=v_audit,requested_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=v_request;
-                RETURN v_audit;
-            END""",
-        "easysynq_accept_r27_approval(uuid,timestamptz)": """
-            DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid; v_audit bigint;
-            BEGIN
-                IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
-                SELECT a.request_id,a.app_user_id,r.org_id,r.record_id INTO v_request,v_user,v_org,v_record
-                FROM public.r27_attestation a JOIN public.r27_action_challenge c ON c.id=a.challenge_id
-                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
-                JOIN public.r27_request r ON r.id=a.request_id
-                JOIN public.r27_manifest m ON m.request_id=a.request_id
-                WHERE a.id=p_id AND a.action='APPROVE' AND a.permission_granted AND a.expires_at>clock_timestamp()
-                  AND k.revoked_at IS NULL AND k.active_at<=a.issued_at
-                  AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
-                  AND c.action=a.action AND c.request_id=a.request_id
-                  AND c.record_id=r.record_id AND c.manifest_sha256=m.sha256
-                  AND c.issuer=a.issuer AND c.token_jti=a.token_jti
-                  AND c.consumed_at IS NULL AND c.expires_at>clock_timestamp() AND r.state='WAITING_FOR_SECOND_APPROVER' AND a.app_user_id<>r.requester_user_id FOR UPDATE OF c,r;
-                IF NOT FOUND THEN RAISE EXCEPTION 'r27_approval_authority_refused'; END IF;
-                INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
-                VALUES(v_org,clock_timestamp(),'user',v_user,'RECORD_WORM_DESTROY_REQUESTED','record',v_record,'record','r27-second-approval-authorized',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
-                UPDATE public.r27_action_challenge SET consumed_at=clock_timestamp() WHERE id=(SELECT challenge_id FROM public.r27_attestation WHERE id=p_id);
-                UPDATE public.r27_request SET state='WAITING_FOR_RECOVERY_GENERATION',approver_user_id=v_user,approver_audit_event_id=v_audit,approved_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=v_request;
-                RETURN v_audit;
-            END""",
-        "easysynq_cancel_r27_request(uuid,timestamptz)": """
-            DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid; v_audit bigint;
-            BEGIN
-                IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
-                SELECT a.request_id,a.app_user_id,r.org_id,r.record_id INTO v_request,v_user,v_org,v_record FROM public.r27_attestation a
+                SELECT a.request_id,a.app_user_id,r.org_id,r.record_id,c.id
+                INTO v_request,v_user,v_org,v_record,v_challenge
+                FROM public.r27_attestation a
                 JOIN public.r27_action_challenge c ON c.id=a.challenge_id
                 JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
                 JOIN public.r27_request r ON r.id=a.request_id
                 JOIN public.r27_manifest m ON m.request_id=a.request_id
-                WHERE a.id=p_id AND a.action='CANCEL' AND a.permission_granted
-                  AND a.expires_at>clock_timestamp() AND c.expires_at>clock_timestamp()
-                  AND k.revoked_at IS NULL AND k.active_at<=a.issued_at
-                  AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
-                  AND c.action=a.action AND c.request_id=a.request_id
-                  AND c.record_id=r.record_id AND c.manifest_sha256=m.sha256
-                  AND c.issuer=a.issuer AND c.token_jti=a.token_jti
-                  AND c.consumed_at IS NULL
-                  AND r.state IN ('WAITING_FOR_SECOND_APPROVER','WAITING_FOR_RECOVERY_GENERATION','READY_FOR_FINALIZATION') FOR UPDATE OF c,r;
-                IF NOT FOUND THEN RAISE EXCEPTION 'r27_cancel_refused'; END IF;
+                JOIN public.app_user action_user ON action_user.id=a.app_user_id
+                JOIN public.record source_record ON source_record.id=r.record_id
+                WHERE a.id=p_id AND r.state IS NULL
+                  AND {pending_request_action}
+                FOR UPDATE OF c,r
+                FOR SHARE OF action_user,source_record;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_request_authority_refused'; END IF;
                 INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
-                VALUES(v_org,clock_timestamp(),'user',v_user,'RECORD_WORM_DESTROY_CANCELLED','record',v_record,'record','r27-cancelled',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
-                UPDATE public.r27_action_challenge SET consumed_at=clock_timestamp() WHERE id=(SELECT challenge_id FROM public.r27_attestation WHERE id=p_id);
-                UPDATE public.r27_request SET state='CANCELLED',cancelled_by_user_id=v_user,cancellation_audit_event_id=v_audit,cancelled_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=v_request;
+                VALUES(v_org,v_now,'user',v_user,'RECORD_WORM_DESTROY_REQUESTED','record',v_record,'record','r27-requester-authorized',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
+                UPDATE public.r27_action_challenge SET consumed_at=v_now
+                WHERE id=v_challenge AND consumed_at IS NULL;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_request_authority_refused'; END IF;
+                UPDATE public.r27_request SET state='WAITING_FOR_SECOND_APPROVER',requester_user_id=v_user,requester_audit_event_id=v_audit,requested_at=v_now,updated_at=v_now
+                WHERE id=v_request AND state IS NULL;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_request_authority_refused'; END IF;
                 RETURN v_audit;
             END""",
-        "easysynq_claim_r27_finalizations(integer,timestamptz)": """
+        "easysynq_accept_r27_approval(uuid,timestamptz)": f"""
+            DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid;
+                    v_challenge uuid; v_audit bigint;
+                    v_now timestamptz:=clock_timestamp();
             BEGIN
-                IF p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'r27_finalization_claim_refused'; END IF;
-                RETURN QUERY WITH ready AS (
-                    SELECT r.id FROM public.r27_request r JOIN public.r27_manifest m ON m.request_id=r.id
-                    JOIN public.recovery_generation_witness w ON w.request_id=r.id AND w.invalidated_at IS NULL
-                    JOIN public.recovery_generation_verifier_key k ON k.id=w.key_id AND k.revoked_at IS NULL
-                    LEFT JOIN public.r27_execution existing ON existing.request_id=r.id
-                    WHERE ((r.state='READY_FOR_FINALIZATION' AND
-                            (existing.id IS NULL OR
-                             (existing.state='FAILED' AND existing.error_code='RECOVERY_KEY_REVOKED')))
-                       OR (r.state='FINALIZING' AND existing.state='FAILED' AND existing.next_attempt_at<=clock_timestamp()))
-                      AND m.expires_at>clock_timestamp() ORDER BY r.created_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT p_limit
-                ), made AS (
-                    INSERT INTO public.r27_execution AS execution
-                        (id,request_id,execution_id,state,claimed_at,attempt_count,updated_at)
-                    SELECT gen_random_uuid(),ready.id,gen_random_uuid(),'CLAIMED',clock_timestamp(),1,clock_timestamp() FROM ready
-                    ON CONFLICT ON CONSTRAINT uq_r27_execution_request_id DO UPDATE
-                    SET state=CASE
-                        WHEN execution.purge_started_at IS NOT NULL THEN 'PURGING'::r27_execution_state
-                        WHEN execution.source_committed_at IS NOT NULL THEN 'SOURCE_COMMITTED'::r27_execution_state
-                        ELSE 'CLAIMED'::r27_execution_state END,
-                    attempt_count=execution.attempt_count+1,error_code=NULL,error_detail=NULL,next_attempt_at=NULL,updated_at=clock_timestamp()
-                    WHERE execution.state='FAILED' AND
-                          (execution.next_attempt_at<=clock_timestamp()
-                           OR execution.error_code='RECOVERY_KEY_REVOKED')
-                    RETURNING execution.request_id,execution.execution_id,execution.id
-                ), requests AS (
-                    UPDATE public.r27_request r SET state='FINALIZING',updated_at=clock_timestamp() FROM made WHERE r.id=made.request_id RETURNING r.id
-                ), consumed AS (
-                    UPDATE public.recovery_generation_witness w SET consumed_execution_id=made.id FROM made
-                    WHERE w.request_id=made.request_id AND w.invalidated_at IS NULL
-                    RETURNING w.id)
-                SELECT made.request_id,made.execution_id FROM made;
+                IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                PERFORM locked_key.id
+                FROM public.r27_authorizer_key locked_key
+                WHERE locked_key.id IN (
+                    SELECT a.authorizer_key_id FROM public.r27_attestation a WHERE a.id=p_id
+                    UNION
+                    SELECT request_attestation.authorizer_key_id
+                    FROM public.r27_attestation approval_attestation
+                    JOIN public.r27_attestation request_attestation
+                      ON request_attestation.request_id=approval_attestation.request_id
+                     AND request_attestation.action='REQUEST'
+                    WHERE approval_attestation.id=p_id
+                )
+                ORDER BY locked_key.id
+                FOR SHARE OF locked_key;
+                SELECT a.request_id,a.app_user_id,r.org_id,r.record_id,c.id
+                INTO v_request,v_user,v_org,v_record,v_challenge
+                FROM public.r27_attestation a
+                JOIN public.r27_action_challenge c ON c.id=a.challenge_id
+                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
+                JOIN public.r27_request r ON r.id=a.request_id
+                JOIN public.r27_manifest m ON m.request_id=a.request_id
+                JOIN public.app_user action_user ON action_user.id=a.app_user_id
+                JOIN public.app_user requester_user ON requester_user.id=r.requester_user_id
+                JOIN public.record source_record ON source_record.id=r.record_id
+                WHERE a.id=p_id
+                  AND r.state='WAITING_FOR_SECOND_APPROVER'
+                  AND a.app_user_id<>r.requester_user_id
+                  AND action_user.keycloak_subject<>requester_user.keycloak_subject
+                  AND {pending_approval_action}
+                  AND {prior_request_action}
+                FOR UPDATE OF c,r
+                FOR SHARE OF action_user,requester_user,source_record;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_approval_authority_refused'; END IF;
+                INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
+                VALUES(v_org,v_now,'user',v_user,'RECORD_WORM_DESTROY_REQUESTED','record',v_record,'record','r27-second-approval-authorized',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
+                UPDATE public.r27_action_challenge SET consumed_at=v_now
+                WHERE id=v_challenge AND consumed_at IS NULL;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_approval_authority_refused'; END IF;
+                UPDATE public.r27_request SET state='WAITING_FOR_RECOVERY_GENERATION',approver_user_id=v_user,approver_audit_event_id=v_audit,approved_at=v_now,updated_at=v_now
+                WHERE id=v_request AND state='WAITING_FOR_SECOND_APPROVER';
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_approval_authority_refused'; END IF;
+                RETURN v_audit;
+            END""",
+        "easysynq_cancel_r27_request(uuid,timestamptz)": f"""
+            DECLARE v_request uuid; v_user uuid; v_org uuid; v_record uuid;
+                    v_challenge uuid; v_key uuid; v_audit bigint;
+                    v_now timestamptz:=clock_timestamp();
+            BEGIN
+                IF p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
+                SELECT k.id INTO v_key
+                FROM public.r27_attestation a
+                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
+                WHERE a.id=p_id AND a.action='CANCEL'
+                  AND k.revoked_at IS NULL
+                  AND k.active_at<=a.issued_at
+                  AND (k.retired_at IS NULL OR a.issued_at<=k.retired_at)
+                FOR SHARE OF k;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_cancel_refused'; END IF;
+                SELECT a.request_id,a.app_user_id,r.org_id,r.record_id,c.id
+                INTO v_request,v_user,v_org,v_record,v_challenge
+                FROM public.r27_attestation a
+                JOIN public.r27_action_challenge c ON c.id=a.challenge_id
+                JOIN public.r27_authorizer_key k ON k.id=a.authorizer_key_id
+                JOIN public.r27_request r ON r.id=a.request_id
+                JOIN public.r27_manifest m ON m.request_id=a.request_id
+                JOIN public.app_user action_user ON action_user.id=a.app_user_id
+                JOIN public.record source_record ON source_record.id=r.record_id
+                WHERE a.id=p_id
+                  AND r.state IN ('WAITING_FOR_SECOND_APPROVER','WAITING_FOR_RECOVERY_GENERATION','READY_FOR_FINALIZATION')
+                  AND {pending_cancel_action}
+                FOR UPDATE OF c,r
+                FOR SHARE OF action_user,source_record;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_cancel_refused'; END IF;
+                INSERT INTO public.audit_event(org_id,occurred_at,actor_type,actor_id,event_type,object_type,object_id,scope_ref,reason,after)
+                VALUES(v_org,v_now,'user',v_user,'RECORD_WORM_DESTROY_CANCELLED','record',v_record,'record','r27-cancelled',jsonb_build_object('request_id',v_request,'attestation_id',p_id)) RETURNING id INTO v_audit;
+                UPDATE public.r27_action_challenge SET consumed_at=v_now
+                WHERE id=v_challenge AND consumed_at IS NULL;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_cancel_refused'; END IF;
+                UPDATE public.r27_request SET state='CANCELLED',cancelled_by_user_id=v_user,cancellation_audit_event_id=v_audit,cancelled_at=v_now,updated_at=v_now
+                WHERE id=v_request
+                  AND state IN ('WAITING_FOR_SECOND_APPROVER','WAITING_FOR_RECOVERY_GENERATION','READY_FOR_FINALIZATION');
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_cancel_refused'; END IF;
+                RETURN v_audit;
+            END""",
+        "easysynq_claim_r27_finalizations(integer,timestamptz)": f"""
+            DECLARE
+                v_now timestamptz:=clock_timestamp();
+                v_request uuid;
+                v_internal uuid;
+                v_public uuid;
+                v_witness uuid;
+                v_recovery_key uuid;
+                v_branch text;
+                v_skipped uuid[]:=ARRAY[]::uuid[];
+                v_claimed integer:=0;
+            BEGIN
+                {read_committed_guard}
+                IF p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN
+                    RAISE EXCEPTION 'r27_finalization_claim_refused';
+                END IF;
+                WHILE v_claimed<p_limit LOOP
+                    v_request:=NULL;
+                    v_internal:=NULL;
+                    v_public:=NULL;
+                    v_witness:=NULL;
+                    v_recovery_key:=NULL;
+                    v_branch:=NULL;
+                    SELECT candidate.id,candidate.internal_id,candidate.branch
+                    INTO v_request,v_internal,v_branch
+                    FROM (
+                        SELECT r.id,existing.id AS internal_id,
+                               CASE
+                                 WHEN existing.id IS NULL THEN 'INITIAL'
+                                 WHEN r.state='READY_FOR_FINALIZATION' THEN 'RECOVERY'
+                                 ELSE 'RETRY'
+                               END AS branch,
+                               r.created_at
+                        FROM public.r27_request r
+                        LEFT JOIN public.r27_execution existing
+                          ON existing.request_id=r.id
+                        WHERE NOT (r.id=ANY(v_skipped))
+                          AND (
+                            (r.state='READY_FOR_FINALIZATION' AND
+                              (existing.id IS NULL OR
+                               (existing.state='FAILED' AND
+                                existing.error_code='RECOVERY_KEY_REVOKED')))
+                            OR
+                            (r.state='FINALIZING' AND existing.state='FAILED'
+                             AND existing.error_code IS DISTINCT FROM
+                                 'RECOVERY_KEY_REVOKED'
+                             AND existing.next_attempt_at<=v_now)
+                          )
+                        ORDER BY r.created_at,r.id
+                        LIMIT 1
+                    ) AS candidate;
+                    EXIT WHEN v_request IS NULL;
+                    v_skipped:=array_append(v_skipped,v_request);
+
+                    SELECT w.id,w.key_id
+                    INTO v_witness,v_recovery_key
+                    FROM public.recovery_generation_witness w
+                    WHERE w.request_id=v_request
+                      AND w.invalidated_at IS NULL
+                      AND (
+                        (v_branch IN ('INITIAL','RECOVERY') AND
+                         w.consumed_execution_id IS NULL)
+                        OR
+                        (v_branch='RETRY' AND
+                         w.consumed_execution_id=v_internal)
+                      )
+                    ORDER BY w.id
+                    LIMIT 1;
+                    CONTINUE WHEN v_witness IS NULL;
+
+                    -- Key lifecycle writers take their key lock before touching
+                    -- requests or witnesses.  Matching that order prevents a
+                    -- revoke/claim deadlock and closes the lifecycle race.
+                    PERFORM locked_key.id
+                    FROM public.r27_authorizer_key locked_key
+                    JOIN (
+                        SELECT DISTINCT authority.authorizer_key_id AS id
+                        FROM public.r27_attestation authority
+                        WHERE authority.request_id=v_request
+                          AND authority.action IN ('REQUEST','APPROVE')
+                    ) AS required_key ON required_key.id=locked_key.id
+                    ORDER BY locked_key.id
+                    FOR SHARE OF locked_key;
+                    PERFORM recovery_key.id
+                    FROM public.recovery_generation_verifier_key recovery_key
+                    WHERE recovery_key.id=v_recovery_key
+                    FOR SHARE OF recovery_key;
+                    CONTINUE WHEN NOT FOUND;
+
+                    PERFORM 1 FROM public.r27_request r
+                    WHERE r.id=v_request FOR UPDATE OF r;
+                    CONTINUE WHEN NOT FOUND;
+                    IF v_internal IS NOT NULL THEN
+                        PERFORM 1 FROM public.r27_execution existing
+                        WHERE existing.id=v_internal FOR UPDATE OF existing;
+                        CONTINUE WHEN NOT FOUND;
+                    END IF;
+                    PERFORM 1 FROM public.recovery_generation_witness w
+                    WHERE w.id=v_witness FOR UPDATE OF w;
+                    CONTINUE WHEN NOT FOUND;
+
+                    -- READ COMMITTED gives this statement a fresh snapshot after
+                    -- all lifecycle and authority locks above have been acquired.
+                    PERFORM 1
+                    FROM public.r27_request r
+                    JOIN public.r27_manifest m ON m.request_id=r.id
+                    JOIN public.recovery_generation_witness w
+                      ON w.id=v_witness AND w.request_id=r.id
+                    JOIN public.recovery_generation_verifier_key recovery_key
+                      ON recovery_key.id=w.key_id
+                    LEFT JOIN public.r27_execution existing
+                      ON existing.request_id=r.id
+                    WHERE r.id=v_request
+                      AND {finalization_human_authority}
+                      AND w.schema_version=1
+                      AND w.invalidated_at IS NULL
+                      AND w.result='VERIFIED'
+                      AND w.manifest_sha256=m.sha256
+                      AND w.excluded_set_sha256=m.excluded_set_sha256
+                      AND w.issued_at>=r.approved_at
+                      AND w.verified_at>=w.issued_at
+                      AND w.verified_at<=v_now
+                      AND recovery_key.revoked_at IS NULL
+                      AND recovery_key.not_before<=w.issued_at
+                      AND (recovery_key.retired_at IS NULL OR
+                           w.issued_at<=recovery_key.retired_at)
+                      AND (
+                        (v_branch='INITIAL' AND
+                         r.state='READY_FOR_FINALIZATION' AND
+                         existing.id IS NULL AND
+                         w.consumed_execution_id IS NULL)
+                        OR
+                        (v_branch='RECOVERY' AND
+                         r.state='READY_FOR_FINALIZATION' AND
+                         existing.id=v_internal AND
+                         existing.state='FAILED' AND
+                         existing.error_code='RECOVERY_KEY_REVOKED' AND
+                         w.consumed_execution_id IS NULL)
+                        OR
+                        (v_branch='RETRY' AND
+                         r.state='FINALIZING' AND
+                         existing.id=v_internal AND
+                         existing.state='FAILED' AND
+                         existing.error_code IS DISTINCT FROM
+                             'RECOVERY_KEY_REVOKED' AND
+                         existing.next_attempt_at<=v_now AND
+                         w.consumed_execution_id=existing.id)
+                      );
+                    CONTINUE WHEN NOT FOUND;
+
+                    IF v_branch='INITIAL' THEN
+                        v_internal:=gen_random_uuid();
+                        v_public:=gen_random_uuid();
+                        INSERT INTO public.r27_execution
+                            (id,request_id,execution_id,state,claimed_at,
+                             attempt_count,updated_at)
+                        VALUES
+                            (v_internal,v_request,v_public,'CLAIMED',v_now,1,v_now);
+                    ELSE
+                        UPDATE public.r27_execution existing
+                        SET state=CASE
+                              WHEN existing.purge_started_at IS NOT NULL
+                                THEN 'PURGING'::r27_execution_state
+                              WHEN existing.source_committed_at IS NOT NULL
+                                THEN 'SOURCE_COMMITTED'::r27_execution_state
+                              ELSE 'CLAIMED'::r27_execution_state
+                            END,
+                            attempt_count=existing.attempt_count+1,
+                            error_code=NULL,error_detail=NULL,
+                            next_attempt_at=NULL,updated_at=v_now
+                        WHERE existing.id=v_internal
+                        RETURNING existing.execution_id INTO v_public;
+                    END IF;
+                    IF v_branch IN ('INITIAL','RECOVERY') THEN
+                        UPDATE public.recovery_generation_witness w
+                        SET consumed_execution_id=v_internal
+                        WHERE w.id=v_witness
+                          AND w.invalidated_at IS NULL
+                          AND w.consumed_execution_id IS NULL;
+                        IF NOT FOUND THEN
+                            RAISE EXCEPTION 'r27_finalization_claim_refused';
+                        END IF;
+                    END IF;
+                    UPDATE public.r27_request r
+                    SET state='FINALIZING',updated_at=v_now
+                    WHERE r.id=v_request;
+                    request_id:=v_request;
+                    execution_id:=v_public;
+                    v_claimed:=v_claimed+1;
+                    RETURN NEXT;
+                END LOOP;
             END""",
         "easysynq_fail_r27_execution(uuid,text,text,timestamptz)": """
             BEGIN
@@ -2324,11 +3191,43 @@ def _create_authority_transition_functions() -> None:
                 WHERE execution_id=p_id AND state IN ('CLAIMED','SOURCE_COMMITTED','PURGING');
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_execution_failure_refused'; END IF;
             END""",
-        "easysynq_claim_r27_exact_purges(uuid,integer,timestamptz)": """
+        "easysynq_claim_r27_exact_purges(uuid,integer,timestamptz)": f"""
+            DECLARE v_internal uuid; v_marker_ids uuid[];
             BEGIN
+                {read_committed_guard}
                 IF p_id IS NULL OR p_limit IS NULL OR p_at IS NULL OR p_limit NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'r27_purge_claim_refused'; END IF;
-                IF NOT EXISTS (SELECT 1 FROM public.r27_execution WHERE execution_id=p_id AND state IN ('SOURCE_COMMITTED','PURGING') FOR UPDATE) THEN RAISE EXCEPTION 'r27_purge_claim_refused'; END IF;
-                RETURN QUERY WITH picked AS (
+                SELECT e.id INTO v_internal
+                FROM public.r27_execution e
+                JOIN public.r27_request request ON request.id=e.request_id
+                WHERE e.execution_id=p_id AND e.state IN ('SOURCE_COMMITTED','PURGING')
+                FOR UPDATE OF e,request;
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_purge_claim_refused'; END IF;
+                SELECT array_agg(locked.id ORDER BY locked.created_at,locked.id)
+                INTO v_marker_ids
+                FROM (
+                    SELECT p.id,p.created_at
+                    FROM public.pending_blob_purge p
+                    WHERE p.r27_execution_id=v_internal
+                      AND p.bypass_governance
+                      AND p.r27_request_id IS NOT NULL
+                      AND p.state IN ('PENDING','FAILED')
+                    ORDER BY p.created_at,p.id
+                    FOR UPDATE OF p SKIP LOCKED
+                    LIMIT p_limit
+                ) AS locked;
+                IF COALESCE(cardinality(v_marker_ids),0)=0 THEN RETURN; END IF;
+                PERFORM 1
+                FROM public.pending_blob_purge p
+                JOIN public.blob blob
+                  ON blob.sha256=p.sha256
+                 AND blob.org_id=p.org_id
+                 AND blob.bucket=p.bucket
+                 AND blob.object_key=p.object_key
+                 AND blob.object_version_id=p.object_version_id
+                WHERE p.id=ANY(v_marker_ids)
+                ORDER BY blob.sha256,p.id
+                FOR UPDATE OF blob;
+                RETURN QUERY WITH valid AS (
                     SELECT p.id FROM public.pending_blob_purge p
                     JOIN public.r27_execution e ON e.id=p.r27_execution_id
                     JOIN public.r27_request request ON request.id=e.request_id
@@ -2341,13 +3240,18 @@ def _create_authority_transition_functions() -> None:
                       ON blob.sha256=p.sha256 AND blob.org_id=p.org_id
                      AND blob.bucket=p.bucket AND blob.object_key=p.object_key
                      AND blob.object_version_id=p.object_version_id
-                    WHERE e.execution_id=p_id AND p.bypass_governance
+                    JOIN public.disposition_event source_disposition
+                      ON source_disposition.id=p.disposition_event_id
+                    WHERE p.id=ANY(v_marker_ids)
+                      AND e.id=v_internal AND e.execution_id=p_id AND p.bypass_governance
                       AND p.r27_request_id=e.request_id
                       AND p.org_id=request.org_id AND p.record_id=request.record_id
                       AND p.state IN ('PENDING','FAILED')
-                    ORDER BY p.created_at,p.id
-                    FOR UPDATE OF p SKIP LOCKED LIMIT p_limit),
-                claimed AS (UPDATE public.pending_blob_purge p SET state='RUNNING',attempt_count=p.attempt_count+1,claimed_at=clock_timestamp(),error_code=NULL,error_detail=NULL,updated_at=clock_timestamp() FROM picked WHERE p.id=picked.id RETURNING p.*),
+                      AND {r27_source}
+                      AND {r27_current_authority}
+                      AND NOT {r27_live_owner}
+                ),
+                claimed AS (UPDATE public.pending_blob_purge p SET state='RUNNING',attempt_count=p.attempt_count+1,claimed_at=clock_timestamp(),error_code=NULL,error_detail=NULL,updated_at=clock_timestamp() FROM valid WHERE p.id=valid.id RETURNING p.*),
                 transitioned AS (
                     UPDATE public.r27_execution execution
                     SET state='PURGING',
@@ -2366,113 +3270,238 @@ def _create_authority_transition_functions() -> None:
                 FROM public.r27_execution e WHERE e.execution_id=p_execution AND p.id=p_marker AND p.r27_execution_id=e.id AND p.bypass_governance AND p.state='RUNNING';
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_purge_failure_refused'; END IF;
             END""",
-        "easysynq_record_r27_hold_release(text,text,uuid,timestamptz)": """
-            DECLARE v_internal uuid;
+        "easysynq_record_r27_hold_release(text,text,uuid,timestamptz)": f"""
+            DECLARE v_internal uuid; v_marker uuid; v_target uuid; v_org uuid;
+                    v_now timestamptz:=clock_timestamp();
             BEGIN
+                {read_committed_guard}
                 IF p_sha IS NULL OR p_version IS NULL OR p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
-                SELECT e.id INTO v_internal FROM public.r27_execution e
-                JOIN public.r27_request r ON r.id=e.request_id
+                SELECT e.id,marker.id,target.id,request.org_id
+                INTO v_internal,v_marker,v_target,v_org
+                FROM public.r27_execution e
+                JOIN public.r27_request request ON request.id=e.request_id
                 JOIN public.r27_manifest m ON m.request_id=e.request_id
-                JOIN public.r27_manifest_target t ON t.manifest_id=m.id
-                JOIN public.blob b ON b.sha256=t.blob_sha256 AND b.org_id=r.org_id
-                  AND b.bucket=t.bucket AND b.object_key=t.object_key
-                  AND b.object_version_id=t.object_version_id
-                WHERE e.execution_id=p_id AND e.state IN ('SOURCE_COMMITTED','PURGING')
-                  AND t.blob_sha256=p_sha AND t.object_version_id=p_version
-                FOR UPDATE OF e,b;
+                JOIN public.r27_manifest_target target ON target.manifest_id=m.id
+                JOIN public.pending_blob_purge marker
+                  ON marker.r27_execution_id=e.id
+                 AND marker.r27_request_id=e.request_id
+                 AND marker.org_id=request.org_id
+                 AND marker.record_id=request.record_id
+                 AND marker.sha256=target.blob_sha256
+                 AND marker.bucket=target.bucket
+                 AND marker.object_key=target.object_key
+                 AND marker.object_version_id=target.object_version_id
+                JOIN public.disposition_event source_disposition
+                  ON source_disposition.id=marker.disposition_event_id
+                JOIN public.blob blob
+                  ON blob.sha256=target.blob_sha256
+                 AND blob.org_id=request.org_id
+                 AND blob.bucket=target.bucket
+                 AND blob.object_key=target.object_key
+                 AND blob.object_version_id=target.object_version_id
+                WHERE e.execution_id=p_id
+                  AND target.blob_sha256=p_sha
+                  AND target.object_version_id=p_version
+                  AND marker.bypass_governance
+                  AND marker.state='RUNNING'
+                  AND e.state IN ('SOURCE_COMMITTED','PURGING')
+                FOR UPDATE OF e,request,marker,blob;
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_hold_release_refused'; END IF;
-                UPDATE public.blob SET worm_legal_hold=false,worm_legal_hold_verified_at=clock_timestamp()
-                WHERE sha256=p_sha AND object_version_id=p_version AND worm_legal_hold
-                  AND EXISTS (
-                      SELECT 1 FROM public.r27_execution e
-                      JOIN public.r27_request r ON r.id=e.request_id
-                      WHERE e.id=v_internal AND r.org_id=public.blob.org_id
-                  );
+                UPDATE public.blob blob
+                SET worm_legal_hold=false,worm_legal_hold_verified_at=v_now
+                FROM public.r27_execution e
+                JOIN public.r27_request request ON request.id=e.request_id
+                JOIN public.r27_manifest m ON m.request_id=e.request_id
+                JOIN public.r27_manifest_target target ON target.manifest_id=m.id
+                JOIN public.pending_blob_purge marker
+                  ON marker.r27_execution_id=e.id
+                 AND marker.r27_request_id=e.request_id
+                 AND marker.org_id=request.org_id
+                 AND marker.record_id=request.record_id
+                 AND marker.sha256=target.blob_sha256
+                 AND marker.bucket=target.bucket
+                 AND marker.object_key=target.object_key
+                 AND marker.object_version_id=target.object_version_id
+                JOIN public.disposition_event source_disposition
+                  ON source_disposition.id=marker.disposition_event_id
+                WHERE e.id=v_internal AND marker.id=v_marker AND target.id=v_target
+                  AND e.execution_id=p_id
+                  AND target.blob_sha256=p_sha
+                  AND target.object_version_id=p_version
+                  AND marker.state='RUNNING' AND marker.bypass_governance
+                  AND blob.sha256=target.blob_sha256
+                  AND blob.org_id=request.org_id
+                  AND blob.bucket=target.bucket
+                  AND blob.object_key=target.object_key
+                  AND blob.object_version_id=target.object_version_id
+                  AND blob.worm_legal_hold
+                  AND {r27_source}
+                  AND {r27_current_authority}
+                  AND NOT {r27_hold_obligation};
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_hold_release_refused'; END IF;
             END""",
-        "easysynq_record_r27_purge(text,text,uuid,timestamptz)": """
-            DECLARE v_internal uuid; v_target uuid; v_marker uuid; v_org uuid;
+        "easysynq_record_r27_purge(text,text,uuid,timestamptz)": f"""
+            DECLARE
+                v_internal uuid;
+                v_target uuid;
+                v_marker uuid;
+                v_org uuid;
+                v_bucket text;
+                v_object_key text;
+                v_now timestamptz:=clock_timestamp();
             BEGIN
+                {read_committed_guard}
                 IF p_sha IS NULL OR p_version IS NULL OR p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
-                SELECT e.id,t.id,p.id,r.org_id INTO v_internal,v_target,v_marker,v_org
+                SELECT e.id,target.id,p.id,request.org_id,target.bucket,target.object_key
+                INTO v_internal,v_target,v_marker,v_org,v_bucket,v_object_key
                 FROM public.r27_execution e
-                JOIN public.r27_request r ON r.id=e.request_id
+                JOIN public.r27_request request ON request.id=e.request_id
                 JOIN public.r27_manifest m ON m.request_id=e.request_id
-                JOIN public.r27_manifest_target t ON t.manifest_id=m.id
+                JOIN public.r27_manifest_target target ON target.manifest_id=m.id
                 JOIN public.pending_blob_purge p ON p.r27_execution_id=e.id
-                  AND p.r27_request_id=e.request_id AND p.org_id=r.org_id
-                  AND p.record_id=r.record_id AND p.sha256=t.blob_sha256
-                  AND p.bucket=t.bucket AND p.object_key=t.object_key
-                  AND p.object_version_id=t.object_version_id
-                JOIN public.disposition_event d ON d.id=p.disposition_event_id
-                  AND d.r27_request_id=e.request_id AND d.r27_execution_id=e.id
-                  AND d.org_id=r.org_id AND d.record_id=r.record_id AND d.is_worm_destroy
-                JOIN public.blob b ON b.sha256=t.blob_sha256 AND b.org_id=r.org_id
-                  AND b.bucket=t.bucket AND b.object_key=t.object_key
-                  AND b.object_version_id=t.object_version_id
-                WHERE e.execution_id=p_id AND e.state IN ('SOURCE_COMMITTED','PURGING') AND t.blob_sha256=p_sha AND t.object_version_id=p_version
-                  AND p.state='RUNNING' AND p.bypass_governance FOR UPDATE OF e,p,b;
+                  AND p.r27_request_id=e.request_id
+                  AND p.org_id=request.org_id
+                  AND p.record_id=request.record_id
+                  AND p.sha256=target.blob_sha256
+                  AND p.bucket=target.bucket
+                  AND p.object_key=target.object_key
+                  AND p.object_version_id=target.object_version_id
+                JOIN public.disposition_event source_disposition
+                  ON source_disposition.id=p.disposition_event_id
+                JOIN public.blob b
+                  ON b.sha256=target.blob_sha256
+                 AND b.org_id=request.org_id
+                 AND b.bucket=target.bucket
+                 AND b.object_key=target.object_key
+                 AND b.object_version_id=target.object_version_id
+                WHERE e.execution_id=p_id
+                  AND target.blob_sha256=p_sha
+                  AND target.object_version_id=p_version
+                  AND p.state='RUNNING'
+                  AND p.bypass_governance
+                  AND e.state IN ('SOURCE_COMMITTED','PURGING')
+                FOR UPDATE OF e,request,p,b,source_disposition;
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_purge_result_refused'; END IF;
-                UPDATE public.blob SET purged_at=clock_timestamp(),purge_execution_id=v_internal
-                WHERE sha256=p_sha AND object_version_id=p_version AND org_id=v_org;
+                UPDATE public.blob b
+                SET purged_at=v_now,purge_execution_id=v_internal
+                FROM public.r27_execution e
+                JOIN public.r27_request request ON request.id=e.request_id
+                JOIN public.r27_manifest m ON m.request_id=e.request_id
+                JOIN public.r27_manifest_target target ON target.manifest_id=m.id
+                JOIN public.pending_blob_purge p
+                  ON p.r27_execution_id=e.id
+                 AND p.r27_request_id=e.request_id
+                 AND p.org_id=request.org_id
+                 AND p.record_id=request.record_id
+                 AND p.sha256=target.blob_sha256
+                 AND p.bucket=target.bucket
+                 AND p.object_key=target.object_key
+                 AND p.object_version_id=target.object_version_id
+                JOIN public.disposition_event source_disposition
+                  ON source_disposition.id=p.disposition_event_id
+                WHERE e.id=v_internal AND target.id=v_target AND p.id=v_marker
+                  AND e.execution_id=p_id
+                  AND target.blob_sha256=p_sha
+                  AND target.object_version_id=p_version
+                  AND p.state='RUNNING' AND p.bypass_governance
+                  AND b.sha256=target.blob_sha256
+                  AND b.org_id=request.org_id
+                  AND b.bucket=target.bucket
+                  AND b.object_key=target.object_key
+                  AND b.object_version_id=target.object_version_id
+                  AND NOT b.worm_legal_hold
+                  AND {r27_source}
+                  AND {r27_current_authority}
+                  AND NOT {r27_live_owner};
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_purge_result_refused'; END IF;
-                UPDATE public.pending_blob_purge SET state='VERIFIED',completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=v_marker;
+                UPDATE public.pending_blob_purge SET state='VERIFIED',completed_at=v_now,updated_at=v_now WHERE id=v_marker AND state='RUNNING';
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_purge_result_refused'; END IF;
                 INSERT INTO public.r27_execution_target_result(execution_id,manifest_target_id,result_code,verified_at,purge_marker_id)
-                VALUES(v_internal,v_target,'PHYSICAL_ERASED',clock_timestamp(),v_marker);
+                VALUES(v_internal,v_target,'PHYSICAL_ERASED',v_now,v_marker);
                 IF NOT EXISTS (SELECT 1 FROM public.r27_manifest_target t JOIN public.r27_manifest m ON m.id=t.manifest_id
                                JOIN public.r27_execution e ON e.request_id=m.request_id WHERE e.id=v_internal
                                AND NOT EXISTS (SELECT 1 FROM public.r27_execution_target_result rr WHERE rr.execution_id=e.id AND rr.manifest_target_id=t.id)) THEN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM public.disposition_event d
-                        JOIN public.r27_execution e ON e.id=d.r27_execution_id
-                        JOIN public.r27_request r ON r.id=e.request_id
-                        WHERE e.id=v_internal AND d.r27_request_id=e.request_id
-                          AND d.org_id=r.org_id AND d.record_id=r.record_id
-                          AND d.is_worm_destroy AND d.action='DESTROY'
-                    ) THEN RAISE EXCEPTION 'r27_source_disposition_missing'; END IF;
-                    UPDATE public.r27_execution e SET state='EXECUTED',result_code=(SELECT CASE WHEN count(*) FILTER (WHERE result_code='PHYSICAL_ERASED')=count(*) THEN 'PHYSICAL_ERASED'::r27_result_code WHEN count(*) FILTER (WHERE result_code='LOGICAL_ONLY_SURVIVING_OWNER')=count(*) THEN 'LOGICAL_ONLY_SURVIVING_OWNER'::r27_result_code ELSE 'MIXED_OUTCOME'::r27_result_code END FROM public.r27_execution_target_result WHERE execution_id=v_internal),completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE e.id=v_internal;
-                    UPDATE public.r27_request SET state='EXECUTED',updated_at=clock_timestamp() WHERE id=(SELECT request_id FROM public.r27_execution WHERE id=v_internal);
+                    UPDATE public.r27_execution e SET state='EXECUTED',result_code=(SELECT CASE WHEN count(*) FILTER (WHERE result_code='PHYSICAL_ERASED')=count(*) THEN 'PHYSICAL_ERASED'::r27_result_code WHEN count(*) FILTER (WHERE result_code='LOGICAL_ONLY_SURVIVING_OWNER')=count(*) THEN 'LOGICAL_ONLY_SURVIVING_OWNER'::r27_result_code ELSE 'MIXED_OUTCOME'::r27_result_code END FROM public.r27_execution_target_result WHERE execution_id=v_internal),completed_at=v_now,updated_at=v_now WHERE e.id=v_internal;
+                    UPDATE public.r27_request SET state='EXECUTED',updated_at=v_now WHERE id=(SELECT request_id FROM public.r27_execution WHERE id=v_internal);
                     INSERT INTO public.audit_event(org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
-                    SELECT r.org_id,clock_timestamp(),'system','RECORD_WORM_DESTROYED','record',r.record_id,'record','r27-exact-purge-complete',jsonb_build_object('execution_id',e.execution_id) FROM public.r27_execution e JOIN public.r27_request r ON r.id=e.request_id WHERE e.id=v_internal;
+                    SELECT r.org_id,v_now,'system','RECORD_WORM_DESTROYED','record',r.record_id,'record','r27-exact-purge-complete',jsonb_build_object('execution_id',e.execution_id) FROM public.r27_execution e JOIN public.r27_request r ON r.id=e.request_id WHERE e.id=v_internal;
                 END IF;
             END""",
-        "easysynq_record_r27_surviving_owner(text,text,uuid,timestamptz)": """
+        "easysynq_record_r27_surviving_owner(text,text,uuid,timestamptz)": f"""
             DECLARE v_internal uuid; v_target uuid; v_owner uuid; v_kind text; v_org uuid;
+                    v_now timestamptz:=clock_timestamp();
             BEGIN
+                {read_committed_guard}
                 IF p_sha IS NULL OR p_version IS NULL OR p_id IS NULL OR p_at IS NULL THEN RAISE EXCEPTION 'required_argument_is_null'; END IF;
-                SELECT e.id,t.id,r.org_id INTO v_internal,v_target,v_org
-                FROM public.r27_execution e JOIN public.r27_request r ON r.id=e.request_id
+                SELECT e.id,target.id,request.org_id INTO v_internal,v_target,v_org
+                FROM public.r27_execution e
+                JOIN public.r27_request request ON request.id=e.request_id
                 JOIN public.r27_manifest m ON m.request_id=e.request_id
-                JOIN public.r27_manifest_target t ON t.manifest_id=m.id
-                JOIN public.blob b ON b.sha256=t.blob_sha256 AND b.org_id=r.org_id
-                  AND b.bucket=t.bucket AND b.object_key=t.object_key
-                  AND b.object_version_id=t.object_version_id
-                WHERE e.execution_id=p_id AND e.state IN ('SOURCE_COMMITTED','PURGING')
-                AND t.blob_sha256=p_sha AND t.object_version_id=p_version FOR UPDATE OF e;
+                JOIN public.r27_manifest_target target ON target.manifest_id=m.id
+                JOIN public.blob b
+                  ON b.sha256=target.blob_sha256
+                 AND b.org_id=request.org_id
+                 AND b.bucket=target.bucket
+                 AND b.object_key=target.object_key
+                 AND b.object_version_id=target.object_version_id
+                JOIN public.disposition_event source_disposition
+                  ON source_disposition.r27_execution_id=e.id
+                 AND source_disposition.r27_request_id=e.request_id
+                WHERE e.execution_id=p_id
+                  AND target.blob_sha256=p_sha
+                  AND target.object_version_id=p_version
+                  AND e.state IN ('SOURCE_COMMITTED','PURGING')
+                FOR UPDATE OF e,request,b,source_disposition;
                 IF NOT FOUND THEN RAISE EXCEPTION 'r27_surviving_owner_refused'; END IF;
-                SELECT v.id,'DOCUMENT_VERSION' INTO v_owner,v_kind FROM public.document_version v
-                WHERE v.source_blob_sha256=p_sha AND v.org_id=v_org ORDER BY v.id LIMIT 1;
+                PERFORM 1
+                FROM public.r27_execution e
+                JOIN public.r27_request request ON request.id=e.request_id
+                JOIN public.r27_manifest m ON m.request_id=e.request_id
+                JOIN public.r27_manifest_target target ON target.manifest_id=m.id
+                JOIN public.disposition_event source_disposition
+                  ON source_disposition.r27_execution_id=e.id
+                 AND source_disposition.r27_request_id=e.request_id
+                WHERE e.id=v_internal AND target.id=v_target
+                  AND e.execution_id=p_id
+                  AND target.blob_sha256=p_sha
+                  AND target.object_version_id=p_version
+                  AND {r27_source}
+                  AND {r27_current_authority};
+                IF NOT FOUND THEN RAISE EXCEPTION 'r27_surviving_owner_refused'; END IF;
+                SELECT v.id,'DOCUMENT_VERSION' INTO v_owner,v_kind
+                FROM public.document_version v
+                JOIN public.documented_information owner_document
+                  ON owner_document.id=v.document_id
+                 AND owner_document.org_id=v.org_id
+                WHERE v.source_blob_sha256=p_sha AND v.org_id=v_org
+                ORDER BY v.id FOR SHARE OF v LIMIT 1;
                 IF NOT FOUND THEN SELECT eb.id,'EVIDENCE_BLOB' INTO v_owner,v_kind
-                    FROM public.evidence_blob eb WHERE eb.blob_sha256=p_sha AND eb.org_id=v_org
-                    ORDER BY eb.id LIMIT 1; END IF;
+                    FROM public.evidence_blob eb
+                    JOIN public.record owner_record
+                      ON owner_record.id=eb.record_id
+                     AND owner_record.org_id=eb.org_id
+                    JOIN public.r27_request target_request
+                      ON target_request.id=(
+                          SELECT execution.request_id
+                          FROM public.r27_execution execution
+                          WHERE execution.id=v_internal
+                      )
+                    WHERE eb.blob_sha256=p_sha
+                      AND eb.org_id=v_org
+                      AND eb.record_id<>target_request.record_id
+                      AND owner_record.disposition_state<>'DISPOSED'
+                    ORDER BY eb.id FOR SHARE OF eb,owner_record LIMIT 1;
+                END IF;
                 IF v_owner IS NULL THEN RAISE EXCEPTION 'r27_surviving_owner_refused'; END IF;
                 INSERT INTO public.r27_execution_target_result(execution_id,manifest_target_id,result_code,verified_at,surviving_owner_kind,surviving_owner_id)
-                VALUES(v_internal,v_target,'LOGICAL_ONLY_SURVIVING_OWNER',clock_timestamp(),v_kind,v_owner);
+                VALUES(v_internal,v_target,'LOGICAL_ONLY_SURVIVING_OWNER',v_now,v_kind,v_owner);
                 IF NOT EXISTS (SELECT 1 FROM public.r27_manifest_target t JOIN public.r27_manifest m ON m.id=t.manifest_id
                                JOIN public.r27_execution e ON e.request_id=m.request_id WHERE e.id=v_internal
                                AND NOT EXISTS (SELECT 1 FROM public.r27_execution_target_result rr WHERE rr.execution_id=e.id AND rr.manifest_target_id=t.id)) THEN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM public.disposition_event d
-                        JOIN public.r27_execution e ON e.id=d.r27_execution_id
-                        JOIN public.r27_request r ON r.id=e.request_id
-                        WHERE e.id=v_internal AND d.r27_request_id=e.request_id
-                          AND d.org_id=r.org_id AND d.record_id=r.record_id
-                          AND d.is_worm_destroy AND d.action='DESTROY'
-                    ) THEN RAISE EXCEPTION 'r27_source_disposition_missing'; END IF;
-                    UPDATE public.r27_execution e SET state='EXECUTED',result_code=(SELECT CASE WHEN count(*) FILTER (WHERE result_code='PHYSICAL_ERASED')=count(*) THEN 'PHYSICAL_ERASED'::r27_result_code WHEN count(*) FILTER (WHERE result_code='LOGICAL_ONLY_SURVIVING_OWNER')=count(*) THEN 'LOGICAL_ONLY_SURVIVING_OWNER'::r27_result_code ELSE 'MIXED_OUTCOME'::r27_result_code END FROM public.r27_execution_target_result WHERE execution_id=v_internal),completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE e.id=v_internal;
-                    UPDATE public.r27_request SET state='EXECUTED',updated_at=clock_timestamp() WHERE id=(SELECT request_id FROM public.r27_execution WHERE id=v_internal);
+                    UPDATE public.r27_execution e SET state='EXECUTED',result_code=(SELECT CASE WHEN count(*) FILTER (WHERE result_code='PHYSICAL_ERASED')=count(*) THEN 'PHYSICAL_ERASED'::r27_result_code WHEN count(*) FILTER (WHERE result_code='LOGICAL_ONLY_SURVIVING_OWNER')=count(*) THEN 'LOGICAL_ONLY_SURVIVING_OWNER'::r27_result_code ELSE 'MIXED_OUTCOME'::r27_result_code END FROM public.r27_execution_target_result WHERE execution_id=v_internal),completed_at=v_now,updated_at=v_now WHERE e.id=v_internal;
+                    UPDATE public.r27_request SET state='EXECUTED',updated_at=v_now WHERE id=(SELECT request_id FROM public.r27_execution WHERE id=v_internal);
                     INSERT INTO public.audit_event(org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason,after)
-                    SELECT r.org_id,clock_timestamp(),'system','RECORD_WORM_DESTROYED','record',r.record_id,'record','r27-exact-purge-complete',jsonb_build_object('execution_id',e.execution_id) FROM public.r27_execution e JOIN public.r27_request r ON r.id=e.request_id WHERE e.id=v_internal;
+                    SELECT r.org_id,v_now,'system','RECORD_WORM_DESTROYED','record',r.record_id,'record','r27-exact-purge-complete',jsonb_build_object('execution_id',e.execution_id) FROM public.r27_execution e JOIN public.r27_request r ON r.id=e.request_id WHERE e.id=v_internal;
                 END IF;
             END""",
         "easysynq_begin_r27_role_membership(uuid,uuid,text,text,timestamptz)": """
@@ -2517,7 +3546,8 @@ def _create_authority_transition_functions() -> None:
 def _grant_database_authority() -> None:
     bind = op.get_bind()
     op.execute(f"REVOKE ALL ON public.r27_request FROM {APP_ROLE}")
-    op.execute(f"GRANT SELECT, INSERT, DELETE ON public.blob TO {APP_ROLE}")
+    op.execute(f"GRANT SELECT, DELETE ON public.blob TO {APP_ROLE}")
+    op.execute(f"GRANT INSERT ({','.join(_APP_BLOB_INSERT_COLUMNS)}) ON public.blob TO {APP_ROLE}")
     op.execute(f"GRANT UPDATE (verified_at,verify_failed_at) ON public.blob TO {APP_ROLE}")
     op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON public.document_version TO {APP_ROLE}")
     op.execute(f"GRANT SELECT, INSERT ON public.evidence_blob TO {APP_ROLE}")
@@ -2536,7 +3566,17 @@ def _grant_database_authority() -> None:
         "GRANT SELECT ON public.r27_request,public.r27_manifest,public.r27_manifest_target,public.r27_attestation,public.r27_action_challenge,public.r27_authorizer_key TO easysynq_r27_authorizer"
     )
     op.execute(
-        "GRANT INSERT ON public.r27_request,public.r27_manifest,public.r27_manifest_target,public.r27_manifest_derivative,public.r27_attestation,public.r27_action_challenge TO easysynq_r27_authorizer"
+        "GRANT INSERT ON public.r27_manifest,public.r27_manifest_target,"
+        "public.r27_manifest_derivative,public.r27_attestation TO easysynq_r27_authorizer"
+    )
+    op.execute(
+        "GRANT INSERT (id,org_id,record_id,normalized_legal_basis,legal_basis_sha256) "
+        "ON public.r27_request TO easysynq_r27_authorizer"
+    )
+    op.execute(
+        "GRANT INSERT (id,action,request_id,record_id,issuer,token_jti,action_nonce,"
+        "accepted_claims,manifest_sha256,expires_at) ON public.r27_action_challenge "
+        "TO easysynq_r27_authorizer"
     )
     op.execute(
         "GRANT SELECT ON public.r27_request,public.r27_manifest,public.r27_manifest_target,public.r27_attestation,public.r27_execution,public.r27_execution_target_result,public.recovery_generation_witness,public.pending_blob_purge,public.blob TO easysynq_r27_maintenance"
@@ -2749,6 +3789,11 @@ def _refuse_populated_0089_downgrade(bind: sa.Connection) -> None:
                 OR EXISTS (SELECT 1 FROM pending_blob_purge LIMIT 1)
                 OR EXISTS (SELECT 1 FROM audit_maintenance_schedule LIMIT 1)
                 OR EXISTS (SELECT 1 FROM backup_maintenance_operation LIMIT 1)
+                OR EXISTS (
+                    SELECT 1 FROM audit_event
+                    WHERE event_type='RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED'
+                    LIMIT 1
+                )
             """
         )
     ).scalar_one()
@@ -2758,6 +3803,7 @@ def _refuse_populated_0089_downgrade(bind: sa.Connection) -> None:
 
 def _drop_database_authority() -> None:
     for table, trigger in (
+        ("disposition_event", "trg_app_disposition_insert_guard"),
         ("blob", "trg_blob_worm_identity"),
         ("document_version", "trg_document_version_worm_owner"),
         ("evidence_blob", "trg_evidence_blob_worm_owner"),
@@ -2772,6 +3818,7 @@ def _drop_database_authority() -> None:
         op.execute(f"DROP FUNCTION IF EXISTS public.{name}")
     for name in (
         "easysynq_guard_blob_worm_identity",
+        "easysynq_guard_app_disposition_insert",
         "easysynq_guard_worm_owner_pointer",
         "easysynq_guard_key_registry_history",
         "easysynq_guard_r27_result_history",
@@ -2926,6 +3973,47 @@ def _restore_alembic_version_width_after_stamp() -> None:
     context.on_version_apply_callbacks = (*existing_callbacks, restore_width)
 
 
+def _restore_0088_event_type(bind: sa.Connection) -> None:
+    """Remove only Task 2's event label while preserving historical enum order."""
+    target = "RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED"
+    op.execute("LOCK TABLE public.audit_event IN ACCESS EXCLUSIVE MODE")
+    if bind.execute(
+        sa.text("SELECT EXISTS (SELECT 1 FROM public.audit_event WHERE event_type=:target)"),
+        {"target": target},
+    ).scalar_one():
+        raise RuntimeError("populated_0089_downgrade_refused")
+    labels = tuple(
+        bind.execute(
+            sa.text(
+                """
+                SELECT enum.enumlabel
+                FROM pg_enum AS enum
+                JOIN pg_type AS type ON type.oid=enum.enumtypid
+                JOIN pg_namespace AS namespace ON namespace.oid=type.typnamespace
+                WHERE namespace.nspname='public' AND type.typname='event_type'
+                ORDER BY enum.enumsortorder
+                """
+            )
+        ).scalars()
+    )
+    if labels.count(target) != 1:
+        raise RuntimeError("database_authority_event_type_shape_refused")
+    restored_labels = tuple(label for label in labels if label != target)
+    _execute_composed(
+        bind,
+        psycopg_sql.SQL("CREATE TYPE public.event_type_0088_restored AS ENUM ({})").format(
+            psycopg_sql.SQL(",").join(map(psycopg_sql.Literal, restored_labels))
+        ),
+    )
+    op.execute(
+        "ALTER TABLE public.audit_event ALTER COLUMN event_type "
+        "TYPE public.event_type_0088_restored "
+        "USING event_type::text::public.event_type_0088_restored"
+    )
+    op.execute("DROP TYPE public.event_type RESTRICT")
+    op.execute("ALTER TYPE public.event_type_0088_restored RENAME TO event_type")
+
+
 def downgrade() -> None:
     bind = op.get_bind()
     _refuse_populated_0089_downgrade(bind)
@@ -2960,12 +4048,20 @@ def downgrade() -> None:
     op.drop_table("r27_manifest_derivative")
     op.drop_table("r27_manifest_target")
     op.drop_table("r27_manifest")
+    op.execute(
+        "REVOKE INSERT (id,org_id,record_id,normalized_legal_basis,legal_basis_sha256) "
+        "ON public.r27_request FROM easysynq_r27_authorizer"
+    )
     _restore_worm_destroy_request()
     _drop_hold_release()
     op.drop_table("retention_operation_target")
     op.drop_table("retention_operation")
     _drop_document_retention()
+    op.execute(
+        f"REVOKE INSERT ({','.join(_APP_BLOB_INSERT_COLUMNS)}) ON public.blob FROM {APP_ROLE}"
+    )
     _downgrade_blob()
+    _restore_0088_event_type(bind)
     _restore_0088_database_authority(bind)
     _restore_0088_audit_partition_factory(bind)
 
@@ -3140,11 +4236,13 @@ def _restore_worm_destroy_request() -> None:
 def _drop_hold_release() -> None:
     op.execute(
         "DROP TRIGGER trg_worm_hold_release_authorization_immutable "
-        "ON worm_hold_release_authorization"
+        "ON public.worm_hold_release_authorization"
     )
-    op.execute("DROP TRIGGER trg_worm_hold_release_authorize ON worm_hold_release_authorization")
-    op.execute("DROP FUNCTION refuse_worm_hold_release_authorization_change()")
-    op.execute("DROP FUNCTION authorize_worm_hold_release()")
+    op.execute(
+        "DROP TRIGGER trg_worm_hold_release_authorize ON public.worm_hold_release_authorization"
+    )
+    op.execute("DROP FUNCTION public.easysynq_guard_hold_release_authorization_history()")
+    op.execute("DROP FUNCTION public.easysynq_guard_hold_release_authorization_insert()")
     op.drop_table("worm_hold_release_authorization")
     op.drop_table("worm_hold_release_operation")
 
@@ -3188,6 +4286,7 @@ def _drop_document_retention() -> None:
 
 def _downgrade_blob() -> None:
     op.drop_index("uq_blob_worm_physical_identity", table_name="blob")
+    op.drop_constraint(op.f("ck_blob_purge_provenance_shape"), "blob", type_="check")
     op.drop_constraint(op.f("ck_blob_worm_assertion_shape"), "blob", type_="check")
     op.drop_constraint(op.f("ck_blob_object_version_id_length"), "blob", type_="check")
     for column in (

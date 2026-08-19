@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import monotonic, sleep
 
 import pytest
 import sqlalchemy as sa
@@ -27,6 +29,25 @@ class OrdinarySeed:
 
 def _engine(database_authority_dsns: dict[str, str], role: str) -> sa.Engine:
     return sa.create_engine(database_authority_dsns[role])
+
+
+def _wait_for_named_lock(
+    engine: sa.Engine, application_name: str, *, timeout_seconds: float = 5
+) -> bool:
+    deadline = monotonic() + timeout_seconds
+    while monotonic() < deadline:
+        with engine.connect() as connection:
+            waiting = connection.execute(
+                sa.text(
+                    "SELECT wait_event_type='Lock' FROM pg_stat_activity "
+                    "WHERE application_name=:name"
+                ),
+                {"name": application_name},
+            ).scalar_one_or_none()
+        if waiting:
+            return True
+        sleep(0.02)
+    return False
 
 
 def _insert_org(connection: sa.Connection) -> uuid.UUID:
@@ -346,6 +367,134 @@ def _authorize(
     )
 
 
+def _apply_hold_authority_drift(
+    connection: sa.Connection,
+    seed: OrdinarySeed,
+    operation_id: uuid.UUID,
+    drift: str,
+) -> None:
+    other_org_id = _insert_org(connection)
+    connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+    if drift == "OPERATION_ORG":
+        connection.execute(
+            sa.text("UPDATE worm_hold_release_operation SET org_id=:org WHERE id=:id"),
+            {"org": other_org_id, "id": operation_id},
+        )
+    elif drift == "RECORD_ORG":
+        connection.execute(
+            sa.text("UPDATE record SET org_id=:org WHERE id=:id"),
+            {"org": other_org_id, "id": seed.record_id},
+        )
+    elif drift == "BLOB_ORG":
+        connection.execute(
+            sa.text("UPDATE blob SET org_id=:org WHERE sha256=:sha"),
+            {"org": other_org_id, "sha": seed.blob_sha256},
+        )
+    elif drift == "BLOB_NON_WORM":
+        connection.execute(
+            sa.text(
+                "UPDATE blob SET worm_locked=false,object_version_id=NULL,"
+                "worm_enforced_mode=NULL,worm_asserted_retain_until=NULL,worm_asserted_at=NULL,"
+                "worm_retain_until=NULL,worm_retention_verified_at=NULL,worm_legal_hold=NULL,"
+                "worm_legal_hold_verified_at=NULL WHERE sha256=:sha"
+            ),
+            {"sha": seed.blob_sha256},
+        )
+    elif drift == "ACTOR_ORG":
+        connection.execute(
+            sa.text("UPDATE app_user SET org_id=:org WHERE id=:id"),
+            {"org": other_org_id, "id": seed.user_id},
+        )
+    elif drift == "EDGE_ORG":
+        connection.execute(
+            sa.text("UPDATE evidence_blob SET org_id=:org WHERE blob_sha256=:sha"),
+            {"org": other_org_id, "sha": seed.blob_sha256},
+        )
+    elif drift == "EDGE_RECORD":
+        alternate_record_id = uuid.uuid4()
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO documented_information
+                    (id,org_id,framework_id,kind,identifier,title,owner_user_id,
+                     current_state,is_singleton,classification,
+                     acknowledgement_required,created_by)
+                VALUES (:id,:org,:framework,'RECORD',:identifier,'Alternate edge record',:user,
+                        'Draft',false,'Internal',false,:user)
+                """
+            ),
+            {
+                "id": alternate_record_id,
+                "org": seed.org_id,
+                "framework": seed.framework_id,
+                "identifier": f"ALT-EDGE-{alternate_record_id}",
+                "user": seed.user_id,
+            },
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO record"
+                "(id,org_id,record_type,captured_by,content_hash_version,"
+                "retention_policy_id,disposition_state,legal_hold) "
+                "VALUES (:id,:org,'EVIDENCE',:user,2,:policy,'DISPOSED',false)"
+            ),
+            {
+                "id": alternate_record_id,
+                "org": seed.org_id,
+                "user": seed.user_id,
+                "policy": seed.policy_id,
+            },
+        )
+        connection.execute(
+            sa.text("UPDATE evidence_blob SET record_id=:record WHERE blob_sha256=:sha"),
+            {"record": alternate_record_id, "sha": seed.blob_sha256},
+        )
+    elif drift == "EDGE_BLOB":
+        alternate_sha256 = uuid.uuid4().hex * 2
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO blob
+                    (sha256,org_id,size_bytes,mime_type,bucket,object_key,object_version_id,
+                     worm_locked,worm_enforced_mode,worm_asserted_retain_until,worm_asserted_at,
+                     worm_retain_until,worm_retention_verified_at,worm_legal_hold,
+                     worm_legal_hold_verified_at,sse)
+                VALUES
+                    (:sha,:org,1,'application/octet-stream',:bucket,:key,:version,true,
+                     'GOVERNANCE',clock_timestamp()+interval '1 year',clock_timestamp(),
+                     clock_timestamp()+interval '2 years',clock_timestamp(),true,
+                     clock_timestamp(),false)
+                """
+            ),
+            {
+                "sha": alternate_sha256,
+                "org": seed.org_id,
+                "bucket": f"alternate-{uuid.uuid4()}",
+                "key": f"alternate/{uuid.uuid4()}",
+                "version": f"version-{uuid.uuid4()}",
+            },
+        )
+        connection.execute(
+            sa.text("UPDATE evidence_blob SET blob_sha256=:alternate WHERE blob_sha256=:sha"),
+            {"alternate": alternate_sha256, "sha": seed.blob_sha256},
+        )
+    elif drift == "EDGE_MISSING":
+        connection.execute(
+            sa.text("DELETE FROM evidence_blob WHERE blob_sha256=:sha"),
+            {"sha": seed.blob_sha256},
+        )
+    elif drift == "VERSION":
+        connection.execute(
+            sa.text(
+                "UPDATE worm_hold_release_operation SET object_version_id='wrong-version' "
+                "WHERE id=:id"
+            ),
+            {"id": operation_id},
+        )
+    else:  # pragma: no cover - the parameter tables below are closed
+        raise AssertionError(drift)
+
+
 def _claim_hold_operations(
     connection: sa.Connection,
 ) -> list[sa.RowMapping]:
@@ -356,6 +505,25 @@ def _claim_hold_operations(
         .mappings()
         .all()
     )
+
+
+def _run_named_owner_update(
+    owner: sa.Engine,
+    *,
+    application_name: str,
+    statement: str,
+    parameters: dict[str, object],
+) -> str:
+    with owner.connect() as connection:
+        transaction = connection.begin()
+        connection.execute(
+            sa.text("SELECT set_config('application_name',:name,true)"),
+            {"name": application_name},
+        )
+        connection.execute(sa.text("SET LOCAL statement_timeout='5s'"))
+        connection.execute(sa.text(statement), parameters)
+        transaction.rollback()
+    return "ok"
 
 
 def test_ordinary_exact_purge_resolves_coordinates_and_retries_without_r27_bypass(
@@ -459,10 +627,497 @@ def test_ordinary_exact_purge_resolves_coordinates_and_retries_without_r27_bypas
                 {"marker_id": marker_id},
             ).one()
             assert state == ("VERIFIED", 2, None, None, True)
-            assert connection.execute(
+            purged_at, purge_execution_id = connection.execute(
                 sa.text("SELECT purged_at,purge_execution_id FROM blob WHERE sha256=:blob_sha256"),
                 {"blob_sha256": seed.blob_sha256},
-            ).one() == (None, None)
+            ).one()
+            assert purged_at is not None
+            assert purge_execution_id is None
+    finally:
+        owner.dispose()
+        retention.dispose()
+
+
+@pytest.mark.parametrize(
+    ("owner_kind", "owner_state", "must_block"),
+    (
+        ("EVIDENCE", "ACTIVE", True),
+        ("EVIDENCE", "DUE_FOR_REVIEW", True),
+        ("EVIDENCE", "ON_HOLD", True),
+        ("EVIDENCE", "DISPOSED", False),
+        ("DOCUMENT", None, True),
+    ),
+)
+def test_ordinary_purge_claim_uses_closed_live_owner_predicate(
+    database_authority_dsns: dict[str, str],
+    owner_kind: str,
+    owner_state: str | None,
+    must_block: bool,
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    retention = _engine(database_authority_dsns, "easysynq_retention")
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+        with retention.begin() as connection:
+            marker_id = connection.execute(
+                sa.text("SELECT easysynq_enqueue_ordinary_exact_purge(:record,:event,:sha)"),
+                {
+                    "record": seed.record_id,
+                    "event": seed.disposition_event_id,
+                    "sha": seed.blob_sha256,
+                },
+            ).scalar_one()
+
+        with owner.begin() as connection:
+            if owner_kind == "DOCUMENT":
+                from tests.integration.test_r27_database_authority import (
+                    _add_permanent_document_owner,
+                )
+
+                _add_permanent_document_owner(connection, seed, "POLICY")
+            else:
+                owner_record_id = _add_owner(
+                    connection,
+                    seed,
+                    logical_hold=owner_state == "ON_HOLD",
+                    policy_duration="P1Y",
+                )
+                connection.execute(
+                    sa.text("UPDATE record SET disposition_state=:state WHERE id=:id"),
+                    {"state": owner_state, "id": owner_record_id},
+                )
+
+        with owner.connect() as connection:
+            before = _ordinary_result_snapshot(connection, marker_id, seed)
+        with retention.begin() as connection:
+            claimed = connection.execute(
+                sa.text("SELECT * FROM easysynq_claim_ordinary_exact_purges(100,clock_timestamp())")
+            ).mappings()
+            claimed_ids = {row["marker_id"] for row in claimed}
+        assert (marker_id not in claimed_ids) is must_block
+
+        with owner.connect() as connection:
+            expected_state = "PENDING" if must_block else "RUNNING"
+            assert (
+                connection.execute(
+                    sa.text("SELECT state::text FROM pending_blob_purge WHERE id=:id"),
+                    {"id": marker_id},
+                ).scalar_one()
+                == expected_state
+            )
+            if must_block:
+                assert _ordinary_result_snapshot(connection, marker_id, seed) == before
+    finally:
+        owner.dispose()
+        retention.dispose()
+
+
+def test_ordinary_purge_claim_holds_blob_lock_until_transaction_end(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    retention = _engine(database_authority_dsns, "easysynq_retention")
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+        with retention.begin() as connection:
+            marker_id = connection.execute(
+                sa.text("SELECT easysynq_enqueue_ordinary_exact_purge(:record,:event,:sha)"),
+                {
+                    "record": seed.record_id,
+                    "event": seed.disposition_event_id,
+                    "sha": seed.blob_sha256,
+                },
+            ).scalar_one()
+
+        with retention.connect() as claim_connection:
+            claim_transaction = claim_connection.begin()
+            try:
+                claimed_ids = {
+                    row.marker_id
+                    for row in claim_connection.execute(
+                        sa.text(
+                            "SELECT * FROM easysynq_claim_ordinary_exact_purges"
+                            "(100,clock_timestamp())"
+                        )
+                    )
+                }
+                assert marker_id in claimed_ids
+
+                with owner.connect() as owner_connection:
+                    owner_transaction = owner_connection.begin()
+                    try:
+                        owner_connection.execute(sa.text("SET LOCAL lock_timeout='250ms'"))
+                        with pytest.raises(sa.exc.DBAPIError, match="lock timeout"):
+                            _add_owner(
+                                owner_connection,
+                                seed,
+                                logical_hold=False,
+                                policy_duration="P1Y",
+                            )
+                    finally:
+                        owner_transaction.rollback()
+            finally:
+                claim_transaction.rollback()
+    finally:
+        owner.dispose()
+        retention.dispose()
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    ("PURGE_CLAIM", "PURGE_RESULT", "HOLD_CLAIM", "HOLD_RESULT"),
+)
+def test_ordinary_authority_rechecks_after_waiting_for_owner_key_share(
+    database_authority_dsns: dict[str, str], boundary: str
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    retention = _engine(database_authority_dsns, "easysynq_retention")
+    hold_authorizer = _engine(database_authority_dsns, "easysynq_hold_authorizer")
+    hold_maintenance = _engine(database_authority_dsns, "easysynq_hold_maintenance")
+    application_name = f"ordinary-owner-race-{uuid.uuid4()}"
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+            operation_id, digest = _insert_hold_operation(connection, seed)
+        with retention.begin() as connection:
+            marker_id = connection.execute(
+                sa.text("SELECT easysynq_enqueue_ordinary_exact_purge(:record,:event,:sha)"),
+                {
+                    "record": seed.record_id,
+                    "event": seed.disposition_event_id,
+                    "sha": seed.blob_sha256,
+                },
+            ).scalar_one()
+            if boundary == "PURGE_RESULT":
+                claimed_ids = {
+                    row.marker_id
+                    for row in connection.execute(
+                        sa.text(
+                            "SELECT * FROM easysynq_claim_ordinary_exact_purges"
+                            "(100,clock_timestamp())"
+                        )
+                    )
+                }
+                assert marker_id in claimed_ids
+        with hold_authorizer.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "SELECT easysynq_authorize_hold_release"
+                    "(:id,:digest,'ordinary-race-authorizer',clock_timestamp())"
+                ),
+                {"id": operation_id, "digest": digest},
+            )
+        if boundary == "HOLD_RESULT":
+            with hold_maintenance.begin() as connection:
+                claimed_ids = {
+                    row.operation_id
+                    for row in connection.execute(
+                        sa.text("SELECT * FROM easysynq_claim_hold_releases(100,clock_timestamp())")
+                    )
+                }
+                assert operation_id in claimed_ids
+
+        def invoke_boundary() -> tuple[str, object]:
+            engine = retention if boundary.startswith("PURGE") else hold_maintenance
+            try:
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text("SELECT set_config('application_name',:name,false)"),
+                        {"name": application_name},
+                    )
+                    connection.execute(sa.text("SET LOCAL statement_timeout='10s'"))
+                    if boundary == "PURGE_CLAIM":
+                        rows = connection.execute(
+                            sa.text(
+                                "SELECT * FROM easysynq_claim_ordinary_exact_purges"
+                                "(100,clock_timestamp())"
+                            )
+                        ).all()
+                        return "rows", {row.marker_id for row in rows}
+                    if boundary == "PURGE_RESULT":
+                        connection.execute(
+                            sa.text(
+                                "SELECT easysynq_record_ordinary_exact_purge(:id,clock_timestamp())"
+                            ),
+                            {"id": marker_id},
+                        )
+                        return "ok", None
+                    if boundary == "HOLD_CLAIM":
+                        rows = connection.execute(
+                            sa.text(
+                                "SELECT * FROM easysynq_claim_hold_releases(100,clock_timestamp())"
+                            )
+                        ).all()
+                        return "rows", {row.operation_id for row in rows}
+                    connection.execute(
+                        sa.text(
+                            "SELECT easysynq_record_ordinary_hold_release"
+                            "(:sha,:version,:id,clock_timestamp())"
+                        ),
+                        {
+                            "sha": seed.blob_sha256,
+                            "version": seed.object_version_id,
+                            "id": operation_id,
+                        },
+                    )
+                    return "ok", None
+            except sa.exc.DBAPIError as error:
+                return "error", str(error)
+
+        owner_connection = owner.connect()
+        owner_transaction = owner_connection.begin()
+        try:
+            _add_owner(
+                owner_connection,
+                seed,
+                logical_hold=boundary.startswith("HOLD"),
+                policy_duration="P1Y",
+            )
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(invoke_boundary)
+                blocked = _wait_for_named_lock(owner, application_name)
+                owner_transaction.commit()
+                outcome, detail = future.result(timeout=15)
+        finally:
+            if owner_transaction.is_active:
+                owner_transaction.rollback()
+            owner_connection.close()
+
+        assert blocked
+        if boundary == "PURGE_CLAIM":
+            assert outcome == "rows" and marker_id not in detail
+        elif boundary == "HOLD_CLAIM":
+            assert outcome == "rows" and operation_id not in detail
+        else:
+            expected = (
+                "ordinary_purge_result_refused"
+                if boundary == "PURGE_RESULT"
+                else "ordinary_hold_release_refused"
+            )
+            assert outcome == "error" and expected in str(detail)
+
+        with owner.connect() as connection:
+            marker_state = connection.execute(
+                sa.text("SELECT state::text FROM pending_blob_purge WHERE id=:id"),
+                {"id": marker_id},
+            ).scalar_one()
+            operation_state = connection.execute(
+                sa.text("SELECT state::text FROM worm_hold_release_operation WHERE id=:id"),
+                {"id": operation_id},
+            ).scalar_one()
+            assert marker_state == ("RUNNING" if boundary == "PURGE_RESULT" else "PENDING")
+            assert operation_state == ("RUNNING" if boundary == "HOLD_RESULT" else "AUTHORIZED")
+            assert connection.execute(
+                sa.text("SELECT worm_legal_hold FROM blob WHERE sha256=:sha"),
+                {"sha": seed.blob_sha256},
+            ).scalar_one()
+    finally:
+        owner.dispose()
+        retention.dispose()
+        hold_authorizer.dispose()
+        hold_maintenance.dispose()
+
+
+def test_ordinary_authority_refuses_non_read_committed_isolation(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    retention = _engine(database_authority_dsns, "easysynq_retention")
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+        with retention.begin() as connection:
+            marker_id = connection.execute(
+                sa.text("SELECT easysynq_enqueue_ordinary_exact_purge(:record,:event,:sha)"),
+                {
+                    "record": seed.record_id,
+                    "event": seed.disposition_event_id,
+                    "sha": seed.blob_sha256,
+                },
+            ).scalar_one()
+        with pytest.raises(sa.exc.DBAPIError, match="authority_requires_read_committed"):
+            with retention.connect().execution_options(
+                isolation_level="REPEATABLE READ"
+            ) as connection:
+                with connection.begin():
+                    connection.execute(
+                        sa.text(
+                            "SELECT * FROM easysynq_claim_ordinary_exact_purges"
+                            "(100,clock_timestamp())"
+                        )
+                    ).all()
+        with owner.connect() as connection:
+            assert (
+                connection.execute(
+                    sa.text("SELECT state::text FROM pending_blob_purge WHERE id=:id"),
+                    {"id": marker_id},
+                ).scalar_one()
+                == "PENDING"
+            )
+    finally:
+        owner.dispose()
+        retention.dispose()
+
+
+def _ordinary_result_snapshot(
+    connection: sa.Connection,
+    marker_id: uuid.UUID,
+    seed: OrdinarySeed,
+) -> sa.Row:
+    return connection.execute(
+        sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(marker) FROM pending_blob_purge marker WHERE id=:marker),
+              (SELECT to_jsonb(blob) FROM blob WHERE sha256=:sha),
+              (SELECT to_jsonb(event) FROM disposition_event event WHERE id=:event),
+              (SELECT count(*) FROM audit_event)
+            """
+        ),
+        {
+            "marker": marker_id,
+            "sha": seed.blob_sha256,
+            "event": seed.disposition_event_id,
+        },
+    ).one()
+
+
+def test_ordinary_purge_claim_revalidates_exact_source_disposition(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    retention = _engine(database_authority_dsns, "easysynq_retention")
+    try:
+        with owner.begin() as connection:
+            source_drift = _seed_ordinary_owner(connection)
+        with retention.begin() as connection:
+            marker_id = connection.execute(
+                sa.text("SELECT easysynq_enqueue_ordinary_exact_purge(:record,:event,:sha)"),
+                {
+                    "record": source_drift.record_id,
+                    "event": source_drift.disposition_event_id,
+                    "sha": source_drift.blob_sha256,
+                },
+            ).scalar_one()
+        with owner.begin() as connection:
+            connection.execute(
+                sa.text("UPDATE disposition_event SET action='ARCHIVE_COLD' WHERE id=:id"),
+                {"id": source_drift.disposition_event_id},
+            )
+
+        with owner.connect() as connection:
+            before = _ordinary_result_snapshot(connection, marker_id, source_drift)
+        with retention.begin() as connection:
+            claimed = connection.execute(
+                sa.text("SELECT * FROM easysynq_claim_ordinary_exact_purges(100,clock_timestamp())")
+            ).mappings()
+            claimed_ids = {row["marker_id"] for row in claimed}
+        assert marker_id not in claimed_ids
+
+        with owner.connect() as connection:
+            marker = connection.execute(
+                sa.text(
+                    "SELECT state::text,attempt_count,error_code,error_detail,completed_at "
+                    "FROM pending_blob_purge WHERE id=:id"
+                ),
+                {"id": marker_id},
+            ).one()
+            assert marker == ("PENDING", 0, None, None, None)
+            assert _ordinary_result_snapshot(connection, marker_id, source_drift) == before
+    finally:
+        owner.dispose()
+        retention.dispose()
+
+
+@pytest.mark.parametrize(
+    ("post_claim_change", "accepted"),
+    (
+        ("ACTIVE_OWNER", False),
+        ("DISPOSED_OWNER", True),
+        ("SOURCE_ACTION", False),
+    ),
+)
+def test_ordinary_purge_result_revalidates_source_and_live_owners_atomically(
+    database_authority_dsns: dict[str, str],
+    post_claim_change: str,
+    accepted: bool,
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    retention = _engine(database_authority_dsns, "easysynq_retention")
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+        with retention.begin() as connection:
+            marker_id = connection.execute(
+                sa.text("SELECT easysynq_enqueue_ordinary_exact_purge(:record,:event,:sha)"),
+                {
+                    "record": seed.record_id,
+                    "event": seed.disposition_event_id,
+                    "sha": seed.blob_sha256,
+                },
+            ).scalar_one()
+            claimed_ids = {
+                row.marker_id
+                for row in connection.execute(
+                    sa.text(
+                        "SELECT * FROM easysynq_claim_ordinary_exact_purges(100,clock_timestamp())"
+                    )
+                )
+            }
+            assert marker_id in claimed_ids
+
+        with owner.begin() as connection:
+            if post_claim_change in {"ACTIVE_OWNER", "DISPOSED_OWNER"}:
+                owner_record_id = _add_owner(
+                    connection,
+                    seed,
+                    logical_hold=False,
+                    policy_duration="P1Y",
+                )
+                connection.execute(
+                    sa.text("UPDATE record SET disposition_state=:state WHERE id=:id"),
+                    {
+                        "state": "ACTIVE" if post_claim_change == "ACTIVE_OWNER" else "DISPOSED",
+                        "id": owner_record_id,
+                    },
+                )
+            else:
+                connection.execute(
+                    sa.text("UPDATE disposition_event SET action='ARCHIVE_COLD' WHERE id=:id"),
+                    {"id": seed.disposition_event_id},
+                )
+
+        with owner.connect() as connection:
+            before = _ordinary_result_snapshot(connection, marker_id, seed)
+
+        statement = sa.text(
+            "SELECT easysynq_record_ordinary_exact_purge(:marker,clock_timestamp())"
+        )
+        if accepted:
+            with retention.begin() as connection:
+                connection.execute(statement, {"marker": marker_id})
+        else:
+            with pytest.raises(sa.exc.DBAPIError, match="ordinary_purge_result_refused"):
+                with retention.begin() as connection:
+                    connection.execute(statement, {"marker": marker_id})
+
+        with owner.connect() as connection:
+            after = _ordinary_result_snapshot(connection, marker_id, seed)
+            if accepted:
+                assert after[0]["state"] == "VERIFIED"
+                assert after[0]["completed_at"] is not None
+                assert before[1]["purged_at"] is None
+                assert after[1]["purged_at"] is not None
+                assert after[1]["purge_execution_id"] is None
+                expected_blob = dict(before[1])
+                expected_blob["purged_at"] = after[1]["purged_at"]
+                assert after[1] == expected_blob
+                assert after[2] == before[2]
+                assert after[3] == before[3]
+            else:
+                assert after == before
     finally:
         owner.dispose()
         retention.dispose()
@@ -733,6 +1388,248 @@ def test_hold_authorization_atomically_binds_exact_digest_and_audit(
         authorizer.dispose()
 
 
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "OPERATION_ORG",
+        "RECORD_ORG",
+        "BLOB_ORG",
+        "BLOB_NON_WORM",
+        "ACTOR_ORG",
+        "EDGE_ORG",
+        "EDGE_RECORD",
+        "EDGE_BLOB",
+        "EDGE_MISSING",
+        "VERSION",
+    ),
+)
+def test_hold_authorization_requires_exact_same_org_record_edge_and_blob(
+    database_authority_dsns: dict[str, str], drift: str
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    authorizer = _engine(database_authority_dsns, "easysynq_hold_authorizer")
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+            operation_id, digest = _insert_hold_operation(connection, seed)
+            _apply_hold_authority_drift(connection, seed, operation_id, drift)
+        snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(operation) FROM worm_hold_release_operation operation
+                 WHERE id=:operation),
+              (SELECT count(*) FROM worm_hold_release_authorization WHERE operation_id=:operation),
+              (SELECT count(*) FROM audit_event
+                 WHERE reason='ordinary-hold-release-authorized'
+                   AND after->>'operation_id'=:operation_text),
+              (SELECT to_jsonb(blob) FROM blob blob WHERE sha256=:sha)
+            """
+        )
+        parameters = {
+            "operation": operation_id,
+            "operation_text": str(operation_id),
+            "sha": seed.blob_sha256,
+        }
+        with owner.connect() as connection:
+            before = connection.execute(snapshot_sql, parameters).one()
+        with pytest.raises(sa.exc.DBAPIError, match="hold_release_authorization_refused"):
+            with authorizer.begin() as connection:
+                _authorize(connection, operation_id, digest)
+        with owner.connect() as connection:
+            assert connection.execute(snapshot_sql, parameters).one() == before
+    finally:
+        owner.dispose()
+        authorizer.dispose()
+
+
+@pytest.mark.parametrize("boundary", ("CLAIM", "RESULT"))
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "OPERATION_ORG",
+        "RECORD_ORG",
+        "BLOB_ORG",
+        "BLOB_NON_WORM",
+        "ACTOR_ORG",
+        "EDGE_ORG",
+        "EDGE_RECORD",
+        "EDGE_BLOB",
+        "EDGE_MISSING",
+        "VERSION",
+    ),
+)
+def test_hold_claim_and_result_revalidate_exact_same_org_authority(
+    database_authority_dsns: dict[str, str], boundary: str, drift: str
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    authorizer = _engine(database_authority_dsns, "easysynq_hold_authorizer")
+    maintenance = _engine(database_authority_dsns, "easysynq_hold_maintenance")
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+            operation_id, digest = _insert_hold_operation(connection, seed)
+        with authorizer.begin() as connection:
+            _authorize(connection, operation_id, digest)
+        if boundary == "RESULT":
+            with maintenance.begin() as connection:
+                assert operation_id in {
+                    row["operation_id"] for row in _claim_hold_operations(connection)
+                }
+        with owner.begin() as connection:
+            _apply_hold_authority_drift(connection, seed, operation_id, drift)
+
+        snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(operation) FROM worm_hold_release_operation operation
+                 WHERE id=:operation),
+              (SELECT to_jsonb(blob) FROM blob blob WHERE sha256=:sha),
+              (SELECT to_jsonb(hold_authorization)
+                 FROM worm_hold_release_authorization hold_authorization
+                 WHERE operation_id=:operation),
+              (SELECT count(*) FROM audit_event)
+            """
+        )
+        parameters = {"operation": operation_id, "sha": seed.blob_sha256}
+        with owner.connect() as connection:
+            before = connection.execute(snapshot_sql, parameters).one()
+        if boundary == "CLAIM":
+            with maintenance.begin() as connection:
+                assert operation_id not in {
+                    row["operation_id"] for row in _claim_hold_operations(connection)
+                }
+        else:
+            with pytest.raises(sa.exc.DBAPIError, match="ordinary_hold_release_refused"):
+                with maintenance.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "SELECT easysynq_record_ordinary_hold_release"
+                            "(:sha,:version,:operation,clock_timestamp())"
+                        ),
+                        {
+                            "sha": seed.blob_sha256,
+                            "version": seed.object_version_id,
+                            "operation": operation_id,
+                        },
+                    )
+        with owner.connect() as connection:
+            assert connection.execute(snapshot_sql, parameters).one() == before
+    finally:
+        owner.dispose()
+        authorizer.dispose()
+        maintenance.dispose()
+
+
+@pytest.mark.parametrize(
+    ("boundary", "locked_relation", "statement"),
+    (
+        (
+            "AUTHORIZATION",
+            "RECORD",
+            "UPDATE record SET org_id=:alternate_org WHERE id=:record",
+        ),
+        (
+            "AUTHORIZATION",
+            "INITIATING_APP_USER",
+            "UPDATE app_user SET org_id=:alternate_org WHERE id=:user",
+        ),
+        (
+            "AUTHORIZATION",
+            "BLOB",
+            "UPDATE blob SET verified_at=clock_timestamp() WHERE sha256=:sha",
+        ),
+        ("CLAIM", "RECORD", "UPDATE record SET org_id=:alternate_org WHERE id=:record"),
+        (
+            "CLAIM",
+            "INITIATING_APP_USER",
+            "UPDATE app_user SET org_id=:alternate_org WHERE id=:user",
+        ),
+        ("RESULT", "RECORD", "UPDATE record SET org_id=:alternate_org WHERE id=:record"),
+        (
+            "RESULT",
+            "INITIATING_APP_USER",
+            "UPDATE app_user SET org_id=:alternate_org WHERE id=:user",
+        ),
+    ),
+)
+def test_hold_authority_locks_exact_tuple_through_caller_transaction(
+    database_authority_dsns: dict[str, str],
+    boundary: str,
+    locked_relation: str,
+    statement: str,
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    authorizer = _engine(database_authority_dsns, "easysynq_hold_authorizer")
+    maintenance = _engine(database_authority_dsns, "easysynq_hold_maintenance")
+    call_connection: sa.Connection | None = None
+    call_transaction: sa.Transaction | None = None
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+            operation_id, digest = _insert_hold_operation(connection, seed)
+            alternate_org_id = _insert_org(connection)
+        if boundary != "AUTHORIZATION":
+            with authorizer.begin() as connection:
+                _authorize(connection, operation_id, digest)
+        if boundary == "RESULT":
+            with maintenance.begin() as connection:
+                assert operation_id in {
+                    row["operation_id"] for row in _claim_hold_operations(connection)
+                }
+
+        caller = authorizer if boundary == "AUTHORIZATION" else maintenance
+        call_connection = caller.connect()
+        call_transaction = call_connection.begin()
+        if boundary == "AUTHORIZATION":
+            _authorize(call_connection, operation_id, digest)
+        elif boundary == "CLAIM":
+            assert operation_id in {
+                row["operation_id"] for row in _claim_hold_operations(call_connection)
+            }
+        else:
+            call_connection.execute(
+                sa.text(
+                    "SELECT easysynq_record_ordinary_hold_release"
+                    "(:sha,:version,:operation,clock_timestamp())"
+                ),
+                {
+                    "sha": seed.blob_sha256,
+                    "version": seed.object_version_id,
+                    "operation": operation_id,
+                },
+            )
+
+        application_name = (
+            f"t2-hold-{boundary[:5].lower()}-{locked_relation[:8].lower()}-{uuid.uuid4().hex[:8]}"
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                _run_named_owner_update,
+                owner,
+                application_name=application_name,
+                statement=statement,
+                parameters={
+                    "record": seed.record_id,
+                    "user": seed.user_id,
+                    "sha": seed.blob_sha256,
+                    "alternate_org": alternate_org_id,
+                },
+            )
+            blocked = _wait_for_named_lock(owner, application_name, timeout_seconds=2)
+            call_transaction.rollback()
+            call_transaction = None
+            assert future.result(timeout=6) == "ok"
+        assert blocked, f"{boundary} did not retain a lock on {locked_relation}"
+    finally:
+        if call_transaction is not None:
+            call_transaction.rollback()
+        if call_connection is not None:
+            call_connection.close()
+        owner.dispose()
+        authorizer.dispose()
+        maintenance.dispose()
+
+
 def test_hold_authorization_rolls_back_audit_when_fresh_owner_check_fails(
     database_authority_dsns: dict[str, str],
 ) -> None:
@@ -740,8 +1637,14 @@ def test_hold_authorization_rolls_back_audit_when_fresh_owner_check_fails(
     authorizer = _engine(database_authority_dsns, "easysynq_hold_authorizer")
     try:
         with owner.begin() as connection:
-            seed = _seed_ordinary_owner(connection, logical_hold=True)
+            seed = _seed_ordinary_owner(connection)
             operation_id, digest = _insert_hold_operation(connection, seed)
+            _add_owner(
+                connection,
+                seed,
+                logical_hold=True,
+                policy_duration="P1Y",
+            )
 
         with pytest.raises(sa.exc.DBAPIError, match="hold_release_authorization_refused"):
             with authorizer.begin() as connection:
@@ -888,6 +1791,222 @@ def test_hold_claim_rechecks_all_current_owners_before_running(
         maintenance.dispose()
 
 
+@pytest.mark.parametrize("boundary", ("CLAIM", "RESULT"))
+@pytest.mark.parametrize(
+    "owner_shape",
+    (
+        "DISPOSED_PERMANENT",
+        "CROSS_ORG_EVIDENCE",
+        "TENANT_ORPHAN_EVIDENCE",
+        "TENANT_ORPHAN_EVIDENCE_PERMANENT",
+        "CROSS_ORG_DOCUMENT",
+        "TENANT_ORPHAN_DOCUMENT",
+    ),
+)
+def test_hold_release_ignores_noncurrent_or_cross_tenant_historical_evidence(
+    database_authority_dsns: dict[str, str], boundary: str, owner_shape: str
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    authorizer = _engine(database_authority_dsns, "easysynq_hold_authorizer")
+    maintenance = _engine(database_authority_dsns, "easysynq_hold_maintenance")
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+            operation_id, digest = _insert_hold_operation(connection, seed)
+        with authorizer.begin() as connection:
+            _authorize(connection, operation_id, digest)
+        if boundary == "RESULT":
+            with maintenance.begin() as connection:
+                assert operation_id in {
+                    row["operation_id"] for row in _claim_hold_operations(connection)
+                }
+
+        with owner.begin() as connection:
+            if owner_shape == "DISPOSED_PERMANENT":
+                owner_record_id = _add_owner(
+                    connection,
+                    seed,
+                    logical_hold=False,
+                    policy_duration="PERMANENT",
+                )
+                connection.execute(
+                    sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:id"),
+                    {"id": owner_record_id},
+                )
+            else:
+                is_document = owner_shape.endswith("DOCUMENT")
+                other_org_id = _insert_org(connection)
+                other_user_id = uuid.uuid4()
+                other_framework_id = uuid.uuid4()
+                other_policy_id = uuid.uuid4()
+                target_permanent_policy_id = uuid.uuid4()
+                other_record_id = uuid.uuid4()
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO app_user(id,org_id,keycloak_subject,display_name) "
+                        "VALUES (:id,:org,:subject,'Cross-tenant owner')"
+                    ),
+                    {
+                        "id": other_user_id,
+                        "org": other_org_id,
+                        "subject": f"cross-owner-{other_user_id}",
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO framework(id,org_id,code,name,is_active,is_authorable) "
+                        "VALUES (:id,:org,:code,'Cross owner framework',true,false)"
+                    ),
+                    {
+                        "id": other_framework_id,
+                        "org": other_org_id,
+                        "code": f"cross:{other_framework_id}",
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO retention_policy"
+                        "(id,org_id,name,duration,worm_lock_period,disposition_action) "
+                        "VALUES (:id,:org,:name,'PERMANENT','PERMANENT','RETAIN_PERMANENT')"
+                    ),
+                    {
+                        "id": other_policy_id,
+                        "org": other_org_id,
+                        "name": f"cross-policy-{other_policy_id}",
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO retention_policy"
+                        "(id,org_id,name,duration,worm_lock_period,disposition_action) "
+                        "VALUES (:id,:org,:name,'PERMANENT','PERMANENT','RETAIN_PERMANENT')"
+                    ),
+                    {
+                        "id": target_permanent_policy_id,
+                        "org": seed.org_id,
+                        "name": f"target-permanent-{target_permanent_policy_id}",
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO documented_information
+                            (id,org_id,framework_id,kind,identifier,title,owner_user_id,
+                             current_state,is_singleton,classification,
+                             acknowledgement_required,created_by)
+                        VALUES (:id,:org,:framework,CAST(:kind AS document_kind),:identifier,
+                                'Cross owner',:user,
+                                'Draft',false,'Internal',false,:user)
+                        """
+                    ),
+                    {
+                        "id": other_record_id,
+                        "org": other_org_id,
+                        "framework": other_framework_id,
+                        "kind": "DOCUMENT" if is_document else "RECORD",
+                        "identifier": f"CROSS-OWNER-{other_record_id}",
+                        "user": other_user_id,
+                    },
+                )
+                connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+                edge_org_id = other_org_id if owner_shape.startswith("CROSS_ORG") else seed.org_id
+                edge_policy_id = (
+                    target_permanent_policy_id
+                    if owner_shape == "TENANT_ORPHAN_DOCUMENT"
+                    or owner_shape == "TENANT_ORPHAN_EVIDENCE_PERMANENT"
+                    else seed.policy_id
+                    if owner_shape.startswith("TENANT_ORPHAN_EVIDENCE")
+                    else other_policy_id
+                )
+                edge_user_id = (
+                    seed.user_id if owner_shape.startswith("TENANT_ORPHAN") else other_user_id
+                )
+                if is_document:
+                    connection.execute(
+                        sa.text(
+                            """
+                            INSERT INTO document_version
+                                (id,org_id,document_id,version_seq,revision_label,
+                                 change_significance,change_reason,version_state,
+                                 retention_authority_kind,retention_policy_id,
+                                 retention_basis_date,source_blob_sha256,metadata_snapshot,
+                                 imported,author_user_id,created_by)
+                            VALUES (:id,:org,:document,1,'A','MINOR','cross owner','Draft',
+                                    'POLICY',:policy,current_date,:sha,'{}'::jsonb,false,:user,:user)
+                            """
+                        ),
+                        {
+                            "id": uuid.uuid4(),
+                            "org": edge_org_id,
+                            "document": other_record_id,
+                            "policy": edge_policy_id,
+                            "sha": seed.blob_sha256,
+                            "user": edge_user_id,
+                        },
+                    )
+                else:
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO record"
+                            "(id,org_id,record_type,captured_by,content_hash_version,"
+                            "retention_policy_id,disposition_state,legal_hold) "
+                            "VALUES (:id,:org,'EVIDENCE',:user,2,:policy,'ACTIVE',:legal_hold)"
+                        ),
+                        {
+                            "id": other_record_id,
+                            "org": other_org_id,
+                            "user": edge_user_id,
+                            "policy": edge_policy_id,
+                            "legal_hold": owner_shape != "TENANT_ORPHAN_EVIDENCE_PERMANENT",
+                        },
+                    )
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO evidence_blob"
+                            "(id,org_id,record_id,blob_sha256,is_original,created_by) "
+                            "VALUES (:id,:edge_org,:record,:sha,true,:user)"
+                        ),
+                        {
+                            "id": uuid.uuid4(),
+                            "edge_org": edge_org_id,
+                            "record": other_record_id,
+                            "sha": seed.blob_sha256,
+                            "user": edge_user_id,
+                        },
+                    )
+
+        with maintenance.begin() as connection:
+            if boundary == "CLAIM":
+                assert operation_id in {
+                    row["operation_id"] for row in _claim_hold_operations(connection)
+                }
+            else:
+                connection.execute(
+                    sa.text(
+                        "SELECT easysynq_record_ordinary_hold_release"
+                        "(:sha,:version,:operation,clock_timestamp())"
+                    ),
+                    {
+                        "sha": seed.blob_sha256,
+                        "version": seed.object_version_id,
+                        "operation": operation_id,
+                    },
+                )
+        with owner.connect() as connection:
+            expected_state = "RUNNING" if boundary == "CLAIM" else "VERIFIED"
+            assert (
+                connection.execute(
+                    sa.text("SELECT state::text FROM worm_hold_release_operation WHERE id=:id"),
+                    {"id": operation_id},
+                ).scalar_one()
+                == expected_state
+            )
+    finally:
+        owner.dispose()
+        authorizer.dispose()
+        maintenance.dispose()
+
+
 def test_hold_result_rechecks_owner_releases_exact_version_and_appends_audit(
     database_authority_dsns: dict[str, str],
 ) -> None:
@@ -988,9 +2107,11 @@ def test_hold_result_refuses_new_logical_hold_after_claim(
             claimed = _claim_hold_operations(connection)
             assert operation_id in {row["operation_id"] for row in claimed}
         with owner.begin() as connection:
-            connection.execute(
-                sa.text("UPDATE record SET legal_hold=true WHERE id=:record_id"),
-                {"record_id": seed.record_id},
+            _add_owner(
+                connection,
+                seed,
+                logical_hold=True,
+                policy_duration="P1Y",
             )
 
         with pytest.raises(sa.exc.DBAPIError, match="ordinary_hold_release_refused"):

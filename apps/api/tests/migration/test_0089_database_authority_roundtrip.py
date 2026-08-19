@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from collections.abc import Callable, Iterator, Sequence
@@ -26,7 +27,11 @@ _REVISION = "0089_worm_retention_container_identity"
 _MEMBERSHIP_REFUSAL = "database_authority_role_membership_refused"
 _SCHEMA_OWNER_REFUSAL = "database_authority_wrong_public_schema_owner"
 _DEFAULT_ACL_REFUSAL = "database_authority_wrong_default_acl_grantor"
+_PREEXISTING_ROLE_REFUSAL = "database_authority_preexisting_purpose_role_refused"
 _DOWNGRADE_REFUSAL = "populated_0089_downgrade_refused"
+_TASK2_EVENT_TYPE = "RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED"
+_FROZEN_0088_EVENT_TYPE_COUNT = 146
+_FROZEN_0088_EVENT_TYPE_SHA256 = "3bb1f865ec7a25b9f09afe142cfe4c990d1c54dd973464943075df13babee2d0"
 
 _APP_ROLE = "easysynq_app"
 _LINKER_ROLE = "easysynq_linker"
@@ -76,8 +81,11 @@ _AUTHORITY_FUNCTIONS = (
     "easysynq_begin_r27_role_membership",
     "easysynq_complete_r27_role_membership",
     "easysynq_fail_r27_role_membership",
+    "easysynq_guard_hold_release_authorization_insert",
+    "easysynq_guard_hold_release_authorization_history",
 )
 _AUTHORITY_TRIGGERS = (
+    "trg_app_disposition_insert_guard",
     "trg_blob_worm_identity",
     "trg_document_version_worm_owner",
     "trg_evidence_blob_worm_owner",
@@ -86,6 +94,8 @@ _AUTHORITY_TRIGGERS = (
     "trg_r27_execution_target_result_history",
     "trg_recovery_witness_history",
     "trg_role_membership_history",
+    "trg_worm_hold_release_authorization_immutable",
+    "trg_worm_hold_release_authorize",
 )
 
 
@@ -366,6 +376,53 @@ def _current_acl_signature(connection: sa.Connection) -> tuple[tuple[object, ...
     )
 
 
+def _direct_acl_signature(connection: sa.Connection, role: str) -> tuple[tuple[object, ...], ...]:
+    return _rows(
+        connection,
+        """
+        WITH target AS (SELECT oid FROM pg_roles WHERE rolname=:role), grants AS (
+            SELECT 'database' AS kind,database.datname AS object_name,'' AS subobject,
+                   acl.privilege_type,acl.is_grantable,pg_get_userbyid(acl.grantor) AS grantor
+            FROM pg_database database
+            CROSS JOIN LATERAL aclexplode(database.datacl) acl,target
+            WHERE database.datname=current_database() AND acl.grantee=target.oid
+            UNION ALL
+            SELECT 'schema',namespace.nspname,'',acl.privilege_type,acl.is_grantable,
+                   pg_get_userbyid(acl.grantor)
+            FROM pg_namespace namespace
+            CROSS JOIN LATERAL aclexplode(namespace.nspacl) acl,target
+            WHERE namespace.nspname='public' AND acl.grantee=target.oid
+            UNION ALL
+            SELECT 'relation',relation.relname,'',acl.privilege_type,acl.is_grantable,
+                   pg_get_userbyid(acl.grantor)
+            FROM pg_class relation
+            JOIN pg_namespace namespace ON namespace.oid=relation.relnamespace
+            CROSS JOIN LATERAL aclexplode(relation.relacl) acl,target
+            WHERE namespace.nspname='public' AND acl.grantee=target.oid
+            UNION ALL
+            SELECT 'column',relation.relname,attribute.attname,acl.privilege_type,
+                   acl.is_grantable,pg_get_userbyid(acl.grantor)
+            FROM pg_attribute attribute
+            JOIN pg_class relation ON relation.oid=attribute.attrelid
+            JOIN pg_namespace namespace ON namespace.oid=relation.relnamespace
+            CROSS JOIN LATERAL aclexplode(attribute.attacl) acl,target
+            WHERE namespace.nspname='public' AND attribute.attnum>0
+              AND acl.grantee=target.oid
+            UNION ALL
+            SELECT 'function',function.oid::regprocedure::text,'',acl.privilege_type,
+                   acl.is_grantable,pg_get_userbyid(acl.grantor)
+            FROM pg_proc function
+            JOIN pg_namespace namespace ON namespace.oid=function.pronamespace
+            CROSS JOIN LATERAL aclexplode(function.proacl) acl,target
+            WHERE namespace.nspname='public' AND acl.grantee=target.oid
+        )
+        SELECT kind,object_name,subobject,privilege_type,is_grantable,grantor
+        FROM grants ORDER BY 1,2,3,4,5,6
+        """,
+        {"role": role},
+    )
+
+
 def _default_acl_signature(connection: sa.Connection) -> tuple[tuple[object, ...], ...]:
     return _rows(
         connection,
@@ -437,6 +494,48 @@ def _snapshot(
 def _execute_composed(connection: sa.Connection, statement: sql.Composed) -> None:
     with connection.connection.driver_connection.cursor() as cursor:
         cursor.execute(statement)
+
+
+def _event_type_labels(connection: sa.Connection) -> tuple[str, ...]:
+    return tuple(
+        connection.execute(
+            sa.text(
+                """
+                SELECT enum.enumlabel
+                FROM pg_enum AS enum
+                JOIN pg_type AS type ON type.oid=enum.enumtypid
+                JOIN pg_namespace AS namespace ON namespace.oid=type.typnamespace
+                WHERE namespace.nspname='public' AND type.typname='event_type'
+                ORDER BY enum.enumsortorder
+                """
+            )
+        ).scalars()
+    )
+
+
+def _install_frozen_0088_event_type(connection: sa.Connection) -> tuple[str, ...]:
+    labels = tuple(label for label in _event_type_labels(connection) if label != _TASK2_EVENT_TYPE)
+    assert len(labels) == _FROZEN_0088_EVENT_TYPE_COUNT
+    assert hashlib.sha256("\0".join(labels).encode()).hexdigest() == (
+        _FROZEN_0088_EVENT_TYPE_SHA256
+    )
+    connection.execute(sa.text("LOCK TABLE public.audit_event IN ACCESS EXCLUSIVE MODE"))
+    _execute_composed(
+        connection,
+        sql.SQL("CREATE TYPE public.event_type_0088_frozen AS ENUM ({})").format(
+            sql.SQL(",").join(sql.Literal(label) for label in labels)
+        ),
+    )
+    connection.execute(
+        sa.text(
+            "ALTER TABLE public.audit_event ALTER COLUMN event_type "
+            "TYPE public.event_type_0088_frozen "
+            "USING event_type::text::public.event_type_0088_frozen"
+        )
+    )
+    connection.execute(sa.text("DROP TYPE public.event_type RESTRICT"))
+    connection.execute(sa.text("ALTER TYPE public.event_type_0088_frozen RENAME TO event_type"))
+    return labels
 
 
 def _create_role(
@@ -518,6 +617,79 @@ def test_any_target_role_membership_refuses_upgrade_atomically(
                                 sql.Identifier(member_role),
                             ),
                         )
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.parametrize("preexisting_role", _NEW_ROLES)
+def test_preexisting_purpose_role_refuses_upgrade_without_touching_global_or_database_state(
+    postgres_admin_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    preexisting_role: str,
+) -> None:
+    password = "preexisting-purpose-role'\\snowman-☃"
+    with _scratch_database(postgres_admin_url) as scratch_url:
+        _point_at(monkeypatch, scratch_url)
+        config = _config()
+        command.upgrade(config, _BASE_REVISION)
+        engine = sa.create_engine(scratch_url)
+        try:
+            with engine.begin() as connection:
+                _create_role(
+                    connection,
+                    preexisting_role,
+                    password=password,
+                    privileged_attributes=True,
+                )
+                _execute_composed(
+                    connection,
+                    sql.SQL("GRANT SELECT ON public.organization TO {}").format(
+                        sql.Identifier(preexisting_role)
+                    ),
+                )
+            with engine.connect() as connection:
+                before = _snapshot(connection, roles=_TARGET_ROLES)
+                before_direct_acls = _direct_acl_signature(connection, preexisting_role)
+
+            with pytest.raises(Exception, match=_PREEXISTING_ROLE_REFUSAL):
+                command.upgrade(config, _REVISION)
+
+            with engine.connect() as connection:
+                assert _snapshot(connection, roles=_TARGET_ROLES) == before
+                assert _direct_acl_signature(connection, preexisting_role) == before_direct_acls
+        finally:
+            engine.dispose()
+
+
+def test_upgrade_explicitly_removes_bypassrls_from_every_runtime_role(
+    postgres_admin_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _scratch_database(postgres_admin_url) as scratch_url:
+        _point_at(monkeypatch, scratch_url)
+        config = _config()
+        command.upgrade(config, _BASE_REVISION)
+        engine = sa.create_engine(scratch_url)
+        try:
+            with engine.begin() as connection:
+                for role in (_APP_ROLE, _LINKER_ROLE):
+                    _execute_composed(
+                        connection,
+                        sql.SQL("ALTER ROLE {} BYPASSRLS").format(sql.Identifier(role)),
+                    )
+
+            command.upgrade(config, _REVISION)
+
+            with engine.connect() as connection:
+                attributes = connection.execute(
+                    sa.text(
+                        "SELECT rolname,rolbypassrls FROM pg_roles "
+                        "WHERE rolname=ANY(:roles) ORDER BY rolname"
+                    ),
+                    {"roles": list(_TARGET_ROLES)},
+                ).all()
+                assert {row.rolname for row in attributes} == set(_TARGET_ROLES)
+                assert all(not row.rolbypassrls for row in attributes)
         finally:
             engine.dispose()
 
@@ -647,10 +819,29 @@ def _seed_invalidated_witness(connection: sa.Connection) -> None:
     )
 
 
+def _seed_task2_audit_event(connection: sa.Connection) -> None:
+    connection.execute(
+        sa.text("SELECT easysynq_create_audit_partition(date_trunc('month',current_date)::date)")
+    )
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO audit_event
+                (org_id,occurred_at,actor_type,event_type,object_type,object_id,scope_ref,reason)
+            SELECT id,clock_timestamp(),'system',CAST(:event_type AS event_type),
+                   'record',gen_random_uuid(),'record','roundtrip-task2-enum'
+            FROM organization ORDER BY created_at LIMIT 1
+            """
+        ),
+        {"event_type": _TASK2_EVENT_TYPE},
+    )
+
+
 _POPULATED_STATES: tuple[tuple[str, Callable[[sa.Connection], None]], ...] = (
     ("r27_execution_target_result", _seed_target_result),
     ("r27_role_membership_operation", _seed_role_membership_operation),
     ("invalidated_recovery_generation_witness", _seed_invalidated_witness),
+    ("task2_audit_event_type", _seed_task2_audit_event),
 )
 
 
@@ -666,6 +857,10 @@ def _new_state_data(connection: sa.Connection) -> tuple[tuple[object, ...], ...]
         UNION ALL
         SELECT 'recovery_generation_witness', id::text, to_jsonb(row_data)::text
         FROM recovery_generation_witness AS row_data
+        UNION ALL
+        SELECT 'audit_event', id::text, to_jsonb(row_data)::text
+        FROM audit_event AS row_data
+        WHERE event_type='RECORD_LEGAL_HOLD_RELEASE_AUTHORIZED'
         ORDER BY 1, 2, 3
         """,
     )
@@ -819,6 +1014,41 @@ def _authenticate(scratch_url: str, role: str, password: str) -> str:
         return str(connection.execute("SELECT session_user").fetchone()[0])
 
 
+def test_frozen_0088_event_type_roundtrip_removes_only_task2_label(
+    postgres_admin_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _scratch_database(postgres_admin_url) as scratch_url:
+        _point_at(monkeypatch, scratch_url)
+        config = _config()
+        command.upgrade(config, _BASE_REVISION)
+        engine = sa.create_engine(scratch_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text("SELECT easysynq_create_audit_partition(CAST(:start AS date))"),
+                    {"start": "2036-01-01"},
+                )
+                frozen_labels = _install_frozen_0088_event_type(connection)
+            with engine.connect() as connection:
+                frozen_schema = _schema_signature(connection)
+
+            command.upgrade(config, _REVISION)
+            with engine.connect() as connection:
+                assert _event_type_labels(connection) == (*frozen_labels, _TASK2_EVENT_TYPE)
+
+            command.downgrade(config, _BASE_REVISION)
+            with engine.connect() as connection:
+                assert _event_type_labels(connection) == frozen_labels
+                assert _schema_signature(connection) == frozen_schema
+
+            command.upgrade(config, _REVISION)
+            with engine.connect() as connection:
+                assert _event_type_labels(connection) == (*frozen_labels, _TASK2_EVENT_TYPE)
+        finally:
+            engine.dispose()
+
+
 def test_empty_authority_roundtrip_is_exact_and_special_passwords_reauthenticate(
     postgres_admin_url: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -834,12 +1064,14 @@ def test_empty_authority_roundtrip_is_exact_and_special_passwords_reauthenticate
         command.upgrade(config, _BASE_REVISION)
         engine = sa.create_engine(scratch_url)
         failures: list[str] = []
+        frozen_event_type_labels: tuple[str, ...]
         try:
             with engine.begin() as connection:
                 connection.execute(
                     sa.text("SELECT easysynq_create_audit_partition(CAST(:start AS date))"),
                     {"start": "2036-01-01"},
                 )
+                frozen_event_type_labels = _install_frozen_0088_event_type(connection)
             with engine.connect() as connection:
                 baseline_schema = _schema_signature(connection)
                 baseline_roles = _role_attributes_without_verifier(
@@ -852,6 +1084,10 @@ def test_empty_authority_roundtrip_is_exact_and_special_passwords_reauthenticate
 
             command.upgrade(config, _REVISION)
             with engine.connect() as connection:
+                assert _event_type_labels(connection) == (
+                    *frozen_event_type_labels,
+                    _TASK2_EVENT_TYPE,
+                )
                 assert _existing_names(connection, catalog="roles", names=_NEW_ROLES) == set(
                     _NEW_ROLES
                 )
@@ -865,6 +1101,10 @@ def test_empty_authority_roundtrip_is_exact_and_special_passwords_reauthenticate
             command.downgrade(config, _BASE_REVISION)
             with engine.connect() as connection:
                 assert _revision(connection) == _BASE_REVISION
+                if _event_type_labels(connection) != frozen_event_type_labels:
+                    failures.append(
+                        "event_type labels were not restored to the frozen executable-0088 set"
+                    )
                 remaining_roles = _existing_names(connection, catalog="roles", names=_NEW_ROLES)
                 remaining_functions = _existing_names(
                     connection, catalog="functions", names=_AUTHORITY_FUNCTIONS
@@ -947,6 +1187,10 @@ def test_empty_authority_roundtrip_is_exact_and_special_passwords_reauthenticate
             command.upgrade(config, _REVISION)
             with engine.connect() as connection:
                 assert _revision(connection) == _REVISION
+                assert _event_type_labels(connection) == (
+                    *frozen_event_type_labels,
+                    _TASK2_EVENT_TYPE,
+                )
             assert _authenticate(scratch_url, _APP_ROLE, app_password) == _APP_ROLE
             assert _authenticate(scratch_url, _LINKER_ROLE, linker_password) == _LINKER_ROLE
 

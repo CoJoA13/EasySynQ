@@ -43,6 +43,10 @@ class Blob(Base):
             "AND worm_legal_hold IS NULL AND worm_legal_hold_verified_at IS NULL)",
             name="worm_assertion_shape",
         ),
+        CheckConstraint(
+            "purge_execution_id IS NULL OR purged_at IS NOT NULL",
+            name="purge_provenance_shape",
+        ),
     )
 
     sha256: Mapped[str] = mapped_column(Text, primary_key=True)  # lowercase hex (64 chars)

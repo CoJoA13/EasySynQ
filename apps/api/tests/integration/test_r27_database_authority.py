@@ -138,12 +138,22 @@ FUNCTION_SIGNATURES = {
 }
 
 GUARD_FUNCTION_SIGNATURES = {
+    "easysynq_guard_app_disposition_insert()",
     "easysynq_guard_blob_worm_identity()",
+    "easysynq_guard_hold_release_authorization_history()",
+    "easysynq_guard_hold_release_authorization_insert()",
     "easysynq_guard_key_registry_history()",
     "easysynq_guard_r27_result_history()",
     "easysynq_guard_recovery_witness_history()",
     "easysynq_guard_role_membership_history()",
     "easysynq_guard_worm_owner_pointer()",
+}
+
+HOLD_TRIGGER_FUNCTIONS = {
+    "trg_worm_hold_release_authorize": "easysynq_guard_hold_release_authorization_insert",
+    "trg_worm_hold_release_authorization_immutable": (
+        "easysynq_guard_hold_release_authorization_history"
+    ),
 }
 
 OBSERVATION_CALLS = (
@@ -718,14 +728,14 @@ def test_runtime_roles_are_independent_no_admin_logins_with_distinct_secrets(
                 sa.text(
                     """
                     SELECT rolname,rolcanlogin,rolinherit,rolsuper,rolcreatedb,
-                           rolcreaterole,rolreplication
+                           rolcreaterole,rolreplication,rolbypassrls
                     FROM pg_roles WHERE rolname = ANY(:roles) ORDER BY rolname
                     """
                 ),
                 {"roles": sorted(ALL_RUNTIME_ROLES)},
             ).all()
             assert {row.rolname for row in rows} == ALL_RUNTIME_ROLES
-            assert all(row[1:] == (True, False, False, False, False, False) for row in rows)
+            assert all(row[1:] == (True, False, False, False, False, False, False) for row in rows)
             memberships = connection.execute(
                 sa.text(
                     """
@@ -747,6 +757,11 @@ def test_runtime_roles_are_independent_no_admin_logins_with_distinct_secrets(
         try:
             with engine.connect() as connection:
                 assert connection.execute(sa.text("SELECT session_user")).scalar_one() == role
+                for other_role in sorted(ALL_RUNTIME_ROLES - {role}):
+                    with pytest.raises(sa.exc.ProgrammingError) as denied:
+                        connection.execute(sa.text(f'SET ROLE "{other_role}"'))
+                    assert denied.value.orig.sqlstate == "42501"
+                    connection.rollback()
         finally:
             engine.dispose()
 
@@ -761,6 +776,274 @@ def test_runtime_roles_are_independent_no_admin_logins_with_distinct_secrets(
                     pass
         finally:
             wrong_engine.dispose()
+
+
+def test_app_disposition_insert_preserves_ordinary_events_but_refuses_r27_authority(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = sa.create_engine(database_authority_dsns["owner"])
+    app = sa.create_engine(database_authority_dsns["easysynq_app"])
+    ordinary_event_id = uuid.uuid4()
+    forged_event_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            connection.execute(
+                sa.text(
+                    "INSERT INTO r27_request "
+                    "(id,org_id,record_id,normalized_legal_basis,legal_basis_sha256) "
+                    "VALUES (:id,:org,:record,'review-forgery',:digest)"
+                ),
+                {
+                    "id": request_id,
+                    "org": seed.org_id,
+                    "record": seed.record_id,
+                    "digest": uuid.uuid4().hex * 2,
+                },
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO r27_execution "
+                    "(id,request_id,execution_id,state,claimed_at) "
+                    "VALUES (:id,:request,:public_id,'CLAIMED',clock_timestamp())"
+                ),
+                {
+                    "id": execution_id,
+                    "request": request_id,
+                    "public_id": uuid.uuid4(),
+                },
+            )
+
+        with app.begin() as connection:
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO disposition_event
+                        (id,org_id,record_id,action,tombstone,policy_id,approved_by,
+                         is_worm_destroy,legal_basis)
+                    VALUES
+                        (:id,:org,:record,'DESTROY',true,:policy,:user,false,
+                         'ordinary application disposition')
+                    """
+                ),
+                {
+                    "id": ordinary_event_id,
+                    "org": seed.org_id,
+                    "record": seed.record_id,
+                    "policy": seed.policy_id,
+                    "user": seed.user_id,
+                },
+            )
+
+        with pytest.raises(sa.exc.DBAPIError, match="app_r27_disposition_insert_refused") as denied:
+            with app.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO disposition_event
+                            (id,org_id,record_id,action,tombstone,approved_by,requested_by,
+                             is_worm_destroy,legal_basis,r27_request_id,r27_execution_id)
+                        VALUES
+                            (:id,:org,:record,'DESTROY',true,:user,:user,true,
+                             'forged R27 authority',:request,:execution)
+                        """
+                    ),
+                    {
+                        "id": forged_event_id,
+                        "org": seed.org_id,
+                        "record": seed.record_id,
+                        "user": seed.user_id,
+                        "request": request_id,
+                        "execution": execution_id,
+                    },
+                )
+        assert denied.value.orig.sqlstate == "P0001"
+
+        with owner.connect() as connection:
+            rows = connection.execute(
+                sa.text(
+                    "SELECT id FROM disposition_event WHERE id IN (:ordinary,:forged) ORDER BY id"
+                ),
+                {"ordinary": ordinary_event_id, "forged": forged_event_id},
+            ).scalars()
+            assert set(rows) == {ordinary_event_id}
+    finally:
+        owner.dispose()
+        app.dispose()
+
+
+def test_r27_authorizer_insert_columns_allow_only_prepared_unconsumed_authority(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = sa.create_engine(database_authority_dsns["owner"])
+    authorizer = sa.create_engine(database_authority_dsns["easysynq_r27_authorizer"])
+    request_id = uuid.uuid4()
+    terminal_request_id = uuid.uuid4()
+    challenge_id = uuid.uuid4()
+    consumed_challenge_id = uuid.uuid4()
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+
+        with authorizer.begin() as connection:
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO r27_request
+                        (id,org_id,record_id,normalized_legal_basis,legal_basis_sha256)
+                    VALUES (:id,:org,:record,'prepared shell',:digest)
+                    """
+                ),
+                {
+                    "id": request_id,
+                    "org": seed.org_id,
+                    "record": seed.record_id,
+                    "digest": uuid.uuid4().hex * 2,
+                },
+            )
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO r27_action_challenge
+                        (id,action,request_id,record_id,issuer,token_jti,action_nonce,
+                         accepted_claims,manifest_sha256,expires_at)
+                    VALUES
+                        (:id,'REQUEST',:request,:record,'https://issuer.test',:jti,:nonce,
+                         '{}'::jsonb,NULL,clock_timestamp()+interval '1 hour')
+                    """
+                ),
+                {
+                    "id": challenge_id,
+                    "request": request_id,
+                    "record": seed.record_id,
+                    "jti": f"prepared-{uuid.uuid4()}",
+                    "nonce": uuid.uuid4().hex + uuid.uuid4().hex[:11],
+                },
+            )
+
+        with pytest.raises(sa.exc.ProgrammingError) as terminal_denied:
+            with authorizer.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO r27_request
+                            (id,org_id,record_id,normalized_legal_basis,legal_basis_sha256,
+                             state,stale_at)
+                        VALUES
+                            (:id,:org,:record,'terminal shell',:digest,'STALE',clock_timestamp())
+                        """
+                    ),
+                    {
+                        "id": terminal_request_id,
+                        "org": seed.org_id,
+                        "record": seed.record_id,
+                        "digest": uuid.uuid4().hex * 2,
+                    },
+                )
+        assert terminal_denied.value.orig.sqlstate == "42501"
+
+        with pytest.raises(sa.exc.ProgrammingError) as consumed_denied:
+            with authorizer.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO r27_action_challenge
+                            (id,action,request_id,record_id,issuer,token_jti,action_nonce,
+                             accepted_claims,manifest_sha256,expires_at,consumed_at)
+                        VALUES
+                            (:id,'REQUEST',:request,:record,'https://issuer.test',:jti,:nonce,
+                             '{}'::jsonb,NULL,clock_timestamp()+interval '1 hour',
+                             clock_timestamp())
+                        """
+                    ),
+                    {
+                        "id": consumed_challenge_id,
+                        "request": request_id,
+                        "record": seed.record_id,
+                        "jti": f"consumed-{uuid.uuid4()}",
+                        "nonce": uuid.uuid4().hex + uuid.uuid4().hex[:11],
+                    },
+                )
+        assert consumed_denied.value.orig.sqlstate == "42501"
+
+        with owner.connect() as connection:
+            assert connection.execute(
+                sa.text(
+                    "SELECT array_agg(id ORDER BY id) FROM r27_request "
+                    "WHERE id IN (:prepared,:terminal)"
+                ),
+                {"prepared": request_id, "terminal": terminal_request_id},
+            ).scalar_one() == [request_id]
+            assert connection.execute(
+                sa.text(
+                    "SELECT array_agg(id ORDER BY id) FROM r27_action_challenge "
+                    "WHERE id IN (:prepared,:consumed)"
+                ),
+                {"prepared": challenge_id, "consumed": consumed_challenge_id},
+            ).scalar_one() == [challenge_id]
+    finally:
+        owner.dispose()
+        authorizer.dispose()
+
+
+def test_r27_authorizer_cannot_insert_preconsumed_challenge(
+    database_authority_dsns: dict[str, str],
+) -> None:
+    owner = sa.create_engine(database_authority_dsns["owner"])
+    authorizer = sa.create_engine(database_authority_dsns["easysynq_r27_authorizer"])
+    request_id = uuid.uuid4()
+    challenge_id = uuid.uuid4()
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+        with authorizer.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO r27_request "
+                    "(id,org_id,record_id,normalized_legal_basis,legal_basis_sha256) "
+                    "VALUES (:id,:org,:record,'prepared shell',:digest)"
+                ),
+                {
+                    "id": request_id,
+                    "org": seed.org_id,
+                    "record": seed.record_id,
+                    "digest": uuid.uuid4().hex * 2,
+                },
+            )
+        with pytest.raises(sa.exc.ProgrammingError) as denied:
+            with authorizer.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO r27_action_challenge
+                            (id,action,request_id,record_id,issuer,token_jti,action_nonce,
+                             accepted_claims,manifest_sha256,expires_at,consumed_at)
+                        VALUES
+                            (:id,'REQUEST',:request,:record,'https://issuer.test',:jti,:nonce,
+                             '{}'::jsonb,NULL,clock_timestamp()+interval '1 hour',
+                             clock_timestamp())
+                        """
+                    ),
+                    {
+                        "id": challenge_id,
+                        "request": request_id,
+                        "record": seed.record_id,
+                        "jti": f"preconsumed-{uuid.uuid4()}",
+                        "nonce": uuid.uuid4().hex + uuid.uuid4().hex[:11],
+                    },
+                )
+        assert denied.value.orig.sqlstate == "42501"
+        with owner.connect() as connection:
+            assert not connection.execute(
+                sa.text("SELECT EXISTS (SELECT 1 FROM r27_action_challenge WHERE id=:id)"),
+                {"id": challenge_id},
+            ).scalar_one()
+    finally:
+        owner.dispose()
+        authorizer.dispose()
 
 
 def test_every_authority_function_exists_hardened_and_has_one_executor(
@@ -861,6 +1144,38 @@ def test_every_authority_function_exists_hardened_and_has_one_executor(
                 ).all()
                 assert non_owner_executors == []
 
+            trigger_bindings = connection.execute(
+                sa.text(
+                    """
+                    SELECT trigger.tgname,trigger.tgfoid
+                    FROM pg_trigger trigger
+                    JOIN pg_class relation ON relation.oid=trigger.tgrelid
+                    WHERE relation.oid=to_regclass('public.worm_hold_release_authorization')
+                      AND NOT trigger.tgisinternal
+                    ORDER BY trigger.tgname
+                    """
+                )
+            ).all()
+            assert len(trigger_bindings) == len(HOLD_TRIGGER_FUNCTIONS) == 2
+            assert {row.tgname for row in trigger_bindings} == set(HOLD_TRIGGER_FUNCTIONS)
+            for binding in trigger_bindings:
+                expected_oid = connection.execute(
+                    sa.text("SELECT to_regprocedure(:signature)::oid"),
+                    {"signature": (f"public.{HOLD_TRIGGER_FUNCTIONS[binding.tgname]}()")},
+                ).scalar_one()
+                assert binding.tgfoid == expected_oid
+            assert connection.execute(
+                sa.text(
+                    """
+                    SELECT
+                      to_regprocedure('public.authorize_worm_hold_release()') IS NULL
+                      AND to_regprocedure(
+                        'public.refuse_worm_hold_release_authorization_change()'
+                      ) IS NULL
+                    """
+                )
+            ).scalar_one()
+
             partition_factory = connection.execute(
                 sa.text(
                     """
@@ -913,13 +1228,13 @@ def test_current_table_column_and_sequence_acls_match_the_authority_allowlist(
     expected_table_grants |= {
         ("easysynq_r27_authorizer", table, privilege)
         for table, privileges in {
-            "r27_action_challenge": ("INSERT", "SELECT"),
+            "r27_action_challenge": ("SELECT",),
             "r27_attestation": ("INSERT", "SELECT"),
             "r27_authorizer_key": ("SELECT",),
             "r27_manifest": ("INSERT", "SELECT"),
             "r27_manifest_derivative": ("INSERT",),
             "r27_manifest_target": ("INSERT", "SELECT"),
-            "r27_request": ("INSERT", "SELECT"),
+            "r27_request": ("SELECT",),
         }.items()
         for privilege in privileges
     }
@@ -1010,7 +1325,6 @@ def test_current_table_column_and_sequence_acls_match_the_authority_allowlist(
                 ("audit_event", "INSERT"),
                 ("audit_event", "SELECT"),
                 ("blob", "DELETE"),
-                ("blob", "INSERT"),
                 ("blob", "SELECT"),
                 ("document_version", "DELETE"),
                 ("document_version", "INSERT"),
@@ -1064,6 +1378,65 @@ def test_current_table_column_and_sequence_acls_match_the_authority_allowlist(
                 ("easysynq_audit_signer", "audit_event", "chained_at"),
             } | {
                 ("easysynq_audit_signer", "audit_chain_cursor", column) for column in cursor_columns
+            }
+
+            sensitive_inserts = set(
+                connection.execute(
+                    sa.text(
+                        """
+                        SELECT grantee,table_name,column_name
+                        FROM information_schema.role_column_grants
+                        WHERE table_schema='public' AND privilege_type='INSERT'
+                          AND ((grantee='easysynq_app' AND table_name='blob')
+                            OR (grantee='easysynq_r27_authorizer'
+                                AND table_name IN ('r27_request','r27_action_challenge')))
+                        """
+                    )
+                ).all()
+            )
+            assert sensitive_inserts == {
+                ("easysynq_app", "blob", column)
+                for column in (
+                    "sha256",
+                    "org_id",
+                    "size_bytes",
+                    "mime_type",
+                    "bucket",
+                    "object_key",
+                    "object_version_id",
+                    "worm_locked",
+                    "worm_enforced_mode",
+                    "worm_asserted_retain_until",
+                    "worm_asserted_at",
+                    "worm_retain_until",
+                    "worm_retention_verified_at",
+                    "worm_legal_hold",
+                    "worm_legal_hold_verified_at",
+                    "sse",
+                )
+            } | {
+                ("easysynq_r27_authorizer", "r27_request", column)
+                for column in (
+                    "id",
+                    "org_id",
+                    "record_id",
+                    "normalized_legal_basis",
+                    "legal_basis_sha256",
+                )
+            } | {
+                ("easysynq_r27_authorizer", "r27_action_challenge", column)
+                for column in (
+                    "id",
+                    "action",
+                    "request_id",
+                    "record_id",
+                    "issuer",
+                    "token_jti",
+                    "action_nonce",
+                    "accepted_claims",
+                    "manifest_sha256",
+                    "expires_at",
+                )
             }
 
             child_grants = set(
@@ -1777,13 +2150,18 @@ def test_worm_owner_org_cannot_change_while_pointer_is_retained(
 def test_r27_result_functions_revalidate_coordinates_and_source_disposition_atomically(
     database_authority_dsns: dict[str, str],
 ) -> None:
-    from tests.integration.test_r27_authority_transitions import _seed_source_execution
+    from tests.integration.test_r27_authority_transitions import (
+        _claim_r27_physical_marker,
+        _seed_source_execution,
+    )
 
     owner = sa.create_engine(database_authority_dsns["owner"])
     maintenance = sa.create_engine(database_authority_dsns["easysynq_r27_maintenance"])
     try:
         hold_source = _seed_source_execution(database_authority_dsns, owner)
         hold_target = hold_source.request.targets[0]
+        with maintenance.begin() as connection:
+            _claim_r27_physical_marker(connection, hold_source)
         with owner.begin() as connection:
             connection.execute(
                 sa.text("UPDATE r27_manifest_target SET bucket='drifted' WHERE id=:id"),
@@ -1854,6 +2232,25 @@ def test_r27_result_functions_revalidate_coordinates_and_source_disposition_atom
             )
 
         with maintenance.begin() as connection:
+            assert connection.execute(
+                sa.text("SELECT worm_legal_hold FROM blob WHERE sha256=:sha"),
+                {"sha": physical.sha256},
+            ).scalar_one()
+            connection.execute(
+                sa.text(
+                    "SELECT easysynq_record_r27_hold_release"
+                    "(:sha,:version,:execution,clock_timestamp())"
+                ),
+                {
+                    "sha": physical.sha256,
+                    "version": physical.object_version_id,
+                    "execution": source.public_execution_id,
+                },
+            )
+            assert not connection.execute(
+                sa.text("SELECT worm_legal_hold FROM blob WHERE sha256=:sha"),
+                {"sha": physical.sha256},
+            ).scalar_one()
             connection.execute(
                 sa.text(
                     "SELECT easysynq_record_r27_purge(:sha,:version,:execution,clock_timestamp())"
@@ -1900,7 +2297,7 @@ def test_r27_result_functions_revalidate_coordinates_and_source_disposition_atom
                 {"id": source.disposition_event_id},
             )
 
-        with pytest.raises(sa.exc.DBAPIError, match="r27_source_disposition_missing"):
+        with pytest.raises(sa.exc.DBAPIError, match="r27_surviving_owner_refused"):
             with maintenance.begin() as connection:
                 connection.execute(
                     sa.text(

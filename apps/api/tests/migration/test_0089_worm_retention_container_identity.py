@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 
 import psycopg
@@ -25,6 +25,18 @@ _BASE_REVISION = "0088_bootstrap_credential"
 _REVISION = "0089_worm_retention_container_identity"
 _LEGACY_REFUSAL = "unsupported_legacy_physical_owner_state"
 _DOWNGRADE_REFUSAL = "populated_0089_downgrade_refused"
+_PURPOSE_ROLES = (
+    "easysynq_retention",
+    "easysynq_hold_authorizer",
+    "easysynq_hold_maintenance",
+    "easysynq_r27_authorizer",
+    "easysynq_r27_maintenance",
+    "easysynq_r27_authorizer_key_manager",
+    "easysynq_recovery_key_manager",
+    "easysynq_r27_role_manager",
+    "easysynq_audit_signer",
+    "easysynq_backup",
+)
 
 
 @pytest.fixture(scope="module")
@@ -43,8 +55,35 @@ def postgres_admin_url() -> Iterator[str]:
         yield postgres.get_connection_url()
 
 
+def _role_names(admin_url: str, candidates: Sequence[str]) -> set[str]:
+    with psycopg.connect(
+        **conn_kwargs(admin_url, dbname="postgres"),
+        autocommit=True,
+    ) as connection:
+        return {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
+                (list(candidates),),
+            )
+        }
+
+
+def _drop_created_purpose_roles(admin_url: str, preexisting_roles: set[str]) -> None:
+    created_roles = _role_names(admin_url, _PURPOSE_ROLES) - preexisting_roles
+    if not created_roles:
+        return
+    with psycopg.connect(
+        **conn_kwargs(admin_url, dbname="postgres"),
+        autocommit=True,
+    ) as connection:
+        for role in sorted(created_roles, reverse=True):
+            connection.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
 @contextmanager
 def _scratch_database(admin_url: str) -> Iterator[str]:
+    preexisting_roles = _role_names(admin_url, _PURPOSE_ROLES)
     database = f"easysynq_0089_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(
         **conn_kwargs(admin_url, dbname="postgres"),
@@ -66,6 +105,7 @@ def _scratch_database(admin_url: str) -> Iterator[str]:
                 (database,),
             )
             connection.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(database)))
+        _drop_created_purpose_roles(admin_url, preexisting_roles)
 
 
 def _config() -> Config:
@@ -131,8 +171,19 @@ def _create_hold_release_operation(
     policy_id = uuid.uuid4()
     record_id = uuid.uuid4()
     operation_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    blob_sha256 = uuid.uuid4().hex * 2
     digest = uuid.uuid4().hex * 2
     connection.execute(sa.text("SET LOCAL session_replication_role = replica"))
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO app_user (id, org_id, keycloak_subject, display_name)
+            VALUES (:id, :org_id, :subject, 'Hold authorization actor')
+            """
+        ),
+        {"id": user_id, "org_id": org_id, "subject": f"hold-test-{user_id}"},
+    )
     connection.execute(
         sa.text(
             """
@@ -162,9 +213,48 @@ def _create_hold_release_operation(
         {
             "id": record_id,
             "org_id": org_id,
-            "captured_by": uuid.uuid4(),
+            "captured_by": user_id,
             "policy_id": policy_id,
             "legal_hold": legal_hold,
+        },
+    )
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO blob
+                (sha256, org_id, size_bytes, mime_type, bucket, object_key,
+                 object_version_id, worm_locked, worm_enforced_mode,
+                 worm_asserted_retain_until, worm_asserted_at, worm_retain_until,
+                 worm_retention_verified_at, worm_legal_hold,
+                 worm_legal_hold_verified_at, sse)
+            VALUES
+                (:sha256, :org_id, 1, 'application/octet-stream', :bucket, :object_key,
+                 'opaque-version', true, 'GOVERNANCE', now() + interval '30 days', now(),
+                 now() + interval '30 days', now(), true, now(), false)
+            """
+        ),
+        {
+            "sha256": blob_sha256,
+            "org_id": org_id,
+            "bucket": f"hold-test-{operation_id.hex[:12]}",
+            "object_key": f"hold/{blob_sha256}",
+        },
+    )
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO evidence_blob
+                (id, org_id, record_id, blob_sha256, is_original, created_by)
+            VALUES
+                (:id, :org_id, :record_id, :blob_sha256, true, :created_by)
+            """
+        ),
+        {
+            "id": uuid.uuid4(),
+            "org_id": org_id,
+            "record_id": record_id,
+            "blob_sha256": blob_sha256,
+            "created_by": user_id,
         },
     )
     connection.execute(
@@ -185,8 +275,8 @@ def _create_hold_release_operation(
             "id": operation_id,
             "org_id": org_id,
             "record_id": record_id,
-            "blob_sha256": "a" * 64,
-            "initiated_by_user_id": uuid.uuid4(),
+            "blob_sha256": blob_sha256,
+            "initiated_by_user_id": user_id,
             "idempotency_key": str(operation_id),
             "canonical_bytes": b"test",
             "canonical_sha256": digest,
