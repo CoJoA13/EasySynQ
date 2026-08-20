@@ -86,6 +86,20 @@ from .staged_identity import (
     WormNotApplied,
 )
 from .watermark import stamp_controlled_copy
+from .worm import (
+    VerifiedWormAssertion,
+    WormCapabilityDenied,
+    WormIdentityMismatch,
+    WormModeMismatch,
+    WormObjectLocator,
+    WormObjectState,
+    WormProtectionWouldWeaken,
+    WormReadbackMismatch,
+    WormRequirement,
+    WormStorageError,
+    WormVersionMissing,
+    worm_locator_from_promotion,
+)
 
 __all__ = [
     "CapturingMirrorEnqueueSink",
@@ -124,7 +138,18 @@ __all__ = [
     "VaultAuditEvent",
     "VaultAuditSink",
     "VerifiedStagedObject",
+    "VerifiedWormAssertion",
+    "WormCapabilityDenied",
+    "WormIdentityMismatch",
+    "WormModeMismatch",
     "WormNotApplied",
+    "WormObjectLocator",
+    "WormObjectState",
+    "WormProtectionWouldWeaken",
+    "WormReadbackMismatch",
+    "WormRequirement",
+    "WormStorageError",
+    "WormVersionMissing",
     "approve",
     "atomic_swap",
     "audit_transition",
@@ -162,4 +187,5 @@ __all__ = [
     "start_revision",
     "submit_review",
     "sync_mirror",
+    "worm_locator_from_promotion",
 ]

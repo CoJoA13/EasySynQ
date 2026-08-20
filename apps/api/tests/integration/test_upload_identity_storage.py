@@ -15,6 +15,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from easysynq_api.services.vault import storage
+from easysynq_api.services.vault._worm_delete import delete_worm_version
 from easysynq_api.services.vault.staged_identity import (
     StagedObjectRef,
     StagedSourceChanged,
@@ -24,6 +25,7 @@ from easysynq_api.services.vault.staged_identity import (
     StorageUnavailable,
     UploadIdentityMismatch,
 )
+from easysynq_api.services.vault.worm import WormObjectLocator, WormRequirement
 
 
 @pytest.fixture
@@ -274,6 +276,68 @@ async def test_exact_rejected_version_delete_leaves_newer_version_readable(s3_cl
     with pytest.raises(ClientError) as caught:
         s3_client.get_object(Bucket="staging", Key=key, VersionId=put_v1["VersionId"])
     assert caught.value.response["Error"]["Code"] == "NoSuchVersion"
+
+
+@pytest.mark.integration
+async def test_worm_exact_delete_leaves_same_key_newer_version_readable(s3_client: Any) -> None:
+    key = f"same-key-exact-delete-{uuid.uuid4().hex}"
+    put_v1 = s3_client.put_object(Bucket="documents", Key=key, Body=b"protected-v1")
+    locator = WormObjectLocator("documents", key, put_v1["VersionId"])
+    v1_state = await storage.read_worm_state(locator)
+    assert v1_state.mode == "GOVERNANCE"
+    assert v1_state.retain_until > v1_state.read_at
+    assert v1_state.legal_hold is False
+
+    v1 = s3_client.get_object(Bucket="documents", Key=key, VersionId=put_v1["VersionId"])
+    try:
+        assert v1["VersionId"] == put_v1["VersionId"]
+        assert v1["Body"].read() == b"protected-v1"
+    finally:
+        v1["Body"].close()
+
+    put_v2 = s3_client.put_object(Bucket="documents", Key=key, Body=b"surviving-v2")
+    v2_before = s3_client.get_object(Bucket="documents", Key=key, VersionId=put_v2["VersionId"])
+    latest_before = s3_client.get_object(Bucket="documents", Key=key)
+    try:
+        assert v2_before["VersionId"] == put_v2["VersionId"]
+        assert v2_before["Body"].read() == b"surviving-v2"
+        assert latest_before["VersionId"] == put_v2["VersionId"]
+        assert latest_before["Body"].read() == b"surviving-v2"
+    finally:
+        v2_before["Body"].close()
+        latest_before["Body"].close()
+
+    await delete_worm_version(locator, release_hold=False, bypass_governance=True)
+
+    with pytest.raises(ClientError) as caught:
+        s3_client.get_object(Bucket="documents", Key=key, VersionId=put_v1["VersionId"])
+    assert caught.value.response["Error"]["Code"] == "NoSuchVersion"
+    v2_after = s3_client.get_object(Bucket="documents", Key=key, VersionId=put_v2["VersionId"])
+    latest_after = s3_client.get_object(Bucket="documents", Key=key)
+    try:
+        assert v2_after["VersionId"] == put_v2["VersionId"]
+        assert v2_after["Body"].read() == b"surviving-v2"
+        assert latest_after["VersionId"] == put_v2["VersionId"]
+        assert latest_after["Body"].read() == b"surviving-v2"
+    finally:
+        v2_after["Body"].close()
+        latest_after["Body"].close()
+
+
+@pytest.mark.integration
+async def test_worm_state_reads_minio_unset_hold_and_explicit_on(s3_client: Any) -> None:
+    key = f"worm-hold-readback-{uuid.uuid4().hex}"
+    put = s3_client.put_object(Bucket="documents", Key=key, Body=b"hold-readback")
+    locator = WormObjectLocator("documents", key, put["VersionId"])
+
+    unset = await storage.read_worm_state(locator)
+    assert unset.legal_hold is False
+
+    applied = await storage.apply_worm_protection(
+        locator,
+        WormRequirement(retain_until=unset.retain_until, legal_hold=True),
+    )
+    assert applied.verified.legal_hold is True
 
 
 class _CopyFailingClient:
