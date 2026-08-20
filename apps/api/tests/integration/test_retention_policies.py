@@ -17,7 +17,9 @@ from httpx import AsyncClient
 from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from easysynq_api.config import get_settings
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
+from easysynq_api.db.models.disposition_event import DispositionEvent
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.evidence_blob import EvidenceBlob
 from easysynq_api.db.models.organization import Organization
@@ -31,7 +33,6 @@ from easysynq_api.services.records.repository import (
     sealed_pack_policy_id,
 )
 
-from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _grant, _subject
 from .test_vault import _auth
 
@@ -55,14 +56,20 @@ async def _delete_records(ids: list[str]) -> None:
     if not ids:
         return
     uids = [uuid.UUID(i) for i in ids]
-    # disposition_event is append-only for the app role (0072 REVOKE UPDATE,DELETE) → delete the
-    # FK-RESTRICT tombstone as the OWNER first; the rest of the chain stays on the app session.
-    await owner_delete_disposition_events(uids)
-    async with get_sessionmaker()() as s:
-        await s.execute(delete(EvidenceBlob).where(EvidenceBlob.record_id.in_(uids)))
-        await s.execute(delete(Record).where(Record.id.in_(uids)))
-        await s.execute(delete(DocumentedInformation).where(DocumentedInformation.id.in_(uids)))
-        await s.commit()
+    # Task 4 makes both the event and its exact owner edge structural. Teardown therefore removes
+    # the complete FK-RESTRICT chain through the existing owner DSN, never by widening app grants.
+    owner_dsn = get_settings().database_url_sync
+    assert owner_dsn is not None
+    engine = create_async_engine(owner_dsn)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as s:
+            await s.execute(delete(DispositionEvent).where(DispositionEvent.record_id.in_(uids)))
+            await s.execute(delete(EvidenceBlob).where(EvidenceBlob.record_id.in_(uids)))
+            await s.execute(delete(Record).where(Record.id.in_(uids)))
+            await s.execute(delete(DocumentedInformation).where(DocumentedInformation.id.in_(uids)))
+            await s.commit()
+    finally:
+        await engine.dispose()
 
 
 async def _delete_policy(policy_id: str) -> None:
@@ -73,13 +80,19 @@ async def _delete_policy(policy_id: str) -> None:
 
 async def _backdate(record_id: str, *, days: int) -> None:
     when = datetime.date.today() - datetime.timedelta(days=days)
-    async with get_sessionmaker()() as s:
-        await s.execute(
-            update(Record)
-            .where(Record.id == uuid.UUID(record_id))
-            .values(retention_basis_date=when)
-        )
-        await s.commit()
+    owner_dsn = get_settings().database_url_sync
+    assert owner_dsn is not None
+    engine = create_async_engine(owner_dsn)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as s:
+            await s.execute(
+                update(Record)
+                .where(Record.id == uuid.UUID(record_id))
+                .values(retention_basis_date=when)
+            )
+            await s.commit()
+    finally:
+        await engine.dispose()
 
 
 # --- CRUD ---------------------------------------------------------------------------------
@@ -188,10 +201,10 @@ async def test_patch_explicit_null_rejects_required_fields_and_clears_nullable_f
         await _delete_policy(pid)
 
 
-async def test_extend_forward_guard(
+async def test_pinned_policy_period_is_immutable_but_unpinned_policy_remains_editable(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """No pinned records: any edit allowed; with a pinned record: reductions 422, extensions 200."""
+    """Task 4 freezes physical authority until Task 6 staged activation exists."""
     subject = _subject("rp")
     await _grant(subject, _PERMS)
     h = _auth(token_factory, subject)
@@ -214,20 +227,102 @@ async def test_extend_forward_guard(
             )
         ).json()["id"]
         rids.append(rid)
-        # Now a reduction is blocked, but an extension is allowed.
-        reduced = await app_client.patch(
-            f"/api/v1/retention-policies/{pid}", headers=h, json={"duration": "P3Y"}
-        )
-        assert reduced.status_code == 422
-        assert reduced.json()["errors"][0]["code"] == "retention_reduction_blocked"
-        extended = await app_client.patch(
-            f"/api/v1/retention-policies/{pid}", headers=h, json={"duration": "P20Y"}
-        )
-        assert extended.status_code == 200, extended.text
-        assert extended.json()["duration"] == "P20Y"
+        # Once pinned, neither reduction nor extension nor a WORM-only change may rewrite
+        # the authority that was used to certify physical protection.
+        for changes in (
+            {"duration": "P3Y"},
+            {"duration": "P20Y"},
+            {"worm_lock_period": "P20Y"},
+        ):
+            refused = await app_client.patch(
+                f"/api/v1/retention-policies/{pid}", headers=h, json=changes
+            )
+            assert refused.status_code == 409, refused.text
+            assert refused.json()["code"] == "conflict"
+
+        unchanged = await app_client.get(f"/api/v1/retention-policies/{pid}", headers=h)
+        assert unchanged.status_code == 200, unchanged.text
+        assert unchanged.json()["duration"] == "P5Y"
     finally:
         await _delete_records(rids)
         await _delete_policy(pid)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"duration": "P999999999999999999999Y", "worm_lock_period": None},
+        {"duration": "P1Y", "worm_lock_period": "P999999999999999999999D"},
+    ),
+    ids=("duration-overflow", "worm-period-overflow"),
+)
+async def test_policy_period_overflow_returns_bounded_validation_problem(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    overrides: dict[str, object],
+) -> None:
+    subject = _subject(f"rp-overflow-{uuid.uuid4().hex[:8]}")
+    await _grant(subject, _PERMS)
+    headers = _auth(token_factory, subject)
+    response = await app_client.post(
+        "/api/v1/retention-policies",
+        headers=headers,
+        json=_policy_body(**overrides),
+    )
+    created_id = response.json().get("id") if response.status_code == 201 else None
+    try:
+        assert response.status_code == 422, response.text
+        assert response.json()["code"] == "validation_error"
+        assert response.json()["errors"][0]["code"] == "invalid_duration"
+    finally:
+        if created_id is not None:
+            await _delete_policy(created_id)
+
+
+async def test_disposed_record_pin_still_returns_bounded_policy_conflict(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The database backstop must not leak its trigger error through the API."""
+    subject = _subject(f"rp-disposed-{uuid.uuid4().hex[:8]}")
+    await _grant(subject, _PERMS)
+    headers = _auth(token_factory, subject)
+    policy_id = (
+        await app_client.post(
+            "/api/v1/retention-policies",
+            headers=headers,
+            json=_policy_body(duration="P1D"),
+        )
+    ).json()["id"]
+    record_ids: list[str] = []
+    try:
+        captured = (
+            await _capture(
+                app_client,
+                headers,
+                record_type="SUPPLIER_EVAL",
+                title="disposed policy pin",
+                retention_policy_id=policy_id,
+            )
+        ).json()
+        record_ids.append(captured["id"])
+        await _backdate(captured["id"], days=30)
+        async with get_sessionmaker()() as session:
+            await sweep_due_records(session)
+        async with get_sessionmaker()() as session:
+            record = await session.get(Record, uuid.UUID(captured["id"]))
+            assert record is not None
+            assert record.disposition_state.value == "DISPOSED"
+
+        refused = await app_client.patch(
+            f"/api/v1/retention-policies/{policy_id}",
+            headers=headers,
+            json={"duration": "P2D"},
+        )
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["code"] == "conflict"
+    finally:
+        await _delete_records(record_ids)
+        await _delete_policy(policy_id)
 
 
 async def test_system_managed_policies_protected(

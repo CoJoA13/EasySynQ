@@ -53,6 +53,36 @@ _APP_BLOB_INSERT_COLUMNS = (
     "worm_legal_hold_verified_at",
     "sse",
 )
+_APP_RECORD_UPDATE_COLUMNS = (
+    "content_hash",
+    "form_field_values",
+    "superseded_by_correction",
+    "disposition_state",
+    "legal_hold",
+    "structured_pdf_blob_sha256",
+)
+_APP_RETENTION_POLICY_UPDATE_COLUMNS = (
+    "name",
+    "applies_to",
+    "basis",
+    "duration",
+    "disposition_action",
+    "review_required",
+    "worm_lock_period",
+    "active",
+    "archived_at",
+    "archived_by",
+    "updated_at",
+)
+_TASK4_RECORD_UPDATE_COLUMNS = (
+    *_APP_RECORD_UPDATE_COLUMNS,
+    "retention_basis_date",
+    "retention_basis_provisional",
+)
+_TASK4_RETENTION_POLICY_UPDATE_COLUMNS = (
+    *_APP_RETENTION_POLICY_UPDATE_COLUMNS,
+    "active_revision_no",
+)
 _AUTHORITY_ROLE_PASSWORD_FIELDS = {
     APP_ROLE: "app_db_password",
     LINKER_ROLE: "linker_db_password",
@@ -69,6 +99,11 @@ _AUTHORITY_ROLE_PASSWORD_FIELDS = {
 }
 _NEW_AUTHORITY_ROLES = tuple(_AUTHORITY_ROLE_PASSWORD_FIELDS)[2:]
 _AUTHORITY_FUNCTION_NAMES = (
+    "easysynq_assert_worm_record_live",
+    "easysynq_lock_document_worm_config",
+    "easysynq_lock_worm_blob",
+    "easysynq_lock_worm_owners",
+    "easysynq_record_worm_assertion",
     "easysynq_claim_retention_targets",
     "easysynq_fail_retention_target",
     "easysynq_ratchet_worm_assertion",
@@ -1403,7 +1438,8 @@ def _upgrade_pending_blob_purge() -> None:
             "(result_code='PHYSICAL_ERASED' AND purge_marker_id IS NOT NULL "
             "AND surviving_owner_kind IS NULL AND surviving_owner_id IS NULL) OR "
             "(result_code='LOGICAL_ONLY_SURVIVING_OWNER' AND purge_marker_id IS NULL "
-            "AND surviving_owner_kind IN ('DOCUMENT_VERSION','EVIDENCE_BLOB') "
+            "AND surviving_owner_kind IN "
+            "('DOCUMENT_VERSION','EVIDENCE_BLOB','SEALED_PACK') "
             "AND surviving_owner_id IS NOT NULL)",
             name="authority_shape",
         ),
@@ -1586,6 +1622,364 @@ def _create_worm_guard_triggers() -> None:
         FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_app_disposition_insert();
         """
     )
+
+
+def _valid_destructive_event_exists_sql(*, record_sql: str) -> str:
+    """Return the immutable ordinary-or-R27 destructive-event predicate for one Record."""
+    return f"""
+        EXISTS (
+            SELECT 1
+            FROM public.disposition_event owner_destroy
+            WHERE owner_destroy.org_id={record_sql}.org_id
+              AND owner_destroy.record_id={record_sql}.id
+              AND owner_destroy.action='DESTROY'
+              AND owner_destroy.tombstone
+              AND (
+                  (
+                      NOT owner_destroy.is_worm_destroy
+                      AND owner_destroy.r27_request_id IS NULL
+                      AND owner_destroy.r27_execution_id IS NULL
+                      AND owner_destroy.derived_from_disposition_event_id IS NULL
+                      AND owner_destroy.policy_id={record_sql}.retention_policy_id
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM public.r27_request owner_request
+                      JOIN public.r27_execution owner_execution
+                        ON owner_execution.id=owner_destroy.r27_execution_id
+                       AND owner_execution.request_id=owner_request.id
+                       AND owner_execution.source_committed_at IS NOT NULL
+                      JOIN public.disposition_event owner_source
+                        ON owner_source.id=COALESCE(
+                            owner_destroy.derived_from_disposition_event_id,
+                            owner_destroy.id
+                        )
+                      WHERE owner_request.id=owner_destroy.r27_request_id
+                        AND owner_request.org_id={record_sql}.org_id
+                        AND owner_source.org_id=owner_request.org_id
+                        AND owner_source.record_id=owner_request.record_id
+                        AND owner_source.action='DESTROY'
+                        AND owner_source.tombstone
+                        AND owner_source.is_worm_destroy
+                        AND owner_source.policy_id IS NULL
+                        AND owner_source.derived_from_disposition_event_id IS NULL
+                        AND owner_source.r27_request_id=owner_request.id
+                        AND owner_source.r27_execution_id=owner_execution.id
+                        AND owner_source.requested_by=owner_request.requester_user_id
+                        AND owner_source.approved_by=owner_request.approver_user_id
+                        AND owner_source.legal_basis=owner_request.normalized_legal_basis
+                        AND owner_destroy.is_worm_destroy
+                        AND owner_destroy.policy_id IS NULL
+                        AND owner_destroy.r27_request_id=owner_request.id
+                        AND owner_destroy.r27_execution_id=owner_execution.id
+                        AND owner_destroy.requested_by=owner_request.requester_user_id
+                        AND owner_destroy.approved_by=owner_request.approver_user_id
+                        AND owner_destroy.legal_basis=owner_request.normalized_legal_basis
+                        AND (
+                            (
+                                owner_destroy.id=owner_source.id
+                                AND owner_request.record_id={record_sql}.id
+                            )
+                            OR (
+                                owner_destroy.derived_from_disposition_event_id=owner_source.id
+                                AND owner_request.record_id<>{record_sql}.id
+                            )
+                        )
+                  )
+              )
+        )
+    """
+
+
+def _create_task4_worm_functions() -> None:
+    live_record = f"NOT {_valid_destructive_event_exists_sql(record_sql='owner_record')}"
+    _create_definer_function(
+        "easysynq_assert_worm_record_live(p_org_id uuid,p_record_id uuid) RETURNS void",
+        "easysynq_assert_worm_record_live(uuid,uuid)",
+        APP_ROLE,
+        f"""
+        DECLARE owner_record public.record%ROWTYPE;
+        BEGIN
+            SELECT record.* INTO owner_record
+            FROM public.record record
+            WHERE record.id=p_record_id AND record.org_id=p_org_id
+            FOR UPDATE OF record;
+            IF NOT FOUND
+               OR {_valid_destructive_event_exists_sql(record_sql="owner_record")} THEN
+                RAISE EXCEPTION 'worm_proposed_owner_liveness_refused';
+            END IF;
+        END
+        """,
+    )
+    _create_definer_function(
+        "easysynq_lock_document_worm_config(p_org_id uuid,p_config_id uuid) "
+        "RETURNS TABLE(id uuid,org_id uuid,active_period text,active_revision_no integer)",
+        "easysynq_lock_document_worm_config(uuid,uuid)",
+        "easysynq_app",
+        """
+        BEGIN
+            RETURN QUERY
+            SELECT config.id,config.org_id,config.active_period,config.active_revision_no
+            FROM public.document_worm_config config
+            WHERE config.id=p_config_id AND config.org_id=p_org_id
+            FOR UPDATE OF config;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'document_worm_config_lock_refused';
+            END IF;
+        END
+        """,
+    )
+    _create_definer_function(
+        "easysynq_lock_worm_blob(p_org_id uuid,p_blob_sha256 text) "
+        "RETURNS TABLE(blob_sha256 text,org_id uuid,bucket text,object_key text,"
+        "object_version_id text,worm_locked boolean,worm_enforced_mode text,"
+        "worm_asserted_retain_until timestamptz,worm_asserted_at timestamptz,"
+        "worm_retain_until timestamptz,worm_retention_verified_at timestamptz,"
+        "worm_legal_hold boolean,worm_legal_hold_verified_at timestamptz,"
+        "purged_at timestamptz,purge_execution_id uuid)",
+        "easysynq_lock_worm_blob(uuid,text)",
+        "easysynq_app,easysynq_retention",
+        """
+        BEGIN
+            PERFORM pg_advisory_xact_lock(1163087698,hashtext(p_org_id::text));
+            PERFORM pg_advisory_xact_lock(1163088712,hashtext(p_blob_sha256));
+            RETURN QUERY
+            SELECT blob.sha256,blob.org_id,blob.bucket,blob.object_key,
+                   blob.object_version_id,blob.worm_locked,blob.worm_enforced_mode,
+                   blob.worm_asserted_retain_until,blob.worm_asserted_at,
+                   blob.worm_retain_until,blob.worm_retention_verified_at,
+                   blob.worm_legal_hold,blob.worm_legal_hold_verified_at,
+                   blob.purged_at,blob.purge_execution_id
+            FROM public.blob
+            WHERE blob.sha256=p_blob_sha256 AND blob.org_id=p_org_id
+            FOR UPDATE OF blob;
+            IF FOUND THEN RETURN; END IF;
+            IF EXISTS (
+                SELECT 1 FROM public.blob foreign_blob
+                WHERE foreign_blob.sha256=p_blob_sha256
+            ) THEN
+                RAISE EXCEPTION 'worm_blob_lock_refused';
+            END IF;
+        END
+        """,
+    )
+    _create_definer_function(
+        "easysynq_lock_worm_owners(p_org_id uuid,p_blob_sha256 text) "
+        "RETURNS TABLE(owner_kind text,owner_id uuid,org_id uuid,blob_sha256 text,"
+        "basis_date date,duration text,domain_hold boolean,permanent boolean,"
+        "worm_lock_period text)",
+        "easysynq_lock_worm_owners(uuid,text)",
+        "easysynq_app,easysynq_retention",
+        f"""
+        DECLARE
+            candidate record;
+            owner_record record;
+            owner_parent record;
+            owner_policy record;
+            owner_config record;
+            owner_edge record;
+            owner_duration text;
+            owner_worm_period text;
+        BEGIN
+            PERFORM pg_advisory_xact_lock(1163087698,hashtext(p_org_id::text));
+            PERFORM pg_advisory_xact_lock(1163088712,hashtext(p_blob_sha256));
+            PERFORM 1 FROM public.blob registry_blob
+            WHERE registry_blob.sha256=p_blob_sha256
+              AND registry_blob.org_id=p_org_id
+              AND registry_blob.worm_locked
+              AND registry_blob.object_version_id IS NOT NULL
+              AND btrim(registry_blob.object_version_id)<>''
+              AND registry_blob.object_version_id<>'null'
+              AND registry_blob.worm_enforced_mode='GOVERNANCE'
+              AND registry_blob.worm_asserted_retain_until IS NOT NULL
+              AND registry_blob.worm_asserted_at IS NOT NULL
+              AND registry_blob.worm_retain_until IS NOT NULL
+              AND registry_blob.worm_retention_verified_at IS NOT NULL
+              AND registry_blob.worm_legal_hold IS NOT NULL
+              AND registry_blob.worm_legal_hold_verified_at IS NOT NULL
+              AND registry_blob.purged_at IS NULL
+              AND registry_blob.purge_execution_id IS NULL
+            FOR UPDATE;
+            IF NOT FOUND THEN RAISE EXCEPTION 'invalid_worm_owner_state'; END IF;
+
+            FOR candidate IN
+                SELECT version.* FROM public.document_version version
+                WHERE version.source_blob_sha256=p_blob_sha256
+                ORDER BY version.id FOR UPDATE
+            LOOP
+                IF candidate.org_id<>p_org_id OR candidate.retention_basis_date IS NULL THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                SELECT parent.* INTO owner_parent
+                FROM public.documented_information parent
+                WHERE parent.id=candidate.document_id FOR UPDATE;
+                IF NOT FOUND OR owner_parent.org_id<>p_org_id OR owner_parent.kind<>'DOCUMENT' THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                IF candidate.retention_authority_kind='POLICY' THEN
+                    IF candidate.retention_policy_id IS NULL
+                       OR candidate.document_worm_config_id IS NOT NULL THEN
+                        RAISE EXCEPTION 'invalid_worm_owner_state';
+                    END IF;
+                    SELECT policy.* INTO owner_policy FROM public.retention_policy policy
+                    WHERE policy.id=candidate.retention_policy_id FOR UPDATE;
+                    IF NOT FOUND OR owner_policy.org_id<>p_org_id THEN
+                        RAISE EXCEPTION 'invalid_worm_owner_state';
+                    END IF;
+                    owner_duration := owner_policy.duration;
+                    owner_worm_period := owner_policy.worm_lock_period;
+                ELSIF candidate.retention_authority_kind='INSTALLATION_MINIMUM' THEN
+                    IF candidate.document_worm_config_id IS NULL
+                       OR candidate.retention_policy_id IS NOT NULL THEN
+                        RAISE EXCEPTION 'invalid_worm_owner_state';
+                    END IF;
+                    SELECT config.* INTO owner_config FROM public.document_worm_config config
+                    WHERE config.id=candidate.document_worm_config_id FOR UPDATE;
+                    IF NOT FOUND OR owner_config.org_id<>p_org_id THEN
+                        RAISE EXCEPTION 'invalid_worm_owner_state';
+                    END IF;
+                    owner_duration := owner_config.active_period;
+                    owner_worm_period := NULL;
+                ELSE
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                owner_kind := 'DOCUMENT_VERSION'; owner_id := candidate.id;
+                org_id := candidate.org_id; blob_sha256 := p_blob_sha256;
+                basis_date := candidate.retention_basis_date; duration := owner_duration;
+                domain_hold := false;
+                permanent := upper(btrim(owner_duration))='PERMANENT'
+                    OR upper(btrim(COALESCE(owner_worm_period,'')))='PERMANENT';
+                worm_lock_period := owner_worm_period;
+                RETURN NEXT;
+            END LOOP;
+
+            FOR candidate IN
+                SELECT edge.* FROM public.evidence_blob edge
+                WHERE edge.blob_sha256=p_blob_sha256
+                ORDER BY edge.id FOR UPDATE
+            LOOP
+                IF candidate.org_id<>p_org_id THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                SELECT record.* INTO owner_record FROM public.record record
+                WHERE record.id=candidate.record_id FOR UPDATE;
+                IF NOT FOUND OR owner_record.org_id<>p_org_id THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                SELECT parent.* INTO owner_parent FROM public.documented_information parent
+                WHERE parent.id=owner_record.id FOR UPDATE;
+                IF NOT FOUND OR owner_parent.org_id<>p_org_id OR owner_parent.kind<>'RECORD' THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                SELECT policy.* INTO owner_policy FROM public.retention_policy policy
+                WHERE policy.id=owner_record.retention_policy_id FOR UPDATE;
+                IF NOT FOUND OR owner_policy.org_id<>p_org_id THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                IF {_valid_destructive_event_exists_sql(record_sql="owner_record")} THEN
+                    CONTINUE;
+                END IF;
+                IF owner_record.retention_basis_date IS NULL THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                owner_kind := 'RECORD_EVIDENCE'; owner_id := candidate.id;
+                org_id := candidate.org_id; blob_sha256 := candidate.blob_sha256;
+                basis_date := owner_record.retention_basis_date;
+                duration := owner_policy.duration; domain_hold := owner_record.legal_hold;
+                permanent := upper(btrim(owner_policy.duration))='PERMANENT'
+                    OR upper(btrim(COALESCE(owner_policy.worm_lock_period,'')))='PERMANENT';
+                worm_lock_period := owner_policy.worm_lock_period;
+                RETURN NEXT;
+            END LOOP;
+
+            FOR candidate IN
+                SELECT pack.* FROM public.evidence_pack pack
+                WHERE pack.zip_blob_sha256=p_blob_sha256
+                  AND pack.status='SEALED'
+                  AND pack.invalidated_at IS NULL
+                ORDER BY pack.id FOR UPDATE
+            LOOP
+                IF candidate.org_id<>p_org_id OR candidate.pack_record_id IS NULL THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                SELECT record.* INTO owner_record FROM public.record record
+                WHERE record.id=candidate.pack_record_id FOR UPDATE;
+                IF NOT FOUND OR owner_record.org_id<>p_org_id
+                   OR owner_record.retention_basis_date IS NULL THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                SELECT parent.* INTO owner_parent FROM public.documented_information parent
+                WHERE parent.id=owner_record.id FOR UPDATE;
+                IF NOT FOUND OR owner_parent.org_id<>p_org_id OR owner_parent.kind<>'RECORD' THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                SELECT policy.* INTO owner_policy FROM public.retention_policy policy
+                WHERE policy.id=owner_record.retention_policy_id FOR UPDATE;
+                IF NOT FOUND OR owner_policy.org_id<>p_org_id
+                   OR NOT (
+                       upper(btrim(owner_policy.duration))='PERMANENT'
+                       OR upper(btrim(COALESCE(owner_policy.worm_lock_period,'')))='PERMANENT'
+                   ) THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                SELECT edge.* INTO owner_edge FROM public.evidence_blob edge
+                WHERE edge.record_id=owner_record.id AND edge.blob_sha256=p_blob_sha256
+                FOR UPDATE;
+                IF NOT FOUND OR owner_edge.org_id<>p_org_id OR NOT ({live_record}) THEN
+                    RAISE EXCEPTION 'invalid_worm_owner_state';
+                END IF;
+                owner_kind := 'SEALED_PACK'; owner_id := candidate.id;
+                org_id := candidate.org_id; blob_sha256 := p_blob_sha256;
+                basis_date := owner_record.retention_basis_date;
+                duration := owner_policy.duration; domain_hold := owner_record.legal_hold;
+                permanent := true; worm_lock_period := owner_policy.worm_lock_period;
+                RETURN NEXT;
+            END LOOP;
+        END
+        """,
+    )
+    _create_definer_function(
+        "easysynq_record_worm_assertion(p_org_id uuid,p_blob_sha256 text,p_bucket text,"
+        "p_object_key text,p_object_version_id text,p_retain_until timestamptz,"
+        "p_legal_hold boolean,p_verified_at timestamptz) RETURNS void",
+        "easysynq_record_worm_assertion(uuid,text,text,text,text,timestamptz,boolean,timestamptz)",
+        APP_ROLE,
+        """
+        DECLARE current_blob public.blob%ROWTYPE;
+        BEGIN
+            SELECT blob.* INTO current_blob FROM public.blob
+            WHERE blob.sha256=p_blob_sha256 FOR UPDATE;
+            IF NOT FOUND
+               OR current_blob.org_id<>p_org_id
+               OR current_blob.bucket<>p_bucket
+               OR current_blob.object_key<>p_object_key
+               OR current_blob.object_version_id<>p_object_version_id
+               OR NOT current_blob.worm_locked
+               OR current_blob.worm_enforced_mode<>'GOVERNANCE'
+               OR current_blob.worm_asserted_retain_until IS NULL
+               OR current_blob.worm_asserted_at IS NULL
+               OR current_blob.worm_retain_until IS NULL
+               OR current_blob.worm_retention_verified_at IS NULL
+               OR current_blob.worm_legal_hold IS NULL
+               OR current_blob.worm_legal_hold_verified_at IS NULL
+               OR current_blob.purged_at IS NOT NULL
+               OR current_blob.purge_execution_id IS NOT NULL
+               OR p_retain_until<current_blob.worm_retain_until
+               OR p_retain_until<current_blob.worm_asserted_retain_until
+               OR (current_blob.worm_legal_hold AND NOT p_legal_hold)
+               OR p_verified_at<current_blob.worm_retention_verified_at
+               OR p_verified_at<current_blob.worm_legal_hold_verified_at THEN
+                RAISE EXCEPTION 'worm_assertion_record_refused';
+            END IF;
+            UPDATE public.blob SET
+                worm_retain_until=p_retain_until,
+                worm_retention_verified_at=p_verified_at,
+                worm_legal_hold=(current_blob.worm_legal_hold OR p_legal_hold),
+                worm_legal_hold_verified_at=p_verified_at
+            WHERE sha256=p_blob_sha256;
+        END
+        """,
+    )
     op.execute(
         """
         CREATE FUNCTION public.easysynq_guard_blob_worm_identity() RETURNS trigger
@@ -1637,7 +2031,39 @@ def _create_worm_guard_triggers() -> None:
             v_locked boolean;
             v_complete boolean;
             v_sha text;
+            v_policy_id uuid;
         BEGIN
+            IF TG_TABLE_NAME='retention_policy' THEN
+                IF session_user='easysynq_app'
+                   AND (NEW.duration IS DISTINCT FROM OLD.duration
+                        OR NEW.worm_lock_period IS DISTINCT FROM OLD.worm_lock_period) THEN
+                    PERFORM 1 FROM public.retention_policy policy
+                    WHERE policy.id=OLD.id
+                    FOR UPDATE;
+                    IF EXISTS (
+                           SELECT 1 FROM public.record owner_record
+                           WHERE owner_record.retention_policy_id=OLD.id
+                       ) OR EXISTS (
+                           SELECT 1 FROM public.document_version owner_version
+                           WHERE owner_version.retention_policy_id=OLD.id
+                       ) THEN
+                        RAISE EXCEPTION 'worm_pinned_policy_is_immutable';
+                    END IF;
+                END IF;
+                RETURN NEW;
+            END IF;
+            IF TG_TABLE_NAME='record' THEN
+                IF TG_OP='INSERT'
+                   OR NEW.retention_policy_id IS DISTINCT FROM OLD.retention_policy_id THEN
+                    v_policy_id := NEW.retention_policy_id;
+                    IF v_policy_id IS NOT NULL THEN
+                        PERFORM 1 FROM public.retention_policy policy
+                        WHERE policy.id=v_policy_id
+                        FOR UPDATE;
+                    END IF;
+                END IF;
+                RETURN NEW;
+            END IF;
             IF TG_OP = 'DELETE' THEN
                 RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
             END IF;
@@ -1648,7 +2074,15 @@ def _create_worm_guard_triggers() -> None:
                    AND ((to_jsonb(NEW)->>'source_blob_sha256')
                         IS DISTINCT FROM (to_jsonb(OLD)->>'source_blob_sha256')
                         OR (to_jsonb(NEW)->>'document_id')
-                           IS DISTINCT FROM (to_jsonb(OLD)->>'document_id')) THEN
+                           IS DISTINCT FROM (to_jsonb(OLD)->>'document_id')
+                        OR (to_jsonb(NEW)->>'retention_authority_kind')
+                           IS DISTINCT FROM (to_jsonb(OLD)->>'retention_authority_kind')
+                        OR (to_jsonb(NEW)->>'retention_policy_id')
+                           IS DISTINCT FROM (to_jsonb(OLD)->>'retention_policy_id')
+                        OR (to_jsonb(NEW)->>'document_worm_config_id')
+                           IS DISTINCT FROM (to_jsonb(OLD)->>'document_worm_config_id')
+                        OR (to_jsonb(NEW)->>'retention_basis_date')
+                           IS DISTINCT FROM (to_jsonb(OLD)->>'retention_basis_date')) THEN
                     RAISE EXCEPTION 'worm_owner_pointer_is_immutable';
                 ELSIF TG_TABLE_NAME='evidence_blob'
                    AND ((to_jsonb(NEW)->>'blob_sha256')
@@ -1660,6 +2094,12 @@ def _create_worm_guard_triggers() -> None:
             END IF;
             IF TG_OP = 'INSERT' THEN
                 IF TG_TABLE_NAME='document_version' THEN
+                    IF NEW.retention_authority_kind='POLICY'
+                       AND NEW.retention_policy_id IS NOT NULL THEN
+                        PERFORM 1 FROM public.retention_policy policy
+                        WHERE policy.id=NEW.retention_policy_id
+                        FOR UPDATE;
+                    END IF;
                     v_sha := to_jsonb(NEW)->>'source_blob_sha256';
                     SELECT parent.org_id INTO v_parent_org
                     FROM public.documented_information parent
@@ -1699,6 +2139,12 @@ def _create_worm_guard_triggers() -> None:
         REVOKE ALL ON FUNCTION public.easysynq_guard_worm_owner_pointer() FROM PUBLIC;
         CREATE TRIGGER trg_document_version_worm_owner
         BEFORE INSERT OR UPDATE OR DELETE ON public.document_version
+        FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_worm_owner_pointer();
+        CREATE TRIGGER trg_record_retention_policy_pin
+        BEFORE INSERT OR UPDATE ON public.record
+        FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_worm_owner_pointer();
+        CREATE TRIGGER trg_retention_policy_worm_owner
+        BEFORE UPDATE OF duration,worm_lock_period ON public.retention_policy
         FOR EACH ROW EXECUTE FUNCTION public.easysynq_guard_worm_owner_pointer();
         CREATE TRIGGER trg_evidence_blob_worm_owner
         BEFORE INSERT OR UPDATE OR DELETE ON public.evidence_blob
@@ -2016,6 +2462,7 @@ def _create_key_functions() -> None:
 
 def _live_owner_exists_sql(*, org_sql: str, blob_sha_sql: str, target_record_sql: str) -> str:
     """Return the one reviewed live-owner predicate used by every purge boundary."""
+    live_record = f"NOT {_valid_destructive_event_exists_sql(record_sql='live_record')}"
     return f"""
         (
             EXISTS (
@@ -2036,7 +2483,15 @@ def _live_owner_exists_sql(*, org_sql: str, blob_sha_sql: str, target_record_sql
                 WHERE live_evidence.org_id={org_sql}
                   AND live_evidence.blob_sha256={blob_sha_sql}
                   AND live_evidence.record_id<>{target_record_sql}
-                  AND live_record.disposition_state<>'DISPOSED'
+                  AND {live_record}
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM public.evidence_pack live_pack
+                WHERE live_pack.org_id={org_sql}
+                  AND live_pack.zip_blob_sha256={blob_sha_sql}
+                  AND live_pack.status='SEALED'
+                  AND live_pack.invalidated_at IS NULL
             )
         )
     """
@@ -2044,6 +2499,7 @@ def _live_owner_exists_sql(*, org_sql: str, blob_sha_sql: str, target_record_sql
 
 def _hold_obligation_exists_sql(*, org_sql: str, blob_sha_sql: str) -> str:
     """Return the reviewed current hold-obligation predicate."""
+    live_record = f"NOT {_valid_destructive_event_exists_sql(record_sql='hold_record')}"
     return f"""
         (
             EXISTS (
@@ -2057,11 +2513,11 @@ def _hold_obligation_exists_sql(*, org_sql: str, blob_sha_sql: str) -> str:
                  AND hold_policy.org_id=hold_record.org_id
                 WHERE hold_evidence.org_id={org_sql}
                   AND hold_evidence.blob_sha256={blob_sha_sql}
-                  AND hold_record.disposition_state<>'DISPOSED'
+                  AND {live_record}
                   AND (
                       hold_record.legal_hold
-                      OR hold_policy.duration='PERMANENT'
-                      OR hold_policy.worm_lock_period='PERMANENT'
+                      OR upper(btrim(hold_policy.duration))='PERMANENT'
+                      OR upper(btrim(COALESCE(hold_policy.worm_lock_period,'')))='PERMANENT'
                   )
             )
             OR EXISTS (
@@ -2082,15 +2538,23 @@ def _hold_obligation_exists_sql(*, org_sql: str, blob_sha_sql: str) -> str:
                       (
                           hold_version.retention_authority_kind='POLICY'
                           AND (
-                              hold_policy.duration='PERMANENT'
-                              OR hold_policy.worm_lock_period='PERMANENT'
+                              upper(btrim(hold_policy.duration))='PERMANENT'
+                              OR upper(btrim(COALESCE(hold_policy.worm_lock_period,'')))='PERMANENT'
                           )
                       )
                       OR (
                           hold_version.retention_authority_kind='INSTALLATION_MINIMUM'
-                          AND hold_config.active_period='PERMANENT'
+                          AND upper(btrim(hold_config.active_period))='PERMANENT'
                       )
                   )
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM public.evidence_pack hold_pack
+                WHERE hold_pack.org_id={org_sql}
+                  AND hold_pack.zip_blob_sha256={blob_sha_sql}
+                  AND hold_pack.status='SEALED'
+                  AND hold_pack.invalidated_at IS NULL
             )
         )
     """
@@ -3684,8 +4148,16 @@ def _create_authority_transition_functions() -> None:
                     WHERE eb.blob_sha256=p_sha
                       AND eb.org_id=v_org
                       AND eb.record_id<>target_request.record_id
-                      AND owner_record.disposition_state<>'DISPOSED'
+                      AND NOT {_valid_destructive_event_exists_sql(record_sql="owner_record")}
                     ORDER BY eb.id FOR SHARE OF eb,owner_record LIMIT 1;
+                END IF;
+                IF NOT FOUND THEN SELECT pack.id,'SEALED_PACK' INTO v_owner,v_kind
+                    FROM public.evidence_pack pack
+                    WHERE pack.org_id=v_org
+                      AND pack.zip_blob_sha256=p_sha
+                      AND pack.status='SEALED'
+                      AND pack.invalidated_at IS NULL
+                    ORDER BY pack.id FOR SHARE OF pack LIMIT 1;
                 END IF;
                 IF v_owner IS NULL THEN RAISE EXCEPTION 'r27_surviving_owner_refused'; END IF;
                 INSERT INTO public.r27_execution_target_result(execution_id,manifest_target_id,result_code,verified_at,surviving_owner_kind,surviving_owner_id)
@@ -3741,6 +4213,14 @@ def _create_authority_transition_functions() -> None:
 def _grant_database_authority() -> None:
     bind = op.get_bind()
     op.execute(f"REVOKE ALL ON public.r27_request FROM {APP_ROLE}")
+    op.execute(f"REVOKE UPDATE ON public.record,public.retention_policy FROM {APP_ROLE}")
+    op.execute(
+        f"GRANT UPDATE ({','.join(_APP_RECORD_UPDATE_COLUMNS)}) ON public.record TO {APP_ROLE}"
+    )
+    op.execute(
+        f"GRANT UPDATE ({','.join(_APP_RETENTION_POLICY_UPDATE_COLUMNS)}) "
+        f"ON public.retention_policy TO {APP_ROLE}"
+    )
     op.execute(f"GRANT SELECT, DELETE ON public.blob TO {APP_ROLE}")
     op.execute(f"GRANT INSERT ({','.join(_APP_BLOB_INSERT_COLUMNS)}) ON public.blob TO {APP_ROLE}")
     op.execute(f"GRANT UPDATE (verified_at,verify_failed_at) ON public.blob TO {APP_ROLE}")
@@ -3874,6 +4354,7 @@ def _grant_database_authority() -> None:
 
 def _create_database_authority() -> None:
     _create_worm_guard_triggers()
+    _create_task4_worm_functions()
     op.execute(
         """
         CREATE FUNCTION public.easysynq_guard_r27_result_history() RETURNS trigger
@@ -4019,6 +4500,8 @@ def _drop_database_authority() -> None:
         ("disposition_event", "trg_app_disposition_insert_guard"),
         ("blob", "trg_blob_worm_identity"),
         ("document_version", "trg_document_version_worm_owner"),
+        ("record", "trg_record_retention_policy_pin"),
+        ("retention_policy", "trg_retention_policy_worm_owner"),
         ("evidence_blob", "trg_evidence_blob_worm_owner"),
         ("r27_authorizer_key", "trg_r27_authorizer_key_history"),
         ("recovery_generation_verifier_key", "trg_recovery_verifier_key_history"),
@@ -4071,6 +4554,7 @@ def _restore_0088_database_authority(bind: sa.Connection) -> None:
     op.execute(
         f"GRANT SELECT,INSERT,UPDATE,DELETE ON blob,document_version,evidence_blob TO {APP_ROLE}"
     )
+    op.execute(f"GRANT UPDATE ON record,retention_policy TO {APP_ROLE}")
     op.execute(f"REVOKE UPDATE (verified_at,verify_failed_at) ON blob FROM {APP_ROLE}")
     op.execute(f"GRANT SELECT,DELETE ON pending_blob_purge TO {APP_ROLE}")
     op.execute(
@@ -4269,6 +4753,13 @@ def downgrade() -> None:
     _drop_hold_release()
     op.drop_table("retention_operation_target")
     op.drop_table("retention_operation")
+    op.execute(
+        f"REVOKE UPDATE ({','.join(_TASK4_RECORD_UPDATE_COLUMNS)}) ON public.record FROM {APP_ROLE}"
+    )
+    op.execute(
+        f"REVOKE UPDATE ({','.join(_TASK4_RETENTION_POLICY_UPDATE_COLUMNS)}) "
+        f"ON public.retention_policy FROM {APP_ROLE}"
+    )
     _drop_document_retention()
     op.execute(
         f"REVOKE INSERT ({','.join(_APP_BLOB_INSERT_COLUMNS)}) ON public.blob FROM {APP_ROLE}"

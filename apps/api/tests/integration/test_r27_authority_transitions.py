@@ -603,10 +603,11 @@ def _make_ready_authority(
     dsns: dict[str, str],
     owner: Engine,
     *,
+    actors: Actors | None = None,
     targets: tuple[Target, ...] | None = None,
     shared_authorizer_key: bool = False,
 ) -> ReadyAuthority:
-    actors = _seed_actors(owner)
+    actors = actors or _seed_actors(owner)
     request_key_id, _ = _install_authorizer_key(dsns)
     approval_key_id = request_key_id
     if not shared_authorizer_key:
@@ -967,6 +968,8 @@ def _add_r27_evidence_owner(
     state: str,
     legal_hold: bool = False,
     permanent: bool = False,
+    policy_duration: str | None = None,
+    worm_lock_period: str | None = None,
 ) -> tuple[uuid.UUID, uuid.UUID]:
     record_id = uuid.uuid4()
     evidence_id = uuid.uuid4()
@@ -978,18 +981,20 @@ def _add_r27_evidence_owner(
         {"id": source.actors.record_id},
     ).one()
     policy_id = uuid.uuid4()
-    duration = "PERMANENT" if permanent else "P1Y"
+    duration = policy_duration or ("PERMANENT" if permanent else "P1Y")
+    physical_period = worm_lock_period or duration
     connection.execute(
         sa.text(
             "INSERT INTO retention_policy "
             "(id,org_id,name,duration,worm_lock_period,disposition_action) "
-            "VALUES (:id,:org,:name,:duration,:duration,'RETAIN_PERMANENT')"
+            "VALUES (:id,:org,:name,:duration,:worm_lock_period,'RETAIN_PERMANENT')"
         ),
         {
             "id": policy_id,
             "org": source.actors.org_id,
             "name": f"r27-survivor-{policy_id}",
             "duration": duration,
+            "worm_lock_period": physical_period,
         },
     )
     connection.execute(
@@ -1047,6 +1052,255 @@ def _add_r27_evidence_owner(
         },
     )
     return record_id, evidence_id
+
+
+def _add_terminal_historical_r27_destroy_owner(
+    dsns: dict[str, str],
+    owner: Engine,
+    source: SourceExecution,
+    target: Target,
+    *,
+    terminal_state: str,
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    with owner.begin() as connection:
+        record_id, evidence_id = _add_r27_evidence_owner(
+            connection,
+            source,
+            target,
+            state="ACTIVE",
+            permanent=True,
+        )
+    historical_actors = Actors(
+        org_id=source.actors.org_id,
+        record_id=record_id,
+        requester_id=source.actors.requester_id,
+        approver_id=source.actors.approver_id,
+        canceller_id=source.actors.canceller_id,
+    )
+    historical_target = Target(
+        id=uuid.uuid4(),
+        sha256=target.sha256,
+        bucket=target.bucket,
+        object_key=target.object_key,
+        object_version_id=target.object_version_id,
+    )
+    ready = _make_ready_authority(
+        dsns,
+        owner,
+        actors=historical_actors,
+        targets=(historical_target,),
+    )
+    maintenance = _engine(dsns, "easysynq_r27_maintenance")
+    try:
+        with maintenance.begin() as connection:
+            claimed = connection.execute(
+                sa.text("SELECT * FROM easysynq_claim_r27_finalizations(100,clock_timestamp())")
+            ).all()
+        public_execution_id = next(
+            row.execution_id for row in claimed if row.request_id == ready.request.request_id
+        )
+    finally:
+        maintenance.dispose()
+    with owner.begin() as connection:
+        execution_id = connection.execute(
+            sa.text("SELECT id FROM r27_execution WHERE execution_id=:id"),
+            {"id": public_execution_id},
+        ).scalar_one()
+        connection.execute(
+            sa.text(
+                "UPDATE r27_execution SET state='SOURCE_COMMITTED',"
+                "source_committed_at=clock_timestamp(),updated_at=clock_timestamp() "
+                "WHERE id=:id"
+            ),
+            {"id": execution_id},
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO disposition_event
+                    (id,org_id,record_id,action,tombstone,approved_by,requested_by,
+                     is_worm_destroy,legal_basis,r27_request_id,r27_execution_id)
+                VALUES
+                    (:id,:org,:record,'DESTROY',true,:approver,:requester,true,
+                     'court-ordered erasure',:request,:execution)
+                """
+            ),
+            {
+                "id": uuid.uuid4(),
+                "org": historical_actors.org_id,
+                "record": historical_actors.record_id,
+                "approver": historical_actors.approver_id,
+                "requester": historical_actors.requester_id,
+                "request": ready.request.request_id,
+                "execution": execution_id,
+            },
+        )
+        connection.execute(
+            sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:id"),
+            {"id": record_id},
+        )
+        if terminal_state == "EXECUTED":
+            survivor_record_id, survivor_evidence_id = _add_r27_evidence_owner(
+                connection,
+                source,
+                target,
+                state="ACTIVE",
+            )
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO r27_execution_target_result
+                        (id,execution_id,manifest_target_id,result_code,verified_at,
+                         surviving_owner_kind,surviving_owner_id)
+                    VALUES
+                        (:id,:execution,:target,'LOGICAL_ONLY_SURVIVING_OWNER',
+                         clock_timestamp(),'EVIDENCE_BLOB',:owner)
+                    """
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "execution": execution_id,
+                    "target": historical_target.id,
+                    "owner": survivor_evidence_id,
+                },
+            )
+            connection.execute(
+                sa.text(
+                    "UPDATE r27_execution SET state='EXECUTED',"
+                    "result_code='LOGICAL_ONLY_SURVIVING_OWNER',"
+                    "error_code=NULL,error_detail=NULL,"
+                    "next_attempt_at=NULL,completed_at=clock_timestamp(),"
+                    "updated_at=clock_timestamp() WHERE id=:id"
+                ),
+                {"id": execution_id},
+            )
+            connection.execute(
+                sa.text(
+                    "UPDATE r27_request SET state='EXECUTED',error_code=NULL,error_detail=NULL,"
+                    "failed_at=NULL,updated_at=clock_timestamp() WHERE id=:id"
+                ),
+                {"id": ready.request.request_id},
+            )
+            survivor_policy_id = connection.execute(
+                sa.text("SELECT retention_policy_id FROM record WHERE id=:id"),
+                {"id": survivor_record_id},
+            ).scalar_one()
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO disposition_event
+                        (id,org_id,record_id,action,tombstone,policy_id,approved_by,
+                         is_worm_destroy,legal_basis)
+                    VALUES
+                        (:id,:org,:record,'DESTROY',true,:policy,:user,false,
+                         'later ordinary destruction of completed historical survivor')
+                    """
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "org": source.actors.org_id,
+                    "record": survivor_record_id,
+                    "policy": survivor_policy_id,
+                    "user": source.actors.canceller_id,
+                },
+            )
+            connection.execute(
+                sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:id"),
+                {"id": survivor_record_id},
+            )
+        else:
+            connection.execute(
+                sa.text(
+                    "UPDATE r27_execution SET state='FAILED',result_code=NULL,"
+                    "error_code='POST_SOURCE_FAILURE',error_detail='bounded test failure',"
+                    "next_attempt_at=clock_timestamp()+interval '1 minute',completed_at=NULL,"
+                    "updated_at=clock_timestamp() WHERE id=:id"
+                ),
+                {"id": execution_id},
+            )
+    return record_id, evidence_id, execution_id
+
+
+def _add_r27_sealed_pack_pointer(
+    connection: sa.Connection,
+    source: SourceExecution,
+    target: Target,
+    *,
+    pack_record_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """Insert a T4-15 conservative pack candidate, including deliberately corrupt chains."""
+    framework_id = connection.execute(
+        sa.text("SELECT framework_id FROM documented_information WHERE id=:id"),
+        {"id": source.actors.record_id},
+    ).scalar_one()
+    pack_id = uuid.uuid4()
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO evidence_pack
+                (id,org_id,framework_id,title,scope_kind,scope_selector,status,
+                 zip_blob_sha256,pack_record_id,created_by)
+            VALUES
+                (:id,:org,:framework,'R27 authority pack','CLAUSE','{}'::jsonb,'SEALED',
+                 :sha,:pack_record,:user)
+            """
+        ),
+        {
+            "id": pack_id,
+            "org": source.actors.org_id,
+            "framework": framework_id,
+            "sha": target.sha256,
+            "pack_record": pack_record_id,
+            "user": source.actors.canceller_id,
+        },
+    )
+    return pack_id
+
+
+def _add_r27_pack_pointer_shape(
+    connection: sa.Connection,
+    source: SourceExecution,
+    target: Target,
+    shape: str,
+) -> uuid.UUID:
+    if shape == "CROSS_ORG_PACK_POINTER":
+        from tests.integration.test_ordinary_authority_transitions import (
+            _add_sealed_pack_pointer,
+            _seed_ordinary_owner,
+        )
+
+        other = _seed_ordinary_owner(connection)
+        return _add_sealed_pack_pointer(
+            connection,
+            other,
+            blob_sha256=target.sha256,
+        )
+    pack_id = _add_r27_sealed_pack_pointer(connection, source, target)
+    if shape == "SEALED_PACK_POINTER":
+        return pack_id
+    connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+    if shape == "INVALIDATED_PACK_POINTER":
+        connection.execute(
+            sa.text(
+                "UPDATE evidence_pack SET status='UNAVAILABLE',"
+                "invalidated_at=clock_timestamp(),invalidated_by_disposition_event_id=:event,"
+                "zip_blob_sha256=NULL,portfolio_blob_sha256=NULL WHERE id=:id"
+            ),
+            {"event": source.disposition_event_id, "id": pack_id},
+        )
+    elif shape == "CLEARED_PACK_POINTER":
+        connection.execute(
+            sa.text("UPDATE evidence_pack SET status='DRAFT',zip_blob_sha256=NULL WHERE id=:id"),
+            {"id": pack_id},
+        )
+    elif shape == "NONMATCHING_PACK_POINTER":
+        connection.execute(
+            sa.text("UPDATE evidence_pack SET zip_blob_sha256=:sha WHERE id=:id"),
+            {"sha": uuid.uuid4().hex * 2, "id": pack_id},
+        )
+    else:  # pragma: no cover - closed test parameter set
+        raise AssertionError(shape)
+    return pack_id
 
 
 def _add_r27_document_owner(
@@ -3718,14 +3972,495 @@ def test_r27_purge_claim_revalidates_exact_source_and_current_authority(
         maintenance.dispose()
 
 
+@pytest.mark.parametrize("terminal_state", ("EXECUTED", "FAILED"))
+@pytest.mark.parametrize("boundary", ("CLAIM", "HOLD", "PHYSICAL", "LOGICAL"))
+def test_r27_transitions_keep_competing_terminal_historical_destroy_nonowning(
+    database_authority_dsns: dict[str, str],
+    terminal_state: str,
+    boundary: str,
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    try:
+        source = _seed_source_execution(database_authority_dsns, owner)
+        target = source.request.targets[1 if boundary == "LOGICAL" else 0]
+        if boundary == "LOGICAL":
+            with owner.begin() as connection:
+                policy_id = connection.execute(
+                    sa.text("SELECT retention_policy_id FROM record WHERE id=:id"),
+                    {"id": source.logical_owner_record_id},
+                ).scalar_one()
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO disposition_event
+                            (id,org_id,record_id,action,tombstone,policy_id,approved_by,
+                             is_worm_destroy,legal_basis)
+                        VALUES
+                            (:id,:org,:record,'DESTROY',true,:policy,:user,false,
+                             'ordinary destruction before historical R27 proof')
+                        """
+                    ),
+                    {
+                        "id": uuid.uuid4(),
+                        "org": source.actors.org_id,
+                        "record": source.logical_owner_record_id,
+                        "policy": policy_id,
+                        "user": source.actors.canceller_id,
+                    },
+                )
+                connection.execute(
+                    sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:id"),
+                    {"id": source.logical_owner_record_id},
+                )
+
+        _historical_record_id, historical_evidence_id, historical_execution_id = (
+            _add_terminal_historical_r27_destroy_owner(
+                database_authority_dsns,
+                owner,
+                source,
+                target,
+                terminal_state=terminal_state,
+            )
+        )
+
+        if boundary == "CLAIM":
+            with maintenance.begin() as connection:
+                claimed_ids = {
+                    row.marker_id
+                    for row in connection.execute(
+                        sa.text(
+                            "SELECT * FROM easysynq_claim_r27_exact_purges"
+                            "(:execution,10,clock_timestamp())"
+                        ),
+                        {"execution": source.public_execution_id},
+                    )
+                }
+            assert source.physical_marker_id in claimed_ids
+        elif boundary in {"HOLD", "PHYSICAL"}:
+            with maintenance.begin() as connection:
+                _claim_r27_physical_marker(connection, source)
+                connection.execute(
+                    sa.text(
+                        "SELECT easysynq_record_r27_hold_release"
+                        "(:sha,:version,:execution,clock_timestamp())"
+                    ),
+                    {
+                        "sha": target.sha256,
+                        "version": target.object_version_id,
+                        "execution": source.public_execution_id,
+                    },
+                )
+                if boundary == "PHYSICAL":
+                    connection.execute(
+                        sa.text(
+                            "SELECT easysynq_record_r27_purge"
+                            "(:sha,:version,:execution,clock_timestamp())"
+                        ),
+                        {
+                            "sha": target.sha256,
+                            "version": target.object_version_id,
+                            "execution": source.public_execution_id,
+                        },
+                    )
+        else:
+            with pytest.raises(sa.exc.DBAPIError, match="r27_surviving_owner_refused"):
+                with maintenance.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "SELECT easysynq_record_r27_surviving_owner"
+                            "(:sha,:version,:execution,clock_timestamp())"
+                        ),
+                        {
+                            "sha": target.sha256,
+                            "version": target.object_version_id,
+                            "execution": source.public_execution_id,
+                        },
+                    )
+
+        with owner.connect() as connection:
+            assert connection.execute(
+                sa.text("SELECT EXISTS (SELECT 1 FROM evidence_blob WHERE id=:id)"),
+                {"id": historical_evidence_id},
+            ).scalar_one()
+            terminal_shape = connection.execute(
+                sa.text(
+                    "SELECT execution.state::text,request.state::text,"
+                    "execution.source_committed_at IS NOT NULL,execution.result_code::text,"
+                    "execution.error_code,execution.completed_at IS NOT NULL,"
+                    "execution.next_attempt_at IS NOT NULL,"
+                    "(SELECT count(*) FROM r27_execution_target_result result "
+                    " WHERE result.execution_id=execution.id) "
+                    "FROM r27_execution execution "
+                    "JOIN r27_request request ON request.id=execution.request_id "
+                    "WHERE execution.id=:id"
+                ),
+                {"id": historical_execution_id},
+            ).one()
+            assert terminal_shape == (
+                (
+                    "EXECUTED",
+                    "EXECUTED",
+                    True,
+                    "LOGICAL_ONLY_SURVIVING_OWNER",
+                    None,
+                    True,
+                    False,
+                    1,
+                )
+                if terminal_state == "EXECUTED"
+                else (
+                    "FAILED",
+                    "FINALIZING",
+                    True,
+                    None,
+                    "POST_SOURCE_FAILURE",
+                    False,
+                    True,
+                    0,
+                )
+            )
+            if boundary == "HOLD":
+                assert not connection.execute(
+                    sa.text("SELECT worm_legal_hold FROM blob WHERE sha256=:sha"),
+                    {"sha": target.sha256},
+                ).scalar_one()
+            elif boundary == "PHYSICAL":
+                assert connection.execute(
+                    sa.text("SELECT purged_at IS NOT NULL FROM blob WHERE sha256=:sha"),
+                    {"sha": target.sha256},
+                ).scalar_one()
+            elif boundary == "LOGICAL":
+                assert not connection.execute(
+                    sa.text(
+                        "SELECT EXISTS (SELECT 1 FROM r27_execution_target_result "
+                        "WHERE execution_id=:execution AND manifest_target_id=:target)"
+                    ),
+                    {"execution": source.internal_execution_id, "target": target.id},
+                ).scalar_one()
+    finally:
+        owner.dispose()
+        maintenance.dispose()
+
+
+@pytest.mark.parametrize("terminal_state", ("EXECUTED", "FAILED"))
+@pytest.mark.parametrize("boundary", ("CLAIM", "HOLD", "PHYSICAL", "LOGICAL"))
+def test_r27_historical_destroy_remains_nonowning_after_record_state_drift(
+    database_authority_dsns: dict[str, str],
+    terminal_state: str,
+    boundary: str,
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    try:
+        source = _seed_source_execution(database_authority_dsns, owner)
+        target = source.request.targets[1 if boundary == "LOGICAL" else 0]
+        if boundary == "LOGICAL":
+            with owner.begin() as connection:
+                policy_id = connection.execute(
+                    sa.text("SELECT retention_policy_id FROM record WHERE id=:id"),
+                    {"id": source.logical_owner_record_id},
+                ).scalar_one()
+                connection.execute(
+                    sa.text(
+                        """
+                        INSERT INTO disposition_event
+                            (id,org_id,record_id,action,tombstone,policy_id,approved_by,
+                             is_worm_destroy,legal_basis)
+                        VALUES
+                            (:id,:org,:record,'DESTROY',true,:policy,:user,false,
+                             'ordinary destruction before state-drift proof')
+                        """
+                    ),
+                    {
+                        "id": uuid.uuid4(),
+                        "org": source.actors.org_id,
+                        "record": source.logical_owner_record_id,
+                        "policy": policy_id,
+                        "user": source.actors.canceller_id,
+                    },
+                )
+                connection.execute(
+                    sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:id"),
+                    {"id": source.logical_owner_record_id},
+                )
+        elif boundary in {"HOLD", "PHYSICAL"}:
+            with maintenance.begin() as connection:
+                _claim_r27_physical_marker(connection, source)
+            if boundary == "PHYSICAL":
+                with maintenance.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            "SELECT easysynq_record_r27_hold_release"
+                            "(:sha,:version,:execution,clock_timestamp())"
+                        ),
+                        {
+                            "sha": target.sha256,
+                            "version": target.object_version_id,
+                            "execution": source.public_execution_id,
+                        },
+                    )
+
+        historical_record_id, historical_evidence_id, historical_execution_id = (
+            _add_terminal_historical_r27_destroy_owner(
+                database_authority_dsns,
+                owner,
+                source,
+                target,
+                terminal_state=terminal_state,
+            )
+        )
+
+        immutable_authority_sql = sa.text(
+            """
+            SELECT
+              to_jsonb(event),
+              to_jsonb(execution),
+              to_jsonb(request)
+            FROM disposition_event event
+            JOIN r27_execution execution ON execution.id=event.r27_execution_id
+            JOIN r27_request request ON request.id=execution.request_id
+            WHERE event.record_id=:record AND execution.id=:execution
+              AND event.action='DESTROY' AND event.tombstone
+              AND event.is_worm_destroy
+            """
+        )
+        with owner.begin() as connection:
+            record_before = connection.execute(
+                sa.text("SELECT to_jsonb(record) FROM record record WHERE id=:id"),
+                {"id": historical_record_id},
+            ).scalar_one()
+            authority_before = connection.execute(
+                immutable_authority_sql,
+                {
+                    "record": historical_record_id,
+                    "execution": historical_execution_id,
+                },
+            ).one()
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            assert (
+                connection.execute(
+                    sa.text(
+                        "UPDATE record SET disposition_state='ACTIVE' "
+                        "WHERE id=:id AND disposition_state='DISPOSED'"
+                    ),
+                    {"id": historical_record_id},
+                ).rowcount
+                == 1
+            )
+            record_after = connection.execute(
+                sa.text("SELECT to_jsonb(record) FROM record record WHERE id=:id"),
+                {"id": historical_record_id},
+            ).scalar_one()
+            authority_after = connection.execute(
+                immutable_authority_sql,
+                {
+                    "record": historical_record_id,
+                    "execution": historical_execution_id,
+                },
+            ).one()
+            assert record_before["disposition_state"] == "DISPOSED"
+            assert record_after["disposition_state"] == "ACTIVE"
+            assert {
+                key: value for key, value in record_before.items() if key != "disposition_state"
+            } == {key: value for key, value in record_after.items() if key != "disposition_state"}
+            assert authority_after == authority_before
+
+        with owner.connect() as connection:
+            historical_shape = connection.execute(
+                sa.text(
+                    """
+                    SELECT
+                      record.disposition_state::text,
+                      event.action::text,
+                      event.tombstone,
+                      event.is_worm_destroy,
+                      event.r27_request_id=execution.request_id,
+                      event.r27_execution_id=execution.id,
+                      execution.source_committed_at IS NOT NULL,
+                      execution.state::text,
+                      request.state::text,
+                      event.legal_basis,
+                      evidence.blob_sha256=:sha
+                    FROM record record
+                    JOIN evidence_blob evidence ON evidence.record_id=record.id
+                    JOIN disposition_event event ON event.record_id=record.id
+                    JOIN r27_execution execution ON execution.id=event.r27_execution_id
+                    JOIN r27_request request ON request.id=execution.request_id
+                    WHERE record.id=:record AND evidence.id=:evidence
+                      AND execution.id=:execution
+                    """
+                ),
+                {
+                    "record": historical_record_id,
+                    "evidence": historical_evidence_id,
+                    "execution": historical_execution_id,
+                    "sha": target.sha256,
+                },
+            ).one()
+        assert historical_shape == (
+            "ACTIVE",
+            "DESTROY",
+            True,
+            True,
+            True,
+            True,
+            True,
+            terminal_state,
+            "EXECUTED" if terminal_state == "EXECUTED" else "FINALIZING",
+            "court-ordered erasure",
+            True,
+        )
+
+        snapshot_sql = sa.text(
+            """
+            SELECT
+              (SELECT to_jsonb(marker) FROM pending_blob_purge marker WHERE id=:marker),
+              (SELECT to_jsonb(execution) FROM r27_execution execution WHERE id=:execution),
+              (SELECT to_jsonb(request) FROM r27_request request WHERE id=:request),
+              (SELECT to_jsonb(blob) FROM blob blob WHERE sha256=:sha),
+              (SELECT to_jsonb(event) FROM disposition_event event WHERE id=:event),
+              (SELECT COALESCE(jsonb_agg(to_jsonb(result) ORDER BY result.id),'[]')
+                 FROM r27_execution_target_result result WHERE execution_id=:execution),
+              (SELECT count(*) FROM audit_event)
+            """
+        )
+        snapshot_parameters = {
+            "marker": source.physical_marker_id,
+            "execution": source.internal_execution_id,
+            "request": source.request.request_id,
+            "sha": target.sha256,
+            "event": source.disposition_event_id,
+        }
+        with owner.connect() as connection:
+            before = connection.execute(snapshot_sql, snapshot_parameters).one()
+
+        observed_error: sa.exc.DBAPIError | None = None
+        claimed_ids: set[uuid.UUID] | None = None
+        observed_hold: bool | None = None
+        observed_purge: tuple[bool, str, int] | None = None
+        observed_survivor_count: int | None = None
+        with maintenance.connect() as connection:
+            transaction = connection.begin()
+            try:
+                if boundary == "CLAIM":
+                    claimed_ids = {
+                        row.marker_id
+                        for row in connection.execute(
+                            sa.text(
+                                "SELECT * FROM easysynq_claim_r27_exact_purges"
+                                "(:execution,10,clock_timestamp())"
+                            ),
+                            {"execution": source.public_execution_id},
+                        )
+                    }
+                elif boundary == "HOLD":
+                    connection.execute(
+                        sa.text(
+                            "SELECT easysynq_record_r27_hold_release"
+                            "(:sha,:version,:execution,clock_timestamp())"
+                        ),
+                        {
+                            "sha": target.sha256,
+                            "version": target.object_version_id,
+                            "execution": source.public_execution_id,
+                        },
+                    )
+                    observed_hold = connection.execute(
+                        sa.text("SELECT worm_legal_hold FROM blob WHERE sha256=:sha"),
+                        {"sha": target.sha256},
+                    ).scalar_one()
+                elif boundary == "PHYSICAL":
+                    connection.execute(
+                        sa.text(
+                            "SELECT easysynq_record_r27_purge"
+                            "(:sha,:version,:execution,clock_timestamp())"
+                        ),
+                        {
+                            "sha": target.sha256,
+                            "version": target.object_version_id,
+                            "execution": source.public_execution_id,
+                        },
+                    )
+                    observed_purge = connection.execute(
+                        sa.text(
+                            "SELECT blob.purged_at IS NOT NULL,marker.state::text,"
+                            "(SELECT count(*) FROM r27_execution_target_result result "
+                            " WHERE result.execution_id=:execution "
+                            "   AND result.manifest_target_id=:target) "
+                            "FROM blob blob "
+                            "JOIN pending_blob_purge marker ON marker.sha256=blob.sha256 "
+                            "WHERE blob.sha256=:sha AND marker.id=:marker"
+                        ),
+                        {
+                            "execution": source.internal_execution_id,
+                            "target": target.id,
+                            "sha": target.sha256,
+                            "marker": source.physical_marker_id,
+                        },
+                    ).one()
+                else:
+                    connection.execute(
+                        sa.text(
+                            "SELECT easysynq_record_r27_surviving_owner"
+                            "(:sha,:version,:execution,clock_timestamp())"
+                        ),
+                        {
+                            "sha": target.sha256,
+                            "version": target.object_version_id,
+                            "execution": source.public_execution_id,
+                        },
+                    )
+                    observed_survivor_count = connection.execute(
+                        sa.text(
+                            "SELECT count(*) FROM r27_execution_target_result "
+                            "WHERE execution_id=:execution AND manifest_target_id=:target"
+                        ),
+                        {
+                            "execution": source.internal_execution_id,
+                            "target": target.id,
+                        },
+                    ).scalar_one()
+            except sa.exc.DBAPIError as error:
+                observed_error = error
+            finally:
+                transaction.rollback()
+
+        with owner.connect() as connection:
+            assert connection.execute(snapshot_sql, snapshot_parameters).one() == before
+
+        if boundary == "LOGICAL":
+            assert observed_error is not None
+            assert "r27_surviving_owner_refused" in str(observed_error)
+            assert observed_survivor_count is None
+        else:
+            assert observed_error is None, str(observed_error)
+            if boundary == "CLAIM":
+                assert claimed_ids is not None
+                assert source.physical_marker_id in claimed_ids
+            elif boundary == "HOLD":
+                assert observed_hold is False
+            else:
+                assert observed_purge == (True, "VERIFIED", 1)
+    finally:
+        owner.dispose()
+        maintenance.dispose()
+
+
 @pytest.mark.parametrize(
     ("owner_kind", "owner_state", "must_block"),
     (
         ("EVIDENCE", "ACTIVE", True),
         ("EVIDENCE", "DUE_FOR_REVIEW", True),
         ("EVIDENCE", "ON_HOLD", True),
-        ("EVIDENCE", "DISPOSED", False),
+        # T4-3: state alone is not destruction authority.
+        ("EVIDENCE", "DISPOSED", True),
         ("DOCUMENT", None, True),
+        ("SEALED_PACK_POINTER", None, True),
+        ("INVALIDATED_PACK_POINTER", None, False),
+        ("CLEARED_PACK_POINTER", None, False),
+        ("CROSS_ORG_PACK_POINTER", None, False),
+        ("NONMATCHING_PACK_POINTER", None, False),
     ),
 )
 def test_r27_purge_claim_uses_closed_live_owner_predicate(
@@ -3740,7 +4475,9 @@ def test_r27_purge_claim_uses_closed_live_owner_predicate(
         source = _seed_source_execution(database_authority_dsns, owner)
         physical = source.request.targets[0]
         with owner.begin() as connection:
-            if owner_kind == "DOCUMENT":
+            if owner_kind.endswith("PACK_POINTER"):
+                _add_r27_pack_pointer_shape(connection, source, physical, owner_kind)
+            elif owner_kind == "DOCUMENT":
                 _add_r27_document_owner(connection, source, physical)
             else:
                 assert owner_state is not None
@@ -3994,7 +4731,13 @@ def test_r27_hold_release_requires_running_marker_in_claim_transaction(
     ("post_claim_change", "accepted"),
     (
         ("ACTIVE_OWNER", False),
-        ("DISPOSED_OWNER", True),
+        # T4-3: a DISPOSED label without a destructive event remains a live owner.
+        ("DISPOSED_OWNER", False),
+        ("SEALED_PACK_POINTER", False),
+        ("INVALIDATED_PACK_POINTER", True),
+        ("CLEARED_PACK_POINTER", True),
+        ("CROSS_ORG_PACK_POINTER", True),
+        ("NONMATCHING_PACK_POINTER", True),
         ("SOURCE_ACTION", False),
     ),
 )
@@ -4022,7 +4765,9 @@ def test_r27_physical_result_rechecks_source_and_live_owner_without_partial_writ
                 },
             )
         with owner.begin() as connection:
-            if post_claim_change in {"ACTIVE_OWNER", "DISPOSED_OWNER"}:
+            if post_claim_change.endswith("PACK_POINTER"):
+                _add_r27_pack_pointer_shape(connection, source, physical, post_claim_change)
+            elif post_claim_change in {"ACTIVE_OWNER", "DISPOSED_OWNER"}:
                 _add_r27_evidence_owner(
                     connection,
                     source,
@@ -4095,7 +4840,7 @@ def test_r27_physical_result_rechecks_source_and_live_owner_without_partial_writ
         ("ACTIVE", True),
         ("DUE_FOR_REVIEW", True),
         ("ON_HOLD", True),
-        ("DISPOSED", False),
+        ("DISPOSED", True),
     ),
 )
 def test_r27_logical_result_requires_real_live_same_org_owner(
@@ -4137,6 +4882,90 @@ def test_r27_logical_result_requires_real_live_same_org_owner(
                 {"execution": source.internal_execution_id, "target": logical.id},
             ).all()
             assert rows == ([("EVIDENCE_BLOB", source.logical_owner_id)] if accepted else [])
+    finally:
+        owner.dispose()
+        maintenance.dispose()
+
+
+@pytest.mark.parametrize(
+    ("pointer_shape", "accepted"),
+    (
+        ("SEALED_PACK_POINTER", True),
+        ("INVALIDATED_PACK_POINTER", False),
+        ("CLEARED_PACK_POINTER", False),
+        ("CROSS_ORG_PACK_POINTER", False),
+        ("NONMATCHING_PACK_POINTER", False),
+    ),
+)
+def test_r27_logical_result_conservatively_records_only_live_matching_pack_pointer(
+    database_authority_dsns: dict[str, str], pointer_shape: str, accepted: bool
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    try:
+        source = _seed_source_execution(database_authority_dsns, owner)
+        logical = source.request.targets[1]
+        with owner.begin() as connection:
+            policy_id = connection.execute(
+                sa.text("SELECT retention_policy_id FROM record WHERE id=:id"),
+                {"id": source.logical_owner_record_id},
+            ).scalar_one()
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO disposition_event
+                        (id,org_id,record_id,action,tombstone,policy_id,approved_by,
+                         is_worm_destroy,legal_basis)
+                    VALUES
+                        (:id,:org,:record,'DESTROY',true,:policy,:user,false,
+                         'ordinary destruction before conservative pack proof')
+                    """
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "org": source.actors.org_id,
+                    "record": source.logical_owner_record_id,
+                    "policy": policy_id,
+                    "user": source.actors.canceller_id,
+                },
+            )
+            connection.execute(
+                sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:id"),
+                {"id": source.logical_owner_record_id},
+            )
+            pack_id = _add_r27_pack_pointer_shape(
+                connection,
+                source,
+                logical,
+                pointer_shape,
+            )
+
+        statement = sa.text(
+            "SELECT easysynq_record_r27_surviving_owner(:sha,:version,:execution,clock_timestamp())"
+        )
+        parameters = {
+            "sha": logical.sha256,
+            "version": logical.object_version_id,
+            "execution": source.public_execution_id,
+        }
+        if accepted:
+            with maintenance.begin() as connection:
+                connection.execute(statement, parameters)
+        else:
+            with pytest.raises(sa.exc.DBAPIError, match="r27_surviving_owner_refused"):
+                with maintenance.begin() as connection:
+                    connection.execute(statement, parameters)
+
+        with owner.connect() as connection:
+            results = connection.execute(
+                sa.text(
+                    "SELECT surviving_owner_kind,surviving_owner_id "
+                    "FROM r27_execution_target_result WHERE execution_id=:execution "
+                    "AND manifest_target_id=:target"
+                ),
+                {"execution": source.internal_execution_id, "target": logical.id},
+            ).all()
+            assert results == ([("SEALED_PACK", pack_id)] if accepted else [])
     finally:
         owner.dispose()
         maintenance.dispose()
@@ -4204,6 +5033,29 @@ def test_r27_logical_result_ignores_cross_org_and_tenant_orphan_edges(
         logical = source.request.targets[1]
         with owner.begin() as connection:
             connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            policy_id = connection.execute(
+                sa.text("SELECT retention_policy_id FROM record WHERE id=:id"),
+                {"id": source.logical_owner_record_id},
+            ).scalar_one()
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO disposition_event
+                        (id,org_id,record_id,action,tombstone,policy_id,approved_by,
+                         is_worm_destroy,legal_basis)
+                    VALUES
+                        (:id,:org,:record,'DESTROY',true,:policy,:user,false,
+                         'ordinary destruction before corrupt-owner isolation')
+                    """
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "org": source.actors.org_id,
+                    "record": source.logical_owner_record_id,
+                    "policy": policy_id,
+                    "user": source.actors.canceller_id,
+                },
+            )
             connection.execute(
                 sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:id"),
                 {"id": source.logical_owner_record_id},
@@ -4305,7 +5157,7 @@ def test_r27_logical_result_revalidates_exact_source_disposition(
         maintenance.dispose()
 
 
-@pytest.mark.parametrize("obligation", ("LEGAL_HOLD", "PERMANENT"))
+@pytest.mark.parametrize("obligation", ("LEGAL_HOLD", "PERMANENT", "NORMALIZED_PERMANENT"))
 def test_r27_hold_release_preserves_hold_for_other_current_obligation(
     database_authority_dsns: dict[str, str], obligation: str
 ) -> None:
@@ -4324,6 +5176,8 @@ def test_r27_hold_release_preserves_hold_for_other_current_obligation(
                 state="ON_HOLD" if obligation == "LEGAL_HOLD" else "ACTIVE",
                 legal_hold=obligation == "LEGAL_HOLD",
                 permanent=obligation == "PERMANENT",
+                policy_duration="P1Y" if obligation == "NORMALIZED_PERMANENT" else None,
+                worm_lock_period=" permanent " if obligation == "NORMALIZED_PERMANENT" else None,
             )
         with pytest.raises(sa.exc.DBAPIError, match="r27_hold_release_refused"):
             with maintenance.begin() as connection:
@@ -4351,7 +5205,6 @@ def test_r27_hold_release_preserves_hold_for_other_current_obligation(
 @pytest.mark.parametrize(
     "owner_shape",
     (
-        "DISPOSED_PERMANENT",
         "CROSS_ORG_EVIDENCE",
         "TENANT_ORPHAN_EVIDENCE",
         "TENANT_ORPHAN_EVIDENCE_PERMANENT",
@@ -4368,22 +5221,13 @@ def test_r27_hold_release_ignores_noncurrent_or_cross_tenant_historical_evidence
         source = _seed_source_execution(database_authority_dsns, owner)
         physical = source.request.targets[0]
         with owner.begin() as connection:
-            if owner_shape == "DISPOSED_PERMANENT":
-                _add_r27_evidence_owner(
-                    connection,
-                    source,
-                    physical,
-                    state="DISPOSED",
-                    permanent=True,
-                )
-            else:
-                connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
-                _add_corrupt_cross_org_owner(
-                    connection,
-                    source,
-                    physical,
-                    kind=owner_shape,
-                )
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            _add_corrupt_cross_org_owner(
+                connection,
+                source,
+                physical,
+                kind=owner_shape,
+            )
 
         with maintenance.begin() as connection:
             _claim_r27_physical_marker(connection, source)
@@ -4403,6 +5247,90 @@ def test_r27_hold_release_ignores_noncurrent_or_cross_tenant_historical_evidence
                 sa.text("SELECT worm_legal_hold FROM blob WHERE sha256=:sha"),
                 {"sha": physical.sha256},
             ).scalar_one()
+    finally:
+        owner.dispose()
+        maintenance.dispose()
+
+
+@pytest.mark.parametrize("boundary", ("CLAIM", "RESULT"))
+@pytest.mark.parametrize(
+    ("owner_shape", "must_block"),
+    (
+        ("DISPOSED_WITHOUT_DESTROY", True),
+        ("SEALED_PACK_POINTER", True),
+        ("INVALIDATED_PACK_POINTER", False),
+        ("CLEARED_PACK_POINTER", False),
+        ("CROSS_ORG_PACK_POINTER", False),
+        ("NONMATCHING_PACK_POINTER", False),
+    ),
+)
+def test_r27_hold_release_rechecks_event_live_and_conservative_pack_owners(
+    database_authority_dsns: dict[str, str],
+    boundary: str,
+    owner_shape: str,
+    must_block: bool,
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    maintenance = _engine(database_authority_dsns, "easysynq_r27_maintenance")
+    try:
+        source = _seed_source_execution(database_authority_dsns, owner)
+        physical = source.request.targets[0]
+        if boundary == "RESULT":
+            with maintenance.begin() as connection:
+                _claim_r27_physical_marker(connection, source)
+
+        with owner.begin() as connection:
+            if owner_shape.endswith("PACK_POINTER"):
+                _add_r27_pack_pointer_shape(connection, source, physical, owner_shape)
+            else:
+                _add_r27_evidence_owner(
+                    connection,
+                    source,
+                    physical,
+                    state="DISPOSED",
+                    permanent=True,
+                )
+
+        if boundary == "CLAIM":
+            with maintenance.begin() as connection:
+                claimed_ids = {
+                    row.marker_id
+                    for row in connection.execute(
+                        sa.text(
+                            "SELECT * FROM easysynq_claim_r27_exact_purges"
+                            "(:execution,10,clock_timestamp())"
+                        ),
+                        {"execution": source.public_execution_id},
+                    )
+                }
+            assert (source.physical_marker_id not in claimed_ids) is must_block
+        else:
+            statement = sa.text(
+                "SELECT easysynq_record_r27_hold_release"
+                "(:sha,:version,:execution,clock_timestamp())"
+            )
+            parameters = {
+                "sha": physical.sha256,
+                "version": physical.object_version_id,
+                "execution": source.public_execution_id,
+            }
+            if must_block:
+                with pytest.raises(sa.exc.DBAPIError, match="r27_hold_release_refused"):
+                    with maintenance.begin() as connection:
+                        connection.execute(statement, parameters)
+            else:
+                with maintenance.begin() as connection:
+                    connection.execute(statement, parameters)
+
+        with owner.connect() as connection:
+            expected_hold = True if boundary == "CLAIM" else must_block
+            assert (
+                connection.execute(
+                    sa.text("SELECT worm_legal_hold FROM blob WHERE sha256=:sha"),
+                    {"sha": physical.sha256},
+                ).scalar_one()
+                is expected_hold
+            )
     finally:
         owner.dispose()
         maintenance.dispose()
@@ -5487,6 +6415,13 @@ def test_finalization_rechecks_manifest_expiry_after_key_lock_wait(
                 ),
                 {"manifest": ready.request.manifest_id},
             )
+            connection.execute(
+                sa.text(
+                    "UPDATE r27_request SET created_at="
+                    "TIMESTAMPTZ '2000-01-01 00:00:00+00' WHERE id=:request"
+                ),
+                {"request": ready.request.request_id},
+            )
         snapshot_sql = sa.text(
             """
             SELECT
@@ -5559,7 +6494,10 @@ def test_finalization_rechecks_manifest_expiry_after_key_lock_wait(
             result = future.result(timeout=6)
 
         assert blocked, result
-        assert result == ()
+        assert not isinstance(result, str), result
+        # The bounded batch may continue with an unrelated eligible request after
+        # skipping this expired candidate; this oracle is exact to the locked target.
+        assert ready.request.request_id not in result
         with owner.connect() as connection:
             assert connection.execute(snapshot_sql, parameters).one() == before
     finally:

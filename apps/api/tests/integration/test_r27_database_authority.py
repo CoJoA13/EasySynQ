@@ -70,6 +70,11 @@ TASK2_SENSITIVE_TABLES = {
 }
 
 FUNCTION_EXECUTORS = {
+    "easysynq_assert_worm_record_live": "easysynq_app",
+    "easysynq_lock_document_worm_config": "easysynq_app",
+    "easysynq_lock_worm_blob": ("easysynq_app", "easysynq_retention"),
+    "easysynq_lock_worm_owners": ("easysynq_app", "easysynq_retention"),
+    "easysynq_record_worm_assertion": "easysynq_app",
     "easysynq_claim_retention_targets": "easysynq_retention",
     "easysynq_fail_retention_target": "easysynq_retention",
     "easysynq_ratchet_worm_assertion": "easysynq_retention",
@@ -104,6 +109,11 @@ FUNCTION_EXECUTORS = {
 }
 
 FUNCTION_SIGNATURES = {
+    "easysynq_assert_worm_record_live(uuid,uuid)",
+    "easysynq_lock_document_worm_config(uuid,uuid)",
+    "easysynq_lock_worm_blob(uuid,text)",
+    "easysynq_lock_worm_owners(uuid,text)",
+    "easysynq_record_worm_assertion(uuid,text,text,text,text,timestamptz,boolean,timestamptz)",
     "easysynq_claim_retention_targets(integer,timestamptz)",
     "easysynq_fail_retention_target(uuid,text,text,timestamptz)",
     "easysynq_ratchet_worm_assertion(text,text,timestamptz,boolean,timestamptz,uuid)",
@@ -157,6 +167,12 @@ HOLD_TRIGGER_FUNCTIONS = {
 }
 
 OBSERVATION_CALLS = (
+    (
+        "easysynq_app",
+        "SELECT easysynq_record_worm_assertion("
+        "gen_random_uuid(),repeat('a',64),'bucket','key','version',"
+        "clock_timestamp(),true,:observed)",
+    ),
     ("easysynq_retention", "SELECT easysynq_claim_retention_targets(1,:observed)"),
     (
         "easysynq_retention",
@@ -293,6 +309,35 @@ RETENTION_REQUIRED_NULL_CALLS = (
 )
 
 _NULL_CALL_SPECS = (
+    (
+        "easysynq_app",
+        "easysynq_lock_document_worm_config",
+        (("p_org_id", "gen_random_uuid()"), ("p_config_id", "gen_random_uuid()")),
+    ),
+    (
+        "easysynq_app",
+        "easysynq_lock_worm_blob",
+        (("p_org_id", "gen_random_uuid()"), ("p_blob_sha256", "repeat('a',64)")),
+    ),
+    (
+        "easysynq_app",
+        "easysynq_lock_worm_owners",
+        (("p_org_id", "gen_random_uuid()"), ("p_blob_sha256", "repeat('a',64)")),
+    ),
+    (
+        "easysynq_app",
+        "easysynq_record_worm_assertion",
+        (
+            ("p_org_id", "gen_random_uuid()"),
+            ("p_blob_sha256", "repeat('a',64)"),
+            ("p_bucket", "'bucket'"),
+            ("p_object_key", "'key'"),
+            ("p_object_version_id", "'version'"),
+            ("p_retain_until", "clock_timestamp()"),
+            ("p_legal_hold", "false"),
+            ("p_verified_at", "clock_timestamp()"),
+        ),
+    ),
     (
         "easysynq_retention",
         "easysynq_claim_retention_targets",
@@ -586,6 +631,10 @@ def _add_permanent_document_owner(
     connection: sa.Connection,
     seed: OrdinarySeed,
     authority_kind: str,
+    *,
+    duration: str = "PERMANENT",
+    worm_lock_period: str | None = "PERMANENT",
+    active_period: str = "PERMANENT",
 ) -> None:
     document_id = uuid.uuid4()
     connection.execute(
@@ -616,19 +665,25 @@ def _add_permanent_document_owner(
                 """
                 INSERT INTO retention_policy
                     (id,org_id,name,duration,worm_lock_period,disposition_action)
-                VALUES (:id,:org_id,:name,'PERMANENT','PERMANENT','RETAIN_PERMANENT')
+                VALUES (:id,:org_id,:name,:duration,:worm_lock_period,'RETAIN_PERMANENT')
                 """
             ),
-            {"id": policy_id, "org_id": seed.org_id, "name": f"permanent-{policy_id}"},
+            {
+                "id": policy_id,
+                "org_id": seed.org_id,
+                "name": f"permanent-{policy_id}",
+                "duration": duration,
+                "worm_lock_period": worm_lock_period,
+            },
         )
     else:
         config_id = uuid.uuid4()
         connection.execute(
             sa.text(
                 "INSERT INTO document_worm_config (id,org_id,active_period) "
-                "VALUES (:id,:org_id,'PERMANENT')"
+                "VALUES (:id,:org_id,:active_period)"
             ),
-            {"id": config_id, "org_id": seed.org_id},
+            {"id": config_id, "org_id": seed.org_id, "active_period": active_period},
         )
     connection.execute(
         sa.text(
@@ -1112,7 +1167,10 @@ def test_every_authority_function_exists_hardened_and_has_one_executor(
                     .scalars()
                     .all()
                 )
-                assert executors == [FUNCTION_EXECUTORS[function.proname]]
+                expected_executors = FUNCTION_EXECUTORS[function.proname]
+                if isinstance(expected_executors, str):
+                    expected_executors = (expected_executors,)
+                assert set(executors) == set(expected_executors)
 
             for signature in GUARD_FUNCTION_SIGNATURES:
                 guard = connection.execute(
@@ -2657,6 +2715,7 @@ def test_authority_functions_reject_unbounded_observation_times_without_writes(
         """
         SELECT
           (SELECT count(*) FROM audit_event),
+          (SELECT count(*) FROM blob),
           (SELECT count(*) FROM pending_blob_purge),
           (SELECT count(*) FROM worm_hold_release_operation),
           (SELECT count(*) FROM r27_execution),
@@ -2773,3 +2832,84 @@ def test_role_membership_model_requires_nonnull_failed_error_code() -> None:
         "AND error_code IS NOT NULL AND btrim(error_code)<>'' AND length(error_code)<=64 "
         "AND length(COALESCE(error_detail,''))<=512)"
     )
+
+
+def test_r27_surviving_owner_model_declares_the_exact_closed_kind_registry() -> None:
+    from easysynq_api.db.models.r27_execution_target_result import (
+        R27ExecutionTargetResult,
+    )
+
+    constraints = {
+        constraint.name: " ".join(str(constraint.sqltext).split())
+        for constraint in R27ExecutionTargetResult.__table__.constraints
+        if isinstance(constraint, sa.CheckConstraint)
+    }
+    assert constraints["ck_r27_execution_target_result_authority_shape"] == (
+        "(result_code='PHYSICAL_ERASED' AND purge_marker_id IS NOT NULL "
+        "AND surviving_owner_kind IS NULL AND surviving_owner_id IS NULL) OR "
+        "(result_code='LOGICAL_ONLY_SURVIVING_OWNER' AND purge_marker_id IS NULL "
+        "AND surviving_owner_kind IN "
+        "('DOCUMENT_VERSION','EVIDENCE_BLOB','SEALED_PACK') "
+        "AND surviving_owner_id IS NOT NULL)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("owner_kind", "accepted"),
+    (
+        ("DOCUMENT_VERSION", True),
+        ("EVIDENCE_BLOB", True),
+        ("SEALED_PACK", True),
+        ("UNKNOWN_OWNER", False),
+    ),
+)
+def test_r27_surviving_owner_database_check_accepts_only_the_closed_kind_registry(
+    database_authority_dsns: dict[str, str],
+    owner_kind: str,
+    accepted: bool,
+) -> None:
+    owner = sa.create_engine(database_authority_dsns["owner"])
+    try:
+        with owner.connect() as connection:
+            transaction = connection.begin()
+            try:
+                connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+                statement = sa.text(
+                    """
+                    INSERT INTO r27_execution_target_result
+                        (id,execution_id,manifest_target_id,result_code,verified_at,
+                         surviving_owner_kind,surviving_owner_id)
+                    VALUES
+                        (:id,:execution,:target,'LOGICAL_ONLY_SURVIVING_OWNER',
+                         clock_timestamp(),:kind,:owner)
+                    """
+                )
+                parameters = {
+                    "id": uuid.uuid4(),
+                    "execution": uuid.uuid4(),
+                    "target": uuid.uuid4(),
+                    "kind": owner_kind,
+                    "owner": uuid.uuid4(),
+                }
+                if accepted:
+                    connection.execute(statement, parameters)
+                    assert (
+                        connection.execute(
+                            sa.text(
+                                "SELECT surviving_owner_kind FROM r27_execution_target_result "
+                                "WHERE id=:id"
+                            ),
+                            {"id": parameters["id"]},
+                        ).scalar_one()
+                        == owner_kind
+                    )
+                else:
+                    with pytest.raises(
+                        sa.exc.IntegrityError,
+                        match="ck_r27_execution_target_result_authority_shape",
+                    ):
+                        connection.execute(statement, parameters)
+            finally:
+                transaction.rollback()
+    finally:
+        owner.dispose()

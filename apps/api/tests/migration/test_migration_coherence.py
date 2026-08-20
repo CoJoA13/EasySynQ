@@ -1235,6 +1235,107 @@ def test_populated_historical_transitions_and_head_repairs(
                 monkeypatch.setenv("DATABASE_URL_SYNC", clean_url)
                 get_settings.cache_clear()
                 command.upgrade(config, "0089_worm_retention_container_identity")
+                task4_functions = (
+                    "easysynq_assert_worm_record_live(uuid,uuid)",
+                    "easysynq_lock_document_worm_config(uuid,uuid)",
+                    "easysynq_lock_worm_blob(uuid,text)",
+                    "easysynq_lock_worm_owners(uuid,text)",
+                    "easysynq_record_worm_assertion"
+                    "(uuid,text,text,text,text,timestamptz,boolean,timestamptz)",
+                )
+
+                def assert_task4_authority_surface(
+                    connection: sa.Connection,
+                    *,
+                    upgraded: bool,
+                ) -> None:
+                    trigger_count = connection.execute(
+                        sa.text(
+                            """
+                            SELECT count(*)
+                            FROM pg_trigger trigger
+                            JOIN pg_class relation ON relation.oid=trigger.tgrelid
+                            WHERE NOT trigger.tgisinternal
+                              AND (relation.relname,trigger.tgname) IN (
+                                ('document_version','trg_document_version_worm_owner'),
+                                ('retention_policy','trg_retention_policy_worm_owner')
+                              )
+                            """
+                        )
+                    ).scalar_one()
+                    assert trigger_count == (2 if upgraded else 0)
+                    if upgraded:
+                        assert connection.execute(
+                            sa.text(
+                                """
+                                SELECT table_name,column_name,
+                                       has_column_privilege(
+                                           'easysynq_app',format('public.%I',table_name),
+                                           column_name,'UPDATE'
+                                       )
+                                FROM (VALUES
+                                    ('record','retention_basis_date'),
+                                    ('record','retention_basis_provisional'),
+                                    ('retention_policy','active_revision_no')
+                                ) AS protected(table_name,column_name)
+                                ORDER BY table_name,column_name
+                                """
+                            )
+                        ).all() == [
+                            ("record", "retention_basis_date", False),
+                            ("record", "retention_basis_provisional", False),
+                            ("retention_policy", "active_revision_no", False),
+                        ]
+                    else:
+                        assert connection.execute(
+                            sa.text(
+                                """
+                                SELECT has_table_privilege(
+                                           'easysynq_app','public.record','UPDATE'
+                                       ),
+                                       has_table_privilege(
+                                           'easysynq_app','public.retention_policy','UPDATE'
+                                       )
+                                """
+                            )
+                        ).one() == (True, True)
+
+                clean_engine = sa.create_engine(clean_url)
+                try:
+                    with clean_engine.connect() as connection:
+                        assert all(
+                            connection.execute(
+                                sa.text("SELECT to_regprocedure(:signature)::oid"),
+                                {"signature": signature},
+                            ).scalar_one()
+                            is not None
+                            for signature in task4_functions
+                        )
+                        assert_task4_authority_surface(connection, upgraded=True)
+                    command.downgrade(config, "0088_bootstrap_credential")
+                    with clean_engine.connect() as connection:
+                        assert all(
+                            connection.execute(
+                                sa.text("SELECT to_regprocedure(:signature)::oid"),
+                                {"signature": signature},
+                            ).scalar_one()
+                            is None
+                            for signature in task4_functions
+                        )
+                        assert_task4_authority_surface(connection, upgraded=False)
+                    command.upgrade(config, "0089_worm_retention_container_identity")
+                    with clean_engine.connect() as connection:
+                        assert all(
+                            connection.execute(
+                                sa.text("SELECT to_regprocedure(:signature)::oid"),
+                                {"signature": signature},
+                            ).scalar_one()
+                            is not None
+                            for signature in task4_functions
+                        )
+                        assert_task4_authority_surface(connection, upgraded=True)
+                finally:
+                    clean_engine.dispose()
                 command.check(config)
         finally:
             engine.dispose()

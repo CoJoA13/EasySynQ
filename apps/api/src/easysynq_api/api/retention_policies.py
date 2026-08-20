@@ -2,8 +2,9 @@
 
 The authenticated CRUD + soft-archive surface for retention policies (policy-as-data). A SEPARATE
 router from ``api/records.py`` — records are immutable (one PATCH = /disposition), whereas policies
-are freely editable governance assets, so keeping them apart keeps the records immutability proof
-tight.
+are org-level governance assets, so keeping them apart keeps the records immutability proof tight.
+Once a Record or DocumentVersion pins a policy, its physical duration and WORM period freeze in
+place; Task 6 owns staged activation of replacement terms for future captures.
 
 Authz: reads → ``retention.read`` (QMS Owner + Internal Auditor), writes → ``retention.manage``
 (QMS Owner) — the two CONTENT-domain keys opened additively in 0028 (R38). Both gate at SYSTEM scope
@@ -134,8 +135,8 @@ async def update_retention_policy_endpoint(
     caller: AppUser = Depends(_retention_manage),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Edit a retention policy (partial; extend-forward only when records are pinned). Needs
-    ``retention.manage``."""
+    """Edit an unpinned policy or non-physical fields on a pinned policy. Needs
+    ``retention.manage``; Task 6 will own staged activation of pinned physical terms."""
     policy = await svc.update_policy(
         session, caller, policy_id, changes=body.model_dump(exclude_unset=True)
     )

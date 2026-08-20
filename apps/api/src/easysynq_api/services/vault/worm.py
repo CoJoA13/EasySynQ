@@ -160,7 +160,7 @@ class WormObjectState:
             raise WormModeMismatch
         retain_until = _utc_timestamp(self.retain_until)
         read_at = _utc_timestamp(self.read_at)
-        if retain_until is None or read_at is None or retain_until <= read_at:
+        if retain_until is None or read_at is None:
             raise WormReadbackMismatch
         if not isinstance(self.legal_hold, bool):
             raise WormReadbackMismatch

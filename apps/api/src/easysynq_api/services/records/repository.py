@@ -46,6 +46,7 @@ from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.storage_config import StorageConfig
 from ...db.models.system_config import SystemConfig
 from ..vault import repository as vault_repo
+from ..vault.worm import WormObjectLocator
 from .listing import (
     RecordListCriteria,
     RecordListCursor,
@@ -63,6 +64,65 @@ SYSTEM_DEFAULT_POLICY_NAME = "System Default Retention"
 SEALED_PACK_POLICY_NAME = "Sealed Evidence Pack Retention"
 SEALED_PACK_POLICY_ID_SALT = "easysynq.sealed-pack-retention.v1:"
 _PRESERVED_PACK_POLICY_PREFIX = f"{SEALED_PACK_POLICY_NAME} (preserved user policy: "
+_DESTINATION_ALLOCATION_LOCK_NAMESPACE = 0x4553414C  # ESAL
+_EXACT_WORM_VERSION_LOCK_NAMESPACE = 0x45535756  # ESWV
+
+
+def _stable_advisory_key(*parts: str) -> int:
+    """Return a process-stable signed int32 for a length-framed physical identity."""
+    framed = bytearray()
+    for part in parts:
+        encoded = part.encode("utf-8")
+        framed.extend(len(encoded).to_bytes(4, "big", signed=False))
+        framed.extend(encoded)
+    return int.from_bytes(
+        hashlib.blake2b(framed, digest_size=4).digest(),
+        "big",
+        signed=True,
+    )
+
+
+def destination_allocation_lock_key(bucket: str, object_key: str) -> tuple[int, int]:
+    """Global pre-copy advisory identity for one physical destination."""
+    return (_DESTINATION_ALLOCATION_LOCK_NAMESPACE, _stable_advisory_key(bucket, object_key))
+
+
+def exact_version_lock_key(locator: WormObjectLocator) -> tuple[int, int]:
+    """Exact immutable-version advisory identity, distinct from allocation locks."""
+    return (
+        _EXACT_WORM_VERSION_LOCK_NAMESPACE,
+        _stable_advisory_key(locator.bucket, locator.object_key, locator.object_version_id),
+    )
+
+
+async def _lock_advisory_tuples(
+    session: AsyncSession,
+    keys: Iterable[tuple[int, int]],
+) -> None:
+    for namespace, identity in sorted(set(keys)):
+        await session.execute(select(func.pg_advisory_xact_lock(namespace, identity)))
+
+
+async def lock_destination_allocations(
+    session: AsyncSession,
+    destinations: Iterable[tuple[str, str]],
+) -> None:
+    """Acquire every global pre-copy destination lock in actual tuple order."""
+    await _lock_advisory_tuples(
+        session,
+        (
+            destination_allocation_lock_key(bucket, object_key)
+            for bucket, object_key in destinations
+        ),
+    )
+
+
+async def lock_exact_worm_objects(
+    session: AsyncSession,
+    locators: Iterable[WormObjectLocator],
+) -> None:
+    """Acquire every exact-VersionId lock in actual tuple order."""
+    await _lock_advisory_tuples(session, map(exact_version_lock_key, locators))
 
 
 def sealed_pack_policy_id(org_id: uuid.UUID) -> uuid.UUID:
@@ -461,6 +521,19 @@ async def get_policy(
     return policy
 
 
+async def get_policy_for_update(
+    session: AsyncSession, policy_id: uuid.UUID, org_id: uuid.UUID
+) -> RetentionPolicy | None:
+    """Lock one tenant-bound policy before deciding whether an in-place edit is admissible."""
+    return (
+        await session.execute(
+            select(RetentionPolicy)
+            .where(RetentionPolicy.id == policy_id, RetentionPolicy.org_id == org_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+
+
 async def system_default_policy(session: AsyncSession, org_id: uuid.UUID) -> RetentionPolicy | None:
     return await policy_by_name(session, org_id, SYSTEM_DEFAULT_POLICY_NAME)
 
@@ -643,6 +716,19 @@ async def count_active_pinned_records(session: AsyncSession, policy_id: uuid.UUI
         )
     )
     return int(count or 0)
+
+
+async def policy_has_worm_owner_pin(session: AsyncSession, policy_id: uuid.UUID) -> bool:
+    """Whether any historical Record or DocumentVersion pins this physical WORM authority."""
+    record_id = await session.scalar(
+        select(Record.id).where(Record.retention_policy_id == policy_id).limit(1)
+    )
+    if record_id is not None:
+        return True
+    document_version_id = await session.scalar(
+        select(DocumentVersion.id).where(DocumentVersion.retention_policy_id == policy_id).limit(1)
+    )
+    return document_version_id is not None
 
 
 # --- evidence satellites -----------------------------------------------------------------

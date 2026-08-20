@@ -8,9 +8,17 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import monotonic, sleep
+from typing import Final
 
 import pytest
 import sqlalchemy as sa
+
+
+class _DefaultWormPeriod:
+    pass
+
+
+_DEFAULT_WORM_PERIOD: Final = _DefaultWormPeriod()
 
 
 @dataclass(frozen=True)
@@ -237,6 +245,7 @@ def _add_owner(
     *,
     logical_hold: bool,
     policy_duration: str,
+    worm_lock_period: str | _DefaultWormPeriod | None = _DEFAULT_WORM_PERIOD,
 ) -> uuid.UUID:
     policy_id = uuid.uuid4()
     record_id = uuid.uuid4()
@@ -246,7 +255,7 @@ def _add_owner(
             INSERT INTO retention_policy
                 (id,org_id,name,duration,worm_lock_period,disposition_action)
             VALUES
-                (:id,:org_id,:name,:duration,:duration,'RETAIN_PERMANENT')
+                (:id,:org_id,:name,:duration,:worm_lock_period,'RETAIN_PERMANENT')
             """
         ),
         {
@@ -254,6 +263,11 @@ def _add_owner(
             "org_id": seed.org_id,
             "name": f"additional-owner-{policy_id}",
             "duration": policy_duration,
+            "worm_lock_period": (
+                policy_duration
+                if isinstance(worm_lock_period, _DefaultWormPeriod)
+                else worm_lock_period
+            ),
         },
     )
     connection.execute(
@@ -311,6 +325,78 @@ def _add_owner(
         },
     )
     return record_id
+
+
+def _add_sealed_pack_pointer(
+    connection: sa.Connection,
+    seed: OrdinarySeed,
+    *,
+    blob_sha256: str | None = None,
+    pack_record_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """Insert the conservative T4-15 candidate; a backing chain is deliberately optional."""
+    pack_id = uuid.uuid4()
+    connection.execute(
+        sa.text(
+            """
+            INSERT INTO evidence_pack
+                (id,org_id,framework_id,title,scope_kind,scope_selector,status,
+                 zip_blob_sha256,pack_record_id,created_by)
+            VALUES
+                (:id,:org,:framework,'Authority pack','CLAUSE','{}'::jsonb,'SEALED',
+                 :sha,:pack_record,:user)
+            """
+        ),
+        {
+            "id": pack_id,
+            "org": seed.org_id,
+            "framework": seed.framework_id,
+            "sha": blob_sha256 or seed.blob_sha256,
+            "pack_record": pack_record_id,
+            "user": seed.user_id,
+        },
+    )
+    return pack_id
+
+
+def _add_pack_pointer_shape(
+    connection: sa.Connection,
+    seed: OrdinarySeed,
+    shape: str,
+) -> uuid.UUID:
+    if shape == "CROSS_ORG_PACK_POINTER":
+        other = _seed_ordinary_owner(connection)
+        return _add_sealed_pack_pointer(
+            connection,
+            other,
+            blob_sha256=seed.blob_sha256,
+        )
+    pack_id = _add_sealed_pack_pointer(connection, seed)
+    if shape == "SEALED_PACK_POINTER":
+        return pack_id
+    connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+    if shape == "INVALIDATED_PACK_POINTER":
+        connection.execute(
+            sa.text(
+                "UPDATE evidence_pack SET status='UNAVAILABLE',"
+                "invalidated_at=clock_timestamp(),invalidated_by_disposition_event_id=:event,"
+                "zip_blob_sha256=NULL,portfolio_blob_sha256=NULL WHERE id=:id"
+            ),
+            {"event": seed.disposition_event_id, "id": pack_id},
+        )
+    elif shape == "CLEARED_PACK_POINTER":
+        connection.execute(
+            sa.text("UPDATE evidence_pack SET status='DRAFT',zip_blob_sha256=NULL WHERE id=:id"),
+            {"id": pack_id},
+        )
+    elif shape == "NONMATCHING_PACK_POINTER":
+        connection.execute(
+            sa.text("UPDATE evidence_pack SET zip_blob_sha256=:sha WHERE id=:id"),
+            {"sha": uuid.uuid4().hex * 2, "id": pack_id},
+        )
+    else:  # pragma: no cover - closed test parameter set
+        raise AssertionError(shape)
+    return pack_id
 
 
 def _insert_hold_operation(
@@ -644,8 +730,14 @@ def test_ordinary_exact_purge_resolves_coordinates_and_retries_without_r27_bypas
         ("EVIDENCE", "ACTIVE", True),
         ("EVIDENCE", "DUE_FOR_REVIEW", True),
         ("EVIDENCE", "ON_HOLD", True),
-        ("EVIDENCE", "DISPOSED", False),
+        # T4-3: state alone is not destruction authority.
+        ("EVIDENCE", "DISPOSED", True),
         ("DOCUMENT", None, True),
+        ("SEALED_PACK_POINTER", None, True),
+        ("INVALIDATED_PACK_POINTER", None, False),
+        ("CLEARED_PACK_POINTER", None, False),
+        ("CROSS_ORG_PACK_POINTER", None, False),
+        ("NONMATCHING_PACK_POINTER", None, False),
     ),
 )
 def test_ordinary_purge_claim_uses_closed_live_owner_predicate(
@@ -670,7 +762,9 @@ def test_ordinary_purge_claim_uses_closed_live_owner_predicate(
             ).scalar_one()
 
         with owner.begin() as connection:
-            if owner_kind == "DOCUMENT":
+            if owner_kind.endswith("PACK_POINTER"):
+                _add_pack_pointer_shape(connection, seed, owner_kind)
+            elif owner_kind == "DOCUMENT":
                 from tests.integration.test_r27_database_authority import (
                     _add_permanent_document_owner,
                 )
@@ -708,6 +802,122 @@ def test_ordinary_purge_claim_uses_closed_live_owner_predicate(
             )
             if must_block:
                 assert _ordinary_result_snapshot(connection, marker_id, seed) == before
+    finally:
+        owner.dispose()
+        retention.dispose()
+
+
+@pytest.mark.parametrize("terminal_state", ("EXECUTED", "FAILED"))
+@pytest.mark.parametrize("boundary", ("CLAIM", "RESULT"))
+def test_ordinary_transition_keeps_valid_historical_r27_destroy_nonowning(
+    database_authority_dsns: dict[str, str],
+    terminal_state: str,
+    boundary: str,
+) -> None:
+    from tests.integration.test_r27_authority_transitions import (
+        _add_r27_evidence_owner,
+        _seed_source_execution,
+    )
+
+    owner = _engine(database_authority_dsns, "owner")
+    retention = _engine(database_authority_dsns, "easysynq_retention")
+    try:
+        source = _seed_source_execution(database_authority_dsns, owner)
+        physical = source.request.targets[0]
+        with owner.begin() as connection:
+            ordinary_record_id, _ = _add_r27_evidence_owner(
+                connection,
+                source,
+                physical,
+                state="DISPOSED",
+            )
+            policy_id = connection.execute(
+                sa.text("SELECT retention_policy_id FROM record WHERE id=:id"),
+                {"id": ordinary_record_id},
+            ).scalar_one()
+            ordinary_event_id = uuid.uuid4()
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO disposition_event
+                        (id,org_id,record_id,action,tombstone,policy_id,approved_by,
+                         is_worm_destroy,legal_basis)
+                    VALUES
+                        (:id,:org,:record,'DESTROY',true,:policy,:user,false,
+                         'ordinary marker for historical R27 owner proof')
+                    """
+                ),
+                {
+                    "id": ordinary_event_id,
+                    "org": source.actors.org_id,
+                    "record": ordinary_record_id,
+                    "policy": policy_id,
+                    "user": source.actors.canceller_id,
+                },
+            )
+            historical_evidence_id = connection.execute(
+                sa.text(
+                    "SELECT id FROM evidence_blob WHERE record_id=:record AND blob_sha256=:sha"
+                ),
+                {"record": source.actors.record_id, "sha": physical.sha256},
+            ).scalar_one()
+        with retention.begin() as connection:
+            marker_id = connection.execute(
+                sa.text("SELECT easysynq_enqueue_ordinary_exact_purge(:record,:event,:sha)"),
+                {
+                    "record": ordinary_record_id,
+                    "event": ordinary_event_id,
+                    "sha": physical.sha256,
+                },
+            ).scalar_one()
+            if boundary == "RESULT":
+                claimed_ids = {
+                    row.marker_id
+                    for row in connection.execute(
+                        sa.text(
+                            "SELECT * FROM easysynq_claim_ordinary_exact_purges"
+                            "(100,clock_timestamp())"
+                        )
+                    )
+                }
+                assert marker_id in claimed_ids
+
+        with owner.begin() as connection:
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            connection.execute(
+                sa.text("UPDATE r27_execution SET state=:state WHERE id=:id"),
+                {"state": terminal_state, "id": source.internal_execution_id},
+            )
+
+        with retention.begin() as connection:
+            if boundary == "CLAIM":
+                claimed_ids = {
+                    row.marker_id
+                    for row in connection.execute(
+                        sa.text(
+                            "SELECT * FROM easysynq_claim_ordinary_exact_purges"
+                            "(100,clock_timestamp())"
+                        )
+                    )
+                }
+                assert marker_id in claimed_ids
+            else:
+                connection.execute(
+                    sa.text(
+                        "SELECT easysynq_record_ordinary_exact_purge(:marker,clock_timestamp())"
+                    ),
+                    {"marker": marker_id},
+                )
+
+        with owner.connect() as connection:
+            assert connection.execute(
+                sa.text("SELECT EXISTS (SELECT 1 FROM evidence_blob WHERE id=:id)"),
+                {"id": historical_evidence_id},
+            ).scalar_one()
+            assert connection.execute(
+                sa.text("SELECT state::text FROM pending_blob_purge WHERE id=:id"),
+                {"id": marker_id},
+            ).scalar_one() == ("RUNNING" if boundary == "CLAIM" else "VERIFIED")
     finally:
         owner.dispose()
         retention.dispose()
@@ -1035,7 +1245,13 @@ def test_ordinary_purge_claim_revalidates_exact_source_disposition(
     ("post_claim_change", "accepted"),
     (
         ("ACTIVE_OWNER", False),
-        ("DISPOSED_OWNER", True),
+        # T4-3: a DISPOSED label without a destructive event remains a live owner.
+        ("DISPOSED_OWNER", False),
+        ("SEALED_PACK_POINTER", False),
+        ("INVALIDATED_PACK_POINTER", True),
+        ("CLEARED_PACK_POINTER", True),
+        ("CROSS_ORG_PACK_POINTER", True),
+        ("NONMATCHING_PACK_POINTER", True),
         ("SOURCE_ACTION", False),
     ),
 )
@@ -1069,7 +1285,9 @@ def test_ordinary_purge_result_revalidates_source_and_live_owners_atomically(
             assert marker_id in claimed_ids
 
         with owner.begin() as connection:
-            if post_claim_change in {"ACTIVE_OWNER", "DISPOSED_OWNER"}:
+            if post_claim_change.endswith("PACK_POINTER"):
+                _add_pack_pointer_shape(connection, seed, post_claim_change)
+            elif post_claim_change in {"ACTIVE_OWNER", "DISPOSED_OWNER"}:
                 owner_record_id = _add_owner(
                     connection,
                     seed,
@@ -1791,11 +2009,103 @@ def test_hold_claim_rechecks_all_current_owners_before_running(
         maintenance.dispose()
 
 
+@pytest.mark.parametrize(
+    "owner_shape",
+    (
+        "RECORD_DURATION",
+        "RECORD_WORM_PERIOD",
+        "DOCUMENT_POLICY_DURATION",
+        "DOCUMENT_POLICY_WORM_PERIOD",
+        "DOCUMENT_CONFIG",
+    ),
+)
+def test_hold_claim_normalizes_every_supported_permanent_period(
+    database_authority_dsns: dict[str, str], owner_shape: str
+) -> None:
+    from tests.integration.test_r27_database_authority import _add_permanent_document_owner
+
+    owner = _engine(database_authority_dsns, "owner")
+    authorizer = _engine(database_authority_dsns, "easysynq_hold_authorizer")
+    maintenance = _engine(database_authority_dsns, "easysynq_hold_maintenance")
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+            operation_id, digest = _insert_hold_operation(connection, seed)
+        with authorizer.begin() as connection:
+            _authorize(connection, operation_id, digest)
+        with owner.begin() as connection:
+            if owner_shape == "RECORD_DURATION":
+                _add_owner(
+                    connection,
+                    seed,
+                    logical_hold=False,
+                    policy_duration=" permanent ",
+                    worm_lock_period=None,
+                )
+            elif owner_shape == "RECORD_WORM_PERIOD":
+                _add_owner(
+                    connection,
+                    seed,
+                    logical_hold=False,
+                    policy_duration="P1Y",
+                    worm_lock_period=" permanent ",
+                )
+            elif owner_shape == "DOCUMENT_POLICY_DURATION":
+                _add_permanent_document_owner(
+                    connection,
+                    seed,
+                    "POLICY",
+                    duration=" permanent ",
+                    worm_lock_period=None,
+                )
+            elif owner_shape == "DOCUMENT_POLICY_WORM_PERIOD":
+                _add_permanent_document_owner(
+                    connection,
+                    seed,
+                    "POLICY",
+                    duration="P1Y",
+                    worm_lock_period=" permanent ",
+                )
+            else:
+                assert owner_shape == "DOCUMENT_CONFIG"
+                _add_permanent_document_owner(
+                    connection,
+                    seed,
+                    "INSTALLATION_MINIMUM",
+                    active_period=" permanent ",
+                )
+
+        with maintenance.begin() as connection:
+            claimed = _claim_hold_operations(connection)
+            assert operation_id not in {row["operation_id"] for row in claimed}
+
+        with owner.connect() as connection:
+            assert (
+                connection.execute(
+                    sa.text(
+                        "SELECT state::text FROM worm_hold_release_operation WHERE id=:operation_id"
+                    ),
+                    {"operation_id": operation_id},
+                ).scalar_one()
+                == "AUTHORIZED"
+            )
+            assert (
+                connection.execute(
+                    sa.text("SELECT worm_legal_hold FROM blob WHERE sha256=:blob_sha256"),
+                    {"blob_sha256": seed.blob_sha256},
+                ).scalar_one()
+                is True
+            )
+    finally:
+        owner.dispose()
+        authorizer.dispose()
+        maintenance.dispose()
+
+
 @pytest.mark.parametrize("boundary", ("CLAIM", "RESULT"))
 @pytest.mark.parametrize(
     "owner_shape",
     (
-        "DISPOSED_PERMANENT",
         "CROSS_ORG_EVIDENCE",
         "TENANT_ORPHAN_EVIDENCE",
         "TENANT_ORPHAN_EVIDENCE_PERMANENT",
@@ -1822,74 +2132,62 @@ def test_hold_release_ignores_noncurrent_or_cross_tenant_historical_evidence(
                 }
 
         with owner.begin() as connection:
-            if owner_shape == "DISPOSED_PERMANENT":
-                owner_record_id = _add_owner(
-                    connection,
-                    seed,
-                    logical_hold=False,
-                    policy_duration="PERMANENT",
-                )
-                connection.execute(
-                    sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:id"),
-                    {"id": owner_record_id},
-                )
-            else:
-                is_document = owner_shape.endswith("DOCUMENT")
-                other_org_id = _insert_org(connection)
-                other_user_id = uuid.uuid4()
-                other_framework_id = uuid.uuid4()
-                other_policy_id = uuid.uuid4()
-                target_permanent_policy_id = uuid.uuid4()
-                other_record_id = uuid.uuid4()
-                connection.execute(
-                    sa.text(
-                        "INSERT INTO app_user(id,org_id,keycloak_subject,display_name) "
-                        "VALUES (:id,:org,:subject,'Cross-tenant owner')"
-                    ),
-                    {
-                        "id": other_user_id,
-                        "org": other_org_id,
-                        "subject": f"cross-owner-{other_user_id}",
-                    },
-                )
-                connection.execute(
-                    sa.text(
-                        "INSERT INTO framework(id,org_id,code,name,is_active,is_authorable) "
-                        "VALUES (:id,:org,:code,'Cross owner framework',true,false)"
-                    ),
-                    {
-                        "id": other_framework_id,
-                        "org": other_org_id,
-                        "code": f"cross:{other_framework_id}",
-                    },
-                )
-                connection.execute(
-                    sa.text(
-                        "INSERT INTO retention_policy"
-                        "(id,org_id,name,duration,worm_lock_period,disposition_action) "
-                        "VALUES (:id,:org,:name,'PERMANENT','PERMANENT','RETAIN_PERMANENT')"
-                    ),
-                    {
-                        "id": other_policy_id,
-                        "org": other_org_id,
-                        "name": f"cross-policy-{other_policy_id}",
-                    },
-                )
-                connection.execute(
-                    sa.text(
-                        "INSERT INTO retention_policy"
-                        "(id,org_id,name,duration,worm_lock_period,disposition_action) "
-                        "VALUES (:id,:org,:name,'PERMANENT','PERMANENT','RETAIN_PERMANENT')"
-                    ),
-                    {
-                        "id": target_permanent_policy_id,
-                        "org": seed.org_id,
-                        "name": f"target-permanent-{target_permanent_policy_id}",
-                    },
-                )
-                connection.execute(
-                    sa.text(
-                        """
+            is_document = owner_shape.endswith("DOCUMENT")
+            other_org_id = _insert_org(connection)
+            other_user_id = uuid.uuid4()
+            other_framework_id = uuid.uuid4()
+            other_policy_id = uuid.uuid4()
+            target_permanent_policy_id = uuid.uuid4()
+            other_record_id = uuid.uuid4()
+            connection.execute(
+                sa.text(
+                    "INSERT INTO app_user(id,org_id,keycloak_subject,display_name) "
+                    "VALUES (:id,:org,:subject,'Cross-tenant owner')"
+                ),
+                {
+                    "id": other_user_id,
+                    "org": other_org_id,
+                    "subject": f"cross-owner-{other_user_id}",
+                },
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO framework(id,org_id,code,name,is_active,is_authorable) "
+                    "VALUES (:id,:org,:code,'Cross owner framework',true,false)"
+                ),
+                {
+                    "id": other_framework_id,
+                    "org": other_org_id,
+                    "code": f"cross:{other_framework_id}",
+                },
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO retention_policy"
+                    "(id,org_id,name,duration,worm_lock_period,disposition_action) "
+                    "VALUES (:id,:org,:name,'PERMANENT','PERMANENT','RETAIN_PERMANENT')"
+                ),
+                {
+                    "id": other_policy_id,
+                    "org": other_org_id,
+                    "name": f"cross-policy-{other_policy_id}",
+                },
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO retention_policy"
+                    "(id,org_id,name,duration,worm_lock_period,disposition_action) "
+                    "VALUES (:id,:org,:name,'PERMANENT','PERMANENT','RETAIN_PERMANENT')"
+                ),
+                {
+                    "id": target_permanent_policy_id,
+                    "org": seed.org_id,
+                    "name": f"target-permanent-{target_permanent_policy_id}",
+                },
+            )
+            connection.execute(
+                sa.text(
+                    """
                         INSERT INTO documented_information
                             (id,org_id,framework_id,kind,identifier,title,owner_user_id,
                              current_state,is_singleton,classification,
@@ -1898,33 +2196,33 @@ def test_hold_release_ignores_noncurrent_or_cross_tenant_historical_evidence(
                                 'Cross owner',:user,
                                 'Draft',false,'Internal',false,:user)
                         """
-                    ),
-                    {
-                        "id": other_record_id,
-                        "org": other_org_id,
-                        "framework": other_framework_id,
-                        "kind": "DOCUMENT" if is_document else "RECORD",
-                        "identifier": f"CROSS-OWNER-{other_record_id}",
-                        "user": other_user_id,
-                    },
-                )
-                connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
-                edge_org_id = other_org_id if owner_shape.startswith("CROSS_ORG") else seed.org_id
-                edge_policy_id = (
-                    target_permanent_policy_id
-                    if owner_shape == "TENANT_ORPHAN_DOCUMENT"
-                    or owner_shape == "TENANT_ORPHAN_EVIDENCE_PERMANENT"
-                    else seed.policy_id
-                    if owner_shape.startswith("TENANT_ORPHAN_EVIDENCE")
-                    else other_policy_id
-                )
-                edge_user_id = (
-                    seed.user_id if owner_shape.startswith("TENANT_ORPHAN") else other_user_id
-                )
-                if is_document:
-                    connection.execute(
-                        sa.text(
-                            """
+                ),
+                {
+                    "id": other_record_id,
+                    "org": other_org_id,
+                    "framework": other_framework_id,
+                    "kind": "DOCUMENT" if is_document else "RECORD",
+                    "identifier": f"CROSS-OWNER-{other_record_id}",
+                    "user": other_user_id,
+                },
+            )
+            connection.execute(sa.text("SET LOCAL session_replication_role=replica"))
+            edge_org_id = other_org_id if owner_shape.startswith("CROSS_ORG") else seed.org_id
+            edge_policy_id = (
+                target_permanent_policy_id
+                if owner_shape == "TENANT_ORPHAN_DOCUMENT"
+                or owner_shape == "TENANT_ORPHAN_EVIDENCE_PERMANENT"
+                else seed.policy_id
+                if owner_shape.startswith("TENANT_ORPHAN_EVIDENCE")
+                else other_policy_id
+            )
+            edge_user_id = (
+                seed.user_id if owner_shape.startswith("TENANT_ORPHAN") else other_user_id
+            )
+            if is_document:
+                connection.execute(
+                    sa.text(
+                        """
                             INSERT INTO document_version
                                 (id,org_id,document_id,version_seq,revision_label,
                                  change_significance,change_reason,version_state,
@@ -1934,46 +2232,46 @@ def test_hold_release_ignores_noncurrent_or_cross_tenant_historical_evidence(
                             VALUES (:id,:org,:document,1,'A','MINOR','cross owner','Draft',
                                     'POLICY',:policy,current_date,:sha,'{}'::jsonb,false,:user,:user)
                             """
-                        ),
-                        {
-                            "id": uuid.uuid4(),
-                            "org": edge_org_id,
-                            "document": other_record_id,
-                            "policy": edge_policy_id,
-                            "sha": seed.blob_sha256,
-                            "user": edge_user_id,
-                        },
-                    )
-                else:
-                    connection.execute(
-                        sa.text(
-                            "INSERT INTO record"
-                            "(id,org_id,record_type,captured_by,content_hash_version,"
-                            "retention_policy_id,disposition_state,legal_hold) "
-                            "VALUES (:id,:org,'EVIDENCE',:user,2,:policy,'ACTIVE',:legal_hold)"
-                        ),
-                        {
-                            "id": other_record_id,
-                            "org": other_org_id,
-                            "user": edge_user_id,
-                            "policy": edge_policy_id,
-                            "legal_hold": owner_shape != "TENANT_ORPHAN_EVIDENCE_PERMANENT",
-                        },
-                    )
-                    connection.execute(
-                        sa.text(
-                            "INSERT INTO evidence_blob"
-                            "(id,org_id,record_id,blob_sha256,is_original,created_by) "
-                            "VALUES (:id,:edge_org,:record,:sha,true,:user)"
-                        ),
-                        {
-                            "id": uuid.uuid4(),
-                            "edge_org": edge_org_id,
-                            "record": other_record_id,
-                            "sha": seed.blob_sha256,
-                            "user": edge_user_id,
-                        },
-                    )
+                    ),
+                    {
+                        "id": uuid.uuid4(),
+                        "org": edge_org_id,
+                        "document": other_record_id,
+                        "policy": edge_policy_id,
+                        "sha": seed.blob_sha256,
+                        "user": edge_user_id,
+                    },
+                )
+            else:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO record"
+                        "(id,org_id,record_type,captured_by,content_hash_version,"
+                        "retention_policy_id,disposition_state,legal_hold) "
+                        "VALUES (:id,:org,'EVIDENCE',:user,2,:policy,'ACTIVE',:legal_hold)"
+                    ),
+                    {
+                        "id": other_record_id,
+                        "org": other_org_id,
+                        "user": edge_user_id,
+                        "policy": edge_policy_id,
+                        "legal_hold": owner_shape != "TENANT_ORPHAN_EVIDENCE_PERMANENT",
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO evidence_blob"
+                        "(id,org_id,record_id,blob_sha256,is_original,created_by) "
+                        "VALUES (:id,:edge_org,:record,:sha,true,:user)"
+                    ),
+                    {
+                        "id": uuid.uuid4(),
+                        "edge_org": edge_org_id,
+                        "record": other_record_id,
+                        "sha": seed.blob_sha256,
+                        "user": edge_user_id,
+                    },
+                )
 
         with maintenance.begin() as connection:
             if boundary == "CLAIM":
@@ -1994,6 +2292,103 @@ def test_hold_release_ignores_noncurrent_or_cross_tenant_historical_evidence(
                 )
         with owner.connect() as connection:
             expected_state = "RUNNING" if boundary == "CLAIM" else "VERIFIED"
+            assert (
+                connection.execute(
+                    sa.text("SELECT state::text FROM worm_hold_release_operation WHERE id=:id"),
+                    {"id": operation_id},
+                ).scalar_one()
+                == expected_state
+            )
+    finally:
+        owner.dispose()
+        authorizer.dispose()
+        maintenance.dispose()
+
+
+@pytest.mark.parametrize("boundary", ("CLAIM", "RESULT"))
+@pytest.mark.parametrize(
+    ("owner_shape", "must_block"),
+    (
+        ("DISPOSED_WITHOUT_DESTROY", True),
+        ("SEALED_PACK_POINTER", True),
+        ("INVALIDATED_PACK_POINTER", False),
+        ("CLEARED_PACK_POINTER", False),
+        ("CROSS_ORG_PACK_POINTER", False),
+        ("NONMATCHING_PACK_POINTER", False),
+    ),
+)
+def test_hold_release_rechecks_event_live_and_conservative_pack_owners(
+    database_authority_dsns: dict[str, str],
+    boundary: str,
+    owner_shape: str,
+    must_block: bool,
+) -> None:
+    owner = _engine(database_authority_dsns, "owner")
+    authorizer = _engine(database_authority_dsns, "easysynq_hold_authorizer")
+    maintenance = _engine(database_authority_dsns, "easysynq_hold_maintenance")
+    try:
+        with owner.begin() as connection:
+            seed = _seed_ordinary_owner(connection)
+            operation_id, digest = _insert_hold_operation(connection, seed)
+        with authorizer.begin() as connection:
+            _authorize(connection, operation_id, digest)
+        if boundary == "RESULT":
+            with maintenance.begin() as connection:
+                assert operation_id in {
+                    row["operation_id"] for row in _claim_hold_operations(connection)
+                }
+
+        with owner.begin() as connection:
+            if owner_shape.endswith("PACK_POINTER"):
+                _add_pack_pointer_shape(connection, seed, owner_shape)
+            else:
+                owner_record_id = _add_owner(
+                    connection,
+                    seed,
+                    logical_hold=False,
+                    policy_duration="PERMANENT",
+                )
+                connection.execute(
+                    sa.text("UPDATE record SET disposition_state='DISPOSED' WHERE id=:id"),
+                    {"id": owner_record_id},
+                )
+
+        if boundary == "CLAIM":
+            with maintenance.begin() as connection:
+                claimed_ids = {row["operation_id"] for row in _claim_hold_operations(connection)}
+            assert (operation_id not in claimed_ids) is must_block
+        else:
+            statement = sa.text(
+                "SELECT easysynq_record_ordinary_hold_release"
+                "(:sha,:version,:operation,clock_timestamp())"
+            )
+            parameters = {
+                "sha": seed.blob_sha256,
+                "version": seed.object_version_id,
+                "operation": operation_id,
+            }
+            if must_block:
+                with pytest.raises(sa.exc.DBAPIError, match="ordinary_hold_release_refused"):
+                    with maintenance.begin() as connection:
+                        connection.execute(statement, parameters)
+            else:
+                with maintenance.begin() as connection:
+                    connection.execute(statement, parameters)
+
+        with owner.connect() as connection:
+            expected_hold = True if boundary == "CLAIM" else must_block
+            assert (
+                connection.execute(
+                    sa.text("SELECT worm_legal_hold FROM blob WHERE sha256=:sha"),
+                    {"sha": seed.blob_sha256},
+                ).scalar_one()
+                is expected_hold
+            )
+            expected_state = (
+                ("AUTHORIZED" if boundary == "CLAIM" else "RUNNING")
+                if must_block
+                else ("RUNNING" if boundary == "CLAIM" else "VERIFIED")
+            )
             assert (
                 connection.execute(
                     sa.text("SELECT state::text FROM worm_hold_release_operation WHERE id=:id"),

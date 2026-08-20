@@ -21,7 +21,8 @@ class R27ExecutionTargetResult(Base):
             "(result_code='PHYSICAL_ERASED' AND purge_marker_id IS NOT NULL "
             "AND surviving_owner_kind IS NULL AND surviving_owner_id IS NULL) OR "
             "(result_code='LOGICAL_ONLY_SURVIVING_OWNER' AND purge_marker_id IS NULL "
-            "AND surviving_owner_kind IN ('DOCUMENT_VERSION','EVIDENCE_BLOB') "
+            "AND surviving_owner_kind IN "
+            "('DOCUMENT_VERSION','EVIDENCE_BLOB','SEALED_PACK') "
             "AND surviving_owner_id IS NOT NULL)",
             name="authority_shape",
         ),

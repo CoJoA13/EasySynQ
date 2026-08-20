@@ -1,14 +1,14 @@
 """Retention-policy management use-cases (slice S-rec-4, doc 06 §5.1, doc 15 §8.16).
 
 The CRUD + soft-archive surface behind ``/api/v1/retention-policies``. Policies are *policy-as-data*
-(reusable schedules); editing one propagates to already-captured records via live-deref off the
-pinned ``retention_policy_id`` (the sweep reads ``policy.duration`` / ``disposition_action`` /
-``review_required`` at sweep time). doc 06 §5.2 wants that ONLY for extensions ("an extension can be
-applied forward; a reduction never applies to already-captured records"), so:
+(reusable schedules). Task 4 freezes the physical duration/WORM authority once any Record or
+DocumentVersion pins the policy; Task 6 will provide staged activation for future term changes.
+Non-physical policy behavior continues to live-dereference the pinned policy, so:
 
-* **PATCH is extend-forward** — when a policy has >=1 non-DISPOSED pinned record, a duration
-  reduction, a weaker ``disposition_action``, or a ``review_required`` true->false is refused 422.
-  Shortening for FUTURE captures is done by archiving the policy + creating a shorter one.
+* **PATCH freezes physical terms** — both duration and WORM-period shortening or extension are
+  refused once any historical Record or DocumentVersion pins the policy. For non-physical fields,
+  the established extend-forward guard still refuses a weaker disposition action or removal of a
+  review requirement while active records are pinned.
 * **Archive is soft** — a hard DELETE is blocked by 3 RESTRICT FKs; ``active=false`` hides the
   policy from new-capture resolution but records already pinned keep being swept under it.
 * **The seeded System Default is protected** — it may not be archived, renamed, or have its
@@ -25,6 +25,7 @@ import datetime
 import uuid
 from typing import Any
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
@@ -75,6 +76,14 @@ def _invalid(field: str, code: str, message: str) -> ProblemException:
 
 def _conflict(code: ProblemCode, title: str) -> ProblemException:
     return ProblemException(status=409, code=code, title=title)
+
+
+def _is_pinned_policy_trigger_refusal(exc: DBAPIError) -> bool:
+    diagnostics = getattr(exc.orig, "diag", None)
+    return (
+        getattr(exc.orig, "sqlstate", None) == "P0001"
+        and getattr(diagnostics, "message_primary", None) == "worm_pinned_policy_is_immutable"
+    )
 
 
 # --- validation --------------------------------------------------------------------------
@@ -216,9 +225,8 @@ async def update_policy(
     *,
     changes: dict[str, Any],
 ) -> RetentionPolicy:
-    """Apply a partial update (only supplied fields). Enforces System-Default protection + the
-    extend-forward ratchet when the policy has pinned records (doc 06 §5.2)."""
-    policy = await repo.get_policy(session, policy_id, actor.org_id)
+    """Apply a partial update after locking the policy and rechecking all physical owner pins."""
+    policy = await repo.get_policy_for_update(session, policy_id, actor.org_id)
     if policy is None:
         raise ProblemException(status=404, code="not_found", title="Retention policy not found")
 
@@ -271,15 +279,14 @@ async def update_policy(
     if "worm_lock_period" in changes or "duration" in changes:
         _validate_worm_lock(new_worm, new_duration)
 
-    # Extend-forward ratchet: only bites when records are already pinned (doc 06 §5.2).
+    terms_changed = ("duration" in changes and new_duration != policy.duration) or (
+        "worm_lock_period" in changes and new_worm != policy.worm_lock_period
+    )
+    if terms_changed and await repo.policy_has_worm_owner_pin(session, policy.id):
+        raise _conflict("conflict", "Pinned retention policy terms are immutable")
+
+    # Preserve the pre-Task-4 extend-forward rules for non-physical behavioral fields.
     if await repo.count_active_pinned_records(session, policy.id) > 0:
-        if "duration" in changes and not duration_ge(new_duration, policy.duration):
-            raise _invalid(
-                "duration",
-                "retention_reduction_blocked",
-                "Cannot shorten a policy with active records (extend-forward only); archive it and "
-                "create a shorter policy for future captures",
-            )
         if "disposition_action" in changes and action_preservation_rank(
             changes["disposition_action"]
         ) < action_preservation_rank(policy.disposition_action):
@@ -304,7 +311,13 @@ async def update_policy(
         setattr(policy, key, value)
     after = {k: _jsonable(getattr(policy, k)) for k in changes}
     _emit(session, actor, EventType.RETENTION_POLICY_UPDATED, policy.id, before=before, after=after)
-    await session.commit()
+    try:
+        await session.commit()
+    except DBAPIError as exc:
+        await session.rollback()
+        if _is_pinned_policy_trigger_refusal(exc):
+            raise _conflict("conflict", "Pinned retention policy terms are immutable") from exc
+        raise
     await session.refresh(policy)
     return policy
 

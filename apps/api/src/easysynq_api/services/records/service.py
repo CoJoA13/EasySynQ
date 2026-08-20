@@ -597,6 +597,7 @@ async def capture_record(
         form_field_values=form_field_values,
         retention_policy_id=resolution.policy_id,
         retention_basis_date=resolution.retention_basis_date,
+        retention_basis_provisional=resolution.retention_basis_provisional,
         correction_of=_correction_of,
         content_hash=None,
         content_hash_version=CONTENT_HASH_VERSION,

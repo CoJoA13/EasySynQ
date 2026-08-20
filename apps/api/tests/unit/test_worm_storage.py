@@ -244,21 +244,41 @@ def test_worm_object_state_rejects_non_governance_mode() -> None:
     [
         (datetime.datetime(2026, 8, 20), NOW),
         (NOW + datetime.timedelta(days=1), datetime.datetime(2026, 8, 19)),
-        (NOW, NOW),
-        (NOW - datetime.timedelta(microseconds=1), NOW),
+        ("not-a-timestamp", NOW),
+        (NOW + datetime.timedelta(days=1), object()),
     ],
 )
-def test_worm_object_state_rejects_naive_or_nonfuture_timestamps(
-    retain_until: datetime.datetime, read_at: datetime.datetime
+def test_worm_object_state_rejects_naive_or_malformed_timestamps(
+    retain_until: object, read_at: object
 ) -> None:
     with pytest.raises(WormReadbackMismatch):
         WormObjectState(
             locator=LOCATOR,
             mode="GOVERNANCE",
-            retain_until=retain_until,
+            retain_until=retain_until,  # type: ignore[arg-type]
             legal_hold=False,
-            read_at=read_at,
+            read_at=read_at,  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize(
+    "retain_until",
+    (NOW, NOW - datetime.timedelta(microseconds=1)),
+    ids=("expires-at-read", "expired-before-read"),
+)
+def test_worm_object_state_accepts_equal_or_past_exact_provider_observation(
+    retain_until: datetime.datetime,
+) -> None:
+    state = WormObjectState(
+        locator=LOCATOR,
+        mode="GOVERNANCE",
+        retain_until=retain_until,
+        legal_hold=False,
+        read_at=NOW,
+    )
+
+    assert state.retain_until == retain_until
+    assert state.read_at == NOW
 
 
 def test_worm_requirement_rejects_naive_timestamp_and_non_boolean_hold() -> None:
@@ -340,12 +360,6 @@ async def test_read_worm_state_does_not_map_unset_hold_code_from_retention(
                 "RetainUntilDate": datetime.datetime(2026, 8, 20),
             }
         },
-        {
-            "Retention": {
-                "Mode": "GOVERNANCE",
-                "RetainUntilDate": datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC),
-            }
-        },
     ],
 )
 async def test_read_worm_state_rejects_missing_or_malformed_retention(
@@ -355,6 +369,31 @@ async def test_read_worm_state_rejects_missing_or_malformed_retention(
 
     with pytest.raises(WormReadbackMismatch):
         await storage.read_worm_state(LOCATOR)
+
+
+async def test_read_worm_state_returns_expired_exact_governance_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expired = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
+    client = _ReadStateClient(
+        retention={
+            "Retention": {
+                "Mode": "GOVERNANCE",
+                "RetainUntilDate": expired,
+            }
+        }
+    )
+    monkeypatch.setattr(storage, "_client", lambda: client)
+
+    state = await storage.read_worm_state(LOCATOR)
+
+    assert state.locator == LOCATOR
+    assert state.mode == "GOVERNANCE"
+    assert state.retain_until == expired
+    assert state.legal_hold is False
+    assert state.read_at > expired
+    assert client.retention_calls == [EXACT_KWARGS]
+    assert client.hold_calls == [EXACT_KWARGS]
 
 
 async def test_read_worm_state_rejects_compliance(monkeypatch: pytest.MonkeyPatch) -> None:

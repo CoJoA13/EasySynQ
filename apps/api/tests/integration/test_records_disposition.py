@@ -24,6 +24,7 @@ from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
 from easysynq_api.db.models.app_user import AppUser
@@ -49,7 +50,6 @@ from easysynq_api.services.vault.staged_identity import (
     StagingDomain,
 )
 
-from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _evidence_json, _grant, _subject, _upload_evidence
 from .test_vault import _auth
 
@@ -92,13 +92,19 @@ async def _seed_policy(
 async def _backdate(record_id: str, *, days: int) -> None:
     """Move the record's retention_basis_date into the past so its clock has elapsed at today."""
     when = datetime.date.today() - datetime.timedelta(days=days)
-    async with get_sessionmaker()() as s:
-        await s.execute(
-            update(Record)
-            .where(Record.id == uuid.UUID(record_id))
-            .values(retention_basis_date=when)
-        )
-        await s.commit()
+    owner_dsn = get_settings().database_url_sync
+    assert owner_dsn is not None
+    engine = create_async_engine(owner_dsn)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as s:
+            await s.execute(
+                update(Record)
+                .where(Record.id == uuid.UUID(record_id))
+                .values(retention_basis_date=when)
+            )
+            await s.commit()
+    finally:
+        await engine.dispose()
 
 
 async def _run_sweep(now: datetime.datetime | None = None) -> dict[str, int]:
@@ -221,31 +227,38 @@ async def _mark_policy_destroy_for_crash(
 
 
 async def _cleanup(policy_id: uuid.UUID) -> None:
-    async with get_sessionmaker()() as s:
-        pinned = list(
-            (await s.execute(select(Record.id).where(Record.retention_policy_id == policy_id)))
-            .scalars()
-            .all()
-        )
-        if pinned:
-            # Authority-bound markers RESTRICT deletion of their event/request/record until the
-            # reaper removes them. Normal successful tests leave none; this also makes teardown
-            # robust when an assertion interrupts a crash-recovery scenario.
-            await s.execute(delete(PendingBlobPurge).where(PendingBlobPurge.record_id.in_(pinned)))
-            await s.commit()  # release the marker FK before owner-role event deletion
-            # disposition_event is append-only for the app role (0072 REVOKE UPDATE,DELETE) → its
-            # teardown DELETE must run as the OWNER, not the app role this session connects as.
-            await owner_delete_disposition_events(pinned)
-            await s.execute(
-                delete(WormDestroyRequest).where(WormDestroyRequest.record_id.in_(pinned))
+    owner_dsn = get_settings().database_url_sync
+    assert owner_dsn is not None
+    engine = create_async_engine(owner_dsn)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as s:
+            pinned = list(
+                (await s.execute(select(Record.id).where(Record.retention_policy_id == policy_id)))
+                .scalars()
+                .all()
             )
-            await s.execute(delete(EvidenceBlob).where(EvidenceBlob.record_id.in_(pinned)))
-            await s.execute(delete(Record).where(Record.id.in_(pinned)))
-            await s.execute(
-                delete(DocumentedInformation).where(DocumentedInformation.id.in_(pinned))
-            )
-        await s.execute(delete(RetentionPolicy).where(RetentionPolicy.id == policy_id))
-        await s.commit()
+            if pinned:
+                # Authority-bound markers RESTRICT deletion of their event/request/record until
+                # the reaper removes them. Normal successful tests leave none; this also makes
+                # teardown robust when an assertion interrupts a crash-recovery scenario.
+                await s.execute(
+                    delete(PendingBlobPurge).where(PendingBlobPurge.record_id.in_(pinned))
+                )
+                await s.execute(
+                    delete(DispositionEvent).where(DispositionEvent.record_id.in_(pinned))
+                )
+                await s.execute(
+                    delete(WormDestroyRequest).where(WormDestroyRequest.record_id.in_(pinned))
+                )
+                await s.execute(delete(EvidenceBlob).where(EvidenceBlob.record_id.in_(pinned)))
+                await s.execute(delete(Record).where(Record.id.in_(pinned)))
+                await s.execute(
+                    delete(DocumentedInformation).where(DocumentedInformation.id.in_(pinned))
+                )
+            await s.execute(delete(RetentionPolicy).where(RetentionPolicy.id == policy_id))
+            await s.commit()
+    finally:
+        await engine.dispose()
 
 
 # --- the sweep ---------------------------------------------------------------------------
