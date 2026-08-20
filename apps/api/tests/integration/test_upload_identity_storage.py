@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import io
 import uuid
@@ -338,6 +339,24 @@ async def test_worm_state_reads_minio_unset_hold_and_explicit_on(s3_client: Any)
         WormRequirement(retain_until=unset.retain_until, legal_hold=True),
     )
     assert applied.verified.legal_hold is True
+
+
+@pytest.mark.integration
+async def test_worm_apply_extends_minio_future_retention_and_reads_back(s3_client: Any) -> None:
+    key = f"worm-retention-extension-{uuid.uuid4().hex}"
+    put = s3_client.put_object(Bucket="documents", Key=key, Body=b"retention-extension")
+    locator = WormObjectLocator("documents", key, put["VersionId"])
+    current = await storage.read_worm_state(locator)
+    required = current.retain_until + datetime.timedelta(days=30)
+
+    applied = await storage.apply_worm_protection(
+        locator,
+        WormRequirement(retain_until=required, legal_hold=False),
+    )
+
+    assert applied.locator == locator
+    assert applied.verified.locator == locator
+    assert applied.verified.retain_until >= required
 
 
 class _CopyFailingClient:

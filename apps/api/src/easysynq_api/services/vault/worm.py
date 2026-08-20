@@ -71,6 +71,21 @@ def _legal_hold_content_md5(status: Literal["ON", "OFF"]) -> str:
     return base64.b64encode(digest).decode("ascii")
 
 
+def _retention_content_md5(retain_until: datetime.datetime) -> str:
+    """Return S3's required Content-MD5 for boto3's canonical GOVERNANCE XML body."""
+    normalized = retain_until.astimezone(datetime.UTC)
+    timestamp_format = "%Y-%m-%dT%H:%M:%S.%fZ" if normalized.microsecond else "%Y-%m-%dT%H:%M:%SZ"
+    timestamp = normalized.strftime(timestamp_format)
+    payload = (
+        '<Retention xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        "<Mode>GOVERNANCE</Mode>"
+        f"<RetainUntilDate>{timestamp}</RetainUntilDate>"
+        "</Retention>"
+    ).encode()
+    digest = hashlib.md5(payload, usedforsecurity=False).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
 def _raise_provider_failure(exc: BaseException) -> NoReturn:
     code = _provider_error_code(exc)
     if code == "NoSuchVersion":

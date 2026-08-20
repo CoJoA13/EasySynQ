@@ -47,6 +47,7 @@ from .worm import (
     _legal_hold_content_md5,
     _provider_error_code,
     _raise_provider_failure,
+    _retention_content_md5,
 )
 
 
@@ -140,13 +141,16 @@ async def presign_get(object_key: str, *, bucket: str | None = None) -> str:
 
 async def presign_worm_get(locator: WormObjectLocator) -> str:
     """Presign a GET for one immutable object version without resolving the key's latest value."""
-    return await asyncio.to_thread(
-        _presign,
-        "get_object",
-        locator.object_key,
-        locator.bucket,
-        {"VersionId": locator.object_version_id},
-    )
+    try:
+        return await asyncio.to_thread(
+            _presign,
+            "get_object",
+            locator.object_key,
+            locator.bucket,
+            {"VersionId": locator.object_version_id},
+        )
+    except Exception as exc:  # noqa: BLE001 - presign/bootstrap exposes multiple provider failures
+        _raise_provider_failure(exc)
 
 
 def _head_sync(key: str, bucket: str) -> ObjectHead:
@@ -206,7 +210,10 @@ def _is_object_absence(exc: BaseException, *, object_level_404: bool) -> bool:
 
 
 def _read_worm_state_sync(locator: WormObjectLocator) -> WormObjectState:
-    client = _client()
+    try:
+        client = _client()
+    except Exception as exc:  # noqa: BLE001 - boto3 client bootstrap has multiple failure types
+        _raise_provider_failure(exc)
     exact = {
         "Bucket": locator.bucket,
         "Key": locator.object_key,
@@ -267,10 +274,14 @@ async def apply_worm_protection(
     """Ratchet one exact version forward and prove its resulting state without bypass authority."""
     current = await read_worm_state(locator)
     target_retain_until = current.retain_until
+    target_legal_hold = current.legal_hold or requirement.legal_hold
     if requirement.retain_until is not None:
         target_retain_until = max(target_retain_until, requirement.retain_until)
 
-    client = _client()
+    try:
+        client = _client()
+    except Exception as exc:  # noqa: BLE001 - boto3 client bootstrap has multiple failure types
+        _raise_provider_failure(exc)
     exact = {
         "Bucket": locator.bucket,
         "Key": locator.object_key,
@@ -286,6 +297,7 @@ async def apply_worm_protection(
                     "Mode": "GOVERNANCE",
                     "RetainUntilDate": target_retain_until,
                 },
+                ContentMD5=_retention_content_md5(target_retain_until),
             )
         except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
             _raise_provider_failure(exc)
@@ -311,7 +323,7 @@ async def apply_worm_protection(
         raise WormReadbackMismatch from exc
     if weaker:
         raise WormProtectionWouldWeaken
-    if requirement.legal_hold and not verified.legal_hold:
+    if target_legal_hold and not verified.legal_hold:
         raise WormReadbackMismatch
 
     return VerifiedWormAssertion(

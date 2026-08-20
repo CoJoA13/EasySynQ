@@ -29,46 +29,7 @@ def _exact_parameters(locator: WormObjectLocator) -> dict[str, str]:
     }
 
 
-def _delete_worm_version_sync(
-    locator: WormObjectLocator,
-    *,
-    release_hold: bool,
-    bypass_governance: bool,
-) -> None:
-    if not isinstance(release_hold, bool) or not isinstance(bypass_governance, bool):
-        raise ValueError("WORM deletion controls must be booleans")
-
-    client = _client()
-    exact = _exact_parameters(locator)
-
-    if release_hold:
-        try:
-            client.put_object_legal_hold(
-                **exact,
-                LegalHold={"Status": "OFF"},
-                ContentMD5=_legal_hold_content_md5("OFF"),
-            )
-        except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
-            _raise_provider_failure(exc)
-        try:
-            hold_response = client.get_object_legal_hold(**exact)
-        except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
-            _raise_provider_failure(exc)
-        if not isinstance(hold_response, dict):
-            raise WormReadbackMismatch
-        hold = hold_response.get("LegalHold")
-        if not isinstance(hold, dict) or hold.get("Status") != "OFF":
-            raise WormReadbackMismatch
-
-    delete_parameters: dict[str, Any] = dict(exact)
-    if bypass_governance:
-        delete_parameters["BypassGovernanceRetention"] = True
-    try:
-        client.delete_object(**delete_parameters)
-    except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
-        if _provider_error_code(exc) != "NoSuchVersion":
-            _raise_provider_failure(exc)
-
+def _confirm_exact_version_absent(client: Any, exact: dict[str, str]) -> None:
     try:
         probe = client.get_object(**exact)
     except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
@@ -85,9 +46,61 @@ def _delete_worm_version_sync(
         body.close()
     except Exception as exc:  # noqa: BLE001 - streaming bodies expose no common error base
         _raise_provider_failure(exc)
-    if probe.get("VersionId") != locator.object_version_id:
+    if probe.get("VersionId") != exact["VersionId"]:
         raise WormReadbackMismatch
     raise WormStorageError("the exact WORM version remained after deletion")
+
+
+def _delete_worm_version_sync(
+    locator: WormObjectLocator,
+    *,
+    release_hold: bool,
+    bypass_governance: bool,
+) -> None:
+    if not isinstance(release_hold, bool) or not isinstance(bypass_governance, bool):
+        raise ValueError("WORM deletion controls must be booleans")
+
+    try:
+        client = _client()
+    except Exception as exc:  # noqa: BLE001 - boto3 client bootstrap has multiple failure types
+        _raise_provider_failure(exc)
+    exact = _exact_parameters(locator)
+
+    if release_hold:
+        try:
+            client.put_object_legal_hold(
+                **exact,
+                LegalHold={"Status": "OFF"},
+                ContentMD5=_legal_hold_content_md5("OFF"),
+            )
+        except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
+            if _provider_error_code(exc) == "NoSuchVersion":
+                _confirm_exact_version_absent(client, exact)
+                return
+            _raise_provider_failure(exc)
+        try:
+            hold_response = client.get_object_legal_hold(**exact)
+        except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
+            if _provider_error_code(exc) == "NoSuchVersion":
+                _confirm_exact_version_absent(client, exact)
+                return
+            _raise_provider_failure(exc)
+        if not isinstance(hold_response, dict):
+            raise WormReadbackMismatch
+        hold = hold_response.get("LegalHold")
+        if not isinstance(hold, dict) or hold.get("Status") != "OFF":
+            raise WormReadbackMismatch
+
+    delete_parameters: dict[str, Any] = dict(exact)
+    if bypass_governance:
+        delete_parameters["BypassGovernanceRetention"] = True
+    try:
+        client.delete_object(**delete_parameters)
+    except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
+        if _provider_error_code(exc) != "NoSuchVersion":
+            _raise_provider_failure(exc)
+
+    _confirm_exact_version_absent(client, exact)
 
 
 async def delete_worm_version(

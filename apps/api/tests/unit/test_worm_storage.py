@@ -59,6 +59,16 @@ def _legal_hold_md5(status: str) -> str:
     return base64.b64encode(hashlib.md5(payload, usedforsecurity=False).digest()).decode()
 
 
+def _retention_md5() -> str:
+    payload = (
+        b'<Retention xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        b"<Mode>GOVERNANCE</Mode>"
+        b"<RetainUntilDate>2026-10-18T12:34:56.789123Z</RetainUntilDate>"
+        b"</Retention>"
+    )
+    return base64.b64encode(hashlib.md5(payload, usedforsecurity=False).digest()).decode()
+
+
 def _s3_error(code: str, operation: str, *, status: int | None = None) -> ClientError:
     if status is None:
         status = 500 if code == "InternalError" else 400
@@ -422,6 +432,35 @@ async def test_read_worm_state_maps_hold_access_denied(
     assert "provider-secret" not in str(caught.value)
 
 
+async def test_read_worm_state_redacts_client_construction_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bootstrap_error = RuntimeError("provider-secret-client-bootstrap")
+
+    def fail_client() -> Any:
+        raise bootstrap_error
+
+    monkeypatch.setattr(storage, "_client", fail_client)
+
+    with pytest.raises(WormStorageError) as caught:
+        await storage.read_worm_state(LOCATOR)
+
+    assert caught.value.__cause__ is bootstrap_error
+    assert "provider-secret" not in str(caught.value)
+
+
+async def test_read_worm_state_does_not_catch_client_baseexception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_client() -> Any:
+        raise _FatalRead
+
+    monkeypatch.setattr(storage, "_client", fail_client)
+
+    with pytest.raises(_FatalRead):
+        await storage.read_worm_state(LOCATOR)
+
+
 class _ApplyClient:
     def __init__(self, *, retention_error: BaseException | None = None) -> None:
         self.retention_error = retention_error
@@ -475,7 +514,7 @@ async def test_apply_keeps_later_retention_and_hold_without_puts(
 async def test_apply_extends_exact_version_then_freshly_reads_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    required = NOW + datetime.timedelta(days=60)
+    required = datetime.datetime(2026, 10, 18, 12, 34, 56, 789123, tzinfo=datetime.UTC)
     current = _state(retain_until=NOW + datetime.timedelta(days=30))
     verified = _state(retain_until=required + datetime.timedelta(seconds=1))
     reads = _read_sequence(monkeypatch, [current, verified])
@@ -487,7 +526,11 @@ async def test_apply_extends_exact_version_then_freshly_reads_back(
     )
 
     assert client.retention_puts == [
-        {**EXACT_KWARGS, "Retention": {"Mode": "GOVERNANCE", "RetainUntilDate": required}}
+        {
+            **EXACT_KWARGS,
+            "Retention": {"Mode": "GOVERNANCE", "RetainUntilDate": required},
+            "ContentMD5": _retention_md5(),
+        }
     ]
     assert all("BypassGovernanceRetention" not in call for call in client.retention_puts)
     assert client.hold_puts == []
@@ -515,6 +558,24 @@ async def test_apply_sets_only_hold_on_for_exact_version(
             "ContentMD5": _legal_hold_md5("ON"),
         }
     ]
+
+
+async def test_apply_refuses_fresh_hold_readback_weaker_than_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = _state(legal_hold=True)
+    weakened = _state(legal_hold=False)
+    _read_sequence(monkeypatch, [current, weakened])
+    client = _ApplyClient()
+    monkeypatch.setattr(storage, "_client", lambda: client)
+
+    with pytest.raises(WormReadbackMismatch):
+        await storage.apply_worm_protection(
+            LOCATOR,
+            WormRequirement(retain_until=None, legal_hold=False),
+        )
+
+    assert client.hold_puts == []
 
 
 def _invalid_state(**overrides: object) -> WormObjectState:
@@ -578,6 +639,27 @@ async def test_apply_maps_put_denial_without_provider_detail(
         )
 
     assert caught.value.__cause__ is provider_error
+    assert "provider-secret" not in str(caught.value)
+
+
+async def test_apply_redacts_client_construction_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bootstrap_error = RuntimeError("provider-secret-client-bootstrap")
+    _read_sequence(monkeypatch, [_state()])
+
+    def fail_client() -> Any:
+        raise bootstrap_error
+
+    monkeypatch.setattr(storage, "_client", fail_client)
+
+    with pytest.raises(WormStorageError) as caught:
+        await storage.apply_worm_protection(
+            LOCATOR,
+            WormRequirement(retain_until=None, legal_hold=False),
+        )
+
+    assert caught.value.__cause__ is bootstrap_error
     assert "provider-secret" not in str(caught.value)
 
 
@@ -796,6 +878,23 @@ async def test_presign_worm_get_includes_exact_version(monkeypatch: pytest.Monke
     ]
 
 
+async def test_presign_worm_get_redacts_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_error = EndpointConnectionError(endpoint_url="http://provider-secret.invalid")
+
+    def fail_presign(*_args: Any, **_kwargs: Any) -> str:
+        raise provider_error
+
+    monkeypatch.setattr(storage, "_presign", fail_presign)
+
+    with pytest.raises(WormStorageError) as caught:
+        await storage.presign_worm_get(LOCATOR)
+
+    assert caught.value.__cause__ is provider_error
+    assert "provider-secret" not in str(caught.value)
+
+
 _DEFAULT_PROBE = object()
 
 
@@ -853,6 +952,28 @@ class _DeleteClient:
         }
 
 
+async def test_internal_delete_redacts_client_construction_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    worm_delete: Any,
+) -> None:
+    bootstrap_error = RuntimeError("provider-secret-client-bootstrap")
+
+    def fail_client() -> Any:
+        raise bootstrap_error
+
+    monkeypatch.setattr(worm_delete, "_client", fail_client)
+
+    with pytest.raises(WormStorageError) as caught:
+        await worm_delete.delete_worm_version(
+            LOCATOR,
+            release_hold=True,
+            bypass_governance=True,
+        )
+
+    assert caught.value.__cause__ is bootstrap_error
+    assert "provider-secret" not in str(caught.value)
+
+
 async def test_internal_delete_releases_hold_then_bypasses_one_exact_version(
     monkeypatch: pytest.MonkeyPatch,
     worm_delete: Any,
@@ -899,12 +1020,6 @@ async def test_internal_delete_without_bypass_omits_bypass_header(
             ),
             WormCapabilityDenied,
         ),
-        (
-            _DeleteClient(
-                hold_get_error=_s3_error("NoSuchVersion", "GetObjectLegalHold", status=404)
-            ),
-            WormVersionMissing,
-        ),
     ],
 )
 async def test_internal_delete_never_deletes_when_hold_release_or_readback_fails(
@@ -920,6 +1035,93 @@ async def test_internal_delete_never_deletes_when_hold_release_or_readback_fails
 
     assert all(event != "delete" for event, _kwargs in client.events)
     assert all(event != "get" for event, _kwargs in client.events)
+
+
+@pytest.mark.parametrize("stage", ["put", "get"])
+async def test_internal_delete_confirms_absence_after_hold_stage_nosuchversion(
+    monkeypatch: pytest.MonkeyPatch,
+    worm_delete: Any,
+    stage: str,
+) -> None:
+    error = _s3_error(
+        "NoSuchVersion",
+        "PutObjectLegalHold" if stage == "put" else "GetObjectLegalHold",
+        status=404,
+    )
+    client = _DeleteClient(
+        hold_put_error=error if stage == "put" else None,
+        hold_get_error=error if stage == "get" else None,
+    )
+    monkeypatch.setattr(worm_delete, "_client", lambda: client)
+
+    await worm_delete.delete_worm_version(
+        LOCATOR,
+        release_hold=True,
+        bypass_governance=True,
+    )
+
+    expected = ["put_hold", "get"] if stage == "put" else ["put_hold", "get_hold", "get"]
+    assert [event for event, _kwargs in client.events] == expected
+
+
+@pytest.mark.parametrize("stage", ["put", "get"])
+async def test_internal_delete_refuses_hold_stage_absence_when_exact_get_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+    worm_delete: Any,
+    stage: str,
+) -> None:
+    error = _s3_error(
+        "NoSuchVersion",
+        "PutObjectLegalHold" if stage == "put" else "GetObjectLegalHold",
+        status=404,
+    )
+    client = _DeleteClient(
+        hold_put_error=error if stage == "put" else None,
+        hold_get_error=error if stage == "get" else None,
+        probe_error=None,
+    )
+    monkeypatch.setattr(worm_delete, "_client", lambda: client)
+
+    with pytest.raises(WormStorageError):
+        await worm_delete.delete_worm_version(
+            LOCATOR,
+            release_hold=True,
+            bypass_governance=True,
+        )
+
+    assert client.probe_body.closed is True
+    assert all(event != "delete" for event, _kwargs in client.events)
+
+
+@pytest.mark.parametrize("stage", ["put", "get"])
+async def test_internal_delete_maps_probe_error_after_hold_stage_nosuchversion(
+    monkeypatch: pytest.MonkeyPatch,
+    worm_delete: Any,
+    stage: str,
+) -> None:
+    hold_error = _s3_error(
+        "NoSuchVersion",
+        "PutObjectLegalHold" if stage == "put" else "GetObjectLegalHold",
+        status=404,
+    )
+    probe_error = EndpointConnectionError(endpoint_url="http://provider-secret.invalid")
+    client = _DeleteClient(
+        hold_put_error=hold_error if stage == "put" else None,
+        hold_get_error=hold_error if stage == "get" else None,
+        probe_error=probe_error,
+    )
+    monkeypatch.setattr(worm_delete, "_client", lambda: client)
+
+    with pytest.raises(WormStorageError) as caught:
+        await worm_delete.delete_worm_version(
+            LOCATOR,
+            release_hold=True,
+            bypass_governance=True,
+        )
+
+    assert caught.value.__cause__ is probe_error
+    assert "provider-secret" not in str(caught.value)
+    assert all(event != "delete" for event, _kwargs in client.events)
 
 
 async def test_internal_delete_confirms_delete_reported_absence_with_exact_probe(
