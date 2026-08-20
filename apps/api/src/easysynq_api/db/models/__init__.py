@@ -59,6 +59,13 @@ from ._pack_enums import (
     PackStatus,
 )
 from ._process_enums import ProcessState, SupplierStatus
+from ._r27_enums import (
+    R27ActionKind,
+    R27DerivativeKind,
+    R27ExecutionState,
+    R27RequestState,
+    R27ResultCode,
+)
 from ._record_enums import RecordDispositionState, RecordType
 from ._retention_enums import DispositionAction, RetentionBasis
 from ._risk_enums import RiskOpportunityType, ScoringMethod
@@ -79,6 +86,17 @@ from ._workflow_enums import (
     WorkflowStageMode,
     WorkflowSubjectType,
 )
+from ._worm_enums import (
+    AuditMaintenanceJobKind,
+    BackupMaintenanceKind,
+    HoldReleaseState,
+    MaintenanceSource,
+    MaintenanceState,
+    RetentionAuthorityKind,
+    RetentionOperationState,
+    RetentionRevisionState,
+    RetentionTargetState,
+)
 from .acknowledgement import Acknowledgement
 from .app_user import AppUser, UserStatus
 from .audit import Audit
@@ -87,10 +105,12 @@ from .audit_checkpoint import AuditCheckpoint
 from .audit_checkpoint_sink import AuditCheckpointSink
 from .audit_event import AuditEvent
 from .audit_finding import AuditFinding
+from .audit_maintenance_schedule import AuditMaintenanceSchedule
 from .audit_plan import AuditPlan
 from .audit_program import AuditProgram
 from .authz_grant import PermissionOverride
 from .awareness_event import AwarenessEvent
+from .backup_maintenance_operation import BackupMaintenanceOperation
 from .backup_policy import BackupPolicy
 from .blob import Blob
 from .capa import Capa
@@ -106,6 +126,7 @@ from .distribution_entry import DistributionEntry
 from .document_link import DocumentLink
 from .document_type import DocumentType
 from .document_version import DocumentVersion
+from .document_worm_config import DocumentWormConfig
 from .documented_information import DocumentedInformation
 from .drift_scan import DriftScan
 from .evidence_blob import EvidenceBlob
@@ -149,8 +170,23 @@ from .process import Process
 from .process_edge import ProcessEdge
 from .process_link import ProcessLink
 from .quality_objective import QualityObjective
+from .r27_action_challenge import R27ActionChallenge
+from .r27_attestation import R27Attestation
+from .r27_authorizer_key import R27AuthorizerKey
+from .r27_execution import R27Execution
+from .r27_execution_target_result import R27ExecutionTargetResult
+from .r27_manifest import R27Manifest
+from .r27_manifest_derivative import R27ManifestDerivative
+from .r27_manifest_target import R27ManifestTarget
+from .r27_request import R27Request
+from .r27_role_membership_operation import R27RoleMembershipOperation
 from .record import Record
+from .recovery_generation_verifier_key import RecoveryGenerationVerifierKey
+from .recovery_generation_witness import RecoveryGenerationWitness
+from .retention_operation import RetentionOperation
+from .retention_operation_target import RetentionOperationTarget
 from .retention_policy import RetentionPolicy
+from .retention_revision import RetentionRevision
 from .review_input import ReviewInput
 from .review_output import ReviewOutput
 from .risk_opportunity import RiskOpportunity
@@ -172,7 +208,8 @@ from .workflow import (
 )
 from .working_calendar import WorkingCalendar
 from .working_draft import WorkingDraft
-from .worm_destroy_request import WormDestroyRequest
+from .worm_hold_release_authorization import WormHoldReleaseAuthorization
+from .worm_hold_release_operation import WormHoldReleaseOperation
 
 __all__ = [
     "Acknowledgement",
@@ -184,11 +221,15 @@ __all__ = [
     "AuditCheckpointSink",
     "AuditEvent",
     "AuditFinding",
+    "AuditMaintenanceJobKind",
+    "AuditMaintenanceSchedule",
     "AuditObjectType",
     "AuditPlan",
     "AuditProgram",
     "AuditState",
     "AwarenessEvent",
+    "BackupMaintenanceKind",
+    "BackupMaintenanceOperation",
     "BackupPolicy",
     "Blob",
     "Capa",
@@ -221,6 +262,7 @@ __all__ = [
     "DocumentLinkType",
     "DocumentType",
     "DocumentVersion",
+    "DocumentWormConfig",
     "DocumentedInformation",
     "DriftScan",
     "DriftScanKind",
@@ -233,6 +275,7 @@ __all__ = [
     "FindingType",
     "FormTemplate",
     "Framework",
+    "HoldReleaseState",
     "ImpactAssessment",
     "ImpactDimension",
     "ImportClassification",
@@ -260,6 +303,8 @@ __all__ = [
     "InterestedPartyStatus",
     "InterestedPartyType",
     "KpiMeasurement",
+    "MaintenanceSource",
+    "MaintenanceState",
     "ManagementReview",
     "ManagementReviewCloseState",
     "MirrorBuild",
@@ -292,11 +337,35 @@ __all__ = [
     "ProcessLink",
     "ProcessState",
     "QualityObjective",
+    "R27ActionChallenge",
+    "R27ActionKind",
+    "R27Attestation",
+    "R27AuthorizerKey",
+    "R27DerivativeKind",
+    "R27Execution",
+    "R27ExecutionState",
+    "R27ExecutionTargetResult",
+    "R27Manifest",
+    "R27ManifestDerivative",
+    "R27ManifestTarget",
+    "R27Request",
+    "R27RequestState",
+    "R27ResultCode",
+    "R27RoleMembershipOperation",
     "Record",
     "RecordDispositionState",
     "RecordType",
+    "RecoveryGenerationVerifierKey",
+    "RecoveryGenerationWitness",
+    "RetentionAuthorityKind",
     "RetentionBasis",
+    "RetentionOperation",
+    "RetentionOperationState",
+    "RetentionOperationTarget",
     "RetentionPolicy",
+    "RetentionRevision",
+    "RetentionRevisionState",
+    "RetentionTargetState",
     "ReviewInput",
     "ReviewInputType",
     "ReviewOutput",
@@ -337,5 +406,6 @@ __all__ = [
     "WorkflowSubjectType",
     "WorkingCalendar",
     "WorkingDraft",
-    "WormDestroyRequest",
+    "WormHoldReleaseAuthorization",
+    "WormHoldReleaseOperation",
 ]

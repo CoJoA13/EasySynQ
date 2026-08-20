@@ -58,6 +58,19 @@ def _pg() -> Iterator[str]:
         yield pg.get_connection_url()
 
 
+@pytest.fixture(scope="session")
+def _database_authority_pg() -> Iterator[str]:
+    """A distinct PostgreSQL cluster for the real-role authority password tuple.
+
+    Roles are cluster-global, so a second database in ``_pg`` would still let ordinary app fixtures
+    and authority fixtures overwrite each other's credentials.
+    """
+    with PostgresContainer(
+        "postgres:16", username="test", password="test", dbname="test", driver="psycopg"
+    ) as pg:
+        yield pg.get_connection_url()
+
+
 def _swap_role(dsn: str, user: str, password: str) -> str:
     """Re-point a DSN at a different role (same host/db). Used to connect as the non-owner
     ``easysynq_app`` / ``easysynq_linker`` roles the 0010 migration creates, so AC#6a's DB-grant
@@ -65,6 +78,74 @@ def _swap_role(dsn: str, user: str, password: str) -> str:
     parts = urlsplit(dsn)
     netloc = f"{user}:{password}@{parts.hostname}:{parts.port}"
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+DATABASE_AUTHORITY_PASSWORDS = {
+    "easysynq_app": "test-app'quote-password",
+    "easysynq_linker": r"test-linker\backslash-password",
+    "easysynq_retention": "test-retention-ñ-password",
+    "easysynq_hold_authorizer": "test-hold-authorizer-password",
+    "easysynq_hold_maintenance": "test-hold-maintenance-password",
+    "easysynq_r27_authorizer": "test-r27-authorizer-password",
+    "easysynq_r27_maintenance": "test-r27-maintenance-password",
+    "easysynq_r27_authorizer_key_manager": "test-r27-authorizer-key-manager-password",
+    "easysynq_recovery_key_manager": "test-recovery-key-manager-password",
+    "easysynq_r27_role_manager": "test-r27-role-manager-password",
+    "easysynq_audit_signer": "test-audit-signer-password",
+    "easysynq_backup": "test-backup-password",
+}
+
+_DATABASE_AUTHORITY_PASSWORD_ENV = {
+    "easysynq_app": "APP_DB_PASSWORD",
+    "easysynq_linker": "LINKER_DB_PASSWORD",
+    "easysynq_retention": "RETENTION_DB_PASSWORD",
+    "easysynq_hold_authorizer": "HOLD_AUTHORIZER_DB_PASSWORD",
+    "easysynq_hold_maintenance": "HOLD_MAINTENANCE_DB_PASSWORD",
+    "easysynq_r27_authorizer": "R27_AUTHORIZER_DB_PASSWORD",
+    "easysynq_r27_maintenance": "R27_MAINTENANCE_DB_PASSWORD",
+    "easysynq_r27_authorizer_key_manager": "R27_AUTHORIZER_KEY_MANAGER_DB_PASSWORD",
+    "easysynq_recovery_key_manager": "RECOVERY_KEY_MANAGER_DB_PASSWORD",
+    "easysynq_r27_role_manager": "R27_ROLE_MANAGER_DB_PASSWORD",
+    "easysynq_audit_signer": "AUDIT_SIGNER_DB_PASSWORD",
+    "easysynq_backup": "BACKUP_DB_PASSWORD",
+}
+
+
+@pytest.fixture
+def database_authority_dsns(
+    _database_authority_pg: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, str]:
+    """Migrate a real PostgreSQL database, then return independently authenticated role DSNs."""
+    from alembic import command
+    from alembic.config import Config
+
+    from easysynq_api.config import get_settings
+    from easysynq_api.readiness import MIGRATIONS_DIR
+
+    # Scope both the authority cluster and its password tuple to this migration.  A function-scoped
+    # fixture's outer monkeypatch otherwise leaks those values into an ordinary fixture initialized
+    # later in the same test.
+    with monkeypatch.context() as authority_env:
+        authority_env.setenv("DATABASE_URL", _database_authority_pg)
+        authority_env.setenv("DATABASE_URL_SYNC", _database_authority_pg)
+        for role, env_name in _DATABASE_AUTHORITY_PASSWORD_ENV.items():
+            authority_env.setenv(env_name, DATABASE_AUTHORITY_PASSWORDS[role])
+        get_settings.cache_clear()
+
+        config = Config()
+        config.set_main_option("script_location", str(MIGRATIONS_DIR))
+        command.upgrade(config, "head")
+
+    get_settings.cache_clear()
+
+    return {
+        "owner": _database_authority_pg,
+        **{
+            role: _swap_role(_database_authority_pg, role, password)
+            for role, password in DATABASE_AUTHORITY_PASSWORDS.items()
+        },
+    }
 
 
 @pytest.fixture

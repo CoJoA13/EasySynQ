@@ -21,7 +21,7 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Text, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,7 +31,14 @@ from ._retention_enums import DispositionAction, disposition_action_enum
 
 class DispositionEvent(Base):
     __tablename__ = "disposition_event"
-    __table_args__ = (Index("ix_disposition_event_record_id", "record_id"),)
+    __table_args__ = (
+        Index("ix_disposition_event_record_id", "record_id"),
+        CheckConstraint(
+            "(is_worm_destroy AND r27_request_id IS NOT NULL AND r27_execution_id IS NOT NULL) "
+            "OR (NOT is_worm_destroy AND r27_request_id IS NULL AND r27_execution_id IS NULL)",
+            name="r27_authority_shape",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
@@ -71,6 +78,12 @@ class DispositionEvent(Base):
             name="fk_disposition_event_derived_from_event",
         ),
         nullable=True,
+    )
+    r27_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("r27_request.id", ondelete="RESTRICT"), nullable=True
+    )
+    r27_execution_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("r27_execution.id", ondelete="RESTRICT"), nullable=True
     )
     executed_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

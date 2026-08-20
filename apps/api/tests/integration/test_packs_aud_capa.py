@@ -42,9 +42,9 @@ from easysynq_api.db.models.pack_item import PackItem
 from easysynq_api.db.models.pack_share_link import PackShareLink
 from easysynq_api.db.models.pending_blob_purge import PendingBlobPurge
 from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.r27_request import R27Request as WormDestroyRequest
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.scope import Scope
-from easysynq_api.db.models.worm_destroy_request import WormDestroyRequest
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect
 from easysynq_api.services.packs import build, build_and_cache_portfolio

@@ -13,8 +13,9 @@ job — an index-backed query — so this function stays pure: it receives at mo
 
 The resolved ``policy_id`` + ``retention_basis_date`` are **snapshotted** onto the record at capture
 and never mutated — the one-way ratchet (doc 06 §5.2). ``basis = captured_at`` → the UTC capture
-date; an ``event:*`` basis has no known event date at capture, so the basis date is ``None`` (the
-deferred Beat sweep fills it when the event fires — the index already exists).
+date. An ``event:*`` basis uses that same date as a provisional physical-protection floor until the
+real event date can ratchet the object forward; ``retention_basis_provisional`` preserves that
+distinction explicitly.
 """
 
 from __future__ import annotations
@@ -59,17 +60,15 @@ class RetentionResolution:
     policy_id: uuid.UUID
     tier: str  # override | process | clause | record_type | system_default
     basis: RetentionBasis
-    retention_basis_date: datetime.date | None
+    retention_basis_date: datetime.date
+    retention_basis_provisional: bool
 
 
-def _basis_date(basis: RetentionBasis, captured_at: datetime.datetime) -> datetime.date | None:
-    if basis is RetentionBasis.CAPTURED_AT:
-        dt = captured_at
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=datetime.UTC)
-        return dt.astimezone(datetime.UTC).date()
-    # event:* bases — no event date is known at capture (doc 06 §5.1); the sweep fills it later.
-    return None
+def _capture_date(captured_at: datetime.datetime) -> datetime.date:
+    dt = captured_at
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.UTC)
+    return dt.astimezone(datetime.UTC).date()
 
 
 def _resolution(
@@ -79,7 +78,8 @@ def _resolution(
         policy_id=candidate.policy_id,
         tier=tier,
         basis=candidate.basis,
-        retention_basis_date=_basis_date(candidate.basis, captured_at),
+        retention_basis_date=_capture_date(captured_at),
+        retention_basis_provisional=candidate.basis is not RetentionBasis.CAPTURED_AT,
     )
 
 
@@ -128,17 +128,20 @@ def retention_until(basis_date: datetime.date | None, duration: str) -> datetime
     if match is None or not any(match.group(g) for g in ("years", "months", "weeks", "days")):
         raise ValueError(f"unparseable retention duration: {duration!r}")
     parts = {k: int(v) if v else 0 for k, v in match.groupdict().items()}
-    out = _add_months(basis_date, parts["years"] * 12 + parts["months"])
-    return out + datetime.timedelta(days=parts["weeks"] * 7 + parts["days"])
+    try:
+        out = _add_months(basis_date, parts["years"] * 12 + parts["months"])
+        return out + datetime.timedelta(days=parts["weeks"] * 7 + parts["days"])
+    except (OverflowError, ValueError):
+        raise ValueError("retention duration is out of supported date range") from None
 
 
-# --- the extend-forward PATCH guard (slice S-rec-4, doc 06 §5.2) ---------------------------
+# --- physical-duration comparison and non-physical PATCH guard ----------------------------
 
-# The most-specific-wins precedence keeps records' clocks live-deref'd off their pinned policy, so
-# a policy *edit* propagates to already-captured records. doc 06 §5.2 wants that ONLY for extensions
-# ("an extension can be applied forward; a reduction never applies to already-captured records"). So
-# the service enforces extend-forward on PATCH (when a policy has pinned records); shortening for
-# FUTURE captures is done by archiving + creating a shorter policy (these comparators back that).
+# Duration comparison supports physical policy validation and retention-strength calculations.
+# It does not authorize in-place duration extension: once a Record or DocumentVersion pins a
+# policy, Task 4 freezes both duration and WORM period, and Task 6 owns staged replacement terms.
+# The disposition-action rank remains the non-physical pinned-policy PATCH guard: live behavior may
+# not be weakened while active records pin the policy.
 
 _REFERENCE_DATE = datetime.date(2000, 1, 1)
 # Preservation rank: a higher rank retains MORE strongly. ARCHIVE_COLD and TRANSFER both preserve
@@ -154,7 +157,8 @@ _PRESERVATION_RANK: dict[DispositionAction, int] = {
 def duration_ge(a: str, b: str) -> bool:
     """``True`` iff retention duration ``a`` retains at least as long as ``b`` (``a >= b``).
     ``PERMANENT`` is the maximum. Raises ``ValueError`` on a malformed duration (the caller
-    validates the new value first, so this only compares well-formed inputs)."""
+    validates the new value first, so this only compares well-formed inputs). This is comparison
+    support, not permission to rewrite the physical terms of a pinned policy."""
     ua, ub = a.strip().upper(), b.strip().upper()
     if ua == PERMANENT:
         return True
@@ -167,6 +171,9 @@ def duration_ge(a: str, b: str) -> bool:
 
 
 def action_preservation_rank(action: DispositionAction) -> int:
-    """Higher = retains more strongly (doc 06 §5.2). Used by the extend-forward guard so a PATCH may
-    not weaken a pinned policy's disposition (e.g. RETAIN_PERMANENT → DESTROY)."""
+    """Higher = retains more strongly (doc 06 §5.2).
+
+    This is the remaining non-physical pinned-policy guard: a PATCH may not weaken disposition
+    behavior (for example, RETAIN_PERMANENT to DESTROY) while active records pin the policy.
+    """
     return _PRESERVATION_RANK[action]

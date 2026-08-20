@@ -257,7 +257,9 @@ def test_populated_historical_transitions_and_head_repairs(
         monkeypatch.setenv("DATABASE_URL_SYNC", scratch_url)
         get_settings.cache_clear()
         config = _config()
-        assert ScriptDirectory.from_config(config).get_heads() == ["0088_bootstrap_credential"]
+        assert ScriptDirectory.from_config(config).get_heads() == [
+            "0089_worm_retention_container_identity"
+        ]
         engine = sa.create_engine(scratch_url)
         try:
             # 0004: role assignments and permission overrides must preserve their full FK closure.
@@ -758,7 +760,8 @@ def test_populated_historical_transitions_and_head_repairs(
                 ).one()
                 assert downgraded[0] == "SEALED"
                 assert "legal erasure" in downgraded[1]
-            command.upgrade(config, "head")
+            # This populated historical fixture intentionally stops before clean-only 0089.
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 reupgraded = connection.execute(
                     sa.text(
@@ -848,7 +851,7 @@ def test_populated_historical_transitions_and_head_repairs(
                 assert _ROLE_ASSIGNMENT_USER_INDEX not in _table_indexes(
                     connection, "role_assignment"
                 )
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _column_nullable(connection, "document_version", "change_summary") is None
                 assert _RECORD_SOURCE_DOCUMENT_INDEX in _table_indexes(connection, "record")
@@ -866,7 +869,7 @@ def test_populated_historical_transitions_and_head_repairs(
             with engine.connect() as connection:
                 assert _retention_grants(connection) == _EXPECTED_RETENTION_GRANTS
                 assert _CANONICAL_CHECK in _process_edge_checks(connection)
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _process_edge_checks(connection) == {_CANONICAL_CHECK}
 
@@ -880,7 +883,7 @@ def test_populated_historical_transitions_and_head_repairs(
                         "CHECK (from_process_id <> to_process_id)"
                     )
                 )
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _process_edge_checks(connection) == {_CANONICAL_CHECK}
 
@@ -889,7 +892,7 @@ def test_populated_historical_transitions_and_head_repairs(
                 connection.execute(
                     sa.text(f"ALTER TABLE process_edge DROP CONSTRAINT {_CANONICAL_CHECK}")
                 )
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _process_edge_checks(connection) == {_CANONICAL_CHECK}
 
@@ -933,7 +936,7 @@ def test_populated_historical_transitions_and_head_repairs(
                     assert phase == expected, number  # historical split restored exactly
                 assert phases["8"] == "DO"
                 assert "split across PLAN" in _clause7_intent(connection, framework_id)
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 phases = _clause_phases(connection, framework_id)
                 sevens = {n: p for n, p in phases.items() if n == "7" or n.startswith("7.")}
@@ -960,7 +963,7 @@ def test_populated_historical_transitions_and_head_repairs(
                 assert head_indexes - downgraded_indexes == {_RECORD_PAGE_INDEX}
                 assert downgraded_indexes == head_indexes - {_RECORD_PAGE_INDEX}
                 assert _index_definition(connection, _RECORD_PAGE_INDEX) is None
-            command.upgrade(config, "head")
+            command.upgrade(config, "0088_bootstrap_credential")
             with engine.connect() as connection:
                 assert _table_indexes(connection, "record") == head_indexes
                 assert _index_definition(connection, _RECORD_PAGE_INDEX) == index_definition
@@ -1225,7 +1228,115 @@ def test_populated_historical_transitions_and_head_repairs(
                     ).one()
                     == identity_setup
                 )
-            command.check(config)
+            # 0089 is deliberately clean-only, while this historical-transition fixture is
+            # intentionally populated. Prove head coherence on a separate empty installation.
+            with _scratch_database(postgres_admin_url) as clean_url:
+                monkeypatch.setenv("DATABASE_URL", clean_url)
+                monkeypatch.setenv("DATABASE_URL_SYNC", clean_url)
+                get_settings.cache_clear()
+                command.upgrade(config, "0089_worm_retention_container_identity")
+                task4_functions = (
+                    "easysynq_assert_worm_record_live(uuid,uuid)",
+                    "easysynq_lock_document_worm_config(uuid,uuid)",
+                    "easysynq_lock_worm_blob(uuid,text)",
+                    "easysynq_lock_worm_owners(uuid,text)",
+                    "easysynq_record_worm_assertion"
+                    "(uuid,text,text,text,text,timestamptz,boolean,timestamptz)",
+                )
+
+                def assert_task4_authority_surface(
+                    connection: sa.Connection,
+                    *,
+                    upgraded: bool,
+                ) -> None:
+                    trigger_count = connection.execute(
+                        sa.text(
+                            """
+                            SELECT count(*)
+                            FROM pg_trigger trigger
+                            JOIN pg_class relation ON relation.oid=trigger.tgrelid
+                            WHERE NOT trigger.tgisinternal
+                              AND (relation.relname,trigger.tgname) IN (
+                                ('document_version','trg_document_version_worm_owner'),
+                                ('retention_policy','trg_retention_policy_worm_owner')
+                              )
+                            """
+                        )
+                    ).scalar_one()
+                    assert trigger_count == (2 if upgraded else 0)
+                    if upgraded:
+                        assert connection.execute(
+                            sa.text(
+                                """
+                                SELECT table_name,column_name,
+                                       has_column_privilege(
+                                           'easysynq_app',format('public.%I',table_name),
+                                           column_name,'UPDATE'
+                                       )
+                                FROM (VALUES
+                                    ('record','retention_basis_date'),
+                                    ('record','retention_basis_provisional'),
+                                    ('retention_policy','active_revision_no')
+                                ) AS protected(table_name,column_name)
+                                ORDER BY table_name,column_name
+                                """
+                            )
+                        ).all() == [
+                            ("record", "retention_basis_date", False),
+                            ("record", "retention_basis_provisional", False),
+                            ("retention_policy", "active_revision_no", False),
+                        ]
+                    else:
+                        assert connection.execute(
+                            sa.text(
+                                """
+                                SELECT has_table_privilege(
+                                           'easysynq_app','public.record','UPDATE'
+                                       ),
+                                       has_table_privilege(
+                                           'easysynq_app','public.retention_policy','UPDATE'
+                                       )
+                                """
+                            )
+                        ).one() == (True, True)
+
+                clean_engine = sa.create_engine(clean_url)
+                try:
+                    with clean_engine.connect() as connection:
+                        assert all(
+                            connection.execute(
+                                sa.text("SELECT to_regprocedure(:signature)::oid"),
+                                {"signature": signature},
+                            ).scalar_one()
+                            is not None
+                            for signature in task4_functions
+                        )
+                        assert_task4_authority_surface(connection, upgraded=True)
+                    command.downgrade(config, "0088_bootstrap_credential")
+                    with clean_engine.connect() as connection:
+                        assert all(
+                            connection.execute(
+                                sa.text("SELECT to_regprocedure(:signature)::oid"),
+                                {"signature": signature},
+                            ).scalar_one()
+                            is None
+                            for signature in task4_functions
+                        )
+                        assert_task4_authority_surface(connection, upgraded=False)
+                    command.upgrade(config, "0089_worm_retention_container_identity")
+                    with clean_engine.connect() as connection:
+                        assert all(
+                            connection.execute(
+                                sa.text("SELECT to_regprocedure(:signature)::oid"),
+                                {"signature": signature},
+                            ).scalar_one()
+                            is not None
+                            for signature in task4_functions
+                        )
+                        assert_task4_authority_surface(connection, upgraded=True)
+                finally:
+                    clean_engine.dispose()
+                command.check(config)
         finally:
             engine.dispose()
             get_settings.cache_clear()

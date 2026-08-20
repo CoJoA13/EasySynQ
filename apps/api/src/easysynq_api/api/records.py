@@ -15,7 +15,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import uuid
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
@@ -33,8 +33,8 @@ from ..db.models.disposition_event import DispositionEvent
 from ..db.models.documented_information import DocumentedInformation
 from ..db.models.evidence_blob import EvidenceBlob
 from ..db.models.evidence_for_link import EvidenceForLink
+from ..db.models.r27_request import R27Request
 from ..db.models.record import Record
-from ..db.models.worm_destroy_request import WormDestroyRequest
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..domain.records.retention import retention_until
@@ -74,6 +74,12 @@ from ..services.vault import storage
 from ..services.vault.staged_identity import StagingDomain
 from ..services.vault.upload_rejection import RejectionContext, require_staging_ref
 from ._validation import Sha256Hex
+
+if TYPE_CHECKING:
+    # Later atomic-slice tasks replace the legacy HTTP behavior; Task 1 only swaps the ORM mapping.
+    WormDestroyRequest = Any
+else:
+    WormDestroyRequest = R27Request
 
 router = APIRouter(prefix="/api/v1", tags=["records"])
 

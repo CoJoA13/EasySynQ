@@ -25,7 +25,7 @@ import pytest
 from fastapi import FastAPI, Request
 from httpx import AsyncClient
 from sqlalchemy import delete, event, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from easysynq_api._generated.models import EvidenceLink as ContractEvidenceLink
 from easysynq_api._generated.models import RecordSummary as ContractRecordSummary
@@ -2817,7 +2817,9 @@ async def test_candidate_tenant_predicate_excludes_other_organization(
 
 
 async def test_candidate_order_uses_descending_id_tiebreak_and_strict_boundary(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    dsns: dict[str, str],
 ) -> None:
     subject = _subject("candidate-order")
     actor_id = await _grant(subject, _RECORD_PERMS)
@@ -2836,17 +2838,23 @@ async def test_candidate_order_uses_descending_id_tiebreak_and_strict_boundary(
     captured_at = datetime.datetime(2026, 8, 14, 12, tzinfo=datetime.UTC)
     criteria = RecordListCriteria(captured_by=actor_id)
     expected = sorted(record_ids, reverse=True)
-    async with get_sessionmaker()() as session:
-        records = list(
-            (await session.scalars(select(Record).where(Record.id.in_(record_ids)))).all()
-        )
-        for record in records:
-            record.captured_at = captured_at
-        await session.commit()
+    owner_engine = create_async_engine(dsns["owner"])
+    try:
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as owner_session:
+            records = list(
+                (await owner_session.scalars(select(Record).where(Record.id.in_(record_ids)))).all()
+            )
+            for record in records:
+                record.captured_at = captured_at
+            org_id = records[0].org_id
+            await owner_session.commit()
+    finally:
+        await owner_engine.dispose()
 
+    async with get_sessionmaker()() as session:
         rows = await records_repo.list_record_candidates(
             session,
-            records[0].org_id,
+            org_id,
             criteria=criteria,
             after=None,
             limit=10,
@@ -2856,7 +2864,7 @@ async def test_candidate_order_uses_descending_id_tiebreak_and_strict_boundary(
         after = RecordListCursor(captured_at=captured_at, record_id=expected[1])
         rows_after = await records_repo.list_record_candidates(
             session,
-            records[0].org_id,
+            org_id,
             criteria=criteria,
             after=after,
             limit=10,
@@ -2865,7 +2873,9 @@ async def test_candidate_order_uses_descending_id_tiebreak_and_strict_boundary(
 
 
 async def test_literal_search_filters_identifier_title_and_all_record_fields(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    dsns: dict[str, str],
 ) -> None:
     subject = _subject("candidate-filters")
     actor_id = await _grant(subject, _RECORD_PERMS)
@@ -2895,43 +2905,55 @@ async def test_literal_search_filters_identifier_title_and_all_record_fields(
         assert response.status_code == 201, response.text
         record_ids[name] = uuid.UUID(response.json()["id"])
 
-    async with get_sessionmaker()() as session:
-        actor = await session.get(AppUser, actor_id)
-        assert actor is not None
-        framework_id = await session.scalar(
-            select(Framework.id).where(Framework.org_id == actor.org_id).limit(1)
-        )
-        assert framework_id is not None
-        source_document = DocumentedInformation(
-            org_id=actor.org_id,
-            framework_id=framework_id,
-            kind=DocumentKind.DOCUMENT,
-            identifier=f"CANDIDATE-SOURCE-{marker}",
-            title=f"Candidate source {marker}",
-            owner_user_id=actor_id,
-            created_by=actor_id,
-        )
-        session.add(source_document)
-        await session.flush()
-        records = {
-            record.id: record
-            for record in (
-                await session.scalars(select(Record).where(Record.id.in_(record_ids.values())))
-            ).all()
-        }
-        source_document_id = source_document.id
-        for record in records.values():
-            record.source_document_id = source_document_id
-        identifier_base = await session.get(DocumentedInformation, record_ids["identifier_target"])
-        assert identifier_base is not None
-        identifier_base.identifier = f"LITERAL {literal}"
-        records[record_ids["wrong_type"]].record_type = RecordType.CALIBRATION
-        records[record_ids["wrong_source"]].source_document_id = None
-        records[record_ids["wrong_actor"]].captured_by = other_actor_id
-        records[record_ids["wrong_disposition"]].disposition_state = RecordDispositionState.ON_HOLD
-        records[record_ids["wrong_hold"]].legal_hold = True
-        await session.commit()
+    owner_engine = create_async_engine(dsns["owner"])
+    try:
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as owner_session:
+            actor = await owner_session.get(AppUser, actor_id)
+            assert actor is not None
+            org_id = actor.org_id
+            framework_id = await owner_session.scalar(
+                select(Framework.id).where(Framework.org_id == org_id).limit(1)
+            )
+            assert framework_id is not None
+            source_document = DocumentedInformation(
+                org_id=org_id,
+                framework_id=framework_id,
+                kind=DocumentKind.DOCUMENT,
+                identifier=f"CANDIDATE-SOURCE-{marker}",
+                title=f"Candidate source {marker}",
+                owner_user_id=actor_id,
+                created_by=actor_id,
+            )
+            owner_session.add(source_document)
+            await owner_session.flush()
+            records = {
+                record.id: record
+                for record in (
+                    await owner_session.scalars(
+                        select(Record).where(Record.id.in_(record_ids.values()))
+                    )
+                ).all()
+            }
+            source_document_id = source_document.id
+            for record in records.values():
+                record.source_document_id = source_document_id
+            identifier_base = await owner_session.get(
+                DocumentedInformation, record_ids["identifier_target"]
+            )
+            assert identifier_base is not None
+            identifier_base.identifier = f"LITERAL {literal}"
+            records[record_ids["wrong_type"]].record_type = RecordType.CALIBRATION
+            records[record_ids["wrong_source"]].source_document_id = None
+            records[record_ids["wrong_actor"]].captured_by = other_actor_id
+            records[
+                record_ids["wrong_disposition"]
+            ].disposition_state = RecordDispositionState.ON_HOLD
+            records[record_ids["wrong_hold"]].legal_hold = True
+            await owner_session.commit()
+    finally:
+        await owner_engine.dispose()
 
+    async with get_sessionmaker()() as session:
         criteria = RecordListCriteria(
             q=f"  LITERAL 50%_DONE\\-{marker.upper()}  ",
             record_type=RecordType.EVIDENCE,
@@ -2942,7 +2964,7 @@ async def test_literal_search_filters_identifier_title_and_all_record_fields(
         )
         rows = await records_repo.list_record_candidates(
             session,
-            actor.org_id,
+            org_id,
             criteria=criteria,
             after=None,
             limit=20,

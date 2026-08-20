@@ -323,20 +323,18 @@ async def test_skip_locked_no_double_send(app_under_test: Any) -> None:
         async with get_sessionmaker()() as session:
             return await drain_once(session, shared_sender, settings, now=_T0)
 
-    results = await asyncio.gather(_run_drain(), _run_drain())
-    total_sent = sum(r["sent"] for r in results)
+    await asyncio.gather(_run_drain(), _run_drain())
 
     row = await _get_email(email_id)
     assert row.status == NotificationEmailStatus.SENT, "Row not SENT after concurrent drain"
 
-    # The fake must have been called exactly once — SKIP LOCKED ensures the second
-    # concurrent drain skips the row (it's either locked or already consumed).
+    # Scope the oracle to this fixture: other shard tests may leave unrelated eligible rows for
+    # either drain to process, but SKIP LOCKED must still send this recipient's row exactly once.
     recipient_addr = f"e2e-user-{salt}@example.com"
     emails_to_recipient = [m for m in shared_sender.sent if m.to == recipient_addr]
     n_sent = len(emails_to_recipient)
     assert n_sent == 1, f"Expected exactly 1 send to recipient, got {n_sent}: {emails_to_recipient}"
     assert row.attempts == 1, f"Expected attempts==1 (sent once), got {row.attempts}"
-    assert total_sent == 1, f"Expected combined sent count==1, got {total_sent}"
 
 
 # ---------------------------------------------------------------------------

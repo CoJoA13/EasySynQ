@@ -35,6 +35,20 @@ from .staged_identity import (
     VerifiedStagedObject,
     WormNotApplied,
 )
+from .worm import (
+    VerifiedWormAssertion,
+    WormIdentityMismatch,
+    WormModeMismatch,
+    WormObjectLocator,
+    WormObjectState,
+    WormProtectionWouldWeaken,
+    WormReadbackMismatch,
+    WormRequirement,
+    _legal_hold_content_md5,
+    _provider_error_code,
+    _raise_provider_failure,
+    _retention_content_md5,
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -125,6 +139,20 @@ async def presign_get(object_key: str, *, bucket: str | None = None) -> str:
     return await asyncio.to_thread(_presign, "get_object", object_key, bucket or _doc_bucket(), {})
 
 
+async def presign_worm_get(locator: WormObjectLocator) -> str:
+    """Presign a GET for one immutable object version without resolving the key's latest value."""
+    try:
+        return await asyncio.to_thread(
+            _presign,
+            "get_object",
+            locator.object_key,
+            locator.bucket,
+            {"VersionId": locator.object_version_id},
+        )
+    except Exception as exc:  # noqa: BLE001 - presign/bootstrap exposes multiple provider failures
+        _raise_provider_failure(exc)
+
+
 def _head_sync(key: str, bucket: str) -> ObjectHead:
     from botocore.exceptions import ClientError
 
@@ -179,6 +207,131 @@ def _is_object_absence(exc: BaseException, *, object_level_404: bool) -> bool:
     if code in {"NoSuchKey", "NoSuchVersion"}:
         return True
     return object_level_404 and code == "404"
+
+
+def _read_worm_state_sync(locator: WormObjectLocator) -> WormObjectState:
+    try:
+        client = _client()
+    except Exception as exc:  # noqa: BLE001 - boto3 client bootstrap has multiple failure types
+        _raise_provider_failure(exc)
+    exact = {
+        "Bucket": locator.bucket,
+        "Key": locator.object_key,
+        "VersionId": locator.object_version_id,
+    }
+    try:
+        retention_response = client.get_object_retention(**exact)
+    except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
+        _raise_provider_failure(exc)
+    if not isinstance(retention_response, dict):
+        raise WormReadbackMismatch
+    retention = retention_response.get("Retention")
+    if not isinstance(retention, dict):
+        raise WormReadbackMismatch
+    mode = retention.get("Mode")
+    if mode == "COMPLIANCE":
+        raise WormModeMismatch
+    if mode != "GOVERNANCE":
+        raise WormReadbackMismatch
+    retain_until = retention.get("RetainUntilDate")
+    if not isinstance(retain_until, datetime.datetime):
+        raise WormReadbackMismatch
+
+    hold_status: object
+    try:
+        hold_response = client.get_object_legal_hold(**exact)
+    except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
+        if _provider_error_code(exc) != "NoSuchObjectLockConfiguration":
+            _raise_provider_failure(exc)
+        hold_status = "OFF"
+    else:
+        if not isinstance(hold_response, dict):
+            raise WormReadbackMismatch
+        legal_hold = hold_response.get("LegalHold")
+        if not isinstance(legal_hold, dict):
+            raise WormReadbackMismatch
+        hold_status = legal_hold.get("Status")
+        if hold_status not in {"ON", "OFF"}:
+            raise WormReadbackMismatch
+
+    return WormObjectState(
+        locator=locator,
+        mode="GOVERNANCE",
+        retain_until=retain_until,
+        legal_hold=hold_status == "ON",
+        read_at=datetime.datetime.now(datetime.UTC),
+    )
+
+
+async def read_worm_state(locator: WormObjectLocator) -> WormObjectState:
+    """Read strict retention and legal-hold state for one immutable object version."""
+    return await asyncio.to_thread(_read_worm_state_sync, locator)
+
+
+async def apply_worm_protection(
+    locator: WormObjectLocator, requirement: WormRequirement
+) -> VerifiedWormAssertion:
+    """Ratchet one exact version forward and prove its resulting state without bypass authority."""
+    current = await read_worm_state(locator)
+    target_retain_until = current.retain_until
+    target_legal_hold = current.legal_hold or requirement.legal_hold
+    if requirement.retain_until is not None:
+        target_retain_until = max(target_retain_until, requirement.retain_until)
+
+    try:
+        client = _client()
+    except Exception as exc:  # noqa: BLE001 - boto3 client bootstrap has multiple failure types
+        _raise_provider_failure(exc)
+    exact = {
+        "Bucket": locator.bucket,
+        "Key": locator.object_key,
+        "VersionId": locator.object_version_id,
+    }
+    asserted_at = datetime.datetime.now(datetime.UTC)
+    if target_retain_until > current.retain_until:
+        try:
+            await asyncio.to_thread(
+                client.put_object_retention,
+                **exact,
+                Retention={
+                    "Mode": "GOVERNANCE",
+                    "RetainUntilDate": target_retain_until,
+                },
+                ContentMD5=_retention_content_md5(target_retain_until),
+            )
+        except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
+            _raise_provider_failure(exc)
+    if requirement.legal_hold and not current.legal_hold:
+        try:
+            await asyncio.to_thread(
+                client.put_object_legal_hold,
+                **exact,
+                LegalHold={"Status": "ON"},
+                ContentMD5=_legal_hold_content_md5("ON"),
+            )
+        except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
+            _raise_provider_failure(exc)
+
+    verified = await read_worm_state(locator)
+    if verified.locator != locator:
+        raise WormIdentityMismatch
+    if verified.mode != "GOVERNANCE":
+        raise WormModeMismatch
+    try:
+        weaker = verified.retain_until < target_retain_until
+    except (TypeError, ValueError) as exc:
+        raise WormReadbackMismatch from exc
+    if weaker:
+        raise WormProtectionWouldWeaken
+    if target_legal_hold and not verified.legal_hold:
+        raise WormReadbackMismatch
+
+    return VerifiedWormAssertion(
+        locator=locator,
+        asserted_retain_until=target_retain_until,
+        asserted_at=asserted_at,
+        verified=verified,
+    )
 
 
 def _require_staging_versioning_sync(domain: StagingDomain, client: Any) -> None:
@@ -482,6 +635,78 @@ async def fetch_bytes(object_key: str, *, bucket: str | None = None) -> bytes:
 
 
 _STREAM_CHUNK = 1 << 20  # 1 MiB
+
+
+def _close_worm_body_sync(body: Any) -> None:
+    try:
+        body.close()
+    except Exception as exc:  # noqa: BLE001 - streaming bodies expose no common error base
+        _raise_provider_failure(exc)
+
+
+def _open_worm_body_sync(locator: WormObjectLocator) -> Any:
+    exact = {
+        "Bucket": locator.bucket,
+        "Key": locator.object_key,
+        "VersionId": locator.object_version_id,
+    }
+    try:
+        response = _client().get_object(**exact)
+    except Exception as exc:  # noqa: BLE001 - boto3 exposes multiple provider failure types
+        _raise_provider_failure(exc)
+    if not isinstance(response, dict):
+        raise WormReadbackMismatch
+    body = response.get("Body")
+    if body is None:
+        raise WormReadbackMismatch
+    if response.get("VersionId") != locator.object_version_id:
+        try:
+            _close_worm_body_sync(body)
+        finally:
+            raise WormReadbackMismatch
+    return body
+
+
+def _stream_hash_exact_sync(locator: WormObjectLocator) -> tuple[str, int]:
+    body = _open_worm_body_sync(locator)
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        try:
+            while True:
+                chunk: bytes = body.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                size += len(chunk)
+        except Exception as exc:  # noqa: BLE001 - stream bodies expose no common error base
+            _raise_provider_failure(exc)
+    finally:
+        _close_worm_body_sync(body)
+    return digest.hexdigest(), size
+
+
+async def stream_hash_exact(locator: WormObjectLocator) -> tuple[str, int]:
+    """Hash and count one exact version in bounded chunks, closing its body on every exit."""
+    return await asyncio.to_thread(_stream_hash_exact_sync, locator)
+
+
+async def stream_worm_exact(locator: WormObjectLocator) -> AsyncIterator[bytes]:
+    """Yield one exact version in bounded chunks and close on success, failure, or early close."""
+    body = await asyncio.to_thread(_open_worm_body_sync, locator)
+    try:
+        while True:
+            try:
+                chunk: bytes = await asyncio.to_thread(body.read, _STREAM_CHUNK)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - stream bodies expose no common error base
+                _raise_provider_failure(exc)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        await asyncio.shield(asyncio.to_thread(_close_worm_body_sync, body))
 
 
 async def stream_object(object_key: str, *, bucket: str) -> AsyncIterator[bytes]:
