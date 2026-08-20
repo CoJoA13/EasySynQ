@@ -58,6 +58,19 @@ def _pg() -> Iterator[str]:
         yield pg.get_connection_url()
 
 
+@pytest.fixture(scope="session")
+def _database_authority_pg() -> Iterator[str]:
+    """A distinct PostgreSQL cluster for the real-role authority password tuple.
+
+    Roles are cluster-global, so a second database in ``_pg`` would still let ordinary app fixtures
+    and authority fixtures overwrite each other's credentials.
+    """
+    with PostgresContainer(
+        "postgres:16", username="test", password="test", dbname="test", driver="psycopg"
+    ) as pg:
+        yield pg.get_connection_url()
+
+
 def _swap_role(dsn: str, user: str, password: str) -> str:
     """Re-point a DSN at a different role (same host/db). Used to connect as the non-owner
     ``easysynq_app`` / ``easysynq_linker`` roles the 0010 migration creates, so AC#6a's DB-grant
@@ -100,7 +113,7 @@ _DATABASE_AUTHORITY_PASSWORD_ENV = {
 
 @pytest.fixture
 def database_authority_dsns(
-    _pg: str,
+    _database_authority_pg: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, str]:
     """Migrate a real PostgreSQL database, then return independently authenticated role DSNs."""
@@ -110,20 +123,26 @@ def database_authority_dsns(
     from easysynq_api.config import get_settings
     from easysynq_api.readiness import MIGRATIONS_DIR
 
-    monkeypatch.setenv("DATABASE_URL", _pg)
-    monkeypatch.setenv("DATABASE_URL_SYNC", _pg)
-    for role, env_name in _DATABASE_AUTHORITY_PASSWORD_ENV.items():
-        monkeypatch.setenv(env_name, DATABASE_AUTHORITY_PASSWORDS[role])
+    # Scope both the authority cluster and its password tuple to this migration.  A function-scoped
+    # fixture's outer monkeypatch otherwise leaks those values into an ordinary fixture initialized
+    # later in the same test.
+    with monkeypatch.context() as authority_env:
+        authority_env.setenv("DATABASE_URL", _database_authority_pg)
+        authority_env.setenv("DATABASE_URL_SYNC", _database_authority_pg)
+        for role, env_name in _DATABASE_AUTHORITY_PASSWORD_ENV.items():
+            authority_env.setenv(env_name, DATABASE_AUTHORITY_PASSWORDS[role])
+        get_settings.cache_clear()
+
+        config = Config()
+        config.set_main_option("script_location", str(MIGRATIONS_DIR))
+        command.upgrade(config, "head")
+
     get_settings.cache_clear()
 
-    config = Config()
-    config.set_main_option("script_location", str(MIGRATIONS_DIR))
-    command.upgrade(config, "head")
-
     return {
-        "owner": _pg,
+        "owner": _database_authority_pg,
         **{
-            role: _swap_role(_pg, role, password)
+            role: _swap_role(_database_authority_pg, role, password)
             for role, password in DATABASE_AUTHORITY_PASSWORDS.items()
         },
     }
