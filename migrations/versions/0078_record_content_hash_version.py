@@ -29,8 +29,11 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
+    # Bare token: Alembic applies the metadata ck naming convention, so the full name would be
+    # stored as ``ck_record_ck_record_content_hash_version_supported`` (the 0019/0079 lesson).
+    # Databases migrated before this correction are repaired by 0089.
     op.create_check_constraint(
-        "ck_record_content_hash_version_supported",
+        "content_hash_version_supported",
         "record",
         "content_hash_version IN (1, 2)",
     )
@@ -56,9 +59,14 @@ def downgrade() -> None:
             """
         )
     )
-    op.drop_constraint(
-        "ck_record_content_hash_version_supported",
-        "record",
-        type_="check",
+    # Spelling-tolerant: a database migrated before the bare-token correction (and not yet through
+    # the 0089 repair) stores the doubled legacy name — a by-name drop of the canonical spelling
+    # would abort such a rollback.
+    op.execute(
+        "ALTER TABLE record DROP CONSTRAINT IF EXISTS ck_record_content_hash_version_supported"
+    )
+    op.execute(
+        "ALTER TABLE record DROP CONSTRAINT IF EXISTS "
+        "ck_record_ck_record_content_hash_version_supported"
     )
     op.drop_column("record", "content_hash_version")

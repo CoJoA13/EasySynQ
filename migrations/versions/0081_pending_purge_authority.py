@@ -24,7 +24,10 @@ branch_labels: str | None = None
 depends_on: str | None = None
 
 _APP_ROLE = "easysynq_app"
-_AUTHORITY_CHECK = "ck_pending_blob_purge_authority_shape"
+# Bare token: Alembic applies the metadata ck naming convention (``ck_pending_blob_purge_…``);
+# the previously passed full name doubled on live databases (the 0019/0079 lesson; repaired by
+# 0089). The ORM mirror (pending_blob_purge.py) already used the bare token.
+_AUTHORITY_CHECK = "authority_shape"
 _WORM_REQUEST_FK = "fk_pending_blob_purge_worm_request"
 
 
@@ -134,7 +137,15 @@ def downgrade() -> None:
         END $$;
         """
     )
-    op.drop_constraint(_AUTHORITY_CHECK, "pending_blob_purge", type_="check")
+    # Spelling-tolerant (see 0078's downgrade note): drop whichever spelling this database stores.
+    op.execute(
+        "ALTER TABLE pending_blob_purge DROP CONSTRAINT IF EXISTS "
+        "ck_pending_blob_purge_authority_shape"
+    )
+    op.execute(
+        "ALTER TABLE pending_blob_purge DROP CONSTRAINT IF EXISTS "
+        "ck_pending_blob_purge_ck_pending_blob_purge_authority_shape"
+    )
     op.drop_constraint(
         _WORM_REQUEST_FK,
         "pending_blob_purge",

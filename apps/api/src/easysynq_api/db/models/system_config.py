@@ -13,6 +13,7 @@ import uuid
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -49,7 +50,17 @@ setup_state_enum = SAEnum(
 
 class SystemConfig(Base):
     __tablename__ = "system_config"
-    __table_args__ = (Index("ix_system_config_bootstrap_admin_user_id", "bootstrap_admin_user_id"),)
+    __table_args__ = (
+        Index("ix_system_config_bootstrap_admin_user_id", "bootstrap_admin_user_id"),
+        # Bare token: the ck naming convention prepends ``ck_system_config_``; passing the full
+        # name here would double it (the 0019/0079 lesson). Mirrors migration 0088 (repaired on
+        # deployed databases by 0089).
+        CheckConstraint(
+            "bootstrap_credential_receipt_hash IS NULL "
+            "OR bootstrap_credential_receipt_hash ~ '^[0-9a-f]{64}$'",
+            name="bootstrap_credential_receipt_hash_hex",
+        ),
+    )
 
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
