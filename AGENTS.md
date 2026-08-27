@@ -30,7 +30,8 @@ It links to mutable project facts instead of copying them.
    [`docs/runbooks/fresh-linux-setup.md`](docs/runbooks/fresh-linux-setup.md) for the reviewed setup path.
 2. Run `./scripts/doctor.sh contributor`, then `just setup` to hydrate the committed Python and npm locks.
 3. Work on a branch and keep the change bounded to one reviewed behavior or documentation contract.
-4. Run the smallest focused test first, then the affected `just check-*` gates.
+4. Run the smallest focused test first, then the affected per-stack gates from the `justfile`
+   (`just lint`, `just test`, `just contracts-check`).
 5. Run `just authority-check` for repository-authority changes and `just check` when the full local
    dependency set is available.
 6. Hand off through a reviewed pull request; do not push directly to `main`.

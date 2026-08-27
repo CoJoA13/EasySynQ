@@ -125,18 +125,21 @@ Then run:
 ```bash
 just setup      # install API/web deps + packages/contracts/package-lock.json, hooks, and contracts
 just up s       # bring up the stack (S profile)
-just demo-user  # create the local demo login
-./scripts/easysynq setup mint-bootstrap
+./scripts/easysynq setup mint-bootstrap   # mint the one-time first-administrator secret
 ```
 
 The contract tools use their own committed lock at `packages/contracts/package-lock.json`; `just setup`
 hydrates that separate toolchain as well as the API and web dependencies.
 
-Then open **http://localhost/setup**, sign in with the dev account `demo` /
-`Demo-Password-1`, paste the one-time secret, and complete the six setup screens. After finalization,
-normal navigation is available at **http://localhost**. `/healthz` and `/readyz` report stack health
-behind Caddy. See the [fresh Linux developer setup](docs/runbooks/fresh-linux-setup.md) for the
-complete environment and platform notes.
+Then open **http://localhost/setup** **without signing in** — do not create any account first. Paste
+the one-time secret into the wizard's first step: it creates the first administrator identity itself
+and shows a one-time temporary password (Keycloak forces a replacement at first sign-in). Complete
+the six setup screens. After finalization, normal navigation is available at **http://localhost**,
+and the optional development fixtures (`just demo-user`, `just seed-personas`) may be created —
+they are post-finalize fixtures, never a first-install identity path. `/healthz` and `/readyz`
+report stack health behind Caddy. See the
+[fresh Linux developer setup](docs/runbooks/fresh-linux-setup.md) for the complete environment and
+platform notes.
 
 ## Repository layout
 

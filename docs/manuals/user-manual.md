@@ -41,12 +41,16 @@ The left rail groups the QMS by Plan–Do–Check–Act:
 |---|---|
 | Home | PDCA health summary and your task rail |
 | PLAN | Objectives; Risk & opportunity register; Context; Interested parties |
-| DO | Library; Review and approve; Import |
+| DO | Library; Records; Review and approve; Import |
 | CHECK | Compliance; Internal audit; Management reviews; Drift; Document register |
 | ACT | Nonconformity and CAPA; Improvement; Change requests |
 
-Each PDCA group also exposes a collapsible clause list. Selecting a clause opens the Library with
-that clause filter applied.
+Each PDCA group header shows its clause range (for example "PLAN · Cl 4–6"). The clause spine
+itself lives inside the Library: its clause filter buttons refine the document list in place.
+
+The DO group's **Records** section is the read-only evidence operations console: a filterable
+record list, per-record detail, and evidence download. Retention and disposition actions remain
+administrative API/worker flows.
 
 Status is never communicated by color alone. The common glyph vocabulary is:
 
@@ -343,13 +347,14 @@ quiet hours when the organization policy enables that behavior.
 - The application edits metadata/workflows and accepts uploaded source files; it is not a rich
   collaborative document editor.
 - Custom-role editing is not available in the current Roles UI.
-- Records/retention and Evidence Packs have shipped API/worker flows but no dedicated browser
-  management screens. Records appear inside supported workflows such as CAPA evidence linking.
+- Retention Policy and Evidence Pack management have shipped API/worker flows but no dedicated
+  browser management screens. Records have a read-only browser console (DO → Records); record
+  capture and disposition still happen inside supported workflows and API/worker flows.
 - Full Part 11 re-authentication/cryptographic signatures are not implemented.
 - Import revision-chain reconstruction is intentionally refused.
 - Approved future-effective versions have no current reschedule/rescind action, and open revision
   drafts have no discard action. Confirm dates before approval and resume or govern abandoned drafts
   explicitly.
-- Some deliberately accepted hardening residuals remain in
-  [`slice-history.md`](../slice-history.md); their absence from the GitHub issue queue does not mean
-  they are complete.
+- Some deliberately accepted hardening residuals remain open in
+  [`open-residuals.md`](../open-residuals.md) (the sole current ledger; `slice-history.md` is
+  historical evidence); their absence from the GitHub issue queue does not mean they are complete.

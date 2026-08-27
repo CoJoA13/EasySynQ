@@ -37,4 +37,4 @@ MSYS_NO_PATHCONV=1 docker compose --env-file .env -f infra/compose/compose.yml -
 - **Verify the backend, not just the UI:** confirm a write landed via the register/list text (`get_page_text` sees the main page) or a `scripts/grant-overrides.py`-style read; for a created resource, confirm its real fields (state, source link).
 
 ## 4. Report
-List what was driven and the observed result per flow (created id, state transition, deep-link). Call out anything verified-live vs. covered-by-tests-only (e.g. a flow blocked by the tooling notes above). Leave dev artifacts in place (harmless; cleared by `just down -v`). Recommend the squash-merge only after the core flows pass.
+List what was driven and the observed result per flow (created id, state transition, deep-link). Call out anything verified-live vs. covered-by-tests-only (e.g. a flow blocked by the tooling notes above). Leave dev artifacts in place (harmless; cleared by a compose `down -v` volume wipe). Recommend the squash-merge only after the core flows pass.
