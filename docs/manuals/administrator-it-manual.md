@@ -529,8 +529,9 @@ Operational planning must account for:
 - known ingestion progress/retry edges around reaping and PartiallyCommitted runs; and
 - a known CAPA multi-approver reject/changes-requested wedge/coverage gap.
 
-The authoritative residual ledger is [`slice-history.md`](../slice-history.md). Zero open GitHub
-issues does not supersede that ledger.
+The authoritative residual ledger is [`open-residuals.md`](../open-residuals.md) (the sole current
+ledger; [`slice-history.md`](../slice-history.md) is historical evidence). Zero open GitHub issues
+does not supersede that ledger.
 
 ## 16. Destructive-operation warning
 

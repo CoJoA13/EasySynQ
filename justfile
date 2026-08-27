@@ -91,7 +91,7 @@ logs:
     docker compose --env-file .env -f infra/compose/compose.yml logs -f --tail=100
 
 # Create/update the Keycloak `demo` dev user for local login. Identity state persists in PostgreSQL
-# across container recreation; `just down -v`/volume deletion is the destructive reset. Idempotent.
+# across container recreation; volume deletion (compose down -v) is the destructive reset. Idempotent.
 demo-user:
     bash scripts/demo-user.sh
 

@@ -294,7 +294,9 @@ any comment you add must not contain an equals sign or it is silently read as a 
 
 ## Notes
 
-- Stop the stack: `just down` (data persists). `just down -v` wipes the volumes (back to a fresh DB).
+- Stop the stack: `just down` (data persists). The `down` recipe takes no flags; a full volume wipe
+  (back to a fresh DB) is
+  `docker compose --env-file .env -f infra/compose/compose.yml down -v`.
 - **Avoid a repo path with spaces** (e.g. `.../Claude Projects/EasySynQ`). `cd "$REPO"` survives it, but a
   spaced absolute path word-splits through `uv run --env-file "$REPO/.env"` (and similar arg passing) even
   when double-quoted under `sg … -c`. Clone to a space-free path, or use a relative (`../../.env` from

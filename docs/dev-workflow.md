@@ -149,8 +149,9 @@ The durable archive (`./scripts/easysynq backup run` / the nightly Beat job) is 
 ## Feature and API quick-reference
 
 This section is the direct API/operator reference even where a routed browser workflow now exists.
-Records/Retention and Evidence Packs remain API/worker-only as standalone management capabilities;
-many later entries have SPA routes. Most v1 feature keys reach no concrete object at their seeded
+Retention Policy and Evidence Pack management remain API/worker-only as standalone management
+capabilities; Records gained a read-only browser console at `/records` (#465); many later entries
+have SPA routes. Most v1 feature keys reach no concrete object at their seeded
 scope, so **ride a SYSTEM override** until the role/UI lands (the `document.export`/`record.*`
 precedent) — EXCEPT `import.*` (SYSTEM-scope, held by the System Administrator bundle, no override
 dance).
