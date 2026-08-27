@@ -87,7 +87,8 @@ def _normalize(table: str, canonical: str, bare_token: str, body: str) -> None:
     legacy_names = sorted(
         n
         for n in names
-        if n.startswith(doubled_prefix) and all(c.isascii() and (c.isalnum() or c == "_") for c in n)
+        if n.startswith(doubled_prefix)
+        and all(c.isascii() and (c.isalnum() or c == "_") for c in n)
     )
     if canonical in names:
         for legacy in legacy_names:
