@@ -299,6 +299,53 @@ async def test_replay_signature_is_anchored_to_the_decided_version(
     assert replay2.json()["signature_event"]["id"] == sig2
 
 
+async def test_replay_signature_window_includes_a_same_transaction_version(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """[Audit U39 boundary] The decided-version window is ``created_at <= started_at`` — the
+    equality leg is load-bearing: the structured register flows (objective/risk/context/
+    interested-party/MR-minutes) create the version AND the approval instance in ONE
+    transaction, so both ``func.now()`` server defaults collapse to the same transaction
+    timestamp. Tightening the bound to ``<`` would silently drop the signature from every
+    structured-flow replay. Pinned here by forcing exact equality on an ordinary flow."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+
+    did = await _to_in_review(app_client, ha, await s5.type_id("SOP"))
+    v1_id = await _latest_version_id(did)
+    task1 = await s5.task_for_doc(did)
+    key = uuid.uuid4().hex
+    first = await app_client.post(
+        f"/api/v1/tasks/{task1}/decision",
+        headers={**hb, "Idempotency-Key": key},
+        json={"outcome": "approve"},
+    )
+    assert first.status_code == 200, first.text
+    sig1 = first.json()["signature_event"]["id"]
+
+    # Force created_at == started_at (the structured same-transaction shape).
+    async with get_sessionmaker()() as s:
+        from easysynq_api.db.models.document_version import DocumentVersion
+
+        created_at = (
+            await s.execute(select(DocumentVersion.created_at).where(DocumentVersion.id == v1_id))
+        ).scalar_one()
+        instance = await s.get(WorkflowInstance, uuid.UUID(first.json()["instance_id"]))
+        assert instance is not None
+        instance.started_at = created_at
+        await s.commit()
+
+    replay = await app_client.post(
+        f"/api/v1/tasks/{task1}/decision",
+        headers={**hb, "Idempotency-Key": key},
+        json={"outcome": "approve"},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["signature_event"] is not None
+    assert replay.json()["signature_event"]["id"] == sig1
+
+
 async def test_changes_requested_returns_to_draft_without_signature(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
