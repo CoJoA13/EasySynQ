@@ -1,3 +1,5 @@
+import { useRef } from "react";
+
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../lib/api";
 import type {
@@ -20,8 +22,15 @@ import { FILES_PAGE_SIZE, buildFilesQuery, type FilesFilter } from "./filters";
 // A run is "settling" (poll it) while the engine is scanning/classifying/etc OR committing; it RESTS
 // at Proposed/Reviewing (human review) and at every terminal status.
 const POLLING_STATUSES = new Set([
-  "Created", "Scanning", "Scanned", "Extracting", "Classifying", "Classified",
-  "Deduping", "Proposing", "Committing",
+  "Created",
+  "Scanning",
+  "Scanned",
+  "Extracting",
+  "Classifying",
+  "Classified",
+  "Deduping",
+  "Proposing",
+  "Committing",
 ]);
 export function isRunSettling(status: string | undefined): boolean {
   return status !== undefined && POLLING_STATUSES.has(status);
@@ -107,19 +116,31 @@ export function useDecisions(runId: string | null) {
   });
 }
 
+// The checklist + run refetches fold/read the WHOLE run server-side (§9.3), so a reviewer
+// clicking through a large run must not pay two whole-run reads per decision (audit C9) —
+// rapid decisions coalesce onto one trailing refetch of those two families.
+const WHOLE_RUN_COALESCE_MS = 1000;
+
 // Invalidate everything a write can move: the row list, the checklist gate, the run counts, and (for
 // structural ops) the cluster/family lists. Merge/split are server-authoritative — never reshape the
-// client cache optimistically (D-5); just refetch.
+// client cache optimistically (D-5); just refetch. Row-scoped families refetch immediately (the
+// files listing is page-scoped server-side); the whole-run checklist/run families coalesce.
 function useRunInvalidator(runId: string | null) {
   const qc = useQueryClient();
+  const wholeRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   return () => {
     void qc.invalidateQueries({ queryKey: ["import-files", runId] });
     void qc.invalidateQueries({ queryKey: ["import-file", runId] });
-    void qc.invalidateQueries({ queryKey: ["import-checklist", runId] });
-    void qc.invalidateQueries({ queryKey: ["import-run", runId] });
     void qc.invalidateQueries({ queryKey: ["import-decisions", runId] });
     void qc.invalidateQueries({ queryKey: ["import-dupe-clusters", runId] });
     void qc.invalidateQueries({ queryKey: ["import-version-families", runId] });
+    // The queryClient outlives any component, so a timer surviving unmount still lands safely.
+    if (wholeRunTimer.current !== null) clearTimeout(wholeRunTimer.current);
+    wholeRunTimer.current = setTimeout(() => {
+      wholeRunTimer.current = null;
+      void qc.invalidateQueries({ queryKey: ["import-checklist", runId] });
+      void qc.invalidateQueries({ queryKey: ["import-run", runId] });
+    }, WHOLE_RUN_COALESCE_MS);
   };
 }
 

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import type { ReactNode } from "react";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { AuthContext } from "../../lib/auth";
 import { server } from "../../test/msw/server";
 import { TEST_AUTH } from "../../test/render";
@@ -68,4 +68,44 @@ test("useCommitRun posts to the commit verb", async () => {
   result.current.mutate();
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
   expect(result.current.data?.status).toBe("Committing");
+});
+
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+test("whole-run checklist/run invalidations coalesce; row-scoped ones stay immediate (C9)", async () => {
+  // The checklist + run refetches fold/read the WHOLE run server-side — two rapid decisions must
+  // trigger ONE trailing refetch of those families, while the (page-scoped) files listing
+  // invalidates per decision.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const spy = vi.spyOn(client, "invalidateQueries");
+  function coalesceWrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={client}>
+        <AuthContext.Provider value={TEST_AUTH}>{children}</AuthContext.Provider>
+      </QueryClientProvider>
+    );
+  }
+  server.use(
+    http.post("/api/v1/admin/imports/:id/decisions", () => HttpResponse.json({ applied: 1 })),
+  );
+  const { result } = renderHook(() => useBulkDecision(RID), { wrapper: coalesceWrapper });
+  const calls = (family: string) =>
+    spy.mock.calls.filter((c) => (c[0]?.queryKey as unknown[] | undefined)?.[0] === family).length;
+
+  result.current.mutate({ body: { action: "defer", file_ids: ["f-1"] }, idempotencyKey: "c9-1" });
+  await waitFor(() => expect(calls("import-files")).toBe(1));
+  result.current.mutate({ body: { action: "defer", file_ids: ["f-2"] }, idempotencyKey: "c9-2" });
+  await waitFor(() => expect(calls("import-files")).toBe(2));
+
+  // Whole-run families have not refetched yet — the trailing window is still open.
+  expect(calls("import-checklist")).toBe(0);
+  expect(calls("import-run")).toBe(0);
+
+  await vi.advanceTimersByTimeAsync(1100);
+  expect(calls("import-checklist")).toBe(1); // coalesced: one refetch for two decisions
+  expect(calls("import-run")).toBe(1);
 });
