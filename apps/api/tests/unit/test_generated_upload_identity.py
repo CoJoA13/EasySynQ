@@ -268,7 +268,9 @@ async def test_generated_helper_maps_mismatch_to_503_after_audit_commit_and_exac
         assert content_type == "application/json"
         return source
 
-    async def mismatch(candidate: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def mismatch(
+        candidate: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         assert candidate is source
         assert target_bucket == "documents"
         raise UploadIdentityMismatch(

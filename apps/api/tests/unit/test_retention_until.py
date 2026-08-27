@@ -11,6 +11,7 @@ from easysynq_api.domain.records.retention import (
     action_preservation_rank,
     duration_ge,
     retention_until,
+    worm_lock_until,
 )
 
 _BASIS = datetime.date(2026, 1, 15)
@@ -94,3 +95,27 @@ def test_action_preservation_rank_ordering() -> None:
     assert action_preservation_rank(DA.DESTROY) < action_preservation_rank(DA.ARCHIVE_COLD)
     assert action_preservation_rank(DA.ARCHIVE_COLD) == action_preservation_rank(DA.TRANSFER)
     assert action_preservation_rank(DA.TRANSFER) < action_preservation_rank(DA.RETAIN_PERMANENT)
+
+
+class TestWormLockUntil:
+    """Audit C5 — the object-lock horizon a policy demands at capture."""
+
+    _CAPTURED = datetime.datetime(2026, 8, 27, 12, 0, tzinfo=datetime.UTC)
+
+    def test_basis_plus_period(self) -> None:
+        until = worm_lock_until(datetime.date(2026, 1, 15), "P1Y", captured_at=self._CAPTURED)
+        assert until == datetime.datetime(2027, 1, 15, 23, 59, 59, tzinfo=datetime.UTC)
+
+    def test_no_period_is_none(self) -> None:
+        assert worm_lock_until(datetime.date(2026, 1, 15), None, captured_at=self._CAPTURED) is None
+
+    def test_permanent_is_none(self) -> None:
+        # S3 object lock needs a finite date; PERMANENT rides the DB-side RETAIN_PERMANENT guard.
+        assert (
+            worm_lock_until(datetime.date(2026, 1, 15), "PERMANENT", captured_at=self._CAPTURED)
+            is None
+        )
+
+    def test_unfired_event_basis_falls_back_to_the_capture_date(self) -> None:
+        until = worm_lock_until(None, "P6M", captured_at=self._CAPTURED)
+        assert until == datetime.datetime(2027, 2, 27, 23, 59, 59, tzinfo=datetime.UTC)

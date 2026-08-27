@@ -151,6 +151,30 @@ _PRESERVATION_RANK: dict[DispositionAction, int] = {
 }
 
 
+def worm_lock_until(
+    basis_date: datetime.date | None,
+    worm_lock_period: str | None,
+    *,
+    captured_at: datetime.datetime,
+) -> datetime.datetime | None:
+    """The storage-layer object-lock horizon a policy demands at capture (doc 06 §5.2, doc 14
+    §10): the retention basis plus ``worm_lock_period``, as an aware UTC end-of-day instant for
+    ``put_object_retention``. An ``event:*`` basis whose event has not fired falls back to the
+    capture date — locking from capture can only under-shoot the eventual basis, never over-lock.
+    ``None`` when the policy sets no period, or the period is ``PERMANENT`` — S3 object lock
+    requires a finite date, so a permanent policy relies on the DB-side RETAIN_PERMANENT guard
+    over the bucket-default lock."""
+    if worm_lock_period is None or worm_lock_period.strip().upper() == PERMANENT:
+        return None
+    if captured_at.tzinfo is None:
+        captured_at = captured_at.replace(tzinfo=datetime.UTC)
+    basis = basis_date or captured_at.astimezone(datetime.UTC).date()
+    until_date = retention_until(basis, worm_lock_period)
+    if until_date is None:  # pragma: no cover - PERMANENT handled above; defensive
+        return None
+    return datetime.datetime.combine(until_date, datetime.time(23, 59, 59), tzinfo=datetime.UTC)
+
+
 def duration_ge(a: str, b: str) -> bool:
     """``True`` iff retention duration ``a`` retains at least as long as ``b`` (``a >= b``).
     ``PERMANENT`` is the maximum. Raises ``ValueError`` on a malformed duration (the caller

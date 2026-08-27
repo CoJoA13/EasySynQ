@@ -288,6 +288,19 @@ async def update_policy(
                 "retention_reduction_blocked",
                 "Cannot weaken disposition for a policy with active records (extend-forward only)",
             )
+        if "worm_lock_period" in changes and policy.worm_lock_period is not None:
+            # Audit C5: worm_lock_period is now APPLIED at capture, so it joins the ratchet —
+            # a pinned policy may not drop or shorten the promised storage-lock horizon.
+            # (Extending it applies to FUTURE captures; already-sealed objects keep the lock
+            # they were promoted with — object-lock cannot be shortened, and a retroactive
+            # extension sweep is deliberately out of scope here.)
+            if new_worm is None or not duration_ge(new_worm, policy.worm_lock_period):
+                raise _invalid(
+                    "worm_lock_period",
+                    "retention_reduction_blocked",
+                    "Cannot drop or shorten worm_lock_period for a policy with active records "
+                    "(extend-forward only)",
+                )
         if (
             "review_required" in changes
             and policy.review_required

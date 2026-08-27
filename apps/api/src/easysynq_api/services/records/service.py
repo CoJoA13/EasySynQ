@@ -44,6 +44,7 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.record import Record
+from ...db.models.retention_policy import RetentionPolicy
 from ...domain.records.content_hash import CONTENT_HASH_VERSION, record_content_hash
 from ...domain.records.form_schema import validate_values, values_too_large
 from ...domain.records.retention import (
@@ -51,6 +52,7 @@ from ...domain.records.retention import (
     RetentionResolution,
     RetentionResolutionInput,
     resolve_retention,
+    worm_lock_until,
 )
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
@@ -398,8 +400,13 @@ async def _attach_evidence(
     *,
     rejection_context: RejectionContext | None = None,
     rejection_sessionmaker: async_sessionmaker[AsyncSession] | None = None,
+    min_retain_until: datetime.datetime | None = None,
 ) -> list[str]:
-    """WORM-seal each unique exact-version evidence blob and attach it idempotently."""
+    """WORM-seal each unique exact-version evidence blob and attach it idempotently.
+    ``min_retain_until`` is the pinned policy's ``worm_lock_period`` horizon (audit C5): promotion
+    extends each object's lock beyond the flat bucket default, and the same-bytes dedup path
+    extends an ALREADY-sealed object so a later capture under a longer policy is never
+    under-locked by the first capture's shorter horizon."""
     settings = get_settings()
     normalized_evidence = _normalize_evidence(evidence)
 
@@ -413,6 +420,7 @@ async def _attach_evidence(
     )
 
     shas: list[str] = []
+    pending_extensions: list[Blob] = []
     for item in normalized_evidence:
         sha256 = item.sha256
         content_type = item.content_type
@@ -437,10 +445,13 @@ async def _attach_evidence(
                     target_bucket=settings.s3_bucket_records,
                     context=rejection_context,
                     rejection_sessionmaker=rejection_sessionmaker,
+                    min_retain_until=min_retain_until,
                 )
             else:
                 promoted = await storage.promote_worm(
-                    source, target_bucket=settings.s3_bucket_records
+                    source,
+                    target_bucket=settings.s3_bucket_records,
+                    min_retain_until=min_retain_until,
                 )
             await session.execute(
                 pg_insert(Blob)
@@ -477,6 +488,16 @@ async def _attach_evidence(
                     "POST /records/{id}/evidence-links."
                 ),
             )
+        # Same-bytes dedup under a LONGER policy: the earlier capture's lock horizon must not
+        # under-lock this record. The S3 extension itself is DEFERRED to after every item has
+        # passed the 423/staging gates — put_object_retention is not transactional, so an
+        # extension followed by a later item's refusal would leave the object over-locked with
+        # the rolled-back DB floor under-reporting it (the C5 review's phantom-horizon
+        # interleaving).
+        if min_retain_until is not None and (
+            blob.worm_retain_until is None or blob.worm_retain_until < min_retain_until
+        ):
+            pending_extensions.append(blob)
         await session.execute(
             pg_insert(EvidenceBlob)
             .values(
@@ -490,6 +511,15 @@ async def _attach_evidence(
             .on_conflict_do_nothing(index_elements=["record_id", "blob_sha256"])
         )
         shas.append(sha256)
+    # All items passed the gates — now extend the shared sealed objects (upward only, read-back
+    # verified, fail-closed) and record the new floor on the shared blob rows. Still inside the
+    # capture transaction and the physical-object advisory locks taken at entry.
+    for blob in pending_extensions:
+        assert min_retain_until is not None  # noqa: S101 — only queued when a horizon exists
+        extended = await storage.extend_object_retention(
+            blob.bucket, blob.object_key, min_retain_until
+        )
+        blob.worm_retain_until = extended
     await session.flush()
     return shas
 
@@ -604,6 +634,15 @@ async def capture_record(
     session.add(record)
     await session.flush()
 
+    # Audit C5: the pinned policy's worm_lock_period becomes a real storage-layer object-lock
+    # horizon at capture (previously validated + stored but never applied — every object carried
+    # only the flat bucket default).
+    pinned_policy = await session.get(RetentionPolicy, resolution.policy_id)
+    min_retain_until = worm_lock_until(
+        resolution.retention_basis_date,
+        pinned_policy.worm_lock_period if pinned_policy is not None else None,
+        captured_at=captured_at,
+    )
     shas = await _attach_evidence(
         session,
         actor,
@@ -611,6 +650,7 @@ async def capture_record(
         evidence,
         rejection_context=rejection_context,
         rejection_sessionmaker=rejection_sessionmaker,
+        min_retain_until=min_retain_until,
     )
     record.content_hash = record_content_hash(
         record_type=rtype.value,

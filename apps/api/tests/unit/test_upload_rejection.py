@@ -119,7 +119,9 @@ async def test_refusal_order_rolls_back_then_commits_audit_before_exact_delete(
     calls: list[str] = []
     audit_session = _AuditSession(calls)
 
-    async def refuse(source: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def refuse(
+        source: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         assert source == _source()
         assert target_bucket == "documents"
         raise _mismatch()
@@ -150,7 +152,9 @@ async def test_owner_rollback_failure_prevents_audit_cleanup_and_enqueue(
 ) -> None:
     calls: list[str] = []
 
-    async def refuse(_source: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def refuse(
+        _source: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         assert target_bucket == "documents"
         raise _mismatch()
 
@@ -179,7 +183,9 @@ async def test_audit_commit_failure_prevents_cleanup_and_enqueue(
 ) -> None:
     calls: list[str] = []
 
-    async def refuse(_source: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def refuse(
+        _source: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         assert target_bucket == "documents"
         raise _mismatch()
 
@@ -215,7 +221,9 @@ async def test_delete_failure_enqueues_committed_reference_and_preserves_origina
     calls: list[str] = []
     enqueued: list[tuple[int, datetime.datetime]] = []
 
-    async def refuse(_source: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def refuse(
+        _source: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         assert target_bucket == "documents"
         raise _mismatch()
 
@@ -252,7 +260,9 @@ async def test_retry_publish_failure_preserves_original_refusal(
 ) -> None:
     calls: list[str] = []
 
-    async def refuse(_source: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def refuse(
+        _source: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         raise _mismatch()
 
     async def fail_delete(_locator: StagedVersionLocator) -> None:
@@ -286,7 +296,9 @@ async def test_infrastructure_failure_rolls_back_without_false_identity_evidence
 ) -> None:
     calls: list[str] = []
 
-    async def unavailable(_source: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def unavailable(
+        _source: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         assert target_bucket == "documents"
         raise StorageUnavailable(StorageStage.COPY)
 
@@ -320,7 +332,9 @@ async def test_target_conflict_commits_retain_source_evidence_without_cleanup(
         observed_size=11,
     )
 
-    async def conflict(_source: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def conflict(
+        _source: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         assert target_bucket == "documents"
         raise failure
 
@@ -415,7 +429,9 @@ async def test_generated_rejection_uses_system_actor_and_private_503() -> None:
     session = _AuditSession(calls)
     context = _context(operation="server_generated")
 
-    async def refuse(_source: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def refuse(
+        _source: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         raise _mismatch()
 
     async def delete_exact(_locator: StagedVersionLocator) -> None:
@@ -455,7 +471,9 @@ async def test_source_refusal_maps_to_stable_restart_problem(
 ) -> None:
     calls: list[str] = []
 
-    async def refuse(_source: StagedObjectRef, *, target_bucket: str) -> Any:
+    async def refuse(
+        _source: StagedObjectRef, *, target_bucket: str, min_retain_until: Any = None
+    ) -> Any:
         raise failure_factory()
 
     async def delete_exact(_locator: StagedVersionLocator) -> None:
