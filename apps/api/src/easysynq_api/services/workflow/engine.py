@@ -71,8 +71,8 @@ _POSITIVE = {
 _NEGATIVE = {TaskOutcomeKind.reject, TaskOutcomeKind.changes_requested}
 _SUCCESS_ON = {"satisfied", "stage_satisfied", "approve"}
 _REJECT_ON = {"reject", "fail"}
-_QUORUM_SKIP = "quorum_skip"  # marker stamped on a task auto-skipped when its stage closed
-_FAILED_STAGE_SKIP = "failed_stage_skip"  # auto-skipped because the stage failed closed
+_QUORUM_SKIP = "quorum_skip"  # marker stamped on a task auto-skipped when its stage's quorum MET
+_FAILED_STAGE_SKIP = "failed_stage_skip"  # auto-skipped: stage FAILED (rejected) or failed closed
 _SIG_MEANINGS = {m.value for m in SignatureMeaning}
 
 
@@ -442,7 +442,8 @@ async def decide(
                 "replayed": True,
             }
         if locked.client_token == _FAILED_STAGE_SKIP:
-            # This sibling was retired by a fail-closed stage, not by a satisfied quorum.
+            # This sibling was retired by a FAILED stage (quorum rejected, or fail-closed
+            # definition/context corruption) — never by a satisfied quorum.
             return {
                 "task_id": str(locked.id),
                 "instance_id": str(locked.instance_id),
@@ -561,8 +562,10 @@ async def decide(
     elif state == "FAILED" and stage is not None:
         for t in tasks:
             if t.state is TaskState.PENDING:
+                # Audit U38: the FAILED marker, not _QUORUM_SKIP — a sibling retired by a
+                # rejected stage must replay stage_state=FAILED, never ALREADY_SATISFIED.
                 t.state = TaskState.SKIPPED
-                t.client_token = _QUORUM_SKIP
+                t.client_token = _FAILED_STAGE_SKIP
         instance.current_state = _transition_target(stage, _REJECT_ON) or REJECTED
         _emit(
             session,

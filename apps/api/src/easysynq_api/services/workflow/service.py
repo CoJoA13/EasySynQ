@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db.models._signature_enums import SignatureMeaning
 from ...db.models._workflow_enums import TaskOutcomeKind, TaskState, TaskType, WorkflowSubjectType
 from ...db.models.app_user import AppUser
+from ...db.models.document_version import DocumentVersion
 from ...db.models.signature_event import SignatureEvent as SignatureEventRow
 from ...db.models.workflow import Task, TaskOutcome, WorkflowInstance
 from ...problems import ProblemException
@@ -121,20 +122,40 @@ def _decision_response(
 async def _signature_for_replay(
     session: AsyncSession, task: Task, outcome: TaskOutcome
 ) -> SignatureEventRow | None:
-    """Re-fetch the approval signature for an idempotent replay (only ``approve`` ever signs)."""
+    """Re-fetch the approval signature for an idempotent replay (only ``approve`` ever signs).
+
+    Audit U39: the signature is anchored to the version THIS instance decided, never the
+    document's *current* latest version — after a later revision the latest is an unapproved
+    Draft (signature silently dropped from the replay), and once that draft is approved through
+    a second cycle the replay would return the LATER cycle's signature (the S-capa-3
+    replay-parity class). The decided version is the newest version created BEFORE the instance
+    opened: one instance approves one submitted version, checkout is FSM-gated to
+    Draft/UnderRevision (never InReview), and both ``created_at`` and ``started_at`` are
+    ``func.now()`` server defaults on the same PostgreSQL clock, so no newer version can sort
+    into the window."""
     if outcome.outcome is not TaskOutcomeKind.approve:
         return None
     instance = await wf_repo.get_instance(session, task.instance_id)
     if instance is None:
         return None
-    version = await vault_repo.latest_version(session, instance.subject_id)
-    if version is None:
+    decided_version_id = (
+        await session.execute(
+            select(DocumentVersion.id)
+            .where(
+                DocumentVersion.document_id == instance.subject_id,
+                DocumentVersion.created_at <= instance.started_at,
+            )
+            .order_by(DocumentVersion.version_seq.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if decided_version_id is None:
         return None
     return (
         await session.execute(
             select(SignatureEventRow)
             .where(
-                SignatureEventRow.signed_object_id == version.id,
+                SignatureEventRow.signed_object_id == decided_version_id,
                 SignatureEventRow.meaning == SignatureMeaning.approval,
             )
             .order_by(SignatureEventRow.created_at.desc())
