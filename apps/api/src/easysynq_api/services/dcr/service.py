@@ -640,6 +640,21 @@ async def decide_dcr_approval(
         await session.commit()
         return result
 
+    # Audit C6: route-time validation proves only the ENTRY stage's pool, so a MAJOR DCR's
+    # second (QMS Owner) stage resolves here — and an empty/under-quorum pool sends the instance
+    # to NEEDS_ATTENTION, which is TERMINAL, while the DCR FSM has no exit from InApproval
+    # (not decidable, not cancellable, not re-routable): a permanent wedge. The engine ran with
+    # ``_commit=False``, so roll the whole advance back (the task stays PENDING, no quorum-skips,
+    # no signature is recorded) and 409 with the staffing instruction — the approver simply
+    # retries once the next stage's role is staffed (owner decision, 2026-08-27).
+    if outcome == "approve" and result.get("current_state") == engine.NEEDS_ATTENTION:
+        await session.rollback()
+        raise _conflict(
+            "dcr_no_approvers",
+            "The next approval stage has no eligible approvers (assign the required role, "
+            "then approve again) — nothing was recorded",
+        )
+
     dcr = await repo.get_dcr(session, instance.subject_id, for_update=True)
     if dcr is None or dcr.org_id != actor.org_id:
         raise _not_found("DCR")
