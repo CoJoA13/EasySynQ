@@ -446,3 +446,82 @@ async def test_cross_stage_distinct_approver_guard(
         f"/api/v1/tasks/{t2}/decision", headers=hd, json={"outcome": "approve"}
     )
     assert d2.status_code == 409, d2.text
+
+
+async def test_major_dcr_unstaffable_second_stage_409s_and_stays_retryable(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Audit C6: with the QMS-Owner pool EMPTY at stage-1 approval, the engine used to advance to
+    terminal NEEDS_ATTENTION while the DCR stayed InApproval with no exit — a permanent wedge.
+    Now the approve rolls back with 409 dcr_no_approvers, NOTHING is recorded (no
+    signature, the stage-1 task stays PENDING), and the same approve succeeds once the role is
+    staffed. QMS-Owner assignments from other tests are snapshotted/restored around the window."""
+    from easysynq_api.db.models.role import Role, RoleAssignment
+
+    req = _subject("dcr-wedge-req")
+    await _grant(req, _ROUTE_PERMS)
+    hr = _auth(token_factory, req)
+    proc = _subject("dcr-wedge-proc")
+    await _assign_seeded_role(proc, "Process Owner")
+    hp = _auth(token_factory, proc)
+
+    async with get_sessionmaker()() as s:
+        proc_user = (
+            await s.execute(select(AppUser).where(AppUser.keycloak_subject == proc))
+        ).scalar_one()
+        org_id = proc_user.org_id
+        qms_role_id = (
+            await s.execute(select(Role.id).where(Role.org_id == org_id, Role.name == "QMS Owner"))
+        ).scalar_one()
+        saved = [
+            (row.org_id, row.user_id, row.role_id)
+            for row in (
+                await s.execute(select(RoleAssignment).where(RoleAssignment.role_id == qms_role_id))
+            ).scalars()
+        ]
+        for row in (
+            await s.execute(select(RoleAssignment).where(RoleAssignment.role_id == qms_role_id))
+        ).scalars():
+            await s.delete(row)
+        await s.commit()
+
+    try:
+        dcr_id = await _open_assessed_dcr(app_client, hr, "MAJOR")
+        iid = (await app_client.post(f"/api/v1/dcrs/{dcr_id}/route", headers=hr)).json()[
+            "approval_instance"
+        ]["id"]
+        t1 = await _my_pending_task(app_client, hp, iid)
+        d1 = await app_client.post(
+            f"/api/v1/tasks/{t1}/decision", headers=hp, json={"outcome": "approve"}
+        )
+        assert d1.status_code == 409, d1.text
+        assert d1.json()["code"] == "dcr_no_approvers"
+
+        # Nothing was recorded: no approval signature, the DCR still InApproval, and the SAME
+        # stage-1 task is still PENDING (the retry affordance).
+        assert await _approval_sig_count(dcr_id) == 0
+        detail = (await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hr)).json()
+        assert detail["state"] == "InApproval"
+        assert await _my_pending_task(app_client, hp, iid) == t1
+    finally:
+        async with get_sessionmaker()() as s:
+            for org, user, role in saved:
+                s.add(RoleAssignment(org_id=org, user_id=user, role_id=role))
+            await s.commit()
+
+    # Staff the second tier, then the SAME approve succeeds and the flow completes normally.
+    qm = _subject("dcr-wedge-qms")
+    await _assign_seeded_role(qm, "QMS Owner")
+    hq = _auth(token_factory, qm)
+    d1b = await app_client.post(
+        f"/api/v1/tasks/{t1}/decision", headers=hp, json={"outcome": "approve"}
+    )
+    assert d1b.status_code == 200, d1b.text
+    assert d1b.json()["dcr_state"] == "InApproval"
+    t2 = await _my_pending_task(app_client, hq, iid)
+    d2 = await app_client.post(
+        f"/api/v1/tasks/{t2}/decision", headers=hq, json={"outcome": "approve"}
+    )
+    assert d2.status_code == 200, d2.text
+    assert d2.json()["dcr_state"] == "Approved"
+    assert await _approval_sig_count(dcr_id) == 2
