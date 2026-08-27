@@ -15,7 +15,7 @@ import datetime
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -182,9 +182,9 @@ async def create_pack_endpoint(
 async def list_packs_endpoint(
     caller: AppUser = Depends(_generate),
     session: AsyncSession = Depends(get_session),
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=100),
 ) -> list[dict[str, Any]]:
-    packs = await packs_repo.list_packs(session, caller.org_id, limit=min(limit, 100))
+    packs = await packs_repo.list_packs(session, caller.org_id, limit=limit)
     return [_pack(p) for p in packs]
 
 

@@ -245,6 +245,9 @@ function ManageUser({
     setError(null);
     void qc.invalidateQueries({ queryKey: ["user-roles", user.id] });
     void qc.invalidateQueries({ queryKey: ["user-overrides", user.id] });
+    // usePermissions caches /me/permissions with a staleTime; a grant edit (possibly the caller's
+    // own) must invalidate the whole family so affordance gating catches up immediately.
+    void qc.invalidateQueries({ queryKey: ["me-permissions"] });
     onChange();
   };
 

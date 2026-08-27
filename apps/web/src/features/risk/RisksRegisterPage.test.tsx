@@ -138,7 +138,9 @@ it("shows New for a PROCESS-only register.manage holder (the first-readable-proc
   await waitFor(() =>
     expect(screen.getByText("Supplier single point of failure")).toBeInTheDocument(),
   );
-  await user.click(screen.getByRole("button", { name: "New risk" }));
+  // find (not get): the button gates on the async processes → PROCESS-scope probe chain, which can
+  // settle after the risks table renders.
+  await user.click(await screen.findByRole("button", { name: "New risk" }));
   const dialog = await screen.findByRole("dialog");
   // requireProcess (a PROCESS-only creator) → the picker is required; query by its placeholder, not
   // the asterisked label (the S-capa-raise-process MAJOR).
@@ -304,7 +306,9 @@ it("the console is hidden for a PROCESS-only register.manage holder (org head is
     expect(screen.getByText("Supplier single point of failure")).toBeInTheDocument(),
   );
   // a PROCESS-only holder CAN create rows (the New button, via the first-readable-process probe)…
-  expect(screen.getByRole("button", { name: "New risk" })).toBeInTheDocument();
+  // find (not get): the probe chain — processes, then PROCESS-scope permissions — settles after
+  // the risks table renders, so the affirmative side must await it before the negative assert.
+  expect(await screen.findByRole("button", { name: "New risk" })).toBeInTheDocument();
   // …but CANNOT steward the org head — the console is SYSTEM-gated, so it's hidden.
   expect(screen.queryByText("Register lifecycle")).not.toBeInTheDocument();
 });

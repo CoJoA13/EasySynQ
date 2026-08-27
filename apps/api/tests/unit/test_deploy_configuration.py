@@ -1289,7 +1289,7 @@ def test_host_wrapper_accepts_equivalent_active_checkout_paths(
         (["backup", "--help"], "worker"),
         (["restore", "--help"], "worker"),
         (["upgrade", "--help"], "worker"),
-        (["mirror", "--help"], "api"),
+        (["mirror", "--help"], "worker"),
         (["blob", "--help"], "worker"),
     ],
 )

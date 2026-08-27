@@ -14,6 +14,11 @@ export function usePermissions(scope?: { level: string; id?: string }) {
   const query = useQuery({
     queryKey: ["me-permissions", scope?.level ?? "SYSTEM", scope?.id ?? null],
     queryFn: () => api.get<MePermissions>(`/api/v1/me/permissions${qs}`),
+    // Effective permissions only change on role/override edits (which invalidate this family) —
+    // without a staleTime the default queryClient refetches this expensive endpoint on every page
+    // mount and window focus.
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
   const allowed = new Set(
     (query.data?.permissions ?? []).filter((p) => p.effect === "ALLOW").map((p) => p.key),

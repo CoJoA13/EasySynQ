@@ -91,6 +91,16 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
           body: { action, after },
           idempotencyKey: crypto.randomUUID(),
         })
+        .then(() => {
+          // A decided row leaves the "needs decision" listing but its id would stay selected,
+          // silently re-targeting it from the next bulk action — prune it.
+          setSelected((prev) => {
+            if (!prev.has(fileId)) return prev;
+            const next = new Set(prev);
+            next.delete(fileId);
+            return next;
+          });
+        })
         .catch((error: unknown) => {
           setReviewActionFailure({ scope: "file", fileId, error });
         });
@@ -102,6 +112,12 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
       setReviewActionFailure(null);
       void bulkDecision
         .mutateAsync({ body, idempotencyKey: crypto.randomUUID() })
+        .then(() => {
+          // Decided rows vanish from the filtered listing while their ids stay selected; a later
+          // bulk action would silently re-target them (an accept can override a just-made
+          // exclude, decisions folding newest-wins). Drop the selection, as MergeMenu does.
+          setSelected(new Set());
+        })
         .catch((error: unknown) => {
           setReviewActionFailure({ scope: "bulk", error });
         });

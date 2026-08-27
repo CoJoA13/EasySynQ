@@ -158,7 +158,16 @@ async def decide(
     """The one-transaction decision core (see module docstring). Authorization + SoD are enforced by
     the caller (the decision endpoint) before this runs."""
     locked = (
-        await session.execute(select(Task).where(Task.id == task.id).with_for_update())
+        # populate_existing: the endpoint already loaded this task into the request session's
+        # identity map, so a plain locked load returns the STALE cached state (the S-drift-1
+        # trap — a concurrent loser would re-check PENDING after the winner committed DONE).
+        # Force a re-read under the lock (the lock_instance_for_update precedent).
+        await session.execute(
+            select(Task)
+            .where(Task.id == task.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one()
 
     if locked.state is TaskState.DONE:
