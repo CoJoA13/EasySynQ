@@ -255,7 +255,9 @@ assert_text_contains \
   "contracts job runs this workflow regression" \
   "$CONTRACTS_BLOCK" \
   '      - name: CI workflow contract
-        run: bash scripts/tests/test-ci-hardening.sh'
+        run: |
+          bash scripts/tests/test-ci-hardening.sh
+          bash scripts/tests/test-check-compose-images-lock.sh'
 assert_text_contains \
   "contracts job runs authority and Claude compatibility contracts" \
   "$CONTRACTS_BLOCK" \

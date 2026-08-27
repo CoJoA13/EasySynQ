@@ -42,7 +42,9 @@ jobs:
       - name: PostgreSQL MCP disabled contract
         run: node --test scripts/tests/test-postgres-mcp-disabled.mjs
       - name: CI workflow contract
-        run: bash scripts/tests/test-ci-hardening.sh
+        run: |
+          bash scripts/tests/test-ci-hardening.sh
+          bash scripts/tests/test-check-compose-images-lock.sh
       - name: install locked contract tools
         run: npm ci --prefix packages/contracts --ignore-scripts
       - name: contract toolchain regressions
@@ -376,19 +378,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Digest-aware (audit C15): the release ceremony rewrites images.lock to `name:tag@sha256:…`
+      # refs, which the previous exact-string comparison read as "missing" — making a green gate
+      # and a digest-pinned release lock mutually exclusive. The extracted script strips digests
+      # before comparing; its regression harness runs in the contracts job.
       - name: every deployed/base image must be pinned in infra/images.lock
-        run: |
-          compose=$(grep -hE '^[[:space:]]+image:[[:space:]]' infra/compose/compose.yml infra/compose/compose.*.yml 2>/dev/null | awk '{print $2}' | sort -u)
-          keycloak_base=$(grep -E '^FROM[[:space:]]' infra/compose/keycloak/Dockerfile | awk '{print $2}' | sort -u)
-          required=$(printf '%s\n%s\n' "$compose" "$keycloak_base" | sort -u)
-          lock=$(grep -vE '^[[:space:]]*#' infra/images.lock | awk 'NF>=2 {print $2}' | sort -u)
-          missing=$(comm -23 <(printf '%s\n' "$required") <(printf '%s\n' "$lock"))
-          if [ -n "$missing" ]; then
-            echo "::error::Deployed/base image(s) not pinned in infra/images.lock — the air-gap bundle would drift:"
-            while IFS= read -r image; do
-              printf '  %s\n' "$image"
-            done <<<"$missing"
-            echo "Add them to infra/images.lock (then \`just images-update\` for digests)."
-            exit 1
-          fi
-          echo "OK — every Compose image ref is pinned in images.lock."
+        run: bash scripts/check-compose-images-lock.sh

@@ -125,7 +125,10 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
     }
 
     expected_commands = {
-        ("contracts", "CI workflow contract"): "bash scripts/tests/test-ci-hardening.sh",
+        ("contracts", "CI workflow contract"): (
+            "bash scripts/tests/test-ci-hardening.sh\n"
+            "bash scripts/tests/test-check-compose-images-lock.sh\n"
+        ),
         ("contracts", "generated contract lock"): "bash scripts/gen-contracts.sh --check",
         (
             "contract-responses",
@@ -205,7 +208,13 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
             "name": "PostgreSQL MCP disabled contract",
             "run": "node --test scripts/tests/test-postgres-mcp-disabled.mjs",
         },
-        {"name": "CI workflow contract", "run": "bash scripts/tests/test-ci-hardening.sh"},
+        {
+            "name": "CI workflow contract",
+            "run": (
+                "bash scripts/tests/test-ci-hardening.sh\n"
+                "bash scripts/tests/test-check-compose-images-lock.sh\n"
+            ),
+        },
         {
             "name": "install locked contract tools",
             "run": "npm ci --prefix packages/contracts --ignore-scripts",
