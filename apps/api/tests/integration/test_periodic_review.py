@@ -1547,3 +1547,120 @@ async def test_sweep_review_notification_date_in_calendar_tz(
                 .values(timezone=original_tz)
             )
             await s.commit()
+
+
+async def test_sweep_survives_a_mis_seeded_org(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """[Audit U5] A mis-seeded org (no effective periodic_review definition) degrades to a
+    logged per-org no-op: the healthy org's due doc still gets its review task, and the sweep
+    neither blanks Pass 1 for everyone nor aborts mid-loop. The old guard checked only the
+    FIRST org in the scan — org order decided between "nothing minted anywhere" and an
+    unhandled ProblemException killing the whole sweep, escalation pass included."""
+    from sqlalchemy import delete
+
+    from easysynq_api.db.models._vault_enums import (
+        Classification,
+        DocumentCurrentState,
+        DocumentKind,
+    )
+    from easysynq_api.db.models._workflow_enums import WorkflowSubjectType
+    from easysynq_api.db.models.app_user import AppUser, UserStatus
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.organization import Organization
+    from easysynq_api.db.models.workflow import WorkflowInstance
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    did, _body = await _release_doc(
+        app_client, ha, hb, await s5.type_id("SOP"), f"pr-mis-seeded-{subj.a}".encode()
+    )
+    doc_uuid = uuid.UUID(did)
+    today_date = datetime.datetime.now(await _canonical_tz()).date()
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": today_date, "id": doc_uuid},
+        )
+        await s.commit()
+
+    # Org B: a bare org (no workflow definitions seeded) with a due Effective doc — it enters
+    # the sweep's Pass 1 loop, where the OLD code either blanked the whole pass (org B scanned
+    # first) or raised out of instantiate (org B scanned later).
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        org_b = Organization(
+            legal_name=f"Review Mis-seeded {salt}", short_code=f"RM{salt[:6].upper()}"
+        )
+        s.add(org_b)
+        await s.flush()
+        owner = AppUser(
+            org_id=org_b.id,
+            keycloak_subject=f"rm-owner-{salt}",
+            display_name="RM Owner",
+            email=f"rm-owner-{salt}@example.com",
+            status=UserStatus.ACTIVE,
+        )
+        s.add(owner)
+        await s.flush()
+        fw_id = (
+            await s.execute(
+                select(DocumentedInformation.framework_id).where(
+                    DocumentedInformation.id == doc_uuid
+                )
+            )
+        ).scalar_one()
+        doc_b = DocumentedInformation(
+            org_id=org_b.id,
+            framework_id=fw_id,
+            kind=DocumentKind.DOCUMENT,
+            identifier=f"RM-DOC-{salt}",
+            title="Mis-seeded review doc",
+            owner_user_id=owner.id,
+            current_state=DocumentCurrentState.Effective,
+            classification=Classification.Internal,
+            next_review_due=today_date,
+            created_by=owner.id,
+        )
+        s.add(doc_b)
+        await s.commit()
+        org_b_id, doc_b_id, owner_id = org_b.id, doc_b.id, owner.id
+
+    try:
+        async with get_sessionmaker()() as session:
+            result = await sweep_reviews(session)  # spans both orgs — must NOT raise
+        assert result["tasks_created"] >= 1
+        async with get_sessionmaker()() as s:
+            # Org A's due doc got its review instance.
+            minted = (
+                await s.execute(
+                    select(WorkflowInstance.id).where(
+                        WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                        WorkflowInstance.subject_id == doc_uuid,
+                    )
+                )
+            ).all()
+            assert len(minted) >= 1
+            # Org B: untouched — no instance for its doc, only the logged skip.
+            stray = (
+                await s.execute(
+                    select(WorkflowInstance.id).where(WorkflowInstance.subject_id == doc_b_id)
+                )
+            ).all()
+            assert stray == []
+    finally:
+        # A second Organization row breaks test_restore's scalar_one() — clean up FK-safe.
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                delete(DocumentedInformation).where(DocumentedInformation.id == doc_b_id)
+            )
+            await s.execute(delete(AppUser).where(AppUser.id == owner_id))
+            await s.execute(delete(Organization).where(Organization.id == org_b_id))
+            await s.commit()

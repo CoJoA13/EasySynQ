@@ -28,6 +28,7 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.workflow import Task, WorkflowInstance
 from ...domain.ack.rules import plan_obligations
+from ...problems import ProblemException
 from ..common.org_clock import resolve_org_tz, using_org_tz
 from ..common.pg_locks import LOCK_ACK_SWEEP, pg_advisory_lock
 from ..workflow import engine as wf_engine
@@ -158,18 +159,30 @@ async def sweep_acks(
             .scalars()
             .all()
         )
-        # Resolve the definition ONCE; a mis-seeded org degrades to a logged no-op — INCLUDING
-        # Pass B: with the definition missing we cannot distinguish "lapsed" from "config-broken",
-        # and cancelling on broken config would be fail-open (the blast radius is every open
-        # obligation). Fail closed: touch nothing this tick.
-        if eligible and (
-            await wf_repo.effective_definition(
-                session, eligible[0].org_id, _DEF_KEY, WorkflowSubjectType.DOC_ACK
-            )
-            is None
-        ):
-            logger.error("ack_sweep: no effective doc_acknowledgement definition — seed missing")
-            return {"tasks_created": 0, "tasks_cancelled": 0, "skipped_lock_held": 0}
+        # Resolve the definition PER ORG (cached for the run; audit U4 — the old first-org-only
+        # guard let one mis-seeded org stall or abort the whole cohort). A broken org degrades to
+        # a logged no-op for THAT org only — INCLUDING its Pass B rows: with the definition
+        # missing we cannot distinguish "lapsed" from "config-broken", and cancelling on broken
+        # config would be fail-open (the blast radius is every open obligation). Fail closed:
+        # touch nothing of that org this tick; every other org proceeds.
+        def_ok: dict[uuid.UUID, bool] = {}
+
+        async def _org_seeded(org_id: uuid.UUID) -> bool:
+            if org_id not in def_ok:
+                ok = (
+                    await wf_repo.effective_definition(
+                        session, org_id, _DEF_KEY, WorkflowSubjectType.DOC_ACK
+                    )
+                    is not None
+                )
+                if not ok:
+                    logger.error(
+                        "ack_sweep: no effective doc_acknowledgement definition for org %s — "
+                        "seed missing; skipping its documents this tick",
+                        org_id,
+                    )
+                def_ok[org_id] = ok
+            return def_ok[org_id]
 
         eligible_ids = {d.id for d in eligible}
         due_at = _now() + datetime.timedelta(days=get_settings().ack_due_days)
@@ -182,6 +195,8 @@ async def sweep_acks(
         )
 
         for doc in eligible:
+            if not await _org_seeded(doc.org_id):
+                continue
             boundary = await queries.boundary_seq(session, doc)
             if boundary is None:
                 continue  # Effective state without a version row — FK-guaranteed unreachable
@@ -212,21 +227,33 @@ async def sweep_acks(
             snapped_due_at = await snap_due_at(session, doc.org_id, due_at)
             org_tz = await resolve_org_tz(session, doc.org_id)
             for user_id in to_mint:
-                instance = await wf_engine.instantiate(
-                    session,
-                    org_id=doc.org_id,
-                    definition_key=_DEF_KEY,
-                    subject_type=WorkflowSubjectType.DOC_ACK,
-                    subject_id=doc.id,
-                    context={
-                        "user_id": str(user_id),
-                        "document_id": str(doc.id),
-                        "document_version_id": str(doc.current_effective_version_id),
-                        "created_reason": reason.value,
-                        "identifier": doc.identifier,
-                    },
-                    actor=None,
-                )
+                try:
+                    instance = await wf_engine.instantiate(
+                        session,
+                        org_id=doc.org_id,
+                        definition_key=_DEF_KEY,
+                        subject_type=WorkflowSubjectType.DOC_ACK,
+                        subject_id=doc.id,
+                        context={
+                            "user_id": str(user_id),
+                            "document_id": str(doc.id),
+                            "document_version_id": str(doc.current_effective_version_id),
+                            "created_reason": reason.value,
+                            "identifier": doc.identifier,
+                        },
+                        actor=None,
+                    )
+                except ProblemException:
+                    # A present-but-malformed definition (e.g. no stages) raises BEFORE adding
+                    # any row; the same U4 posture applies — mark the org broken for the rest of
+                    # this run (its later docs and Pass B rows skip) and keep the cohort alive.
+                    logger.exception(
+                        "ack_sweep: instantiate failed for org %s — malformed "
+                        "doc_acknowledgement definition; skipping the org this tick",
+                        doc.org_id,
+                    )
+                    def_ok[doc.org_id] = False
+                    break
                 await session.flush()
                 await session.execute(
                     update(Task)
@@ -263,6 +290,10 @@ async def sweep_acks(
         if document_id is not None:
             stale_q = stale_q.where(WorkflowInstance.subject_id == document_id)
         for instance_id, subject_id, org_id, context in (await session.execute(stale_q)).all():
+            # The same per-org fail-closed posture: a config-broken org's obligations are left
+            # untouched (cancel-without-remint on broken config would be fail-open).
+            if not await _org_seeded(org_id):
+                continue
             if subject_id not in eligible_ids and await _cancel_instance(session, instance_id):
                 _emit_cancelled(
                     session,

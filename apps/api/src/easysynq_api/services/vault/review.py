@@ -142,17 +142,33 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
             .scalars()
             .all()
         )
-        # Resolve the definition ONCE; a mis-seeded org must degrade to a logged no-op, not a
-        # 500-shaped Beat failure every day that also kills the escalation pass.
-        if docs and (
-            await wf_repo.effective_definition(
-                session, docs[0].org_id, _DEF_KEY, WorkflowSubjectType.PERIODIC_REVIEW
-            )
-            is None
-        ):
-            logger.error("review_sweep: no effective periodic_review definition — seed missing")
-            docs = []
+        # Resolve the definition PER ORG (cached for the run; audit U5 — the old first-org-only
+        # guard killed Pass 1 for EVERY org when the first org was mis-seeded, and a mis-seeded
+        # later org aborted the whole sweep mid-loop, escalation pass included). A broken org
+        # degrades to a logged no-op for that org only; the escalation pass never needs the
+        # definition, so it always runs.
+        def_ok: dict[uuid.UUID, bool] = {}
+
+        async def _org_seeded(org_id: uuid.UUID) -> bool:
+            if org_id not in def_ok:
+                ok = (
+                    await wf_repo.effective_definition(
+                        session, org_id, _DEF_KEY, WorkflowSubjectType.PERIODIC_REVIEW
+                    )
+                    is not None
+                )
+                if not ok:
+                    logger.error(
+                        "review_sweep: no effective periodic_review definition for org %s — "
+                        "seed missing; skipping its documents this tick",
+                        org_id,
+                    )
+                def_ok[org_id] = ok
+            return def_ok[org_id]
+
         for doc in docs:
+            if not await _org_seeded(doc.org_id):
+                continue
             if (
                 await wf_repo.find_nonterminal_instance(
                     session,
@@ -164,15 +180,26 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
                 is not None
             ):
                 continue
-            instance = await wf_engine.instantiate(
-                session,
-                org_id=doc.org_id,
-                definition_key=_DEF_KEY,
-                subject_type=WorkflowSubjectType.PERIODIC_REVIEW,
-                subject_id=doc.id,
-                context={"owner_user_id": str(doc.owner_user_id), "identifier": doc.identifier},
-                actor=None,
-            )
+            try:
+                instance = await wf_engine.instantiate(
+                    session,
+                    org_id=doc.org_id,
+                    definition_key=_DEF_KEY,
+                    subject_type=WorkflowSubjectType.PERIODIC_REVIEW,
+                    subject_id=doc.id,
+                    context={"owner_user_id": str(doc.owner_user_id), "identifier": doc.identifier},
+                    actor=None,
+                )
+            except ProblemException:
+                # A present-but-malformed definition (e.g. no stages) raises BEFORE adding any
+                # row — mark the org broken for the rest of this run and keep the cohort alive.
+                logger.exception(
+                    "review_sweep: instantiate failed for org %s — malformed periodic_review "
+                    "definition; skipping the org this tick",
+                    doc.org_id,
+                )
+                def_ok[doc.org_id] = False
+                continue
             await session.flush()
             # R55 (S-duedate-snap, D-5): build at midnight in the working_calendar's tz (the timer's
             # business-day frame) and snap FORWARD to a working day, so OVERDUE never fires on a

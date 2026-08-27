@@ -8,7 +8,7 @@ import datetime
 import logging
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...config import Settings
 from ...db.models._notification_enums import NotificationEmailStatus
@@ -65,7 +65,7 @@ async def _still_eligible(
 
 
 async def drain_once(
-    session: AsyncSession,
+    sessionmaker: async_sessionmaker[AsyncSession],
     sender: MailSender,
     settings: Settings,
     *,
@@ -74,74 +74,86 @@ async def drain_once(
 ) -> dict[str, int]:
     counts: dict[str, int] = {"sent": 0, "failed": 0, "suppressed": 0, "retried": 0}
 
+    # One FRESH session per claimed row (audit U6, the S-ing-5 worker discipline): the drain makes
+    # up to `limit` independent commit cycles and its failure paths rollback — reusing one
+    # AsyncSession across commit→exception→rollback cycles is the catalogued MissingGreenlet
+    # pool-teardown shape, and a short-lived per-row session also confines a poisoned transaction
+    # to its own row. The siblings (sweep_digests / sweep_task_timers / fan_out_awareness)
+    # already take the sessionmaker.
+    #
     # Claim ONE eligible row per iteration: a per-row commit releases the FOR UPDATE lock on ALL
     # still-unprocessed siblings in a batch, so an overlapping drain could claim+send a sibling this
     # drain also held → double-send. A single-row claim holds the lock on exactly that row until its
     # lease commits. Bound the loop to at most `limit` iterations.
     for _ in range(limit):
-        row = (
-            await session.execute(
-                select(NotificationEmail)
-                .where(
-                    NotificationEmail.status == NotificationEmailStatus.PENDING,
-                    (NotificationEmail.next_attempt_at.is_(None))
-                    | (NotificationEmail.next_attempt_at <= now),
+        async with sessionmaker() as session:
+            row = (
+                await session.execute(
+                    select(NotificationEmail)
+                    .where(
+                        NotificationEmail.status == NotificationEmailStatus.PENDING,
+                        (NotificationEmail.next_attempt_at.is_(None))
+                        | (NotificationEmail.next_attempt_at <= now),
+                    )
+                    .order_by(NotificationEmail.created_at)
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
                 )
-                .order_by(NotificationEmail.created_at)
-                .limit(1)
-                .with_for_update(skip_locked=True)
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            break
+            ).scalar_one_or_none()
+            if row is None:
+                break
 
-        # Re-check eligibility at send time → suppress if no longer eligible (org-off / no-smtp /
-        # user-inactive / user-opted-out). No attempt increment, no send, no failure emit.
-        if not await _still_eligible(session, row, settings):
-            row.status = NotificationEmailStatus.SUPPRESSED
-            await session.commit()
-            counts["suppressed"] += 1
-            continue
-
-        # Exhausted? → make FAILED durable FIRST, then emit best-effort (adjustment #1 hardening).
-        if row.attempts >= settings.notification_max_send_attempts:
-            row.status = NotificationEmailStatus.FAILED
-            row.failed_at = now
-            await session.commit()
-            try:
-                await _emit_failure(session, row)
+            # Re-check eligibility at send time → suppress if no longer eligible (org-off /
+            # no-smtp / user-inactive / user-opted-out). No attempt increment, no send, no
+            # failure emit.
+            if not await _still_eligible(session, row, settings):
+                row.status = NotificationEmailStatus.SUPPRESSED
                 await session.commit()
-            except Exception:
-                logger.warning(
-                    "notification.emit_failure_failed",
-                    exc_info=True,
-                    extra={"id": str(row.id)},
-                )
-                await session.rollback()
-            counts["failed"] += 1
-            continue
+                counts["suppressed"] += 1
+                continue
 
-        # COUNT-BEFORE-SEND lease: increment + push next_attempt_at out, COMMIT (releases the lock;
-        # a concurrent drain in the send window skips on next_attempt_at), THEN send.
-        row.attempts += 1
-        row.next_attempt_at = now + _backoff(row.attempts, settings.notification_retry_base_seconds)
-        await session.commit()
+            # Exhausted? → make FAILED durable FIRST, then emit best-effort (adjustment #1
+            # hardening).
+            if row.attempts >= settings.notification_max_send_attempts:
+                row.status = NotificationEmailStatus.FAILED
+                row.failed_at = now
+                await session.commit()
+                try:
+                    await _emit_failure(session, row)
+                    await session.commit()
+                except Exception:
+                    logger.warning(
+                        "notification.emit_failure_failed",
+                        exc_info=True,
+                        extra={"id": str(row.id)},
+                    )
+                    await session.rollback()
+                counts["failed"] += 1
+                continue
 
-        try:
-            await sender.send(
-                MailMessage(to=row.recipient_email, subject=row.subject, body=row.body)
+            # COUNT-BEFORE-SEND lease: increment + push next_attempt_at out, COMMIT (releases the
+            # lock; a concurrent drain in the send window skips on next_attempt_at), THEN send.
+            row.attempts += 1
+            row.next_attempt_at = now + _backoff(
+                row.attempts, settings.notification_retry_base_seconds
             )
-        except Exception as exc:  # noqa: BLE001 — transient; leave PENDING, lease retries after backoff
-            row.last_error = str(exc)[:1000]
             await session.commit()
-            counts["retried"] += 1
-            logger.warning("notification.email_send_failed", extra={"id": str(row.id)})
-            continue
 
-        row.status = NotificationEmailStatus.SENT
-        row.sent_at = now
-        await session.commit()
-        counts["sent"] += 1
+            try:
+                await sender.send(
+                    MailMessage(to=row.recipient_email, subject=row.subject, body=row.body)
+                )
+            except Exception as exc:  # noqa: BLE001 — transient; leave PENDING, lease retries after backoff
+                row.last_error = str(exc)[:1000]
+                await session.commit()
+                counts["retried"] += 1
+                logger.warning("notification.email_send_failed", extra={"id": str(row.id)})
+                continue
+
+            row.status = NotificationEmailStatus.SENT
+            row.sent_at = now
+            await session.commit()
+            counts["sent"] += 1
 
     return counts
 

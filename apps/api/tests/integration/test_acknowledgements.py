@@ -1552,3 +1552,159 @@ async def test_process_scoped_distribute_grant_allows(
     deny = await app_client.get(f"/api/v1/documents/{doc_other['id']}/acknowledgements", headers=h2)
     assert deny.status_code == 403, deny.text
     assert deny.json()["code"] == "permission_denied"
+
+
+async def test_sweep_survives_a_mis_seeded_org(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """[Audit U4] A mis-seeded org (no effective doc_acknowledgement definition) degrades to a
+    logged per-org no-op: the healthy org still mints, and the sweep neither early-returns for
+    everyone nor aborts mid-loop. The old guard checked only the FIRST org in the scan — org
+    order decided between "nothing minted anywhere" and an unhandled ProblemException."""
+    import hashlib
+
+    from easysynq_api.db.models._ack_enums import DistributionTargetType
+    from easysynq_api.db.models._vault_enums import Classification, DocumentCurrentState
+    from easysynq_api.db.models._vault_enums import DocumentKind as DK
+    from easysynq_api.db.models.app_user import UserStatus
+    from easysynq_api.db.models.blob import Blob
+    from easysynq_api.db.models.distribution_entry import DistributionEntry
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.organization import Organization
+
+    sam_id = await _setup_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    _did, doc_uuid = await _release_ack_doc(
+        app_client,
+        ha,
+        hb,
+        await s5.type_id("SOP"),
+        f"ack-mis-seeded-org-{subj.a}".encode(),
+        entries=[{"target_type": "user", "target_id": str(sam_id)}],
+    )
+
+    # Org B: a bare org (no workflow definitions seeded) with a FULLY mintable ack doc — it must
+    # genuinely reach the mint step so the OLD first-org-only code fails deterministically
+    # regardless of which org the scan happens to visit first.
+    salt = uuid.uuid4().hex[:8]
+    sha = hashlib.sha256(f"ack-ms-{salt}".encode()).hexdigest()
+    async with get_sessionmaker()() as s:
+        org_b = Organization(
+            legal_name=f"Ack Mis-seeded {salt}", short_code=f"AM{salt[:6].upper()}"
+        )
+        s.add(org_b)
+        await s.flush()
+        reader = AppUser(
+            org_id=org_b.id,
+            keycloak_subject=f"am-reader-{salt}",
+            display_name="AM Reader",
+            email=f"am-reader-{salt}@example.com",
+            status=UserStatus.ACTIVE,
+        )
+        s.add(reader)
+        await s.flush()
+        fw_id = (
+            await s.execute(
+                select(DocumentedInformation.framework_id).where(
+                    DocumentedInformation.id == doc_uuid
+                )
+            )
+        ).scalar_one()
+        s.add(
+            Blob(
+                sha256=sha,
+                org_id=org_b.id,
+                size_bytes=4,
+                mime_type="text/plain",
+                bucket="documents",
+                object_key=f"am/{salt}",
+            )
+        )
+        doc_b = DocumentedInformation(
+            org_id=org_b.id,
+            framework_id=fw_id,
+            kind=DK.DOCUMENT,
+            identifier=f"AM-DOC-{salt}",
+            title="Mis-seeded ack doc",
+            owner_user_id=reader.id,
+            current_state=DocumentCurrentState.Effective,
+            classification=Classification.Internal,
+            acknowledgement_required=True,
+            created_by=reader.id,
+        )
+        s.add(doc_b)
+        await s.flush()
+        v_b = DocumentVersion(
+            org_id=org_b.id,
+            document_id=doc_b.id,
+            version_seq=1,
+            revision_label="A",
+            change_significance=ChangeSignificance.MAJOR,
+            change_reason="seed",
+            version_state=VersionState.Effective,
+            source_blob_sha256=sha,
+            metadata_snapshot={},
+            author_user_id=reader.id,
+            created_by=reader.id,
+        )
+        s.add(v_b)
+        await s.flush()
+        doc_b.current_effective_version_id = v_b.id
+        s.add(
+            DistributionEntry(
+                org_id=org_b.id,
+                document_id=doc_b.id,
+                target_type=DistributionTargetType.user,
+                target_id=reader.id,
+                ack_required=True,
+                created_by=reader.id,
+            )
+        )
+        await s.commit()
+        org_b_id, doc_b_id, reader_id = org_b.id, doc_b.id, reader.id
+
+    try:
+        result = await _run_sweep()  # unscoped, spans both orgs — must NOT raise
+        # Org A minted for sam: release only ENQUEUES a sweep (no worker in tests), so only
+        # THIS run can have minted the task.
+        await _ack_task_for(doc_uuid, sam_id)
+        assert result["tasks_created"] >= 1
+        # Org B: untouched — no DOC_ACK instance for its doc, only the logged skip.
+        async with get_sessionmaker()() as s:
+            stray = (
+                await s.execute(
+                    select(WorkflowInstance.id).where(
+                        WorkflowInstance.subject_type == WorkflowSubjectType.DOC_ACK,
+                        WorkflowInstance.subject_id == doc_b_id,
+                    )
+                )
+            ).all()
+            assert stray == []
+    finally:
+        # A second Organization row breaks test_restore's scalar_one() — clean up FK-safe.
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                delete(DistributionEntry).where(DistributionEntry.document_id == doc_b_id)
+            )
+            await s.execute(
+                text(
+                    "UPDATE documented_information"
+                    " SET current_effective_version_id = NULL WHERE id = :id"
+                ),
+                {"id": doc_b_id},
+            )
+            await s.execute(delete(DocumentVersion).where(DocumentVersion.document_id == doc_b_id))
+            await s.execute(
+                delete(DocumentedInformation).where(DocumentedInformation.id == doc_b_id)
+            )
+            from easysynq_api.db.models.blob import Blob as BlobRow
+
+            await s.execute(delete(BlobRow).where(BlobRow.sha256 == sha))
+            await s.execute(delete(AppUser).where(AppUser.id == reader_id))
+            from easysynq_api.db.models.organization import Organization as OrgRow
+
+            await s.execute(delete(OrgRow).where(OrgRow.id == org_b_id))
+            await s.commit()

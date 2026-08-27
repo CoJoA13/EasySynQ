@@ -167,8 +167,7 @@ async def test_drain_sends_pending_row(app_under_test: AnyT) -> None:
 
     sender = FakeMailSender()
     settings = _configured_settings()
-    async with get_sessionmaker()() as session:
-        counts = await drain_once(session, sender, settings, now=_T0)
+    counts = await drain_once(get_sessionmaker(), sender, settings, now=_T0)
 
     assert counts["sent"] >= 1
     row = await _get_email(email_id)
@@ -196,8 +195,7 @@ async def test_drain_transient_failure_increments_attempts_and_stays_pending(
     # Sender that always raises (transient error).
     sender = FakeMailSender(fail_with=RuntimeError("smtp down"))
     settings = _configured_settings()
-    async with get_sessionmaker()() as session:
-        counts = await drain_once(session, sender, settings, now=_T0)
+    counts = await drain_once(get_sessionmaker(), sender, settings, now=_T0)
 
     assert counts["retried"] >= 1
     row = await _get_email(email_id)
@@ -235,8 +233,7 @@ async def test_drain_exhausted_marks_failed_and_emits_system_notification(
     email_id = await _seed_email_row(org_id, user_id, salt, attempts=max_attempts)
 
     sender = FakeMailSender()  # healthy sender — emit_failure uses session, not sender
-    async with get_sessionmaker()() as session:
-        counts = await drain_once(session, sender, settings, now=_T0)
+    counts = await drain_once(get_sessionmaker(), sender, settings, now=_T0)
 
     assert counts["failed"] >= 1
     row = await _get_email(email_id)
@@ -277,8 +274,7 @@ async def test_drain_attempts_incremented_before_send(app_under_test: AnyT) -> N
 
     sender = FakeMailSender(fail_with=OSError("connection refused"))
     settings = _configured_settings()
-    async with get_sessionmaker()() as session:
-        await drain_once(session, sender, settings, now=_T0)
+    await drain_once(get_sessionmaker(), sender, settings, now=_T0)
 
     row = await _get_email(email_id)
     assert row.attempts == 1, "attempts must be incremented before the SMTP call"
@@ -299,8 +295,7 @@ async def test_drain_skips_rows_with_future_next_attempt_at(app_under_test: AnyT
 
     sender = FakeMailSender()
     settings = _configured_settings()
-    async with get_sessionmaker()() as session:
-        await drain_once(session, sender, settings, now=_T0)
+    await drain_once(get_sessionmaker(), sender, settings, now=_T0)
 
     row = await _get_email(email_id)
     # Row should be untouched (still PENDING, attempts=0).
@@ -327,8 +322,7 @@ async def test_drain_suppresses_when_smtp_unconfigured(app_under_test: AnyT) -> 
 
     sender = FakeMailSender()
     no_smtp = Settings(smtp_host="")
-    async with get_sessionmaker()() as session:
-        counts = await drain_once(session, sender, no_smtp, now=_T0)
+    counts = await drain_once(get_sessionmaker(), sender, no_smtp, now=_T0)
 
     assert counts["suppressed"] >= 1
     assert counts["sent"] == 0
@@ -376,8 +370,7 @@ async def test_drain_rechecks_org_flag_at_send_and_suppresses(app_under_test: An
 
     sender = FakeMailSender()
     settings = _configured_settings()  # smtp configured → only the org flag is the disqualifier
-    async with get_sessionmaker()() as session:
-        counts = await drain_once(session, sender, settings, now=_T0)
+    counts = await drain_once(get_sessionmaker(), sender, settings, now=_T0)
 
     assert counts["suppressed"] >= 1
     row = await _get_email(email_id)
@@ -406,11 +399,48 @@ async def test_drain_rechecks_user_opt_out_at_send_and_suppresses(app_under_test
 
     sender = FakeMailSender()
     settings = _configured_settings()
-    async with get_sessionmaker()() as session:
-        counts = await drain_once(session, sender, settings, now=_T0)
+    counts = await drain_once(get_sessionmaker(), sender, settings, now=_T0)
 
     assert counts["suppressed"] >= 1
     row = await _get_email(email_id)
     assert row.status == NotificationEmailStatus.SUPPRESSED
     assert row.attempts == 0
     assert not any(m.to == f"user-{salt}@example.com" for m in sender.sent)
+
+
+# ---------------------------------------------------------------------------
+# Audit U6: one fresh session per claimed row (the S-ing-5 worker discipline).
+# ---------------------------------------------------------------------------
+
+
+async def test_drain_opens_a_fresh_session_per_row(app_under_test: AnyT) -> None:
+    """[Audit U6] Each claimed row is processed in its OWN short-lived session: the drain makes
+    up to `limit` independent commit cycles and its failure paths rollback, and reusing one
+    AsyncSession across commit→exception→rollback cycles is the catalogued MissingGreenlet
+    pool-teardown shape. Pinned structurally: sessions opened == rows processed + the final
+    empty-claim probe (a regression back to one hoisted session opens exactly 1)."""
+    org_id = await _default_org_id()
+    await _set_org_email_flag(org_id, enabled=True)
+    salt = uuid.uuid4().hex[:8]
+    user_id = await _seed_user(org_id, salt)
+    await _seed_email_row(org_id, user_id, f"{salt}-1")
+    await _seed_email_row(org_id, user_id, f"{salt}-2")
+
+    class _CountingMaker:
+        def __init__(self, sm: AnyT) -> None:
+            self.sm = sm
+            self.opened = 0
+
+        def __call__(self) -> AnyT:
+            self.opened += 1
+            return self.sm()
+
+    maker = _CountingMaker(get_sessionmaker())
+    sender = FakeMailSender()
+    counts = await drain_once(maker, sender, _configured_settings(), now=_T0, limit=200)
+
+    # The shared DB may hold other PENDING rows — assert RELATIVE to what this run processed.
+    processed = sum(counts.values())
+    assert counts["sent"] >= 2  # both seeded rows drained
+    assert processed < 200  # under the limit, so the empty-claim probe opened one extra
+    assert maker.opened == processed + 1

@@ -284,8 +284,7 @@ async def test_e2e_submit_review_enqueues_email_and_drain_sends(
     # drain_once → row transitions to SENT; fake records the send.
     sender = FakeMailSender()
     settings = _configured_settings()  # non-empty smtp_host → drain proceeds (CI has no SMTP_HOST)
-    async with get_sessionmaker()() as session:
-        await drain_once(session, sender, settings, now=_T0)
+    await drain_once(get_sessionmaker(), sender, settings, now=_T0)
 
     row = await _get_email(email_row_id)
     assert row.status == NotificationEmailStatus.SENT, f"Expected SENT, got {row.status}"
@@ -320,8 +319,7 @@ async def test_skip_locked_no_double_send(app_under_test: Any) -> None:
     shared_sender = FakeMailSender()
 
     async def _run_drain() -> dict[str, int]:
-        async with get_sessionmaker()() as session:
-            return await drain_once(session, shared_sender, settings, now=_T0)
+        return await drain_once(get_sessionmaker(), shared_sender, settings, now=_T0)
 
     results = await asyncio.gather(_run_drain(), _run_drain())
     total_sent = sum(r["sent"] for r in results)
@@ -370,8 +368,7 @@ async def test_delivery_failure_emits_admin_notification_without_subject_metadat
     email_id = await _seed_email_row(org_id, user_id, salt, attempts=max_attempts)
 
     sender = FakeMailSender()
-    async with get_sessionmaker()() as session:
-        counts = await drain_once(session, sender, settings, now=_T0)
+    counts = await drain_once(get_sessionmaker(), sender, settings, now=_T0)
 
     assert counts["failed"] >= 1
 
