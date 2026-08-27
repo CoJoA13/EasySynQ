@@ -4004,8 +4004,9 @@ paths:
         signed_object=capa_stage) + the signed ActionPlan stage and flips the CAPA to ActionPlan;
         409 if the actor already decided an earlier stage of the same approval. A recorded decision
         is idempotent via the Idempotency-Key header (replay on match, else 409). Exception: a sibling
-        task auto-skipped after quorum closes or a stage fails closed returns a key-independent benign
-        replay with outcome=null, replayed=true, and stage_state=ALREADY_SATISFIED or FAILED. For
+        task auto-skipped when its stage closed returns a key-independent benign replay with
+        outcome=null, replayed=true, and stage_state=ALREADY_SATISFIED (the quorum was met) or
+        FAILED (the quorum failed — a rejection — or the stage failed closed). For
         PERIODIC_REVIEW subjects the accepted outcomes are complete ("no change needed" — emits the
         review_confirmed signature and resets next_review_due) and changes_requested. For DOC_ACK
         subjects the only accepted outcome is

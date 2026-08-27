@@ -462,6 +462,36 @@ async def test_all_quorum_reject_fails_stage(app_under_test: object) -> None:
     assert await _audit_count(iid, EventType.STAGE_FAILED) == 1
 
 
+async def test_quorum_failed_retires_siblings_with_the_failed_marker(
+    app_under_test: object,
+) -> None:
+    """[Audit U38] A sibling auto-skipped by a quorum-FAILED (rejected) stage carries the
+    ``_FAILED_STAGE_SKIP`` marker, so its retry replays ``stage_state=FAILED`` — never
+    ``ALREADY_SATISFIED``, which would assert the opposite of what happened to the stage."""
+    org = await _org_id()
+    a, b, c = await _user("qf-a"), await _user("qf-b"), await _user("qf-c")
+    role = await _role_with([a, b, c])
+    key = await _seed_definition(
+        org, [_approve_stage("gate", role, quorum={"type": "ALL"})], entry="gate"
+    )
+    iid = await _instantiate(key, uuid.uuid4(), None, a)
+    by_user = {t.assignee_user_id: t for t in await _stage_tasks(iid, "gate")}
+    await _decide(by_user[a].id, a, "approve")  # ALL needs three → still PENDING
+    r = await _decide(by_user[b].id, b, "reject")  # early-fail: c can no longer satisfy ALL
+    assert r["stage_state"] == "FAILED"
+    assert (await _instance(iid)).current_state == "REJECTED"
+
+    skipped = next(t for t in await _stage_tasks(iid, "gate") if t.assignee_user_id == c)
+    assert skipped.state is TaskState.SKIPPED
+    assert skipped.client_token == engine._FAILED_STAGE_SKIP
+
+    retry = await _decide(skipped.id, c, "approve")
+    assert retry["stage_state"] == "FAILED"
+    assert retry["current_state"] == "REJECTED"
+    assert retry["outcome"] is None
+    assert retry["replayed"] is True
+
+
 async def test_null_quorum_fails_closed_at_instantiate(app_under_test: object) -> None:
     org = await _org_id()
     a = await _user("nq-a")

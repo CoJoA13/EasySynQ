@@ -222,6 +222,130 @@ async def test_decision_idempotency(
     assert await _signature_count(version_id, SignatureMeaning.approval) == 1
 
 
+async def test_replay_signature_is_anchored_to_the_decided_version(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """[Audit U39] An idempotent approve replay returns the signature of the version THIS task
+    decided — never re-derived from the document's *current* latest version. After a later
+    revision the latest is an unapproved Draft (the old code silently dropped the signature from
+    the replay), and once that draft is approved through a second cycle the old code returned the
+    LATER cycle's signature for the FIRST task's replay (the S-capa-3 replay-parity class)."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)  # b approves AND releases
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+
+    did = await _to_in_review(app_client, ha, await s5.type_id("SOP"))
+    task1 = await s5.task_for_doc(did)
+    key1 = uuid.uuid4().hex
+    first = await app_client.post(
+        f"/api/v1/tasks/{task1}/decision",
+        headers={**hb, "Idempotency-Key": key1},
+        json={"outcome": "approve"},
+    )
+    assert first.status_code == 200, first.text
+    sig1 = first.json()["signature_event"]["id"]
+
+    # Release v1, open a revision, and check in v2 — an unapproved Draft is now the latest.
+    rel = await app_client.post(f"/api/v1/documents/{did}/release", headers=hb, json={})
+    assert rel.status_code == 200, rel.text
+    sr = await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=ha)
+    assert sr.status_code == 200, sr.text
+    sha2 = await _upload(app_client, ha, did, f"replay-anchor-v2-{did}".encode())
+    ci2 = await _checkin(app_client, ha, did, sha2, change_reason="v2", change_significance="MINOR")
+    assert ci2.status_code == 201, ci2.text
+
+    replay = await app_client.post(
+        f"/api/v1/tasks/{task1}/decision",
+        headers={**hb, "Idempotency-Key": key1},
+        json={"outcome": "approve"},
+    )
+    assert replay.status_code == 200, replay.text
+    # Old derivation: latest_version → the v2 Draft → no approval signature → null.
+    assert replay.json()["signature_event"] is not None
+    assert replay.json()["signature_event"]["id"] == sig1
+
+    # Approve v2 through a second cycle (same approver), then replay BOTH tasks: each must
+    # return its own cycle's signature.
+    assert (
+        await app_client.post(f"/api/v1/documents/{did}/submit-review", headers=ha)
+    ).status_code == 200
+    task2 = await s5.task_for_doc(did)
+    assert task2 != task1
+    key2 = uuid.uuid4().hex
+    second = await app_client.post(
+        f"/api/v1/tasks/{task2}/decision",
+        headers={**hb, "Idempotency-Key": key2},
+        json={"outcome": "approve"},
+    )
+    assert second.status_code == 200, second.text
+    sig2 = second.json()["signature_event"]["id"]
+    assert sig2 != sig1
+
+    replay1 = await app_client.post(
+        f"/api/v1/tasks/{task1}/decision",
+        headers={**hb, "Idempotency-Key": key1},
+        json={"outcome": "approve"},
+    )
+    # Old derivation: latest approved version's signature → sig2 for task1's replay (WRONG).
+    assert replay1.status_code == 200, replay1.text
+    assert replay1.json()["signature_event"]["id"] == sig1
+    replay2 = await app_client.post(
+        f"/api/v1/tasks/{task2}/decision",
+        headers={**hb, "Idempotency-Key": key2},
+        json={"outcome": "approve"},
+    )
+    assert replay2.status_code == 200, replay2.text
+    assert replay2.json()["signature_event"]["id"] == sig2
+
+
+async def test_replay_signature_window_includes_a_same_transaction_version(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """[Audit U39 boundary] The decided-version window is ``created_at <= started_at`` — the
+    equality leg is load-bearing: the structured register flows (objective/risk/context/
+    interested-party/MR-minutes) create the version AND the approval instance in ONE
+    transaction, so both ``func.now()`` server defaults collapse to the same transaction
+    timestamp. Tightening the bound to ``<`` would silently drop the signature from every
+    structured-flow replay. Pinned here by forcing exact equality on an ordinary flow."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+
+    did = await _to_in_review(app_client, ha, await s5.type_id("SOP"))
+    v1_id = await _latest_version_id(did)
+    task1 = await s5.task_for_doc(did)
+    key = uuid.uuid4().hex
+    first = await app_client.post(
+        f"/api/v1/tasks/{task1}/decision",
+        headers={**hb, "Idempotency-Key": key},
+        json={"outcome": "approve"},
+    )
+    assert first.status_code == 200, first.text
+    sig1 = first.json()["signature_event"]["id"]
+
+    # Force created_at == started_at (the structured same-transaction shape).
+    async with get_sessionmaker()() as s:
+        from easysynq_api.db.models.document_version import DocumentVersion
+
+        created_at = (
+            await s.execute(select(DocumentVersion.created_at).where(DocumentVersion.id == v1_id))
+        ).scalar_one()
+        instance = await s.get(WorkflowInstance, uuid.UUID(first.json()["instance_id"]))
+        assert instance is not None
+        instance.started_at = created_at
+        await s.commit()
+
+    replay = await app_client.post(
+        f"/api/v1/tasks/{task1}/decision",
+        headers={**hb, "Idempotency-Key": key},
+        json={"outcome": "approve"},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["signature_event"] is not None
+    assert replay.json()["signature_event"]["id"] == sig1
+
+
 async def test_changes_requested_returns_to_draft_without_signature(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
