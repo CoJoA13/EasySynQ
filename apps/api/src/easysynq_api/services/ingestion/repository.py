@@ -765,18 +765,15 @@ async def get_version_family(
 
 
 async def list_proposal_nodes(
-    session: AsyncSession, run_id: uuid.UUID
+    session: AsyncSession, run_id: uuid.UUID, *, file_ids: Sequence[uuid.UUID] | None = None
 ) -> Sequence[ImportProposalNode]:
-    """All keep-item proposal nodes for a run (the checklist + review fold read them at once)."""
-    return (
-        (
-            await session.execute(
-                select(ImportProposalNode).where(ImportProposalNode.run_id == run_id)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    """Keep-item proposal nodes for a run — the whole run (the checklist fold), or pushed down to
+    ``file_ids`` (the paged files listing: the fold is strictly per-file, so a ≤200-row page must
+    not materialize a 10k-file run's node set per request)."""
+    stmt = select(ImportProposalNode).where(ImportProposalNode.run_id == run_id)
+    if file_ids is not None:
+        stmt = stmt.where(ImportProposalNode.file_id.in_(file_ids))
+    return (await session.execute(stmt)).scalars().all()
 
 
 async def insert_decision(
@@ -825,19 +822,20 @@ async def find_decision_by_idem(
     ).scalar_one_or_none()
 
 
-async def list_decisions(session: AsyncSession, run_id: uuid.UUID) -> Sequence[ImportDecision]:
-    """The run's full decision log, newest-first (the audit/review history + the fold source)."""
-    return (
-        (
-            await session.execute(
-                select(ImportDecision)
-                .where(ImportDecision.run_id == run_id)
-                .order_by(ImportDecision.decided_at.desc(), ImportDecision.id.desc())
-            )
-        )
-        .scalars()
-        .all()
+async def list_decisions(
+    session: AsyncSession, run_id: uuid.UUID, *, file_ids: Sequence[uuid.UUID] | None = None
+) -> Sequence[ImportDecision]:
+    """The decision log, newest-first (the audit/review history + the fold source) — the whole
+    run, or pushed down to ``file_ids`` (``ix_import_decision_run_file_decided`` backs it; the
+    append-only log only grows, so an unrestricted load degrades monotonically per page view)."""
+    stmt = (
+        select(ImportDecision)
+        .where(ImportDecision.run_id == run_id)
+        .order_by(ImportDecision.decided_at.desc(), ImportDecision.id.desc())
     )
+    if file_ids is not None:
+        stmt = stmt.where(ImportDecision.file_id.in_(file_ids))
+    return (await session.execute(stmt)).scalars().all()
 
 
 async def decided_file_ids(

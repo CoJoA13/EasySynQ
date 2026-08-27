@@ -936,9 +936,17 @@ async def list_files_review(
         limit=settings.import_bulk_decision_max if fetch_all else min(limit, 200),
         offset=0 if fetch_all else max(offset, 0),
     )
-    nodes = {n.file_id: n for n in await repo.list_proposal_nodes(session, run_id)}
+    # Push the candidate rows' ids into both fold loads: the fold is strictly per-file (own
+    # decisions + own node + own classification), so a ≤200-row page must not materialize the
+    # whole run's node set and append-only decision log per request (the C9 audit finding). The
+    # fetch_all (review_status) path passes its bounded candidate set the same way.
+    page_file_ids = [f.id for f, _c in rows]
+    nodes = {
+        n.file_id: n
+        for n in await repo.list_proposal_nodes(session, run_id, file_ids=page_file_ids)
+    }
     decs: dict[uuid.UUID, list[ImportDecision]] = {}
-    for d in await repo.list_decisions(session, run_id):
+    for d in await repo.list_decisions(session, run_id, file_ids=page_file_ids):
         if d.file_id is not None:
             decs.setdefault(d.file_id, []).append(d)
 
