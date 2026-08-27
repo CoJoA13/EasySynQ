@@ -142,17 +142,33 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
             .scalars()
             .all()
         )
-        # Resolve the definition ONCE; a mis-seeded org must degrade to a logged no-op, not a
-        # 500-shaped Beat failure every day that also kills the escalation pass.
-        if docs and (
-            await wf_repo.effective_definition(
-                session, docs[0].org_id, _DEF_KEY, WorkflowSubjectType.PERIODIC_REVIEW
-            )
-            is None
-        ):
-            logger.error("review_sweep: no effective periodic_review definition — seed missing")
-            docs = []
+        # Resolve the definition PER ORG (cached for the run; audit U5 — the old first-org-only
+        # guard killed Pass 1 for EVERY org when the first org was mis-seeded, and a mis-seeded
+        # later org aborted the whole sweep mid-loop, escalation pass included). A broken org
+        # degrades to a logged no-op for that org only; the escalation pass never needs the
+        # definition, so it always runs.
+        def_ok: dict[uuid.UUID, bool] = {}
+
+        async def _org_seeded(org_id: uuid.UUID) -> bool:
+            if org_id not in def_ok:
+                ok = (
+                    await wf_repo.effective_definition(
+                        session, org_id, _DEF_KEY, WorkflowSubjectType.PERIODIC_REVIEW
+                    )
+                    is not None
+                )
+                if not ok:
+                    logger.error(
+                        "review_sweep: no effective periodic_review definition for org %s — "
+                        "seed missing; skipping its documents this tick",
+                        org_id,
+                    )
+                def_ok[org_id] = ok
+            return def_ok[org_id]
+
         for doc in docs:
+            if not await _org_seeded(doc.org_id):
+                continue
             if (
                 await wf_repo.find_nonterminal_instance(
                     session,
@@ -164,45 +180,68 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
                 is not None
             ):
                 continue
-            instance = await wf_engine.instantiate(
-                session,
-                org_id=doc.org_id,
-                definition_key=_DEF_KEY,
-                subject_type=WorkflowSubjectType.PERIODIC_REVIEW,
-                subject_id=doc.id,
-                context={"owner_user_id": str(doc.owner_user_id), "identifier": doc.identifier},
-                actor=None,
-            )
-            await session.flush()
-            # R55 (S-duedate-snap, D-5): build at midnight in the working_calendar's tz (the timer's
-            # business-day frame) and snap FORWARD to a working day, so OVERDUE never fires on a
-            # weekend. NB: next_review_due is unchanged and review_state still flips at env-tz
-            # midnight (today_org) — under a divergent env-tz vs calendar-tz the badge may lead this
-            # snapped notification (D-3/D-6, accepted).
-            # next_review_due is filtered is_not(None) above; guard for mypy.
+            # next_review_due is filtered is_not(None) above; guard for mypy (kept OUTSIDE the
+            # savepoint so an early continue can never skip the savepoint close).
             if doc.next_review_due is None:
                 continue  # unreachable; the WHERE clause guarantees it
-            from ..notifications.duedate import resolve_calendar, snap_to_working_day
-
-            cal = await resolve_calendar(session, doc.org_id)
-            due_at = snap_to_working_day(
-                datetime.datetime.combine(doc.next_review_due, datetime.time(0, 0), tzinfo=cal.tz),
-                cal,
-            )
-            await session.execute(
-                update(Task).where(Task.instance_id == instance.id).values(due_at=due_at)
-            )
-            review_tasks = (
-                (await session.execute(select(Task).where(Task.instance_id == instance.id)))
-                .scalars()
-                .all()
-            )
-            from ..notifications.dispatch import enqueue_task_notifications
-
-            with using_org_tz(cal.tz):
-                await enqueue_task_notifications(
-                    session, instance, list(review_tasks), due_at_override=due_at
+            # Per-doc SAVEPOINT: some malformed-spec shapes raise AFTER the engine added the
+            # instance row (scalar assignees/roles/sla, non-numeric quorum → AttributeError/
+            # TypeError/ValueError from _enter_stage) — a bare continue would carry that
+            # partial instance to the outer commit.
+            savepoint = await session.begin_nested()
+            try:
+                instance = await wf_engine.instantiate(
+                    session,
+                    org_id=doc.org_id,
+                    definition_key=_DEF_KEY,
+                    subject_type=WorkflowSubjectType.PERIODIC_REVIEW,
+                    subject_id=doc.id,
+                    context={"owner_user_id": str(doc.owner_user_id), "identifier": doc.identifier},
+                    actor=None,
                 )
+                await session.flush()
+                # R55 (S-duedate-snap, D-5): build at midnight in the working_calendar's tz (the
+                # timer's business-day frame) and snap FORWARD to a working day, so OVERDUE never
+                # fires on a weekend. NB: next_review_due is unchanged and review_state still
+                # flips at env-tz midnight (today_org) — under a divergent env-tz vs calendar-tz
+                # the badge may lead this snapped notification (D-3/D-6, accepted).
+                from ..notifications.duedate import resolve_calendar, snap_to_working_day
+
+                cal = await resolve_calendar(session, doc.org_id)
+                due_at = snap_to_working_day(
+                    datetime.datetime.combine(
+                        doc.next_review_due, datetime.time(0, 0), tzinfo=cal.tz
+                    ),
+                    cal,
+                )
+                await session.execute(
+                    update(Task).where(Task.instance_id == instance.id).values(due_at=due_at)
+                )
+                review_tasks = (
+                    (await session.execute(select(Task).where(Task.instance_id == instance.id)))
+                    .scalars()
+                    .all()
+                )
+                from ..notifications.dispatch import enqueue_task_notifications
+
+                with using_org_tz(cal.tz):
+                    await enqueue_task_notifications(
+                        session, instance, list(review_tasks), due_at_override=due_at
+                    )
+            except Exception:
+                # EVERY malformed-definition shape lands here (the pre-add ProblemException
+                # raises AND the post-add malformed-stage shapes). Roll this doc's partial rows
+                # back, mark the org broken for the rest of this run, keep the cohort (and the
+                # escalation pass below) alive.
+                await savepoint.rollback()
+                logger.exception(
+                    "review_sweep: reconcile failed for org %s — malformed periodic_review "
+                    "definition; skipping the org this tick",
+                    doc.org_id,
+                )
+                def_ok[doc.org_id] = False
+                continue
+            await savepoint.commit()
             created += 1
 
         overdue_rows = (

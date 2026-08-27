@@ -719,8 +719,7 @@ async def test_digest_drain_sends(org_email_on: Any) -> None:
 
     sender = FakeMailSender()
     settings = _configured_settings()
-    async with get_sessionmaker()() as session:
-        counts = await drain_once(session, sender, settings, now=_SWEEP_NOW)
+    counts = await drain_once(get_sessionmaker(), sender, settings, now=_SWEEP_NOW)
 
     assert counts["sent"] >= 1
     row = await _get_email(email_id)
@@ -754,8 +753,7 @@ async def test_digest_drain_failure_emits_to_admins(org_email_on: Any) -> None:
     )
 
     sender = FakeMailSender()
-    async with get_sessionmaker()() as session:
-        counts = await drain_once(session, sender, settings, now=_SWEEP_NOW)
+    counts = await drain_once(get_sessionmaker(), sender, settings, now=_SWEEP_NOW)
 
     assert counts["failed"] >= 1
     row = await _get_email(email_id)

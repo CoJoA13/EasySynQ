@@ -18,7 +18,7 @@ from easysynq_api.db.models._ack_enums import AckCreatedReason
 from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
 from easysynq_api.db.models._clause_enums import PdcaPhase
 from easysynq_api.db.models._vault_enums import ChangeSignificance, VersionState
-from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectType
+from easysynq_api.db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
 from easysynq_api.db.models.acknowledgement import Acknowledgement
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
@@ -1552,3 +1552,429 @@ async def test_process_scoped_distribute_grant_allows(
     deny = await app_client.get(f"/api/v1/documents/{doc_other['id']}/acknowledgements", headers=h2)
     assert deny.status_code == 403, deny.text
     assert deny.json()["code"] == "permission_denied"
+
+
+async def test_sweep_survives_a_mis_seeded_org(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """[Audit U4] A mis-seeded org (no effective doc_acknowledgement definition) degrades to a
+    logged per-org no-op: the healthy org still mints, and the sweep neither early-returns for
+    everyone nor aborts mid-loop. The old guard checked only the FIRST org in the scan — org
+    order decided between "nothing minted anywhere" and an unhandled ProblemException."""
+    import hashlib
+
+    from easysynq_api.db.models._ack_enums import DistributionTargetType
+    from easysynq_api.db.models._vault_enums import Classification, DocumentCurrentState
+    from easysynq_api.db.models._vault_enums import DocumentKind as DK
+    from easysynq_api.db.models.app_user import UserStatus
+    from easysynq_api.db.models.blob import Blob
+    from easysynq_api.db.models.distribution_entry import DistributionEntry
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.organization import Organization
+
+    sam_id = await _setup_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    _did, doc_uuid = await _release_ack_doc(
+        app_client,
+        ha,
+        hb,
+        await s5.type_id("SOP"),
+        f"ack-mis-seeded-org-{subj.a}".encode(),
+        entries=[{"target_type": "user", "target_id": str(sam_id)}],
+    )
+
+    # Org B: a bare org (no workflow definitions seeded) with a FULLY mintable ack doc — it must
+    # genuinely reach the mint step so the OLD first-org-only code fails deterministically
+    # regardless of which org the scan happens to visit first.
+    salt = uuid.uuid4().hex[:8]
+    sha = hashlib.sha256(f"ack-ms-{salt}".encode()).hexdigest()
+    async with get_sessionmaker()() as s:
+        org_b = Organization(
+            legal_name=f"Ack Mis-seeded {salt}", short_code=f"AM{salt[:6].upper()}"
+        )
+        s.add(org_b)
+        await s.flush()
+        reader = AppUser(
+            org_id=org_b.id,
+            keycloak_subject=f"am-reader-{salt}",
+            display_name="AM Reader",
+            email=f"am-reader-{salt}@example.com",
+            status=UserStatus.ACTIVE,
+        )
+        s.add(reader)
+        await s.flush()
+        fw_id = (
+            await s.execute(
+                select(DocumentedInformation.framework_id).where(
+                    DocumentedInformation.id == doc_uuid
+                )
+            )
+        ).scalar_one()
+        s.add(
+            Blob(
+                sha256=sha,
+                org_id=org_b.id,
+                size_bytes=4,
+                mime_type="text/plain",
+                bucket="documents",
+                object_key=f"am/{salt}",
+            )
+        )
+        doc_b = DocumentedInformation(
+            org_id=org_b.id,
+            framework_id=fw_id,
+            kind=DK.DOCUMENT,
+            identifier=f"AM-DOC-{salt}",
+            title="Mis-seeded ack doc",
+            owner_user_id=reader.id,
+            current_state=DocumentCurrentState.Effective,
+            classification=Classification.Internal,
+            acknowledgement_required=True,
+            created_by=reader.id,
+        )
+        s.add(doc_b)
+        await s.flush()
+        v_b = DocumentVersion(
+            org_id=org_b.id,
+            document_id=doc_b.id,
+            version_seq=1,
+            revision_label="A",
+            change_significance=ChangeSignificance.MAJOR,
+            change_reason="seed",
+            version_state=VersionState.Effective,
+            source_blob_sha256=sha,
+            metadata_snapshot={},
+            author_user_id=reader.id,
+            created_by=reader.id,
+        )
+        s.add(v_b)
+        await s.flush()
+        doc_b.current_effective_version_id = v_b.id
+        s.add(
+            DistributionEntry(
+                org_id=org_b.id,
+                document_id=doc_b.id,
+                target_type=DistributionTargetType.user,
+                target_id=reader.id,
+                ack_required=True,
+                created_by=reader.id,
+            )
+        )
+        # Pass B leg: an OPEN obligation of the broken org on an ineligible subject. The
+        # fail-closed posture must leave it untouched (cancel-without-remint on broken config
+        # is fail-open). The instance's definition FK borrows org A's definition row (no FK on
+        # the org match; org B deliberately has none) — Pass B keys on the instance's org_id.
+        def_a = await wf_repo.effective_definition(
+            s, (await s5.default_org_id()), "doc_acknowledgement", WorkflowSubjectType.DOC_ACK
+        )
+        assert def_a is not None
+        orphan_instance = WorkflowInstance(
+            org_id=org_b.id,
+            definition_id=def_a.id,
+            definition_version=def_a.version,
+            subject_type=WorkflowSubjectType.DOC_ACK,
+            subject_id=uuid.uuid4(),  # not an eligible doc → Pass B territory
+            current_state="ack",
+            context={"user_id": str(reader.id)},
+            revision=0,
+        )
+        s.add(orphan_instance)
+        await s.flush()
+        orphan_task = Task(
+            org_id=org_b.id,
+            instance_id=orphan_instance.id,
+            stage_key="ack",
+            assignee_user_id=reader.id,
+            candidate_pool=[str(reader.id)],
+            type=TaskType.DOC_ACK,
+            state=TaskState.PENDING,
+        )
+        s.add(orphan_task)
+        await s.commit()
+        org_b_id, doc_b_id, reader_id = org_b.id, doc_b.id, reader.id
+        orphan_instance_id, orphan_task_id = orphan_instance.id, orphan_task.id
+
+    try:
+        result = await _run_sweep()  # unscoped, spans both orgs — must NOT raise
+        # Org A minted for sam: release only ENQUEUES a sweep (no worker in tests), so only
+        # THIS run can have minted the task.
+        await _ack_task_for(doc_uuid, sam_id)
+        assert result["tasks_created"] >= 1
+        async with get_sessionmaker()() as s:
+            # Org B: untouched — no DOC_ACK instance for its doc, only the logged skip.
+            stray = (
+                await s.execute(
+                    select(WorkflowInstance.id).where(
+                        WorkflowInstance.subject_type == WorkflowSubjectType.DOC_ACK,
+                        WorkflowInstance.subject_id == doc_b_id,
+                    )
+                )
+            ).all()
+            assert stray == []
+            # Pass B fail-closed: the broken org's open obligation was NOT cancelled.
+            t = await s.get(Task, orphan_task_id)
+            assert t is not None and t.state is TaskState.PENDING
+            i = await s.get(WorkflowInstance, orphan_instance_id)
+            assert i is not None and i.current_state == "ack"
+    finally:
+        # A second Organization row breaks test_restore's scalar_one() — clean up FK-safe.
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(Task).where(Task.id == orphan_task_id))
+            await s.execute(
+                delete(WorkflowInstance).where(WorkflowInstance.id == orphan_instance_id)
+            )
+            await s.execute(
+                delete(DistributionEntry).where(DistributionEntry.document_id == doc_b_id)
+            )
+            await s.execute(
+                text(
+                    "UPDATE documented_information"
+                    " SET current_effective_version_id = NULL WHERE id = :id"
+                ),
+                {"id": doc_b_id},
+            )
+            await s.execute(delete(DocumentVersion).where(DocumentVersion.document_id == doc_b_id))
+            await s.execute(
+                delete(DocumentedInformation).where(DocumentedInformation.id == doc_b_id)
+            )
+            from easysynq_api.db.models.blob import Blob as BlobRow
+
+            await s.execute(delete(BlobRow).where(BlobRow.sha256 == sha))
+            await s.execute(delete(AppUser).where(AppUser.id == reader_id))
+            from easysynq_api.db.models.organization import Organization as OrgRow
+
+            await s.execute(delete(OrgRow).where(OrgRow.id == org_b_id))
+            await s.commit()
+
+
+async def test_malformed_definition_rolls_back_the_docs_cancels(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """[Audit U4 savepoint] Cancel-before-mint is a PAIRED reconciliation: when instantiate dies
+    on a PRESENT-but-malformed definition (no stages), the doc's already-performed cancels must
+    roll back with the failed mint — a stale-pinned user sits in BOTH to_cancel and to_mint, so
+    committing the cancel half alone would retire their obligation with the owed remint never
+    minted (cancel-without-remint, the fail-open shape the Pass B posture forbids). The healthy
+    org still mints."""
+    import hashlib
+
+    from easysynq_api.db.models._ack_enums import DistributionTargetType
+    from easysynq_api.db.models._vault_enums import Classification, DocumentCurrentState
+    from easysynq_api.db.models._vault_enums import DocumentKind as DK
+    from easysynq_api.db.models.app_user import UserStatus
+    from easysynq_api.db.models.audit_event import AuditEvent
+    from easysynq_api.db.models.blob import Blob
+    from easysynq_api.db.models.distribution_entry import DistributionEntry
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.organization import Organization
+    from easysynq_api.db.models.workflow import WorkflowDefinition
+
+    sam_id = await _setup_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    _did, doc_uuid = await _release_ack_doc(
+        app_client,
+        ha,
+        hb,
+        await s5.type_id("SOP"),
+        f"ack-savepoint-{subj.a}".encode(),
+        entries=[{"target_type": "user", "target_id": str(sam_id)}],
+    )
+
+    salt = uuid.uuid4().hex[:8]
+    sha = hashlib.sha256(f"ack-sp-{salt}".encode()).hexdigest()
+    async with get_sessionmaker()() as s:
+        org_b = Organization(legal_name=f"Ack Savepoint {salt}", short_code=f"AS{salt[:6].upper()}")
+        s.add(org_b)
+        await s.flush()
+        reader = AppUser(
+            org_id=org_b.id,
+            keycloak_subject=f"as-reader-{salt}",
+            display_name="AS Reader",
+            email=f"as-reader-{salt}@example.com",
+            status=UserStatus.ACTIVE,
+        )
+        s.add(reader)
+        await s.flush()
+        # PRESENT but malformed: effective definition with an empty stages payload and zero
+        # stage rows -> instantiate raises "Workflow definition has no stages".
+        bad_def = WorkflowDefinition(
+            org_id=org_b.id,
+            key="doc_acknowledgement",
+            version=1,
+            is_effective=True,
+            subject_type=WorkflowSubjectType.DOC_ACK,
+            stages={},
+        )
+        s.add(bad_def)
+        fw_id = (
+            await s.execute(
+                select(DocumentedInformation.framework_id).where(
+                    DocumentedInformation.id == doc_uuid
+                )
+            )
+        ).scalar_one()
+        s.add(
+            Blob(
+                sha256=sha,
+                org_id=org_b.id,
+                size_bytes=4,
+                mime_type="text/plain",
+                bucket="documents",
+                object_key=f"as/{salt}",
+            )
+        )
+        doc_b = DocumentedInformation(
+            org_id=org_b.id,
+            framework_id=fw_id,
+            kind=DK.DOCUMENT,
+            identifier=f"AS-DOC-{salt}",
+            title="Savepoint ack doc",
+            owner_user_id=reader.id,
+            current_state=DocumentCurrentState.Effective,
+            classification=Classification.Internal,
+            acknowledgement_required=True,
+            created_by=reader.id,
+        )
+        s.add(doc_b)
+        await s.flush()
+        v1 = DocumentVersion(
+            org_id=org_b.id,
+            document_id=doc_b.id,
+            version_seq=1,
+            revision_label="A",
+            change_significance=ChangeSignificance.MAJOR,
+            change_reason="seed v1",
+            version_state=VersionState.Superseded,
+            source_blob_sha256=sha,
+            metadata_snapshot={},
+            author_user_id=reader.id,
+            created_by=reader.id,
+        )
+        v2 = DocumentVersion(
+            org_id=org_b.id,
+            document_id=doc_b.id,
+            version_seq=2,
+            revision_label="B",
+            change_significance=ChangeSignificance.MAJOR,
+            change_reason="seed v2",
+            version_state=VersionState.Effective,
+            source_blob_sha256=sha,
+            metadata_snapshot={},
+            author_user_id=reader.id,
+            created_by=reader.id,
+        )
+        s.add_all([v1, v2])
+        await s.flush()
+        doc_b.current_effective_version_id = v2.id
+        s.add(
+            DistributionEntry(
+                org_id=org_b.id,
+                document_id=doc_b.id,
+                target_type=DistributionTargetType.user,
+                target_id=reader.id,
+                ack_required=True,
+                created_by=reader.id,
+            )
+        )
+        # The STALE-PINNED open obligation: pinned to v1 (below the v2 MAJOR boundary), so the
+        # plan puts reader in BOTH to_cancel and to_mint.
+        stale_instance = WorkflowInstance(
+            org_id=org_b.id,
+            definition_id=bad_def.id,
+            definition_version=1,
+            subject_type=WorkflowSubjectType.DOC_ACK,
+            subject_id=doc_b.id,
+            current_state="ack",
+            context={
+                "user_id": str(reader.id),
+                "document_id": str(doc_b.id),
+                "document_version_id": str(v1.id),
+                "identifier": f"AS-DOC-{salt}",
+            },
+            revision=0,
+        )
+        s.add(stale_instance)
+        await s.flush()
+        stale_task = Task(
+            org_id=org_b.id,
+            instance_id=stale_instance.id,
+            stage_key="ack",
+            assignee_user_id=reader.id,
+            candidate_pool=[str(reader.id)],
+            type=TaskType.DOC_ACK,
+            state=TaskState.PENDING,
+        )
+        s.add(stale_task)
+        await s.commit()
+        org_b_id, doc_b_id, reader_id = org_b.id, doc_b.id, reader.id
+        bad_def_id = bad_def.id
+        stale_instance_id, stale_task_id = stale_instance.id, stale_task.id
+
+    try:
+        result = await _run_sweep()  # unscoped — must NOT raise
+        await _ack_task_for(doc_uuid, sam_id)  # the healthy org still minted
+        assert result["tasks_created"] >= 1
+        async with get_sessionmaker()() as s:
+            # The savepoint rolled the doc's cancel back: obligation intact, not "lapsed".
+            t = await s.get(Task, stale_task_id)
+            assert t is not None and t.state is TaskState.PENDING
+            i = await s.get(WorkflowInstance, stale_instance_id)
+            assert i is not None and i.current_state == "ack"
+            lapsed = (
+                await s.execute(
+                    select(AuditEvent.id).where(
+                        AuditEvent.org_id == org_b_id,
+                        AuditEvent.object_id == doc_b_id,
+                        AuditEvent.after["event"].astext == "ack_obligation_cancelled",
+                    )
+                )
+            ).all()
+            assert lapsed == []
+            # And the org's cancels are not in the counters either.
+            stray = (
+                await s.execute(
+                    select(WorkflowInstance.id).where(
+                        WorkflowInstance.subject_type == WorkflowSubjectType.DOC_ACK,
+                        WorkflowInstance.subject_id == doc_b_id,
+                        WorkflowInstance.id != stale_instance_id,
+                    )
+                )
+            ).all()
+            assert stray == []  # no fresh mint leaked either
+    finally:
+        async with get_sessionmaker()() as s:
+            from easysynq_api.db.models.blob import Blob as BlobRow
+            from easysynq_api.db.models.distribution_entry import DistributionEntry as DE
+            from easysynq_api.db.models.documented_information import (
+                DocumentedInformation as DI,
+            )
+            from easysynq_api.db.models.organization import Organization as OrgRow
+            from easysynq_api.db.models.workflow import WorkflowDefinition as WD
+
+            await s.execute(delete(Task).where(Task.id == stale_task_id))
+            await s.execute(
+                delete(WorkflowInstance).where(WorkflowInstance.id == stale_instance_id)
+            )
+            await s.execute(delete(WD).where(WD.id == bad_def_id))
+            await s.execute(delete(DE).where(DE.document_id == doc_b_id))
+            await s.execute(
+                text(
+                    "UPDATE documented_information"
+                    " SET current_effective_version_id = NULL WHERE id = :id"
+                ),
+                {"id": doc_b_id},
+            )
+            await s.execute(delete(DocumentVersion).where(DocumentVersion.document_id == doc_b_id))
+            await s.execute(delete(DI).where(DI.id == doc_b_id))
+            await s.execute(delete(BlobRow).where(BlobRow.sha256 == sha))
+            # No audit_event cleanup: the app role cannot DELETE it (S6 append-only REVOKE),
+            # and the savepoint means no org-B audit row ever commits on the green path.
+            await s.execute(delete(AppUser).where(AppUser.id == reader_id))
+            await s.execute(delete(OrgRow).where(OrgRow.id == org_b_id))
+            await s.commit()

@@ -31,12 +31,11 @@ async def _run_drain() -> dict[str, int]:
     )
     sender = SmtpMailSender(settings)
     try:
-        async with sessionmaker() as session:
-            summary = await drain_once(
-                session, sender, settings, now=datetime.datetime.now(datetime.UTC)
-            )
-            logger.info("notifications.outbox_drain", extra={"extra_fields": summary})
-            return summary
+        summary = await drain_once(
+            sessionmaker, sender, settings, now=datetime.datetime.now(datetime.UTC)
+        )
+        logger.info("notifications.outbox_drain", extra={"extra_fields": summary})
+        return summary
     finally:
         await engine.dispose()
 

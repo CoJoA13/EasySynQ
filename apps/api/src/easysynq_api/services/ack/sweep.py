@@ -158,18 +158,30 @@ async def sweep_acks(
             .scalars()
             .all()
         )
-        # Resolve the definition ONCE; a mis-seeded org degrades to a logged no-op — INCLUDING
-        # Pass B: with the definition missing we cannot distinguish "lapsed" from "config-broken",
-        # and cancelling on broken config would be fail-open (the blast radius is every open
-        # obligation). Fail closed: touch nothing this tick.
-        if eligible and (
-            await wf_repo.effective_definition(
-                session, eligible[0].org_id, _DEF_KEY, WorkflowSubjectType.DOC_ACK
-            )
-            is None
-        ):
-            logger.error("ack_sweep: no effective doc_acknowledgement definition — seed missing")
-            return {"tasks_created": 0, "tasks_cancelled": 0, "skipped_lock_held": 0}
+        # Resolve the definition PER ORG (cached for the run; audit U4 — the old first-org-only
+        # guard let one mis-seeded org stall or abort the whole cohort). A broken org degrades to
+        # a logged no-op for THAT org only — INCLUDING its Pass B rows: with the definition
+        # missing we cannot distinguish "lapsed" from "config-broken", and cancelling on broken
+        # config would be fail-open (the blast radius is every open obligation). Fail closed:
+        # touch nothing of that org this tick; every other org proceeds.
+        def_ok: dict[uuid.UUID, bool] = {}
+
+        async def _org_seeded(org_id: uuid.UUID) -> bool:
+            if org_id not in def_ok:
+                ok = (
+                    await wf_repo.effective_definition(
+                        session, org_id, _DEF_KEY, WorkflowSubjectType.DOC_ACK
+                    )
+                    is not None
+                )
+                if not ok:
+                    logger.error(
+                        "ack_sweep: no effective doc_acknowledgement definition for org %s — "
+                        "seed missing; skipping its documents this tick",
+                        org_id,
+                    )
+                def_ok[org_id] = ok
+            return def_ok[org_id]
 
         eligible_ids = {d.id for d in eligible}
         due_at = _now() + datetime.timedelta(days=get_settings().ack_due_days)
@@ -182,6 +194,8 @@ async def sweep_acks(
         )
 
         for doc in eligible:
+            if not await _org_seeded(doc.org_id):
+                continue
             boundary = await queries.boundary_seq(session, doc)
             if boundary is None:
                 continue  # Effective state without a version row — FK-guaranteed unreachable
@@ -200,51 +214,81 @@ async def sweep_acks(
             instance_by_user: dict[uuid.UUID, uuid.UUID] = {
                 t.assignee_user_id: i.id for t, i in open_pairs if t.assignee_user_id
             }
-            for user_id in to_cancel:
-                iid = instance_by_user.get(user_id)
-                if iid is not None and await _cancel_instance(session, iid):
-                    _emit_cancelled(session, doc.org_id, doc.id, iid, doc.identifier, "lapsed")
-                    cancelled += 1
-            # R55 (S-duedate-snap): snap the (loop-invariant) raw due_at forward to a working day in
-            # THIS doc's org calendar — a NEW local (never reassign `due_at`, which spans all orgs).
-            from ..notifications.duedate import snap_due_at
+            # Per-doc SAVEPOINT: cancel-before-mint is a PAIRED reconciliation, and instantiate
+            # can fail mid-pair on a present-but-malformed definition — some malformed-spec
+            # shapes even raise AFTER the engine added the instance row. If the mint half dies,
+            # the cancel half (and any partial engine rows) must not survive to the outer
+            # commit: cancel-without-remint on broken config is fail-open (the Pass B
+            # rationale). A stale-pinned user sits in BOTH to_cancel and to_mint, so their
+            # obligation would otherwise be cancelled "lapsed" with the owed remint never
+            # minted.
+            doc_created = doc_cancelled = 0
+            savepoint = await session.begin_nested()
+            try:
+                for user_id in to_cancel:
+                    iid = instance_by_user.get(user_id)
+                    if iid is not None and await _cancel_instance(session, iid):
+                        _emit_cancelled(session, doc.org_id, doc.id, iid, doc.identifier, "lapsed")
+                        doc_cancelled += 1
+                # R55 (S-duedate-snap): snap the (loop-invariant) raw due_at forward to a
+                # working day in THIS doc's org calendar — a NEW local (never reassign
+                # `due_at`, which spans all orgs).
+                from ..notifications.duedate import snap_due_at
 
-            snapped_due_at = await snap_due_at(session, doc.org_id, due_at)
-            org_tz = await resolve_org_tz(session, doc.org_id)
-            for user_id in to_mint:
-                instance = await wf_engine.instantiate(
-                    session,
-                    org_id=doc.org_id,
-                    definition_key=_DEF_KEY,
-                    subject_type=WorkflowSubjectType.DOC_ACK,
-                    subject_id=doc.id,
-                    context={
-                        "user_id": str(user_id),
-                        "document_id": str(doc.id),
-                        "document_version_id": str(doc.current_effective_version_id),
-                        "created_reason": reason.value,
-                        "identifier": doc.identifier,
-                    },
-                    actor=None,
-                )
-                await session.flush()
-                await session.execute(
-                    update(Task)
-                    .where(Task.instance_id == instance.id)
-                    .values(due_at=snapped_due_at)
-                )
-                ack_tasks = (
-                    (await session.execute(select(Task).where(Task.instance_id == instance.id)))
-                    .scalars()
-                    .all()
-                )
-                from ..notifications.dispatch import enqueue_task_notifications
-
-                with using_org_tz(org_tz):
-                    await enqueue_task_notifications(
-                        session, instance, list(ack_tasks), due_at_override=snapped_due_at
+                snapped_due_at = await snap_due_at(session, doc.org_id, due_at)
+                org_tz = await resolve_org_tz(session, doc.org_id)
+                for user_id in to_mint:
+                    instance = await wf_engine.instantiate(
+                        session,
+                        org_id=doc.org_id,
+                        definition_key=_DEF_KEY,
+                        subject_type=WorkflowSubjectType.DOC_ACK,
+                        subject_id=doc.id,
+                        context={
+                            "user_id": str(user_id),
+                            "document_id": str(doc.id),
+                            "document_version_id": str(doc.current_effective_version_id),
+                            "created_reason": reason.value,
+                            "identifier": doc.identifier,
+                        },
+                        actor=None,
                     )
-                created += 1
+                    await session.flush()
+                    await session.execute(
+                        update(Task)
+                        .where(Task.instance_id == instance.id)
+                        .values(due_at=snapped_due_at)
+                    )
+                    ack_tasks = (
+                        (await session.execute(select(Task).where(Task.instance_id == instance.id)))
+                        .scalars()
+                        .all()
+                    )
+                    from ..notifications.dispatch import enqueue_task_notifications
+
+                    with using_org_tz(org_tz):
+                        await enqueue_task_notifications(
+                            session, instance, list(ack_tasks), due_at_override=snapped_due_at
+                        )
+                    doc_created += 1
+            except Exception:
+                # EVERY malformed-definition shape lands here: the pre-add ProblemException
+                # raises (missing/entry-less definition) AND the post-add
+                # AttributeError/TypeError/ValueError shapes a malformed stage spec (scalar
+                # assignees/roles/sla, non-numeric quorum) throws from _enter_stage. Roll the
+                # doc's half-done pair back, mark the org broken for the rest of this run (its
+                # later docs and Pass B rows skip), keep the cohort alive.
+                await savepoint.rollback()
+                logger.exception(
+                    "ack_sweep: reconcile failed for org %s — malformed doc_acknowledgement "
+                    "definition; skipping the org this tick",
+                    doc.org_id,
+                )
+                def_ok[doc.org_id] = False
+                continue
+            await savepoint.commit()
+            created += doc_created
+            cancelled += doc_cancelled
 
         # Pass B: open DOC_ACK obligations on docs that are no longer eligible.
         stale_q = (
@@ -263,6 +307,10 @@ async def sweep_acks(
         if document_id is not None:
             stale_q = stale_q.where(WorkflowInstance.subject_id == document_id)
         for instance_id, subject_id, org_id, context in (await session.execute(stale_q)).all():
+            # The same per-org fail-closed posture: a config-broken org's obligations are left
+            # untouched (cancel-without-remint on broken config would be fail-open).
+            if not await _org_seeded(org_id):
+                continue
             if subject_id not in eligible_ids and await _cancel_instance(session, instance_id):
                 _emit_cancelled(
                     session,
