@@ -15,7 +15,7 @@ import datetime
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -38,6 +38,10 @@ _audit_read = require("system.audit_log.read")
 
 _PAGE_DEFAULT = 50
 _PAGE_MAX = 200
+# AuditEvent.id is a PostgreSQL BigInteger (contract: format int64); an out-of-int64 value must
+# 422 at the edge, not 500 at the driver. Full int64 range only — the contract sets no minimum.
+_BIGINT_MIN = -(2**63)
+_BIGINT_MAX = 2**63 - 1
 
 
 def _hex(value: bytes | None) -> str | None:
@@ -73,7 +77,12 @@ def _event(event: AuditEvent) -> dict[str, Any]:
 async def list_audit_events(
     caller: AppUser = Depends(_audit_read),
     session: AsyncSession = Depends(get_session),
-    cursor: int | None = Query(None, description="page rows with id < cursor (keyset, desc)"),
+    cursor: int | None = Query(
+        None,
+        ge=_BIGINT_MIN,
+        le=_BIGINT_MAX,
+        description="page rows with id < cursor (keyset, desc)",
+    ),
     limit: int = Query(_PAGE_DEFAULT, ge=1, le=_PAGE_MAX),
     actor_id: uuid.UUID | None = None,
     actor_type: str | None = None,
@@ -119,8 +128,8 @@ async def list_audit_events(
 async def verify_chain_endpoint(
     caller: AppUser = Depends(_audit_read),
     session: AsyncSession = Depends(get_session),
-    from_id: int | None = Query(None, alias="from"),
-    to_id: int | None = Query(None, alias="to"),
+    from_id: int | None = Query(None, alias="from", ge=_BIGINT_MIN, le=_BIGINT_MAX),
+    to_id: int | None = Query(None, alias="to", ge=_BIGINT_MIN, le=_BIGINT_MAX),
 ) -> dict[str, Any]:
     """On-demand hash-chain verification (tamper-evidence). The nightly Beat job runs this too.
     Scoped to the caller's org (the chain is per-org — doc 12 §4.3). On a FULL walk (no from/to) the
@@ -188,7 +197,7 @@ async def audit_status(
 
 @router.get("/audit-events/{event_id}")
 async def get_audit_event(
-    event_id: int,
+    event_id: int = Path(ge=_BIGINT_MIN, le=_BIGINT_MAX),
     caller: AppUser = Depends(_audit_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -240,7 +249,7 @@ async def document_audit_events(
     document_id: uuid.UUID,
     caller: AppUser = Depends(_audit_read),
     session: AsyncSession = Depends(get_session),
-    cursor: int | None = Query(None),
+    cursor: int | None = Query(None, ge=_BIGINT_MIN, le=_BIGINT_MAX),
     limit: int = Query(_PAGE_DEFAULT, ge=1, le=_PAGE_MAX),
 ) -> dict[str, Any]:
     """One document's full trail (doc + version events). Every vault/lifecycle row carries the

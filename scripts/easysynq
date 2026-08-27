@@ -176,7 +176,10 @@ case "$cmd" in
     compose_run worker uv run python -m easysynq_api.cli.upgrade "$@"
     ;;
   mirror)
-    compose_run api uv run python -m easysynq_api.cli.mirror "$@"
+    # rebuild/sync/scan write the mirror tree in-process, and the api service mounts the mirror
+    # volume READ-ONLY by design (only the worker UID writes it) — dispatching to api fails the
+    # first mkdir with EROFS. Runs on the WORKER, like backup/restore/upgrade/blob.
+    compose_run worker uv run python -m easysynq_api.cli.mirror "$@"
     ;;
   blob)
     # S-drift-3 (D1): rolling/--full blob integrity re-hash under LOCK_BLOB_VERIFY. Runs on the

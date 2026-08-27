@@ -21,7 +21,7 @@ import datetime
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -328,8 +328,8 @@ async def list_import_files_endpoint(
     kind: ImportKind | None = None,
     band: ImportConfidenceBand | None = None,
     review_status: str | None = None,
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     caller: AppUser = Depends(_import_review),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:

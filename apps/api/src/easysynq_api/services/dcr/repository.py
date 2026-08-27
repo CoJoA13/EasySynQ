@@ -60,8 +60,17 @@ async def get_dcr(
     session: AsyncSession, dcr_id: uuid.UUID, *, for_update: bool = False
 ) -> Dcr | None:
     if for_update:
+        # populate_existing: the authz resolver already session.get-loaded the row into the request
+        # session's identity map, so a plain locked load returns the STALE cached attributes (the
+        # S-drift-1 trap — the FSM guards would then re-check pre-lock state). Force a re-read
+        # under the lock (the capa/improvement/workflow repo precedent).
         return (
-            await session.execute(select(Dcr).where(Dcr.id == dcr_id).with_for_update())
+            await session.execute(
+                select(Dcr)
+                .where(Dcr.id == dcr_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         ).scalar_one_or_none()
     return await session.get(Dcr, dcr_id)
 

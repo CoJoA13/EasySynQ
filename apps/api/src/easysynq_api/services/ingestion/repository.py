@@ -64,7 +64,11 @@ async def get_run(
 ) -> ImportRun | None:
     stmt = select(ImportRun).where(ImportRun.id == run_id)
     if for_update:
-        stmt = stmt.with_for_update()
+        # populate_existing: stage workers hold the run object live across the whole stage, so a
+        # plain locked re-load returns the STALE identity-map attributes (the S-drift-1 trap) and
+        # the "a late cancel won the race" guard can never observe the committed CANCELLED/FAILED
+        # status. Force a re-read under the lock (the capa/workflow repo precedent).
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     return (await session.execute(stmt)).scalar_one_or_none()
 
 

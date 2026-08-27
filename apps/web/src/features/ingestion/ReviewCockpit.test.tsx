@@ -269,6 +269,40 @@ test("surfaces a failed bulk decision", async () => {
   expect(await screen.findByText("The selected review set is stale.")).toBeInTheDocument();
 });
 
+test("a successful bulk decision clears the selection", async () => {
+  // Decided rows leave the filtered listing while their ids would stay selected — a later bulk
+  // action would silently re-target them (an accept can override a just-made exclude, decisions
+  // folding newest-wins). The success path must drop the selection.
+  const user = userEvent.setup();
+  renderCockpit();
+  await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  await user.click(screen.getByLabelText("Select SOP-PUR-014 Purchasing.docx"));
+  expect(await screen.findByRole("region", { name: "Bulk actions" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Exclude selected" }));
+  await user.click(await screen.findByRole("button", { name: "Exclude items" }));
+
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "Bulk actions" })).not.toBeInTheDocument(),
+  );
+});
+
+test("a successful per-file decision prunes that row from the selection", async () => {
+  const user = userEvent.setup();
+  renderCockpit();
+  const filename = await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  await user.click(screen.getByLabelText("Select SOP-PUR-014 Purchasing.docx"));
+  expect(await screen.findByRole("region", { name: "Bulk actions" })).toBeInTheDocument();
+
+  const row = filename.closest("tr");
+  expect(row).not.toBeNull();
+  await user.click(within(row!).getByRole("button", { name: "Accept" }));
+
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "Bulk actions" })).not.toBeInTheDocument(),
+  );
+});
+
 test("surfaces a failed split action", async () => {
   const user = userEvent.setup();
   server.use(
