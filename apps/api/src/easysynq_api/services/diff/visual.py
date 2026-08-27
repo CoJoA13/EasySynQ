@@ -141,39 +141,124 @@ async def build_visual_diff(
         await session.commit()
         return
     try:
-        from_pdf = await _ensure_rendition_pdf(session, from_v, render_sink)
-        to_pdf = await _ensure_rendition_pdf(session, to_v, render_sink)
-    except _VisualUnavailable:
-        vd.status = VisualDiffStatus.Unavailable
-        vd.reason = "a version is not renderable to PDF (no page images available)"
-        vd.completed_at = _now()
-        await session.commit()
-        return
-    # _VisualPending propagates → the row stays Pending; the reaper / a re-run retries.
+        try:
+            from_pdf = await _ensure_rendition_pdf(session, from_v, render_sink)
+            to_pdf = await _ensure_rendition_pdf(session, to_v, render_sink)
+        except _VisualUnavailable:
+            vd.status = VisualDiffStatus.Unavailable
+            vd.reason = "a version is not renderable to PDF (no page images available)"
+            vd.completed_at = _now()
+            await session.commit()
+            return
 
-    page_diffs = diff_pages(rasterize(from_pdf), rasterize(to_pdf))
-    pages: list[dict[str, object]] = []
-    for pd in page_diffs:
-        pages.append(
+        page_diffs = diff_pages(rasterize(from_pdf), rasterize(to_pdf))
+        # Content-address every page PNG first, then cache the blobs in SORTED sha order:
+        # concurrent mirror-image builds ((from,to) and (to,from)) share page blobs, and inserting
+        # the shared content-addressed rows in opposite order inside two open transactions
+        # deadlocks on the speculative ON CONFLICT insert — canonical ordering removes the cycle.
+        png_by_sha: dict[str, bytes] = {}
+
+        def _sha(png: bytes | None) -> str | None:
+            if png is None:
+                return None
+            digest = hashlib.sha256(png).hexdigest()
+            png_by_sha[digest] = png
+            return digest
+
+        pages: list[dict[str, object]] = [
             {
                 "page": pd.page,
                 "changed": pd.changed,
-                "from_blob_sha": (
-                    await _cache_png(session, vd.org_id, pd.from_png) if pd.from_png else None
-                ),
-                "to_blob_sha": (
-                    await _cache_png(session, vd.org_id, pd.to_png) if pd.to_png else None
-                ),
-                "diff_blob_sha": (
-                    await _cache_png(session, vd.org_id, pd.diff_png) if pd.diff_png else None
-                ),
+                "from_blob_sha": _sha(pd.from_png),
+                "to_blob_sha": _sha(pd.to_png),
+                "diff_blob_sha": _sha(pd.diff_png),
             }
+            for pd in page_diffs
+        ]
+        for digest in sorted(png_by_sha):
+            await _cache_png(session, vd.org_id, png_by_sha[digest])
+        vd.pages = pages
+        vd.page_count = len(pages)
+        vd.status = VisualDiffStatus.Ready
+        vd.completed_at = _now()
+        await session.commit()
+    except _VisualPending:
+        # Deliberate leave-Pending: a transient renderer outage. The redelivery / a re-POST / the
+        # stall reaper retries or times the row out.
+        raise
+    except Exception as exc:
+        # Any other error (a malformed cached PDF, a rasterize/diff crash, an S3 failure) would
+        # otherwise strand the row Pending forever — task_acks_late still acks a task that RAISES,
+        # there is no Celery retry policy, and the SPA poll is side-effect-free by contract. Flip
+        # the row Failed in its own transaction (the packs ``_fail`` discipline), then re-raise so
+        # the worker logs the failure.
+        logger.exception(
+            "visual_diff.build_failed",
+            extra={"extra_fields": {"visual_diff_id": str(visual_diff_id)}},
         )
-    vd.pages = pages
-    vd.page_count = len(pages)
-    vd.status = VisualDiffStatus.Ready
+        # Only the exception CLASS reaches the stored reason — the message can carry internal
+        # endpoints/paths (boto3, SQLAlchemy) and ``reason`` is served verbatim to any
+        # document.read caller; the full detail stays in the worker log above.
+        await _fail(session, visual_diff_id, f"build_error: {type(exc).__name__}")
+        raise
+
+
+async def _fail(session: AsyncSession, visual_diff_id: uuid.UUID, reason: str) -> None:
+    """Mark a build Failed + record the reason, in its own transaction (after rolling back the
+    half-built one). Re-select the row — never touch attributes of a rolled-back instance (the
+    post-rollback lazy-refresh MissingGreenlet trap); the packs ``_fail`` precedent."""
+    await session.rollback()
+    vd = (
+        await session.execute(
+            select(VisualDiff).where(VisualDiff.id == visual_diff_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if vd is None or vd.status is not VisualDiffStatus.Pending:  # pragma: no cover - defensive
+        return
+    vd.status = VisualDiffStatus.Failed
+    vd.reason = reason[:1000]
     vd.completed_at = _now()
     await session.commit()
+
+
+# Mirror the packs stall window: a build renders two PDFs + rasterizes — minutes at most.
+STALL_TIMEOUT_SECONDS = 3600
+
+
+async def reap_stalled_visual_diffs(
+    session: AsyncSession,
+    *,
+    now: datetime.datetime | None = None,
+    max_age_seconds: int = STALL_TIMEOUT_SECONDS,
+) -> dict[str, int]:
+    """Flip visual_diff rows stuck Pending past the stall window → Failed, so the SPA poll reaches
+    a terminal state without a human re-POST (a hard worker kill or a dropped enqueue otherwise
+    strands the row). A Beat job (``easysynq.visual_diff.reap_stalled``) drives this; tests call it
+    directly. ``FOR UPDATE SKIP LOCKED`` never races an in-flight build — ``build_visual_diff``
+    holds the row lock for the whole build. ``created_at`` is the anchor (reset when a Failed row
+    is re-driven), so a genuinely queued-behind-backlog row can be timed out and re-requested."""
+    now = now or _now()
+    cutoff = now - datetime.timedelta(seconds=max_age_seconds)
+    stalled = (
+        (
+            await session.execute(
+                select(VisualDiff)
+                .where(
+                    VisualDiff.status == VisualDiffStatus.Pending,
+                    VisualDiff.created_at < cutoff,
+                )
+                .with_for_update(skip_locked=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for vd in stalled:
+        vd.status = VisualDiffStatus.Failed
+        vd.reason = "build_timeout"
+        vd.completed_at = now
+    await session.commit()
+    return {"reaped": len(stalled)}
 
 
 async def get_or_create_visual_diff(
@@ -183,11 +268,15 @@ async def get_or_create_visual_diff(
     document_id: uuid.UUID,
     from_version_id: uuid.UUID,
     to_version_id: uuid.UUID,
+    retry_failed: bool = False,
 ) -> tuple[VisualDiff, bool]:
     """The cached visual_diff row for (from, to), creating a Pending one if absent. Returns
-    (row, should_enqueue) — enqueue when freshly created OR still Pending (re-drives a stalled
-    task;
-    idempotent — the task FOR-UPDATEs + early-returns on terminal). Race-safe via ON CONFLICT."""
+    (row, should_enqueue) — enqueue when freshly created or still Pending (re-drives a stalled
+    task). A Failed row re-drives ONLY on ``retry_failed`` (the explicit operator retry — the SPA
+    auto-POSTs on every viewer mount, so an implicit re-drive would silently rebuild a
+    deterministic failure on every visit); a plain POST returns the cached Failed. Idempotent —
+    the task FOR-UPDATEs + early-returns on terminal. Race-safe via ON CONFLICT; two concurrent
+    re-drives both enqueue a build that early-returns once one finishes."""
     await session.execute(
         pg_insert(VisualDiff)
         .values(
@@ -208,6 +297,18 @@ async def get_or_create_visual_diff(
             )
         )
     ).scalar_one()
+    if row.status is VisualDiffStatus.Failed and retry_failed:
+        # Optimistic, no lock: nothing else transitions a Failed row (builds run only on Pending,
+        # the reaper selects only Pending), and a concurrent identical re-drive is benign — both
+        # enqueue an idempotent build. Never FOR UPDATE here: an in-flight build holds the row
+        # lock for the whole build and would block this POST for minutes.
+        row.status = VisualDiffStatus.Pending
+        row.reason = None
+        row.completed_at = None
+        # The reaper's stall anchor — this attempt starts now, not at the original request.
+        row.created_at = _now()
+        await session.commit()
+        return row, True
     return row, row.status is VisualDiffStatus.Pending
 
 

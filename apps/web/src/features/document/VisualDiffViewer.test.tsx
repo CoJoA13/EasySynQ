@@ -98,34 +98,34 @@ test("VisualDiffViewer (Pending) shows the phased long-op affordance, not a froz
   expect(screen.getByRole("button", { name: "Re-request render" })).toBeInTheDocument();
 });
 
-test("VisualDiffViewer (Failed) is a calm terminal with a source-download fallback (no dead Retry)", async () => {
+test("VisualDiffViewer (Failed) offers an explicit retry that re-drives with ?retry=true", async () => {
   const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
-  // The poll now GETs the real status; the row IS Failed, so POST and GET both return it.
+  // A plain (auto-mount) POST must NOT re-drive a Failed row — only the explicit ?retry=true does
+  // (the server contract: Failed → Pending + re-enqueue only on the retry flag).
+  let retried = false;
+  const failedBody = { status: "Failed", page_count: null, reason: "render crashed", pages: null };
+  const pendingBody = { status: "Pending", page_count: null, reason: null, pages: null };
   server.use(
-    http.post(VD, () =>
-      HttpResponse.json({
-        status: "Failed",
-        page_count: null,
-        reason: "render crashed",
-        pages: null,
-      }),
-    ),
-    http.get(VD, () =>
-      HttpResponse.json({
-        status: "Failed",
-        page_count: null,
-        reason: "render crashed",
-        pages: null,
-      }),
-    ),
+    http.post(VD, ({ request }) => {
+      if (new URL(request.url).searchParams.get("retry") === "true") {
+        retried = true;
+        return HttpResponse.json(pendingBody);
+      }
+      return HttpResponse.json(failedBody);
+    }),
+    http.get(VD, () => HttpResponse.json(retried ? pendingBody : failedBody)),
   );
   const user = userEvent.setup();
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
   await waitFor(() => expect(screen.getByText(/render crashed/)).toBeInTheDocument());
-  // a terminal Failed row can't be re-driven (the backend only re-enqueues Pending) — no dead Retry
-  expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  // the auto-mount POST alone must not have re-driven the failed build
+  expect(retried).toBe(false);
   await user.click(screen.getByRole("button", { name: /Download After source/ }));
   await waitFor(() => expect(openSpy).toHaveBeenCalled());
+
+  await user.click(screen.getByRole("button", { name: "Retry render" }));
+  await waitFor(() => expect(screen.getByText("Rendering page images…")).toBeInTheDocument());
+  expect(retried).toBe(true);
 });
 
 test("VisualDiffViewer resets the selected page when the compared pair changes", async () => {

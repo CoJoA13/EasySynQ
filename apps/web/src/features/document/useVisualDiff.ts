@@ -47,11 +47,12 @@ export function useVisualDiff(
   const key = ["visual-diff", documentId, toVid, fromVid] as const;
   const url = `/api/v1/documents/${documentId}/versions/${toVid}/visual-diff?from=${fromVid}`;
 
-  // TVariables is the pair-identifying `url` so `request.variables` tracks WHICH pair the POST was
-  // for (the enable gate below reads it). The mutationFn ignores it — `url` is closed over — but a
-  // zero-arg fn is assignable to `(v: string) => …`.
+  // TVariables is the pair-identifying request URL so `request.variables` tracks WHICH pair the
+  // POST was for (the enable gate below reads it). retry() passes `url` plus `&retry=true` — the
+  // explicit Failed re-drive — so the mutationFn posts its VARIABLE, and the gate matches by
+  // prefix (both variables start with this pair's `url`).
   const request = useMutation<VisualDiffStatus, Error, string>({
-    mutationFn: () => api.send<VisualDiffStatus>("POST", url),
+    mutationFn: (target: string) => api.send<VisualDiffStatus>("POST", target),
   });
 
   // Fire the POST once per active, distinct version pair (it re-fires when the pair changes — the
@@ -75,7 +76,8 @@ export function useVisualDiff(
     // (S-dcr-3b) so the GET never double-enqueues. The poll's first fetch runs against an empty cache
     // (no seed), so it always fetches and populates the status itself — never skipped by an enable-
     // time staleness read. refetchInterval then polls until a poll returns a terminal status, and halts.
-    enabled: active && request.isSuccess && request.variables === url,
+    enabled:
+      active && request.isSuccess && (request.variables?.startsWith(url) ?? false),
     refetchInterval: (q) => (q.state.data?.status === "Pending" ? 2500 : false),
   });
 
@@ -83,13 +85,15 @@ export function useVisualDiff(
   const isError = request.isError || poll.isError;
   const error: Error | null = request.error ?? poll.error;
 
-  // Re-request a STALLED (Pending) render — e.g. the dev renderer was off when the row was created.
-  // (A terminal Failed/Unavailable row is NOT re-drivable: get_or_create_visual_diff only re-enqueues
-  // a Pending row, so the viewer offers this only from the Pending state, never from Failed.)
+  // Re-request a STALLED (Pending) render, or explicitly re-drive a TERMINAL Failed one:
+  // `?retry=true` flips a Failed row back to Pending server-side and re-enqueues the build (the
+  // plain auto-POST on mount deliberately does NOT — a deterministic failure must not silently
+  // rebuild on every visit). Unavailable stays terminal (non-renderable is a property of the
+  // versions, not a transient).
   function retry() {
     qc.removeQueries({ queryKey: key });
     request.reset();
-    request.mutate(url);
+    request.mutate(`${url}&retry=true`);
   }
 
   return {

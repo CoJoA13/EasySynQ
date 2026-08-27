@@ -130,6 +130,13 @@ app.conf.update(
             "task": "easysynq.packs.reap_stalled_builds",
             "schedule": 86400.0,  # daily
         },
+        # S-dcr-3b follow-up: daily reaper for visual-diff builds stuck Pending (a hard worker kill,
+        # a dropped enqueue, or an un-retried transient outage strands them; the SPA poll is
+        # side-effect-free by contract) → Failed, which a re-POST explicitly re-drives.
+        "visual-diff-reap-stalled": {
+            "task": "easysynq.visual_diff.reap_stalled",
+            "schedule": 86400.0,  # daily
+        },
         # S-ing-1/2: recover ingestion runs wedged in any in-progress stage (Scanning/Scanned/
         # Extracting/Classifying — a worker kill strands them) → FAILED + free the source-root lock.
         # Tighter cadence than the daily packs reaper because a stuck run holds the source root's

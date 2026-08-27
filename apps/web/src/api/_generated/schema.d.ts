@@ -1139,7 +1139,7 @@ export interface paths {
         /** Poll the cached visual-diff result (no side effect). 404 if not yet requested (POST first), 202 while Pending, 200 once terminal. Requires document.read plus both immutable sides' state-selected keys: Effective adds none, Draft/InReview/Approved add document.read_draft, and Superseded/Obsolete add document.read_obsolete. */
         get: operations["getVisualDiff"];
         put?: never;
-        /** Request the doc 05 §8.1 visual page-image diff of `from` → `version_id` (worker-async — the API can't render). Idempotent (UPSERTs the cached row + enqueues the worker when not terminal). 202 Pending / 200 once Ready (then poll GET). Requires document.read plus both immutable sides' state-selected keys: Effective adds none, Draft/InReview/Approved add document.read_draft, and Superseded/Obsolete add document.read_obsolete. */
+        /** Request the doc 05 §8.1 visual page-image diff of `from` → `version_id` (worker-async — the API can't render). Idempotent (UPSERTs the cached row + enqueues the worker when not terminal). 202 Pending / 200 once Ready (then poll GET). A Failed row re-drives only with `retry=true` (the viewer auto-POSTs on mount; a plain POST returns the cached Failed). Requires document.read plus both immutable sides' state-selected keys: Effective adds none, Draft/InReview/Approved add document.read_draft, and Superseded/Obsolete add document.read_obsolete. */
         post: operations["requestVisualDiff"];
         delete?: never;
         options?: never;
@@ -10164,6 +10164,8 @@ export interface operations {
         parameters: {
             query: {
                 from: string;
+                /** @description explicitly re-drive a Failed build (Failed → Pending + re-enqueue) */
+                retry?: boolean;
             };
             header?: never;
             path: {
