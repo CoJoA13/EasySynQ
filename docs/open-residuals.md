@@ -237,6 +237,23 @@ Closure contract: Define all prohibited WORM bucket roles, fail closed before an
 the guard without weakening the current documents-bucket protection.
 Last reviewed: 2026-08-08
 
+## RES-WORM-EVENT-BASIS-REEXTENSION
+
+Status: OPEN
+Owner: Repository owner
+Source: C5 worm_lock_period enforcement review, 2026-08-27
+Reason: An `event:*`-basis capture locks objects from the CAPTURE date (the basis is unknown until
+the event fires), and nothing re-extends the object lock when a later basis-fill lands.
+Closure contract: When the event-basis fill mechanism ships, extend the affected records' sealed
+object locks to the recomputed `basis + worm_lock_period` horizon (upward only) in the same slice,
+and prove the recomputed floor on both the blob row and the storage layer.
+Last reviewed: 2026-08-27
+
+`worm_lock_until` falls back to the capture date for an unfired `event:*` basis — that can only
+under-shoot the eventual basis-derived horizon. In v1 nothing writes `retention_basis_date` after
+capture, so the gap is vacuous today; the basis-fill slice must inherit the re-extension duty or
+the storage floor silently stays at the capture-derived horizon.
+
 ## RES-AUDIT-EXPORT
 
 Status: OPEN

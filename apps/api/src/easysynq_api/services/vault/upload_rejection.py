@@ -422,9 +422,12 @@ async def promote_for_owner(
     target_bucket: str,
     context: RejectionContext,
     rejection_sessionmaker: async_sessionmaker[AsyncSession] | None = None,
+    min_retain_until: datetime.datetime | None = None,
 ) -> PromotionResult:
     try:
-        return await storage.promote_worm(source, target_bucket=target_bucket)
+        return await storage.promote_worm(
+            source, target_bucket=target_bucket, min_retain_until=min_retain_until
+        )
     except (IdentityRefusal, TargetIdentityConflict, StorageUnavailable, WormNotApplied) as failure:
         try:
             await owner_session.rollback()

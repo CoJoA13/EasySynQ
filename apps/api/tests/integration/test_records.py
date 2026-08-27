@@ -3931,3 +3931,216 @@ async def test_records_absent_from_documents_and_search(
     assert search.status_code == 200
     hit_ids = {hit["id"] for hit in search.json().get("results", [])}
     assert rid not in hit_ids
+
+
+async def _live_object_lock(bucket: str, object_key: str) -> datetime.datetime:
+    """The REAL storage-layer lock horizon of the latest version (the C5 ground truth)."""
+    import asyncio as _asyncio
+
+    from easysynq_api.services.vault import storage as _storage
+
+    def _read() -> datetime.datetime:
+        client = _storage._client()
+        head = client.head_object(Bucket=bucket, Key=object_key)
+        retention = client.get_object_retention(
+            Bucket=bucket, Key=object_key, VersionId=head["VersionId"]
+        )
+        value = retention["Retention"]["RetainUntilDate"]
+        assert isinstance(value, datetime.datetime)
+        return value
+
+    return await _asyncio.to_thread(_read)
+
+
+async def test_worm_lock_period_extends_object_lock_beyond_bucket_default(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Audit C5: a policy's worm_lock_period is now a REAL object-lock horizon at capture — both
+    on the blob row and on the storage layer itself — while a default-policy capture keeps the
+    flat bucket default (the extension is policy-driven, not global)."""
+    subject = _subject("rec-worm-c5")
+    await _grant(subject, (*_RECORD_PERMS, "retention.read", "retention.manage"))
+    h = _auth(token_factory, subject)
+    pol = await app_client.post(
+        "/api/v1/retention-policies",
+        headers=h,
+        json={
+            "name": f"C5-{uuid.uuid4().hex[:8]}",
+            "duration": "P6M",
+            "worm_lock_period": "P6M",
+            "disposition_action": "ARCHIVE_COLD",
+            "review_required": False,
+        },
+    )
+    assert pol.status_code == 201, pol.text
+    pid = pol.json()["id"]
+
+    now = datetime.datetime.now(datetime.UTC)
+    content = f"c5 policy-locked evidence {uuid.uuid4().hex}".encode()
+    upload = await _upload_evidence(app_client, h, content)
+    r = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=f"c5 lock {uuid.uuid4().hex[:6]}",
+        evidence=[_evidence_json(upload)],
+        retention_policy_id=pid,
+    )
+    assert r.status_code == 201, r.text
+
+    async with get_sessionmaker()() as s:
+        blob = await s.get(Blob, upload.sha256)
+        assert blob is not None and blob.worm_retain_until is not None
+        # ~P6M ≫ the 30d bucket default; 150d is a slack lower bound.
+        assert blob.worm_retain_until > now + datetime.timedelta(days=150), blob.worm_retain_until
+        live = await _live_object_lock(blob.bucket, blob.object_key)
+        assert live > now + datetime.timedelta(days=150), live
+        assert live >= blob.worm_retain_until - datetime.timedelta(seconds=1)
+
+    # Control: a default-policy capture stays on the flat bucket default (~30d).
+    control = f"c5 default-locked evidence {uuid.uuid4().hex}".encode()
+    upload2 = await _upload_evidence(app_client, h, control)
+    r2 = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=f"c5 control {uuid.uuid4().hex[:6]}",
+        evidence=[_evidence_json(upload2)],
+    )
+    assert r2.status_code == 201, r2.text
+    async with get_sessionmaker()() as s:
+        blob2 = await s.get(Blob, upload2.sha256)
+        assert blob2 is not None and blob2.worm_retain_until is not None
+        assert blob2.worm_retain_until < now + datetime.timedelta(days=60), blob2.worm_retain_until
+
+
+async def test_same_bytes_recapture_under_longer_policy_extends_the_shared_lock(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The same-bytes dedup path: a later capture under a LONGER worm_lock_period must extend the
+    already-sealed shared object's lock (and the shared blob row's floor), or the second record
+    would be under-locked by the first capture's shorter horizon."""
+    subject = _subject("rec-worm-dedup")
+    await _grant(subject, (*_RECORD_PERMS, "retention.read", "retention.manage"))
+    h = _auth(token_factory, subject)
+    now = datetime.datetime.now(datetime.UTC)
+
+    content = f"c5 shared evidence {uuid.uuid4().hex}".encode()
+    upload = await _upload_evidence(app_client, h, content)
+    first = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=f"c5 first {uuid.uuid4().hex[:6]}",
+        evidence=[_evidence_json(upload)],
+    )
+    assert first.status_code == 201, first.text
+    async with get_sessionmaker()() as s:
+        blob = await s.get(Blob, upload.sha256)
+        assert blob is not None and blob.worm_retain_until is not None
+        assert blob.worm_retain_until < now + datetime.timedelta(days=60)
+
+    pid = (
+        await app_client.post(
+            "/api/v1/retention-policies",
+            headers=h,
+            json={
+                "name": f"C5D-{uuid.uuid4().hex[:8]}",
+                "duration": "P1Y",
+                "worm_lock_period": "P1Y",
+                "disposition_action": "ARCHIVE_COLD",
+                "review_required": False,
+            },
+        )
+    ).json()["id"]
+    # Same bytes, no fresh staging upload: init-upload reports dedup, evidence carries no version.
+    second = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=f"c5 second {uuid.uuid4().hex[:6]}",
+        evidence=[{"sha256": upload.sha256, "content_type": "application/pdf"}],
+        retention_policy_id=pid,
+    )
+    assert second.status_code == 201, second.text
+    async with get_sessionmaker()() as s:
+        blob = await s.get(Blob, upload.sha256)
+        assert blob is not None and blob.worm_retain_until is not None
+        assert blob.worm_retain_until > now + datetime.timedelta(days=300), blob.worm_retain_until
+        live = await _live_object_lock(blob.bucket, blob.object_key)
+        assert live > now + datetime.timedelta(days=300), live
+
+
+async def test_expired_first_lock_recapture_places_a_fresh_horizon(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The C5 review's MAJOR: recapturing shared bytes AFTER the first capture's lock has lapsed
+    (the mainline for multi-year policies) must place the fresh policy horizon, not fail closed on
+    the expired prior lock. The lapse is simulated by a governance-bypass shorten + wait."""
+    import asyncio as _asyncio
+
+    from easysynq_api.services.vault import storage as _storage
+
+    subject = _subject("rec-worm-expired")
+    await _grant(subject, (*_RECORD_PERMS, "retention.read", "retention.manage"))
+    h = _auth(token_factory, subject)
+    now = datetime.datetime.now(datetime.UTC)
+
+    content = f"c5 expired-lock evidence {uuid.uuid4().hex}".encode()
+    upload = await _upload_evidence(app_client, h, content)
+    first = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=f"c5 aged {uuid.uuid4().hex[:6]}",
+        evidence=[_evidence_json(upload)],
+    )
+    assert first.status_code == 201, first.text
+
+    def _lapse_lock() -> None:
+        client = _storage._client()
+        _storage._register_retention_md5(client)
+        head = client.head_object(Bucket="records", Key=upload.sha256)
+        client.put_object_retention(
+            Bucket="records",
+            Key=upload.sha256,
+            VersionId=head["VersionId"],
+            Retention={
+                "Mode": "GOVERNANCE",
+                "RetainUntilDate": datetime.datetime.now(datetime.UTC)
+                + datetime.timedelta(seconds=2),
+            },
+            BypassGovernanceRetention=True,
+        )
+
+    await _asyncio.to_thread(_lapse_lock)
+    await _asyncio.sleep(3)
+
+    pid = (
+        await app_client.post(
+            "/api/v1/retention-policies",
+            headers=h,
+            json={
+                "name": f"C5E-{uuid.uuid4().hex[:8]}",
+                "duration": "P1Y",
+                "worm_lock_period": "P1Y",
+                "disposition_action": "ARCHIVE_COLD",
+                "review_required": False,
+            },
+        )
+    ).json()["id"]
+    second = await _capture(
+        app_client,
+        h,
+        record_type="EVIDENCE",
+        title=f"c5 revive {uuid.uuid4().hex[:6]}",
+        evidence=[{"sha256": upload.sha256, "content_type": "application/pdf"}],
+        retention_policy_id=pid,
+    )
+    assert second.status_code == 201, second.text
+    async with get_sessionmaker()() as s:
+        blob = await s.get(Blob, upload.sha256)
+        assert blob is not None and blob.worm_retain_until is not None
+        assert blob.worm_retain_until > now + datetime.timedelta(days=300)
+    live = await _live_object_lock("records", upload.sha256)
+    assert live > now + datetime.timedelta(days=300), live

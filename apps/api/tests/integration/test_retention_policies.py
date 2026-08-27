@@ -385,3 +385,46 @@ async def test_pin_archived_policy_at_capture_422(
         assert capture.json()["errors"][0]["code"] == "retention_policy_archived"
     finally:
         await _delete_policy(pid)
+
+
+async def test_worm_lock_period_joins_the_extend_forward_ratchet(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Audit C5: worm_lock_period is now APPLIED at capture, so a pinned policy may not drop or
+    shorten the promised storage-lock horizon (extensions apply to future captures)."""
+    subject = _subject("rp-worm")
+    await _grant(subject, _PERMS)
+    h = _auth(token_factory, subject)
+    pid = (
+        await app_client.post(
+            "/api/v1/retention-policies",
+            headers=h,
+            json=_policy_body(duration="P5Y", worm_lock_period="P10Y"),
+        )
+    ).json()["id"]
+    rids: list[str] = []
+    try:
+        rid = (
+            await _capture(
+                app_client, h, record_type="SUPPLIER_EVAL", title="wl", retention_policy_id=pid
+            )
+        ).json()["id"]
+        rids.append(rid)
+        for bad in ({"worm_lock_period": "P6Y"}, {"worm_lock_period": None}):
+            r = await app_client.patch(f"/api/v1/retention-policies/{pid}", headers=h, json=bad)
+            assert r.status_code == 422, r.text
+            assert r.json()["errors"][0]["code"] == "retention_reduction_blocked"
+        extended = await app_client.patch(
+            f"/api/v1/retention-policies/{pid}", headers=h, json={"worm_lock_period": "P20Y"}
+        )
+        assert extended.status_code == 200, extended.text
+        assert extended.json()["worm_lock_period"] == "P20Y"
+        # PERMANENT is the ratchet's maximum: an allowed extension (storage keeps the last finite
+        # horizon; the DB-side RETAIN_PERMANENT guard owns the rest — the documented C5 limit).
+        to_perm = await app_client.patch(
+            f"/api/v1/retention-policies/{pid}", headers=h, json={"worm_lock_period": "PERMANENT"}
+        )
+        assert to_perm.status_code == 200, to_perm.text
+    finally:
+        await _delete_records(rids)
+        await _delete_policy(pid)

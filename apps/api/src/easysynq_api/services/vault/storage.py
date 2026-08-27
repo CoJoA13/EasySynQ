@@ -11,6 +11,7 @@ matches the SigV4 signature; server-side operations use ``s3_endpoint``.
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
 import datetime
 import hashlib
@@ -279,9 +280,40 @@ def _require_store_version_id(value: Any, stage: StorageStage) -> str:
     return value
 
 
-def _target_retention_sync(
-    client: Any, *, target_bucket: str, target_key: str, target_version_id: str
-) -> datetime.datetime:
+def _inject_content_md5(request: Any, **_kwargs: Any) -> None:
+    """MinIO enforces the classic ``Content-MD5`` header on object-lock mutations, and recent
+    botocore no longer auto-adds it (the backup drill's DeleteObjects note is the same
+    incompatibility). Inject it before signing so SigV4 covers it; transport integrity only —
+    not a security hash."""
+    body = request.body
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    if body:
+        digest = hashlib.md5(body, usedforsecurity=False).digest()
+        request.headers["Content-MD5"] = base64.b64encode(digest).decode("ascii")
+
+
+def _register_retention_md5(client: Any) -> None:
+    client.meta.events.register(
+        "before-sign.s3.PutObjectRetention",
+        _inject_content_md5,
+        unique_id="easysynq-retention-content-md5",
+    )
+
+
+def _read_retention_sync(
+    client: Any,
+    *,
+    target_bucket: str,
+    target_key: str,
+    target_version_id: str,
+    allow_expired: bool = False,
+) -> tuple[datetime.datetime | None, str]:
+    """(retain_until, mode) for one exact object version. The strict form (the promotion verify)
+    raises WormNotApplied unless a LIVE future lock is present. ``allow_expired`` is the
+    extension path's initial read: an aged shared object whose first horizon has lapsed (or a
+    legacy row with no per-version lock) returns ``(None, mode)`` so the caller PLACES the fresh
+    lock instead of fail-closing a legitimate recapture — the final read-back stays strict."""
     try:
         response = client.get_object_retention(
             Bucket=target_bucket,
@@ -292,20 +324,88 @@ def _target_retention_sync(
         if not isinstance(retention, dict):
             raise TypeError("malformed retention response")
         retain_until = retention.get("RetainUntilDate")
+        mode = retention.get("Mode")
     except Exception as exc:
+        if allow_expired and _error_code(exc) in {
+            "NoSuchObjectLockConfiguration",
+            "ObjectLockConfigurationNotFoundError",
+        }:
+            return None, "GOVERNANCE"
         raise StorageUnavailable(StorageStage.RETENTION, exc) from exc
+    mode_out = mode if isinstance(mode, str) and mode else "GOVERNANCE"
     now = datetime.datetime.now(datetime.UTC)
     if (
         not isinstance(retain_until, datetime.datetime)
         or retain_until.tzinfo is None
         or retain_until <= now
     ):
+        if allow_expired:
+            return None, mode_out
         raise WormNotApplied(
             target_bucket=target_bucket,
             target_key=target_key,
             target_version_id=target_version_id,
         )
-    return retain_until
+    return retain_until, mode_out
+
+
+def _target_retention_sync(
+    client: Any,
+    *,
+    target_bucket: str,
+    target_key: str,
+    target_version_id: str,
+    min_retain_until: datetime.datetime | None = None,
+) -> datetime.datetime:
+    """The object's effective lock horizon, EXTENDED to ``min_retain_until`` when the retention
+    policy demands more than the flat bucket default (audit C5: the per-policy
+    ``worm_lock_period`` was documented but never applied — every object carried only the 30-day
+    bucket default). Extending object-lock retention upward is always permitted (GOVERNANCE and
+    COMPLIANCE alike, same mode preserved); the put is READ-BACK VERIFIED so a silently ignored
+    extension fails closed as WormNotApplied rather than under-locking a sealed record."""
+    retain_until, mode = _read_retention_sync(
+        client,
+        target_bucket=target_bucket,
+        target_key=target_key,
+        target_version_id=target_version_id,
+        # The extension path must tolerate an EXPIRED/ABSENT prior lock on the initial read (an
+        # aged shared object being recaptured — the 7-year-policy mainline); the promotion verify
+        # (min_retain_until is None) stays strict, and so does the final read-back below.
+        allow_expired=min_retain_until is not None,
+    )
+    if min_retain_until is None:
+        if retain_until is None:  # pragma: no cover - the strict read raised instead
+            raise WormNotApplied(
+                target_bucket=target_bucket,
+                target_key=target_key,
+                target_version_id=target_version_id,
+            )
+        return retain_until
+    if retain_until is not None and min_retain_until <= retain_until:
+        return retain_until
+    try:
+        _register_retention_md5(client)
+        client.put_object_retention(
+            Bucket=target_bucket,
+            Key=target_key,
+            VersionId=target_version_id,
+            Retention={"Mode": mode, "RetainUntilDate": min_retain_until},
+        )
+    except Exception as exc:
+        raise StorageUnavailable(StorageStage.RETENTION, exc) from exc
+    extended, _mode = _read_retention_sync(
+        client,
+        target_bucket=target_bucket,
+        target_key=target_key,
+        target_version_id=target_version_id,
+    )
+    if extended is None or extended < min_retain_until:
+        raise WormNotApplied(
+            target_bucket=target_bucket,
+            target_key=target_key,
+            target_version_id=target_version_id,
+        )
+    return extended
 
 
 def _adopt_target_sync(
@@ -313,6 +413,7 @@ def _adopt_target_sync(
     target_bucket: str,
     target_version_id: str,
     client: Any,
+    min_retain_until: datetime.datetime | None = None,
 ) -> PromotionResult:
     target_key = verified.source.locator.object_key
     try:
@@ -357,6 +458,7 @@ def _adopt_target_sync(
         target_bucket=target_bucket,
         target_key=target_key,
         target_version_id=target_version_id,
+        min_retain_until=min_retain_until,
     )
     return PromotionResult(
         outcome=PromotionOutcome.ADOPTED_EXISTING,
@@ -377,6 +479,7 @@ def _verify_copied_target_sync(
     target_bucket: str,
     target_version_id: str,
     client: Any,
+    min_retain_until: datetime.datetime | None = None,
 ) -> PromotionResult:
     target_key = verified.source.locator.object_key
     try:
@@ -407,6 +510,7 @@ def _verify_copied_target_sync(
         target_bucket=target_bucket,
         target_key=target_key,
         target_version_id=target_version_id,
+        min_retain_until=min_retain_until,
     )
     return PromotionResult(
         outcome=PromotionOutcome.COPIED,
@@ -428,6 +532,7 @@ def _finalize_sync(
     *,
     client: Any | None = None,
     before_copy: Callable[[], None] | None = None,
+    min_retain_until: datetime.datetime | None = None,
 ) -> PromotionResult:
     storage_client = client or _client()
     verified = _verify_staged_sync(source, client=storage_client)
@@ -437,7 +542,9 @@ def _finalize_sync(
         target_version_id = _require_store_version_id(
             existing.get("VersionId"), StorageStage.TARGET_HEAD
         )
-        return _adopt_target_sync(verified, target_bucket, target_version_id, storage_client)
+        return _adopt_target_sync(
+            verified, target_bucket, target_version_id, storage_client, min_retain_until
+        )
 
     if before_copy is not None:
         before_copy()
@@ -460,11 +567,49 @@ def _finalize_sync(
             raise StagedSourceUnavailable(source) from exc
         raise StorageUnavailable(StorageStage.COPY, exc) from exc
     target_version_id = _require_store_version_id(copied.get("VersionId"), StorageStage.COPY)
-    return _verify_copied_target_sync(verified, target_bucket, target_version_id, storage_client)
+    return _verify_copied_target_sync(
+        verified, target_bucket, target_version_id, storage_client, min_retain_until
+    )
 
 
-async def promote_worm(source: StagedObjectRef, *, target_bucket: str) -> PromotionResult:
-    return await asyncio.to_thread(_finalize_sync, source, target_bucket)
+async def promote_worm(
+    source: StagedObjectRef,
+    *,
+    target_bucket: str,
+    min_retain_until: datetime.datetime | None = None,
+) -> PromotionResult:
+    return await asyncio.to_thread(
+        lambda: _finalize_sync(source, target_bucket, min_retain_until=min_retain_until)
+    )
+
+
+def _extend_latest_retention_sync(
+    bucket: str, object_key: str, min_retain_until: datetime.datetime
+) -> datetime.datetime:
+    """Extend the LATEST version's lock of an already-promoted content-addressed object to at
+    least ``min_retain_until`` (the same-bytes-under-a-longer-policy dedup path: content-addressed
+    keys are written once, so latest IS the sealed version). Read-back verified; fail-closed."""
+    client = _client()
+    try:
+        head = client.head_object(Bucket=bucket, Key=object_key)
+    except Exception as exc:
+        raise StorageUnavailable(StorageStage.TARGET_HEAD, exc) from exc
+    version_id = _require_store_version_id(head.get("VersionId"), StorageStage.TARGET_HEAD)
+    return _target_retention_sync(
+        client,
+        target_bucket=bucket,
+        target_key=object_key,
+        target_version_id=version_id,
+        min_retain_until=min_retain_until,
+    )
+
+
+async def extend_object_retention(
+    bucket: str, object_key: str, min_retain_until: datetime.datetime
+) -> datetime.datetime:
+    return await asyncio.to_thread(
+        _extend_latest_retention_sync, bucket, object_key, min_retain_until
+    )
 
 
 def _fetch_bytes_sync(object_key: str, bucket: str) -> bytes:
