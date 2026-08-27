@@ -176,9 +176,9 @@ export function VisualDiffViewer({
     );
   }
 
-  // --- Failed → a TERMINAL render failure. NOT re-drivable: get_or_create_visual_diff only
-  //     re-enqueues a Pending row, so a re-POST of a Failed row just returns Failed forever — we do
-  //     NOT advertise a retry that can't work (DP-6). Calm, with the source-download fallback. ---
+  // --- Failed → a terminal render failure. Explicitly re-drivable: retry() POSTs `?retry=true`,
+  //     which flips the row back to Pending server-side and re-enqueues the build. Calm, with the
+  //     source-download fallback. ---
   if (status?.status === "Failed") {
     return (
       <Alert color="red" title="Visual diff failed">
@@ -188,6 +188,9 @@ export function VisualDiffViewer({
             works; or open the source files:
           </Text>
           <Group gap="md">
+            <Anchor component="button" type="button" onClick={retry}>
+              Retry render
+            </Anchor>
             <Anchor component="button" type="button" onClick={() => void openSource(fromVid)}>
               Download Before source
             </Anchor>

@@ -2140,14 +2140,20 @@ async def request_visual_diff_endpoint(
     response: Response,
     request: Request,
     from_version_id: uuid.UUID = Query(alias="from"),
+    retry: bool = Query(
+        False,
+        description="explicitly re-drive a Failed build (Failed → Pending + re-enqueue)",
+    ),
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Request the doc 05 §8.1 visual page-image diff of ``from`` → ``version_id`` (worker-async,
     since the API can't render). Idempotent — UPSERTs the cached ``visual_diff`` row + enqueues the
-    worker task when not already terminal. 202 while Pending, 200 once Ready (poll GET). Requires
-    ``document.read`` plus every specialized key selected by the two version states."""
+    worker task when not already terminal. 202 while Pending, 200 once Ready (poll GET). A Failed
+    row re-drives only with ``?retry=true`` (the viewer auto-POSTs on mount, so a plain POST must
+    return the cached Failed instead of silently rebuilding a deterministic failure per visit).
+    Requires ``document.read`` plus every specialized key selected by the two version states."""
     doc, versions = await _load_authorized_versions(
         session,
         authz_sink,
@@ -2163,6 +2169,7 @@ async def request_visual_diff_endpoint(
         document_id=doc.id,
         from_version_id=from_version.id,
         to_version_id=to_version.id,
+        retry_failed=retry,
     )
     if should_enqueue:
         visual_diff_task.delay(str(vd.id))

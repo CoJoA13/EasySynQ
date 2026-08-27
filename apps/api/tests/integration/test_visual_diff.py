@@ -133,6 +133,126 @@ async def test_visual_diff_unavailable_when_not_renderable(
     assert body["reason"]
 
 
+async def test_visual_diff_unexpected_error_fails_row_and_repost_redrives(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Any non-Pending/non-Unavailable build error must reach the Failed terminal (never a
+    forever-Pending spinner: the raising task is still acked, no retry policy exists, and the GET
+    poll is side-effect-free), and a later POST explicitly re-drives Failed → Pending → Ready."""
+    monkeypatch.setattr(visual_diff_task, "delay", lambda *a, **k: None)
+    subject = _subject("vdiff-fail")
+    await _grant_doc_perms(subject)
+    h = _auth(token_factory, subject)
+    did, v1, v2 = await _two_pdf_versions(app_client, h, _pdf("one"), _pdf("two"))
+    post = await app_client.post(
+        f"/api/v1/documents/{did}/versions/{v2}/visual-diff?from={v1}", headers=h
+    )
+    assert post.status_code == 202, post.text
+
+    def _boom(pdf: bytes) -> list[object]:
+        raise RuntimeError("rasterizer crashed on a malformed cached rendition")
+
+    monkeypatch.setattr("easysynq_api.services.diff.visual.rasterize", _boom)
+    with pytest.raises(RuntimeError):
+        await _run_worker(v1, v2, GotenbergRenderSink())
+
+    got = await app_client.get(
+        f"/api/v1/documents/{did}/versions/{v2}/visual-diff?from={v1}", headers=h
+    )
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["status"] == "Failed"
+    # Only the exception CLASS is stored/served — the message may carry internal detail.
+    assert body["reason"] == "build_error: RuntimeError"
+
+    # A PLAIN re-POST (the viewer auto-POSTs on every mount) must NOT re-drive a Failed row —
+    # a deterministic failure would otherwise rebuild silently per visit.
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(visual_diff_task, "delay", lambda *a, **k: calls.append(a))
+    plain = await app_client.post(
+        f"/api/v1/documents/{did}/versions/{v2}/visual-diff?from={v1}", headers=h
+    )
+    assert plain.status_code == 200, plain.text
+    assert plain.json()["status"] == "Failed"
+    assert not calls, "a plain POST must not re-enqueue a Failed build"
+
+    # ?retry=true is the explicit retry affordance: Failed flips back to Pending and re-enqueues.
+    repost = await app_client.post(
+        f"/api/v1/documents/{did}/versions/{v2}/visual-diff?from={v1}&retry=true", headers=h
+    )
+    assert repost.status_code == 202, repost.text
+    assert repost.json()["status"] == "Pending"
+    assert calls, "a Failed re-drive must re-enqueue the build task"
+
+    from easysynq_api.domain.diff.visual import rasterize as real_rasterize
+
+    monkeypatch.setattr("easysynq_api.services.diff.visual.rasterize", real_rasterize)
+    await _run_worker(v1, v2, GotenbergRenderSink())
+    body = (
+        await app_client.get(
+            f"/api/v1/documents/{did}/versions/{v2}/visual-diff?from={v1}", headers=h
+        )
+    ).json()
+    assert body["status"] == "Ready"
+    assert body["reason"] is None
+
+
+async def test_visual_diff_reaper_times_out_only_stalled_pending(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Beat reaper flips a Pending row past the stall window → Failed (build_timeout) while a
+    fresh Pending row is untouched. Assertions are scoped to this run's own rows."""
+    import uuid as _uuid
+
+    import sqlalchemy as sa
+
+    from easysynq_api.services.diff.visual import reap_stalled_visual_diffs
+
+    monkeypatch.setattr(visual_diff_task, "delay", lambda *a, **k: None)
+    subject = _subject("vdiff-reap")
+    await _grant_doc_perms(subject)
+    h = _auth(token_factory, subject)
+    did, v1, v2 = await _two_pdf_versions(app_client, h, _pdf("p"), _pdf("q"))
+    # Two distinct (from, to) pairs on the same document: the stale one and a fresh control.
+    for from_id, to_id in ((v1, v2), (v2, v1)):
+        r = await app_client.post(
+            f"/api/v1/documents/{did}/versions/{to_id}/visual-diff?from={from_id}", headers=h
+        )
+        assert r.status_code == 202, r.text
+
+    async with get_sessionmaker()() as s:
+        stale = await get_visual_diff(s, _uuid.UUID(v1), _uuid.UUID(v2))
+        fresh = await get_visual_diff(s, _uuid.UUID(v2), _uuid.UUID(v1))
+        assert stale is not None and fresh is not None
+        await s.execute(
+            sa.text(
+                "UPDATE visual_diff SET created_at = now() - interval '2 hours' WHERE id = :id"
+            ),
+            {"id": stale.id},
+        )
+        await s.commit()
+        summary = await reap_stalled_visual_diffs(s)
+        assert summary["reaped"] >= 1  # shared DB: other files' stale rows may be swept too
+
+    body = (
+        await app_client.get(
+            f"/api/v1/documents/{did}/versions/{v2}/visual-diff?from={v1}", headers=h
+        )
+    ).json()
+    assert body["status"] == "Failed"
+    assert body["reason"] == "build_timeout"
+    fresh_body = (
+        await app_client.get(
+            f"/api/v1/documents/{did}/versions/{v1}/visual-diff?from={v2}", headers=h
+        )
+    ).json()
+    assert fresh_body["status"] == "Pending"
+
+
 async def test_visual_diff_poll_404_before_requested(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
