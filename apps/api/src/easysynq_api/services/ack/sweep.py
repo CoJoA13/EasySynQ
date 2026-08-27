@@ -28,7 +28,6 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.workflow import Task, WorkflowInstance
 from ...domain.ack.rules import plan_obligations
-from ...problems import ProblemException
 from ..common.org_clock import resolve_org_tz, using_org_tz
 from ..common.pg_locks import LOCK_ACK_SWEEP, pg_advisory_lock
 from ..workflow import engine as wf_engine
@@ -215,19 +214,30 @@ async def sweep_acks(
             instance_by_user: dict[uuid.UUID, uuid.UUID] = {
                 t.assignee_user_id: i.id for t, i in open_pairs if t.assignee_user_id
             }
-            for user_id in to_cancel:
-                iid = instance_by_user.get(user_id)
-                if iid is not None and await _cancel_instance(session, iid):
-                    _emit_cancelled(session, doc.org_id, doc.id, iid, doc.identifier, "lapsed")
-                    cancelled += 1
-            # R55 (S-duedate-snap): snap the (loop-invariant) raw due_at forward to a working day in
-            # THIS doc's org calendar — a NEW local (never reassign `due_at`, which spans all orgs).
-            from ..notifications.duedate import snap_due_at
+            # Per-doc SAVEPOINT: cancel-before-mint is a PAIRED reconciliation, and instantiate
+            # can fail mid-pair on a present-but-malformed definition — some malformed-spec
+            # shapes even raise AFTER the engine added the instance row. If the mint half dies,
+            # the cancel half (and any partial engine rows) must not survive to the outer
+            # commit: cancel-without-remint on broken config is fail-open (the Pass B
+            # rationale). A stale-pinned user sits in BOTH to_cancel and to_mint, so their
+            # obligation would otherwise be cancelled "lapsed" with the owed remint never
+            # minted.
+            doc_created = doc_cancelled = 0
+            savepoint = await session.begin_nested()
+            try:
+                for user_id in to_cancel:
+                    iid = instance_by_user.get(user_id)
+                    if iid is not None and await _cancel_instance(session, iid):
+                        _emit_cancelled(session, doc.org_id, doc.id, iid, doc.identifier, "lapsed")
+                        doc_cancelled += 1
+                # R55 (S-duedate-snap): snap the (loop-invariant) raw due_at forward to a
+                # working day in THIS doc's org calendar — a NEW local (never reassign
+                # `due_at`, which spans all orgs).
+                from ..notifications.duedate import snap_due_at
 
-            snapped_due_at = await snap_due_at(session, doc.org_id, due_at)
-            org_tz = await resolve_org_tz(session, doc.org_id)
-            for user_id in to_mint:
-                try:
+                snapped_due_at = await snap_due_at(session, doc.org_id, due_at)
+                org_tz = await resolve_org_tz(session, doc.org_id)
+                for user_id in to_mint:
                     instance = await wf_engine.instantiate(
                         session,
                         org_id=doc.org_id,
@@ -243,35 +253,42 @@ async def sweep_acks(
                         },
                         actor=None,
                     )
-                except ProblemException:
-                    # A present-but-malformed definition (e.g. no stages) raises BEFORE adding
-                    # any row; the same U4 posture applies — mark the org broken for the rest of
-                    # this run (its later docs and Pass B rows skip) and keep the cohort alive.
-                    logger.exception(
-                        "ack_sweep: instantiate failed for org %s — malformed "
-                        "doc_acknowledgement definition; skipping the org this tick",
-                        doc.org_id,
+                    await session.flush()
+                    await session.execute(
+                        update(Task)
+                        .where(Task.instance_id == instance.id)
+                        .values(due_at=snapped_due_at)
                     )
-                    def_ok[doc.org_id] = False
-                    break
-                await session.flush()
-                await session.execute(
-                    update(Task)
-                    .where(Task.instance_id == instance.id)
-                    .values(due_at=snapped_due_at)
-                )
-                ack_tasks = (
-                    (await session.execute(select(Task).where(Task.instance_id == instance.id)))
-                    .scalars()
-                    .all()
-                )
-                from ..notifications.dispatch import enqueue_task_notifications
+                    ack_tasks = (
+                        (await session.execute(select(Task).where(Task.instance_id == instance.id)))
+                        .scalars()
+                        .all()
+                    )
+                    from ..notifications.dispatch import enqueue_task_notifications
 
-                with using_org_tz(org_tz):
-                    await enqueue_task_notifications(
-                        session, instance, list(ack_tasks), due_at_override=snapped_due_at
-                    )
-                created += 1
+                    with using_org_tz(org_tz):
+                        await enqueue_task_notifications(
+                            session, instance, list(ack_tasks), due_at_override=snapped_due_at
+                        )
+                    doc_created += 1
+            except Exception:
+                # EVERY malformed-definition shape lands here: the pre-add ProblemException
+                # raises (missing/entry-less definition) AND the post-add
+                # AttributeError/TypeError/ValueError shapes a malformed stage spec (scalar
+                # assignees/roles/sla, non-numeric quorum) throws from _enter_stage. Roll the
+                # doc's half-done pair back, mark the org broken for the rest of this run (its
+                # later docs and Pass B rows skip), keep the cohort alive.
+                await savepoint.rollback()
+                logger.exception(
+                    "ack_sweep: reconcile failed for org %s — malformed doc_acknowledgement "
+                    "definition; skipping the org this tick",
+                    doc.org_id,
+                )
+                def_ok[doc.org_id] = False
+                continue
+            await savepoint.commit()
+            created += doc_created
+            cancelled += doc_cancelled
 
         # Pass B: open DOC_ACK obligations on docs that are no longer eligible.
         stale_q = (

@@ -1664,3 +1664,162 @@ async def test_sweep_survives_a_mis_seeded_org(
             await s.execute(delete(AppUser).where(AppUser.id == owner_id))
             await s.execute(delete(Organization).where(Organization.id == org_b_id))
             await s.commit()
+
+
+async def test_sweep_survives_a_malformed_definition(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """[Audit U5 catch/savepoint] A PRESENT-but-malformed periodic_review definition whose stage
+    spec raises AFTER the engine added the instance row (scalar ``assignees`` ->
+    ``AttributeError`` from ``_resolve_pool``, a non-Problem exception) must neither abort the
+    cohort nor leak the partially-added instance to the outer commit. The healthy org still
+    mints and the escalation pass still runs."""
+    from sqlalchemy import delete
+
+    from easysynq_api.db.models._vault_enums import (
+        Classification,
+        DocumentCurrentState,
+        DocumentKind,
+    )
+    from easysynq_api.db.models._workflow_enums import (
+        WorkflowStageMode,
+        WorkflowSubjectType,
+    )
+    from easysynq_api.db.models.app_user import AppUser, UserStatus
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.organization import Organization
+    from easysynq_api.db.models.workflow import (
+        WorkflowDefinition,
+        WorkflowInstance,
+        WorkflowStage,
+    )
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    did, _body = await _release_doc(
+        app_client, ha, hb, await s5.type_id("SOP"), f"pr-malformed-{subj.a}".encode()
+    )
+    doc_uuid = uuid.UUID(did)
+    today_date = datetime.datetime.now(await _canonical_tz()).date()
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": today_date, "id": doc_uuid},
+        )
+        await s.commit()
+
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        org_b = Organization(
+            legal_name=f"Review Malformed {salt}", short_code=f"RX{salt[:6].upper()}"
+        )
+        s.add(org_b)
+        await s.flush()
+        owner = AppUser(
+            org_id=org_b.id,
+            keycloak_subject=f"rx-owner-{salt}",
+            display_name="RX Owner",
+            email=f"rx-owner-{salt}@example.com",
+            status=UserStatus.ACTIVE,
+        )
+        s.add(owner)
+        await s.flush()
+        bad_def = WorkflowDefinition(
+            org_id=org_b.id,
+            key="periodic_review",
+            version=1,
+            is_effective=True,
+            subject_type=WorkflowSubjectType.PERIODIC_REVIEW,
+            stages={"entry": "gate"},
+        )
+        s.add(bad_def)
+        await s.flush()
+        # The malformed stage: a SCALAR assignees payload -> `_stage_spec(stage)` returns 5,
+        # `spec.get("roles", [])` raises AttributeError — after instantiate already added the
+        # instance row.
+        s.add(
+            WorkflowStage(
+                org_id=org_b.id,
+                definition_id=bad_def.id,
+                key="gate",
+                mode=WorkflowStageMode.PARALLEL,
+                assignees=5,
+                quorum={"type": "ANY"},
+            )
+        )
+        fw_id = (
+            await s.execute(
+                select(DocumentedInformation.framework_id).where(
+                    DocumentedInformation.id == doc_uuid
+                )
+            )
+        ).scalar_one()
+        doc_b = DocumentedInformation(
+            org_id=org_b.id,
+            framework_id=fw_id,
+            kind=DocumentKind.DOCUMENT,
+            identifier=f"RX-DOC-{salt}",
+            title="Malformed review doc",
+            owner_user_id=owner.id,
+            current_state=DocumentCurrentState.Effective,
+            classification=Classification.Internal,
+            next_review_due=today_date,
+            created_by=owner.id,
+        )
+        s.add(doc_b)
+        await s.commit()
+        org_b_id, doc_b_id, owner_id, bad_def_id = org_b.id, doc_b.id, owner.id, bad_def.id
+
+    try:
+        async with get_sessionmaker()() as session:
+            result = await sweep_reviews(session)  # must NOT raise
+        assert result["tasks_created"] >= 1
+        assert "escalated" in result  # the escalation pass ran (no mid-loop abort)
+        async with get_sessionmaker()() as s:
+            minted = (
+                await s.execute(
+                    select(WorkflowInstance.id).where(
+                        WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                        WorkflowInstance.subject_id == doc_uuid,
+                    )
+                )
+            ).all()
+            assert len(minted) >= 1
+            # The savepoint rolled the partially-added engine rows back: nothing for org B.
+            stray = (
+                await s.execute(
+                    select(WorkflowInstance.id).where(WorkflowInstance.subject_id == doc_b_id)
+                )
+            ).all()
+            assert stray == []
+    finally:
+        async with get_sessionmaker()() as s:
+            from easysynq_api.db.models.workflow import Task as TaskRow
+
+            stray_ids = (
+                (
+                    await s.execute(
+                        select(WorkflowInstance.id).where(WorkflowInstance.subject_id == doc_b_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if stray_ids:  # only on the assertion-failure path
+                await s.execute(delete(TaskRow).where(TaskRow.instance_id.in_(stray_ids)))
+                await s.execute(delete(WorkflowInstance).where(WorkflowInstance.id.in_(stray_ids)))
+            await s.execute(delete(WorkflowStage).where(WorkflowStage.definition_id == bad_def_id))
+            await s.execute(delete(WorkflowDefinition).where(WorkflowDefinition.id == bad_def_id))
+            await s.execute(
+                delete(DocumentedInformation).where(DocumentedInformation.id == doc_b_id)
+            )
+            await s.execute(delete(AppUser).where(AppUser.id == owner_id))
+            await s.execute(delete(Organization).where(Organization.id == org_b_id))
+            await s.commit()
