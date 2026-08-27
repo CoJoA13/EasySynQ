@@ -1760,7 +1760,9 @@ async def test_commit_writes_documents_records_and_generated_report_to_vault(
             report_source = source
         return source
 
-    async def require_exact_report_source(source: object, *, target_bucket: str) -> object:
+    async def require_exact_report_source(
+        source: object, *, target_bucket: str, min_retain_until: object = None
+    ) -> object:
         nonlocal report_promotions
         if getattr(source, "content_type", None) == "text/markdown":
             assert source is report_source
@@ -1935,7 +1937,9 @@ async def test_generated_report_source_mismatch_preserves_terminal_commit_and_au
             report_source = source
         return source
 
-    async def refuse_report(source: StagedObjectRef, *, target_bucket: str) -> object:
+    async def refuse_report(
+        source: StagedObjectRef, *, target_bucket: str, min_retain_until: object = None
+    ) -> object:
         if source.content_type == "text/markdown":
             assert source is report_source
             raise UploadIdentityMismatch(
@@ -3461,7 +3465,9 @@ async def test_restaged_locator_survives_retained_storage_failure_and_resumes_ex
             restaged_uri = staged.staged_blob_uri
             return staged
 
-        async def _fail_after_restage(source: object, *, target_bucket: str) -> object:
+        async def _fail_after_restage(
+            source: object, *, target_bucket: str, min_retain_until: object = None
+        ) -> object:
             if source.locator.object_key == sha:  # type: ignore[union-attr]
                 raise StorageUnavailable(StorageStage.COPY)
             return await original_promote(source, target_bucket=target_bucket)  # type: ignore[arg-type]

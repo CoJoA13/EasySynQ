@@ -331,7 +331,9 @@ async def test_pack_build_seal_r28_matrix_and_download(
                 staged_zip = source
             return source
 
-        async def require_exact_zip_source(source: object, *, target_bucket: str) -> object:
+        async def require_exact_zip_source(
+            source: object, *, target_bucket: str, min_retain_until: object = None
+        ) -> object:
             nonlocal zip_promotions
             if getattr(source, "content_type", None) == "application/zip":
                 assert source is staged_zip

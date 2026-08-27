@@ -144,7 +144,9 @@ async def test_mode_b_happy_path(
             schema_source = source
         return source
 
-    async def require_exact_schema_source(source: object, *, target_bucket: str) -> object:
+    async def require_exact_schema_source(
+        source: object, *, target_bucket: str, min_retain_until: object = None
+    ) -> object:
         if getattr(source, "content_type", None) == "application/json":
             assert source is schema_source
         return await original_promote(source, target_bucket=target_bucket)  # type: ignore[arg-type]
@@ -199,7 +201,9 @@ async def test_generated_schema_mismatch_is_system_503_without_owner_success(
     }
     did = await _new_form_template(app_client, ha, mismatch_schema)
 
-    async def mismatch(source: object, *, target_bucket: str) -> object:
+    async def mismatch(
+        source: object, *, target_bucket: str, min_retain_until: object = None
+    ) -> object:
         raise UploadIdentityMismatch(
             source=source,  # type: ignore[arg-type]
             expected_sha256=source.expected_sha256,  # type: ignore[union-attr]
