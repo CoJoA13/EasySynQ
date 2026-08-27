@@ -13,6 +13,7 @@ import dataclasses
 import datetime
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
@@ -45,6 +46,7 @@ from ..db.models.management_review import ManagementReview
 from ..db.models.process import Process
 from ..db.models.process_link import ProcessLink
 from ..db.models.quality_objective import QualityObjective
+from ..db.models.record import Record
 from ..db.models.role import Role
 from ..db.models.visual_diff import VisualDiff
 from ..db.models.workflow import Task, WorkflowInstance
@@ -66,6 +68,7 @@ from ..services.authz.version_history import (
 from ..services.common.org_clock import current_org_tz
 from ..services.dcr import build_where_used
 from ..services.diff import build_version_diff, get_or_create_visual_diff, get_visual_diff
+from ..services.records import repository as records_repo
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -102,6 +105,7 @@ from ..services.vault.leadership_authorization import (
     request_leadership_authorization,
 )
 from ..services.vault.locks import LOCK_TTL_SECONDS
+from ..services.vault.obsoletion import referencing_effective_documents
 from ..services.vault.release_scope import enrich_release_sod_scope
 from ..services.vault.review import compute_next_review_due, review_state, today_org
 from ..services.workflow import instantiate_approval
@@ -1348,10 +1352,13 @@ def _document_link(link: DocumentLink) -> dict[str, Any]:
 @router.get("/documents/{document_id}/links")
 async def list_document_links_endpoint(
     document_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
-    """Every document_link touching this document (outbound + inbound). Needs ``document.read``."""
+    """Every document_link touching this document (outbound + inbound). Needs ``document.read``;
+    rows whose FAR end the caller's own read grants do not cover are dropped — a filtered row's id
+    must not leak through the edge (the S-process-scope-2 /map edge-filter rule)."""
     await _load_document(session, caller, document_id)
     rows = (
         (
@@ -1367,19 +1374,30 @@ async def list_document_links_endpoint(
         .scalars()
         .all()
     )
-    return [_document_link(link) for link in rows]
+    grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
+    doc_visible = _readable_doc_predicate(session, grants, _panel_request_context(request))
+    visible_links = []
+    for link in rows:
+        far = link.to_document_id if link.from_document_id == document_id else link.from_document_id
+        if await doc_visible(str(far)):
+            visible_links.append(link)
+    return [_document_link(link) for link in visible_links]
 
 
 @router.post("/documents/{document_id}/links", status_code=status.HTTP_201_CREATED)
 async def create_document_link_endpoint(
     document_id: uuid.UUID,
     body: DocumentLinkCreate,
+    request: Request,
     caller: AppUser = Depends(_manage_metadata),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Create a directed ``from → to`` document link of ``link_type`` (doc 14 §5.6). Both must be
     in-org controlled Documents; no self-link; 409 on a duplicate (from,to,type). Needs
-    ``document.manage_metadata``."""
+    ``document.manage_metadata`` on BOTH ends — an inbound ``references`` edge is a §7.3
+    obsoletion-block input and a where-used/impact fact of the TARGET, so minting one is a write
+    against the target's control state (the ``_enforce_target_process`` discipline)."""
     doc = await _load_document(session, caller, document_id)
     await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     if body.to_document_id == document_id:
@@ -1392,6 +1410,18 @@ async def create_document_link_endpoint(
     target = await session.get(DocumentedInformation, body.to_document_id)
     if target is None or target.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Target document not found")
+    # Re-authorize against the TARGET document's own full context: a PROCESS-scoped
+    # manage_metadata holder must hold authority over the far end too, not just the path doc.
+    # Ordered BEFORE the kind/managed-head checks so an unauthorized probe learns only 403 —
+    # never whether the target is a Record or a reserved OBJ/MR/RSK head (the kind oracle).
+    await enforce(
+        session,
+        authz_sink,
+        request,
+        caller,
+        "document.manage_metadata",
+        await _document_scope_by_id(session, target.id),
+    )
     if target.kind != DocumentKind.DOCUMENT:
         raise ProblemException(
             status=422,
@@ -1431,10 +1461,14 @@ async def create_document_link_endpoint(
 async def delete_document_link_endpoint(
     document_id: uuid.UUID,
     link_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_manage_metadata),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> Response:
-    """Remove a document link touching this document. Needs ``document.manage_metadata``."""
+    """Remove a document link touching this document. Needs ``document.manage_metadata`` on BOTH
+    ends — deleting the edge removes the other document's declared dependency / obsoletion-block
+    input, so it is symmetric with create (the ``_enforce_target_process`` discipline)."""
     doc = await _load_document(session, caller, document_id)
     await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     link = await session.get(DocumentLink, link_id)
@@ -1452,6 +1486,15 @@ async def delete_document_link_endpoint(
     other = await session.get(DocumentedInformation, other_id)
     if other is not None:
         await reject_objective_byte_path(session, other)
+    # Re-authorize against the OTHER end's own full context (symmetric with create).
+    await enforce(
+        session,
+        authz_sink,
+        request,
+        caller,
+        "document.manage_metadata",
+        await _document_scope_by_id(session, other_id),
+    )
     before = {
         "to_document_id": str(link.to_document_id),
         "from_document_id": str(link.from_document_id),
@@ -1463,17 +1506,157 @@ async def delete_document_link_endpoint(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def _panel_request_context(request: Request) -> RequestContext:
+    """RequestContext for a row-filter read — threads ``source_ip`` so an ``ip_allow``-predicated
+    grant evaluates exactly as the enforce path does (the S-process-scope-2 lesson)."""
+    return RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
+
+
+def _readable_doc_predicate(
+    session: AsyncSession, grants: Any, ctx: RequestContext
+) -> Callable[[str], Awaitable[bool]]:
+    """A cached per-document ``document.read`` row-filter predicate built on the CANONICAL context
+    builder (``_document_scope_by_id``), so the panel filter can't drift from the detail gate. The
+    neighbour set of one document is small (tens), so per-row context builds are bounded."""
+    cache: dict[str, bool] = {}
+
+    async def _visible(doc_id: str) -> bool:
+        if doc_id not in cache:
+            resource = await _document_scope_by_id(session, uuid.UUID(doc_id))
+            cache[doc_id] = authorize(grants, "document.read", resource, ctx).allow
+        return cache[doc_id]
+
+    return _visible
+
+
+_WHERE_USED_DOC_BUCKETS = (
+    "child_documents",
+    "parent_documents",
+    "referenced_by",
+    "references_out",
+    "forms_templates",
+    "supersedes",
+    "superseded_by",
+)
+
+
+async def _filter_where_used_for_caller(
+    session: AsyncSession,
+    caller: AppUser,
+    ctx: RequestContext,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Per-neighbour authorization over the where-used projection (R57: identifier/title/state is a
+    ``document.read``-gated surface — the panel must not disclose neighbours the caller's scoped
+    grants do not cover, exactly as the Library list, search, and the detail GET already hide them).
+    Filters the HTTP panel only; the DCR assess path keeps the complete data — a persisted impact
+    assessment must not silently shrink to its assessor's read scope."""
+    doc_grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
+    doc_visible = _readable_doc_predicate(session, doc_grants, ctx)
+    for key in _WHERE_USED_DOC_BUCKETS:
+        kept = []
+        for row in payload[key]:
+            if await doc_visible(row["document_id"]):
+                kept.append(row)
+        payload[key] = kept
+
+    # Records sample: per-row record.read with the records listing's exact context recipe. The
+    # COUNT stays exact — it is aggregate awareness metadata of the path document itself (§7.3
+    # feeds on it); the identifiable rows are what R57 protects.
+    sample = payload["records_produced_under"]["sample"]
+    if sample:
+        rec_grants = await gather_grants(session, caller.id, caller.org_id, "record.read")
+        visible_record_ids: set[str] = set()
+        if rec_grants:
+            rows = (
+                await session.execute(
+                    select(Record, DocumentedInformation)
+                    .join(DocumentedInformation, DocumentedInformation.id == Record.id)
+                    .where(Record.id.in_([uuid.UUID(r["id"]) for r in sample]))
+                )
+            ).all()
+            process_ids_by_record = await records_repo.record_process_ids_for(
+                session, [record for record, _base in rows]
+            )
+            for record, base in rows:
+                process_ids = process_ids_by_record.get(record.id) or set()
+                if (
+                    not process_ids
+                    and record.source_document_id is None
+                    and record.correction_of is not None
+                ):
+                    process_ids = await records_repo.record_process_ids_effective(session, record)
+                resource = ResourceContext(
+                    artifact_id=str(record.id),
+                    kind="RECORD",
+                    folder_path=base.folder_path,
+                    framework_id=str(base.framework_id),
+                    process_ids=frozenset(process_ids),
+                    lifecycle_state=base.current_state.value,
+                )
+                if authorize(rec_grants, "record.read", resource, ctx).allow:
+                    visible_record_ids.add(str(record.id))
+        payload["records_produced_under"]["sample"] = [
+            r for r in sample if r["id"] in visible_record_ids
+        ]
+
+    # Obsoletion advisory: the referenced_by_effective reason embeds the referencing documents'
+    # IDENTIFIERS — the same R57 fact the bucket filter above hides (authz-reviewer catch). Rebuild
+    # that reason's detail from the same source set, naming only documents the caller can read and
+    # aggregating the rest; the blocking gate and the DCR assess path keep the full detail. The
+    # governs_active_process reason mirrors the deliberately-unfiltered processes leg, and
+    # sole_star_coverage names only clause-catalog data.
+    reasons = payload["obsoletion_safety"]["reasons"]
+    if any(r["code"] == "referenced_by_effective" for r in reasons):
+        referencing = await referencing_effective_documents(
+            session, uuid.UUID(payload["document_id"])
+        )
+        visible_names = [ident for rid, ident in referencing if await doc_visible(rid)]
+        hidden = len(referencing) - len(visible_names)
+        detail = f"referenced by {len(referencing)} Effective doc(s)"
+        if visible_names:
+            detail += f": {', '.join(visible_names)}"
+        if hidden:
+            detail += f" ({hidden} not visible to your read scope)"
+        for r in reasons:
+            if r["code"] == "referenced_by_effective":
+                r["detail"] = detail
+
+    # Related CAPAs/findings: DCR identifiers are a changeRequest.read surface. Gate the leg with
+    # the SAME decision GET /dcrs gives (SYSTEM context) — a caller who cannot read DCRs must not
+    # collect their identifiers here. capa_close_state is additionally a capa.read fact; hide it
+    # (conservatively at SYSTEM) when the caller lacks that key.
+    if payload["related_capas_findings"]:
+        cr_grants = await gather_grants(session, caller.id, caller.org_id, "changeRequest.read")
+        if not authorize(cr_grants, "changeRequest.read", ResourceContext.system(), ctx).allow:
+            payload["related_capas_findings"] = []
+        else:
+            capa_grants = await gather_grants(session, caller.id, caller.org_id, "capa.read")
+            if not authorize(capa_grants, "capa.read", ResourceContext.system(), ctx).allow:
+                for row in payload["related_capas_findings"]:
+                    row["capa_close_state"] = None
+    return payload
+
+
 @router.get("/documents/{document_id}/where-used")
 async def where_used_endpoint(
     document_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """The doc 05 §7.2 where-used panel for this document (processes · child/parent documents ·
     referenced-by · forms/templates · records-produced-under · clauses · related CAPAs/findings) +
-    the §7.3 ``obsoletion_safety`` advisory. Needs ``document.read``."""
+    the §7.3 ``obsoletion_safety`` advisory. Needs ``document.read``; every neighbour row is
+    additionally filtered by the caller's own read grants (R57)."""
     doc = await _load_document(session, caller, document_id)
-    return await build_where_used(session, caller.org_id, doc.id)
+    payload = await build_where_used(session, caller.org_id, doc.id)
+    return await _filter_where_used_for_caller(
+        session, caller, _panel_request_context(request), payload
+    )
 
 
 # --- distribution & acknowledgements (S-ack-1, doc 04 §8.1/§8.2, R42/R43) -----------------

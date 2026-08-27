@@ -44,7 +44,7 @@ async def _governing_active_processes(
     return [(str(proc.id), proc.name) for _link, proc in links if proc.state is ProcessState.ACTIVE]
 
 
-async def _referencing_effective_documents(
+async def referencing_effective_documents(
     session: AsyncSession, doc_id: uuid.UUID
 ) -> list[tuple[str, str]]:
     """Effective documents that ``references``-link TO ``doc_id`` (inbound ``references`` = the
@@ -125,7 +125,7 @@ async def assemble_obsoletion_safety(
     place the obsoletion decision is computed (the gate + the advisory both call this)."""
     return evaluate_obsoletion(
         governing_active_processes=await _governing_active_processes(session, doc_id),
-        referencing_effective_documents=await _referencing_effective_documents(session, doc_id),
+        referencing_effective_documents=await referencing_effective_documents(session, doc_id),
         sole_star_clauses=await _sole_star_clauses(session, org_id, doc_id),
     )
 
