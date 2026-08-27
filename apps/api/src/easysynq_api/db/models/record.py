@@ -45,9 +45,12 @@ from ._record_enums import (
 class Record(Base):
     __tablename__ = "record"
     __table_args__ = (
+        # Bare token: the ck naming convention prepends ``ck_record_``; the previously passed
+        # full name doubled to ``ck_record_ck_record_content_hash_version_supported`` on live
+        # databases (the 0019/0079 lesson; repaired by migration 0089).
         CheckConstraint(
             "content_hash_version IN (1, 2)",
-            name="ck_record_content_hash_version_supported",
+            name="content_hash_version_supported",
         ),
         Index("ix_record_source_document_id", "source_document_id"),
         Index("ix_record_source_version_id", "source_version_id"),

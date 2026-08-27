@@ -26,8 +26,11 @@ def upgrade() -> None:
         "system_config",
         sa.Column("bootstrap_credential_receipt_hash", sa.String(length=64), nullable=True),
     )
+    # Bare token: Alembic applies the metadata ck naming convention; the full name previously
+    # doubled AND hash-truncated on live databases (63-char identifier cap — the 0019/0079
+    # lesson; repaired by 0089). The ORM mirrors this constraint in system_config.py.
     op.create_check_constraint(
-        "ck_system_config_bootstrap_credential_receipt_hash_hex",
+        "bootstrap_credential_receipt_hash_hex",
         "system_config",
         "bootstrap_credential_receipt_hash IS NULL OR "
         "bootstrap_credential_receipt_hash ~ '^[0-9a-f]{64}$'",
@@ -35,9 +38,22 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "ck_system_config_bootstrap_credential_receipt_hash_hex",
-        "system_config",
-        type_="check",
+    # Spelling-tolerant (see 0078's downgrade note). The legacy spelling here is additionally
+    # hash-truncated (63-char cap, opaque suffix), so it is matched by prefix, never by literal.
+    op.execute(
+        """
+        DO $$
+        DECLARE c record;
+        BEGIN
+            FOR c IN
+                SELECT conname FROM pg_constraint
+                WHERE conrelid = 'system_config'::regclass AND contype = 'c'
+                  AND (conname = 'ck_system_config_bootstrap_credential_receipt_hash_hex'
+                       OR starts_with(conname, 'ck_system_config_ck_system_config_'))
+            LOOP
+                EXECUTE format('ALTER TABLE system_config DROP CONSTRAINT %I', c.conname);
+            END LOOP;
+        END $$;
+        """
     )
     op.drop_column("system_config", "bootstrap_credential_receipt_hash")

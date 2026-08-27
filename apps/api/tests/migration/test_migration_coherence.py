@@ -137,6 +137,19 @@ def _process_edge_checks(connection: sa.Connection) -> set[str]:
     }
 
 
+def _table_check_names(connection: sa.Connection, table_name: str) -> set[str]:
+    return {
+        str(name)
+        for name in connection.execute(
+            sa.text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conrelid = CAST(:table_name AS regclass) AND contype = 'c'"
+            ),
+            {"table_name": table_name},
+        ).scalars()
+    }
+
+
 def _column_nullable(
     connection: sa.Connection,
     table_name: str,
@@ -257,7 +270,7 @@ def test_populated_historical_transitions_and_head_repairs(
         monkeypatch.setenv("DATABASE_URL_SYNC", scratch_url)
         get_settings.cache_clear()
         config = _config()
-        assert ScriptDirectory.from_config(config).get_heads() == ["0088_bootstrap_credential"]
+        assert ScriptDirectory.from_config(config).get_heads() == ["0089_constraint_name_coherence"]
         engine = sa.create_engine(scratch_url)
         try:
             # 0004: role assignments and permission overrides must preserve their full FK closure.
@@ -1225,6 +1238,100 @@ def test_populated_historical_transitions_and_head_repairs(
                     ).one()
                     == identity_setup
                 )
+            # 0089: normalize the doubled CHECK names a pre-correction installation stored. The
+            # corrected 0078/0081/0088 create canonical names on a fresh chain, so the repair's
+            # rename branch is only reachable by fabricating the legacy spellings first.
+            coherence = {
+                "record": (
+                    "ck_record_content_hash_version_supported",
+                    "ck_record_ck_record_content_hash_version_supported",
+                ),
+                "pending_blob_purge": (
+                    "ck_pending_blob_purge_authority_shape",
+                    "ck_pending_blob_purge_ck_pending_blob_purge_authority_shape",
+                ),
+                "system_config": (
+                    "ck_system_config_bootstrap_credential_receipt_hash_hex",
+                    # The truncated doubled spelling a live DB stored (opaque 4-hex suffix).
+                    "ck_system_config_ck_system_config_bootstrap_credential__314c",
+                ),
+            }
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                for table, (canonical, _legacy) in coherence.items():
+                    names = _table_check_names(connection, table)
+                    assert canonical in names, (table, names)
+                    assert not any(n.startswith(f"ck_{table}_ck_{table}_") for n in names), (
+                        table,
+                        names,
+                    )
+
+            # Rename branch: a deployed database carrying only the doubled names.
+            command.downgrade(config, "0088_bootstrap_credential")
+            with engine.begin() as connection:
+                for table, (canonical, legacy) in coherence.items():
+                    connection.execute(
+                        sa.text(f"ALTER TABLE {table} RENAME CONSTRAINT {canonical} TO {legacy}")
+                    )
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                for table, (canonical, legacy) in coherence.items():
+                    names = _table_check_names(connection, table)
+                    assert canonical in names, (table, names)
+                    assert legacy not in names, (table, names)
+
+            # Duplicate branch: collapse a harmless legacy copy beside the canonical name.
+            command.downgrade(config, "0088_bootstrap_credential")
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "ALTER TABLE record ADD CONSTRAINT "
+                        f"{coherence['record'][1]} CHECK (content_hash_version IN (1, 2))"
+                    )
+                )
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                names = _table_check_names(connection, "record")
+                assert coherence["record"][0] in names
+                assert coherence["record"][1] not in names
+
+            # Absent branch: a manually dropped constraint is recreated under the canonical name.
+            command.downgrade(config, "0088_bootstrap_credential")
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "ALTER TABLE pending_blob_purge "
+                        f"DROP CONSTRAINT {coherence['pending_blob_purge'][0]}"
+                    )
+                )
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                assert coherence["pending_blob_purge"][0] in _table_check_names(
+                    connection, "pending_blob_purge"
+                )
+
+            # A pre-repair database can still ROLL BACK through the corrected 0078/0081/0088
+            # without ever upgrading through 0089: fabricate the doubled names at stamp 0088, then
+            # downgrade below 0078 (the tolerant drops must remove the legacy spellings) and come
+            # back to head. The 0078 data guard requires every record at content_hash_version 1.
+            command.downgrade(config, "0088_bootstrap_credential")
+            with engine.begin() as connection:
+                for table, (canonical, legacy) in coherence.items():
+                    connection.execute(
+                        sa.text(f"ALTER TABLE {table} RENAME CONSTRAINT {canonical} TO {legacy}")
+                    )
+                connection.execute(sa.text("UPDATE record SET content_hash_version = 1"))
+            command.downgrade(config, "0077_sealed_pack_retention")
+            with engine.connect() as connection:
+                for table, (canonical, legacy) in coherence.items():
+                    names = _table_check_names(connection, table)
+                    assert canonical not in names, (table, names)
+                    assert legacy not in names, (table, names)
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                for table, (canonical, _legacy) in coherence.items():
+                    assert canonical in _table_check_names(connection, table), table
+
             command.check(config)
         finally:
             engine.dispose()
