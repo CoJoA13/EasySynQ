@@ -142,3 +142,40 @@ async def test_loaders_push_file_ids_down(app_under_test: object) -> None:
         assert (
             await s.execute(select(ImportDecision).where(ImportDecision.run_id == run_id))
         ).scalars().first() is not None
+
+
+async def test_list_files_review_passes_the_page_ids_to_both_loaders(
+    app_under_test: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pushdown WITNESS: parity alone cannot fail when the wiring is absent (both calls then
+    execute identical whole-run loads), so pin that list_files_review actually passes the page's
+    ids to both loaders (the diff-critic catch on the first cut of this slice)."""
+    caller, run_id, file1, _file2 = await _fabricate_run()
+    seen: dict[str, object] = {}
+    real_nodes = repo.list_proposal_nodes
+    real_decisions = repo.list_decisions
+
+    async def spy_nodes(session: object, rid: object, *, file_ids: object = None) -> object:
+        seen["nodes"] = file_ids
+        return await real_nodes(session, rid, file_ids=file_ids)  # type: ignore[arg-type]
+
+    async def spy_decisions(session: object, rid: object, *, file_ids: object = None) -> object:
+        seen["decisions"] = file_ids
+        return await real_decisions(session, rid, file_ids=file_ids)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(repo, "list_proposal_nodes", spy_nodes)
+    monkeypatch.setattr(repo, "list_decisions", spy_decisions)
+    async with get_sessionmaker()() as s:
+        await list_files_review(
+            s,
+            caller,
+            run_id,
+            disposition=None,
+            kind=None,
+            band=None,
+            review_status=None,
+            limit=1,
+            offset=0,
+        )
+    assert seen.get("nodes") == [file1], seen
+    assert seen.get("decisions") == [file1], seen

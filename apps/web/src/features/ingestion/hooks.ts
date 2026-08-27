@@ -125,7 +125,7 @@ const WHOLE_RUN_COALESCE_MS = 1000;
 // structural ops) the cluster/family lists. Merge/split are server-authoritative — never reshape the
 // client cache optimistically (D-5); just refetch. Row-scoped families refetch immediately (the
 // files listing is page-scoped server-side); the whole-run checklist/run families coalesce.
-function useRunInvalidator(runId: string | null) {
+function useRunInvalidator(runId: string | null, opts?: { wholeRunImmediate?: boolean }) {
   const qc = useQueryClient();
   const wholeRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   return () => {
@@ -134,6 +134,14 @@ function useRunInvalidator(runId: string | null) {
     void qc.invalidateQueries({ queryKey: ["import-decisions", runId] });
     void qc.invalidateQueries({ queryKey: ["import-dupe-clusters", runId] });
     void qc.invalidateQueries({ queryKey: ["import-version-families", runId] });
+    // One-shot lifecycle verbs (commit/cancel) have nothing to coalesce, and a deferred run
+    // refetch would leave the cockpit rendered (with the Commit button re-enabled on the stale
+    // ready checklist) for the whole window after a successful commit — refetch immediately.
+    if (opts?.wholeRunImmediate) {
+      void qc.invalidateQueries({ queryKey: ["import-checklist", runId] });
+      void qc.invalidateQueries({ queryKey: ["import-run", runId] });
+      return;
+    }
     // The queryClient outlives any component, so a timer surviving unmount still lands safely.
     if (wholeRunTimer.current !== null) clearTimeout(wholeRunTimer.current);
     wholeRunTimer.current = setTimeout(() => {
@@ -222,7 +230,7 @@ export function useCreateImportRun() {
 
 export function useCancelRun(runId: string | null) {
   const api = useApi();
-  const invalidate = useRunInvalidator(runId);
+  const invalidate = useRunInvalidator(runId, { wholeRunImmediate: true });
   return useMutation({
     mutationFn: () => api.send<ImportRun>("POST", `/api/v1/admin/imports/${runId}/cancel`),
     onSuccess: invalidate,
@@ -231,7 +239,7 @@ export function useCancelRun(runId: string | null) {
 
 export function useCommitRun(runId: string | null) {
   const api = useApi();
-  const invalidate = useRunInvalidator(runId);
+  const invalidate = useRunInvalidator(runId, { wholeRunImmediate: true });
   return useMutation({
     mutationFn: () => api.send<ImportRun>("POST", `/api/v1/admin/imports/${runId}/commit`),
     onSuccess: invalidate,

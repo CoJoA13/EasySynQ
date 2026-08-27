@@ -109,3 +109,32 @@ test("whole-run checklist/run invalidations coalesce; row-scoped ones stay immed
   expect(calls("import-checklist")).toBe(1); // coalesced: one refetch for two decisions
   expect(calls("import-run")).toBe(1);
 });
+
+
+test("commit invalidates the whole-run families IMMEDIATELY (no coalescing on lifecycle verbs)", async () => {
+  // After a successful commit the server flips the run to Committing; a deferred run/checklist
+  // refetch would keep the cockpit (with a re-enabled Commit button) rendered for the window.
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const spy = vi.spyOn(client, "invalidateQueries");
+  function immWrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={client}>
+        <AuthContext.Provider value={TEST_AUTH}>{children}</AuthContext.Provider>
+      </QueryClientProvider>
+    );
+  }
+  server.use(
+    http.post("/api/v1/admin/imports/:id/commit", () =>
+      HttpResponse.json({ ...ingestionRunFixture, status: "Committing" }),
+    ),
+  );
+  const { result } = renderHook(() => useCommitRun(RID), { wrapper: immWrapper });
+  const calls = (family: string) =>
+    spy.mock.calls.filter((c) => (c[0]?.queryKey as unknown[] | undefined)?.[0] === family).length;
+  result.current.mutate();
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  // No timer advance: both whole-run families already refetched.
+  expect(calls("import-run")).toBe(1);
+  expect(calls("import-checklist")).toBe(1);
+});
