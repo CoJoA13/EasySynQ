@@ -25,8 +25,13 @@ since it has nothing to compare against.
    ```bash
    just images-update      # prints image:tag@sha256:… for each line in infra/images.lock
    ```
-   Replace the tag-pinned lines in `infra/images.lock` with the printed `@sha256:` refs and commit
-   for the release. Check it before tagging:
+   Paste the printed refs into `infra/images.lock`, keeping the service column, and commit for the
+   release. The recipe retries and **exits non-zero** if any image is unresolved rather than
+   printing a partial list — never paste output from a failed run.
+
+   ⚠ **Docker Hub rate-limits anonymous manifest requests.** In practice a second run minutes after
+   a successful one returned `429 Too Many Requests` for six of nine images. Run `docker login`
+   before the ceremony, or wait for the window to reset. Check it before tagging:
 
    ```bash
    just release-check

@@ -486,6 +486,64 @@ def test_the_release_gate_runs_on_a_version_tag() -> None:
     assert "test_images_lock_pinned" in steps[0]["run"]
 
 
+def test_images_update_refuses_to_emit_a_partial_pin(tmp_path: Path) -> None:
+    """A partial resolve must FAIL, not print something pasteable.
+
+    The old inline recipe printed `# COULD NOT RESOLVE: <img>` and exited 0. Pasted verbatim, that
+    line turns the image into a COMMENT — silently dropping it from the lock. This is not
+    hypothetical: Docker Hub rate-limits anonymous manifest requests, and a run minutes after a
+    successful one returned 429 for six of nine images.
+    """
+    lock = tmp_path / "images.lock"
+    lock.write_text("# service image\nok  example.test/ok:1\nbad example.test/bad:1\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "docker"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        "  *example.test/ok:1*) echo sha256:" + "e" * 64 + " ;;\n"
+        '  *) echo "ERROR: 429 Too Many Requests" >&2; exit 1 ;;\n'
+        "esac\n"
+    )
+    fake.chmod(0o755)
+    result = subprocess.run(  # noqa: S603 - repository script with an isolated fake docker
+        [BASH, str(ROOT / "scripts" / "images-update.sh")],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "IMAGES_LOCK": str(lock),
+            "IMAGES_UPDATE_ATTEMPTS": "1",
+        },
+    )
+    assert result.returncode != 0, "a partial resolve must fail the ceremony"
+    assert "COULD NOT RESOLVE" not in result.stdout, (
+        "stdout is pasted into the lock — a comment line there deletes the image"
+    )
+    assert "example.test/bad:1" in result.stderr
+    assert "docker login" in result.stderr, "429 needs the remedy, not just the symptom"
+    # The one that DID resolve is still emitted, so a retry after `docker login` is cheap.
+    assert "example.test/ok:1@sha256:" in result.stdout
+
+
+def test_the_release_lock_is_digest_pinned() -> None:
+    """The ceremony ran: every non-dev image carries an immutable @sha256.
+
+    `test_images_lock_pinned.py` asserts the same thing but SKIPS unless EASYSYNQ_RELEASE=1, so
+    without this the state is unobserved on an ordinary run.
+    """
+    floating = [
+        line.split()[1]
+        for line in _read("infra/images.lock").splitlines()
+        if line.strip()
+        and not line.strip().startswith("#")
+        and "@sha256:" not in line
+        and not line.startswith("mailpit")
+    ]
+    assert not floating, f"non-dev images still on a floating tag: {floating}"
+
+
 def test_a_local_release_check_exists() -> None:
     """CI fires only on a tag; the ceremony needs a way to check BEFORE tagging.
 
