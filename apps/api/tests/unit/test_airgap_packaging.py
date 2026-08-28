@@ -49,6 +49,30 @@ def _compose_services() -> dict[str, dict[str, object]]:
     return {name: spec for name, spec in model["services"].items() if isinstance(spec, dict)}
 
 
+class _ComposeLoader(yaml.SafeLoader):
+    """SafeLoader that tolerates Compose's own tags (production uses ``ports: !reset []``)."""
+
+
+_ComposeLoader.add_multi_constructor("!", lambda loader, suffix, node: None)
+
+
+def _merged_service_keys() -> dict[str, set[str]]:
+    """Which keys each service carries across the base file and every sizing/mode overlay.
+
+    Overlays only tune the base today, but a service introduced by an overlay alone would still be
+    started — and must still be covered by the offline overlay.
+    """
+    merged: dict[str, set[str]] = {}
+    for path in sorted((ROOT / "infra" / "compose").glob("compose*.yml")):
+        if path.name == "compose.offline.yml":
+            continue
+        model = yaml.load(path.read_text(), Loader=_ComposeLoader) or {}  # noqa: S506
+        for name, spec in (model.get("services") or {}).items():
+            if isinstance(spec, dict):
+                merged.setdefault(name, set()).update(spec)
+    return merged
+
+
 def _split_ref(ref: str) -> tuple[str, str]:
     """Split ``repository:tag``.
 
@@ -185,8 +209,8 @@ def test_offline_overlay_forbids_pulling_every_pulled_service() -> None:
     overlay = yaml.safe_load(_read("infra/compose/compose.offline.yml"))["services"]
     pulled = {
         name
-        for name, spec in _compose_services().items()
-        if "image" in spec and "build" not in spec
+        for name, keys in _merged_service_keys().items()
+        if "image" in keys and "build" not in keys
     }
     assert set(overlay) == pulled, (
         f"compose.offline.yml covers {sorted(overlay)} but the pulled services are {sorted(pulled)}"
@@ -221,7 +245,7 @@ def test_installer_names_every_missing_image_before_compose_runs() -> None:
     assert 'docker image inspect "$image"' in install
     assert 'MISSING+=("$image")' in install
     # The api image backs four services; reporting it four times reads like four problems.
-    assert 'config --images | sort -u' in install
+    assert "config --images | sort -u" in install
 
 
 def test_installer_pins_the_image_tag_before_the_env_only_exit() -> None:
