@@ -272,8 +272,15 @@ async def test_system_managed_policies_protected(
     )
 
     async with get_sessionmaker()() as s:
-        org_id = (await s.execute(select(Organization.id).limit(1))).scalar_one()
+        # The caller's org: order_by(created_at) mirrors _ensure_user, so the ensure and the
+        # authed listing below agree on shared multi-org DBs (diff-critic catch).
+        org_id = (
+            await s.execute(select(Organization.id).order_by(Organization.created_at).limit(1))
+        ).scalar_one()
         await ensure_import_report_policy(s, org_id)
+        # Re-run the sealed ensure too so the value assertions below exercise the WRITER, not
+        # just the migration seed (false-pass-hunter: the seed made them decorative).
+        await ensure_sealed_pack_policy(s, org_id)
         await s.commit()
     relisted = (
         await app_client.get("/api/v1/retention-policies?include_archived=true", headers=h)
@@ -281,6 +288,9 @@ async def test_system_managed_policies_protected(
     report_policy = next(p for p in relisted if p["name"] == IMPORT_REPORT_POLICY_NAME)
     assert report_policy["duration"] == "PERMANENT"
     assert report_policy["disposition_action"] == "RETAIN_PERMANENT"
+    sealed_relisted = next(p for p in relisted if p["name"] == SEALED_PACK_POLICY_NAME)
+    assert sealed_relisted["duration"] == "PERMANENT"
+    assert sealed_relisted["disposition_action"] == "RETAIN_PERMANENT"
     rid_ = report_policy["id"]
     r_mutated = await app_client.patch(
         f"/api/v1/retention-policies/{rid_}",

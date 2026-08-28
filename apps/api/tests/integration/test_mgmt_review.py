@@ -955,6 +955,14 @@ async def test_release_wedge_is_redrivable_by_retrying_the_post(
         },
     )
     assert out.status_code == 201, out.text
+    # A release on the DRAFT review is a plain FSM 409 — the wedge gate must NOT swallow it
+    # (its `doc Effective` conjunct is load-bearing: without it this would 200 and spawn
+    # actions on a never-released review — the false-pass-hunter 1c corruption shape).
+    early = await app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl)
+    assert early.status_code == 409, early.text
+    async with get_sessionmaker()() as s:
+        mr_early = await s.get(ManagementReview, uuid.UUID(rid))
+        assert mr_early is not None and mr_early.close_state is None
     assert (
         await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=hs)
     ).status_code == 200
@@ -1000,3 +1008,86 @@ async def test_release_wedge_is_redrivable_by_retrying_the_post(
     assert again.status_code == 409, again.text
     tasks2 = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
     assert len([t for t in tasks2 if t["assignee_user_id"] == str(owner_id)]) == 1
+
+
+async def test_concurrent_wedge_redrives_spawn_exactly_once(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[Audit U11 race] Two concurrent retries of a wedged release serialize on the satellite's
+    FOR UPDATE lock: exactly one runs Phase 5 (200), the loser re-reads ActionsTracked under the
+    lock and re-raises the release conflict (409). Without the lock both read close_state=None
+    and double-spawn (duplicate MR_ACTION tasks + container instances)."""
+    from easysynq_api.api import management_review as mr_api
+
+    salt = uuid.uuid4().hex[:8]
+    owner_subject = f"mr-rc-{salt}"
+    ho = _auth(token_factory, owner_subject)
+    owner_id = await _grant(owner_subject, ())
+
+    submitter, approver, releaser = f"mr-sm-{salt}", f"mr-ap-{salt}", f"mr-rl-{salt}"
+    hs = _auth(token_factory, submitter)
+    hap = _auth(token_factory, approver)
+    hrl = _auth(token_factory, releaser)
+    await _grant(submitter, _MR_KEYS)
+    await s5.grant_role(approver, "Approver")
+    await _grant(releaser, ("document.release", "document.read", "document.read_draft"))
+
+    rid = await _create_review(app_client, hs, f"Race review {salt}")
+    out = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs",
+        headers=hs,
+        json={
+            "output_type": "ACTION",
+            "description": "Race the re-drive",
+            "owner_user_id": str(owner_id),
+            "due_date": "2026-12-31",
+        },
+    )
+    assert out.status_code == 201, out.text
+    assert (
+        await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=hs)
+    ).status_code == 200
+    task_id = await s5.task_for_doc(rid)
+    assert (
+        await app_client.post(
+            f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+        )
+    ).status_code == 200
+
+    async def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("simulated phase-5 crash after the release commit")
+
+    monkeypatch.setattr(mr_api, "spawn_mr_actions", _boom)
+    with pytest.raises(RuntimeError):
+        await app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl)
+    monkeypatch.undo()
+
+    results = await asyncio.gather(
+        app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl),
+        app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl),
+    )
+    assert sorted(r.status_code for r in results) == [200, 409], [
+        (r.status_code, r.text) for r in results
+    ]
+
+    tasks = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    mine = [t for t in tasks if t["assignee_user_id"] == str(owner_id)]
+    assert len(mine) == 1, mine  # exactly-once spawn under concurrency
+    async with get_sessionmaker()() as s:
+        mr = await s.get(ManagementReview, uuid.UUID(rid))
+        assert mr is not None and mr.close_state is not None
+        instances = (
+            (
+                await s.execute(
+                    select(WorkflowInstance).where(
+                        WorkflowInstance.subject_type == WorkflowSubjectType.MGMT_REVIEW,
+                        WorkflowInstance.subject_id == uuid.UUID(rid),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(instances) == 1  # no duplicate container instance either
