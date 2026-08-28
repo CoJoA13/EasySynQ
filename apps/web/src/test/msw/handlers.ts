@@ -1681,13 +1681,6 @@ export const distributionNoEffectiveFixture = {
   coverage: null,
 } satisfies DistributionPayload;
 
-// Flag OFF but an Effective version exists → honest zeros, not null.
-export const distributionFlagOffFixture = {
-  acknowledgement_required: false,
-  entries: [],
-  coverage: { required: 0, acknowledged: 0, pending: 0, overdue: 0 },
-} satisfies DistributionPayload;
-
 export const ackMatrixFixture = [
   {
     user_id: "bbbb1111-1111-1111-1111-111111111111",

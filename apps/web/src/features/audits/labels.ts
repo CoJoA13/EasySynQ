@@ -1,4 +1,4 @@
-import type { AuditState, FindingType } from "../../lib/types";
+import type { AuditState } from "../../lib/types";
 
 export const AUDIT_STATE_ORDER: AuditState[] = [
   "Scheduled", "Planned", "InProgress", "FindingsDraft", "Reported", "Closing", "Closed",
@@ -27,10 +27,4 @@ export const NEXT_TRANSITION: Record<
   Reported: { path: "begin-closing", label: "Begin closing", gate: "audit.close" },
   Closing: { path: "close", label: "Close audit", gate: "audit.close" },
   Closed: null,
-};
-
-export const FINDING_TYPE_LABEL: Record<FindingType, string> = {
-  NC: "NC",
-  OBSERVATION: "Observation",
-  OFI: "OFI",
 };

@@ -5,7 +5,6 @@ import { useApi } from "../../lib/api";
 import type {
   ImportBulkDecisionRequest,
   ImportChecklist,
-  ImportDecisionLog,
   ImportDupeClusterList,
   ImportFileDecisionRequest,
   ImportFileDetail,
@@ -103,15 +102,6 @@ export function useChecklist(runId: string | null) {
   return useQuery({
     queryKey: ["import-checklist", runId],
     queryFn: () => api.get<ImportChecklist>(`/api/v1/admin/imports/${runId}/checklist`),
-    enabled: runId !== null,
-  });
-}
-
-export function useDecisions(runId: string | null) {
-  const api = useApi();
-  return useQuery({
-    queryKey: ["import-decisions", runId],
-    queryFn: () => api.get<ImportDecisionLog>(`/api/v1/admin/imports/${runId}/decisions`),
     enabled: runId !== null,
   });
 }

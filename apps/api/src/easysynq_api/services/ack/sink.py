@@ -1,5 +1,6 @@
-"""The ack-sweep enqueue seam (slice S-ack-1) — a Protocol/Celery/Logging/Capturing quad
-(mirroring the mirror_sink pattern) so tests assert fired-exactly-once-post-commit."""
+"""The ack-sweep enqueue seam (slice S-ack-1) — a Protocol/Celery/Logging trio (mirroring the
+mirror_sink pattern); the integration conftest injects the Logging sink so a test never dispatches
+a real Celery task."""
 
 from __future__ import annotations
 
@@ -38,16 +39,6 @@ class LoggingAckEnqueueSink:
             "ack.enqueue",
             extra={"extra_fields": {"document_id": document_id, "trigger": trigger}},
         )
-
-
-class CapturingAckEnqueueSink:
-    """Test double — records each enqueue so a test asserts exactly-once, post-commit."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str | None, str | None]] = []
-
-    def enqueue(self, document_id: str | None = None, trigger: str | None = None) -> None:
-        self.calls.append((document_id, trigger))
 
 
 _default_sink: AckEnqueueSink = CeleryAckEnqueueSink()

@@ -81,15 +81,6 @@ def signature(shingle_set: frozenset[str]) -> tuple[int, ...]:
     return tuple(min(((a * h + b) % _MERSENNE_PRIME) & _MAX_HASH for h in bases) for a, b in _PERMS)
 
 
-def estimate_jaccard(sig_a: Sequence[int], sig_b: Sequence[int]) -> float:
-    """The MinHash Jaccard ESTIMATE (fraction of equal positions). Diagnostic only — NOT the
-    clustering decision (use ``exact_jaccard`` for that)."""
-    if not sig_a or not sig_b:
-        return 0.0
-    equal = sum(1 for x, y in zip(sig_a, sig_b, strict=False) if x == y)
-    return equal / len(sig_a)
-
-
 def exact_jaccard(set_a: frozenset[str], set_b: frozenset[str]) -> float:
     """The exact Jaccard of two shingle sets — the deterministic §7.1 cluster decision. 0.0 on
     an empty union (never a ZeroDivisionError)."""

@@ -17,7 +17,6 @@ stay ``import.execute``."""
 
 from __future__ import annotations
 
-import datetime
 import uuid
 from typing import Any
 
@@ -42,6 +41,7 @@ from ..db.models.import_run import ImportRun
 from ..db.models.import_version_family import ImportVersionFamily
 from ..db.session import get_session
 from ..services.authz import require
+from ..services.common.serialize import iso
 from ..services.ingestion import review as review_svc
 from ..services.ingestion import service as svc
 
@@ -106,10 +106,6 @@ class SplitBody(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
-def _iso(value: datetime.datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
-
-
 def _view(run: ImportRun) -> dict[str, Any]:
     return {
         "id": str(run.id),
@@ -123,9 +119,9 @@ def _view(run: ImportRun) -> dict[str, Any]:
         "created_by": str(run.created_by),
         "committed_by": str(run.committed_by) if run.committed_by else None,
         "report_record_id": str(run.report_record_id) if run.report_record_id else None,
-        "created_at": _iso(run.created_at),
-        "scan_started_at": _iso(run.scan_started_at),
-        "completed_at": _iso(run.completed_at),
+        "created_at": iso(run.created_at),
+        "scan_started_at": iso(run.scan_started_at),
+        "completed_at": iso(run.completed_at),
     }
 
 
@@ -188,8 +184,8 @@ def _file_view(f: ImportFile, classification: ImportClassification | None = None
         "staged_blob_uri": f.staged_blob_uri,
         "scan_flags": f.scan_flags,
         "included_candidate": f.included_candidate,
-        "mtime": _iso(f.mtime),
-        "ctime": _iso(f.ctime),
+        "mtime": iso(f.mtime),
+        "ctime": iso(f.ctime),
         "classification": _classification_view(classification),
     }
 
@@ -243,7 +239,7 @@ def _commit_result_view(r: ImportCommitResult | None) -> dict[str, Any] | None:
         "vault_document_id": str(r.vault_document_id) if r.vault_document_id else None,
         "vault_version_id": str(r.vault_version_id) if r.vault_version_id else None,
         "error": r.error,
-        "committed_at": _iso(r.committed_at),
+        "committed_at": iso(r.committed_at),
     }
 
 

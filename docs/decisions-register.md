@@ -1158,7 +1158,7 @@ not a record id — the `ncr`/`dcr` precedent; `scope_ref=<identifier>`); the sl
 `improvement_stage` / `improvement_source` enums + the four `INITIATIVE_*`/`MGMT_REVIEW_INITIATIVE_*`
 event types + `audit_object_type='improvement_initiative'` + the two `improvement.*` keys & role
 grants. `domain/improvement/fsm.py` (the pure edge map) + `services/improvement` (create / transition
-/ update / list / get / stage-events; `_improvement_scope`). `/improvement-initiatives` router (the 6
+/ update / list / get / stage-events). `/improvement-initiatives` router (the 6
 lifecycle endpoints). All spawn-seam columns ship now so **slice 2 (the OFI-finding + MR-output spawn)
 was zero-migration**.
 

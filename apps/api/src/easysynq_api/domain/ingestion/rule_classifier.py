@@ -42,10 +42,8 @@ from .rule_pack import (
 # The calibrated cutoffs now live on the pack (``ScoringConfig``) so an org override rides the
 # same ``version`` pin as the weights they calibrate against. ``_DEFAULT_SCORING`` is the fallback
 # used by the module helpers (``band_of`` / ``_is_ambiguous`` / ``_derive_pdca``) when no pack is
-# given; the published default constants below are single-sourced from it (back-compat / docs).
+# given; the two constants below are single-sourced from it for the callers that read them.
 _DEFAULT_SCORING = ScoringConfig()
-HIGH_THRESHOLD = _DEFAULT_SCORING.high_threshold
-MEDIUM_THRESHOLD = _DEFAULT_SCORING.medium_threshold
 AMBIGUOUS_MARGIN = _DEFAULT_SCORING.ambiguous_margin
 KIND_UNKNOWN_FLOOR = _DEFAULT_SCORING.kind_unknown_floor  # max(DOC, RECORD) below this → UNKNOWN
 _DATE_RE = re.compile(

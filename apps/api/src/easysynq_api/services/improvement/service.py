@@ -28,7 +28,6 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.improvement_initiative import ImprovementInitiative
 from ...db.models.improvement_initiative_stage_event import ImprovementInitiativeStageEvent
 from ...db.models.process import Process
-from ...domain.authz import ResourceContext
 from ...domain.improvement import is_terminal, transition_allowed
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
@@ -106,17 +105,6 @@ def _validation_error(field: str, code: str, message: str) -> ProblemException:
         title=message,
         errors=[{"field": field, "code": code, "message": message}],
     )
-
-
-async def _improvement_scope(
-    session: AsyncSession, initiative: ImprovementInitiative
-) -> ResourceContext:
-    """The PROCESS-scoped authz target for an initiative (the ``_objective_scope`` / ``_capa``
-    precedent): ``process_ids={process_id}`` when set, else SYSTEM (a SYSTEM grant/override always
-    matches). Used by the listing row-filter and any path-id write resolver."""
-    if initiative.process_id is None:
-        return ResourceContext.system()
-    return ResourceContext(process_ids=frozenset({str(initiative.process_id)}))
 
 
 async def create_initiative(
