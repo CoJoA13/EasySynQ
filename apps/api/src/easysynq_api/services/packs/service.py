@@ -37,6 +37,7 @@ from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_pack import EvidencePack
+from ...db.models.framework import Framework
 from ...db.models.pack_item import PackItem
 from ...db.models.pack_share_link import PackShareLink
 from ...db.models.record import Record
@@ -277,9 +278,14 @@ async def _validate_scope(
         except ValueError as exc:
             raise _validation_error(key, "invalid", f"{key} must be UUIDs") from exc
     if scope_kind == "CLAUSE":
+        # Audit U37: anchor the clause to THIS org through its framework — the only scope leg
+        # that previously accepted any org's clause id (every sibling checks .org_id).
         for cid in ids:
             clause = await vault_repo.get_clause(session, cid)
-            if clause is None:
+            framework = (
+                await session.get(Framework, clause.framework_id) if clause is not None else None
+            )
+            if clause is None or framework is None or framework.org_id != org_id:
                 raise _validation_error(key, "not_found", f"Clause {cid} not found")
     elif scope_kind == "PROCESS":
         for pid in ids:

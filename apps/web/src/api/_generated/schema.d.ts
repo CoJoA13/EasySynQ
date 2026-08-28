@@ -3050,7 +3050,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the org's DCRs. Filter state / change_type / target_document_id / created_by / reason_class. Needs changeRequest.read. */
+        /** List DCRs, row-filtered to what the caller may changeRequest.read at each DCR's target document's scope (a no-grant caller gets 200 + empty, never 403; a CREATE DCR with no target authorizes at SYSTEM scope). Filter state / change_type / target_document_id / created_by / reason_class. */
         get: operations["listDcrs"];
         put?: never;
         /** Raise a Document Change Request at Open (doc 15 §8.7). CREATE has no target; REVISE/RETIRE require an in-org controlled Document target (422 otherwise; 422 not_a_document for a Record target). Writes the genesis stage event + a DCR_RAISED audit. Needs changeRequest.create (scope from the target document; SYSTEM fallback for CREATE). */
@@ -3068,7 +3068,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A DCR with its append-only stage-event trail. Needs changeRequest.read. */
+        /** A DCR with its append-only stage-event trail. Needs changeRequest.read at the target document's scope (SYSTEM for a CREATE DCR). */
         get: operations["getDcr"];
         put?: never;
         post?: never;
@@ -3137,7 +3137,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The DCR's auto-populated impact_assessment rows (S-dcr-2). Needs changeRequest.read. */
+        /** The DCR's auto-populated impact_assessment rows (S-dcr-2). Needs changeRequest.read at the target document's scope; neighbour identifiers, the record sample, and the obsoletion advisory are filtered to the caller's read scope like the where-used panel (the persisted assessment stays complete). */
         get: operations["getDcrImpact"];
         /** Set requester_annotation on the named impact dimensions (keyed by ImpactDimension value); the auto_populated facts are untouched. Terminal Closed / Cancelled / Rejected DCRs are sealed (409 dcr_impact_not_editable). 422 on an unknown dimension. Needs changeRequest.assess. */
         put: operations["annotateDcrImpact"];
@@ -13800,7 +13800,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The org's DCRs. */
+            /** @description The DCRs visible to the caller's changeRequest.read scope. */
             200: {
                 headers: {
                     [name: string]: unknown;

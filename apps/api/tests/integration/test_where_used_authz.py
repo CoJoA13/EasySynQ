@@ -59,6 +59,34 @@ async def _deny_artifact(subject: str, key: str, artifact_id: str) -> None:
         await s.commit()
 
 
+async def _deny_process(subject: str, key: str, process_id: str) -> None:
+    """A PROCESS-scoped DENY override — deny-always-wins must fold through doc-scoped
+    evaluations exactly as it does through the (U2-scoped) GET /dcrs row filter."""
+    from easysynq_api.db.models.authz_grant import PermissionOverride
+    from easysynq_api.db.models.permission import Permission
+    from easysynq_api.db.models.scope import Scope
+    from easysynq_api.domain.authz.types import Effect, ScopeLevel
+
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        perm = (await s.execute(select(Permission).where(Permission.key == key))).scalar_one()
+        scope = Scope(
+            org_id=user.org_id, level=ScopeLevel.PROCESS, selector={"process_id": process_id}
+        )
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=perm.id,
+                effect=Effect.DENY,
+                scope_id=scope.id,
+            )
+        )
+        await s.commit()
+
+
 pytestmark = pytest.mark.integration
 
 _ADMIN_KEYS = (
@@ -291,9 +319,11 @@ async def test_related_capas_leg_gated_by_change_request_read(
         "DCR identifiers leaked to a caller without changeRequest.read"
     )
 
-    # changeRequest.read (SYSTEM, matching the GET /dcrs gate) reveals the leg — with the CAPA
-    # close_state still hidden until capa.read is also held.
-    await _grant(emp, ("changeRequest.read",))
+    # A PROCESS-scoped changeRequest.read on the PATH DOC's process reveals the leg — the SAME
+    # decision the (U2-scoped) GET /dcrs row filter gives for this DCR. The old SYSTEM-context
+    # evaluation could never match this grant (the incomplete-scope-tuple trap). The CAPA
+    # close_state stays hidden until capa.read is also held.
+    await _grant_process(emp, "changeRequest.read", p1)
     wu = (await app_client.get(f"/api/v1/documents/{doc_a}/where-used", headers=h_emp)).json()
     rows = {row["dcr_id"]: row for row in wu["related_capas_findings"]}
     assert dcr_id in rows
@@ -366,3 +396,123 @@ async def test_artifact_deny_folds_through_the_panel_filter(
     await _deny_artifact(emp, "document.read", doc_c)
     wu = (await app_client.get(f"/api/v1/documents/{doc_a}/where-used", headers=h_emp)).json()
     assert doc_c not in _bucket_doc_ids(wu), "an ARTIFACT DENY did not fold through the filter"
+
+
+async def test_related_capas_leg_honors_scoped_change_request_deny(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: object
+) -> None:
+    """[Authz-reviewer catch on U2] A SYSTEM changeRequest.read ALLOW plus a PROCESS-scoped DENY
+    on the path doc's process must hide the DCR leg — at the old SYSTEM context the scoped DENY
+    silently never matched, so where-used revealed DCR identifiers that GET /dcrs (now scoped)
+    hides from the same caller. Both surfaces must give one answer."""
+    h_admin, p1, doc_a, _p2, _doc_b, _doc_c = await _fixture(app_client, token_factory)
+    capa = await app_client.post(
+        "/api/v1/capas", headers=h_admin, json={"title": "wua deny capa", "severity": "Minor"}
+    )
+    assert capa.status_code == 201, capa.text
+    # CAPA-SOURCED, like the sibling test: only source-linked DCRs populate the leg — an
+    # unsourced DCR would make the hidden-leg assertion vacuously true (false-PASS).
+    dcr = await app_client.post(
+        "/api/v1/dcrs",
+        headers=h_admin,
+        json={
+            "change_type": "REVISE",
+            "change_significance": "MINOR",
+            "reason_class": "capa",
+            "reason_text": "deny-direction probe",
+            "target_document_id": doc_a,
+            "source_link_type": "capa",
+            "source_link_id": capa.json()["id"],
+        },
+    )
+    assert dcr.status_code == 201, dcr.text
+    dcr_id = dcr.json()["id"]
+
+    # Anti-vacuity: a broad reader DOES see the leg before the DENY subject is exercised.
+    baseline = (
+        await app_client.get(f"/api/v1/documents/{doc_a}/where-used", headers=h_admin)
+    ).json()
+    assert any(row["dcr_id"] == dcr_id for row in baseline["related_capas_findings"])
+
+    emp = _subject("wua-dcrdeny")
+    await _grant(emp, ("document.read", "changeRequest.read"))  # broad SYSTEM ALLOW
+    await _deny_process(emp, "changeRequest.read", p1)  # scoped DENY on the doc's process
+    h2 = _auth(token_factory, emp)
+
+    wu = (await app_client.get(f"/api/v1/documents/{doc_a}/where-used", headers=h2)).json()
+    assert all(row["dcr_id"] != dcr_id for row in wu["related_capas_findings"]), (
+        "a PROCESS-scoped changeRequest.read DENY must hide the DCR leg"
+    )
+    # Consistency: the (U2-scoped) GET /dcrs hides the same DCR from the same caller.
+    lst = (await app_client.get("/api/v1/dcrs", headers=h2)).json()
+    assert dcr_id not in [d["id"] for d in lst["data"]]
+    assert (await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=h2)).status_code == 403
+
+
+async def test_impact_read_filters_neighbours_to_the_callers_scope(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: object
+) -> None:
+    """[Authz-reviewer Important 1] The impact READ filters the persisted where-used snapshot per
+    caller — U2 made the endpoint reachable by scoped readers, and the stored auto_populated
+    embeds neighbour identifiers the where-used panel deliberately hides from the same caller.
+    The stored rows stay complete (the admin still sees everything)."""
+    h_admin, p1, doc_a, _p2, doc_b, _doc_c = await _fixture(app_client, token_factory)
+    # The fixture's A→B link is references_out — a bucket the impact projection drops. Mint the
+    # REVERSE link so doc_b lands in doc_a's referenced_by (a projected bucket).
+    reverse = await app_client.post(
+        f"/api/v1/documents/{doc_b}/links",
+        headers=h_admin,
+        json={"to_document_id": doc_a, "link_type": "references"},
+    )
+    assert reverse.status_code == 201, reverse.text
+    adm = _subject("wua-imp-adm")
+    await _grant(
+        adm,
+        (
+            "changeRequest.create",
+            "changeRequest.assess",
+            "changeRequest.read",
+            "document.read",
+            "record.read",
+        ),
+    )
+    h_adm = _auth(token_factory, adm)
+    dcr = await app_client.post(
+        "/api/v1/dcrs",
+        headers=h_adm,
+        json={
+            "change_type": "REVISE",
+            "change_significance": "MINOR",
+            "reason_class": "error_correction",
+            "reason_text": "impact filter probe",
+            "target_document_id": doc_a,
+        },
+    )
+    assert dcr.status_code == 201, dcr.text
+    dcr_id = dcr.json()["id"]
+    assessed = await app_client.post(f"/api/v1/dcrs/{dcr_id}/assess", headers=h_adm)
+    assert assessed.status_code == 200, assessed.text
+
+    def _neighbour_ids(payload: dict[str, Any]) -> set[str]:
+        dep = next(r for r in payload["data"] if r["dimension"] == "dependent_documents")
+        ids: set[str] = set()
+        for bucket in ("child_documents", "parent_documents", "referenced_by", "forms_templates"):
+            ids |= {row["document_id"] for row in dep["auto_populated"].get(bucket, [])}
+        return ids
+
+    # The broad caller sees the A→B neighbour in the persisted snapshot.
+    full = (await app_client.get(f"/api/v1/dcrs/{dcr_id}/impact", headers=h_adm)).json()
+    assert doc_b in _neighbour_ids(full)
+
+    # A P1-scoped reader reaches the endpoint (U2) but doc_b (in P2) is filtered from the read.
+    emp = _subject("wua-imp-emp")
+    await _grant_process(emp, "document.read", p1)
+    await _grant_process(emp, "changeRequest.read", p1)
+    h_emp = _auth(token_factory, emp)
+    scoped = await app_client.get(f"/api/v1/dcrs/{dcr_id}/impact", headers=h_emp)
+    assert scoped.status_code == 200, scoped.text
+    assert doc_b not in _neighbour_ids(scoped.json())
+
+    # The persisted snapshot was NOT shrunk by the scoped read: the admin still sees doc_b.
+    again = (await app_client.get(f"/api/v1/dcrs/{dcr_id}/impact", headers=h_adm)).json()
+    assert doc_b in _neighbour_ids(again)

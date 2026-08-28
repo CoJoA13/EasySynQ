@@ -13,7 +13,7 @@ from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from easysynq_api.db.models.authz_grant import PermissionOverride
@@ -160,15 +160,16 @@ async def _add_override(
     level: ScopeLevel,
     *,
     selector: dict[str, object] | None = None,
+    predicates: dict[str, object] | None = None,
 ) -> None:
     """Seed a scoped permission override for ``subject`` (the register/test_authz precedent) — used
-    here to seed a FRAMEWORK-scoped ``document.read`` DENY."""
+    here to seed a FRAMEWORK-scoped ``document.read`` DENY and an ip_allow-predicated ALLOW."""
     async with get_sessionmaker()() as s:
         user = await _ensure_user(s, subject)
         perm = (
             await s.execute(select(Permission).where(Permission.key == permission_key))
         ).scalar_one()
-        scope = Scope(org_id=user.org_id, level=level, selector=selector)
+        scope = Scope(org_id=user.org_id, level=level, selector=selector, predicates=predicates)
         s.add(scope)
         await s.flush()
         s.add(
@@ -284,3 +285,73 @@ async def test_concrete_type_deny_is_consistent_across_document_read_surfaces(
     suggestion_ids = {item["id"] for item in suggested.json()["suggestions"]}
     assert objective["id"] not in suggestion_ids
     assert alternate["id"] in suggestion_ids
+
+
+async def test_ip_allow_predicated_read_matches_on_row_filters(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """[Audit U1] The document.read row filters (/search, /search/suggest, GET /documents) thread
+    the live source_ip into their RequestContext, so an ip_allow-predicated grant evaluates
+    exactly as the detail-gate PEP does. Before the fix the filters built ctx with
+    source_ip=None, so the fail-closed predicate silently never matched — an ip-bound reader
+    saw NOTHING on any list surface. The wrong-IP twin proves the value is the real peer, not
+    a hardcoded pass."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    token = uuid.uuid4().hex[:8]
+    doc = await _effective_titled(app_client, ha, hb, f"Ipbound{token} Spec")
+
+    # The ASGI test transport presents client=("127.0.0.1", …) — the request's real peer.
+    matching = f"kc-ipok-{token}"
+    await _add_override(
+        matching,
+        "document.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"ip_allow": ["127.0.0.1"]},
+    )
+    hm = _auth(token_factory, matching)
+    r = await app_client.get(f"/api/v1/search?q=Ipbound{token}", headers=hm)
+    assert r.status_code == 200, r.text
+    assert doc["id"] in [h_["id"] for h_ in r.json()["results"]]
+    r = await app_client.get(f"/api/v1/search/suggest?q=Ipbound{token}", headers=hm)
+    assert r.status_code == 200, r.text
+    assert doc["id"] in [s_["id"] for s_ in r.json()["suggestions"]]
+    r = await app_client.get("/api/v1/documents", headers=hm)
+    assert r.status_code == 200, r.text
+    assert doc["id"] in [d["id"] for d in r.json()["data"]]
+
+    # An ip-bound grant for a DIFFERENT address must keep everything hidden (fail-closed).
+    other = f"kc-ipwrong-{token}"
+    await _add_override(
+        other,
+        "document.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"ip_allow": ["203.0.113.9"]},
+    )
+    ho = _auth(token_factory, other)
+    r = await app_client.get(f"/api/v1/search?q=Ipbound{token}", headers=ho)
+    assert r.status_code == 200 and r.json()["results"] == []
+    r = await app_client.get(f"/api/v1/search/suggest?q=Ipbound{token}", headers=ho)
+    assert r.status_code == 200 and r.json()["suggestions"] == []
+    r = await app_client.get("/api/v1/documents", headers=ho)
+    assert r.status_code == 200, r.text
+    assert doc["id"] not in [d["id"] for d in r.json()["data"]]
+
+    # The threaded value follows the request PEER, not any constant (false-pass-hunter pin: a
+    # hardcoded "127.0.0.1" would pass every leg above). Through a transport presenting
+    # 203.0.113.9 the roles invert: the 203-bound reader sees the doc, the 127-bound one loses it.
+    alt_transport = ASGITransport(app=app_under_test, client=("203.0.113.9", 12345))
+    async with AsyncClient(transport=alt_transport, base_url="http://test") as alt:
+        r = await alt.get(f"/api/v1/search?q=Ipbound{token}", headers=ho)
+        assert doc["id"] in [h_["id"] for h_ in r.json()["results"]]
+        r = await alt.get("/api/v1/documents", headers=ho)
+        assert doc["id"] in [d["id"] for d in r.json()["data"]]
+        r = await alt.get(f"/api/v1/search?q=Ipbound{token}", headers=hm)
+        assert r.json()["results"] == []

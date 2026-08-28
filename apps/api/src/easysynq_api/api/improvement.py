@@ -229,6 +229,7 @@ async def create_initiative_endpoint(
 
 @router.get("/improvement-initiatives")
 async def list_initiatives_endpoint(
+    request: Request,
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     stage: ImprovementStage | None = None,
@@ -248,7 +249,11 @@ async def list_initiatives_endpoint(
     # ResourceContext (process_ids) is populated so a PROCESS-scoped grant authorizes correctly (the
     # S-pack-1 R28 lesson — a bare SYSTEM context would fail-closed mis-DENY it).
     grants = await gather_grants(session, caller.id, caller.org_id, "improvement.read")
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    # Audit U1: thread source_ip so ip_allow-predicated grants/DENYs evaluate on this row filter.
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
     visible = [
         i
         for i in rows

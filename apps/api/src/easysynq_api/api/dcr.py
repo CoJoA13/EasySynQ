@@ -17,6 +17,7 @@ SYSTEM overrides meanwhile (the family precedent). Reads gate at SYSTEM + an org
 
 from __future__ import annotations
 
+import copy
 import datetime
 import uuid
 from typing import Any
@@ -24,10 +25,17 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
-from ..db.models._dcr_enums import DcrChangeType, DcrReasonClass, DcrSourceLinkType, DcrState
+from ..db.models._dcr_enums import (
+    DcrChangeType,
+    DcrReasonClass,
+    DcrSourceLinkType,
+    DcrState,
+    ImpactDimension,
+)
 from ..db.models._vault_enums import ChangeSignificance
 from ..db.models.app_user import AppUser
 from ..db.models.dcr import Dcr
@@ -63,6 +71,12 @@ from ..services.vault import (
 from ..services.vault import repository as vault_repo
 from ..services.vault.release_scope import enrich_release_sod_scope
 from ..tasks.lifecycle import release_due_versions
+from .documents import (
+    _panel_request_context,
+    _readable_doc_predicate,
+    _redact_obsoletion_reasons,
+    _visible_record_sample,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["dcr"])
 
@@ -222,7 +236,12 @@ async def _dcr_scope(request: Request, session: AsyncSession) -> ResourceContext
     return await _dcr_doc_scope(session, dcr.target_document_id)
 
 
-_dcr_read = require("changeRequest.read")
+# Audit U2: single-resource reads resolve the TARGET DOCUMENT's scope (the write-gate posture) —
+# the old bare SYSTEM-scope require made the seeded Process Owner changeRequest.read grant
+# unsatisfiable (finest_scope is documentary; the PDP matches PROCESS grants purely on the
+# resource's process_ids, which a SYSTEM context never carries). A CREATE DCR (no target doc)
+# keeps the SYSTEM fallback via _dcr_scope. The LIST is filter-not-403 (below), not require().
+_dcr_read = require("changeRequest.read", async_scope_resolver=_dcr_scope)
 _dcr_assess = require("changeRequest.assess", async_scope_resolver=_dcr_scope)
 _dcr_close = require("changeRequest.close", async_scope_resolver=_dcr_scope)
 _dcr_route = require("changeRequest.route", async_scope_resolver=_dcr_scope)
@@ -369,7 +388,7 @@ async def create_dcr_endpoint(
 @router.get("/dcrs")
 async def list_dcrs_endpoint(
     request: Request,
-    caller: AppUser = Depends(_dcr_read),
+    caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     state: DcrState | None = None,
     change_type: DcrChangeType | None = None,
@@ -386,10 +405,56 @@ async def list_dcrs_endpoint(
         created_by=created_by,
         reason_class=reason_class,
     )
+    # Audit U2 (the S-process-scope-2 recipe): filter-not-403 per row at the TARGET DOCUMENT's
+    # scope, batched (docs + types + process links in three grouped queries — no N+1). SYSTEM
+    # grants match every scope, so the SYSTEM-caller listing is byte-identical; a no-grant
+    # caller gets 200 + empty (doc 18 §5.2). A CREATE DCR (no target document) authorizes at
+    # SYSTEM scope, matching the detail resolver's fallback. source_ip is threaded so an
+    # ip_allow-predicated grant evaluates as the replaced enforce did.
+    grants = await gather_grants(session, caller.id, caller.org_id, "changeRequest.read")
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
+    doc_ids = [d.target_document_id for d, _i, _t in rows if d.target_document_id is not None]
+    docs: dict[uuid.UUID, DocumentedInformation] = {}
+    if doc_ids:
+        docs = {
+            doc.id: doc
+            for doc in (
+                await session.execute(
+                    select(DocumentedInformation).where(DocumentedInformation.id.in_(doc_ids))
+                )
+            ).scalars()
+        }
+    type_ids = {d.document_type_id for d in docs.values() if d.document_type_id}
+    document_types: dict[uuid.UUID, DocumentType] = {}
+    if type_ids:
+        document_types = {
+            dt.id: dt
+            for dt in (
+                await session.execute(select(DocumentType).where(DocumentType.id.in_(type_ids)))
+            ).scalars()
+        }
+    process_ids_by_doc = await vault_repo.process_ids_for_docs(session, list(docs))
+
+    def _row_scope(d: Dcr) -> ResourceContext:
+        doc = docs.get(d.target_document_id) if d.target_document_id is not None else None
+        if doc is None:
+            return ResourceContext.system()
+        return resource_from_doc(
+            doc,
+            document_type=(
+                document_types.get(doc.document_type_id) if doc.document_type_id else None
+            ),
+            process_ids=process_ids_by_doc.get(doc.id, frozenset()),
+        )
+
     return {
         "data": [
             _dcr(d, target_identifier=target_ident, target_title=target_t)
             for d, target_ident, target_t in rows
+            if authorize(grants, "changeRequest.read", _row_scope(d), ctx).allow
         ]
     }
 
@@ -573,18 +638,76 @@ async def raise_dcr_from_capa_endpoint(
     )
 
 
+async def _filter_impact_for_caller(
+    session: AsyncSession,
+    caller: AppUser,
+    request: Request,
+    target_document_id: uuid.UUID | None,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """R57 over the impact READ (authz-reviewer catch on the U2 scoping): the persisted
+    ``auto_populated`` snapshot embeds where-used slices — neighbour document identifiers, a
+    record sample, the obsoletion advisory's referencing identifiers — that the where-used
+    panel per-row filters for the SAME caller. U2 made this surface reachable by scoped
+    readers, so the read applies the same discipline (the stored rows and the assess path
+    stay complete). Dicts are deep-copied before mutation so the ORM JSONB is never touched."""
+    ctx = _panel_request_context(request)
+    doc_grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
+    doc_visible = _readable_doc_predicate(session, doc_grants, ctx)
+    for row in rows:
+        ap = copy.deepcopy(row["auto_populated"])
+        row["auto_populated"] = ap
+        if not isinstance(ap, dict):
+            continue
+        if row["dimension"] == ImpactDimension.dependent_documents.value:
+            for bucket in (
+                "child_documents",
+                "parent_documents",
+                "referenced_by",
+                "forms_templates",
+            ):
+                vals = ap.get(bucket)
+                if isinstance(vals, list):
+                    ap[bucket] = [
+                        r
+                        for r in vals
+                        if isinstance(r, dict) and await doc_visible(r["document_id"])
+                    ]
+        elif row["dimension"] == ImpactDimension.records_produced_under.value:
+            sample = ap.get("sample")
+            if isinstance(sample, list):
+                ap["sample"] = await _visible_record_sample(session, caller, ctx, sample)
+        elif row["dimension"] == ImpactDimension.clause_coverage.value:
+            gap = ap.get("obsoletion_star_gap")
+            if (
+                isinstance(gap, dict)
+                and isinstance(gap.get("reasons"), list)
+                and target_document_id is not None
+            ):
+                await _redact_obsoletion_reasons(
+                    session, doc_visible, target_document_id, gap["reasons"]
+                )
+    return rows
+
+
 @router.get("/dcrs/{dcr_id}/impact")
 async def get_dcr_impact_endpoint(
     dcr_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_dcr_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """The DCR's auto-populated impact_assessment rows (gate ``changeRequest.read``)."""
+    """The DCR's auto-populated impact_assessment rows (gate ``changeRequest.read`` at the
+    target document's scope), R57-filtered per caller like the where-used panel."""
     dcr = await dcr_repo.get_dcr(session, dcr_id)
     if dcr is None or dcr.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="DCR not found")
     rows = [_impact(ia) for ia in await dcr_repo.list_impact_assessments(session, dcr_id)]
-    return {"data": rows}
+    return {
+        "data": await _filter_impact_for_caller(
+            session, caller, request, dcr.target_document_id, rows
+        )
+    }
 
 
 @router.put("/dcrs/{dcr_id}/impact")

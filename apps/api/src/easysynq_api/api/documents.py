@@ -822,7 +822,12 @@ async def list_documents(
     # with no link gets an empty set → byte-identical filtering for the SYSTEM/ARTIFACT-scoped case.
     # S-process-scope-1 routes this through the shared ``vault_repo.process_ids_for_docs`` loader.
     process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [d.id for d in docs])
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    # Audit U1: thread the live source_ip so an ip_allow-predicated grant/DENY evaluates here
+    # exactly as the detail-gate PEP does (it silently never matched on this row filter before).
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
     visible: list[DocumentedInformation] = []
     for d in docs:
         # #333: full scope tuple via the shared helper so the list row-filter can't drift from the
@@ -1532,6 +1537,77 @@ def _readable_doc_predicate(
     return _visible
 
 
+async def _visible_record_sample(
+    session: AsyncSession,
+    caller: AppUser,
+    ctx: RequestContext,
+    sample: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Per-row ``record.read`` over an identifiable record sample, with the records listing's
+    exact context recipe — shared by the where-used panel and the DCR impact read (both surfaces
+    project the same R57-protected rows)."""
+    if not sample:
+        return sample
+    rec_grants = await gather_grants(session, caller.id, caller.org_id, "record.read")
+    visible_record_ids: set[str] = set()
+    if rec_grants:
+        rows = (
+            await session.execute(
+                select(Record, DocumentedInformation)
+                .join(DocumentedInformation, DocumentedInformation.id == Record.id)
+                .where(Record.id.in_([uuid.UUID(r["id"]) for r in sample]))
+            )
+        ).all()
+        process_ids_by_record = await records_repo.record_process_ids_for(
+            session, [record for record, _base in rows]
+        )
+        for record, base in rows:
+            process_ids = process_ids_by_record.get(record.id) or set()
+            if (
+                not process_ids
+                and record.source_document_id is None
+                and record.correction_of is not None
+            ):
+                process_ids = await records_repo.record_process_ids_effective(session, record)
+            resource = ResourceContext(
+                artifact_id=str(record.id),
+                kind="RECORD",
+                folder_path=base.folder_path,
+                framework_id=str(base.framework_id),
+                process_ids=frozenset(process_ids),
+                lifecycle_state=base.current_state.value,
+            )
+            if authorize(rec_grants, "record.read", resource, ctx).allow:
+                visible_record_ids.add(str(record.id))
+    return [r for r in sample if r["id"] in visible_record_ids]
+
+
+async def _redact_obsoletion_reasons(
+    session: AsyncSession,
+    doc_visible: Callable[[str], Awaitable[bool]],
+    document_id: uuid.UUID,
+    reasons: list[dict[str, Any]],
+) -> None:
+    """The referenced_by_effective reason embeds the referencing documents' IDENTIFIERS — the
+    same R57 fact the bucket filter hides (authz-reviewer catch). Rebuild that reason's detail
+    from the same source set, naming only documents the caller can read and aggregating the
+    rest; the blocking gate and the DCR assess path keep the full detail. Shared by the
+    where-used panel and the DCR impact read."""
+    if not any(r["code"] == "referenced_by_effective" for r in reasons):
+        return
+    referencing = await referencing_effective_documents(session, document_id)
+    visible_names = [ident for rid, ident in referencing if await doc_visible(rid)]
+    hidden = len(referencing) - len(visible_names)
+    detail = f"referenced by {len(referencing)} Effective doc(s)"
+    if visible_names:
+        detail += f": {', '.join(visible_names)}"
+    if hidden:
+        detail += f" ({hidden} not visible to your read scope)"
+    for r in reasons:
+        if r["code"] == "referenced_by_effective":
+            r["detail"] = detail
+
+
 _WHERE_USED_DOC_BUCKETS = (
     "child_documents",
     "parent_documents",
@@ -1566,42 +1642,9 @@ async def _filter_where_used_for_caller(
     # Records sample: per-row record.read with the records listing's exact context recipe. The
     # COUNT stays exact — it is aggregate awareness metadata of the path document itself (§7.3
     # feeds on it); the identifiable rows are what R57 protects.
-    sample = payload["records_produced_under"]["sample"]
-    if sample:
-        rec_grants = await gather_grants(session, caller.id, caller.org_id, "record.read")
-        visible_record_ids: set[str] = set()
-        if rec_grants:
-            rows = (
-                await session.execute(
-                    select(Record, DocumentedInformation)
-                    .join(DocumentedInformation, DocumentedInformation.id == Record.id)
-                    .where(Record.id.in_([uuid.UUID(r["id"]) for r in sample]))
-                )
-            ).all()
-            process_ids_by_record = await records_repo.record_process_ids_for(
-                session, [record for record, _base in rows]
-            )
-            for record, base in rows:
-                process_ids = process_ids_by_record.get(record.id) or set()
-                if (
-                    not process_ids
-                    and record.source_document_id is None
-                    and record.correction_of is not None
-                ):
-                    process_ids = await records_repo.record_process_ids_effective(session, record)
-                resource = ResourceContext(
-                    artifact_id=str(record.id),
-                    kind="RECORD",
-                    folder_path=base.folder_path,
-                    framework_id=str(base.framework_id),
-                    process_ids=frozenset(process_ids),
-                    lifecycle_state=base.current_state.value,
-                )
-                if authorize(rec_grants, "record.read", resource, ctx).allow:
-                    visible_record_ids.add(str(record.id))
-        payload["records_produced_under"]["sample"] = [
-            r for r in sample if r["id"] in visible_record_ids
-        ]
+    payload["records_produced_under"]["sample"] = await _visible_record_sample(
+        session, caller, ctx, payload["records_produced_under"]["sample"]
+    )
 
     # Obsoletion advisory: the referenced_by_effective reason embeds the referencing documents'
     # IDENTIFIERS — the same R57 fact the bucket filter above hides (authz-reviewer catch). Rebuild
@@ -1609,29 +1652,24 @@ async def _filter_where_used_for_caller(
     # aggregating the rest; the blocking gate and the DCR assess path keep the full detail. The
     # governs_active_process reason mirrors the deliberately-unfiltered processes leg, and
     # sole_star_coverage names only clause-catalog data.
-    reasons = payload["obsoletion_safety"]["reasons"]
-    if any(r["code"] == "referenced_by_effective" for r in reasons):
-        referencing = await referencing_effective_documents(
-            session, uuid.UUID(payload["document_id"])
-        )
-        visible_names = [ident for rid, ident in referencing if await doc_visible(rid)]
-        hidden = len(referencing) - len(visible_names)
-        detail = f"referenced by {len(referencing)} Effective doc(s)"
-        if visible_names:
-            detail += f": {', '.join(visible_names)}"
-        if hidden:
-            detail += f" ({hidden} not visible to your read scope)"
-        for r in reasons:
-            if r["code"] == "referenced_by_effective":
-                r["detail"] = detail
+    await _redact_obsoletion_reasons(
+        session,
+        doc_visible,
+        uuid.UUID(payload["document_id"]),
+        payload["obsoletion_safety"]["reasons"],
+    )
 
-    # Related CAPAs/findings: DCR identifiers are a changeRequest.read surface. Gate the leg with
-    # the SAME decision GET /dcrs gives (SYSTEM context) — a caller who cannot read DCRs must not
-    # collect their identifiers here. capa_close_state is additionally a capa.read fact; hide it
-    # (conservatively at SYSTEM) when the caller lacks that key.
+    # Related CAPAs/findings: DCR identifiers are a changeRequest.read surface. Gate the leg at
+    # the PATH DOCUMENT's full scope — the SAME decision the (U2-scoped) GET /dcrs row filter
+    # gives for a DCR targeting this doc: a PROCESS-bound reader who sees the DCR on /dcrs sees
+    # the leg here, and a scoped changeRequest.read DENY that hides it there hides it here too
+    # (a SYSTEM context can never match a scoped DENY — the incomplete-scope-tuple trap).
+    # capa_close_state is additionally a capa.read fact; hidden conservatively at SYSTEM (CAPAs
+    # carry their own scope model — documented posture, unchanged).
     if payload["related_capas_findings"]:
         cr_grants = await gather_grants(session, caller.id, caller.org_id, "changeRequest.read")
-        if not authorize(cr_grants, "changeRequest.read", ResourceContext.system(), ctx).allow:
+        doc_scope = await _document_scope_by_id(session, uuid.UUID(payload["document_id"]))
+        if not authorize(cr_grants, "changeRequest.read", doc_scope, ctx).allow:
             payload["related_capas_findings"] = []
         else:
             capa_grants = await gather_grants(session, caller.id, caller.org_id, "capa.read")

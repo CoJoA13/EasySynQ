@@ -16,7 +16,7 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
@@ -35,12 +35,13 @@ _CANDIDATE_CAP = (
 
 
 async def _readable_hits(
-    session: AsyncSession, caller: AppUser, hits: list[SearchHit]
+    session: AsyncSession, caller: AppUser, hits: list[SearchHit], *, source_ip: str | None
 ) -> tuple[list[SearchHit], int]:
     """Drop hits the caller may not ``document.read`` (the GET /documents row-filter pattern).
     Returns (visible, hidden_count)."""
     grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    # Audit U1: thread source_ip so ip_allow-predicated grants/DENYs evaluate on this row filter.
+    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC), source_ip=source_ip)
     # S-process-scope-1: batch-load each candidate's process links so a bound Process Owner's
     # PROCESS-scoped document.read matches (the GET /documents row-filter pattern). A hit with no
     # link gets an empty set → byte-identical filtering for the SYSTEM/ARTIFACT-scoped case.
@@ -67,13 +68,19 @@ async def _readable_hits(
 
 @router.get("/search")
 async def search_endpoint(
+    request: Request,
     q: str = Query(..., min_length=1, description="free-text query (metadata plane)"),
     limit: int = Query(25, ge=1, le=100),
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     candidates = await get_indexer().search(session, caller.org_id, q, limit=_CANDIDATE_CAP)
-    visible, hidden = await _readable_hits(session, caller, candidates)
+    visible, hidden = await _readable_hits(
+        session,
+        caller,
+        candidates,
+        source_ip=request.client.host if request.client else None,
+    )
     visible = visible[:limit]
     refs = await vault_repo.clause_numbers_for_docs(session, [h.doc_id for h in visible])
     return {
@@ -97,6 +104,7 @@ async def search_endpoint(
 
 @router.get("/search/suggest")
 async def suggest_endpoint(
+    request: Request,
     q: str = Query(..., min_length=1, description="prefix for type-ahead (identifier/title)"),
     limit: int = Query(10, ge=1, le=25),
     caller: AppUser = Depends(get_current_user),
@@ -105,7 +113,11 @@ async def suggest_endpoint(
     # Over-fetch suggestions then post-filter by document.read (filter-not-403), keeping ``limit``.
     raw = await get_indexer().suggest(session, caller.org_id, q, limit=_CANDIDATE_CAP)
     grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    # Audit U1: thread source_ip so ip_allow-predicated grants/DENYs evaluate on this row filter.
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
     # S-process-scope-1: process links per suggestion so a PROCESS-scoped document.read matches.
     process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [s.doc_id for s in raw])
     out: list[dict[str, str]] = []

@@ -56,9 +56,12 @@ def _rid() -> uuid.UUID | None:
 
 def _client_ip(request: Request) -> str | None:
     # The pack_share XFF-aware shape (Caddy fronts the API, so the socket peer is the proxy).
+    # Audit U21: the RIGHTMOST entry — the value the trusted proxy appended for the actual
+    # peer; the leftmost is client-controlled and would let an acknowledger forge the IP
+    # recorded in the immutable Part-11-adjacent evidence row.
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()
+        return fwd.split(",")[-1].strip()
     return request.client.host if request.client else None
 
 
