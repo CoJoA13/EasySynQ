@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any, ParamSpec, Protocol, TypeVar, cast
 
-from celery import Celery
+from celery import Celery, bootsteps
+from celery.signals import beat_init
 
 from ..config import get_settings
+from ..services.common.signing import (
+    SigningKeyUnavailable,
+    ensure_signing_keys_persistable,
+)
+
+logger = logging.getLogger("easysynq.tasks")
 
 _settings = get_settings()
 
@@ -16,6 +24,57 @@ app = Celery(
     broker=_settings.redis_url,
     backend=_settings.redis_url,
 )
+
+
+class SigningKeyGate(bootsteps.StartStopStep):  # type: ignore[misc]  # celery ships no stubs
+    """Refuse to start the worker/beat when a signing key cannot be durably persisted.
+
+    A BOOTSTEP, not a signal receiver: Celery's ``Signal.send`` catches receiver exceptions, so a
+    ``worker_init`` handler that raises logs a traceback and the worker then reports ready anyway
+    (measured). A bootstep's ``start`` propagates, which is the only in-app mechanism that actually
+    aborts startup.
+
+    The worker mints controlled-copy QR tokens and anchors signed audit checkpoints. Both loaders
+    used to degrade to an ephemeral in-memory key behind a log warning when the ``secrets`` volume
+    was unwritable, and no health surface probes those paths — so the stack ran, `/readyz` stayed
+    green, and every signature it produced was worthless.
+
+    The api process is deliberately NOT gated: it only VERIFIES, and reading UNKNOWN before the
+    worker has minted anything is a legitimate state.
+    """
+
+    def start(self, parent: object) -> None:
+        try:
+            ensure_signing_keys_persistable()
+        except SigningKeyUnavailable:
+            # Celery logs a bootstep failure, but this one deserves to be unmissable in a restart
+            # loop — it is the difference between "broken" and "silently unsigned".
+            logger.critical("refusing to start: signing keys cannot be persisted", exc_info=True)
+            raise
+
+
+app.steps["worker"].add(SigningKeyGate)
+
+
+def _gate_beat_startup(**_: object) -> None:
+    """The same gate for beat, which has no bootstep support.
+
+    ``celery.beat.Service`` carries no blueprint, so ``app.steps["beat"]`` is a defaultdict entry
+    nothing consumes — measured: beat started normally with an unwritable key path. The only hook
+    is ``beat_init``, and Celery's signal dispatch catches ``Exception``, so a raised
+    ``SigningKeyUnavailable`` is logged and swallowed. ``SystemExit`` is a ``BaseException`` and
+    therefore propagates, which is what actually stops beat.
+    """
+    try:
+        ensure_signing_keys_persistable()
+    except SigningKeyUnavailable:
+        logger.critical("refusing to start: signing keys cannot be persisted", exc_info=True)
+        raise SystemExit(1) from None
+
+
+beat_init.connect(_gate_beat_startup)
+
+
 app.conf.update(
     task_track_started=True,
     task_acks_late=True,

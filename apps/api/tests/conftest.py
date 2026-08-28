@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator, Callable, Iterable
+
+# The suite runs as an ordinary user and cannot write /run/secrets, which is exactly the
+# development case the ephemeral-signing-key fallback exists for. Set before easysynq_api.main is
+# imported below, since get_settings() is lru_cached on first use. Tests that assert the
+# FAIL-CLOSED behaviour construct their own Settings with the flag off.
+os.environ.setdefault("ALLOW_EPHEMERAL_SIGNING_KEYS", "1")
 
 import pytest
 from fastapi import FastAPI
