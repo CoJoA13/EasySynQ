@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { RiskBand, RiskRow } from "../../lib/types";
+import { TruncationNotice } from "../../app/shell/TruncationNotice";
 import { AsOf } from "../../lib/AsOf";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { usePermissions } from "../../app/shell/usePermissions";
@@ -67,7 +68,7 @@ function bannerFor(state: string | null): string | null {
 }
 
 export function RisksRegisterPage() {
-  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useRisks();
+  const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } = useRisks();
   const status = useRiskRegisterStatus();
   const sys = usePermissions();
   // "New risk" gate: register.manage at SYSTEM ‖ a first-readable-process probe (the CapaBoardPage
@@ -181,6 +182,7 @@ export function RisksRegisterPage() {
       </Group>
 
       <AsOf at={dataUpdatedAt} />
+      <TruncationNotice truncated={truncated} noun="risk rows" />
       {banner && (
         <Alert color="gray" variant="light" mt="xs">
           {banner}

@@ -19,11 +19,17 @@ export function useInitiatives() {
   const api = useApi();
   const query = useQuery({
     queryKey: ["initiatives"],
-    queryFn: async (): Promise<Initiative[]> =>
-      (await api.get<InitiativeList>("/api/v1/improvement-initiatives")).data,
+    queryFn: () => api.get<InitiativeList>("/api/v1/improvement-initiatives"),
     retry: false,
   });
-  return { ...query, forbidden: forbiddenOf(query.error) };
+  // U14: keep `data` the bare array (every consumer reads it that way) and surface the
+  // register's scan-window truncation alongside `forbidden`.
+  return {
+    ...query,
+    data: query.data?.data,
+    truncated: query.data?.truncated ?? false,
+    forbidden: forbiddenOf(query.error),
+  };
 }
 
 export function useInitiative(id: string | null) {

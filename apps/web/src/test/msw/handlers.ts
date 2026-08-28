@@ -1540,6 +1540,7 @@ export const auditListFixture = {
       created_at: "2026-04-25T09:00:00+00:00",
     },
   ],
+  truncated: false,
 } satisfies AuditList;
 
 // Findings of au000001: a live Major NC (its CAPA ca000001 is at RootCause → BLOCKS close), an OFI,
@@ -2581,6 +2582,7 @@ export const riskListFixture = {
       linked_capa_id: "ca000099-0099-0099-0099-000000000099",
     }),
   ],
+  truncated: false,
 } satisfies RiskListResponse;
 
 export const riskSummaryFixture = {
@@ -3009,7 +3011,7 @@ export const handlers = [
     HttpResponse.json(initiativeFixtures[1]! satisfies Initiative),
   ),
   http.get("/api/v1/improvement-initiatives", () =>
-    HttpResponse.json({ data: initiativeFixtures } satisfies InitiativeList),
+    HttpResponse.json({ data: initiativeFixtures, truncated: false } satisfies InitiativeList),
   ),
   http.post("/api/v1/improvement-initiatives", () =>
     HttpResponse.json(initiativeCreatedFixture satisfies Initiative, { status: 201 }),

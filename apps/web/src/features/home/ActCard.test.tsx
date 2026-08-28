@@ -36,6 +36,7 @@ const mixedInitiatives = [
 ] satisfies Initiative[];
 
 const capas: CapaList = {
+  truncated: false,
   data: [
     {
       id: "c1",
@@ -219,4 +220,21 @@ it("degrades calmly when the initiatives read is forbidden (line absent, no cras
   // The other (allowed) sections still render — wait on one of them to settle.
   await waitFor(() => expect(within(card).getByLabelText("0 CAPAs open")).toBeInTheDocument());
   expect(within(card).queryByLabelText(/initiatives in progress/)).toBeNull();
+});
+
+it("marks the CAPA count as a floor when the register scan window was truncated", async () => {
+  // [Audit U14] This KPI counts client-side over the CAPA register, whose pre-authorization scan
+  // window is capped server-side. When the API reports `truncated`, an exact-looking compliance
+  // number would UNDER-REPORT — the tile must present it as a floor instead.
+  server.use(
+    http.get("/api/v1/capas", () =>
+      HttpResponse.json({ ...capas, truncated: true } satisfies CapaList),
+    ),
+    http.get("/api/v1/ncrs", () => HttpResponse.json(ncrs)),
+    http.get("/api/v1/complaints", () => HttpResponse.json(complaints)),
+  );
+  renderWithProviders(<ActCard />);
+  const card = await screen.findByRole("group", { name: /act quadrant/i });
+  await waitFor(() => expect(within(card).getByLabelText("1+ CAPAs open")).toBeInTheDocument());
+  expect(within(card).queryByLabelText("1 CAPAs open")).not.toBeInTheDocument();
 });

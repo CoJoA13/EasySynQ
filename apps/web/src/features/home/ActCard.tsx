@@ -29,7 +29,12 @@ export function ActCard() {
     const n = capasOpenCount(ca.data);
     const rag = countRag(n, "amber");
     rags.push(rag);
-    lines.push(<StatLine key="capa" value={n} label="CAPAs open" tone={rag} />);
+    // U14: this KPI counts client-side over the CAPA register, whose scan window is capped.
+    // When the window filled, the count is a FLOOR — say so rather than under-report a
+    // compliance number as if it were exact.
+    lines.push(
+      <StatLine key="capa" value={ca.truncated ? `${n}+` : n} label="CAPAs open" tone={rag} />,
+    );
   }
   if (!nc.forbidden && !nc.isError && nc.data) {
     const n = ncrsAwaitingCount(nc.data);
@@ -47,7 +52,14 @@ export function ActCard() {
     const n = initiativesInProgressCount(init.data);
     // Neutral, informational — deliberately NOT pushed to `rags` (improvement activity never reds/drags
     // the ACT tile; the tile RAG stays the worst of the actionable CAPA/NCR/complaint signals).
-    lines.push(<StatLine key="init" value={n} label="initiatives in progress" tone="neutral" />);
+    lines.push(
+      <StatLine
+        key="init"
+        value={init.truncated ? `${n}+` : n}
+        label="initiatives in progress"
+        tone="neutral"
+      />,
+    );
   }
 
   // ACT no-access is governed by the ACTIONABLE reads only — NOT the initiatives read. The initiatives

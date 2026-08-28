@@ -882,6 +882,9 @@ export interface CapaStage {
 
 export interface CapaList {
   data: Capa[];
+  // U14: true when the newest-first pre-authz scan window filled to its cap — the register
+  // may omit older rows. Always present (api/*.py list serializers).
+  truncated: boolean;
 }
 
 // The per-stage PROJECTION of an evidence-for link, as returned inside CapaStage.evidence_links by the
@@ -1146,6 +1149,9 @@ export interface AuditPlanList {
 }
 export interface AuditList {
   data: Audit[];
+  // U14: true when the newest-first pre-authz scan window filled to its cap — the register
+  // may omit older rows. Always present (api/*.py list serializers).
+  truncated: boolean;
 }
 export interface FindingList {
   data: Finding[];
@@ -1687,6 +1693,9 @@ export interface Initiative {
 
 export interface InitiativeList {
   data: Initiative[];
+  // U14: true when the newest-first pre-authz scan window filled to its cap — the register
+  // may omit older rows. Always present (api/*.py list serializers).
+  truncated: boolean;
 }
 
 export interface InitiativeStageEvent {
@@ -1799,6 +1808,9 @@ export interface RiskRow {
 
 export interface RiskListResponse {
   data: RiskRow[];
+  // U14: true when the newest-first pre-authz scan window filled to its cap — the register
+  // may omit older rows. Always present (api/*.py list serializers).
+  truncated: boolean;
 }
 
 // The RSK register head lifecycle status — api/risk.py `_register_status` / `_NO_REGISTER`.

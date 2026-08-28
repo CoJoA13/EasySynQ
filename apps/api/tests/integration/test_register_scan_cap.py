@@ -7,17 +7,23 @@ time), proves the window + flag, then restores and proves the untruncated shape.
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from collections.abc import Callable
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
+from easysynq_api.db.models.organization import Organization
+from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.services.audits import repository as audits_repo
+from easysynq_api.services.capa import repository as capa_repo
 from easysynq_api.services.common import listing
 
 from .test_audits import _grant
-from .test_vault import _auth
+from .test_vault import _auth, _ensure_user
 
 pytestmark = pytest.mark.integration
 
@@ -26,8 +32,10 @@ def _subject(prefix: str) -> str:
     return f"kc-{prefix}-{uuid.uuid4().hex[:10]}"
 
 
-def _mine(body: dict[str, Any], ids: set[str]) -> list[str]:
-    return [row["id"] for row in body["data"] if row["id"] in ids]
+def _mine(body: dict[str, Any], ids: list[str]) -> list[str]:
+    """This run's rows, in the response's own order."""
+    wanted = set(ids)
+    return [row["id"] for row in body["data"] if row["id"] in wanted]
 
 
 async def test_capas_scan_window_is_capped_and_flagged(
@@ -38,23 +46,26 @@ async def test_capas_scan_window_is_capped_and_flagged(
     subject = _subject("cap-capa")
     await _grant(subject, ("capa.create", "capa.read"))
     h = _auth(token_factory, subject)
-    ids = set()
+    ids: list[str] = []
     for i in range(2):
         r = await app_client.post(
             "/api/v1/capas", headers=h, json={"title": f"cap probe {i}", "severity": "Minor"}
         )
         assert r.status_code == 201, r.text
-        ids.add(r.json()["id"])
+        ids.append(r.json()["id"])
 
     monkeypatch.setattr(listing, "REGISTER_SCAN_CAP", 1)
     capped = (await app_client.get("/api/v1/capas", headers=h)).json()
     assert capped["truncated"] is True
-    assert len(_mine(capped, ids)) == 1  # only the newest row fits the window
+    # NEWEST-first: the window must hold the LAST row created, not the oldest (an .asc()
+    # window would serve the oldest rows and hide every recent one while still flagging
+    # truncated — the count-only assertion could not tell the difference).
+    assert _mine(capped, ids) == [ids[-1]]
     monkeypatch.undo()
 
     full = (await app_client.get("/api/v1/capas", headers=h)).json()
     assert full["truncated"] is False
-    assert len(_mine(full, ids)) == 2
+    assert sorted(_mine(full, ids)) == sorted(ids)
 
 
 async def test_improvement_scan_window_is_capped_and_flagged(
@@ -65,23 +76,23 @@ async def test_improvement_scan_window_is_capped_and_flagged(
     subject = _subject("cap-imp")
     await _grant(subject, ("improvement.manage", "improvement.read"))
     h = _auth(token_factory, subject)
-    ids = set()
+    ids: list[str] = []
     for i in range(2):
         r = await app_client.post(
             "/api/v1/improvement-initiatives", headers=h, json={"title": f"cap probe {i}"}
         )
         assert r.status_code == 201, r.text
-        ids.add(r.json()["id"])
+        ids.append(r.json()["id"])
 
     monkeypatch.setattr(listing, "REGISTER_SCAN_CAP", 1)
     capped = (await app_client.get("/api/v1/improvement-initiatives", headers=h)).json()
     assert capped["truncated"] is True
-    assert len(_mine(capped, ids)) == 1
+    assert _mine(capped, ids) == [ids[-1]]
     monkeypatch.undo()
 
     full = (await app_client.get("/api/v1/improvement-initiatives", headers=h)).json()
     assert full["truncated"] is False
-    assert len(_mine(full, ids)) == 2
+    assert sorted(_mine(full, ids)) == sorted(ids)
 
 
 async def test_risks_scan_window_is_capped_and_flagged(
@@ -92,7 +103,7 @@ async def test_risks_scan_window_is_capped_and_flagged(
     subject = _subject("cap-risk")
     await _grant(subject, ("register.manage", "register.read"))
     h = _auth(token_factory, subject)
-    ids = set()
+    ids: list[str] = []
     for i in range(2):
         r = await app_client.post(
             "/api/v1/risks",
@@ -105,17 +116,17 @@ async def test_risks_scan_window_is_capped_and_flagged(
             },
         )
         assert r.status_code == 201, r.text
-        ids.add(r.json()["id"])
+        ids.append(r.json()["id"])
 
     monkeypatch.setattr(listing, "REGISTER_SCAN_CAP", 1)
     capped = (await app_client.get("/api/v1/risks", headers=h)).json()
     assert capped["truncated"] is True
-    assert len(_mine(capped, ids)) == 1
+    assert _mine(capped, ids) == [ids[-1]]
     monkeypatch.undo()
 
     full = (await app_client.get("/api/v1/risks", headers=h)).json()
     assert full["truncated"] is False
-    assert len(_mine(full, ids)) == 2
+    assert sorted(_mine(full, ids)) == sorted(ids)
 
 
 async def test_audits_scan_window_is_capped_and_flagged(
@@ -133,7 +144,7 @@ async def test_audits_scan_window_is_capped_and_flagged(
     )
     assert r.status_code == 201, r.text
     program_id = r.json()["id"]
-    ids = set()
+    ids: list[str] = []
     for i in range(2):
         r = await app_client.post(
             f"/api/v1/audit-programs/{program_id}/plans",
@@ -147,17 +158,17 @@ async def test_audits_scan_window_is_capped_and_flagged(
             json={"plan_id": r.json()["id"], "title": f"Cap probe audit {i}"},
         )
         assert r.status_code == 201, r.text
-        ids.add(r.json()["id"])
+        ids.append(r.json()["id"])
 
     monkeypatch.setattr(listing, "REGISTER_SCAN_CAP", 1)
     capped = (await app_client.get("/api/v1/audits", headers=h)).json()
     assert capped["truncated"] is True
-    assert len(_mine(capped, ids)) == 1
+    assert _mine(capped, ids) == [ids[-1]]
     monkeypatch.undo()
 
     full = (await app_client.get("/api/v1/audits", headers=h)).json()
     assert full["truncated"] is False
-    assert len(_mine(full, ids)) == 2
+    assert sorted(_mine(full, ids)) == sorted(ids)
 
 
 async def test_management_review_compile_is_not_capped(
@@ -179,6 +190,16 @@ async def test_management_review_compile_is_not_capped(
         _MR_KEYS + _SOURCE_KEYS + ("audit.plan", "audit.create", "capa.create"),
     )
     h = _auth(token_factory, subject)
+
+    # Baseline the org's CURRENT totals (the integration DB is shared, so a bare >= 2 would be
+    # vacuous once neighbouring files have seeded rows) — read through the same uncapped repo
+    # calls the compiler uses.
+    async with get_sessionmaker()() as s:
+        org_id = (
+            await s.execute(select(Organization.id).order_by(Organization.created_at).limit(1))
+        ).scalar_one()
+        audits_before = len(await audits_repo.list_audits(s, org_id))
+        capas_before = len(await capa_repo.list_capas(s, org_id))
 
     # Two audits + two CAPAs, so a cap of 1 would visibly under-count either summary.
     r = await app_client.post(
@@ -207,6 +228,12 @@ async def test_management_review_compile_is_not_capped(
         )
         assert made.status_code == 201, made.text
 
+    # Structural pin: the shared repo functions must default to UNBOUNDED. A literal
+    # `limit: int | None = 2000` default reads the cap early — the monkeypatch below could not
+    # see it, and the MAJOR this test exists to prevent would ship green (false-pass-hunter E3).
+    assert inspect.signature(audits_repo.list_audits).parameters["limit"].default is None
+    assert inspect.signature(capa_repo.list_capas).parameters["limit"].default is None
+
     rid = await _create_review(app_client, h, "Cap-independence compile")
     monkeypatch.setattr(listing, "REGISTER_SCAN_CAP", 1)
     r = await app_client.post(f"/api/v1/management-reviews/{rid}/compile-inputs", headers=h)
@@ -215,12 +242,48 @@ async def test_management_review_compile_is_not_capped(
 
     audits = by_type["AUDIT_RESULTS"]
     assert audits["available"] is True, audits
-    assert audits["source_ref"]["summary"]["total"] >= 2, (
+    # EXACT delta (the org is shared, so a bare >= 2 is vacuous once neighbours seed rows).
+    assert audits["source_ref"]["summary"]["total"] == audits_before + 2, (
         "the MR audit summary inherited the listing scan cap — frozen evidence would under-count"
     )
     capas = by_type["NONCONFORMITIES_CAPA"]
     assert capas["available"] is True, capas
     # summarize_capas_ncrs counts each CAPA into by_close_state (newly raised → not Closed).
-    assert sum(capas["source_ref"]["summary"]["by_close_state"].values()) >= 2, (
+    assert sum(capas["source_ref"]["summary"]["by_close_state"].values()) == capas_before + 2, (
         "the MR CAPA summary inherited the listing scan cap"
+    )
+
+
+async def test_truncated_reflects_the_pre_authz_scan_not_the_visible_rows(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[U14 semantics] ``truncated`` describes the SCAN window, not the caller's visible slice.
+    A caller whose grants hide every scanned row must still be told the window filled — if the
+    flag were computed post-authz they would see an empty register reported as complete, the
+    exact 'silently missing rows reads as covered everything' hazard the flag exists to prevent.
+    """
+    author = _subject("cap-preauthz")
+    await _grant(author, ("capa.create", "capa.read"))
+    ha = _auth(token_factory, author)
+    for i in range(2):
+        r = await app_client.post(
+            "/api/v1/capas", headers=ha, json={"title": f"preauthz {i}", "severity": "Minor"}
+        )
+        assert r.status_code == 201, r.text
+
+    # A JIT user with NO capa.read: the row filter hides everything (200 + empty, never 403).
+    blind = _subject("cap-blind")
+    async with get_sessionmaker()() as s:
+        await _ensure_user(s, blind)
+        await s.commit()
+    hb = _auth(token_factory, blind)
+
+    monkeypatch.setattr(listing, "REGISTER_SCAN_CAP", 1)
+    body = (await app_client.get("/api/v1/capas", headers=hb)).json()
+    assert body["data"] == []
+    assert body["truncated"] is True, (
+        "truncated was computed from the VISIBLE rows — a scoped caller would read an empty "
+        "register as complete"
     )

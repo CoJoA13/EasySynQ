@@ -13,10 +13,17 @@ export function useRisks() {
   const api = useApi();
   const query = useQuery({
     queryKey: ["risks"],
-    queryFn: async () => (await api.get<RiskListResponse>("/api/v1/risks")).data,
+    queryFn: () => api.get<RiskListResponse>("/api/v1/risks"),
     retry: false,
   });
-  return { ...query, forbidden: forbiddenOf(query.error) };
+  // U14: keep `data` the bare array (every consumer reads it that way) and surface the
+  // register's scan-window truncation alongside `forbidden`.
+  return {
+    ...query,
+    data: query.data?.data,
+    truncated: query.data?.truncated ?? false,
+    forbidden: forbiddenOf(query.error),
+  };
 }
 
 // GET /risks/{id} — one risk row (the drawer's fetch; enforced at the row's PROCESS scope → 403 calmly).

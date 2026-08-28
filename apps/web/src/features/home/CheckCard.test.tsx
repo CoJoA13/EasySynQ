@@ -7,6 +7,7 @@ import { renderWithProviders } from "../../test/render";
 import { CheckCard } from "./CheckCard";
 
 const audits: AuditList = {
+  truncated: false,
   data: [
     {
       id: "a1",

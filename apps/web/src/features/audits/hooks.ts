@@ -1,7 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, useApi } from "../../lib/api";
 import type {
-  Audit, AuditList, AuditPlan, AuditPlanList, AuditProgramList, FindingList, ProcessRow,
+  Audit,
+  AuditList,
+  AuditPlan,
+  AuditPlanList,
+  AuditProgramList,
+  FindingList,
+  ProcessRow,
 } from "../../lib/types";
 
 // Every audit-family read is gated (audit.read / finding.read) and the demo admin holds none —
@@ -46,10 +52,17 @@ export function useAudits() {
   const api = useApi();
   const query = useQuery({
     queryKey: ["audits"],
-    queryFn: async () => (await api.get<AuditList>("/api/v1/audits")).data,
+    queryFn: () => api.get<AuditList>("/api/v1/audits"),
     retry: false,
   });
-  return { ...query, forbidden: forbiddenOf(query.error) };
+  // U14: keep `data` the bare array (every consumer reads it that way) and surface the
+  // register's scan-window truncation alongside `forbidden`.
+  return {
+    ...query,
+    data: query.data?.data,
+    truncated: query.data?.truncated ?? false,
+    forbidden: forbiddenOf(query.error),
+  };
 }
 
 export function useAudit(id: string | null) {
