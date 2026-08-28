@@ -99,11 +99,11 @@ export function PlansSection({
             <Button variant="default" onClick={() => setConfirming(null)}>
               Cancel
             </Button>
-            <Button
-              color="red"
-              onClick={() => confirming && removePlan(confirming)}
-              loading={remove.isPending}
-            >
+            {/* No `loading` here: removePlan closes the modal BEFORE mutating, so it could only
+                ever reflect a DIFFERENT row's in-flight delete — Mantine maps loading onto the
+                real `disabled`, which would silently block this confirm. The row icon carries
+                the pending state, scoped by remove.variables. */}
+            <Button color="red" onClick={() => confirming && removePlan(confirming)}>
               Remove plan
             </Button>
           </Group>

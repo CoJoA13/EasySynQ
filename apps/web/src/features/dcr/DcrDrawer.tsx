@@ -145,8 +145,14 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
             </Field>
           ) : null}
 
+          {/* NOT an instant: proposedEffectiveIso() pins the operator's picked calendar day to
+              UTC midnight, and EditDcrModal seeds its date input from the same raw slice.
+              Converting it to the org timezone would move it a day earlier for every
+              west-of-UTC org and contradict the edit form for the same field. */}
           {dcr.proposed_effective_from ? (
-            <Field label="Proposed effective from">{formatDate(dcr.proposed_effective_from)}</Field>
+            <Field label="Proposed effective from">
+              {dcr.proposed_effective_from.slice(0, 10)}
+            </Field>
           ) : null}
 
           {dcr.decision ? <Field label="Decision">{dcr.decision}</Field> : null}

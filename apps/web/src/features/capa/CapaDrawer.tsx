@@ -1,10 +1,10 @@
-import { Badge, Button, Group, Stack, Text, TextInput, Title } from "@mantine/core";
+import { Alert, Badge, Button, Group, Stack, Text, TextInput, Title } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { StatusBadge } from "../../lib/StatusBadge";
-import { useMutationFeedback } from "../../lib/mutationFeedback";
+import { ApiError } from "../../lib/api";
 import { ErrorState, LoadingState } from "../../lib/states";
 import { SpawnDcrModal } from "../dcr/SpawnDcrModal";
 import { useRaiseDcrFromCapa } from "../dcr/mutations";
@@ -26,7 +26,11 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
   const { can } = usePermissions(scope);
   const raiseDcr = useRaiseDcrFromCapa(capaId ?? "");
   const setTargetDate = useCapaSetTargetDate(capaId ?? "");
-  const feedback = useMutationFeedback();
+  // U18: the failure renders INSIDE the drawer. The shared mutation-feedback banner is
+  // mounted in AppShell.Main — behind this drawer's scrim, in a scroll-locked region and
+  // outside its focus trap — so an operator would never see or reach it (the
+  // EditDcrModal / DistributionEditor inline-Alert pattern is the one that fits an overlay).
+  const [targetDateError, setTargetDateError] = useState<string | null>(null);
   const [raisingDcr, setRaisingDcr] = useState(false);
   const [targetDate, setTargetDateInput] = useState("");
 
@@ -119,21 +123,26 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
                   loading={setTargetDate.isPending}
                   // U18: report the failure — the PATCH 409s on a terminal CAPA and 403s
                   // without capa.update, and both used to vanish leaving the old date on screen.
-                  onClick={() =>
+                  onClick={() => {
+                    setTargetDateError(null);
                     setTargetDate.mutate(targetDate || null, {
                       onError: (error) =>
-                        feedback.report({
-                          key: `capa-target-date:${capa.id}`,
-                          title: `The target date was not saved for ${capa.identifier}`,
-                          error,
-                          dismissLabel: `Dismiss target-date error for ${capa.identifier}`,
-                        }),
-                    })
-                  }
+                        setTargetDateError(
+                          error instanceof ApiError && error.status === 409
+                            ? "This CAPA is closed — its target date can no longer be changed."
+                            : "The target date was not saved.",
+                        ),
+                    });
+                  }}
                 >
                   Save
                 </Button>
               </Group>
+            )}
+            {targetDateError && (
+              <Alert color="red" mt="xs" withCloseButton onClose={() => setTargetDateError(null)}>
+                {targetDateError}
+              </Alert>
             )}
           </div>
 

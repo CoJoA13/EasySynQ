@@ -64,3 +64,30 @@ test("has bounded geometry and no axe violations", async () => {
   });
   expect(await axe(container)).toHaveNoViolations();
 });
+
+test("[U15] a failed chunk load leads with reload, not a retry that can never work", async () => {
+  // React.lazy memoizes a rejected payload, so remounting re-reads the same rejection — the
+  // stale-chunk-after-deploy case would leave "Try this page again" a permanent no-op.
+  const onRetry = vi.fn();
+  const onReload = vi.fn();
+  render(
+    <RouteErrorPage
+      onRetry={onRetry}
+      onReload={onReload}
+      error={new TypeError("Failed to fetch dynamically imported module: /assets/Records-abc.js")}
+    />,
+    { wrapper: Tree },
+  );
+  expect(screen.queryByRole("button", { name: /try this page again/i })).toBeNull();
+  expect(screen.getByText(/probably updated while your tab was open/i)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /reload easysynq/i }));
+  expect(onReload).toHaveBeenCalledTimes(1);
+  expect(onRetry).not.toHaveBeenCalled();
+});
+
+test("[U15] an ordinary render fault still offers the in-place retry", async () => {
+  const onRetry = vi.fn();
+  render(<RouteErrorPage onRetry={onRetry} error={new Error("boom")} />, { wrapper: Tree });
+  await userEvent.click(screen.getByRole("button", { name: /try this page again/i }));
+  expect(onRetry).toHaveBeenCalledTimes(1);
+});

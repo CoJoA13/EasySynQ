@@ -1,4 +1,5 @@
 import { http, HttpResponse } from "msw";
+import type { Me } from "../../app/shell/useMe";
 import type {
   AckDecisionResult,
   AckMatrixRow,
@@ -2197,7 +2198,7 @@ export const dcrListFixture = {
   ],
 } satisfies DcrList;
 
-const dcrDetailFixture = {
+export const dcrDetailFixture = {
   ...dcrListFixture.data[0]!,
   stage_events: [
     {
@@ -2871,6 +2872,19 @@ const DEFAULT_NOTIFICATION_PREFS = {
   quiet_start: null,
   quiet_end: null,
 } satisfies NotificationPreferences;
+
+// Pinned field-for-field to the real serializer, apps/api `api/auth.py::_represent` — the wire
+// row carries keycloak_subject and is_guest too, and a hand-typed subset hides a wrong-shape
+// read from both vitest and tsc.
+export const meFixture = {
+  id: "bbbb1111-1111-1111-1111-111111111111",
+  keycloak_subject: "kc-mara",
+  display_name: "Mara Quality",
+  email: "mara@example.com",
+  status: "ACTIVE",
+  is_guest: false,
+  org_timezone: "UTC",
+} satisfies Me & { is_guest: boolean };
 
 export const handlers = [
   http.get("/api/v1/risks", () => HttpResponse.json(riskListFixture)),
@@ -3619,15 +3633,7 @@ export const handlers = [
   http.post("/api/v1/documents/:id/release", ({ params }) =>
     HttpResponse.json({ ...docFixture[0], id: String(params.id), current_state: "Effective" }),
   ),
-  http.get("/api/v1/me", () =>
-    HttpResponse.json({
-      id: "bbbb1111-1111-1111-1111-111111111111",
-      display_name: "Mara Quality",
-      email: "mara@example.com",
-      status: "ACTIVE",
-      org_timezone: "UTC",
-    }),
-  ),
+  http.get("/api/v1/me", () => HttpResponse.json(meFixture)),
   http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state: "OPERATIONAL" })),
   http.get("/api/v1/auth/config", () =>
     HttpResponse.json({

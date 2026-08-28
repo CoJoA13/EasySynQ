@@ -1,6 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
+import { meFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { useOrgDate } from "./useOrgDate";
@@ -14,18 +15,10 @@ function Probe({ iso }: { iso: string }) {
   return <span data-testid="out">{formatDate(iso)}</span>;
 }
 
+// Spread the serializer-pinned fixture rather than hand-typing a subset (the fabricated-fixture
+// trap: HttpResponse.json accepts any JSON, so a wrong shape is invisible to vitest AND tsc).
 function meWithTimezone(tz: string) {
-  server.use(
-    http.get("/api/v1/me", () =>
-      HttpResponse.json({
-        id: "11111111-1111-1111-1111-111111111111",
-        display_name: "Mara",
-        email: "mara@example.com",
-        org_id: "22222222-2222-2222-2222-222222222222",
-        org_timezone: tz,
-      }),
-    ),
-  );
+  server.use(http.get("/api/v1/me", () => HttpResponse.json({ ...meFixture, org_timezone: tz })));
 }
 
 it("renders a late-evening UTC instant as the NEXT day in a positive-offset org", async () => {

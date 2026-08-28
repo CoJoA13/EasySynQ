@@ -306,8 +306,10 @@ function AppContent() {
 
   return (
     <MutationFeedbackProvider>
-      {/* One Suspense boundary around the whole route table: a route swap shows the shared
-          LoadingState while its chunk arrives, and the boundary never unmounts the chrome. */}
+      {/* One Suspense boundary around the whole route table. This only shows its fallback
+          because the routers opt OUT of react-router's default startTransition wrapping (see
+          main.tsx) — inside a transition React keeps the previous page on screen instead, which
+          would make an uncached route look like a frozen app. */}
       <Suspense fallback={<LoadingState label="Loading page" />}>
         <Routes>
           <Route

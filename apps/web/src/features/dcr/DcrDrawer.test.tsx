@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
 import type { DcrDetail, DcrImpactList, DcrState, DocumentSummary } from "../../lib/types";
-import { DCR_REVISE_ID } from "../../test/msw/handlers";
+import { DCR_REVISE_ID, dcrDetailFixture, meFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { DcrDrawer } from "./DcrDrawer";
@@ -247,4 +247,25 @@ it("shows the bare resulting-version id for a CREATE DCR without resulting_docum
   const screen = renderWithProviders(<DcrDrawer dcrId={CREATE_DCR_ID} onClose={() => {}} />);
   await screen.findByText("DCR-2026-0050");
   expect(screen.queryByRole("link", { name: "View document" })).not.toBeInTheDocument();
+});
+
+it("[U20] shows the PICKED effective date verbatim, matching the edit form", async () => {
+  // proposed_effective_from is not an instant: proposedEffectiveIso() pins the operator's chosen
+  // calendar day to UTC midnight, and EditDcrModal seeds its date input from the same raw slice.
+  // Org-timezone conversion would move it a day earlier for every west-of-UTC org, so the drawer
+  // and the edit form would disagree about the same field. A Denver org proves it.
+  server.use(
+    http.get("/api/v1/me", () =>
+      HttpResponse.json({ ...meFixture, org_timezone: "America/Denver" }),
+    ),
+    http.get("/api/v1/dcrs/:id", () =>
+      HttpResponse.json({
+        ...dcrDetailFixture,
+        proposed_effective_from: "2026-07-01T00:00:00+00:00",
+      } satisfies DcrDetail),
+    ),
+  );
+  const screen = renderWithProviders(<DcrDrawer dcrId={DCR_REVISE_ID} onClose={() => {}} />);
+  expect(await screen.findByText("2026-07-01")).toBeInTheDocument();
+  expect(screen.queryByText("2026-06-30")).toBeNull();
 });

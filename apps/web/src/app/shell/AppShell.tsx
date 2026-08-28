@@ -66,7 +66,7 @@ export function AppShell({ notFound = false }: AppShellProps) {
         <RouteAnnouncement />
         <ApplicationErrorBoundary
           resetKey={routeResetKey}
-          fallback={({ onReset }) => <RouteErrorPage onRetry={onReset} />}
+          fallback={({ onReset, error }) => <RouteErrorPage onRetry={onReset} error={error} />}
         >
           {notFound ? <NotFoundPage /> : <Outlet />}
         </ApplicationErrorBoundary>

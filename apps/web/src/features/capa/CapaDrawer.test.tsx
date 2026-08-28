@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
@@ -7,7 +7,6 @@ import { TONE_GLYPH } from "../../lib/status";
 import { capaDetailFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
-import { MutationFeedbackOutlet } from "../../lib/mutationFeedback";
 import { CapaDrawer } from "./CapaDrawer";
 
 test("renders the title, the closed-loop thread and the close gate", async () => {
@@ -181,14 +180,17 @@ describe("Target completion / overdue", () => {
       ),
     );
     renderWithProviders(
-      <>
-        <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />
-        <MutationFeedbackOutlet />
-      </>,
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
     );
     await screen.findByLabelText("Set target date");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
-    expect(await screen.findByText(/target date was not saved/i)).toBeInTheDocument();
+    // Scoped to the DIALOG on purpose: the Save button lives inside a Drawer (scrim, scroll
+    // lock, focus trap, portal), so a banner rendered in the app shell would be invisible and
+    // unreachable to the operator. Asserting on a bare sibling outlet would pass either way.
+    const drawer = await screen.findByRole("dialog");
+    expect(
+      within(drawer).getByText(/closed — its target date can no longer be changed/i),
+    ).toBeInTheDocument();
   });
 
   it("does NOT show the date edit field without capa.update", async () => {

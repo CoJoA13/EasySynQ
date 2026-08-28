@@ -20,7 +20,12 @@ ReactDOM.createRoot(root).render(
     <MantineProvider theme={theme} defaultColorScheme="auto">
       <ApplicationErrorBoundary fallback={() => <ApplicationErrorScreen />}>
         <QueryClientProvider client={queryClient}>
-          <BrowserRouter>
+          {/* U15: react-router wraps navigation in startTransition by default, and React will
+              not replace already-revealed content with a Suspense fallback during a transition —
+              so a click to an UNCACHED route chunk would leave the previous page frozen with no
+              indication. Opting out lets the route-level Suspense boundary in App show its
+              LoadingState; a cached chunk resolves synchronously, so there is no flash. */}
+          <BrowserRouter useTransitions={false}>
             <AuthProvider>
               <App />
             </AuthProvider>
