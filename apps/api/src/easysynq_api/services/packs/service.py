@@ -27,7 +27,7 @@ import uuid
 from typing import Any, Literal
 
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
@@ -821,8 +821,16 @@ async def record_share_download(
 ) -> None:
     """Account + audit a successful guest download (PACK_DOWNLOADED, system-actor — a bearer-token
     guest has no app_user). Commits its own short transaction before the bytes stream."""
-    link.download_count += 1
-    link.last_downloaded_at = _now()
+    # Audit U9: an atomic SQL increment — the ORM `+= 1` read-modify-write loses updates when
+    # concurrent guest downloads both read the pre-increment value.
+    await session.execute(
+        update(PackShareLink)
+        .where(PackShareLink.id == link.id)
+        .values(
+            download_count=PackShareLink.download_count + 1,
+            last_downloaded_at=_now(),
+        )
+    )
     emit_pack_event_system(
         session,
         pack.org_id,

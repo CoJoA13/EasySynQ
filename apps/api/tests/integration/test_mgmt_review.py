@@ -916,3 +916,87 @@ async def test_generic_document_release_rejects_management_review(
     r = await app_client.post(f"/api/v1/documents/{rid}/release", headers=h, json={})
     assert r.status_code == 422, r.text
     assert r.json()["errors"][0]["code"] == "management_review_managed_via_reviews"
+
+
+async def test_release_wedge_is_redrivable_by_retrying_the_post(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[Audit U11] release() commits Effective in its OWN session; Phase 5 (spawn +
+    close_state flip) commits separately. A crash between the two used to leave an Effective
+    review that could neither re-release (409) nor close (409) — a permanent wedge. Retrying
+    the SAME POST is now the re-drive: it skips the already-committed release and runs only
+    the missing Phase 5, exactly once."""
+    from easysynq_api.api import management_review as mr_api
+
+    salt = uuid.uuid4().hex[:8]
+    owner_subject = f"mr-wdg-{salt}"
+    ho = _auth(token_factory, owner_subject)
+    owner_id = await _grant(owner_subject, ())
+
+    submitter, approver, releaser = f"mr-sm-{salt}", f"mr-ap-{salt}", f"mr-rl-{salt}"
+    hs = _auth(token_factory, submitter)
+    hap = _auth(token_factory, approver)
+    hrl = _auth(token_factory, releaser)
+    await _grant(submitter, _MR_KEYS)
+    await s5.grant_role(approver, "Approver")
+    await _grant(releaser, ("document.release", "document.read", "document.read_draft"))
+
+    rid = await _create_review(app_client, hs, f"Wedge review {salt}")
+    out = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs",
+        headers=hs,
+        json={
+            "output_type": "ACTION",
+            "description": "Recover from the wedge",
+            "owner_user_id": str(owner_id),
+            "due_date": "2026-12-31",
+        },
+    )
+    assert out.status_code == 201, out.text
+    assert (
+        await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=hs)
+    ).status_code == 200
+    task_id = await s5.task_for_doc(rid)
+    assert (
+        await app_client.post(
+            f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+        )
+    ).status_code == 200
+
+    # Simulate the partial failure: release() commits, then Phase 5 dies before its commit.
+    async def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("simulated phase-5 crash after the release commit")
+
+    monkeypatch.setattr(mr_api, "spawn_mr_actions", _boom)
+    # The ASGI test transport re-raises server exceptions rather than rendering the 500.
+    with pytest.raises(RuntimeError, match="simulated phase-5 crash"):
+        await app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl)
+    monkeypatch.undo()
+
+    # The wedge state: Effective, close_state never advanced, zero MR_ACTION tasks — and both
+    # historical outs are shut (close 409s; on the OLD code this release retry 409'd too).
+    async with get_sessionmaker()() as s:
+        doc = await s.get(DocumentedInformation, uuid.UUID(rid))
+        mr = await s.get(ManagementReview, uuid.UUID(rid))
+        assert doc is not None and doc.current_state.value == "Effective"
+        assert mr is not None and mr.close_state is None
+    closed = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs)
+    assert closed.status_code == 409, closed.text
+
+    # The re-drive: the SAME POST now completes Phase 5.
+    redriven = await app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl)
+    assert redriven.status_code == 200, redriven.text
+    assert redriven.json()["current_state"] == "Effective"
+    assert redriven.json()["close_state"] == "ActionsTracked"
+
+    tasks = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    mine = [t for t in tasks if t["assignee_user_id"] == str(owner_id)]
+    assert len(mine) == 1, mine  # exactly-once spawn
+
+    # A THIRD identical POST after full success stays a clean 409 (no duplicate spawn).
+    again = await app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl)
+    assert again.status_code == 409, again.text
+    tasks2 = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    assert len([t for t in tasks2 if t["assignee_user_id"] == str(owner_id)]) == 1

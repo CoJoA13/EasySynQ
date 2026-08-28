@@ -25,7 +25,7 @@ from ..auth.dependencies import get_current_user
 from ..db.models._capa_enums import NcSeverity
 from ..db.models._dcr_enums import DcrChangeType
 from ..db.models._mgmt_review_enums import ReviewOutputType
-from ..db.models._vault_enums import ChangeSignificance
+from ..db.models._vault_enums import ChangeSignificance, DocumentCurrentState
 from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.document_type import DocumentType
@@ -36,6 +36,7 @@ from ..db.models.review_output import ReviewOutput
 from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
+from ..domain.vault.lifecycle import IllegalTransition
 from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
@@ -733,25 +734,66 @@ async def release_review_endpoint(
     resource = await _release_scope(session, doc)
     await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
     caller_id = caller.id  # capture BEFORE expire_all (the expired `caller` would lazy-refresh)
-    await release_review(caller, review_id, vault_sink, sig_sink)
-    # release() committed in its own SERIALIZABLE session; expire this session's identity map so the
-    # re-reads refresh from the DB.
+    # Audit U11 re-drive: release() commits Effective in its OWN SERIALIZABLE session, then
+    # Phase 5 (spawn + close_state flip) commits separately below — a crash between the two
+    # leaves an Effective review whose close_state never advanced, which can neither re-release
+    # (T6 is gone → release_review raises) nor close (close_review 409s on the un-flipped
+    # close_state). A retry of the SAME POST is the re-drive: when the wedge state holds — doc
+    # Effective AND close_state still unset — the (already committed) release is skipped and
+    # only the missing Phase 5 runs. Any other release failure re-raises.
+    # The FSM guard raises the domain IllegalTransition (handler-mapped to the 409), not a
+    # ProblemException — the re-drive must catch both.
+    release_error: Exception | None = None
+    try:
+        await release_review(caller, review_id, vault_sink, sig_sink)
+    except (ProblemException, IllegalTransition) as exc:
+        release_error = exc
+    # release() committed in its own SERIALIZABLE session; expire this session's identity map so
+    # the re-reads refresh from the DB.
     session.expire_all()
-    # Phase 5: spawn one MR_ACTION task per ACTION output (tracked to closure) on a MGMT_REVIEW
-    # container instance + flip close_state=ActionsTracked. Re-load the satellite + base doc +
-    # outputs + the actor FRESH (the release commit + expire_all invalidated the pre-release rows;
-    # accessing an expired instance's attrs would lazy-refresh off-greenlet → MissingGreenlet).
-    pair = await get_review_doc(session, review_id)
-    outputs = await list_outputs(session, review_id)
-    actor = await session.get(AppUser, caller_id)
-    if pair is None or actor is None:  # pragma: no cover — just-released doc + just-authed caller
+    # Phase 5's serialization point: the satellite row FOR UPDATE (populate_existing — the
+    # S-drift-1 trap). The happy path, a wedge re-drive, and two concurrent retries all converge
+    # here to exactly-once spawn: the loser blocks, re-reads close_state=ActionsTracked under
+    # the lock, and (re-drive) re-raises the release conflict.
+    locked_mr = (
+        await session.execute(
+            select(ManagementReview)
+            .where(ManagementReview.id == review_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    doc_row = await session.get(DocumentedInformation, review_id)
+    if release_error is not None and not (
+        locked_mr is not None
+        and locked_mr.close_state is None
+        and doc_row is not None
+        and doc_row.current_state is DocumentCurrentState.Effective
+    ):
+        raise release_error
+    if locked_mr is None:  # pragma: no cover — the satellite existed at _load_review
         raise ProblemException(
             status=500,
             code="internal_error",
             title="Management review not found after release",
         )
-    mr_after, doc_after = pair
-    await spawn_mr_actions(session, actor, doc_after, mr_after, outputs)
+    if locked_mr.close_state is None:
+        # Phase 5: spawn one MR_ACTION task per ACTION output (tracked to closure) on a
+        # MGMT_REVIEW container instance + flip close_state=ActionsTracked. Re-load the
+        # satellite + base doc + outputs + the actor FRESH (the release commit + expire_all
+        # invalidated the pre-release rows; accessing an expired instance's attrs would
+        # lazy-refresh off-greenlet → MissingGreenlet).
+        pair = await get_review_doc(session, review_id)
+        outputs = await list_outputs(session, review_id)
+        actor = await session.get(AppUser, caller_id)
+        if pair is None or actor is None:  # pragma: no cover — just-released + just-authed
+            raise ProblemException(
+                status=500,
+                code="internal_error",
+                title="Management review not found after release",
+            )
+        mr_after, doc_after = pair
+        await spawn_mr_actions(session, actor, doc_after, mr_after, outputs)
     await session.commit()
     row = await mr_repo.get_review_row(session, review_id)
     if row is None:  # pragma: no cover — the doc was just released, it cannot be absent

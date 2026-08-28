@@ -298,9 +298,14 @@ async def fetch_import_reports(session: AsyncSession) -> list[ImportReportRef]:
 
 
 def _safe(name: str) -> str:
-    """Make a path component filesystem-safe (no separators / NUL); never empty."""
+    """Make a path component filesystem-safe (no separators / NUL / dot-traversal); never empty.
+
+    Audit U22: a component that IS ``.`` or ``..`` would resolve the mirror path outside its
+    parent folder (e.g. a process literally named ".." escaping its by-process directory)."""
     cleaned = name.replace("/", "_").replace("\\", "_").replace("\x00", "").strip()
-    return cleaned or "untitled"
+    if not cleaned or cleaned in (".", ".."):
+        return "untitled"
+    return cleaned
 
 
 def _ext(mime_type: str) -> str:
