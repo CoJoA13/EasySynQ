@@ -220,6 +220,8 @@ def test_installer_names_every_missing_image_before_compose_runs() -> None:
     )
     assert 'docker image inspect "$image"' in install
     assert 'MISSING+=("$image")' in install
+    # The api image backs four services; reporting it four times reads like four problems.
+    assert 'config --images | sort -u' in install
 
 
 def test_installer_pins_the_image_tag_before_the_env_only_exit() -> None:
@@ -228,6 +230,18 @@ def test_installer_pins_the_image_tag_before_the_env_only_exit() -> None:
     pin = install.index('set_kv EASYSYNQ_IMAGE_TAG "$(bash "$ROOT/scripts/app-images.sh" --tag)"')
     env_only_exit = install.index('if [ "$ENV_ONLY" = "1" ]; then')
     assert pin < env_only_exit, "EASYSYNQ_ENV_ONLY=1 would exit before the tag is written"
+
+
+def test_appliance_provisioner_pins_the_image_tag_on_a_reprovision() -> None:
+    """The provisioner only runs install.sh when .env is ABSENT.
+
+    A re-provision over an existing .env would otherwise leave EASYSYNQ_IMAGE_TAG unset and keep
+    building the `dev` fallback images instead of this release's.
+    """
+    provisioner = _read("infra/appliance/provision/easysynq-provision.sh")
+    assert (
+        'set_kv EASYSYNQ_IMAGE_TAG "$(bash "$APP_DIR/scripts/app-images.sh" --tag)"' in provisioner
+    )
 
 
 # --- the runbook must describe what the scripts actually do -----------------------------------

@@ -137,6 +137,10 @@ cmd_run() {
   set_kv OIDC_JWKS_URL "http://keycloak:8080/realms/easysynq/protocol/openid-connect/certs"
   set_kv OIDC_DISCOVERY_URL "http://keycloak:8080/realms/easysynq/.well-known/openid-configuration"
   set_kv IMPORT_SOURCE_PATH "/srv/easysynq/import"
+  # install.sh writes this too, but only on the first-run path that generates .env — an appliance
+  # re-provision over an existing .env would otherwise keep building the `dev`-tagged fallback
+  # images instead of this release's (C13).
+  set_kv EASYSYNQ_IMAGE_TAG "$(bash "$APP_DIR/scripts/app-images.sh" --tag)"
   bash "$APP_DIR/scripts/validate-browser-origins.sh" --env-file "$APP_DIR/.env"
   # The sudo-less helpers (easysynq-status/--remint, easysynq-compose) read .env as the easysynq
   # user; install.sh leaves it root:root 0600. Group-read for easysynq adds no exposure — the

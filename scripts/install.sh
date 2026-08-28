@@ -215,11 +215,13 @@ if [ "$OFFLINE" = "1" ]; then
   # to fix rather than an opaque build failure deep in the dependency order. `config --images` is
   # derived from the resolved model, so it stays correct as services are added.
   echo "install: verifying the loaded image set (offline)..."
+  # sort -u: the api image backs four services, and listing it four times would read like four
+  # separate problems.
   MISSING=()
   while IFS= read -r image; do
     [ -n "$image" ] || continue
     docker image inspect "$image" >/dev/null 2>&1 || MISSING+=("$image")
-  done < <("${COMPOSE[@]}" config --images)
+  done < <("${COMPOSE[@]}" config --images | sort -u)
   if [ "${#MISSING[@]}" -gt 0 ]; then
     echo "install: these images are not loaded on this host:" >&2
     printf '  %s\n' "${MISSING[@]}" >&2
