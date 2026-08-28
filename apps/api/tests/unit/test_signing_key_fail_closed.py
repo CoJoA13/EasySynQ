@@ -1,4 +1,4 @@
-"""RES-SECRETS-VOLUME-SILENT-EPHEMERAL-KEY — signing keys must be durably persisted.
+"""Signing keys must be durably persisted, or the worker refuses to start.
 
 Both loaders used to catch ``OSError`` and continue with an ephemeral in-memory key behind a log
 warning. Nothing else noticed: readiness probes PostgreSQL, Redis, MinIO, Keycloak and Alembic, not

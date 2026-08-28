@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # Signing keys must be DURABLY persisted. When a key path is unwritable the loaders refuse
     # rather than fall back to an ephemeral in-memory key: a silent fallback leaves every printed
     # verify QR reading UNKNOWN and every anchored off-host checkpoint unverifiable while every
-    # health surface stays green (RES-SECRETS-VOLUME-SILENT-EPHEMERAL-KEY). Development only.
+    # health surface stays green. Development only.
     allow_ephemeral_signing_keys: bool = False
     # Ed25519 PUBLIC key (PEM) used to VERIFY checkpoint signatures (doc 12 §4.4). Distinct from the
     # beat-only private key so api/CLI/off-host verifiers attest a checkpoint without the signing

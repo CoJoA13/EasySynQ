@@ -37,8 +37,7 @@ class SigningKeyGate(bootsteps.StartStopStep):  # type: ignore[misc]  # celery s
     The worker mints controlled-copy QR tokens and anchors signed audit checkpoints. Both loaders
     used to degrade to an ephemeral in-memory key behind a log warning when the ``secrets`` volume
     was unwritable, and no health surface probes those paths — so the stack ran, `/readyz` stayed
-    green, and every signature it produced was worthless
-    (RES-SECRETS-VOLUME-SILENT-EPHEMERAL-KEY).
+    green, and every signature it produced was worthless.
 
     The api process is deliberately NOT gated: it only VERIFIES, and reading UNKNOWN before the
     worker has minted anything is a legitimate state.

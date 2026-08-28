@@ -1,4 +1,4 @@
-"""Signing-key availability — the fail-closed gate (RES-SECRETS-VOLUME-SILENT-EPHEMERAL-KEY).
+"""Signing-key availability — the fail-closed startup gate.
 
 Two Ed25519 keys must be durably persisted for the product's tamper-evidence claims to hold:
 
