@@ -4,11 +4,9 @@ import type {
   MgmtReview,
   MgmtReviewCreateBody,
   MgmtReviewDetail,
-  MgmtReviewMetaBody,
   NcSeverity,
   ReviewOutput,
   ReviewOutputCreateBody,
-  ReviewOutputUpdateBody,
 } from "../../lib/types";
 
 // Invalidate every read a lifecycle mutation can change: the detail, the approval cycle, the list,
@@ -55,40 +53,12 @@ export function useAddOutput() {
   });
 }
 
-export function usePatchOutput() {
-  const api = useApi();
-  const invalidate = useInvalidateReview();
-  return useMutation({
-    mutationFn: ({
-      id,
-      oid,
-      body,
-    }: {
-      id: string;
-      oid: string;
-      body: ReviewOutputUpdateBody;
-    }) =>
-      api.send<ReviewOutput>("PATCH", `/api/v1/management-reviews/${id}/outputs/${oid}`, body),
-    onSuccess: (_d, { id }) => invalidate(id),
-  });
-}
-
 export function useDeleteOutput() {
   const api = useApi();
   const invalidate = useInvalidateReview();
   return useMutation({
     mutationFn: ({ id, oid }: { id: string; oid: string }) =>
       api.send<void>("DELETE", `/api/v1/management-reviews/${id}/outputs/${oid}`),
-    onSuccess: (_d, { id }) => invalidate(id),
-  });
-}
-
-export function usePatchMeta() {
-  const api = useApi();
-  const invalidate = useInvalidateReview();
-  return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: MgmtReviewMetaBody }) =>
-      api.send<MgmtReview>("PATCH", `/api/v1/management-reviews/${id}`, body),
     onSuccess: (_d, { id }) => invalidate(id),
   });
 }

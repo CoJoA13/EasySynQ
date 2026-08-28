@@ -208,14 +208,3 @@ def read_manifest(archive: Path) -> dict[str, Any]:
             return data
     except (tarfile.TarError, json.JSONDecodeError, OSError) as exc:
         raise BackupError(f"manifest read failed: {exc}"[:200]) from exc
-
-
-def extract_leg(archive: Path, arcname: str) -> bytes | None:
-    """Return the bytes of an optional leg (realm/config/checkpoint) from a PLAINTEXT archive, or
-    ``None`` if that leg is absent."""
-    try:
-        with tarfile.open(archive, "r") as tar:
-            member = tar.extractfile(arcname)
-            return member.read() if member is not None else None
-    except (tarfile.TarError, KeyError, OSError):
-        return None

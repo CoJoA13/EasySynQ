@@ -1,5 +1,6 @@
-"""The ack-sweep enqueue seam (slice S-ack-1) — a Protocol/Celery/Logging/Capturing quad
-(mirroring the mirror_sink pattern) so tests assert fired-exactly-once-post-commit."""
+"""The ack-sweep enqueue seam (slice S-ack-1) — a Protocol/Celery/Logging trio (mirroring the
+mirror_sink pattern); the integration conftest injects the Logging sink so a test never dispatches
+a real Celery task."""
 
 from __future__ import annotations
 
@@ -40,16 +41,6 @@ class LoggingAckEnqueueSink:
         )
 
 
-class CapturingAckEnqueueSink:
-    """Test double — records each enqueue so a test asserts exactly-once, post-commit."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str | None, str | None]] = []
-
-    def enqueue(self, document_id: str | None = None, trigger: str | None = None) -> None:
-        self.calls.append((document_id, trigger))
-
-
 _default_sink: AckEnqueueSink = CeleryAckEnqueueSink()
 
 
@@ -59,8 +50,8 @@ def get_ack_enqueue_sink() -> AckEnqueueSink:
 
 
 def set_ack_enqueue_sink(sink: AckEnqueueSink) -> AckEnqueueSink:
-    """Swap the process-wide sink (tests inject a Capturing sink). Returns the previous sink so
-    the caller can restore it."""
+    """Swap the process-wide sink (the integration conftest injects the Logging sink). Returns the
+    previous sink so the caller can restore it."""
     global _default_sink
     previous = _default_sink
     _default_sink = sink

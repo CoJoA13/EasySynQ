@@ -46,11 +46,6 @@ async def acquire(document_id: uuid.UUID) -> str | None:
     return token if ok else None
 
 
-async def is_locked(document_id: uuid.UUID) -> bool:
-    async with _redis() as client:
-        return bool(await client.exists(_key(document_id)))
-
-
 async def ttl(document_id: uuid.UUID) -> int:
     """Remaining lock lifetime in seconds (-2 if absent, -1 if no expiry)."""
     async with _redis() as client:

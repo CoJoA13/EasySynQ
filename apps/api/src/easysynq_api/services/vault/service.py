@@ -783,8 +783,7 @@ async def heartbeat(session: AsyncSession, actor: AppUser, doc: DocumentedInform
 
 # --- S7d: per-request export/print stamped rendition ------------------------------------
 
-_EXPORT = "export"
-_PRINT = "print"
+_EXPORT = "export"  # the "print" intent is the other arm of the Literal, matched as the else
 
 # The download filename is interpolated into a Content-Disposition header, so keep it to a strict
 # ASCII token (no quotes/semicolons/spaces/controls) — the identifier embeds the request-supplied

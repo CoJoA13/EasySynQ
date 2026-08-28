@@ -11,8 +11,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
     # core
-    easysynq_env: str = "production"
-    easysynq_profile: str = "s"
     easysynq_org_timezone: str = "UTC"
     log_level: str = "INFO"
     version: str = "0.1.0"
@@ -55,7 +53,6 @@ class Settings(BaseSettings):
     # S8b2 restore-drill: a plain (NON-WORM) scratch bucket the drill copies blobs INTO and tears
     # down (R37 — object-lock can't be retro-added, so never restore into the locked vault bucket).
     s3_bucket_restore_scratch: str = "restore-scratch"
-    s3_object_lock_mode: str = "GOVERNANCE"
     s3_presign_expiry_seconds: int = 900  # presigned PUT/GET validity (doc 18 §5.2)
 
     # S6 off-host audit-checkpoint sink (worm_bucket kind, R13/D-8): a SEPARATE object-lock

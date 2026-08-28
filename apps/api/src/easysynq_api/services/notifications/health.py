@@ -8,7 +8,6 @@ test-deterministic). Pure reads; no side effects; no WORM touch."""
 
 from __future__ import annotations
 
-import datetime
 import uuid
 from typing import Any
 
@@ -20,13 +19,10 @@ from ...db.models._notification_enums import NotificationEmailStatus
 from ...db.models.awareness_event import AwarenessEvent
 from ...db.models.notification import NotificationEmail
 from ...db.models.system_config import SystemConfig
+from ..common.serialize import iso
 from .delivery import email_delivery_ready
 
 _RECENT_FAILURES_LIMIT = 10
-
-
-def _iso(dt: datetime.datetime | None) -> str | None:
-    return dt.isoformat() if dt is not None else None
 
 
 async def get_delivery_health(
@@ -96,20 +92,20 @@ async def get_delivery_health(
             "pending_now": pending_now,
             "pending_scheduled": pending_scheduled,
             "suppressed": suppressed,
-            "oldest_pending_at": _iso(oldest_pending),
+            "oldest_pending_at": iso(oldest_pending),
         },
         "recent_failures": [
             {
                 "recipient_email": r.recipient_email,
                 "last_error": r.last_error,
                 "attempts": r.attempts,
-                "failed_at": _iso(r.failed_at),
+                "failed_at": iso(r.failed_at),
                 "email_kind": r.email_kind.value,
             }
             for r in failure_rows
         ],
         "awareness": {
             "pending": aw_pending,
-            "oldest_pending_at": _iso(aw_oldest),
+            "oldest_pending_at": iso(aw_oldest),
         },
     }

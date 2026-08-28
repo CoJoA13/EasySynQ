@@ -13,7 +13,6 @@ delete is blocked by 3 RESTRICT FKs, so retirement is the soft ``/archive`` acti
 
 from __future__ import annotations
 
-import datetime
 import uuid
 from typing import Any
 
@@ -27,6 +26,7 @@ from ..db.models.retention_policy import RetentionPolicy
 from ..db.session import get_session
 from ..problems import ProblemException
 from ..services.authz import require
+from ..services.common.serialize import iso
 from ..services.records import repository as repo
 from ..services.records import retention_policies as svc
 
@@ -57,10 +57,6 @@ class RetentionPolicyUpdate(BaseModel):
     worm_lock_period: str | None = None
 
 
-def _iso(value: datetime.datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
-
-
 def _view(policy: RetentionPolicy) -> dict[str, Any]:
     return {
         "id": str(policy.id),
@@ -73,10 +69,10 @@ def _view(policy: RetentionPolicy) -> dict[str, Any]:
         "review_required": policy.review_required,
         "worm_lock_period": policy.worm_lock_period,
         "active": policy.is_active,
-        "archived_at": _iso(policy.archived_at),
+        "archived_at": iso(policy.archived_at),
         "archived_by": str(policy.archived_by) if policy.archived_by else None,
-        "created_at": _iso(policy.created_at),
-        "updated_at": _iso(policy.updated_at),
+        "created_at": iso(policy.created_at),
+        "updated_at": iso(policy.updated_at),
     }
 
 
