@@ -101,6 +101,39 @@ preserves accounts and client edits in the PostgreSQL `pgdata` volume. The tempo
 is scoped to that Compose project, so multiple installations on one Docker host cannot consume one
 another's exported identities.
 
+## Container users and SELinux
+
+The application containers run **unprivileged** (audit U33): the api image — which backs `migrate`,
+`api`, `worker` and `beat` — runs as `easysynq` (uid/gid **10001**), and the web image runs as
+`node` (uid **1000**). Neither needs any operator action on a fresh install: Docker seeds a newly
+created named volume with the ownership of the image directory behind it, so `mirror`, `secrets`
+and `backups` come up writable.
+
+⚠ **Volumes that already exist keep their old ownership.** If you are starting a stack whose
+volumes were created by an earlier root-running build, the worker cannot write them and will fail.
+Either recreate them (`docker compose … down -v`, which **destroys** their contents) or chown them
+once:
+
+```bash
+for v in easysynq_mirror easysynq_secrets easysynq_backup; do
+  docker run --rm -v "$v":/v alpine chown -R 10001:10001 /v
+done
+```
+
+**SELinux.** On a host whose container runtime applies SELinux labels (podman, or docker-ce built
+with SELinux support), the Compose files already carry `,z` on every bind-mounted **configuration**
+file the stack ships — the Caddyfile, the MinIO init scripts and the Keycloak seed. `IMPORT_SOURCE_PATH`
+is deliberately **not** labelled: it points at your own document tree, and `,z` would relabel it
+recursively. Label it yourself, once, with a rule that survives a relabel:
+
+```bash
+sudo semanage fcontext -a -t container_file_t "/srv/easysynq/import(/.*)?"
+sudo restorecon -Rv /srv/easysynq/import
+```
+
+Skip this entirely if `docker info` does not list `selinux` under *Security Options* — the label is
+then a no-op and the mount works as-is.
+
 ## Verify it works (release-time security check)
 
 ```bash

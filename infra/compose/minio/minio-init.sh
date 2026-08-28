@@ -3,8 +3,19 @@
 # default (D-7). The `local` alias is provided via MC_HOST_local in compose.
 set -eu
 
+# Bounded wait. api, worker and beat all gate on this one-shot completing, so an unbounded loop
+# turns a wrong S3 credential into a whole-stack hang whose only symptom is this message repeating
+# forever. Fail loudly instead, and surface mc's own error so the cause is in the logs (audit U43).
 echo "minio-init: waiting for MinIO..."
+MINIO_WAIT_SECONDS="${MINIO_WAIT_SECONDS:-120}"
+deadline=$(( $(date +%s) + MINIO_WAIT_SECONDS ))
 until mc ls local >/dev/null 2>&1; do
+	if [ "$(date +%s)" -ge "$deadline" ]; then
+		echo "minio-init: MinIO not reachable after ${MINIO_WAIT_SECONDS}s. Last error:" >&2
+		mc ls local >&2 2>&1 || true
+		echo "minio-init: check S3_ACCESS_KEY/S3_SECRET_KEY match the minio service's root creds." >&2
+		exit 1
+	fi
 	sleep 2
 done
 

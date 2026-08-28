@@ -1869,15 +1869,33 @@ def test_dev_overlay_relabels_only_repository_bind_mounts_for_selinux() -> None:
                 if volumes[target]["type"] == "volume"
             } == targets
 
-    production_source = _read("infra/compose/compose.production.yml")
-    assert ":z" not in production_source
-    assert ",z" not in production_source
+    # Audit U35 CHANGED THIS. This block previously asserted that production carried NO SELinux
+    # label at all — a scope fence from the Fedora-developer PR that introduced the dev labels
+    # (#452, "harden Compose DEVELOPMENT mounts"), not a stated product decision. Unlabelled, the
+    # production stack fails with permission-denied on the Caddyfile on any runtime that applies
+    # container labels (podman; docker-ce built with SELinux support).
+    #
+    # The original INTENT — the one in this test's name — survives and is now enforced on both
+    # stacks: relabel only paths this REPOSITORY owns. `z` relabels recursively, so the shipped
+    # config files are ours to relabel and the organization's document tree is not.
+    # IMPORT_SOURCE_PATH keeps its dev label because there it defaults to a repo-local directory;
+    # in production it points at the customer's file store and must stay untouched.
     for sizing in ("compose.s.yml", "compose.m.yml"):
         production = render(sizing, "compose.production.yml", production=True)
+        labelled: dict[str, str | None] = {}
         for service in production["services"].values():
             for volume in service.get("volumes", []):
                 if volume["type"] == "bind":
-                    assert "selinux" not in volume["bind"]
+                    labelled[volume["target"]] = volume["bind"].get("selinux")
+        assert labelled == {
+            "/init/keycloak-init.sh": "z",
+            "/seed/easysynq-realm.json": "z",
+            "/init": "z",
+            "/etc/caddy/Caddyfile": "z",
+            "/etc/caddy/Caddyfile.base": "z",
+            # The organization's document tree — never relabelled by us (audit U35).
+            "/srv/import/source": None,
+        }, f"unexpected production bind-mount labelling: {labelled}"
 
 
 def test_production_entrypoints_require_compose_2_24_4(tmp_path: Path) -> None:

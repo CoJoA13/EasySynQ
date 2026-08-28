@@ -4,10 +4,17 @@ This is an explicit operator action — **not** an app-logic auto-grant — for 
 recovery when the normal administration API is unavailable. It bypasses the API audit
 path, so production use requires an independent change/incident record.
 
-Run it inside the api container (where the DB is reachable):
+From the HOST, use the wrapper — it execs into the api container for you and takes the subject
+positionally:
 
-    easysynq grant-role <keycloak-subject> ["Role Name"] [--org CODE]
+    ./scripts/easysynq grant-role <keycloak-subject> ["Role Name"] [--org CODE]
         [--bound-scope JSON]
+
+Inside the api container (where the DB is reachable), call the module directly. Note the subject
+is a REQUIRED FLAG here, not a positional — the wrapper is what translates it:
+
+    python -m easysynq_api.cli.grant_role --subject <keycloak-subject> [--role "Role Name"]
+        [--org CODE] [--bound-scope JSON]
 
 Idempotent: re-running is a no-op. JIT-creates the ``app_user`` row if absent. Uses a sync
 engine — it is a one-shot script, not coupled to the app's event loop.
