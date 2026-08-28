@@ -46,7 +46,6 @@ from ...problems import ProblemException
 from ..authz import AuthzAuditSink, enforce
 from ..capa import repository as capa_repo
 from ..capa.service import build_capa
-from ..common import listing
 from ..vault import VaultAuditSink, create_document
 from ..vault import repository as vault_repo
 from .queries import governing_register
@@ -276,15 +275,18 @@ async def get_risk(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def list_risks(session: AsyncSession, org_id: uuid.UUID) -> list[RiskOpportunity]:
+async def list_risks(
+    session: AsyncSession, org_id: uuid.UUID, *, limit: int | None = None
+) -> list[RiskOpportunity]:
+    """Newest-first risk rows. ``limit`` bounds the LISTING surface's scan window (audit U14);
+    a consumer needing complete data leaves it None."""
     return list(
         (
             await session.execute(
                 select(RiskOpportunity)
                 .where(RiskOpportunity.org_id == org_id)
                 .order_by(RiskOpportunity.created_at.desc())
-                # Audit U14 (S-web-2): bound the pre-authz scan window.
-                .limit(listing.REGISTER_SCAN_CAP)
+                .limit(limit)
             )
         )
         .scalars()

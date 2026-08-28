@@ -158,3 +158,69 @@ async def test_audits_scan_window_is_capped_and_flagged(
     full = (await app_client.get("/api/v1/audits", headers=h)).json()
     assert full["truncated"] is False
     assert len(_mine(full, ids)) == 2
+
+
+async def test_management_review_compile_is_not_capped(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[U14 regression guard] The Management Review 9.3.2 input compiler shares list_capas /
+    list_audits with the register listings, but its summaries are FROZEN into the minutes as
+    ISO-9001 evidence — a silently capped count would seal an under-counted compliance summary
+    into an immutable record. The cap belongs to the listing surface (an explicit ``limit``
+    argument), so compile must count every row even with the cap shrunk to 1."""
+    from .test_mgmt_review import _MR_KEYS, _SOURCE_KEYS, _create_review
+    from .test_quality_objectives import _grant as _grant_keys
+
+    subject = _subject("cap-mrcompile")
+    await _grant_keys(
+        subject,
+        _MR_KEYS + _SOURCE_KEYS + ("audit.plan", "audit.create", "capa.create"),
+    )
+    h = _auth(token_factory, subject)
+
+    # Two audits + two CAPAs, so a cap of 1 would visibly under-count either summary.
+    r = await app_client.post(
+        "/api/v1/audit-programs",
+        headers=h,
+        json={"title": "MR compile programme", "period": "2026"},
+    )
+    assert r.status_code == 201, r.text
+    program_id = r.json()["id"]
+    for i in range(2):
+        plan = await app_client.post(
+            f"/api/v1/audit-programs/{program_id}/plans",
+            headers=h,
+            json={"scheduled_date": f"2026-10-0{i + 1}"},
+        )
+        assert plan.status_code == 201, plan.text
+        made = await app_client.post(
+            "/api/v1/audits",
+            headers=h,
+            json={"plan_id": plan.json()["id"], "title": f"MR compile audit {i}"},
+        )
+        assert made.status_code == 201, made.text
+    for i in range(2):
+        made = await app_client.post(
+            "/api/v1/capas", headers=h, json={"title": f"MR compile capa {i}", "severity": "Minor"}
+        )
+        assert made.status_code == 201, made.text
+
+    rid = await _create_review(app_client, h, "Cap-independence compile")
+    monkeypatch.setattr(listing, "REGISTER_SCAN_CAP", 1)
+    r = await app_client.post(f"/api/v1/management-reviews/{rid}/compile-inputs", headers=h)
+    assert r.status_code == 200, r.text
+    by_type = {ri["input_type"]: ri for ri in r.json()["inputs"]}
+
+    audits = by_type["AUDIT_RESULTS"]
+    assert audits["available"] is True, audits
+    assert audits["source_ref"]["summary"]["total"] >= 2, (
+        "the MR audit summary inherited the listing scan cap — frozen evidence would under-count"
+    )
+    capas = by_type["NONCONFORMITIES_CAPA"]
+    assert capas["available"] is True, capas
+    # summarize_capas_ncrs counts each CAPA into by_close_state (newly raised → not Closed).
+    assert sum(capas["source_ref"]["summary"]["by_close_state"].values()) >= 2, (
+        "the MR CAPA summary inherited the listing scan cap"
+    )

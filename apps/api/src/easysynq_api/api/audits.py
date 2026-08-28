@@ -382,7 +382,7 @@ async def list_audits_endpoint(
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    rows = await audits_repo.list_audits(session, caller.org_id)
+    rows = await audits_repo.list_audits(session, caller.org_id, limit=listing.REGISTER_SCAN_CAP)
     return {
         "data": [_audit(a, ident, title, created) for a, ident, title, created in rows],
         # Audit U14: the scan window is capped (newest first); an at-cap scan is flagged.

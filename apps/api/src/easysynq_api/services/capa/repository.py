@@ -21,7 +21,6 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.ncr import Ncr
 from ...db.models.system_config import SystemConfig
-from ..common import listing
 
 
 async def get_capa(
@@ -160,8 +159,11 @@ async def allow_capa_self_verify(session: AsyncSession, org_id: uuid.UUID) -> bo
 
 
 async def list_capas(
-    session: AsyncSession, org_id: uuid.UUID
+    session: AsyncSession, org_id: uuid.UUID, *, limit: int | None = None
 ) -> Sequence[tuple[Capa, str | None, str | None, datetime | None]]:
+    """Newest-first CAPAs for the org. ``limit`` bounds the scan window for the LISTING surface
+    (audit U14); callers that need COMPLETE data — the Management Review 9.3.2 input compiler,
+    whose summaries are frozen into the minutes as evidence — must leave it None."""
     rows = await session.execute(
         select(
             Capa,
@@ -172,8 +174,7 @@ async def list_capas(
         .join(DocumentedInformation, DocumentedInformation.id == Capa.id)
         .where(Capa.org_id == org_id)
         .order_by(DocumentedInformation.created_at.desc())
-        # Audit U14 (S-web-2): bound the pre-authz scan window — newest first, honest cap.
-        .limit(listing.REGISTER_SCAN_CAP)
+        .limit(limit)
     )
     return [(c, ident, title, created) for c, ident, title, created in rows.all()]
 

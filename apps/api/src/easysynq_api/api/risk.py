@@ -190,7 +190,7 @@ async def _readable_risks(
     bound Process Owner's PROCESS-scoped grant narrows to their owned process(es); an org-level
     (process-less) row needs a SYSTEM grant; a no-grant caller gets an empty list, never 403.
     ``source_ip`` is threaded so an ``ip_allow`` predicate evaluates as the replaced enforce did."""
-    rows = await list_risks(session, caller.org_id)
+    rows = await list_risks(session, caller.org_id, limit=listing.REGISTER_SCAN_CAP)
     # Audit U14: the pre-authz window is capped (newest first); an at-cap scan is flagged.
     truncated = len(rows) >= listing.REGISTER_SCAN_CAP
     grants = await gather_grants(session, caller.id, caller.org_id, "register.read")

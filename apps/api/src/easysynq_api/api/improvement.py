@@ -245,6 +245,7 @@ async def list_initiatives_endpoint(
         source=source,
         owner_user_id=owner_user_id,
         process_id=process_id,
+        limit=listing.REGISTER_SCAN_CAP,
     )
     # Filter-not-403 (doc 15 §9.3): drop rows the caller may not improvement.read. The FULL
     # ResourceContext (process_ids) is populated so a PROCESS-scoped grant authorizes correctly (the

@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db.models._improvement_enums import ImprovementSource, ImprovementStage
 from ...db.models.improvement_initiative import ImprovementInitiative
 from ...db.models.improvement_initiative_stage_event import ImprovementInitiativeStageEvent
-from ..common import listing
 
 
 async def get_initiative(
@@ -66,6 +65,7 @@ async def list_initiatives(
     source: ImprovementSource | None = None,
     owner_user_id: uuid.UUID | None = None,
     process_id: uuid.UUID | None = None,
+    limit: int | None = None,
 ) -> Sequence[ImprovementInitiative]:
     """List initiatives (newest first), org-scoped + optionally filtered. The endpoint additionally
     row-filters by the caller's ``improvement.read`` grant scope (the records/CAPA precedent)."""
@@ -78,8 +78,9 @@ async def list_initiatives(
         stmt = stmt.where(ImprovementInitiative.owner_user_id == owner_user_id)
     if process_id is not None:
         stmt = stmt.where(ImprovementInitiative.process_id == process_id)
-    # Audit U14 (S-web-2): bound the pre-authz scan window — newest first, honest cap.
-    stmt = stmt.order_by(ImprovementInitiative.created_at.desc()).limit(listing.REGISTER_SCAN_CAP)
+    # Audit U14: ``limit`` bounds the LISTING surface's scan window; a consumer needing
+    # complete data leaves it None.
+    stmt = stmt.order_by(ImprovementInitiative.created_at.desc()).limit(limit)
     return (await session.execute(stmt)).scalars().all()
 
 

@@ -371,7 +371,7 @@ async def _readable_capas(
     owned process(es); a process-less (ad-hoc/SYSTEM) CAPA needs a SYSTEM grant; a no-grant caller
     gets an empty list, never ``403``. ``source_ip`` is threaded so an ``ip_allow`` predicate
     evaluates exactly as the replaced ``require()`` enforce did (``ip_allow`` is v1-deferred)."""
-    rows = await capa_repo.list_capas(session, caller.org_id)
+    rows = await capa_repo.list_capas(session, caller.org_id, limit=listing.REGISTER_SCAN_CAP)
     # Audit U14: the pre-authz window is capped (newest first); an at-cap scan is flagged so the
     # register never silently reads as complete.
     truncated = len(rows) >= listing.REGISTER_SCAN_CAP
