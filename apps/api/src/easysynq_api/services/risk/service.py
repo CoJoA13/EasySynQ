@@ -275,13 +275,18 @@ async def get_risk(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def list_risks(session: AsyncSession, org_id: uuid.UUID) -> list[RiskOpportunity]:
+async def list_risks(
+    session: AsyncSession, org_id: uuid.UUID, *, limit: int | None = None
+) -> list[RiskOpportunity]:
+    """Newest-first risk rows. ``limit`` bounds the LISTING surface's scan window (audit U14);
+    a consumer needing complete data leaves it None."""
     return list(
         (
             await session.execute(
                 select(RiskOpportunity)
                 .where(RiskOpportunity.org_id == org_id)
                 .order_by(RiskOpportunity.created_at.desc())
+                .limit(limit)
             )
         )
         .scalars()

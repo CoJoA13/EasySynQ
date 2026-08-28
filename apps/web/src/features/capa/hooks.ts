@@ -9,11 +9,18 @@ export function useCapas() {
   const api = useApi();
   const query = useQuery({
     queryKey: ["capas"],
-    queryFn: async () => (await api.get<CapaList>("/api/v1/capas")).data,
+    queryFn: () => api.get<CapaList>("/api/v1/capas"),
     retry: false,
   });
   const forbidden = query.error instanceof ApiError && query.error.status === 403;
-  return { ...query, forbidden };
+  // U14: keep `data` the bare array (every consumer reads it that way) and surface the
+  // register's scan-window truncation alongside `forbidden`.
+  return {
+    ...query,
+    data: query.data?.data,
+    truncated: query.data?.truncated ?? false,
+    forbidden,
+  };
 }
 
 // GET /capas/{id} — the detail (+ stages[]). Disabled until a card is selected; the `id!` makes the

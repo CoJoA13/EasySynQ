@@ -35,6 +35,7 @@ from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
+from ..services.common import listing
 from ..services.improvement import (
     create_initiative,
     request_authorization,
@@ -244,6 +245,7 @@ async def list_initiatives_endpoint(
         source=source,
         owner_user_id=owner_user_id,
         process_id=process_id,
+        limit=listing.REGISTER_SCAN_CAP,
     )
     # Filter-not-403 (doc 15 §9.3): drop rows the caller may not improvement.read. The FULL
     # ResourceContext (process_ids) is populated so a PROCESS-scoped grant authorizes correctly (the
@@ -259,7 +261,11 @@ async def list_initiatives_endpoint(
         for i in rows
         if authorize(grants, "improvement.read", _scope_for(i.process_id), ctx).allow
     ]
-    return {"data": [_initiative(i) for i in visible]}
+    return {
+        "data": [_initiative(i) for i in visible],
+        # Audit U14: the pre-authz scan window is capped (newest first); at-cap is flagged.
+        "truncated": len(rows) >= listing.REGISTER_SCAN_CAP,
+    }
 
 
 @router.get("/improvement-initiatives/{initiative_id}")

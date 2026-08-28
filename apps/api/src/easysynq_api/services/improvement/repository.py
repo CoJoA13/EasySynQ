@@ -65,6 +65,7 @@ async def list_initiatives(
     source: ImprovementSource | None = None,
     owner_user_id: uuid.UUID | None = None,
     process_id: uuid.UUID | None = None,
+    limit: int | None = None,
 ) -> Sequence[ImprovementInitiative]:
     """List initiatives (newest first), org-scoped + optionally filtered. The endpoint additionally
     row-filters by the caller's ``improvement.read`` grant scope (the records/CAPA precedent)."""
@@ -77,7 +78,9 @@ async def list_initiatives(
         stmt = stmt.where(ImprovementInitiative.owner_user_id == owner_user_id)
     if process_id is not None:
         stmt = stmt.where(ImprovementInitiative.process_id == process_id)
-    stmt = stmt.order_by(ImprovementInitiative.created_at.desc())
+    # Audit U14: ``limit`` bounds the LISTING surface's scan window; a consumer needing
+    # complete data leaves it None.
+    stmt = stmt.order_by(ImprovementInitiative.created_at.desc()).limit(limit)
     return (await session.execute(stmt)).scalars().all()
 
 

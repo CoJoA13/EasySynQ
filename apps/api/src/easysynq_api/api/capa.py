@@ -63,6 +63,7 @@ from ..services.capa import (
     verify_capa,
 )
 from ..services.capa import repository as capa_repo
+from ..services.common import listing
 from ..services.common.org_clock import current_org_tz
 from ..services.vault import SignatureEventSink, get_vault_signature_sink
 from ..services.workflow import repository as wf_repo
@@ -362,7 +363,7 @@ async def raise_capa_endpoint(
 
 async def _readable_capas(
     request: Request, session: AsyncSession, caller: AppUser
-) -> list[tuple[Capa, str | None, str | None, datetime.datetime | None]]:
+) -> tuple[list[tuple[Capa, str | None, str | None, datetime.datetime | None]], bool]:
     """The org's CAPAs the caller may ``capa.read``, row-filtered per-process (filter-not-403, doc
     18 §5.2 — the ``_readable_processes`` precedent). A SYSTEM grant matches every row (QMS Owner /
     Internal Auditor / a Top-Management approver / a ``demo`` override see the org-wide list
@@ -370,17 +371,21 @@ async def _readable_capas(
     owned process(es); a process-less (ad-hoc/SYSTEM) CAPA needs a SYSTEM grant; a no-grant caller
     gets an empty list, never ``403``. ``source_ip`` is threaded so an ``ip_allow`` predicate
     evaluates exactly as the replaced ``require()`` enforce did (``ip_allow`` is v1-deferred)."""
-    rows = await capa_repo.list_capas(session, caller.org_id)
+    rows = await capa_repo.list_capas(session, caller.org_id, limit=listing.REGISTER_SCAN_CAP)
+    # Audit U14: the pre-authz window is capped (newest first); an at-cap scan is flagged so the
+    # register never silently reads as complete.
+    truncated = len(rows) >= listing.REGISTER_SCAN_CAP
     grants = await gather_grants(session, caller.id, caller.org_id, "capa.read")
     ctx = RequestContext(
         now=datetime.datetime.now(datetime.UTC),
         source_ip=request.client.host if request.client else None,
     )
-    return [
+    visible = [
         row
         for row in rows
         if authorize(grants, "capa.read", _process_scope(row[0].process_id), ctx).allow
     ]
+    return visible, truncated
 
 
 @router.get("/capas")
@@ -389,11 +394,12 @@ async def list_capas_endpoint(
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    rows = await _readable_capas(request, session, caller)
+    rows, truncated = await _readable_capas(request, session, caller)
     return {
         "data": [
             _capa(c, ident, title=title, created_at=created) for c, ident, title, created in rows
-        ]
+        ],
+        "truncated": truncated,
     }
 
 

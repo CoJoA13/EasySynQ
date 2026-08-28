@@ -40,6 +40,7 @@ from ..services.audits import (
 )
 from ..services.audits import repository as audits_repo
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
+from ..services.common import listing
 
 # Reuse the canonical improvement-initiative serializer (one source → no drift). api/improvement
 # imports only services, so there is no import cycle (the api/objectives↔api/workflow precedent).
@@ -381,8 +382,12 @@ async def list_audits_endpoint(
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    rows = await audits_repo.list_audits(session, caller.org_id)
-    return {"data": [_audit(a, ident, title, created) for a, ident, title, created in rows]}
+    rows = await audits_repo.list_audits(session, caller.org_id, limit=listing.REGISTER_SCAN_CAP)
+    return {
+        "data": [_audit(a, ident, title, created) for a, ident, title, created in rows],
+        # Audit U14: the scan window is capped (newest first); an at-cap scan is flagged.
+        "truncated": len(rows) >= listing.REGISTER_SCAN_CAP,
+    }
 
 
 @router.get("/audits/{audit_id}")

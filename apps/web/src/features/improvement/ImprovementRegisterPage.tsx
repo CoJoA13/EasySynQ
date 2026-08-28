@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { AsOf } from "../../lib/AsOf";
+import { TruncationNotice } from "../../app/shell/TruncationNotice";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
@@ -32,7 +33,8 @@ function formatDate(iso: string): string {
 }
 
 export function ImprovementRegisterPage() {
-  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useInitiatives();
+  const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } =
+    useInitiatives();
   const { data: directory } = useUserDirectory();
   const [params, setParams] = useSearchParams();
   const initiativeSelectorState = readSearchParamState(params, "initiative");
@@ -141,6 +143,7 @@ export function ImprovementRegisterPage() {
       </Group>
 
       <AsOf at={dataUpdatedAt} />
+      <TruncationNotice truncated={truncated} noun="initiatives" />
 
       {rows.length === 0 ? (
         <EmptyState message="No improvement initiatives yet." />

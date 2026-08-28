@@ -48,6 +48,14 @@ class DocumentedInformation(Base):
         UniqueConstraint(
             "org_id", "identifier", name="uq_documented_information_org_id_identifier"
         ),
+        # Audit U16: the documents list scans WHERE (org_id, kind) ORDER BY created_at DESC with
+        # a bounded window — without this index every request sorted the whole shared table.
+        Index(
+            "ix_documented_information_org_id_kind_created_at",
+            "org_id",
+            "kind",
+            "created_at",
+        ),
         # R25 singleton: at most one Effective instance per (org, document_type) AT A TIME
         # (Quality Policy / Scope Statement) — a draft successor may coexist while the current
         # governs. The predicate carries the explicit enum cast PG stores so alembic check is clean.

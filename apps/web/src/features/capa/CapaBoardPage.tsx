@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { AsOf } from "../../lib/AsOf";
+import { TruncationNotice } from "../../app/shell/TruncationNotice";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
@@ -39,7 +40,7 @@ import { RaiseCapaModal } from "./RaiseCapaModal";
 const TERMINAL: CapaCloseState[] = ["Closed", "Rejected"];
 
 export function CapaBoardPage() {
-  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useCapas();
+  const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } = useCapas();
   const nav = useRowKeyboardNav<HTMLTableSectionElement>();
   const [view, setView] = useState<"board" | "list">("board");
   const [source, setSource] = useState<CapaSource | "">("");
@@ -158,6 +159,7 @@ export function CapaBoardPage() {
       </Group>
 
       <AsOf at={dataUpdatedAt} />
+      <TruncationNotice truncated={truncated} noun="CAPAs" />
       <SimpleGrid cols={{ base: 1, sm: 2 }} mb="md">
         <Card withBorder padding="sm">
           <Text size="xs" c="dimmed">

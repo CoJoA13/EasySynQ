@@ -42,6 +42,7 @@ from ..services.authz import (
 )
 from ..services.authz.register_caps import register_capabilities
 from ..services.authz.resource import resource_from_doc
+from ..services.common import listing
 from ..services.risk import (
     add_risk_row,
     find_head,
@@ -182,24 +183,27 @@ def _risk(row: RiskOpportunity, governing: dict[str, Any] | None) -> dict[str, A
 # --- endpoints ---
 async def _readable_risks(
     request: Request, session: AsyncSession, caller: AppUser
-) -> list[RiskOpportunity]:
+) -> tuple[list[RiskOpportunity], bool]:
     """The org's risk rows the caller may ``register.read``, row-filtered per-process
     (filter-not-403,
     doc 18 §5.2). A SYSTEM grant matches every row (QMS Owner / Internal Auditor byte-identical); a
     bound Process Owner's PROCESS-scoped grant narrows to their owned process(es); an org-level
     (process-less) row needs a SYSTEM grant; a no-grant caller gets an empty list, never 403.
     ``source_ip`` is threaded so an ``ip_allow`` predicate evaluates as the replaced enforce did."""
-    rows = await list_risks(session, caller.org_id)
+    rows = await list_risks(session, caller.org_id, limit=listing.REGISTER_SCAN_CAP)
+    # Audit U14: the pre-authz window is capped (newest first); an at-cap scan is flagged.
+    truncated = len(rows) >= listing.REGISTER_SCAN_CAP
     grants = await gather_grants(session, caller.id, caller.org_id, "register.read")
     ctx = RequestContext(
         now=datetime.datetime.now(datetime.UTC),
         source_ip=request.client.host if request.client else None,
     )
-    return [
+    visible = [
         row
         for row in rows
         if authorize(grants, "register.read", _risk_scope(row.process_id), ctx).allow
     ]
+    return visible, truncated
 
 
 @router.get("/risks")
@@ -208,9 +212,9 @@ async def list_risks_endpoint(
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    rows = await _readable_risks(request, session, caller)
+    rows, truncated = await _readable_risks(request, session, caller)
     governing = await governing_register(session, caller.org_id)
-    return {"data": [_risk(r, governing) for r in rows]}
+    return {"data": [_risk(r, governing) for r in rows], "truncated": truncated}
 
 
 # --- the register-head lifecycle (S-risk-1b) -------------------------------------------------

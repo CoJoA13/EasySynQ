@@ -270,7 +270,7 @@ def test_populated_historical_transitions_and_head_repairs(
         monkeypatch.setenv("DATABASE_URL_SYNC", scratch_url)
         get_settings.cache_clear()
         config = _config()
-        assert ScriptDirectory.from_config(config).get_heads() == ["0090_import_report_retention"]
+        assert ScriptDirectory.from_config(config).get_heads() == ["0091_documents_list_index"]
         engine = sa.create_engine(scratch_url)
         try:
             # 0004: role assignments and permission overrides must preserve their full FK closure.
