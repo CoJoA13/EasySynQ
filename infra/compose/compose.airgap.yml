@@ -1,7 +1,11 @@
-# Air-gapped overlay: no outbound, no ACME. ACME (Let's Encrypt) is unreachable offline, so TLS uses
-# Caddy's internal self-signed CA. Set SITE_ADDRESS to a hostname (e.g. https://easysynq.local) so the
+# Air-gapped TLS overlay: no ACME. ACME (Let's Encrypt) is unreachable offline, so TLS uses Caddy's
+# internal self-signed CA. Set SITE_ADDRESS to a hostname (e.g. https://easysynq.local) so the
 # internal issuer takes effect — `tls internal` is invalid on the plain :80 listener. Images must be
 # loaded from the air-gapped bundle (scripts/airgap-bundle.sh) and pinned by digest in images.lock.
+#
+# This overlay selects TLS ONLY. Forbidding pulls lives in compose.offline.yml, kept separate
+# because the Hyper-V appliance provisioner stacks this file while still building and pulling
+# online on first run. `scripts/install.sh --offline` adds the offline overlay and `up --no-build`.
 services:
   proxy:
     environment:

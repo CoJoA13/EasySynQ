@@ -1,0 +1,32 @@
+# Offline overlay (C13): forbid every image pull, so a missing image fails immediately with
+# "image not found" instead of hanging on a network timeout the air-gapped host can never satisfy.
+#
+# Stack this on an air-gapped target after `docker load`-ing the bundle built by
+# scripts/airgap-bundle.sh. `scripts/install.sh --offline` adds it automatically and also passes
+# `up --no-build`, which is the other half: the six application services carry a `build:` stanza,
+# and Compose builds a missing image even when it never pulls one. pull_policy is deliberately NOT
+# set on those built services — `--no-build` is the supported way to forbid a build, and the
+# installer's pre-flight names any missing image before Compose runs at all.
+#
+# This is separate from compose.airgap.yml (which only selects Caddy's internal CA) because the
+# Hyper-V appliance provisioner stacks the air-gap TLS overlay while still building and pulling
+# online on first run.
+services:
+  postgres:
+    pull_policy: never
+  redis:
+    pull_policy: never
+  minio:
+    pull_policy: never
+  minio-init:
+    pull_policy: never
+  keycloak-init:
+    pull_policy: never
+  renderer:
+    pull_policy: never
+  tika:
+    pull_policy: never
+  proxy:
+    pull_policy: never
+  mailpit:
+    pull_policy: never

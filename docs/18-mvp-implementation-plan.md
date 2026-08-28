@@ -119,11 +119,11 @@ easysynq/
 │   └── web/                       # React/TS + Mantine + Tailwind (Vite, pnpm)
 │       └── src/{theme,api/_generated,lib,components,features,routes}/
 ├── infra/
-│   ├── compose/{compose.yml, compose.s.yml, compose.m.yml, compose.airgap.yml, caddy/}
+│   ├── compose/{compose.yml, compose.s.yml, compose.m.yml, compose.airgap.yml, compose.offline.yml, caddy/}
 │   ├── keycloak/realm-export.json   minio/bucket-policy.json   images.lock
 ├── migrations/                    # Alembic — single tree for the whole app
 │   └── versions/
-├── scripts/{install.sh, easysynq, gen-contracts.sh, seed_*.py, airgap-bundle.sh}
+├── scripts/{install.sh, easysynq, gen-contracts.sh, seed_*.py, airgap-bundle.sh, app-images.sh}
 ├── seed/iso9001_clauses.yaml      # reviewable clause + ★-mandatory catalog (feeds M19)
 ├── tests/e2e/                     # Playwright acceptance #1..#6 + axe
 └── docs/                          # EXISTING spec (00–17 + decisions-register + this 18)
@@ -165,7 +165,7 @@ so OpenSearch is a clean v1 drop-in and `/readyz` does not check it.
 | `opensearch` | — | **omitted in MVP** (v1; present-but-off optional on M) | — | — |
 
 Compose specifics to build:
-- **Profiles** via overlay files (`compose.s.yml` / `compose.m.yml`) selecting replica counts; `compose.airgap.yml` forces self-signed/admin-supplied TLS (ACME impossible offline).
+- **Profiles** via overlay files (`compose.s.yml` / `compose.m.yml`) selecting replica counts; `compose.airgap.yml` forces self-signed/admin-supplied TLS (ACME impossible offline) and `compose.offline.yml` forbids every image pull, so an air-gapped `up --no-build` runs entirely from the loaded bundle.
 - **MinIO init** sidecar: create `documents`/`renditions`/`records`/`staging` buckets; enable **object-lock** on `documents`+`records` (GOVERNANCE mode default — see §11 D-7) and **SSE**; the WORM probe at setup (G-B) verifies it.
 - **Postgres init**: `CREATE EXTENSION ltree;` (+`pgcrypto`); the `audit_event` app role gets `INSERT`/`SELECT` only.
 - **Keycloak realm bootstrap**: `realm-export.json` defines a public **SPA PKCE client** + a confidential **API audience** client, password policy, brute-force lockout (5 fails → 15 min), and admin MFA; a Keycloak **event-listener SPI** ships audit/login events into `audit_event`.

@@ -16,8 +16,27 @@ keycloak_dockerfile="${KEYCLOAK_DOCKERFILE:-$compose_dir/keycloak/Dockerfile}"
 
 strip_digest() { sed 's/@sha256:.*$//'; }
 
+# The images this repository BUILDS are named in compose.yml so the air-gap bundle can carry them
+# (C13), but they are never pulled and have no place in the pull-pinning lock. scripts/app-images.sh
+# is the single source of that set; drop its repositories before comparing against images.lock.
+built_repos=$(bash "$root/scripts/app-images.sh" | sed 's/:[^:/]*$//' | sort -u)
+drop_built() {
+  local ref repo
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    # Strip any ${...} interpolation before splitting off the tag: the locally built images take
+    # their tag from a Compose variable whose default value itself contains a colon.
+    repo="$(printf '%s\n' "$ref" | sed 's/\${[^}]*}/_/g')"
+    repo="${repo%:*}"
+    if printf '%s\n' "$built_repos" | grep -qxF "$repo"; then
+      continue
+    fi
+    printf '%s\n' "$ref"
+  done
+}
+
 compose=$(grep -hE '^[[:space:]]+image:[[:space:]]' "$compose_dir"/compose.yml \
-  "$compose_dir"/compose.*.yml 2>/dev/null | awk '{print $2}' | strip_digest | sort -u)
+  "$compose_dir"/compose.*.yml 2>/dev/null | awk '{print $2}' | strip_digest | drop_built | sort -u)
 keycloak_base=$(grep -E '^FROM[[:space:]]' "$keycloak_dockerfile" | awk '{print $2}' \
   | strip_digest | sort -u)
 required=$(printf '%s\n%s\n' "$compose" "$keycloak_base" | sort -u)

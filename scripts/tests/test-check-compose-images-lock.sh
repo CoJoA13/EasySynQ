@@ -108,5 +108,38 @@ else
   ok "digest-pinned WRONG tag still fails"
 fi
 
+# Case 5: the LOCALLY BUILT application images are exempt (C13). They carry an `image:` name in
+# compose.yml only so the air-gap bundle can save and reload them; they are never pulled, so
+# demanding a lock entry would make the naming and the gate mutually exclusive.
+built_dir="$TEST_ROOT/compose-built"
+fixture "$built_dir"
+cat >>"$built_dir/compose.yml" <<'EOF'
+  api:
+    build: {context: ../..}
+    image: easysynq/api:${EASYSYNQ_IMAGE_TAG:-dev}
+  web:
+    build: {context: ../../apps/web}
+    image: easysynq/web:${EASYSYNQ_IMAGE_TAG:-dev}
+EOF
+if run_gate "$built_dir" "$TEST_ROOT/lock-tags"; then
+  ok "locally built easysynq/* refs need no lock entry (C13)"
+else
+  bad "locally built easysynq/* refs need no lock entry (C13)"
+fi
+
+# Case 6: the exemption is per-REPOSITORY, not a prefix match — an unrecognised easysynq/* ref is a
+# real pulled image and must still be pinned, or a typo'd built name would silently skip the gate.
+foreign_dir="$TEST_ROOT/compose-foreign"
+fixture "$foreign_dir"
+cat >>"$foreign_dir/compose.yml" <<'EOF'
+  extra:
+    image: easysynq/not-a-built-image:1.0
+EOF
+if run_gate "$foreign_dir" "$TEST_ROOT/lock-tags"; then
+  bad "an unrecognised easysynq/* ref still requires a lock entry"
+else
+  ok "an unrecognised easysynq/* ref still requires a lock entry"
+fi
+
 printf 'check-compose-images-lock tests: %d ok, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

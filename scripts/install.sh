@@ -10,15 +10,18 @@ cd "$ROOT"
 PROFILE="s"
 HOST_NAME=""
 TLS_MODE="acme"
+OFFLINE=0
 ENV_FILE="$ROOT/.env"
 ENV_ONLY="${EASYSYNQ_ENV_ONLY:-0}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: install.sh [s|m] --host <fqdn> [--tls acme|internal]
+usage: install.sh [s|m] --host <fqdn> [--tls acme|internal] [--offline]
 
   --host      Browser-facing DNS name (without scheme or port).
   --tls       acme (default; publicly resolvable DNS) or internal (private/LAN CA).
+  --offline   Air-gapped install from a loaded bundle: never pull, never build. Requires
+              --tls internal (ACME is unreachable offline). See runbooks/install-airgapped.md.
 
 EASYSYNQ_ENV_ONLY=1 omits --host and only generates the .env for appliance provisioning.
 EOF
@@ -41,6 +44,10 @@ while [ $# -gt 0 ]; do
       TLS_MODE="$2"
       shift 2
       ;;
+    --offline)
+      OFFLINE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -60,6 +67,12 @@ case "$TLS_MODE" in
   acme|internal) ;;
   *) usage; exit 2 ;;
 esac
+# ACME needs outbound HTTP to Let's Encrypt, which an air-gapped host does not have. Refuse the
+# contradiction here rather than let Caddy fail to obtain a certificate after the stack is up.
+if [ "$OFFLINE" = "1" ] && [ "$TLS_MODE" != "internal" ]; then
+  echo "install: --offline requires --tls internal (ACME is unreachable without outbound HTTP)" >&2
+  exit 2
+fi
 
 if [ "$ENV_ONLY" != "1" ]; then
   [ -n "$HOST_NAME" ] || { usage; exit 2; }
@@ -131,6 +144,13 @@ else
   echo "install: $ENV_FILE already exists — preserving its secrets and operator settings."
 fi
 
+# The locally built images are named easysynq/{api,web,keycloak}:$EASYSYNQ_IMAGE_TAG in
+# compose.yml. Derive the tag from the repo's VERSION file so a bundle built from this checkout
+# (scripts/airgap-bundle.sh) resolves to the same refs here — the air-gapped target then reuses the
+# loaded images instead of building (C13). Written on every path, including a reused .env, so an
+# upgraded install stops referring to the previous release's tag.
+set_kv EASYSYNQ_IMAGE_TAG "$(bash "$ROOT/scripts/app-images.sh" --tag)"
+
 # Env-only mode (the appliance provisioner): generate/keep the .env, skip the stack startup —
 # the caller applies its own hostname and internal-TLS settings before `up`.
 if [ "$ENV_ONLY" = "1" ]; then
@@ -181,9 +201,36 @@ COMPOSE=(
   -f "infra/compose/compose.${PROFILE}.yml"
   -f infra/compose/compose.production.yml
 )
+# The offline overlay turns every pull into an immediate "image not found" instead of a network
+# timeout the air-gapped host can never satisfy.
+[ "$OFFLINE" = "1" ] && COMPOSE+=(-f infra/compose/compose.offline.yml)
+
+UP=(up -d --build)
+if [ "$OFFLINE" = "1" ]; then
+  # --no-build is the half pull_policy cannot express: the application services carry a build:
+  # stanza, and Compose builds a missing image even when it is forbidden to pull one.
+  UP=(up -d --no-build)
+
+  # Name every missing image BEFORE Compose runs, so a partially transferred bundle reports what
+  # to fix rather than an opaque build failure deep in the dependency order. `config --images` is
+  # derived from the resolved model, so it stays correct as services are added.
+  echo "install: verifying the loaded image set (offline)..."
+  MISSING=()
+  while IFS= read -r image; do
+    [ -n "$image" ] || continue
+    docker image inspect "$image" >/dev/null 2>&1 || MISSING+=("$image")
+  done < <("${COMPOSE[@]}" config --images)
+  if [ "${#MISSING[@]}" -gt 0 ]; then
+    echo "install: these images are not loaded on this host:" >&2
+    printf '  %s\n' "${MISSING[@]}" >&2
+    echo "install: build the bundle on a connected host (\`just airgap\`), transfer it, and run" >&2
+    echo "         'docker load -i easysynq-airgap.tar' before retrying." >&2
+    exit 1
+  fi
+fi
 
 echo "install: starting the stack (profile: $PROFILE)..."
-"${COMPOSE[@]}" up -d --build
+"${COMPOSE[@]}" "${UP[@]}"
 
 # KC_HOSTNAME controls the issuer URL but does not authorize SPA callbacks. Append the selected URI
 # through the Admin API; updating the complete representation preserves operator-added callbacks.

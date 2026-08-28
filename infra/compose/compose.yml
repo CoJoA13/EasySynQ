@@ -13,6 +13,10 @@
 # app's own /readyz reports their true reachability.
 name: easysynq
 
+# Every build: service also carries an explicit image: name. Compose reuses an already-loaded
+# image instead of building, which is what makes `docker load` of the air-gap bundle a complete
+# offline install (C13) — the tag comes from the repo's VERSION file via scripts/image-tag.sh,
+# which scripts/airgap-bundle.sh and scripts/install.sh both export as EASYSYNQ_IMAGE_TAG.
 x-api-build: &api-build
   context: ../..
   dockerfile: apps/api/Dockerfile
@@ -114,6 +118,7 @@ services:
     build:
       context: ./keycloak
       dockerfile: Dockerfile
+    image: easysynq/keycloak:${EASYSYNQ_IMAGE_TAG:-dev}
     restart: unless-stopped
     command: ["start", "--optimized", "--import-realm"]
     environment:
@@ -165,6 +170,7 @@ services:
   # Run migrations to head, then exit. The api waits for this to complete.
   migrate:
     build: *api-build
+    image: easysynq/api:${EASYSYNQ_IMAGE_TAG:-dev}
     <<: *api-env
     command: ["uv", "run", "alembic", "upgrade", "head"]
     depends_on:
@@ -175,6 +181,7 @@ services:
 
   api:
     build: *api-build
+    image: easysynq/api:${EASYSYNQ_IMAGE_TAG:-dev}
     <<: *api-env
     restart: unless-stopped
     depends_on:
@@ -205,6 +212,7 @@ services:
 
   worker:
     build: *api-build
+    image: easysynq/api:${EASYSYNQ_IMAGE_TAG:-dev}
     <<: *api-env
     restart: unless-stopped
     command: ["uv", "run", "celery", "-A", "easysynq_api.tasks.app", "worker", "-l", "info"]
@@ -232,6 +240,7 @@ services:
   # Scheduler — EXACTLY ONE replica (two would double-fire). Asserted in profile overlays.
   beat:
     build: *api-build
+    image: easysynq/api:${EASYSYNQ_IMAGE_TAG:-dev}
     <<: *api-env
     restart: unless-stopped
     command: ["uv", "run", "celery", "-A", "easysynq_api.tasks.app", "beat", "-l", "info"]
@@ -248,6 +257,7 @@ services:
     build:
       context: ../../apps/web
       dockerfile: Dockerfile
+    image: easysynq/web:${EASYSYNQ_IMAGE_TAG:-dev}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:5173').then(()=>process.exit(0)).catch(()=>process.exit(1))\""]

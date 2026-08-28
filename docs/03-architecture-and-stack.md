@@ -436,10 +436,12 @@ The single-host profile is honest about its limits: every stateful service runs 
 
 ## 12. On-Prem Packaging & Install (developer-facing summary)
 
-- **Shipped artifact:** a base `compose.yml`, `s` and `m` sizing overlays, production/dev/air-gap
-  overlays, `.env.example`, and `install.sh`. L and observability overlays remain reserved.
+- **Shipped artifact:** a base `compose.yml`, `s` and `m` sizing overlays, production/dev/air-gap/
+  offline overlays, `.env.example`, and `install.sh`. L and observability overlays remain reserved.
 - **Images:** the release ceremony pins non-development images by digest before building an
-  **air-gapped bundle** (`docker save` tarball + offline install guide).
+  **air-gapped bundle** (`docker save` tarball + offline install guide). The bundle carries the
+  three locally built images (`easysynq/api`, `easysynq/web`, `easysynq/keycloak`) alongside the
+  pinned third-party set, so `install.sh --offline` neither pulls nor builds.
 - **First-run:** Admin completes the six-screen browser wizard (Activate, Organization, Storage,
   Backup, Authentication, Finalize), then provisions users/process owners and starts imports in the
   post-finalize application surfaces.
