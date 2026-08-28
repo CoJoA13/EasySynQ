@@ -39,6 +39,9 @@ npm-debug.log*
 .vscode/
 *.swp
 
+# --- packaging output (multi-GB `docker save` tarball + its sidecars; `just airgap`) ---
+/dist/
+
 # --- runtime data (never committed) ---
 infra/data/
 qms-mirror/
