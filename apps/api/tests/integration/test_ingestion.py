@@ -1782,6 +1782,16 @@ async def test_commit_writes_documents_records_and_generated_report_to_vault(
     assert run["report_record_id"]
     assert report_promotions == 1
 
+    # Audit U7: the report record pins the system-managed PERMANENT policy, never the
+    # org-editable System Default (whose weakening would make the report disposable).
+    from easysynq_api.db.models.record import Record
+    from easysynq_api.services.records.repository import import_report_policy_id
+
+    async with get_sessionmaker()() as s:
+        report_rec = await s.get(Record, uuid.UUID(run["report_record_id"]))
+        assert report_rec is not None
+        assert report_rec.retention_policy_id == import_report_policy_id(report_rec.org_id)
+
     async with get_sessionmaker()() as s:
         doc = (
             await s.execute(

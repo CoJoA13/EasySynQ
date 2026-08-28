@@ -1166,7 +1166,9 @@ async def _capture_report(
         md_sha,
         content_type="text/markdown",
     )
-    permanent = await records_repo.ensure_default_policy(session, org_id)
+    # Audit U7: the dedicated system-managed PERMANENT policy — the org-editable System Default
+    # could be weakened to DESTROY, silently making the evidence-grade report disposable.
+    permanent = await records_repo.ensure_import_report_policy(session, org_id)
     rec = await records_svc.capture_record(
         session,
         committer,

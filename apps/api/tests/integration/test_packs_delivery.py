@@ -1157,3 +1157,55 @@ async def test_pack_share_requires_generate_permission(
     h = _auth(token_factory, subject)
     r = await app_client.post(f"/api/v1/evidence-packs/{uuid.uuid4()}/share", headers=h, json={})
     assert r.status_code == 403, r.text
+
+
+async def test_share_download_count_survives_stale_concurrent_accounting(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[Audit U9] ``record_share_download`` increments atomically in SQL. The old ORM
+    ``link.download_count += 1`` was a read-modify-write: a second session that loaded the link
+    BEFORE the first accounting committed overwrote the count with its stale value (two guest
+    downloads recorded as one). Two pre-loaded sessions accounting back-to-back is the
+    deterministic reproduction — no race needed."""
+    from easysynq_api.services.packs.service import record_share_download
+
+    subject = _subject("cnt")
+    user_id = await _grant(subject, _PACK_PERMS)
+    h = _auth(token_factory, subject)
+    process_id = await _make_process(user_id, f"Proc-{uuid.uuid4().hex[:8]}")
+    pack_uuid: uuid.UUID | None = None
+    rid = ""
+    try:
+        pack_uuid, rid = await _make_sealed_pack(app_client, h, process_id)
+        shared = await app_client.post(
+            f"/api/v1/evidence-packs/{pack_uuid}/share",
+            headers=h,
+            json={"recipient": "Stale counter probe"},
+        )
+        assert shared.status_code == 201, shared.text
+
+        sm = get_sessionmaker()
+        async with sm() as sa_, sm() as sb:
+            # BOTH sessions load the link (count 0) before EITHER accounts a download.
+            la = (
+                await sa_.execute(select(PackShareLink).where(PackShareLink.pack_id == pack_uuid))
+            ).scalar_one()
+            lb = (
+                await sb.execute(select(PackShareLink).where(PackShareLink.pack_id == pack_uuid))
+            ).scalar_one()
+            pa = await sa_.get(EvidencePack, pack_uuid)
+            pb = await sb.get(EvidencePack, pack_uuid)
+            assert pa is not None and pb is not None
+            await record_share_download(sa_, la, pa, fmt="zip", client_ip=None)
+            await record_share_download(sb, lb, pb, fmt="zip", client_ip=None)
+
+        async with get_sessionmaker()() as s:
+            fresh = (
+                await s.execute(select(PackShareLink).where(PackShareLink.pack_id == pack_uuid))
+            ).scalar_one()
+            assert fresh.download_count == 2  # the stale second accounting must not clobber
+            assert fresh.last_downloaded_at is not None
+    finally:
+        await _delivery_teardown(
+            record_ids=[rid] if rid else [], pack_id=pack_uuid, process_id=process_id
+        )

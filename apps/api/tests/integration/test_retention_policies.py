@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
@@ -264,6 +264,56 @@ async def test_system_managed_policies_protected(
     sealed_archived = await app_client.post(f"/api/v1/retention-policies/{sid}/archive", headers=h)
     assert sealed_archived.status_code == 409
     assert sealed_archived.json()["code"] == "system_policy_protected"
+
+    # Audit U7: the managed Import Report policy gets the same immutability posture.
+    from easysynq_api.services.records.repository import (
+        IMPORT_REPORT_POLICY_NAME,
+        ensure_import_report_policy,
+    )
+
+    async with get_sessionmaker()() as s:
+        # The caller's org: order_by(created_at) mirrors _ensure_user, so the ensure and the
+        # authed listing below agree on shared multi-org DBs (diff-critic catch).
+        org_id = (
+            await s.execute(select(Organization.id).order_by(Organization.created_at).limit(1))
+        ).scalar_one()
+        await ensure_import_report_policy(s, org_id)
+        # Re-run the sealed ensure too so the value assertions below exercise the WRITER, not
+        # just the migration seed (false-pass-hunter: the seed made them decorative).
+        await ensure_sealed_pack_policy(s, org_id)
+        await s.commit()
+    relisted = (
+        await app_client.get("/api/v1/retention-policies?include_archived=true", headers=h)
+    ).json()
+    report_policy = next(p for p in relisted if p["name"] == IMPORT_REPORT_POLICY_NAME)
+    assert report_policy["duration"] == "PERMANENT"
+    assert report_policy["disposition_action"] == "RETAIN_PERMANENT"
+    sealed_relisted = next(p for p in relisted if p["name"] == SEALED_PACK_POLICY_NAME)
+    assert sealed_relisted["duration"] == "PERMANENT"
+    assert sealed_relisted["disposition_action"] == "RETAIN_PERMANENT"
+    rid_ = report_policy["id"]
+    r_mutated = await app_client.patch(
+        f"/api/v1/retention-policies/{rid_}",
+        headers=h,
+        json={"duration": "P1D", "disposition_action": "DESTROY"},
+    )
+    assert r_mutated.status_code == 409
+    assert r_mutated.json()["code"] == "system_policy_protected"
+    r_archived = await app_client.post(f"/api/v1/retention-policies/{rid_}/archive", headers=h)
+    assert r_archived.status_code == 409
+    assert r_archived.json()["code"] == "system_policy_protected"
+    r_created = await app_client.post(
+        "/api/v1/retention-policies",
+        headers=h,
+        json={
+            "name": IMPORT_REPORT_POLICY_NAME,
+            "basis": "captured_at",
+            "duration": "P1Y",
+            "disposition_action": "DESTROY",
+            "review_required": False,
+        },
+    )
+    assert r_created.status_code == 422  # reserved name
 
 
 async def test_lazy_pack_policy_ensure_preserves_a_user_name_collision(

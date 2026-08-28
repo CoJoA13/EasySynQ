@@ -35,11 +35,18 @@ from ...db.models.retention_policy import RetentionPolicy
 from ...domain.records.retention import action_preservation_rank, duration_ge, retention_until
 from ...problems import ProblemCode, ProblemException
 from . import repository as repo
-from .repository import SEALED_PACK_POLICY_NAME, SYSTEM_DEFAULT_POLICY_NAME
+from .repository import (
+    IMPORT_REPORT_POLICY_NAME,
+    SEALED_PACK_POLICY_NAME,
+    SYSTEM_DEFAULT_POLICY_NAME,
+)
 from .service import _now, _rid
 
 _APPLIES_TO_KEYS = frozenset({"record_type", "clause_id", "process_id"})
-_RESERVED_POLICY_NAMES = frozenset({SYSTEM_DEFAULT_POLICY_NAME, SEALED_PACK_POLICY_NAME})
+# System-managed permanent policies: immutable, never archived, names reserved (audit U7 added
+# the Import Report policy to the sealed-pack posture).
+_MANAGED_POLICY_NAMES = frozenset({SEALED_PACK_POLICY_NAME, IMPORT_REPORT_POLICY_NAME})
+_RESERVED_POLICY_NAMES = frozenset({SYSTEM_DEFAULT_POLICY_NAME}) | _MANAGED_POLICY_NAMES
 # The retention_policy fields a PATCH may set (everything but the system/audit columns).
 _PATCHABLE = frozenset(
     {
@@ -231,12 +238,12 @@ async def update_policy(
             raise _invalid(field, "not_nullable", f"{field} cannot be null")
 
     is_system_default = policy.name == SYSTEM_DEFAULT_POLICY_NAME
-    is_sealed_pack_policy = policy.name == SEALED_PACK_POLICY_NAME
+    is_sealed_pack_policy = policy.name in _MANAGED_POLICY_NAMES
 
     if is_sealed_pack_policy and changes:
         raise _conflict(
             "system_policy_protected",
-            "The sealed evidence-pack retention policy is immutable",
+            "This system-managed retention policy is immutable",
         )
 
     if is_system_default:
@@ -330,10 +337,10 @@ async def archive_policy(
         raise ProblemException(status=404, code="not_found", title="Retention policy not found")
     if policy.name == SYSTEM_DEFAULT_POLICY_NAME:
         raise _conflict("system_default_protected", "The System Default policy cannot be archived")
-    if policy.name == SEALED_PACK_POLICY_NAME:
+    if policy.name in _MANAGED_POLICY_NAMES:
         raise _conflict(
             "system_policy_protected",
-            "The sealed evidence-pack retention policy cannot be archived",
+            "A system-managed retention policy cannot be archived",
         )
     if not policy.is_active:
         raise _conflict("already_archived", "Policy is already archived")
@@ -359,10 +366,10 @@ async def unarchive_policy(
     policy = await repo.get_policy(session, policy_id, actor.org_id)
     if policy is None:
         raise ProblemException(status=404, code="not_found", title="Retention policy not found")
-    if policy.name == SEALED_PACK_POLICY_NAME:
+    if policy.name in _MANAGED_POLICY_NAMES:
         raise _conflict(
             "system_policy_protected",
-            "The sealed evidence-pack retention policy is system-managed",
+            "This retention policy is system-managed",
         )
     if policy.is_active:
         raise _conflict("not_archived", "Policy is not archived")

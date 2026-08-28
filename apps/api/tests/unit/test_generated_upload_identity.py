@@ -368,7 +368,7 @@ async def test_import_report_passes_exact_staging_object_identity_to_record_capt
     async def ensure_policy(*_args: Any) -> Any:
         return SimpleNamespace(id=policy_id)
 
-    monkeypatch.setattr(commit_service.records_repo, "ensure_default_policy", ensure_policy)
+    monkeypatch.setattr(commit_service.records_repo, "ensure_import_report_policy", ensure_policy)
     monkeypatch.setattr(commit_service.records_svc, "capture_record", capture_report)
 
     result = await commit_service._capture_report(

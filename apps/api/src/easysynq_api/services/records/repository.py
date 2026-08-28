@@ -56,12 +56,24 @@ SYSTEM_DEFAULT_POLICY_NAME = "System Default Retention"
 SEALED_PACK_POLICY_NAME = "Sealed Evidence Pack Retention"
 SEALED_PACK_POLICY_ID_SALT = "easysynq.sealed-pack-retention.v1:"
 _PRESERVED_PACK_POLICY_PREFIX = f"{SEALED_PACK_POLICY_NAME} (preserved user policy: "
+IMPORT_REPORT_POLICY_NAME = "Import Report Retention"
+IMPORT_REPORT_POLICY_ID_SALT = "easysynq.import-report-retention.v1:"
+_PRESERVED_IMPORT_POLICY_PREFIX = f"{IMPORT_REPORT_POLICY_NAME} (preserved user policy: "
+
+
+def _managed_policy_id(salt: str, org_id: uuid.UUID) -> uuid.UUID:
+    digest = hashlib.sha256(f"{salt}{org_id}".encode()).digest()
+    return uuid.UUID(bytes=digest[:16])
 
 
 def sealed_pack_policy_id(org_id: uuid.UUID) -> uuid.UUID:
     """Return the stable per-org id used to distinguish the managed policy from a name collision."""
-    digest = hashlib.sha256(f"{SEALED_PACK_POLICY_ID_SALT}{org_id}".encode()).digest()
-    return uuid.UUID(bytes=digest[:16])
+    return _managed_policy_id(SEALED_PACK_POLICY_ID_SALT, org_id)
+
+
+def import_report_policy_id(org_id: uuid.UUID) -> uuid.UUID:
+    """The stable per-org id of the managed Import Report retention policy (audit U7)."""
+    return _managed_policy_id(IMPORT_REPORT_POLICY_ID_SALT, org_id)
 
 
 # --- record lookups ----------------------------------------------------------------------
@@ -493,28 +505,34 @@ async def ensure_default_policy(session: AsyncSession, org_id: uuid.UUID) -> Ret
     return policy
 
 
-async def ensure_sealed_pack_policy(session: AsyncSession, org_id: uuid.UUID) -> RetentionPolicy:
-    """Get-or-create the system-managed policy reserved for sealed evidence packs.
+async def _ensure_managed_permanent_policy(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    policy_id: uuid.UUID,
+    name: str,
+    preserved_prefix: str,
+) -> RetentionPolicy:
+    """Get-or-create one system-managed PERMANENT policy (the sealed-pack shape).
 
     Its deterministic id distinguishes it from a pre-existing user policy that happens to use the
-    newly reserved name. Such a collision is renamed in place (preserving its id, settings, and
-    pinned records) before the separate managed row is created. The managed row is normalized on
-    every use so an out-of-band edit cannot make a newly sealed pack disposable.
+    reserved name. Such a collision is renamed in place (preserving its id, settings, and pinned
+    records) before the separate managed row is created. The managed row is normalized on every
+    use so an out-of-band edit cannot make a record pinned to it disposable.
     """
-    policy_id = sealed_pack_policy_id(org_id)
     collision = (
         await session.execute(
             select(RetentionPolicy)
             .where(
                 RetentionPolicy.org_id == org_id,
-                RetentionPolicy.name == SEALED_PACK_POLICY_NAME,
+                RetentionPolicy.name == name,
                 RetentionPolicy.id != policy_id,
             )
             .with_for_update()
         )
     ).scalar_one_or_none()
     if collision is not None:
-        collision.name = f"{_PRESERVED_PACK_POLICY_PREFIX}{collision.id}:{uuid.uuid4().hex[:16]})"
+        collision.name = f"{preserved_prefix}{collision.id}:{uuid.uuid4().hex[:16]})"
         await session.flush()
 
     await session.execute(
@@ -522,7 +540,7 @@ async def ensure_sealed_pack_policy(session: AsyncSession, org_id: uuid.UUID) ->
         .values(
             id=policy_id,
             org_id=org_id,
-            name=SEALED_PACK_POLICY_NAME,
+            name=name,
             applies_to=None,
             basis=RetentionBasis.CAPTURED_AT,
             duration="PERMANENT",
@@ -536,7 +554,7 @@ async def ensure_sealed_pack_policy(session: AsyncSession, org_id: uuid.UUID) ->
         .on_conflict_do_update(
             index_elements=["id"],
             set_={
-                "name": SEALED_PACK_POLICY_NAME,
+                "name": name,
                 "applies_to": None,
                 "basis": RetentionBasis.CAPTURED_AT,
                 "duration": "PERMANENT",
@@ -554,6 +572,30 @@ async def ensure_sealed_pack_policy(session: AsyncSession, org_id: uuid.UUID) ->
     assert policy is not None  # noqa: S101 — just inserted-or-normalized under the unique index
     await session.refresh(policy)
     return policy
+
+
+async def ensure_sealed_pack_policy(session: AsyncSession, org_id: uuid.UUID) -> RetentionPolicy:
+    """Get-or-create the system-managed policy reserved for sealed evidence packs."""
+    return await _ensure_managed_permanent_policy(
+        session,
+        org_id,
+        policy_id=sealed_pack_policy_id(org_id),
+        name=SEALED_PACK_POLICY_NAME,
+        preserved_prefix=_PRESERVED_PACK_POLICY_PREFIX,
+    )
+
+
+async def ensure_import_report_policy(session: AsyncSession, org_id: uuid.UUID) -> RetentionPolicy:
+    """Get-or-create the system-managed policy reserved for Import Report records (audit U7 —
+    they were previously pinned to the org-EDITABLE System Default policy, so an admin edit could
+    silently make the evidence-grade report disposable despite the documented RETAIN_PERMANENT)."""
+    return await _ensure_managed_permanent_policy(
+        session,
+        org_id,
+        policy_id=import_report_policy_id(org_id),
+        name=IMPORT_REPORT_POLICY_NAME,
+        preserved_prefix=_PRESERVED_IMPORT_POLICY_PREFIX,
+    )
 
 
 async def record_type_default_policy(

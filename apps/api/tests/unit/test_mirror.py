@@ -580,3 +580,18 @@ async def test_build_tree_manifest_carries_doc_ids(
 
     raw = json.loads((build / "_meta" / "manifest.json").read_text())
     assert raw["schema"] == "easysynq.mirror.manifest/1"
+
+
+def test_safe_neutralizes_dot_traversal_components() -> None:
+    """[Audit U22] A component that IS ``.`` or ``..`` must not survive as a path segment — a
+    process literally named ".." would resolve the mirror index dir OUTSIDE its by-process
+    folder. Only the pure dot components are traversal; dotted names stay intact."""
+    from easysynq_api.services.vault.mirror import _safe
+
+    assert _safe(".") == "untitled"
+    assert _safe("..") == "untitled"
+    assert _safe(" .. ") == "untitled"  # strip() happens before the check
+    assert _safe("") == "untitled"
+    assert _safe("a/b") == "a_b"
+    assert _safe("..foo") == "..foo"
+    assert _safe("v1.2") == "v1.2"
