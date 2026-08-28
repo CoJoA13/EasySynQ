@@ -28,6 +28,7 @@ from ...domain.authz.types import Decision
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ...redis_client import redis_client
+from ..common.client_ip import client_ip
 from .audit import AuthzAuditEvent, AuthzAuditSink, DbAuthzAuditSink
 from .repository import (
     gather_grants,
@@ -86,7 +87,7 @@ async def evaluate(
     """Build request context, run the PDP, and emit the audit hook (allow AND deny)."""
     ctx = RequestContext(
         now=_now(),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
         actor_user_id=str(user.id),
     )
     return await evaluate_with_context(

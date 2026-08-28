@@ -65,6 +65,7 @@ from ..services.capa import (
 )
 from ..services.capa import repository as capa_repo
 from ..services.common import listing
+from ..services.common.client_ip import client_ip
 from ..services.common.org_clock import current_org_tz
 from ..services.common.register_filters import (
     RegisterFilter,
@@ -396,7 +397,9 @@ async def _readable_capas(
     byte-identical); a bound Process Owner's PROCESS-scoped ``capa.read`` narrows to CAPAs in their
     owned process(es); a process-less (ad-hoc/SYSTEM) CAPA needs a SYSTEM grant; a no-grant caller
     gets an empty list, never ``403``. ``source_ip`` is threaded so an ``ip_allow`` predicate
-    evaluates exactly as the replaced ``require()`` enforce did (``ip_allow`` is v1-deferred)."""
+    evaluates exactly as the replaced ``require()`` enforce did (what is v1.x-deferred is the
+    ``guest_grant`` carrier, not the predicate — since S-proxy-trust it compares a real client
+    address)."""
     rows = await capa_repo.list_capas(
         session,
         caller.org_id,
@@ -409,7 +412,7 @@ async def _readable_capas(
     grants = await gather_grants(session, caller.id, caller.org_id, "capa.read")
     ctx = RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
     visible = [
         row

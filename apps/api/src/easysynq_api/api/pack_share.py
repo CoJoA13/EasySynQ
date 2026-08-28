@@ -27,6 +27,7 @@ from ..config import get_settings
 from ..db.models.evidence_pack import EvidencePack
 from ..db.models.pack_share_link import PackShareLink
 from ..db.session import get_session
+from ..services.common.client_ip import client_ip
 from ..services.packs import record_share_download, resolve_share_token
 from ..services.vault import repository as vault_repo
 from ..services.vault import storage, watermark
@@ -42,16 +43,6 @@ _DENIED_MESSAGE = {
     "REVOKED": "This share link has been revoked.",
     "UNAVAILABLE": "This evidence pack is not available.",
 }
-
-
-def _client_ip(request: Request) -> str | None:
-    # Audit U21: the RIGHTMOST X-Forwarded-For entry — the value the trusted fronting proxy
-    # (Caddy) appended for the actual peer. The leftmost entry is client-controlled: any guest
-    # could write an arbitrary IP into the immutable download audit with a forged header.
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[-1].strip()
-    return request.client.host if request.client else None
 
 
 def _denied_page(status: str) -> str:
@@ -162,7 +153,7 @@ async def shared_download_endpoint(
     if zip_sha is None:  # pragma: no cover - resolve_share_token already asserts SEALED + zip
         return Response("Pack artifact not found", status_code=404, headers=_NO_REFERRER)
 
-    await record_share_download(session, link, pack, fmt=format, client_ip=_client_ip(request))
+    await record_share_download(session, link, pack, fmt=format, client_ip=client_ip(request))
 
     if format == "pdf" and portfolio_sha is not None:
         base = await storage.fetch_bytes(portfolio_sha, bucket=get_settings().s3_bucket_renditions)

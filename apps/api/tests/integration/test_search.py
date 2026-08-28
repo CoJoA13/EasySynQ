@@ -355,3 +355,89 @@ async def test_ip_allow_predicated_read_matches_on_row_filters(
         assert doc["id"] in [d["id"] for d in r.json()["data"]]
         r = await alt.get(f"/api/v1/search?q=Ipbound{token}", headers=hm)
         assert r.json()["results"] == []
+
+
+async def test_ip_allow_follows_the_forwarded_client_only_from_a_trusted_peer(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """[S-proxy-trust] An ip_allow grant must narrow to the real client, and only a peer the
+    operator declared a proxy may say who that is.
+
+    Behind the shipped Caddy every request's socket peer is the proxy, so before this change the
+    predicate compared an administrator's allowlist against the proxy's own container address:
+    it never matched anything, which is a universal denial dressed up as a narrowing rule. The
+    forgery direction is the same bug mirrored — believing X-Forwarded-For from a caller that is
+    not a proxy would let that caller name its own address.
+
+    The two legs below are the same request differing only in who the peer is, and they must
+    disagree. Both run against the SHIPPED TRUSTED_PROXY_CIDRS default (loopback is in it, which
+    is what the ASGI transport presents) rather than a test-only override, so a default that
+    stopped covering the deployment topology would surface here.
+    """
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    token = uuid.uuid4().hex[:8]
+    doc = await _effective_titled(app_client, ha, hb, f"Proxied{token} Spec")
+
+    forwarded = f"kc-fwd-{token}"
+    await _add_override(
+        forwarded,
+        "document.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"ip_allow": ["203.0.113.9"]},
+    )
+    hf = _auth(token_factory, forwarded)
+
+    peerbound = f"kc-peer-{token}"
+    await _add_override(
+        peerbound,
+        "document.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"ip_allow": ["127.0.0.1"]},
+    )
+    hp = _auth(token_factory, peerbound)
+
+    # Leg 1 — a TRUSTED peer (loopback, per the shipped default) forwards a client address.
+    # The grant bound to the forwarded address now matches; the one bound to the proxy's own
+    # address must not, because the proxy is no longer who the request is attributed to.
+    xff = {"x-forwarded-for": "203.0.113.9"}
+    r = await app_client.get(f"/api/v1/search?q=Proxied{token}", headers={**hf, **xff})
+    assert r.status_code == 200, r.text
+    assert doc["id"] in [h_["id"] for h_ in r.json()["results"]], (
+        "an ip_allow grant for the forwarded client must match behind a trusted proxy"
+    )
+    r = await app_client.get(f"/api/v1/search?q=Proxied{token}", headers={**hp, **xff})
+    assert r.json()["results"] == [], (
+        "the proxy's own address must stop being the attributed client once it forwards one"
+    )
+
+    # Leg 2 — the SAME header from an UNTRUSTED peer is not evidence. 203.0.113.9 is outside the
+    # shipped allowlist, so a caller there cannot promote itself to 198.51.100.9; it stays 203.
+    spoofed = f"kc-spoof-{token}"
+    await _add_override(
+        spoofed,
+        "document.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"ip_allow": ["198.51.100.9"]},
+    )
+    hs = _auth(token_factory, spoofed)
+    forge = {"x-forwarded-for": "198.51.100.9"}
+    alt_transport = ASGITransport(app=app_under_test, client=("203.0.113.9", 12345))
+    async with AsyncClient(transport=alt_transport, base_url="http://test") as alt:
+        r = await alt.get(f"/api/v1/search?q=Proxied{token}", headers={**hs, **forge})
+        assert r.json()["results"] == [], (
+            "X-Forwarded-For from an untrusted peer must not choose the attributed address"
+        )
+        # Anti-vacuity: the same caller, same header, judged against its REAL peer, does see it.
+        r = await alt.get(f"/api/v1/search?q=Proxied{token}", headers={**hf, **forge})
+        assert doc["id"] in [h_["id"] for h_ in r.json()["results"]], (
+            "the untrusted peer's own address is still what the predicate compares"
+        )

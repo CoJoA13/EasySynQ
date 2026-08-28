@@ -23,6 +23,7 @@ from ..domain.authz import Effect, RequestContext, ResourceContext, ScopeLevel
 from ..domain.authz.pdp import _predicates_pass
 from ..problems import ProblemException
 from ..services.authz import gather_grants, require
+from ..services.common.client_ip import client_ip
 from ..services.reports import compute_checklist
 from ..services.reports.document_control import (
     build_provenance,
@@ -111,7 +112,7 @@ async def document_control_register_endpoint(
         caller.org_id,
         caller.display_name or caller.email or str(caller.id),
     )
-    source_ip = request.client.host if request.client else None
+    source_ip = client_ip(request)
 
     # --- surface gate (FIX A) — still on connection #1, before it's released ---
     report_grants = await gather_grants(session, uid, org_id, "report.read")

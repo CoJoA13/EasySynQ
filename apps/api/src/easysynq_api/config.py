@@ -2,9 +2,37 @@
 
 from __future__ import annotations
 
+import ipaddress
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+IpNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+@lru_cache
+def parse_trusted_proxy_cidrs(raw: str) -> tuple[IpNetwork, ...]:
+    """Parse ``TRUSTED_PROXY_CIDRS`` — a comma-separated list of networks or bare addresses.
+
+    A bare address is its own single-host network. Cached on the raw string because the
+    per-request client-IP resolution reads it on every call.
+
+    Raises ``ValueError`` on a malformed entry. That is deliberate and diverges from the
+    ``ops_alert_channels`` precedent (which silently drops an unknown token): a typo here
+    would leave the fronting proxy UNtrusted, so ``X-Forwarded-For`` would be ignored and
+    every ``ip_allow``-narrowed grant would deny against the proxy's own address — the exact
+    silent failure this setting exists to remove. Loud at startup, like the signing-key gate.
+    """
+    networks: list[IpNetwork] = []
+    for entry in raw.split(","):
+        token = entry.strip()
+        if not token:
+            continue
+        # strict=False so an operator writing a host address with a prefix ("10.0.0.7/8")
+        # is masked to its network rather than rejected.
+        networks.append(ipaddress.ip_network(token, strict=False))
+    return tuple(networks)
 
 
 class Settings(BaseSettings):
@@ -97,6 +125,39 @@ class Settings(BaseSettings):
     # Configurable-verbosity knob (doc 12 §4.1): also persist routine authz ALLOW decisions.
     # Off in v1 — only denies + state-changes persist (avoids an audit row per read request).
     audit_persist_allows: bool = False
+
+    # The reverse proxies whose ``X-Forwarded-For`` this API may believe (comma-separated CIDRs
+    # or bare addresses; empty ⇒ trust nothing). The shipped Compose fronts the api with Caddy on
+    # the internal bridge network and publishes NO api port, so without this the socket peer is
+    # ALWAYS Caddy: every ``ip_allow``-narrowed grant evaluates against the proxy address and can
+    # never match a real client, i.e. the predicate fails closed universally rather than
+    # narrowing. Trusting the peer is what makes the forwarded chain usable — and refusing to
+    # trust it on a direct connection is what keeps a client-forged header out of the immutable
+    # audit rows.
+    #
+    # The default is deliberately NOT empty. ``install.sh`` preserves an existing ``.env``, so an
+    # upgraded deployment never picks up a new template key; an empty default would leave every
+    # such install attributing acknowledgement and pack-download evidence to the proxy — worse
+    # than the behaviour this setting replaces — behind a green health check. ``172.16.0.0/12``
+    # is Docker's entire built-in bridge pool, so it holds whichever subnet the daemon assigns
+    # without pinning one in Compose; loopback covers a bare local ``uvicorn`` and matches
+    # gunicorn's own default. ``10.0.0.0/8`` and the 192.168 pool are deliberately EXCLUDED: an
+    # organisation whose real clients sit on such a LAN would have genuine client entries treated
+    # as proxy hops and skipped. An operator behind an additional upstream load balancer, or on a
+    # daemon with custom address pools, adds that edge's CIDR here.
+    trusted_proxy_cidrs: str = "127.0.0.1/32,::1/128,172.16.0.0/12"
+
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def _check_trusted_proxy_cidrs(cls, raw: str) -> str:
+        parse_trusted_proxy_cidrs(raw)
+        return raw
+
+    @property
+    def trusted_proxy_networks(self) -> tuple[IpNetwork, ...]:
+        """The parsed :attr:`trusted_proxy_cidrs` (validated at construction, so this cannot
+        raise on a live request)."""
+        return parse_trusted_proxy_cidrs(self.trusted_proxy_cidrs)
 
     # auth (Keycloak)
     oidc_issuer: str = ""

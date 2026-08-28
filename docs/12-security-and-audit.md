@@ -308,7 +308,7 @@ The audit trail is the **spine of ISO 9001 traceability** and the **evidentiary 
 | `before` | `jsonb` (nullable) | Prior state of changed fields (redacted of secrets) |
 | `after` | `jsonb` (nullable) | New state of changed fields |
 | `request_id` | uuid | Correlates with structured app logs / traces |
-| `client_ip` | inet | Source IP (proxy-forwarded, validated) |
+| `client_ip` | inet | Source IP. Resolved from the socket peer, or from `X-Forwarded-For` when the peer is inside `TRUSTED_PROXY_CIDRS`; an unreadable chain records no address rather than an unverified one (§6.1). |
 | `user_agent` | text | Client hint |
 | `auth_context` | `jsonb` | `acr`/`amr` (factors used), session id — **reused by Part 11 to prove re-auth at signing** |
 | `prev_hash` | bytea (**nullable until linked**) | SHA-256 of the previous row's `row_hash` in this org's chain; populated by the single-threaded chain-linker, not in the action transaction (reconciled per Decisions Register R12) |

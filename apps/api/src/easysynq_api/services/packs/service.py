@@ -45,6 +45,7 @@ from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..authz import AuthzAuditSink, enforce, evaluate_with_context, gather_grants
+from ..common.client_ip import client_ip
 from ..records import repository as records_repo
 from ..reports.checklist import compute_checklist
 from ..vault import repository as vault_repo
@@ -528,7 +529,7 @@ async def create_pack_with_preview(
         session,
         caller,
         candidates,
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
     items, included = _build_items(caller.org_id, pack.id, classified)
     session.add_all(items)
@@ -581,7 +582,7 @@ async def generate_pack(
     # Preserve the exact representation that the request-time PDP accepted. Its ``ip_allow``
     # semantics are exact-string matching, so canonicalizing an IPv6 address here would change the
     # decision when the worker replays this context.
-    pack.build_source_ip = request.client.host if request.client else None
+    pack.build_source_ip = client_ip(request)
     pack.error = None
     await session.commit()
     await session.refresh(pack)

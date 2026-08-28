@@ -25,6 +25,7 @@ from ...db.models._vault_enums import VersionState
 from ...db.models.app_user import AppUser
 from ...db.models.document_version import DocumentVersion
 from ...domain.authz import RequestContext, ResourceContext, authorize
+from ..common.client_ip import client_ip
 from .audit import AuthzAuditSink
 from .pep import enforce
 from .repository import gather_grants
@@ -65,7 +66,7 @@ def version_resource(
 def _request_context(request: Request, caller: AppUser) -> RequestContext:
     return RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
         actor_user_id=str(caller.id),
     )
 

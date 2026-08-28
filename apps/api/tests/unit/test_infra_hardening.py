@@ -12,6 +12,7 @@ before anything else ran.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -98,6 +99,45 @@ def test_uv_run_never_syncs_at_container_start() -> None:
     )
     assert "UV_FROZEN=1" in dockerfile
     assert "UV_NO_CACHE=1" in dockerfile
+
+
+def test_the_api_image_leaves_forwarded_headers_to_the_application() -> None:
+    """Two proxy-trust mechanisms stacked silently re-open what one of them closes.
+
+    uvicorn installs ``ProxyHeadersMiddleware`` unconditionally and gunicorn hands it a default
+    ``forwarded_allow_ips`` of ``127.0.0.1,::1``. Measured against the pinned uvicorn: with that
+    default, a loopback caller sending ``X-Forwarded-For`` has ``scope["client"]`` rewritten to a
+    value it chose, *before* any application code runs — so the ``TRUSTED_PROXY_CIDRS`` check
+    would be evaluating the caller's own claim as though it were the socket peer. An empty list
+    disables the rewrite, leaving ``services/common/client_ip.py`` the only place that decides
+    whose forwarded chain is believed.
+
+    The CMD is parsed rather than substring-matched: a commented-out flag reads identically.
+    """
+    dockerfile = _read("apps/api/Dockerfile")
+    joined = dockerfile.replace("\\\n", " ")
+    cmd = next(
+        (line for line in _instructions(joined) if line.startswith("CMD ")),
+        None,
+    )
+    assert cmd is not None, "the api image has no CMD instruction"
+    argv = json.loads(cmd[len("CMD ") :])
+    assert "--forwarded-allow-ips" in argv, (
+        "gunicorn defaults to trusting loopback's X-Forwarded-For; pin the flag off"
+    )
+    assert argv[argv.index("--forwarded-allow-ips") + 1] == "", (
+        "an empty allow-list is what disables uvicorn's rewrite"
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [".env.example", "infra/compose/compose.yml", "apps/api/Dockerfile"],
+)
+def test_nothing_reintroduces_the_uvicorn_forwarded_trust(path: str) -> None:
+    # The api service loads the repo-root .env, so this variable anywhere in the shipped
+    # configuration would re-enable the rewrite the CMD above turns off.
+    assert "FORWARDED_ALLOW_IPS" not in _read(path)
 
 
 # --- U34: the image installs exactly what the lockfile pins ------------------------------------

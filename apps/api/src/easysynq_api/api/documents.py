@@ -65,6 +65,7 @@ from ..services.authz.version_history import (
     enforce_version_reads,
     filter_readable_versions,
 )
+from ..services.common.client_ip import client_ip
 from ..services.common.org_clock import current_org_tz
 from ..services.dcr import build_where_used
 from ..services.diff import build_version_diff, get_or_create_visual_diff, get_visual_diff
@@ -424,7 +425,7 @@ async def _document_capabilities(
     now = datetime.datetime.now(datetime.UTC)
     ctx = RequestContext(
         now=now,
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
         actor_user_id=str(caller.id),
     )
     caps: dict[str, bool] = {}
@@ -826,7 +827,7 @@ async def list_documents(
     # exactly as the detail-gate PEP does (it silently never matched on this row filter before).
     ctx = RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
     visible: list[DocumentedInformation] = []
     for d in docs:
@@ -1516,7 +1517,7 @@ def _panel_request_context(request: Request) -> RequestContext:
     grant evaluates exactly as the enforce path does (the S-process-scope-2 lesson)."""
     return RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
 
 
@@ -2108,7 +2109,7 @@ async def get_leadership_authorization_endpoint(
     doc = await _load_document(session, caller, document_id)
     state = await release_authorization_status(session, doc)
     can_request = await _can_request_leadership_authorization(
-        session, caller, doc, source_ip=request.client.host if request.client else None
+        session, caller, doc, source_ip=client_ip(request)
     )
     instance = await wf_repo.latest_instance_for_subject(
         session, caller.org_id, WorkflowSubjectType.LEADERSHIP_AUTHORIZATION, doc.id
