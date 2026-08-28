@@ -1,4 +1,5 @@
 import { Anchor, Badge, Group, Stack, Text, Title } from "@mantine/core";
+import { useOrgDate } from "../../app/shell/useOrgDate";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
@@ -16,9 +17,6 @@ import { useDcr, useDcrImpact } from "./hooks";
 function nameOf(userId: string, directory: DirectoryUser[]): string {
   return directory.find((u) => u.id === userId)?.display_name ?? `${userId.slice(0, 8)}…`;
 }
-function formatDate(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 10);
-}
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -32,6 +30,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: () => void }) {
+  const formatDate = useOrgDate();
   const { data: dcr, isLoading, isError, refetch } = useDcr(dcrId);
   const { data: impact } = useDcrImpact(dcrId);
   const { data: directoryData } = useUserDirectory();

@@ -7,6 +7,7 @@ import { TONE_GLYPH } from "../../lib/status";
 import { capaDetailFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+import { MutationFeedbackOutlet } from "../../lib/mutationFeedback";
 import { CapaDrawer } from "./CapaDrawer";
 
 test("renders the title, the closed-loop thread and the close gate", async () => {
@@ -160,6 +161,34 @@ describe("Target completion / overdue", () => {
     // The TextInput for setting the date and a Save button must appear
     expect(screen.getByLabelText("Set target date")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save/ })).toBeInTheDocument();
+  });
+
+  it("[U18] surfaces a failed target-date save instead of swallowing it", async () => {
+    // The PATCH 409s on a terminal CAPA and 403s without capa.update, and the button had no
+    // error path — the old date simply stayed on screen with nothing said.
+    server.use(
+      http.get("/api/v1/me/permissions", () =>
+        HttpResponse.json({
+          scope: { level: "PROCESS", selector: null },
+          permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
+        }),
+      ),
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({ ...capaDetailFixture, overdue: false, target_completion_date: null }),
+      ),
+      http.patch("/api/v1/capas/:id", () =>
+        HttpResponse.json({ code: "conflict" }, { status: 409 }),
+      ),
+    );
+    renderWithProviders(
+      <>
+        <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />
+        <MutationFeedbackOutlet />
+      </>,
+    );
+    await screen.findByLabelText("Set target date");
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+    expect(await screen.findByText(/target date was not saved/i)).toBeInTheDocument();
   });
 
   it("does NOT show the date edit field without capa.update", async () => {

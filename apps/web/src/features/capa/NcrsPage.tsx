@@ -1,4 +1,5 @@
 import { Badge, Button, Container, Group, Stack, Table, Text, Title } from "@mantine/core";
+import { useOrgDate } from "../../app/shell/useOrgDate";
 import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
@@ -19,6 +20,7 @@ function actorLabel(userId: string, directory: DirectoryUser[]): string {
 }
 
 export function NcrsPage() {
+  const formatDate = useOrgDate();
   const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useNcrs();
   const { can } = usePermissions();
   const { data: directory } = useUserDirectory();
@@ -111,7 +113,7 @@ export function NcrsPage() {
                             {n.disposition_authorized_by &&
                               `by ${actorLabel(n.disposition_authorized_by, directory ?? [])}`}
                             {n.disposition_authorized_by && n.disposed_at && " · "}
-                            {n.disposed_at && new Date(n.disposed_at).toISOString().slice(0, 10)}
+                            {n.disposed_at && formatDate(n.disposed_at)}
                           </Text>
                         )}
                       </Stack>

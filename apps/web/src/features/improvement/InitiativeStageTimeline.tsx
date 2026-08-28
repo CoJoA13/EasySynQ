@@ -1,4 +1,5 @@
 import { Text, Timeline } from "@mantine/core";
+import { useOrgDate } from "../../app/shell/useOrgDate";
 import { EmptyState } from "../../lib/states";
 import type { DirectoryUser, InitiativeStage, InitiativeStageEvent } from "../../lib/types";
 import { INITIATIVE_STAGE_META } from "./labels";
@@ -11,10 +12,6 @@ function actorLabel(actorId: string | null, directory: DirectoryUser[]): string 
 
 function stageLabel(stage: InitiativeStage): string {
   return INITIATIVE_STAGE_META[stage].label;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 10);
 }
 
 // A Closed move folds a free-text realized-benefit note into payload.outcome (the lightweight 10.3
@@ -33,6 +30,7 @@ export function InitiativeStageTimeline({
   events: InitiativeStageEvent[];
   directory: DirectoryUser[];
 }) {
+  const formatDate = useOrgDate();
   if (events.length === 0) {
     return <EmptyState message="No history yet." />;
   }

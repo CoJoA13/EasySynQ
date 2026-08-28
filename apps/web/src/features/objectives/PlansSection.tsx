@@ -1,4 +1,4 @@
-import { ActionIcon, Button, Card, Group, Stack, Text, Title } from "@mantine/core";
+import { ActionIcon, Button, Card, Group, Modal, Stack, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import type { ObjectivePlan } from "../../lib/types";
 import { usePermissions } from "../../app/shell/usePermissions";
@@ -6,6 +6,7 @@ import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { useRemovePlan } from "./mutations";
 import { AddPlanModal } from "./AddPlanModal";
 import { EmptyState } from "../../lib/states";
+import { useMutationFeedback } from "../../lib/mutationFeedback";
 
 function nameOf(userId: string | null, dir: { id: string; display_name: string | null }[]): string {
   if (!userId) return "no owner";
@@ -24,6 +25,23 @@ export function PlansSection({
   const manage = can("objective.manage");
   const remove = useRemovePlan(objectiveId);
   const [addOpen, setAddOpen] = useState(false);
+  // U17: removing a plan is a PERMANENT delete with no undo — confirm before firing, and never
+  // let the failure be silent (the mutation had no onError at all).
+  const [confirming, setConfirming] = useState<ObjectivePlan | null>(null);
+  const feedback = useMutationFeedback();
+
+  function removePlan(plan: ObjectivePlan) {
+    setConfirming(null);
+    remove.mutate(plan.id, {
+      onError: (error) =>
+        feedback.report({
+          key: `remove-plan:${plan.id}`,
+          title: `This plan was not removed: ${plan.action}`,
+          error,
+          dismissLabel: `Dismiss remove error for ${plan.action}`,
+        }),
+    });
+  }
 
   return (
     <Stack gap="sm">
@@ -52,9 +70,11 @@ export function PlansSection({
                 <ActionIcon
                   variant="subtle"
                   color="gray"
-                  aria-label="Remove plan"
+                  // U17: one label per ROW — a repeated "Remove plan" makes getByLabelText
+                  // ambiguous and gives AT users no way to tell the buttons apart.
+                  aria-label={`Remove plan: ${p.action}`}
                   loading={remove.isPending && remove.variables === p.id}
-                  onClick={() => remove.mutate(p.id)}
+                  onClick={() => setConfirming(p)}
                 >
                   ✕
                 </ActionIcon>
@@ -66,6 +86,29 @@ export function PlansSection({
       {addOpen && (
         <AddPlanModal opened objectiveId={objectiveId} onClose={() => setAddOpen(false)} />
       )}
+      <Modal
+        opened={confirming !== null}
+        onClose={() => setConfirming(null)}
+        title="Remove this plan?"
+      >
+        <Stack gap="md">
+          <Text size="sm">
+            {confirming?.action} will be removed from this objective. This cannot be undone.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setConfirming(null)}>
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              onClick={() => confirming && removePlan(confirming)}
+              loading={remove.isPending}
+            >
+              Remove plan
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }

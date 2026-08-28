@@ -1,4 +1,5 @@
 import { Anchor, Box, Button, Container, Group, Select, Table, Title } from "@mantine/core";
+import { useOrgDate } from "../../app/shell/useOrgDate";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { Dcr, DcrChangeType, DcrReasonClass, DcrState } from "../../lib/types";
@@ -51,11 +52,8 @@ function sortValue(d: Dcr, key: SortKey): string | null | undefined {
   }
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 10);
-}
-
 export function DcrsRegisterPage() {
+  const formatDate = useOrgDate();
   const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useDcrs();
   const [params, setParams] = useSearchParams();
   const dcrSelectorState = readSearchParamState(params, "dcr");

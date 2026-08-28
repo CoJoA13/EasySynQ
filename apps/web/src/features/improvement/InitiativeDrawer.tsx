@@ -1,4 +1,5 @@
 import { Badge, Group, Stack, Text, Title } from "@mantine/core";
+import { useOrgDate } from "../../app/shell/useOrgDate";
 import type { ReactNode } from "react";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
@@ -13,9 +14,6 @@ import { useInitiative, useInitiativeStageEvents } from "./hooks";
 
 function nameOf(userId: string, directory: DirectoryUser[]): string {
   return directory.find((u) => u.id === userId)?.display_name ?? `${userId.slice(0, 8)}…`;
-}
-function formatDate(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 10);
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -36,6 +34,7 @@ export function InitiativeDrawer({
   initiativeId: string | null;
   onClose: () => void;
 }) {
+  const formatDate = useOrgDate();
   const { data: initiative, isLoading, isError, refetch } = useInitiative(initiativeId);
   const { data: events } = useInitiativeStageEvents(initiativeId);
   const { data: directoryData } = useUserDirectory();

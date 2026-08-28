@@ -1,55 +1,158 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
-import { SetupWizard } from "./SetupWizard";
 import { AppShell } from "./app/shell/AppShell";
 import { AuthStartupScreen } from "./app/startup/AuthStartupScreen";
 import { SetupStartupScreen } from "./app/startup/SetupStartupScreen";
 import { fetchSetupState } from "./app/startup/setupState";
 import { AdminShell } from "./admin/AdminShell";
-import { ConfigAdmin } from "./admin/ConfigAdmin";
-import { ProcessesAdmin } from "./admin/ProcessesAdmin";
-import { RolesAdmin } from "./admin/RolesAdmin";
-import { UsersAdmin } from "./admin/UsersAdmin";
-import { NewDocumentWizard } from "./features/authoring/NewDocumentWizard";
-import { DocumentDetailPage } from "./features/document/DocumentDetailPage";
-import { HomePage } from "./features/home/HomePage";
-import { LibraryPage } from "./features/library/LibraryPage";
-import { ReviewApprovePage } from "./features/review/ReviewApprovePage";
-import { TasksInbox } from "./features/review/TasksInbox";
-import { SearchResultsPage } from "./features/search/SearchResultsPage";
-import { CompliancePage } from "./features/compliance/CompliancePage";
-import { CapaBoardPage } from "./features/capa/CapaBoardPage";
 import { CapaLayout } from "./features/capa/CapaLayout";
-import { ComplaintsPage } from "./features/capa/ComplaintsPage";
-import { NcrsPage } from "./features/capa/NcrsPage";
 import { AuditsLayout } from "./features/audits/AuditsLayout";
-import { AuditsListPage } from "./features/audits/AuditsListPage";
-import { AuditDetailPage } from "./features/audits/AuditDetailPage";
-import { ProgrammePage } from "./features/audits/ProgrammePage";
-import { IngestionRunsPage } from "./features/ingestion/IngestionRunsPage";
-import { IngestionRunPage } from "./features/ingestion/IngestionRunPage";
 import { DriftLayout } from "./features/drift/DriftLayout";
-import { DriftStatusPage } from "./features/drift/DriftStatusPage";
-import { SupersededCopiesPage } from "./features/drift/SupersededCopiesPage";
-import { ObjectivesRegisterPage } from "./features/objectives/ObjectivesRegisterPage";
-import { ReportsRegisterPage } from "./features/reports/ReportsRegisterPage";
-import { ObjectiveDetailPage } from "./features/objectives/ObjectiveDetailPage";
-import { ManagementReviewsRegisterPage } from "./features/management-review/ManagementReviewsRegisterPage";
-import { ManagementReviewDetailPage } from "./features/management-review/ManagementReviewDetailPage";
-import { DcrsRegisterPage } from "./features/dcr/DcrsRegisterPage";
-import { DcrDiffPage } from "./features/dcr/DcrDiffPage";
-import { ImprovementRegisterPage } from "./features/improvement/ImprovementRegisterPage";
-import { RisksRegisterPage } from "./features/risk/RisksRegisterPage";
-import { ContextRegisterPage } from "./features/context/ContextRegisterPage";
-import { InterestedPartiesRegisterPage } from "./features/interested-parties/InterestedPartiesRegisterPage";
-import { NotificationsPage } from "./features/notifications/NotificationsPage";
-import { NotificationSettingsPage } from "./features/notifications/NotificationSettingsPage";
-import { RecordsPage } from "./features/records/RecordsPage";
-import { RecordDetailPage } from "./features/records/RecordDetailPage";
 import { useAuth } from "./lib/auth";
+import { LoadingState } from "./lib/states";
 import { MutationFeedbackProvider } from "./lib/mutationFeedback";
 import { RouteChromeProvider, useRouteChrome } from "./lib/routeChrome";
+
+// U15: route-level code splitting. Every ROUTE ELEMENT is a lazy chunk so the initial
+// bundle no longer carries the admin console, the setup wizard, the ingestion console and
+// every register a given operator may never open. Layout/chrome (AppShell, AdminShell and
+// the three sub-layouts) stay eager — they render on every route in their subtree, so
+// splitting them would only add a waterfall.
+const SetupWizard = lazy(() => import("./SetupWizard").then((m) => ({ default: m.SetupWizard })));
+const ConfigAdmin = lazy(() =>
+  import("./admin/ConfigAdmin").then((m) => ({ default: m.ConfigAdmin })),
+);
+const ProcessesAdmin = lazy(() =>
+  import("./admin/ProcessesAdmin").then((m) => ({ default: m.ProcessesAdmin })),
+);
+const RolesAdmin = lazy(() =>
+  import("./admin/RolesAdmin").then((m) => ({ default: m.RolesAdmin })),
+);
+const UsersAdmin = lazy(() =>
+  import("./admin/UsersAdmin").then((m) => ({ default: m.UsersAdmin })),
+);
+const NewDocumentWizard = lazy(() =>
+  import("./features/authoring/NewDocumentWizard").then((m) => ({ default: m.NewDocumentWizard })),
+);
+const DocumentDetailPage = lazy(() =>
+  import("./features/document/DocumentDetailPage").then((m) => ({ default: m.DocumentDetailPage })),
+);
+const HomePage = lazy(() =>
+  import("./features/home/HomePage").then((m) => ({ default: m.HomePage })),
+);
+const LibraryPage = lazy(() =>
+  import("./features/library/LibraryPage").then((m) => ({ default: m.LibraryPage })),
+);
+const ReviewApprovePage = lazy(() =>
+  import("./features/review/ReviewApprovePage").then((m) => ({ default: m.ReviewApprovePage })),
+);
+const TasksInbox = lazy(() =>
+  import("./features/review/TasksInbox").then((m) => ({ default: m.TasksInbox })),
+);
+const SearchResultsPage = lazy(() =>
+  import("./features/search/SearchResultsPage").then((m) => ({ default: m.SearchResultsPage })),
+);
+const CompliancePage = lazy(() =>
+  import("./features/compliance/CompliancePage").then((m) => ({ default: m.CompliancePage })),
+);
+const CapaBoardPage = lazy(() =>
+  import("./features/capa/CapaBoardPage").then((m) => ({ default: m.CapaBoardPage })),
+);
+const ComplaintsPage = lazy(() =>
+  import("./features/capa/ComplaintsPage").then((m) => ({ default: m.ComplaintsPage })),
+);
+const NcrsPage = lazy(() =>
+  import("./features/capa/NcrsPage").then((m) => ({ default: m.NcrsPage })),
+);
+const AuditsListPage = lazy(() =>
+  import("./features/audits/AuditsListPage").then((m) => ({ default: m.AuditsListPage })),
+);
+const AuditDetailPage = lazy(() =>
+  import("./features/audits/AuditDetailPage").then((m) => ({ default: m.AuditDetailPage })),
+);
+const ProgrammePage = lazy(() =>
+  import("./features/audits/ProgrammePage").then((m) => ({ default: m.ProgrammePage })),
+);
+const IngestionRunsPage = lazy(() =>
+  import("./features/ingestion/IngestionRunsPage").then((m) => ({ default: m.IngestionRunsPage })),
+);
+const IngestionRunPage = lazy(() =>
+  import("./features/ingestion/IngestionRunPage").then((m) => ({ default: m.IngestionRunPage })),
+);
+const DriftStatusPage = lazy(() =>
+  import("./features/drift/DriftStatusPage").then((m) => ({ default: m.DriftStatusPage })),
+);
+const SupersededCopiesPage = lazy(() =>
+  import("./features/drift/SupersededCopiesPage").then((m) => ({
+    default: m.SupersededCopiesPage,
+  })),
+);
+const ObjectivesRegisterPage = lazy(() =>
+  import("./features/objectives/ObjectivesRegisterPage").then((m) => ({
+    default: m.ObjectivesRegisterPage,
+  })),
+);
+const ReportsRegisterPage = lazy(() =>
+  import("./features/reports/ReportsRegisterPage").then((m) => ({
+    default: m.ReportsRegisterPage,
+  })),
+);
+const ObjectiveDetailPage = lazy(() =>
+  import("./features/objectives/ObjectiveDetailPage").then((m) => ({
+    default: m.ObjectiveDetailPage,
+  })),
+);
+const ManagementReviewsRegisterPage = lazy(() =>
+  import("./features/management-review/ManagementReviewsRegisterPage").then((m) => ({
+    default: m.ManagementReviewsRegisterPage,
+  })),
+);
+const ManagementReviewDetailPage = lazy(() =>
+  import("./features/management-review/ManagementReviewDetailPage").then((m) => ({
+    default: m.ManagementReviewDetailPage,
+  })),
+);
+const DcrsRegisterPage = lazy(() =>
+  import("./features/dcr/DcrsRegisterPage").then((m) => ({ default: m.DcrsRegisterPage })),
+);
+const DcrDiffPage = lazy(() =>
+  import("./features/dcr/DcrDiffPage").then((m) => ({ default: m.DcrDiffPage })),
+);
+const ImprovementRegisterPage = lazy(() =>
+  import("./features/improvement/ImprovementRegisterPage").then((m) => ({
+    default: m.ImprovementRegisterPage,
+  })),
+);
+const RisksRegisterPage = lazy(() =>
+  import("./features/risk/RisksRegisterPage").then((m) => ({ default: m.RisksRegisterPage })),
+);
+const ContextRegisterPage = lazy(() =>
+  import("./features/context/ContextRegisterPage").then((m) => ({
+    default: m.ContextRegisterPage,
+  })),
+);
+const InterestedPartiesRegisterPage = lazy(() =>
+  import("./features/interested-parties/InterestedPartiesRegisterPage").then((m) => ({
+    default: m.InterestedPartiesRegisterPage,
+  })),
+);
+const NotificationsPage = lazy(() =>
+  import("./features/notifications/NotificationsPage").then((m) => ({
+    default: m.NotificationsPage,
+  })),
+);
+const NotificationSettingsPage = lazy(() =>
+  import("./features/notifications/NotificationSettingsPage").then((m) => ({
+    default: m.NotificationSettingsPage,
+  })),
+);
+const RecordsPage = lazy(() =>
+  import("./features/records/RecordsPage").then((m) => ({ default: m.RecordsPage })),
+);
+const RecordDetailPage = lazy(() =>
+  import("./features/records/RecordDetailPage").then((m) => ({ default: m.RecordDetailPage })),
+);
 
 type FinalizationVerification = "idle" | "checking" | "error";
 
@@ -203,83 +306,87 @@ function AppContent() {
 
   return (
     <MutationFeedbackProvider>
-      <Routes>
-        <Route
-          path="/setup"
-          element={
-            operational ? (
-              <Navigate to="/" replace />
-            ) : setupValue === "UNINITIALIZED" || setupValue === "IN_SETUP" ? (
-              <SetupWizard
-                setupState={setupValue}
-                token={token}
-                login={login}
-                onBootstrapAcknowledged={verifyBootstrapAcknowledgment}
-                onFinalized={verifyFinalization}
-              />
-            ) : (
-              <Navigate to="/" replace />
-            )
-          }
-        />
-        <Route
-          path="/admin"
-          element={operational ? <AdminShell /> : <Navigate to="/setup" replace />}
-        >
-          <Route index element={<Navigate to="users" replace />} />
-          <Route path="users" element={<UsersAdmin token={token} />} />
-          <Route path="roles" element={<RolesAdmin token={token} />} />
-          <Route path="processes" element={<ProcessesAdmin token={token} />} />
-          <Route path="config" element={<ConfigAdmin />} />
-        </Route>
-        <Route path="/" element={operational ? <AppShell /> : <Navigate to="/setup" replace />}>
-          <Route index element={<HomePage />} />
-          <Route path="library" element={<LibraryPage />} />
-          <Route path="library/new" element={<NewDocumentWizard />} />
-          <Route path="documents/:id" element={<DocumentDetailPage />} />
-          <Route path="tasks" element={<TasksInbox />} />
-          <Route path="tasks/:id" element={<ReviewApprovePage />} />
-          <Route path="notifications" element={<NotificationsPage />} />
-          <Route path="settings/notifications" element={<NotificationSettingsPage />} />
-          <Route path="search" element={<SearchResultsPage />} />
-          <Route path="compliance" element={<CompliancePage />} />
-          <Route path="reports/document-control" element={<ReportsRegisterPage />} />
-          <Route path="capa" element={<CapaLayout />}>
-            <Route index element={<CapaBoardPage />} />
-            <Route path="complaints" element={<ComplaintsPage />} />
-            <Route path="ncrs" element={<NcrsPage />} />
+      {/* One Suspense boundary around the whole route table: a route swap shows the shared
+          LoadingState while its chunk arrives, and the boundary never unmounts the chrome. */}
+      <Suspense fallback={<LoadingState label="Loading page" />}>
+        <Routes>
+          <Route
+            path="/setup"
+            element={
+              operational ? (
+                <Navigate to="/" replace />
+              ) : setupValue === "UNINITIALIZED" || setupValue === "IN_SETUP" ? (
+                <SetupWizard
+                  setupState={setupValue}
+                  token={token}
+                  login={login}
+                  onBootstrapAcknowledged={verifyBootstrapAcknowledgment}
+                  onFinalized={verifyFinalization}
+                />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+          <Route
+            path="/admin"
+            element={operational ? <AdminShell /> : <Navigate to="/setup" replace />}
+          >
+            <Route index element={<Navigate to="users" replace />} />
+            <Route path="users" element={<UsersAdmin token={token} />} />
+            <Route path="roles" element={<RolesAdmin token={token} />} />
+            <Route path="processes" element={<ProcessesAdmin token={token} />} />
+            <Route path="config" element={<ConfigAdmin />} />
           </Route>
-          <Route path="audits" element={<AuditsLayout />}>
-            <Route index element={<AuditsListPage />} />
-            <Route path="programme" element={<ProgrammePage />} />
+          <Route path="/" element={operational ? <AppShell /> : <Navigate to="/setup" replace />}>
+            <Route index element={<HomePage />} />
+            <Route path="library" element={<LibraryPage />} />
+            <Route path="library/new" element={<NewDocumentWizard />} />
+            <Route path="documents/:id" element={<DocumentDetailPage />} />
+            <Route path="tasks" element={<TasksInbox />} />
+            <Route path="tasks/:id" element={<ReviewApprovePage />} />
+            <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="settings/notifications" element={<NotificationSettingsPage />} />
+            <Route path="search" element={<SearchResultsPage />} />
+            <Route path="compliance" element={<CompliancePage />} />
+            <Route path="reports/document-control" element={<ReportsRegisterPage />} />
+            <Route path="capa" element={<CapaLayout />}>
+              <Route index element={<CapaBoardPage />} />
+              <Route path="complaints" element={<ComplaintsPage />} />
+              <Route path="ncrs" element={<NcrsPage />} />
+            </Route>
+            <Route path="audits" element={<AuditsLayout />}>
+              <Route index element={<AuditsListPage />} />
+              <Route path="programme" element={<ProgrammePage />} />
+            </Route>
+            <Route path="audits/:id" element={<AuditDetailPage />} />
+            <Route path="imports" element={<IngestionRunsPage />} />
+            <Route path="imports/:runId" element={<IngestionRunPage />} />
+            <Route path="ingestion" element={<LegacyImportRedirect />} />
+            <Route path="ingestion/:runId" element={<LegacyImportRedirect />} />
+            <Route path="drift" element={<DriftLayout />}>
+              <Route index element={<DriftStatusPage />} />
+              <Route path="superseded-copies" element={<SupersededCopiesPage />} />
+            </Route>
+            <Route path="objectives" element={<ObjectivesRegisterPage />} />
+            <Route path="objectives/:id" element={<ObjectiveDetailPage />} />
+            <Route path="management-reviews" element={<ManagementReviewsRegisterPage />} />
+            <Route path="management-reviews/:id" element={<ManagementReviewDetailPage />} />
+            <Route path="dcrs" element={<DcrsRegisterPage />} />
+            <Route path="dcrs/:id/diff" element={<DcrDiffPage />} />
+            <Route path="improvement" element={<ImprovementRegisterPage />} />
+            <Route path="risks" element={<RisksRegisterPage />} />
+            <Route path="context" element={<ContextRegisterPage />} />
+            <Route path="interested-parties" element={<InterestedPartiesRegisterPage />} />
+            <Route path="records" element={<RecordsPage />} />
+            <Route path="records/:recordId" element={<RecordDetailPage />} />
           </Route>
-          <Route path="audits/:id" element={<AuditDetailPage />} />
-          <Route path="imports" element={<IngestionRunsPage />} />
-          <Route path="imports/:runId" element={<IngestionRunPage />} />
-          <Route path="ingestion" element={<LegacyImportRedirect />} />
-          <Route path="ingestion/:runId" element={<LegacyImportRedirect />} />
-          <Route path="drift" element={<DriftLayout />}>
-            <Route index element={<DriftStatusPage />} />
-            <Route path="superseded-copies" element={<SupersededCopiesPage />} />
-          </Route>
-          <Route path="objectives" element={<ObjectivesRegisterPage />} />
-          <Route path="objectives/:id" element={<ObjectiveDetailPage />} />
-          <Route path="management-reviews" element={<ManagementReviewsRegisterPage />} />
-          <Route path="management-reviews/:id" element={<ManagementReviewDetailPage />} />
-          <Route path="dcrs" element={<DcrsRegisterPage />} />
-          <Route path="dcrs/:id/diff" element={<DcrDiffPage />} />
-          <Route path="improvement" element={<ImprovementRegisterPage />} />
-          <Route path="risks" element={<RisksRegisterPage />} />
-          <Route path="context" element={<ContextRegisterPage />} />
-          <Route path="interested-parties" element={<InterestedPartiesRegisterPage />} />
-          <Route path="records" element={<RecordsPage />} />
-          <Route path="records/:recordId" element={<RecordDetailPage />} />
-        </Route>
-        <Route
-          path="*"
-          element={operational ? <AppShell notFound /> : <Navigate to="/setup" replace />}
-        />
-      </Routes>
+          <Route
+            path="*"
+            element={operational ? <AppShell notFound /> : <Navigate to="/setup" replace />}
+          />
+        </Routes>
+      </Suspense>
     </MutationFeedbackProvider>
   );
 }
