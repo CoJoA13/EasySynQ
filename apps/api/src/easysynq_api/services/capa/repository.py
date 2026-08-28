@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._evidence_enums import EvidenceForTargetType
@@ -159,11 +159,18 @@ async def allow_capa_self_verify(session: AsyncSession, org_id: uuid.UUID) -> bo
 
 
 async def list_capas(
-    session: AsyncSession, org_id: uuid.UUID, *, limit: int | None = None
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    limit: int | None = None,
+    filters: Sequence[ColumnElement[bool]] = (),
 ) -> Sequence[tuple[Capa, str | None, str | None, datetime | None]]:
     """Newest-first CAPAs for the org. ``limit`` bounds the scan window for the LISTING surface
     (audit U14); callers that need COMPLETE data — the Management Review 9.3.2 input compiler,
-    whose summaries are frozen into the minutes as evidence — must leave it None."""
+    whose summaries are frozen into the minutes as evidence — must leave it None.
+
+    ``filters`` narrow in SQL BEFORE the limit, which is what makes rows older than the window
+    reachable at all — applying them after would only trim what the window already returned."""
     rows = await session.execute(
         select(
             Capa,
@@ -172,7 +179,7 @@ async def list_capas(
             DocumentedInformation.created_at,
         )
         .join(DocumentedInformation, DocumentedInformation.id == Capa.id)
-        .where(Capa.org_id == org_id)
+        .where(Capa.org_id == org_id, *filters)
         .order_by(DocumentedInformation.created_at.desc())
         .limit(limit)
     )

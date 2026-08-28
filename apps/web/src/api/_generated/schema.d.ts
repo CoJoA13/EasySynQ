@@ -1757,7 +1757,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The org's audits. Needs audit.read. */
+        /**
+         * The org's audits. Needs audit.read.
+         * @description The bracketed filter[field][op] grammar (doc 15 §3.2, the GET /documents precedent) narrows the candidate set in SQL before the bounded scan window; an unrecognised field/op is 400 unknown_filter so a client can never believe an unsupported facet narrowed the register.
+         */
         get: operations["listAudits"];
         put?: never;
         /** Create an audit (state=Scheduled) from a plan. Captures an immutable AUDIT record. Needs audit.create. */
@@ -2790,7 +2793,7 @@ export interface paths {
         };
         /**
          * The org's CAPAs the caller may read (row-filtered by capa.read).
-         * @description Row-filtered per-process by capa.read (filter, not 403 — doc 18 §5.2): a SYSTEM grant sees every CAPA, a bound Process Owner narrows to CAPAs in their owned process(es) (a process-less ad-hoc CAPA needs a SYSTEM grant), a no-grant caller gets 200 + an empty list.
+         * @description Row-filtered per-process by capa.read (filter, not 403 — doc 18 §5.2): a SYSTEM grant sees every CAPA, a bound Process Owner narrows to CAPAs in their owned process(es) (a process-less ad-hoc CAPA needs a SYSTEM grant), a no-grant caller gets 200 + an empty list. The bracketed filter[field][op] grammar (doc 15 §3.2, the GET /documents precedent) narrows the candidate set in SQL before the bounded scan window and before the row-filter; an unrecognised field/op is 400 unknown_filter.
          */
         get: operations["listCapas"];
         put?: never;
@@ -3344,7 +3347,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the org's risk/opportunity rows (newest first), row-filtered to what the caller may register.read (filter-not-403 — a no-grant caller gets 200 + empty; a bound Process Owner sees only their owned-process rows; a SYSTEM grant sees all). Needs register.read. */
+        /**
+         * List the org's risk/opportunity rows (newest first), row-filtered to what the caller may register.read (filter-not-403 — a no-grant caller gets 200 + empty; a bound Process Owner sees only their owned-process rows; a SYSTEM grant sees all). Needs register.read.
+         * @description The bracketed filter[field][op] grammar (doc 15 §3.2, the GET /documents precedent) narrows the candidate set in SQL before the bounded scan window; an unrecognised field/op is 400 unknown_filter.
+         */
         get: operations["listRisks"];
         put?: never;
         /** Author a risk/opportunity row on the org's Risk & Opportunity register (clause 6.1, S-risk-1). Lazily get-or-creates the single kind=DOCUMENT RSK register head (which carries no ProcessLinks). risk_rating is server-derived (likelihood x severity, never client-supplied). Needs register.manage at the body process_id's PROCESS scope (SYSTEM for an org-level / null process_id row). */
@@ -11529,7 +11535,13 @@ export interface operations {
     };
     listAudits: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description ISO-8601 date or datetime lower bound on creation. A bare YYYY-MM-DD is read as midnight UTC. Filters narrow in SQL BEFORE the bounded scan window, so narrowing is how rows older than the window are reached; a malformed value is 422 validation_error. */
+                "filter[created_at][gte]"?: string;
+                /** @description ISO-8601 date or datetime upper bound on creation. */
+                "filter[created_at][lte]"?: string;
+                "filter[state][eq]"?: "Scheduled" | "Planned" | "InProgress" | "FindingsDraft" | "Reported" | "Closing" | "Closed";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -13276,7 +13288,15 @@ export interface operations {
     };
     listCapas: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description ISO-8601 date or datetime lower bound on creation. A bare YYYY-MM-DD is read as midnight UTC. Filters narrow in SQL BEFORE the bounded scan window, so narrowing is how rows older than the window are reached; a malformed value is 422 validation_error. */
+                "filter[created_at][gte]"?: string;
+                /** @description ISO-8601 date or datetime upper bound on creation. */
+                "filter[created_at][lte]"?: string;
+                "filter[close_state][eq]"?: "Raised" | "Containment" | "RootCause" | "ActionPlan" | "Implement" | "Verify" | "Closed" | "Rejected";
+                "filter[severity][eq]"?: "Critical" | "Major" | "Minor";
+                "filter[process_id][eq]"?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -14414,7 +14434,14 @@ export interface operations {
     };
     listRisks: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description ISO-8601 date or datetime lower bound on creation. A bare YYYY-MM-DD is read as midnight UTC. Filters narrow in SQL BEFORE the bounded scan window, so narrowing is how rows older than the window are reached; a malformed value is 422 validation_error. */
+                "filter[created_at][gte]"?: string;
+                /** @description ISO-8601 date or datetime upper bound on creation. */
+                "filter[created_at][lte]"?: string;
+                "filter[type][eq]"?: "risk" | "opportunity";
+                "filter[process_id][eq]"?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

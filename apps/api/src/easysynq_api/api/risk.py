@@ -43,6 +43,13 @@ from ..services.authz import (
 from ..services.authz.register_caps import register_capabilities
 from ..services.authz.resource import resource_from_doc
 from ..services.common import listing
+from ..services.common.register_filters import (
+    RegisterFilter,
+    parse_date_boundary,
+    parse_enum,
+    parse_register_filters,
+    parse_uuid,
+)
 from ..services.risk import (
     add_risk_row,
     find_head,
@@ -190,7 +197,12 @@ async def _readable_risks(
     bound Process Owner's PROCESS-scoped grant narrows to their owned process(es); an org-level
     (process-less) row needs a SYSTEM grant; a no-grant caller gets an empty list, never 403.
     ``source_ip`` is threaded so an ``ip_allow`` predicate evaluates as the replaced enforce did."""
-    rows = await list_risks(session, caller.org_id, limit=listing.REGISTER_SCAN_CAP)
+    rows = await list_risks(
+        session,
+        caller.org_id,
+        limit=listing.REGISTER_SCAN_CAP,
+        filters=parse_register_filters(request, _RISK_FILTERS),
+    )
     # Audit U14: the pre-authz window is capped (newest first); an at-cap scan is flagged.
     truncated = len(rows) >= listing.REGISTER_SCAN_CAP
     grants = await gather_grants(session, caller.id, caller.org_id, "register.read")
@@ -204,6 +216,23 @@ async def _readable_risks(
         if authorize(grants, "register.read", _risk_scope(row.process_id), ctx).allow
     ]
     return visible, truncated
+
+
+# Server-side facets. `created_at` is the load-bearing one — the conditions narrow in SQL BEFORE
+# REGISTER_SCAN_CAP, which is what makes rows older than the window reachable at all.
+_RISK_FILTERS: dict[str, RegisterFilter] = {
+    "type": RegisterFilter(
+        column=RiskOpportunity.type, ops=frozenset({"eq"}), parse=parse_enum(RiskOpportunityType)
+    ),
+    "process_id": RegisterFilter(
+        column=RiskOpportunity.process_id, ops=frozenset({"eq"}), parse=parse_uuid
+    ),
+    "created_at": RegisterFilter(
+        column=RiskOpportunity.created_at,
+        ops=frozenset({"gte", "lte"}),
+        parse=parse_date_boundary,
+    ),
+}
 
 
 @router.get("/risks")

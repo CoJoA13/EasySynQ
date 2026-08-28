@@ -9,6 +9,8 @@ import type {
   FindingList,
   ProcessRow,
 } from "../../lib/types";
+import type { RegisterFilterState } from "../registers/registerFilters";
+import { registerFilterKey, registerQuerySuffix } from "../registers/registerFilters";
 
 // Every audit-family read is gated (audit.read / finding.read) and the demo admin holds none —
 // the S-web-6 calm-403 case. retry:false + a `forbidden` flag (the capa hooks idiom).
@@ -48,11 +50,15 @@ export function useAuditPlan(planId: string | null) {
   });
 }
 
-export function useAudits() {
+export function useAudits(filters: RegisterFilterState = {}) {
   const api = useApi();
+  // The filter state is part of the cache key, and the request carries it as the bracketed
+  // filter[field][op] grammar the API narrows on in SQL — which is how entries older than the
+  // server's scan window are reached at all.
+  const filterKey = registerFilterKey(filters);
   const query = useQuery({
-    queryKey: ["audits"],
-    queryFn: () => api.get<AuditList>("/api/v1/audits"),
+    queryKey: ["audits", filterKey],
+    queryFn: () => api.get<AuditList>(`/api/v1/audits${registerQuerySuffix(filters)}`),
     retry: false,
   });
   // U14: keep `data` the bare array (every consumer reads it that way) and surface the

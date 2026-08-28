@@ -20,10 +20,11 @@ from __future__ import annotations
 import datetime
 import hashlib
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import select, text
+from sqlalchemy import ColumnElement, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
@@ -276,15 +277,22 @@ async def get_risk(
 
 
 async def list_risks(
-    session: AsyncSession, org_id: uuid.UUID, *, limit: int | None = None
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    limit: int | None = None,
+    filters: Sequence[ColumnElement[bool]] = (),
 ) -> list[RiskOpportunity]:
     """Newest-first risk rows. ``limit`` bounds the LISTING surface's scan window (audit U14);
-    a consumer needing complete data leaves it None."""
+    a consumer needing complete data leaves it None.
+
+    ``filters`` narrow in SQL BEFORE the limit, so rows older than the scan window stay
+    reachable by narrowing (audit follow-up)."""
     return list(
         (
             await session.execute(
                 select(RiskOpportunity)
-                .where(RiskOpportunity.org_id == org_id)
+                .where(RiskOpportunity.org_id == org_id, *filters)
                 .order_by(RiskOpportunity.created_at.desc())
                 .limit(limit)
             )

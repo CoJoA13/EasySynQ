@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, select
+from sqlalchemy import ColumnElement, Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._capa_enums import CapaCloseState
@@ -77,10 +77,17 @@ async def list_audit_plans(session: AsyncSession, program_id: uuid.UUID) -> Sequ
 
 
 async def list_audits(
-    session: AsyncSession, org_id: uuid.UUID, *, limit: int | None = None
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    limit: int | None = None,
+    filters: Sequence[ColumnElement[bool]] = (),
 ) -> Sequence[tuple[Audit, str | None, str | None, datetime | None]]:
     """(audit, identifier, title, created_at) — the record header lives on the base row
-    (the list_capas precedent; same-PK join, zero extra queries)."""
+    (the list_capas precedent; same-PK join, zero extra queries).
+
+    ``filters`` narrow in SQL BEFORE the limit, so rows older than the scan window stay
+    reachable by narrowing (audit follow-up)."""
     rows = await session.execute(
         select(
             Audit,
@@ -89,7 +96,7 @@ async def list_audits(
             DocumentedInformation.created_at,
         )
         .join(DocumentedInformation, DocumentedInformation.id == Audit.id)
-        .where(Audit.org_id == org_id)
+        .where(Audit.org_id == org_id, *filters)
         .order_by(DocumentedInformation.created_at.desc())
         # Audit U14: ``limit`` bounds the LISTING surface's scan window; the Management Review
         # 9.3.2 compiler passes None so its frozen summary counts every audit.
