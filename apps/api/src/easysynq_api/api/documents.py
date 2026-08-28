@@ -822,7 +822,12 @@ async def list_documents(
     # with no link gets an empty set → byte-identical filtering for the SYSTEM/ARTIFACT-scoped case.
     # S-process-scope-1 routes this through the shared ``vault_repo.process_ids_for_docs`` loader.
     process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [d.id for d in docs])
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    # Audit U1: thread the live source_ip so an ip_allow-predicated grant/DENY evaluates here
+    # exactly as the detail-gate PEP does (it silently never matched on this row filter before).
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
     visible: list[DocumentedInformation] = []
     for d in docs:
         # #333: full scope tuple via the shared helper so the list row-filter can't drift from the

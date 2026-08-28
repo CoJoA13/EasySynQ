@@ -45,9 +45,12 @@ _DENIED_MESSAGE = {
 
 
 def _client_ip(request: Request) -> str | None:
+    # Audit U21: the RIGHTMOST X-Forwarded-For entry — the value the trusted fronting proxy
+    # (Caddy) appended for the actual peer. The leftmost entry is client-controlled: any guest
+    # could write an arbitrary IP into the immutable download audit with a forged header.
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()
+        return fwd.split(",")[-1].strip()
     return request.client.host if request.client else None
 
 

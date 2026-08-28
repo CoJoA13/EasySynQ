@@ -515,3 +515,68 @@ async def test_dcr_list_and_detail_name_the_target(
     cre_detail = (await app_client.get(f"/api/v1/dcrs/{create_id}", headers=h)).json()
     assert cre_detail["target_identifier"] is None
     assert cre_detail["target_title"] is None
+
+
+async def test_read_authorized_by_concrete_process_grant(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[Audit U2] changeRequest.read resolves the TARGET DOCUMENT's scope: the detail GET rides
+    the same _dcr_scope resolver the writes use, and the list is filter-not-403 per row — the
+    old bare SYSTEM require made a PROCESS-scoped read grant unsatisfiable (raise a DCR you
+    can't read back). A SYSTEM-grant caller's listing stays byte-identical; a no-grant caller
+    gets 200 + empty, never a 403."""
+    author = _subject("dcr-rdauth")
+    await _grant(author, ("changeRequest.create", "changeRequest.read"))
+    ha = _auth(token_factory, author)
+    process_id, doc_id = await _seed_process_and_linked_doc(author)
+    _other_process_id, other_doc_id = await _seed_process_and_linked_doc(author)
+
+    async def _raise_dcr(target: str) -> str:
+        r = await app_client.post(
+            "/api/v1/dcrs",
+            headers=ha,
+            json={
+                "change_type": "REVISE",
+                "change_significance": "MINOR",
+                "reason_class": "error_correction",
+                "reason_text": "read-scope probe",
+                "target_document_id": target,
+            },
+        )
+        assert r.status_code == 201, r.text
+        return str(r.json()["id"])
+
+    dcr_bound = await _raise_dcr(doc_id)
+    dcr_other = await _raise_dcr(other_doc_id)
+
+    # A no-grant caller: the list filters to empty (200, never 403); the detail 403s.
+    reader = _subject("dcr-procread")
+    async with get_sessionmaker()() as s:
+        await _ensure_user(s, reader)
+        await s.commit()
+    hr = _auth(token_factory, reader)
+    r = await app_client.get("/api/v1/dcrs", headers=hr)
+    assert r.status_code == 200, r.text
+    assert r.json()["data"] == []
+    assert (await app_client.get(f"/api/v1/dcrs/{dcr_bound}", headers=hr)).status_code == 403
+
+    # A PROCESS-scoped read grant on the bound doc's process: the bound DCR becomes readable —
+    # list shows exactly it (not the other), detail 200; the other doc's DCR stays 403.
+    await _grant_process(reader, "changeRequest.read", process_id)
+    r = await app_client.get("/api/v1/dcrs", headers=hr)
+    assert r.status_code == 200, r.text
+    ids = [d["id"] for d in r.json()["data"]]
+    assert dcr_bound in ids
+    assert dcr_other not in ids
+    assert (await app_client.get(f"/api/v1/dcrs/{dcr_bound}", headers=hr)).status_code == 200
+    assert (await app_client.get(f"/api/v1/dcrs/{dcr_other}", headers=hr)).status_code == 403
+    # The impact panel rides the same scoped read.
+    assert (await app_client.get(f"/api/v1/dcrs/{dcr_bound}/impact", headers=hr)).status_code == 200
+    assert (
+        await app_client.get(f"/api/v1/dcrs/{dcr_other}/impact", headers=hr)
+    ).status_code == 403
+
+    # The SYSTEM-grant raiser still sees both (byte-identical for SYSTEM/broad callers).
+    r = await app_client.get("/api/v1/dcrs", headers=ha)
+    ids = [d["id"] for d in r.json()["data"]]
+    assert dcr_bound in ids and dcr_other in ids

@@ -539,3 +539,52 @@ async def test_create_and_transitions_mint_no_signature_event(
             )
         ).scalar_one()
         assert signed_hooks == 0
+
+
+async def test_ip_allow_predicated_read_matches_on_the_row_filter(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[Audit U1] The initiatives list threads the live source_ip into its RequestContext so an
+    ip_allow-predicated improvement.read grant evaluates on the row filter (it silently never
+    matched before — ctx carried source_ip=None and the predicate is fail-closed). The wrong-IP
+    twin proves the threaded value is the real peer."""
+    author = _subject("imp-ipauth")
+    await _grant(author, _IMP_KEYS)
+    h = _auth(token_factory, author)
+    initiative_id = str((await _create(app_client, h, title="IP-bound visibility probe"))["id"])
+
+    async def _ip_bound_reader(prefix: str, ip: str) -> dict[str, str]:
+        subject = _subject(prefix)
+        async with get_sessionmaker()() as s:
+            user = await _ensure_user(s, subject)
+            perm = (
+                await s.execute(select(Permission).where(Permission.key == "improvement.read"))
+            ).scalar_one()
+            scope = Scope(
+                org_id=user.org_id,
+                level=ScopeLevel.SYSTEM,
+                predicates={"ip_allow": [ip]},
+            )
+            s.add(scope)
+            await s.flush()
+            s.add(
+                PermissionOverride(
+                    org_id=user.org_id,
+                    user_id=user.id,
+                    permission_id=perm.id,
+                    effect=Effect.ALLOW,
+                    scope_id=scope.id,
+                )
+            )
+            await s.commit()
+        return _auth(token_factory, subject)
+
+    hm = await _ip_bound_reader("imp-ipok", "127.0.0.1")  # the ASGI transport's peer
+    r = await app_client.get("/api/v1/improvement-initiatives", headers=hm)
+    assert r.status_code == 200, r.text
+    assert initiative_id in [i["id"] for i in r.json()["data"]]
+
+    ho = await _ip_bound_reader("imp-ipwrong", "203.0.113.9")
+    r = await app_client.get("/api/v1/improvement-initiatives", headers=ho)
+    assert r.status_code == 200, r.text
+    assert r.json()["data"] == []  # fail-closed: no grant matches from the wrong address

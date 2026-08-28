@@ -24,6 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
@@ -222,7 +223,12 @@ async def _dcr_scope(request: Request, session: AsyncSession) -> ResourceContext
     return await _dcr_doc_scope(session, dcr.target_document_id)
 
 
-_dcr_read = require("changeRequest.read")
+# Audit U2: single-resource reads resolve the TARGET DOCUMENT's scope (the write-gate posture) —
+# the old bare SYSTEM-scope require made the seeded Process Owner changeRequest.read grant
+# unsatisfiable (finest_scope is documentary; the PDP matches PROCESS grants purely on the
+# resource's process_ids, which a SYSTEM context never carries). A CREATE DCR (no target doc)
+# keeps the SYSTEM fallback via _dcr_scope. The LIST is filter-not-403 (below), not require().
+_dcr_read = require("changeRequest.read", async_scope_resolver=_dcr_scope)
 _dcr_assess = require("changeRequest.assess", async_scope_resolver=_dcr_scope)
 _dcr_close = require("changeRequest.close", async_scope_resolver=_dcr_scope)
 _dcr_route = require("changeRequest.route", async_scope_resolver=_dcr_scope)
@@ -369,7 +375,7 @@ async def create_dcr_endpoint(
 @router.get("/dcrs")
 async def list_dcrs_endpoint(
     request: Request,
-    caller: AppUser = Depends(_dcr_read),
+    caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     state: DcrState | None = None,
     change_type: DcrChangeType | None = None,
@@ -386,10 +392,56 @@ async def list_dcrs_endpoint(
         created_by=created_by,
         reason_class=reason_class,
     )
+    # Audit U2 (the S-process-scope-2 recipe): filter-not-403 per row at the TARGET DOCUMENT's
+    # scope, batched (docs + types + process links in three grouped queries — no N+1). SYSTEM
+    # grants match every scope, so the SYSTEM-caller listing is byte-identical; a no-grant
+    # caller gets 200 + empty (doc 18 §5.2). A CREATE DCR (no target document) authorizes at
+    # SYSTEM scope, matching the detail resolver's fallback. source_ip is threaded so an
+    # ip_allow-predicated grant evaluates as the replaced enforce did.
+    grants = await gather_grants(session, caller.id, caller.org_id, "changeRequest.read")
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
+    doc_ids = [d.target_document_id for d, _i, _t in rows if d.target_document_id is not None]
+    docs: dict[uuid.UUID, DocumentedInformation] = {}
+    if doc_ids:
+        docs = {
+            doc.id: doc
+            for doc in (
+                await session.execute(
+                    select(DocumentedInformation).where(DocumentedInformation.id.in_(doc_ids))
+                )
+            ).scalars()
+        }
+    type_ids = {d.document_type_id for d in docs.values() if d.document_type_id}
+    document_types: dict[uuid.UUID, DocumentType] = {}
+    if type_ids:
+        document_types = {
+            dt.id: dt
+            for dt in (
+                await session.execute(select(DocumentType).where(DocumentType.id.in_(type_ids)))
+            ).scalars()
+        }
+    process_ids_by_doc = await vault_repo.process_ids_for_docs(session, list(docs))
+
+    def _row_scope(d: Dcr) -> ResourceContext:
+        doc = docs.get(d.target_document_id) if d.target_document_id is not None else None
+        if doc is None:
+            return ResourceContext.system()
+        return resource_from_doc(
+            doc,
+            document_type=(
+                document_types.get(doc.document_type_id) if doc.document_type_id else None
+            ),
+            process_ids=process_ids_by_doc.get(doc.id, frozenset()),
+        )
+
     return {
         "data": [
             _dcr(d, target_identifier=target_ident, target_title=target_t)
             for d, target_ident, target_t in rows
+            if authorize(grants, "changeRequest.read", _row_scope(d), ctx).allow
         ]
     }
 
