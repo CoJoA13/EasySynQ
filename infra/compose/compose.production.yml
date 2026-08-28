@@ -34,8 +34,8 @@ services:
     volumes:
       # The entry Caddyfile imports the base verbatim — one source of truth for the app site; only
       # the separately-addressed MinIO site is production-specific.
-      - ./caddy/Caddyfile.production:/etc/caddy/Caddyfile:ro
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile.base:ro
+      - ./caddy/Caddyfile.production:/etc/caddy/Caddyfile:ro,z
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile.base:ro,z
 
   api:
     environment:

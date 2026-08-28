@@ -84,8 +84,11 @@ services:
       AUDIT_SINK_READ_SECRET_KEY: ${AUDIT_SINK_READ_SECRET_KEY:-audit-sink-read-secret-change-me}
       WORM_RETENTION: ${WORM_RETENTION:-30d}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+      # How long to wait for MinIO before failing this one-shot. Reachable from .env because a
+      # large miniodata on a slow disk can legitimately exceed the default (audit U43).
+      MINIO_WAIT_SECONDS: ${MINIO_WAIT_SECONDS:-120}
     volumes:
-      - ./minio:/init:ro
+      - ./minio:/init:ro,z
     networks: [internal]
     restart: "no"
 
@@ -109,8 +112,8 @@ services:
       # owner credential to the web-facing identity service as a compatibility fallback.
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set a distinct KEYCLOAK_DB_PASSWORD}
     volumes:
-      - ./keycloak/keycloak-init.sh:/init/keycloak-init.sh:ro
-      - ./keycloak/realm-export.json:/seed/easysynq-realm.json:ro
+      - ./keycloak/keycloak-init.sh:/init/keycloak-init.sh:ro,z
+      - ./keycloak/realm-export.json:/seed/easysynq-realm.json:ro,z
       - keycloakimport:/import
     networks: [internal]
     restart: "no"
@@ -235,6 +238,11 @@ services:
       # S-ing-1: the import source tree, mounted READ-ONLY (NG3 — the engine physically cannot write
       # back). Only the worker walks it; IMPORT_SOURCE_ROOT (=/srv/import/source) is the confinement
       # root. Compose resolves relative host paths from this file's directory, so ../../ is repo root.
+      # Deliberately NOT ,z: this points at the organization's real document tree, and `z`
+      # relabels it RECURSIVELY. On an SELinux-labelling runtime the operator labels their own
+      # source tree (see runbooks/install-online.md) rather than have a container rewrite it
+      # (audit U35). Repo-owned config files above are safe to relabel; a customer's file store
+      # is not.
       - ${IMPORT_SOURCE_PATH:-../../.import-source}:/srv/import/source:ro
     networks: [internal]
 
@@ -285,7 +293,7 @@ services:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro,z
       - caddydata:/data
       - caddyconfig:/config
     networks:

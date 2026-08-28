@@ -25,7 +25,11 @@ sub_for() {
   if [ -z "$id" ]; then
     id="$(kc get users -r easysynq -q username="$u" --fields id 2>/dev/null | grep -oE '[0-9a-f-]{36}' | head -1)"
   fi
-  kc set-password -r easysynq --username "$u" --new-password "Demo-Password-1" >/dev/null 2>&1 || true
+  if ! pw_err="$(kc set-password -r easysynq --username "$u" --new-password "Demo-Password-1" 2>&1)"; then
+    echo "seed-personas: could not set the password for '$u' — the account would exist but be" >&2
+    echo "               unusable. Keycloak said: ${pw_err}" >&2
+    exit 1
+  fi
   printf '%s' "$id"
 }
 
