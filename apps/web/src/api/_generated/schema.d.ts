@@ -11544,6 +11544,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["Audit"][];
+                        /** @description True when the pre-authorization scan window hit its cap (newest-first, 2000) — older rows exist but were not scanned. */
+                        truncated?: boolean;
                     };
                 };
             };
@@ -13289,6 +13291,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         data?: components["schemas"]["Capa"][];
+                        /** @description True when the pre-authorization scan window hit its cap (newest-first, 2000) — older rows exist but were not scanned. */
+                        truncated?: boolean;
                     };
                 };
             };
@@ -14116,6 +14120,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         data?: components["schemas"]["ImprovementInitiative"][];
+                        /** @description True when the pre-authorization scan window hit its cap (newest-first, 2000) — older rows exist but were not scanned. */
+                        truncated?: boolean;
                     };
                 };
             };
@@ -14423,6 +14429,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["RiskOpportunity"][];
+                        /** @description True when the pre-authorization scan window hit its cap (newest-first, 2000) — older rows exist but were not scanned. */
+                        truncated?: boolean;
                     };
                 };
             };

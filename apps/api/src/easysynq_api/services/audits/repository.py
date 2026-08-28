@@ -19,6 +19,7 @@ from ...db.models.audit_program import AuditProgram
 from ...db.models.capa import Capa
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.record import Record
+from ..common import listing
 
 
 async def get_audit_program(session: AsyncSession, program_id: uuid.UUID) -> AuditProgram | None:
@@ -91,6 +92,8 @@ async def list_audits(
         .join(DocumentedInformation, DocumentedInformation.id == Audit.id)
         .where(Audit.org_id == org_id)
         .order_by(DocumentedInformation.created_at.desc())
+        # Audit U14 (S-web-2): bound the pre-authz scan window — newest first, honest cap.
+        .limit(listing.REGISTER_SCAN_CAP)
     )
     return [(a, ident, title, created) for a, ident, title, created in rows.all()]
 

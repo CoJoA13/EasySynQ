@@ -6132,6 +6132,10 @@
                       "items": {
                         "$ref": "#/components/schemas/Audit"
                       }
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "True when the pre-authorization scan window hit its cap (newest-first, 2000) — older rows exist but were not scanned."
                     }
                   },
                   "required": [
@@ -9346,6 +9350,10 @@
                       "items": {
                         "$ref": "#/components/schemas/Capa"
                       }
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "True when the pre-authorization scan window hit its cap (newest-first, 2000) — older rows exist but were not scanned."
                     }
                   }
                 }
@@ -10775,6 +10783,10 @@
                       "items": {
                         "$ref": "#/components/schemas/ImprovementInitiative"
                       }
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "True when the pre-authorization scan window hit its cap (newest-first, 2000) — older rows exist but were not scanned."
                     }
                   }
                 }
@@ -11297,6 +11309,10 @@
                       "items": {
                         "$ref": "#/components/schemas/RiskOpportunity"
                       }
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "True when the pre-authorization scan window hit its cap (newest-first, 2000) — older rows exist but were not scanned."
                     }
                   }
                 }

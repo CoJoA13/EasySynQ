@@ -46,6 +46,7 @@ from ...problems import ProblemException
 from ..authz import AuthzAuditSink, enforce
 from ..capa import repository as capa_repo
 from ..capa.service import build_capa
+from ..common import listing
 from ..vault import VaultAuditSink, create_document
 from ..vault import repository as vault_repo
 from .queries import governing_register
@@ -282,6 +283,8 @@ async def list_risks(session: AsyncSession, org_id: uuid.UUID) -> list[RiskOppor
                 select(RiskOpportunity)
                 .where(RiskOpportunity.org_id == org_id)
                 .order_by(RiskOpportunity.created_at.desc())
+                # Audit U14 (S-web-2): bound the pre-authz scan window.
+                .limit(listing.REGISTER_SCAN_CAP)
             )
         )
         .scalars()

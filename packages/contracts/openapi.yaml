@@ -3105,6 +3105,11 @@ paths:
                 type: object
                 properties:
                   data: { type: array, items: { $ref: "#/components/schemas/Audit" } }
+                  truncated:
+                    type: boolean
+                    description: >-
+                      True when the pre-authorization scan window hit its cap (newest-first,
+                      2000) — older rows exist but were not scanned.
                 required: [data]
         "403": { $ref: "#/components/responses/ProblemResponse" }
     post:
@@ -4608,6 +4613,11 @@ paths:
                 type: object
                 properties:
                   data: { type: array, items: { $ref: "#/components/schemas/Capa" } }
+                  truncated:
+                    type: boolean
+                    description: >-
+                      True when the pre-authorization scan window hit its cap (newest-first,
+                      2000) — older rows exist but were not scanned.
   /capas/{capa_id}:
     get:
       tags: [capa]
@@ -5303,6 +5313,11 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/ImprovementInitiative" }
+                  truncated:
+                    type: boolean
+                    description: >-
+                      True when the pre-authorization scan window hit its cap (newest-first,
+                      2000) — older rows exist but were not scanned.
         "403": { $ref: "#/components/responses/ProblemResponse" }
   /improvement-initiatives/{initiative_id}:
     get:
@@ -5572,6 +5587,11 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/RiskOpportunity" }
+                  truncated:
+                    type: boolean
+                    description: >-
+                      True when the pre-authorization scan window hit its cap (newest-first,
+                      2000) — older rows exist but were not scanned.
   /risks/register:
     get:
       tags: [risk]

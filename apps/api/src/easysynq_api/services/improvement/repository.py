@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db.models._improvement_enums import ImprovementSource, ImprovementStage
 from ...db.models.improvement_initiative import ImprovementInitiative
 from ...db.models.improvement_initiative_stage_event import ImprovementInitiativeStageEvent
+from ..common import listing
 
 
 async def get_initiative(
@@ -77,7 +78,8 @@ async def list_initiatives(
         stmt = stmt.where(ImprovementInitiative.owner_user_id == owner_user_id)
     if process_id is not None:
         stmt = stmt.where(ImprovementInitiative.process_id == process_id)
-    stmt = stmt.order_by(ImprovementInitiative.created_at.desc())
+    # Audit U14 (S-web-2): bound the pre-authz scan window — newest first, honest cap.
+    stmt = stmt.order_by(ImprovementInitiative.created_at.desc()).limit(listing.REGISTER_SCAN_CAP)
     return (await session.execute(stmt)).scalars().all()
 
 
