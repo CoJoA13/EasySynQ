@@ -1,19 +1,32 @@
 # Single source of pinned container images (doc 03 §15; Compose references these, while `keycloak`
 # is the base for infra/compose/keycloak/Dockerfile's optimized production image).
 #
-# NOTE: digests must be resolved on a host with Docker via `just images-update`
-# (docker buildx imagetools inspect / docker manifest inspect). Until then these
-# are tag-pinned; PRODUCTION RELEASES MUST PIN BY @sha256 DIGEST, never a floating tag.
-# No `:latest` anywhere — every tag is an explicit version (Phase-1 tech-debt: I-2).
+# DIGEST-PINNED (release ceremony, 2026-08-28). Each ref carries the immutable @sha256 the
+# registry served at pin time, so a rebuild fetches the same bytes even if the tag is re-pointed.
+# Every digest here was cross-checked against the digest the image was actually pulled by locally
+# (`docker image inspect --format '{{index .RepoDigests 0}}'`) — an independent source from the
+# registry query that produced it.
+#
+# Re-resolve with `just images-update` (needs Docker + network; the recipe retries and fails loudly
+# rather than emitting a partial list). `just release-check` and CI's tag-gated release-gate job
+# refuse a floating non-dev tag. No `:latest` anywhere (Phase-1 tech-debt: I-2).
+#
+# ⚠ The tag BEFORE the digest is load-bearing: scripts/airgap-bundle.sh saves each image under it,
+# because `docker pull name:tag@sha256:…` lands the image UNTAGGED and Compose asks for the tag.
 #
 # service   image:tag                                   # @sha256:... (pin before release)
-postgres    postgres:16
-minio       minio/minio:RELEASE.2024-09-13T20-26-02Z
-mc          minio/mc:RELEASE.2025-08-13T08-35-41Z         # minio-init one-shot (was :latest)
-redis       redis:7
-keycloak    quay.io/keycloak/keycloak:26.7
-caddy       caddy:2
-renderer    gotenberg/gotenberg:8.34
-tika        apache/tika:3.3.1.0-full
-mailpit     axllent/mailpit:v1.30.5                       # dev profile only (was :latest)
+postgres    postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+minio    minio/minio:RELEASE.2024-09-13T20-26-02Z@sha256:cd04ea408e185cb50076ea1c3988d444119b19aaae15aab45387ccf14b2a2f86
+# mc: minio-init one-shot (was :latest)
+mc    minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+redis    redis:7@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7
+keycloak    quay.io/keycloak/keycloak:26.7@sha256:9d1f1b2b7261ff53c66cb1092dfcdc34a5fb77e81f9e6a6e75b8b6a795de8067
+caddy    caddy:2@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d
+renderer    gotenberg/gotenberg:8.34@sha256:67097317623a503ba2a6a7e9ae8db6929a1f7e1bbd88077bacf2d325fbdab923
+tika    apache/tika:3.3.1.0-full@sha256:d8e6ed96260ad89307a93195a1b856102987a818ac648502f8efbaf313d32470
+# mailpit: dev profile only (was :latest)
+# NOT digest-pinned: this dev-profile-only image is excluded from the release guard,
+# and its digest could not be independently verified (it is never pulled locally, and
+# Docker Hub was rate-limiting). Pin it during a ceremony that can verify it.
+mailpit     axllent/mailpit:v1.30.5
 # opensearch — intentionally OMITTED in MVP (R34); v1 drop-in via the Indexer interface.
