@@ -13,6 +13,7 @@ before anything else ran.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -63,7 +64,11 @@ def test_api_image_runs_unprivileged_and_owns_its_volume_mount_points() -> None:
     ):
         assert path in dockerfile, f"{path} is a written volume mount and must be pre-owned"
     assert "install -d -o easysynq -g easysynq" in dockerfile
-    assert "chown -R easysynq:easysynq /app" in dockerfile, "the venv must be writable-by-owner"
+    # NON-recursive on purpose. Only /app itself must be writable (Celery Beat's schedule file
+    # lands in the CWD); recursing rewrote the 159 MB venv into a duplicated layer, and these
+    # images ship in the air-gap bundle. UV_NO_SYNC means nothing writes into the venv at runtime.
+    assert "chown easysynq:easysynq /app" in dockerfile
+    assert "chown -R easysynq:easysynq /app" not in dockerfile
 
 
 def test_web_image_runs_unprivileged() -> None:
@@ -214,6 +219,26 @@ def test_seed_personas_fails_loudly_when_a_password_cannot_be_set() -> None:
     assert '--new-password "Demo-Password-1" >/dev/null 2>&1 || true' not in script
 
 
+def test_the_minio_wait_budget_is_reachable_from_env() -> None:
+    """A hard bound an operator cannot raise turns a slow-but-healthy MinIO into a failed install.
+
+    The service declares an explicit ``environment:`` map and no ``env_file``, so nothing reaches
+    it from .env unless it is listed there.
+    """
+    compose = _read("infra/compose/compose.yml")
+    assert "MINIO_WAIT_SECONDS: ${MINIO_WAIT_SECONDS:-120}" in compose
+
+
+def test_the_mailpit_hint_is_an_uncommentable_assignment() -> None:
+    """Prose in a .env file is silently ignored by Compose.
+
+    "Uncomment the mailpit line" has to point at something that becomes a real assignment, or a
+    developer follows it and dev mail stays suppressed with no signal.
+    """
+    env_example = _read(".env.example")
+    assert "\n#SMTP_HOST=mailpit" in env_example
+
+
 # --- U40: the CLI docstring must describe the CLI, not the host wrapper -------------------------
 
 
@@ -223,3 +248,85 @@ def test_grant_role_docstring_names_the_flag_its_parser_requires() -> None:
     assert 'parser.add_argument("--subject", required=True' in module
     assert "python -m easysynq_api.cli.grant_role --subject" in module
     assert "./scripts/easysynq grant-role" in module
+
+
+# --- an opt-in RUNTIME proof (every other pin above is a source string) -------------------------
+
+
+@pytest.mark.skipif(
+    os.getenv("EASYSYNQ_IMAGE_PROOF") != "1",
+    reason="builds the api image; opt in with EASYSYNQ_IMAGE_PROOF=1 (the release-gate precedent)",
+)
+def test_the_built_api_image_is_unprivileged_and_starts_offline() -> None:
+    """The source pins above cannot see a base-image change that reintroduces root.
+
+    This builds the real image and exercises the two properties that actually matter: it runs as
+    uid 10001, and `uv run` — the entry path for migrate/api/worker/beat — works with NO network.
+    """
+    docker = shutil.which("docker")
+    assert docker is not None, "EASYSYNQ_IMAGE_PROOF=1 needs Docker"
+    tag = "easysynq-image-proof/api:test"
+    build = subprocess.run(  # noqa: S603 - resolved binary, repository Dockerfile
+        [docker, "build", "-q", "-f", "apps/api/Dockerfile", "-t", tag, "."],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    try:
+        uid = subprocess.run(  # noqa: S603 - resolved binary, image built above
+            [docker, "run", "--rm", tag, "id", "-u"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert uid.stdout.strip() == "10001"
+
+        offline = subprocess.run(  # noqa: S603 - resolved binary, image built above
+            [docker, "run", "--rm", "--network", "none", tag, "uv", "run", "alembic", "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert offline.returncode == 0, (
+            f"uv run needs the network at container start — an air-gapped stack dies on "
+            f"`migrate` before anything else runs:\n{offline.stderr}"
+        )
+    finally:
+        subprocess.run(  # noqa: S603 - resolved binary, image built above
+            [docker, "rmi", "-f", tag], capture_output=True, check=False
+        )
+
+
+# --- the non-root worker must not silently shrink an import baseline --------------------------
+
+
+def test_an_unreadable_source_directory_is_recorded_not_dropped(tmp_path: Path) -> None:
+    """``os.walk`` ignores a directory it cannot list, dropping its WHOLE subtree silently.
+
+    That became reachable when the worker stopped running as root (U33): it reads the import mount
+    as uid 10001, so a directory owned by someone else with mode 0750 is invisible. Without this,
+    a run completes, reports a smaller file count, and hands back an incomplete controlled-document
+    baseline with no error anywhere — the worst possible failure mode for a QMS import.
+    """
+    from easysynq_api.services.ingestion.source import FilesystemSourceProvider
+
+    root = tmp_path / "src"
+    (root / "readable").mkdir(parents=True)
+    (root / "readable" / "a.txt").write_text("a")
+    blocked = root / "blocked"
+    blocked.mkdir()
+    (blocked / "hidden.txt").write_text("secret")
+    blocked.chmod(0o000)
+    try:
+        metas = [m for chunk in FilesystemSourceProvider(root).walk(batch_size=10) for m in chunk]
+    finally:
+        blocked.chmod(0o755)  # so tmp_path cleanup can remove it
+
+    assert "readable/a.txt" in {m.rel_path for m in metas}
+    unreadable = [m for m in metas if m.error and m.error.startswith("unreadable_dir:")]
+    assert unreadable, (
+        f"the unreadable directory was silently dropped: {[m.rel_path for m in metas]}"
+    )
+    assert unreadable[0].rel_path == "blocked"

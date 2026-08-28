@@ -84,6 +84,9 @@ services:
       AUDIT_SINK_READ_SECRET_KEY: ${AUDIT_SINK_READ_SECRET_KEY:-audit-sink-read-secret-change-me}
       WORM_RETENTION: ${WORM_RETENTION:-30d}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+      # How long to wait for MinIO before failing this one-shot. Reachable from .env because a
+      # large miniodata on a slow disk can legitimately exceed the default (audit U43).
+      MINIO_WAIT_SECONDS: ${MINIO_WAIT_SECONDS:-120}
     volumes:
       - ./minio:/init:ro,z
     networks: [internal]

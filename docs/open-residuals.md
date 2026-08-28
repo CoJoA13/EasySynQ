@@ -254,6 +254,29 @@ under-shoot the eventual basis-derived horizon. In v1 nothing writes `retention_
 capture, so the gap is vacuous today; the basis-fill slice must inherit the re-extension duty or
 the storage floor silently stays at the capture-derived horizon.
 
+## RES-SECRETS-VOLUME-SILENT-EPHEMERAL-KEY
+
+Status: OPEN
+Owner: Repository owner
+Source: U33 non-root containers, 2026-08-28 (`services/vault/verify_token.py`,
+`services/audit/checkpoint.py`, `readiness.py`)
+Reason: When the `secrets` volume is not writable, both signing-key loaders catch `OSError` and
+fall back to an EPHEMERAL in-memory key with only a `logger.warning`. Nothing fails. Every printed
+controlled-copy verify QR then reads UNKNOWN, evidence-pack share minting fails closed via
+`signing_key_is_persisted()`, and every off-host checkpoint already anchored under the previous key
+becomes unverifiable (R13/D-8). `/readyz` probes PostgreSQL, Redis, MinIO, Keycloak and Alembic —
+not the mirror or secrets volumes — so `easysynq upgrade`'s health gate reports green while both
+keys are broken. Pre-existing behaviour, but newly reachable: the api image now runs as uid 10001,
+and a volume created by an earlier root-running build stays root-owned across an upgrade.
+Closure contract: Make the condition observable before it is load-bearing — probe the mirror and
+secrets volumes for writability in the readiness surface (or refuse to start the worker), so an
+upgrade cannot report success while the signing keys are ephemeral. Decide separately whether an
+ephemeral fallback should remain legal outside development at all.
+Last reviewed: 2026-08-28
+
+The install runbook documents the one-time chown and tells the operator to check the worker log for
+`key path not writable`. That is a workaround for an operator who reads it, not a gate.
+
 ## RES-AIRGAP-BUILT-IMAGE-PINNING
 
 Status: OPEN

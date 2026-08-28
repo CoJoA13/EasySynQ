@@ -50,7 +50,11 @@ RUN uv sync --locked --no-dev
 # image path behind it, so mirror/secrets/backups come up writable on a new install without any
 # operator step. Pre-creating the three mount points here is what makes that work — an unseeded
 # volume would be created root-owned and the worker could not write it.
-# ⚠ Volumes that ALREADY exist keep their old root ownership; see docs/runbooks/upgrade.md.
+# The chown of /app is NOT recursive: only the directory itself must be writable (Celery Beat's
+# schedule file lands in the CWD). Recursing rewrote the 159 MB venv into a duplicated 171 MB
+# layer, and UV_NO_SYNC below means nothing writes into the venv at runtime anyway.
+# ⚠ Volumes that ALREADY exist keep their old root ownership; the chown is in
+# docs/runbooks/install-online.md ("Container users and SELinux").
 ARG APP_UID=10001
 ARG APP_GID=10001
 RUN groupadd --gid ${APP_GID} easysynq \
@@ -59,7 +63,7 @@ RUN groupadd --gid ${APP_GID} easysynq \
         /var/lib/easysynq/qms-mirror \
         /var/lib/easysynq/backups \
         /run/secrets \
-    && chown -R easysynq:easysynq /app
+    && chown easysynq:easysynq /app
 # ⚠ UV_NO_SYNC is load-bearing, not tidiness. `uv run` SYNCS the environment on every invocation,
 # and it resolves the DEV dependency group the image deliberately did not install (--no-dev) — so
 # every `uv run` (the api CMD, `migrate`'s alembic, the worker's celery, every `easysynq` CLI call)

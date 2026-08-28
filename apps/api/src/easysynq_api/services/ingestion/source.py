@@ -56,12 +56,39 @@ class FilesystemSourceProvider:
 
     def walk(self, *, batch_size: int) -> Iterator[list[FileMeta]]:
         batch: list[FileMeta] = []
+        unreadable: list[FileMeta] = []
+
         # followlinks=False: never descend a directory symlink (the loop trap). Deterministic order
-        # so
-        # a resumed scan re-walks identically. onerror is swallowed — an unreadable dir surfaces via
-        # its files being absent, but every *file* we do reach gets a row (nothing silently
-        # dropped).
-        for dirpath, dirnames, filenames in os.walk(self._root, followlinks=False):
+        # so a resumed scan re-walks identically.
+        #
+        # onerror is NOT swallowed. A directory the walker cannot list drops its WHOLE subtree, and
+        # os.walk's default is to ignore that silently — so the run would complete, report a
+        # smaller file count, and hand back an incomplete controlled-document baseline with no
+        # error anywhere. That became reachable when the worker stopped running as root (audit
+        # U33): it now reads this mount as uid 10001 and a 0750 directory owned by someone else is
+        # simply invisible. Record the directory as an excluded row instead; service.py turns any
+        # ``FileMeta.error`` into ``ScanFlags("excluded", <reason>)``, so it surfaces in the run.
+        def _on_error(exc: OSError) -> None:
+            failed = Path(exc.filename) if exc.filename else self._root
+            try:
+                rel = str(failed.relative_to(self._root))
+            except ValueError:
+                rel = str(failed)
+            unreadable.append(
+                FileMeta(
+                    rel,
+                    failed.name,
+                    None,
+                    0,
+                    None,
+                    None,
+                    error=f"unreadable_dir:{exc.strerror or exc}",
+                )
+            )
+
+        for dirpath, dirnames, filenames in os.walk(
+            self._root, followlinks=False, onerror=_on_error
+        ):
             dirnames.sort()
             for name in sorted(filenames):
                 abs_path = Path(dirpath) / name
@@ -69,6 +96,11 @@ class FilesystemSourceProvider:
                 if len(batch) >= batch_size:
                     yield batch
                     batch = []
+        for meta in unreadable:
+            batch.append(meta)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
         if batch:
             yield batch
 

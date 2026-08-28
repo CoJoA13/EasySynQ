@@ -110,15 +110,32 @@ created named volume with the ownership of the image directory behind it, so `mi
 and `backups` come up writable.
 
 ⚠ **Volumes that already exist keep their old ownership.** If you are starting a stack whose
-volumes were created by an earlier root-running build, the worker cannot write them and will fail.
-Either recreate them (`docker compose … down -v`, which **destroys** their contents) or chown them
-once:
+volumes were created by an earlier root-running build, chown them once — **never** `docker compose
+down -v`, which removes *every* volume in the project including `pgdata` (the database and its
+audit hash chain) and `miniodata` (the WORM object store):
 
 ```bash
+TAG=$(bash scripts/app-images.sh --tag)
 for v in easysynq_mirror easysynq_secrets easysynq_backup; do
-  docker run --rm -v "$v":/v alpine chown -R 10001:10001 /v
+  docker run --rm --user 0 -v "$v":/v "easysynq/api:$TAG" chown -R 10001:10001 /v
 done
 ```
+
+The image is the one the stack already runs, so this works on an air-gapped host too; `--user 0`
+overrides the image's unprivileged default just for the chown.
+
+Only `easysynq_mirror` is regenerable (`docker volume rm easysynq_mirror` is safe — the next
+reconcile rebuilds it). The other two must be **chowned, never recreated**:
+
+| Volume | Contents | If deleted |
+| --- | --- | --- |
+| `easysynq_secrets` | the verify-token and audit-checkpoint signing keys | every printed controlled-copy QR stops verifying, outstanding evidence-pack share links break, and every off-host checkpoint already anchored becomes unverifiable (R13/D-8) |
+| `easysynq_backup` | the durable backup archives | they are gone |
+
+⚠ A wrong-ownership `secrets` volume does **not** fail loudly: both key loaders fall back to an
+ephemeral in-memory key with only a log warning, and the readiness gate does not probe the volume,
+so an upgrade can report green while both signing keys are broken. Check the worker's log for
+`key path not writable` after the first start.
 
 **SELinux.** On a host whose container runtime applies SELinux labels (podman, or docker-ce built
 with SELinux support), the Compose files already carry `,z` on every bind-mounted **configuration**
@@ -133,6 +150,16 @@ sudo restorecon -Rv /srv/easysynq/import
 
 Skip this entirely if `docker info` does not list `selinux` under *Security Options* — the label is
 then a no-op and the mount works as-is.
+
+**The import tree must also be readable by uid 10001.** This is ordinary file permissions, separate
+from SELinux, and it is new: the worker used to read that mount as root. A directory it cannot
+traverse is skipped, so the import reports fewer files rather than an error. Give the tree
+world-read-and-traverse (`chmod -R o+rX /srv/easysynq/import`) or add uid 10001 to a group that
+can read it, then confirm before the first import:
+
+```bash
+docker compose … exec -T worker ls /srv/import/source
+```
 
 ## Verify it works (release-time security check)
 

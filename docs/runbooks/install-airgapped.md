@@ -83,6 +83,30 @@ since it has nothing to compare against.
    by `scripts/app-images.sh --tag`). The production overlay deliberately fails Compose
    interpolation when one is missing.
 
+## Container users
+
+The application containers run unprivileged — the api image as `easysynq` (uid/gid **10001**), the
+web image as `node` (uid **1000**). A fresh install needs no action: Docker seeds a newly created
+named volume with the ownership of the image directory behind it.
+
+Two things are specific to an air-gapped host:
+
+- If you are reusing volumes created by an earlier root-running build, chown them with an image the
+  bundle actually contains — `alpine` is not in it:
+
+  ```bash
+  TAG=$(bash scripts/app-images.sh --tag)
+  for v in easysynq_mirror easysynq_secrets easysynq_backup; do
+    docker run --rm --user 0 -v "$v":/v "easysynq/api:$TAG" chown -R 10001:10001 /v
+  done
+  ```
+
+  Never `docker compose down -v` — it removes every volume in the project, including `pgdata` and
+  `miniodata`. See the volume table in [install-online.md](install-online.md#container-users-and-selinux).
+
+- `IMPORT_SOURCE_PATH` must be readable and traversable by uid 10001. A directory the worker cannot
+  enter is skipped, so the import reports fewer files rather than an error.
+
 ## Assumed network capabilities
 No outbound HTTP. The browser reaches Caddy on 443 (app/Keycloak) and 9443 (presigned S3); everything
 else is the internal Docker network. If your org uses a private registry or internal NTP/DNS,

@@ -521,7 +521,7 @@ def test_web_image_uses_lockfile_and_excludes_host_artifacts() -> None:
     dockerfile = _read("apps/web/Dockerfile")
     dockerignore = _read("apps/web/.dockerignore").splitlines()
 
-    assert "COPY package.json package-lock.json ./" in dockerfile
+    assert "COPY --chown=node:node package.json package-lock.json ./" in dockerfile
     assert "RUN npm ci" in dockerfile
     assert "npm ci ||" not in dockerfile
     assert {"node_modules", "dist", "coverage", ".vite"}.issubset(dockerignore)
@@ -534,14 +534,15 @@ def test_web_image_excludes_browser_harness_and_removes_playwright_from_runtime(
     # These exact app-root patterns are interpreted by Docker before the broad `COPY . .`.
     assert BROWSER_ONLY_CONTEXT_ROOTS.issubset(dockerignore)
     _assert_no_protected_dockerignore_reinclusions(dockerignore, BROWSER_ONLY_CONTEXT_ROOTS)
-    assert "COPY . ." in dockerfile
+    broad_copy = "COPY --chown=node:node . ."
+    assert broad_copy in dockerfile
 
     install_build_cleanup = """RUN npm ci \\
     && npm run build \\
     && npm uninstall --no-save @playwright/test \\
     && npm cache clean --force"""
     assert install_build_cleanup in dockerfile
-    assert dockerfile.index("COPY . .") < dockerfile.index(install_build_cleanup)
+    assert dockerfile.index(broad_copy) < dockerfile.index(install_build_cleanup)
     assert dockerfile.count("RUN npm ci") == 1
     assert (
         'CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]' in dockerfile
@@ -1882,19 +1883,21 @@ def test_dev_overlay_relabels_only_repository_bind_mounts_for_selinux() -> None:
     # in production it points at the customer's file store and must stay untouched.
     for sizing in ("compose.s.yml", "compose.m.yml"):
         production = render(sizing, "compose.production.yml", production=True)
-        labelled: dict[str, str | None] = {}
-        for service in production["services"].values():
+        # Keyed by (service, target): keying by target alone would let two services binding the
+        # same target with different labels collapse into one entry and pass.
+        labelled: dict[tuple[str, str], str | None] = {}
+        for service_name, service in production["services"].items():
             for volume in service.get("volumes", []):
                 if volume["type"] == "bind":
-                    labelled[volume["target"]] = volume["bind"].get("selinux")
+                    labelled[(service_name, volume["target"])] = volume["bind"].get("selinux")
         assert labelled == {
-            "/init/keycloak-init.sh": "z",
-            "/seed/easysynq-realm.json": "z",
-            "/init": "z",
-            "/etc/caddy/Caddyfile": "z",
-            "/etc/caddy/Caddyfile.base": "z",
+            ("keycloak-init", "/init/keycloak-init.sh"): "z",
+            ("keycloak-init", "/seed/easysynq-realm.json"): "z",
+            ("minio-init", "/init"): "z",
+            ("proxy", "/etc/caddy/Caddyfile"): "z",
+            ("proxy", "/etc/caddy/Caddyfile.base"): "z",
             # The organization's document tree — never relabelled by us (audit U35).
-            "/srv/import/source": None,
+            ("worker", "/srv/import/source"): None,
         }, f"unexpected production bind-mount labelling: {labelled}"
 
 
