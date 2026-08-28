@@ -4,6 +4,7 @@ import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
 import { TONE_GLYPH } from "../../lib/status";
+import { meFixture, ncrListFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { NcrsPage } from "./NcrsPage";
@@ -179,4 +180,28 @@ test("gives register headers a column scope (a11y)", async () => {
   renderWithProviders(<NcrsPage />, { route: "/capa/ncrs" });
   const header = await screen.findByRole("columnheader", { name: "Identifier" });
   expect(header).toHaveAttribute("scope", "col");
+});
+
+test("[U20] renders the disposition date on the ORG calendar day, not the UTC day", async () => {
+  // The registers used `new Date(iso).toISOString().slice(0, 10)`, which reports the UTC day.
+  // 23:30Z on 2026-06-04 is already 2026-06-05 in Sydney — the old idiom filed it a day early.
+  // The default /me fixture is UTC, which makes both implementations agree, so this consumer-level
+  // pin needs a non-UTC org (otherwise every converted call site can be reverted silently).
+  grant(["ncr.record_correction"]);
+  server.use(
+    http.get("/api/v1/me", () =>
+      HttpResponse.json({ ...meFixture, org_timezone: "Australia/Sydney" }),
+    ),
+    http.get("/api/v1/ncrs", () =>
+      HttpResponse.json({
+        data: ncrListFixture.data.map((n) =>
+          n.identifier === "NCR-000049" ? { ...n, disposed_at: "2026-06-04T23:30:00+00:00" } : n,
+        ),
+      }),
+    ),
+  );
+  renderWithProviders(<NcrsPage />, { route: "/capa/ncrs" });
+  const row = await screen.findByRole("row", { name: /NCR-000049/ });
+  await waitFor(() => expect(within(row).getByText(/2026-06-05/)).toBeInTheDocument());
+  expect(within(row).queryByText(/2026-06-04/)).toBeNull();
 });

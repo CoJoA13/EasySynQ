@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
@@ -160,6 +160,37 @@ describe("Target completion / overdue", () => {
     // The TextInput for setting the date and a Save button must appear
     expect(screen.getByLabelText("Set target date")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save/ })).toBeInTheDocument();
+  });
+
+  it("[U18] surfaces a failed target-date save instead of swallowing it", async () => {
+    // The PATCH 409s on a terminal CAPA and 403s without capa.update, and the button had no
+    // error path — the old date simply stayed on screen with nothing said.
+    server.use(
+      http.get("/api/v1/me/permissions", () =>
+        HttpResponse.json({
+          scope: { level: "PROCESS", selector: null },
+          permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
+        }),
+      ),
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({ ...capaDetailFixture, overdue: false, target_completion_date: null }),
+      ),
+      http.patch("/api/v1/capas/:id", () =>
+        HttpResponse.json({ code: "conflict" }, { status: 409 }),
+      ),
+    );
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+    await screen.findByLabelText("Set target date");
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+    // Scoped to the DIALOG on purpose: the Save button lives inside a Drawer (scrim, scroll
+    // lock, focus trap, portal), so a banner rendered in the app shell would be invisible and
+    // unreachable to the operator. Asserting on a bare sibling outlet would pass either way.
+    const drawer = await screen.findByRole("dialog");
+    expect(
+      within(drawer).getByText(/closed — its target date can no longer be changed/i),
+    ).toBeInTheDocument();
   });
 
   it("does NOT show the date edit field without capa.update", async () => {

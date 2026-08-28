@@ -68,4 +68,57 @@ describe("DistributionEditor", () => {
     expect(screen.queryByRole("radio", { name: /process/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: /folder/i })).not.toBeInTheDocument();
   });
+
+  test("[U19] a failed entry removal is surfaced, not swallowed", async () => {
+    server.use(
+      http.delete("/api/v1/documents/:id/distribution/:entryId", () =>
+        HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
+      ),
+    );
+    renderWithProviders(<DistributionEditor documentId={DOC} payload={distributionFixture} />);
+    const row = (await screen.findByText("Mara Quality")).closest("tr")!;
+    await userEvent.click(within(row).getByRole("button", { name: /remove/i }));
+    // The delete had no onError: the row stayed on screen with nothing said.
+    expect(
+      await screen.findByText(/do not have permission to change this distribution/i),
+    ).toBeInTheDocument();
+  });
+
+  test("[U19] a failed ack-required toggle is surfaced, not swallowed", async () => {
+    server.use(
+      http.post("/api/v1/documents/:id/distribution", () =>
+        HttpResponse.json({ code: "permission_denied" }, { status: 403 }),
+      ),
+    );
+    renderWithProviders(<DistributionEditor documentId={DOC} payload={distributionFixture} />);
+    await userEvent.click(screen.getByLabelText(/require acknowledgement/i));
+    expect(
+      await screen.findByText(/do not have permission to change this distribution/i),
+    ).toBeInTheDocument();
+  });
+
+  test("[U19] a pending removal only loads ITS OWN row's button", async () => {
+    // `loading={del.isPending}` put EVERY row's Remove into the loading state, so the operator
+    // could not tell which recipient was being removed.
+    server.use(
+      http.delete("/api/v1/documents/:id/distribution/:entryId", async () => {
+        await new Promise((r) => setTimeout(r, 50));
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const twoEntries = {
+      ...distributionFixture,
+      entries: [
+        distributionFixture.entries[0]!,
+        { ...distributionFixture.entries[0]!, id: "de000002-0002-0002-0002-000000000002" },
+      ],
+    };
+    renderWithProviders(<DistributionEditor documentId={DOC} payload={twoEntries} />);
+    const rows = await screen.findAllByRole("row");
+    const bodyRows = rows.filter((r) => within(r).queryByRole("button", { name: /remove/i }));
+    expect(bodyRows).toHaveLength(2);
+    await userEvent.click(within(bodyRows[0]!).getByRole("button", { name: /remove/i }));
+    const second = within(bodyRows[1]!).getByRole("button", { name: /remove/i });
+    expect(second).not.toHaveAttribute("data-loading", "true");
+  });
 });

@@ -42,7 +42,9 @@ export function renderWithProviders(
         <QueryClientProvider client={queryClient}>
           <AuthContext.Provider value={auth}>
             <MutationFeedbackProvider>
-              <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
+              <MemoryRouter initialEntries={[route]} useTransitions={false}>
+                {children}
+              </MemoryRouter>
             </MutationFeedbackProvider>
           </AuthContext.Provider>
         </QueryClientProvider>

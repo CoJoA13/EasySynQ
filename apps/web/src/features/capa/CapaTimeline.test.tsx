@@ -1,32 +1,42 @@
-import { render, screen } from "@testing-library/react";
-import { MantineProvider } from "@mantine/core";
+import { screen } from "@testing-library/react";
 import { expect, test } from "vitest";
-import { theme } from "../../theme/mantine";
 import type { CapaStage } from "../../lib/types";
 import { renderWithProviders } from "../../test/render";
 import { CapaTimeline } from "./CapaTimeline";
 
-const directory = [
-  { id: "bbbb1111-1111-1111-1111-111111111111", display_name: "Mara Quality" },
-];
+const directory = [{ id: "bbbb1111-1111-1111-1111-111111111111", display_name: "Mara Quality" }];
 
+// U20: the timeline now renders dates in the ORG timezone (useOrgDate → useMe), so it needs the
+// app providers rather than a bare MantineProvider.
 function wrap(stages: CapaStage[], cycleMarker = 0) {
-  return render(
-    <MantineProvider theme={theme}>
-      <CapaTimeline
-        stages={stages}
-        directory={directory}
-        capaId="ca1"
-        cycleMarker={cycleMarker}
-        closeState="RootCause"
-      />
-    </MantineProvider>,
+  return renderWithProviders(
+    <CapaTimeline
+      stages={stages}
+      directory={directory}
+      capaId="ca1"
+      cycleMarker={cycleMarker}
+      closeState="RootCause"
+    />,
   );
 }
 
 const baseStages: CapaStage[] = [
-  { id: "s1", stage: "Raised", content_block: { problem: "X" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-20T09:00:00+00:00" },
-  { id: "s2", stage: "Containment", content_block: { correction: "Y" }, cycle_marker: 0, created_by: "bbbb9999-9999-9999-9999-999999999999", created_at: "2026-05-21T09:00:00+00:00" },
+  {
+    id: "s1",
+    stage: "Raised",
+    content_block: { problem: "X" },
+    cycle_marker: 0,
+    created_by: "bbbb1111-1111-1111-1111-111111111111",
+    created_at: "2026-05-20T09:00:00+00:00",
+  },
+  {
+    id: "s2",
+    stage: "Containment",
+    content_block: { correction: "Y" },
+    cycle_marker: 0,
+    created_by: "bbbb9999-9999-9999-9999-999999999999",
+    created_at: "2026-05-21T09:00:00+00:00",
+  },
 ];
 
 test("renders one timeline item per stage with its label + actor", () => {
@@ -44,7 +54,14 @@ test("degrades to the raw id when the actor is not in the directory", () => {
 test("marks the effectiveness loop when a stage has cycle_marker > 0", () => {
   wrap([
     ...baseStages,
-    { id: "s3", stage: "RootCause", content_block: { root_cause: "Z" }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-22T09:00:00+00:00" },
+    {
+      id: "s3",
+      stage: "RootCause",
+      content_block: { root_cause: "Z" },
+      cycle_marker: 1,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-22T09:00:00+00:00",
+    },
   ]);
   expect(screen.getByText(/Cycle 2/)).toBeInTheDocument();
 });
@@ -71,7 +88,13 @@ test("an Implement stage shows its linked records (as labels) + a stage-scoped e
           created_by: "bbbb1111-1111-1111-1111-111111111111",
           created_at: "2026-05-27T09:00:00+00:00",
           evidence_links: [
-            { id: "el1", record_id: "r1", record_identifier: "REC-000041", link_reason: null, created_at: null },
+            {
+              id: "el1",
+              record_id: "r1",
+              record_identifier: "REC-000041",
+              link_reason: null,
+              created_at: null,
+            },
           ],
         },
       ]}
@@ -94,8 +117,32 @@ test("a looped CAPA renders the linker only on the CURRENT cycle's Verify (no du
       cycleMarker={1}
       closeState="Verify"
       stages={[
-        { id: "v0", stage: "Verify", content_block: { decision: "not_effective" }, cycle_marker: 0, created_by: "u", created_at: "2026-05-18T09:00:00+00:00", evidence_links: [{ id: "e0", record_id: "r0", record_identifier: "REC-OLD", link_reason: null, created_at: null }] },
-        { id: "v1", stage: "Verify", content_block: { decision: "effective" }, cycle_marker: 1, created_by: "u", created_at: "2026-05-21T09:00:00+00:00", evidence_links: [] },
+        {
+          id: "v0",
+          stage: "Verify",
+          content_block: { decision: "not_effective" },
+          cycle_marker: 0,
+          created_by: "u",
+          created_at: "2026-05-18T09:00:00+00:00",
+          evidence_links: [
+            {
+              id: "e0",
+              record_id: "r0",
+              record_identifier: "REC-OLD",
+              link_reason: null,
+              created_at: null,
+            },
+          ],
+        },
+        {
+          id: "v1",
+          stage: "Verify",
+          content_block: { decision: "effective" },
+          cycle_marker: 1,
+          created_by: "u",
+          created_at: "2026-05-21T09:00:00+00:00",
+          evidence_links: [],
+        },
       ]}
     />,
   );
@@ -114,8 +161,40 @@ test("a terminal (Closed) CAPA shows linked evidence read-only but offers NO evi
       cycleMarker={0}
       closeState="Closed"
       stages={[
-        { id: "im", stage: "Implement", content_block: {}, cycle_marker: 0, created_by: "u", created_at: "2026-05-27T09:00:00+00:00", evidence_links: [{ id: "e1", record_id: "r1", record_identifier: "REC-000041", link_reason: null, created_at: null }] },
-        { id: "vf", stage: "Verify", content_block: { decision: "effective" }, cycle_marker: 0, created_by: "u", created_at: "2026-05-28T09:00:00+00:00", evidence_links: [{ id: "e2", record_id: "r2", record_identifier: "REC-000042", link_reason: null, created_at: null }] },
+        {
+          id: "im",
+          stage: "Implement",
+          content_block: {},
+          cycle_marker: 0,
+          created_by: "u",
+          created_at: "2026-05-27T09:00:00+00:00",
+          evidence_links: [
+            {
+              id: "e1",
+              record_id: "r1",
+              record_identifier: "REC-000041",
+              link_reason: null,
+              created_at: null,
+            },
+          ],
+        },
+        {
+          id: "vf",
+          stage: "Verify",
+          content_block: { decision: "effective" },
+          cycle_marker: 0,
+          created_by: "u",
+          created_at: "2026-05-28T09:00:00+00:00",
+          evidence_links: [
+            {
+              id: "e2",
+              record_id: "r2",
+              record_identifier: "REC-000042",
+              link_reason: null,
+              created_at: null,
+            },
+          ],
+        },
       ]}
     />,
   );

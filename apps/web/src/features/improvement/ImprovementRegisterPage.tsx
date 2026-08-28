@@ -1,4 +1,5 @@
 import { Anchor, Box, Button, Container, Group, Select, Table, Title } from "@mantine/core";
+import { useOrgDate } from "../../app/shell/useOrgDate";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
@@ -28,11 +29,8 @@ const SOURCES: InitiativeSource[] = ["OFI", "review", "manual"];
 const SORT_KEYS = ["identifier", "title", "source", "owner", "stage", "opened"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
-function formatDate(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 10);
-}
-
 export function ImprovementRegisterPage() {
+  const formatDate = useOrgDate();
   const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } =
     useInitiatives();
   const { data: directory } = useUserDirectory();

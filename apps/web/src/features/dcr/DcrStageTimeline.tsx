@@ -1,4 +1,5 @@
 import { Text, Timeline } from "@mantine/core";
+import { useOrgDate } from "../../app/shell/useOrgDate";
 import type { DcrStageEvent, DirectoryUser } from "../../lib/types";
 import { dcrStateLabel } from "./dcrState";
 
@@ -8,10 +9,6 @@ function actorLabel(actorId: string | null, directory: DirectoryUser[]): string 
   return hit?.display_name ?? `${actorId.slice(0, 8)}…`;
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 10);
-}
-
 export function DcrStageTimeline({
   events,
   directory,
@@ -19,6 +16,7 @@ export function DcrStageTimeline({
   events: DcrStageEvent[];
   directory: DirectoryUser[];
 }) {
+  const formatDate = useOrgDate();
   if (events.length === 0) {
     return (
       <Text size="sm" c="dimmed">

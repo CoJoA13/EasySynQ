@@ -1,4 +1,5 @@
 import { Badge, Group, Text, Timeline } from "@mantine/core";
+import { useOrgDate } from "../../app/shell/useOrgDate";
 import type { CapaCloseState, CapaStage, DirectoryUser } from "../../lib/types";
 import { CLOSE_STATE_LABEL } from "./columns";
 import { ContentBlock } from "./ContentBlock";
@@ -7,10 +8,6 @@ import { EvidenceLinker } from "./EvidenceLinker";
 function actorLabel(userId: string, directory: DirectoryUser[]): string {
   const hit = directory.find((u) => u.id === userId);
   return hit?.display_name ?? `${userId.slice(0, 8)}…`;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 10);
 }
 
 const EVIDENCE_STAGES = new Set(["Implement", "Verify"]);
@@ -29,6 +26,7 @@ export function CapaTimeline({
   cycleMarker: number;
   closeState: CapaCloseState;
 }) {
+  const formatDate = useOrgDate();
   // A terminal CAPA's evidence trail is frozen (closed/rejected) — never offer to append new links to its
   // stages post-closure (the server only org-checks the link, so the client must guard the affordance).
   const terminal = TERMINAL_STATES.has(closeState);

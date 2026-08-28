@@ -39,13 +39,45 @@ export function DistributionEditor({
     const u = new Map((directory.data ?? []).map((d) => [d.id, d.display_name ?? d.id] as const));
     const r = new Map((roles.data ?? []).map((x) => [x.id, x.name] as const));
     return (e: DistributionEntry) =>
-      e.target_type === "user" ? (u.get(e.target_id) ?? e.target_id) : (r.get(e.target_id) ?? e.target_id);
+      e.target_type === "user"
+        ? (u.get(e.target_id) ?? e.target_id)
+        : (r.get(e.target_id) ?? e.target_id);
   }, [directory.data, roles.data]);
 
   const options =
     kind === "user"
       ? (directory.data ?? []).map((d) => ({ value: d.id, label: d.display_name ?? d.id }))
       : (roles.data ?? []).map((r) => ({ value: r.id, label: r.name }));
+
+  // U19: neither the per-entry delete nor the ack-required switch had an error path — a 403
+  // or a 409 left the row on screen (or the switch flipped back) with nothing said. Both now
+  // surface through the same inline Alert the add path already uses.
+  function removeEntry(entry: DistributionEntry) {
+    setError(null);
+    del.mutate(entry.id, {
+      onError: (e) =>
+        setError(
+          e instanceof ApiError && e.status === 403
+            ? "You do not have permission to change this distribution."
+            : `Could not remove ${nameFor(entry)}.`,
+        ),
+    });
+  }
+
+  function setAckRequired(checked: boolean) {
+    setError(null);
+    update.mutate(
+      { acknowledgement_required: checked },
+      {
+        onError: (e) =>
+          setError(
+            e instanceof ApiError && e.status === 403
+              ? "You do not have permission to change this distribution."
+              : "Could not change the acknowledgement requirement.",
+          ),
+      },
+    );
+  }
 
   async function add() {
     setError(null);
@@ -55,8 +87,10 @@ export function DistributionEditor({
       setAdding(false);
       setTargetId(null);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) setError("That recipient is already on the list.");
-      else if (e instanceof ApiError && e.status === 404) setError("That recipient no longer exists.");
+      if (e instanceof ApiError && e.status === 409)
+        setError("That recipient is already on the list.");
+      else if (e instanceof ApiError && e.status === 404)
+        setError("That recipient no longer exists.");
       else setError(e instanceof Error ? e.message : "Could not add the recipient.");
     }
   }
@@ -68,7 +102,7 @@ export function DistributionEditor({
         <Switch
           label="Require acknowledgement of this document"
           checked={payload.acknowledgement_required}
-          onChange={(ev) => update.mutate({ acknowledgement_required: ev.currentTarget.checked })}
+          onChange={(ev) => setAckRequired(ev.currentTarget.checked)}
         />
         {payload.entries.length === 0 ? (
           <Text size="sm" c="dimmed">
@@ -96,8 +130,8 @@ export function DistributionEditor({
                       color="red"
                       size="xs"
                       aria-label={`Remove ${nameFor(e)}`}
-                      onClick={() => del.mutate(e.id)}
-                      loading={del.isPending}
+                      onClick={() => removeEntry(e)}
+                      loading={del.isPending && del.variables === e.id}
                     >
                       Remove
                     </Button>
@@ -114,7 +148,12 @@ export function DistributionEditor({
         )}
         {!adding ? (
           <Group>
-            <Button variant="light" size="xs" aria-label="Add recipient" onClick={() => setAdding(true)}>
+            <Button
+              variant="light"
+              size="xs"
+              aria-label="Add recipient"
+              onClick={() => setAdding(true)}
+            >
               Add recipient
             </Button>
           </Group>
@@ -141,7 +180,12 @@ export function DistributionEditor({
               searchable
             />
             <Group>
-              <Button size="xs" onClick={() => void add()} loading={update.isPending} disabled={!targetId}>
+              <Button
+                size="xs"
+                onClick={() => void add()}
+                loading={update.isPending}
+                disabled={!targetId}
+              >
                 Add
               </Button>
               <Button
