@@ -8,11 +8,16 @@ set -eu
 # forever. Fail loudly instead, and surface mc's own error so the cause is in the logs (audit U43).
 echo "minio-init: waiting for MinIO..."
 MINIO_WAIT_SECONDS="${MINIO_WAIT_SECONDS:-120}"
-deadline=$(( $(date +%s) + MINIO_WAIT_SECONDS ))
+started=$(date +%s)
+deadline=$(( started + MINIO_WAIT_SECONDS ))
 until mc ls local >/dev/null 2>&1; do
+	# The deadline is checked BETWEEN attempts, so a slow DNS/connect timeout inside `mc` can
+	# overshoot it. Report the real elapsed time rather than the budget, or the operator reads a
+	# number that does not match what they watched.
 	if [ "$(date +%s)" -ge "$deadline" ]; then
-		echo "minio-init: MinIO not reachable after ${MINIO_WAIT_SECONDS}s. Last error:" >&2
-		mc ls local >&2 2>&1 || true
+		echo "minio-init: MinIO not reachable after $(( $(date +%s) - started ))s" \
+			"(budget ${MINIO_WAIT_SECONDS}s). Last error:" >&2
+		mc ls local >&2 || true
 		echo "minio-init: check S3_ACCESS_KEY/S3_SECRET_KEY match the minio service's root creds." >&2
 		exit 1
 	fi
