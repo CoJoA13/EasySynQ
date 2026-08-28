@@ -425,6 +425,25 @@ def test_installer_offline_neither_pulls_nor_builds() -> None:
     assert "UP=(up -d --build)" in install
 
 
+def test_installer_refuses_a_bundle_built_from_another_revision() -> None:
+    """A present image proves the TAG matched, not that the bundle came from this checkout."""
+    install = _read("scripts/install.sh")
+    assert "org.opencontainers.image.revision" in install
+    assert 'HERE_REVISION="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"' in install
+    # The hard-fail leg must exist, and the unknown/unlabelled legs must NOT reach it.
+    assert 'elif [ "$BUILT_REVISION" != "$HERE_REVISION" ]; then' in install
+    for tolerated in (
+        '[ -z "$BUILT_REVISION" ]',
+        '[ "$BUILT_REVISION" = "unknown" ]',
+        '[ "$BUILT_REVISION" = "<no value>" ]',
+        '[ -z "$HERE_REVISION" ]',
+    ):
+        assert tolerated in install, (
+            f"{tolerated} must short-circuit the comparison — an ordinary online build carries no "
+            f"revision label and would otherwise hard-fail"
+        )
+
+
 def test_installer_offline_requires_internal_tls() -> None:
     """ACME cannot reach Let's Encrypt from an air-gapped host."""
     install = _read("scripts/install.sh")

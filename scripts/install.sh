@@ -246,7 +246,10 @@ if [ "$OFFLINE" = "1" ]; then
     --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
     "easysynq/api:${IMAGE_TAG}" 2>/dev/null || true)"
   HERE_REVISION="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
-  if [ -z "$BUILT_REVISION" ] || [ "$BUILT_REVISION" = "unknown" ] || [ -z "$HERE_REVISION" ]; then
+  # An image built by an ordinary online `up --build` carries no label; some Docker versions render
+  # a missing template key as "<no value>" rather than empty. Both mean "nothing to compare".
+  if [ -z "$BUILT_REVISION" ] || [ "$BUILT_REVISION" = "unknown" ] \
+     || [ "$BUILT_REVISION" = "<no value>" ] || [ -z "$HERE_REVISION" ]; then
     echo "install: loaded images report revision '${BUILT_REVISION:-none}'; this checkout reports" \
          "'${HERE_REVISION:-none}' — cannot compare, continuing."
   elif [ "$BUILT_REVISION" != "$HERE_REVISION" ]; then
