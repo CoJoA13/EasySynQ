@@ -256,7 +256,17 @@ the storage floor silently stays at the capture-derived horizon.
 
 ## RES-SECRETS-VOLUME-SILENT-EPHEMERAL-KEY
 
-Status: OPEN
+Status: RESOLVED (2026-08-28) — the worker and beat now refuse to start when either signing key
+cannot be durably persisted, and the ephemeral fallback is gated behind
+`ALLOW_EPHEMERAL_SIGNING_KEYS`. ⚠ The two processes needed DIFFERENT mechanisms: Celery's
+`Signal.send` catches `Exception`, so a `worker_init` receiver that raises is logged and the worker
+reports ready anyway (measured). The worker gate is a **bootstep**, whose `start` propagates; beat
+has no blueprint at all, so its gate is a `beat_init` receiver raising **`SystemExit`**, which
+escapes the dispatcher's `except Exception`. Both verified against a real broker: exit 1, no
+"ready" line, and a healthy path still starts. The MIRROR volume is deliberately not gated — its
+failure was already loud (a `PermissionError` from the Beat task), never silent.
+
+Original status: OPEN
 Owner: Repository owner
 Source: U33 non-root containers, 2026-08-28 (`services/vault/verify_token.py`,
 `services/audit/checkpoint.py`, `readiness.py`)

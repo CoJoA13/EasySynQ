@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     # Ed25519 private key (PEM) that signs checkpoints — a beat-only secret (dev-grade; the
     # Part-11 crypto path stays reserved). Generated + persisted here on first use if absent.
     audit_checkpoint_signing_key_path: str = "/run/secrets/audit_ckpt_key"
+    # Signing keys must be DURABLY persisted. When a key path is unwritable the loaders refuse
+    # rather than fall back to an ephemeral in-memory key: a silent fallback leaves every printed
+    # verify QR reading UNKNOWN and every anchored off-host checkpoint unverifiable while every
+    # health surface stays green (RES-SECRETS-VOLUME-SILENT-EPHEMERAL-KEY). Development only.
+    allow_ephemeral_signing_keys: bool = False
     # Ed25519 PUBLIC key (PEM) used to VERIFY checkpoint signatures (doc 12 §4.4). Distinct from the
     # beat-only private key so api/CLI/off-host verifiers attest a checkpoint without the signing
     # secret — the whole point of the detection control (a DB owner can't forge a signature).

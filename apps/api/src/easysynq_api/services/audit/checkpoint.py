@@ -44,6 +44,7 @@ from ...config import get_settings
 from ...db.models.audit_checkpoint import AuditCheckpoint
 from ...db.models.audit_checkpoint_sink import AuditCheckpointSink
 from ...db.models.audit_event import AuditEvent
+from ..common.signing import SigningKeyUnavailable, describe_unpersistable
 from .sink import fetch_latest_offhost_checkpoint, push_checkpoint
 
 logger = logging.getLogger("easysynq.audit.checkpoint")
@@ -93,7 +94,15 @@ def load_signing_key() -> Ed25519PrivateKey:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
-    except OSError:
+    except OSError as exc:
+        # Fail closed. Regenerating this key makes every off-host checkpoint already anchored under
+        # the previous one unverifiable (R13/D-8) — the detection control the product claims.
+        if not get_settings().allow_ephemeral_signing_keys:
+            raise SigningKeyUnavailable(
+                describe_unpersistable(
+                    "the audit-checkpoint signing key", path, exc.strerror or str(exc)
+                )
+            ) from exc
         logger.warning("audit signing key path not writable; using an ephemeral dev key")
     _export_public_key(key.public_key())
     return key

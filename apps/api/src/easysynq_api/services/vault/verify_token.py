@@ -33,6 +33,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from ...config import get_settings
+from ..common.signing import SigningKeyUnavailable, describe_unpersistable
 
 logger = logging.getLogger("easysynq.vault")
 
@@ -96,7 +97,16 @@ def load_verify_signing_key() -> Ed25519PrivateKey:
         os.replace(tmp, path)  # atomic publish — a concurrent winner's file wins for everyone
         _ephemeral_fallback = False  # durably persisted
         return _read_key() or key
-    except OSError:  # pragma: no cover - read-only mount fallback
+    except OSError as exc:
+        # Fail closed. An ephemeral key mints QR tokens no other process can verify, so every
+        # printed controlled copy reads UNKNOWN — silently, because nothing else checks. The
+        # fallback survives for development only, behind an explicit opt-in.
+        if not get_settings().allow_ephemeral_signing_keys:
+            raise SigningKeyUnavailable(
+                describe_unpersistable(
+                    "the verify-token signing key", path, exc.strerror or str(exc)
+                )
+            ) from exc
         logger.warning(
             "verify-token key path not writable; using an ephemeral dev key "
             "(cross-process verifies will read UNKNOWN until a persisted key is available)"

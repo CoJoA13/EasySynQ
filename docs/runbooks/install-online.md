@@ -132,10 +132,12 @@ reconcile rebuilds it). The other two must be **chowned, never recreated**:
 | `easysynq_secrets` | the verify-token and audit-checkpoint signing keys | every printed controlled-copy QR stops verifying, outstanding evidence-pack share links break, and every off-host checkpoint already anchored becomes unverifiable (R13/D-8) |
 | `easysynq_backup` | the durable backup archives | they are gone |
 
-⚠ A wrong-ownership `secrets` volume does **not** fail loudly: both key loaders fall back to an
-ephemeral in-memory key with only a log warning, and the readiness gate does not probe the volume,
-so an upgrade can report green while both signing keys are broken. Check the worker's log for
-`key path not writable` after the first start.
+A wrong-ownership `secrets` volume now **refuses to start** the worker and beat rather than
+degrading silently: both would otherwise fall back to an ephemeral in-memory key, leaving every
+printed QR unverifiable while `/readyz` stayed green. The log line is
+`refusing to start: signing keys cannot be persisted`, and the message names the uid to chown to.
+Set `ALLOW_EPHEMERAL_SIGNING_KEYS=1` only in development, where losing signatures on restart is
+acceptable.
 
 **SELinux.** On a host whose container runtime applies SELinux labels (podman, or docker-ce built
 with SELinux support), the Compose files already carry `,z` on every bind-mounted **configuration**
