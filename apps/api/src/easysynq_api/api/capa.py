@@ -42,6 +42,7 @@ from ..db.models.app_user import AppUser
 from ..db.models.capa import Capa
 from ..db.models.capa_stage import CapaStage
 from ..db.models.complaint import Complaint
+from ..db.models.documented_information import DocumentedInformation
 from ..db.models.ncr import Ncr
 from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
@@ -65,6 +66,13 @@ from ..services.capa import (
 from ..services.capa import repository as capa_repo
 from ..services.common import listing
 from ..services.common.org_clock import current_org_tz
+from ..services.common.register_filters import (
+    RegisterFilter,
+    parse_date_boundary,
+    parse_enum,
+    parse_register_filters,
+    parse_uuid,
+)
 from ..services.vault import SignatureEventSink, get_vault_signature_sink
 from ..services.workflow import repository as wf_repo
 
@@ -361,6 +369,24 @@ async def raise_capa_endpoint(
     return await _capa_full(session, capa)
 
 
+# The register's server-side facets. `created_at` is the load-bearing one: it is what makes rows
+# older than REGISTER_SCAN_CAP reachable, because the conditions narrow in SQL BEFORE the window.
+_CAPA_FILTERS: dict[str, RegisterFilter] = {
+    "close_state": RegisterFilter(
+        column=Capa.close_state, ops=frozenset({"eq"}), parse=parse_enum(CapaCloseState)
+    ),
+    "severity": RegisterFilter(
+        column=Capa.severity, ops=frozenset({"eq"}), parse=parse_enum(NcSeverity)
+    ),
+    "process_id": RegisterFilter(column=Capa.process_id, ops=frozenset({"eq"}), parse=parse_uuid),
+    "created_at": RegisterFilter(
+        column=DocumentedInformation.created_at,
+        ops=frozenset({"gte", "lte"}),
+        parse=parse_date_boundary,
+    ),
+}
+
+
 async def _readable_capas(
     request: Request, session: AsyncSession, caller: AppUser
 ) -> tuple[list[tuple[Capa, str | None, str | None, datetime.datetime | None]], bool]:
@@ -371,7 +397,12 @@ async def _readable_capas(
     owned process(es); a process-less (ad-hoc/SYSTEM) CAPA needs a SYSTEM grant; a no-grant caller
     gets an empty list, never ``403``. ``source_ip`` is threaded so an ``ip_allow`` predicate
     evaluates exactly as the replaced ``require()`` enforce did (``ip_allow`` is v1-deferred)."""
-    rows = await capa_repo.list_capas(session, caller.org_id, limit=listing.REGISTER_SCAN_CAP)
+    rows = await capa_repo.list_capas(
+        session,
+        caller.org_id,
+        limit=listing.REGISTER_SCAN_CAP,
+        filters=parse_register_filters(request, _CAPA_FILTERS),
+    )
     # Audit U14: the pre-authz window is capped (newest first); an at-cap scan is flagged so the
     # register never silently reads as complete.
     truncated = len(rows) >= listing.REGISTER_SCAN_CAP

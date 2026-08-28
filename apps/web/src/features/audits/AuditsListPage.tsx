@@ -17,6 +17,8 @@ import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { AsOf } from "../../lib/AsOf";
 import { TruncationNotice } from "../../app/shell/TruncationNotice";
+import { RegisterFilterBar } from "../registers/RegisterFilterBar";
+import type { RegisterFilterState } from "../registers/registerFilters";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import {
@@ -53,7 +55,9 @@ function Tile({ label, value }: { label: string; value: number }) {
 }
 
 export function AuditsListPage() {
-  const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } = useAudits();
+  const [registerFilters, setRegisterFilters] = useState<RegisterFilterState>({});
+  const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } =
+    useAudits(registerFilters);
   const { data: directory } = useUserDirectory();
   // status filter is URL-backed ("" = All) so it survives navigation + is shareable.
   const [filter, setFilter] = useUrlParam("status", "");
@@ -151,6 +155,11 @@ export function AuditsListPage() {
         {can("audit.create") && <Button onClick={() => setNewOpen(true)}>New audit</Button>}
       </Group>
       <AsOf at={dataUpdatedAt} />
+      {/* The date window only. This page already renders a "State" control, and a duplicate
+          accessible name breaks getByLabelText. The window is the one facet no register had, and the
+          only one that reaches entries older than the server's scan window; the API accepts the
+          richer per-register facets for API consumers (see the contract). */}
+      <RegisterFilterBar value={registerFilters} onChange={setRegisterFilters} />
       <TruncationNotice truncated={truncated} noun="audits" />
       <SimpleGrid cols={{ base: 1, sm: 3 }} mb="md">
         {/* "… audits" labels: distinct from the segmented control's All/Active/Closed radio names. */}

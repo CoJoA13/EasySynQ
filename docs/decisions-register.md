@@ -33,6 +33,22 @@ The product is founded on **ISO 9001:2015**. It is **extensibly designed toward 
 
 ---
 
+## Accepted duplication: the risk / context / interested-parties register stacks
+
+The three register families each ship a `PublishRegisterModal`, a `RegisterLifecyclePanel`, a
+scorecard band, and their own `hooks`/`mutations`/`labels` — roughly 1,670 lines of routes and
+1,890 of services on the API side, plus a parallel SPA feature directory each.
+
+Measured before deciding: `RegisterLifecyclePanel` is 148 lines in all three with about 74% of
+lines identical once the domain word is normalised, and `PublishRegisterModal` about 80%. So they
+are substantially but not mechanically alike — and they are separate ISO domains that already
+diverge (risk scoring, SWOT, interested-party types).
+
+**Decision: leave them separate.** Three is not many, a shared abstraction over three domains this
+early tends to cost more than the duplication it removes, and the divergence is real rather than
+incidental. Revisit if a fourth register family appears, or if the panels converge to near-identical
+under a change that has to be made three times.
+
 ## Part 2 — New Stakeholder Decisions (just locked by the product owner)
 
 These four decisions were locked by the product owner as part of this reconcile-and-harden pass. They are normative and bind every section.

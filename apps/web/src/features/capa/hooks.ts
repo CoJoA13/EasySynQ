@@ -1,15 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, useApi } from "../../lib/api";
 import type { Capa, CapaApproval, CapaList, ComplaintList, NcrList } from "../../lib/types";
+import type { RegisterFilterState } from "../registers/registerFilters";
+import { registerFilterKey, registerQuerySuffix } from "../registers/registerFilters";
 
 // GET /capas is gated capa.read; the demo admin holds NO capa.* (S-web-6 calm-403 case, NOT S-ing-4b).
 // Surface a `forbidden` flag so the page renders a calm no-access panel. retry:false — don't hammer a
 // permission denial.
-export function useCapas() {
+export function useCapas(filters: RegisterFilterState = {}) {
   const api = useApi();
+  // The filter state is part of the cache key, and the request carries it as the bracketed
+  // filter[field][op] grammar the API narrows on in SQL — which is how entries older than the
+  // server's scan window are reached at all.
+  const filterKey = registerFilterKey(filters);
   const query = useQuery({
-    queryKey: ["capas"],
-    queryFn: () => api.get<CapaList>("/api/v1/capas"),
+    queryKey: ["capas", filterKey],
+    queryFn: () => api.get<CapaList>(`/api/v1/capas${registerQuerySuffix(filters)}`),
     retry: false,
   });
   const forbidden = query.error instanceof ApiError && query.error.status === 403;

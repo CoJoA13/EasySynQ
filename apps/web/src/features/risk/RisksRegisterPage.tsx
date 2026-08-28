@@ -13,6 +13,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { RiskBand, RiskRow } from "../../lib/types";
 import { TruncationNotice } from "../../app/shell/TruncationNotice";
+import { RegisterFilterBar } from "../registers/RegisterFilterBar";
+import type { RegisterFilterState } from "../registers/registerFilters";
 import { AsOf } from "../../lib/AsOf";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { usePermissions } from "../../app/shell/usePermissions";
@@ -68,7 +70,9 @@ function bannerFor(state: string | null): string | null {
 }
 
 export function RisksRegisterPage() {
-  const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } = useRisks();
+  const [registerFilters, setRegisterFilters] = useState<RegisterFilterState>({});
+  const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } =
+    useRisks(registerFilters);
   const status = useRiskRegisterStatus();
   const sys = usePermissions();
   // "New risk" gate: register.manage at SYSTEM ‖ a first-readable-process probe (the CapaBoardPage
@@ -182,6 +186,11 @@ export function RisksRegisterPage() {
       </Group>
 
       <AsOf at={dataUpdatedAt} />
+      {/* The date window only. This page already renders a "Type" control, and a duplicate
+          accessible name breaks getByLabelText. The window is the one facet no register had, and the
+          only one that reaches entries older than the server's scan window; the API accepts the
+          richer per-register facets for API consumers (see the contract). */}
+      <RegisterFilterBar value={registerFilters} onChange={setRegisterFilters} />
       <TruncationNotice truncated={truncated} noun="risk rows" />
       {banner && (
         <Alert color="gray" variant="light" mt="xs">

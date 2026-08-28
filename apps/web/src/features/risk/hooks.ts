@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, useApi } from "../../lib/api";
 import type { RiskListResponse, RiskRegisterStatus, RiskRow, RiskSummary } from "../../lib/types";
+import type { RegisterFilterState } from "../registers/registerFilters";
+import { registerFilterKey, registerQuerySuffix } from "../registers/registerFilters";
 
 function forbiddenOf(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
@@ -9,11 +11,15 @@ function forbiddenOf(error: unknown): boolean {
 // GET /risks — the live working satellite, per-process row-filtered (filter-not-403; a no-grant
 // caller gets an empty list). The register PAGE rolls its scorecard up from THESE rows (the working
 // view), distinct from the governing summary (Home/MR read).
-export function useRisks() {
+export function useRisks(filters: RegisterFilterState = {}) {
   const api = useApi();
+  // The filter state is part of the cache key, and the request carries it as the bracketed
+  // filter[field][op] grammar the API narrows on in SQL — which is how entries older than the
+  // server's scan window are reached at all.
+  const filterKey = registerFilterKey(filters);
   const query = useQuery({
-    queryKey: ["risks"],
-    queryFn: () => api.get<RiskListResponse>("/api/v1/risks"),
+    queryKey: ["risks", filterKey],
+    queryFn: () => api.get<RiskListResponse>(`/api/v1/risks${registerQuerySuffix(filters)}`),
     retry: false,
   });
   // U14: keep `data` the bare array (every consumer reads it that way) and surface the

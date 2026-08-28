@@ -20,6 +20,8 @@ import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { AsOf } from "../../lib/AsOf";
 import { TruncationNotice } from "../../app/shell/TruncationNotice";
+import { RegisterFilterBar } from "../registers/RegisterFilterBar";
+import type { RegisterFilterState } from "../registers/registerFilters";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
@@ -40,7 +42,9 @@ import { RaiseCapaModal } from "./RaiseCapaModal";
 const TERMINAL: CapaCloseState[] = ["Closed", "Rejected"];
 
 export function CapaBoardPage() {
-  const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } = useCapas();
+  const [registerFilters, setRegisterFilters] = useState<RegisterFilterState>({});
+  const { data, isLoading, isError, forbidden, truncated, dataUpdatedAt, refetch } =
+    useCapas(registerFilters);
   const nav = useRowKeyboardNav<HTMLTableSectionElement>();
   const [view, setView] = useState<"board" | "list">("board");
   const [source, setSource] = useState<CapaSource | "">("");
@@ -159,6 +163,11 @@ export function CapaBoardPage() {
       </Group>
 
       <AsOf at={dataUpdatedAt} />
+      {/* Only the date window. This page already has client-side Severity / Stage / Source
+          selects that narrow the loaded rows; duplicating them here would render two controls
+          with the same label. The date window is the one facet no register had, and the only one
+          that reaches entries older than the server's scan window. */}
+      <RegisterFilterBar value={registerFilters} onChange={setRegisterFilters} />
       <TruncationNotice truncated={truncated} noun="CAPAs" />
       <SimpleGrid cols={{ base: 1, sm: 2 }} mb="md">
         <Card withBorder padding="sm">

@@ -25,6 +25,7 @@ from ..db.models.audit import Audit
 from ..db.models.audit_finding import AuditFinding
 from ..db.models.audit_plan import AuditPlan
 from ..db.models.audit_program import AuditProgram
+from ..db.models.documented_information import DocumentedInformation
 from ..db.session import get_session
 from ..domain.authz import ResourceContext
 from ..problems import ProblemException
@@ -41,6 +42,12 @@ from ..services.audits import (
 from ..services.audits import repository as audits_repo
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
 from ..services.common import listing
+from ..services.common.register_filters import (
+    RegisterFilter,
+    parse_date_boundary,
+    parse_enum,
+    parse_register_filters,
+)
 
 # Reuse the canonical improvement-initiative serializer (one source → no drift). api/improvement
 # imports only services, so there is no import cycle (the api/objectives↔api/workflow precedent).
@@ -377,12 +384,32 @@ async def create_audit_endpoint(
     return await _audit_full(session, audit)
 
 
+# Server-side facets. `created_at` is the load-bearing one — the conditions narrow in SQL BEFORE
+# REGISTER_SCAN_CAP, which is what makes rows older than the window reachable at all.
+_AUDIT_FILTERS: dict[str, RegisterFilter] = {
+    "state": RegisterFilter(
+        column=Audit.state, ops=frozenset({"eq"}), parse=parse_enum(AuditState)
+    ),
+    "created_at": RegisterFilter(
+        column=DocumentedInformation.created_at,
+        ops=frozenset({"gte", "lte"}),
+        parse=parse_date_boundary,
+    ),
+}
+
+
 @router.get("/audits")
 async def list_audits_endpoint(
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    rows = await audits_repo.list_audits(session, caller.org_id, limit=listing.REGISTER_SCAN_CAP)
+    rows = await audits_repo.list_audits(
+        session,
+        caller.org_id,
+        limit=listing.REGISTER_SCAN_CAP,
+        filters=parse_register_filters(request, _AUDIT_FILTERS),
+    )
     return {
         "data": [_audit(a, ident, title, created) for a, ident, title, created in rows],
         # Audit U14: the scan window is capped (newest first); an at-cap scan is flagged.
