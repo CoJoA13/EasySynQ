@@ -50,8 +50,8 @@ def get_ack_enqueue_sink() -> AckEnqueueSink:
 
 
 def set_ack_enqueue_sink(sink: AckEnqueueSink) -> AckEnqueueSink:
-    """Swap the process-wide sink (tests inject a Capturing sink). Returns the previous sink so
-    the caller can restore it."""
+    """Swap the process-wide sink (the integration conftest injects the Logging sink). Returns the
+    previous sink so the caller can restore it."""
     global _default_sink
     previous = _default_sink
     _default_sink = sink

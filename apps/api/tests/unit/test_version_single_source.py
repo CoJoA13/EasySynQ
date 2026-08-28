@@ -12,6 +12,8 @@ the same string.
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -35,6 +37,28 @@ def test_settings_version_matches_the_version_file() -> None:
     )
 
 
+def test_the_contract_document_declares_the_same_version_the_api_serves() -> None:
+    """``main.py`` builds ``FastAPI(version=settings.version)``.
+
+    So the SERVED OpenAPI takes its version from Settings while the checked-in
+    ``packages/contracts/openapi.yaml`` carries its own literal. Nothing compares them, so they
+    drift silently and the published contract ends up declaring a version the API never serves.
+    """
+    spec = (_repo_root() / "packages/contracts/openapi.yaml").read_text()
+    declared = re.search(r"^  version:\s*(\S+)\s*$", spec, re.M)
+    assert declared is not None, "openapi.yaml has no info.version"
+    assert declared.group(1) == Settings().version
+
+
+@pytest.mark.parametrize("manifest", ["apps/web/package.json", "packages/contracts/package.json"])
+def test_workspace_manifests_carry_the_same_release_string(manifest: str) -> None:
+    """The two npm workspaces version independently of the Python side."""
+    data = json.loads((_repo_root() / manifest).read_text())
+    assert data["version"] == Settings().version, (
+        f"{manifest} says {data['version']!r} but the release string is {Settings().version!r}"
+    )
+
+
 @pytest.mark.parametrize("removed", ["easysynq_env", "easysynq_profile", "s3_object_lock_mode"])
 def test_settings_no_longer_advertises_knobs_nothing_reads(removed: str) -> None:
     """These fields were read by nothing.
@@ -44,7 +68,12 @@ def test_settings_no_longer_advertises_knobs_nothing_reads(removed: str) -> None
     row written by the setup wizard. An operator who set the variable got no hardening and no
     warning.
     """
-    assert removed not in Settings.model_fields
+    assert removed not in Settings.model_fields, (
+        f"{removed} was removed as unread. If a later slice genuinely needs it, drop it from "
+        f"this "
+        f"parametrization and say in the commit what reads it — the pin exists to stop it coming "
+        f"back as decoration, not to forbid the capability."
+    )
 
 
 def test_env_example_does_not_advertise_the_dead_object_lock_knob() -> None:
