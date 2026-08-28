@@ -119,11 +119,11 @@ easysynq/
 │   └── web/                       # React/TS + Mantine + Tailwind (Vite, pnpm)
 │       └── src/{theme,api/_generated,lib,components,features,routes}/
 ├── infra/
-│   ├── compose/{compose.yml, compose.s.yml, compose.m.yml, compose.airgap.yml, caddy/}
+│   ├── compose/{compose.yml, compose.s.yml, compose.m.yml, compose.airgap.yml, compose.offline.yml, caddy/}
 │   ├── keycloak/realm-export.json   minio/bucket-policy.json   images.lock
 ├── migrations/                    # Alembic — single tree for the whole app
 │   └── versions/
-├── scripts/{install.sh, easysynq, gen-contracts.sh, seed_*.py, airgap-bundle.sh}
+├── scripts/{install.sh, easysynq, gen-contracts.sh, seed_*.py, airgap-bundle.sh, app-images.sh}
 ├── seed/iso9001_clauses.yaml      # reviewable clause + ★-mandatory catalog (feeds M19)
 ├── tests/e2e/                     # Playwright acceptance #1..#6 + axe
 └── docs/                          # EXISTING spec (00–17 + decisions-register + this 18)
@@ -165,7 +165,7 @@ so OpenSearch is a clean v1 drop-in and `/readyz` does not check it.
 | `opensearch` | — | **omitted in MVP** (v1; present-but-off optional on M) | — | — |
 
 Compose specifics to build:
-- **Profiles** via overlay files (`compose.s.yml` / `compose.m.yml`) selecting replica counts; `compose.airgap.yml` forces self-signed/admin-supplied TLS (ACME impossible offline).
+- **Profiles** via overlay files (`compose.s.yml` / `compose.m.yml`) selecting replica counts; `compose.airgap.yml` forces self-signed/admin-supplied TLS (ACME impossible offline) and `compose.offline.yml` forbids every image pull, so an air-gapped `up --no-build` runs entirely from the loaded bundle.
 - **MinIO init** sidecar: create `documents`/`renditions`/`records`/`staging` buckets; enable **object-lock** on `documents`+`records` (GOVERNANCE mode default — see §11 D-7) and **SSE**; the WORM probe at setup (G-B) verifies it.
 - **Postgres init**: `CREATE EXTENSION ltree;` (+`pgcrypto`); the `audit_event` app role gets `INSERT`/`SELECT` only.
 - **Keycloak realm bootstrap**: `realm-export.json` defines a public **SPA PKCE client** + a confidential **API audience** client, password policy, brute-force lockout (5 fails → 15 min), and admin MFA; a Keycloak **event-listener SPI** ships audit/login events into `audit_event`.
@@ -329,7 +329,7 @@ S0 walking skeleton ─┬─ S1 AuthN ── S2 AuthZ[AC#3,4] ── S3 Vault �
 | **S8 Setup wizard + gates [AC#5]** | 10-step latch; WORM-verify + tested-restore hard gates | `setup_state` latch enforced; `/api/v1/*` → **423** until OPERATIONAL; canonical step order (org profile before storage; backup+restore-test before auth); bootstrap secret single-use, salted-hashed; **[PROOF G-B]** WORM probe: object-locked probe early-delete **denied**; **[PROOF AC#5]** finalize **blocked** until a backup→restore-into-scratch drill **passes** integrity assertions (blob SHA-256 re-hash, row counts, FK checks) — "configured but unverified" does **not** satisfy G-C; off-host sink absent → loud not-tamper-evident warning (never blocks); finalize is one transactional commit that arms Beat jobs + writes `SETUP_FINALIZED`; Avery→Mara handoff (System Administrator bundle = no content caps; Mara gets QualityManager). |
 | **S9 IA/nav + Library + Document UI** | Calm shell + Library + document landing/timeline | single token source feeds Mantine+Tailwind; clause spine by PDCA; Library + landing + version timeline functional; **[PROOF]** axe-core CI gate green + manual SR/keyboard pass; **[PROOF DP-6]** Avery sees **no enabled** approve control; responsive to tablet; signature slot present single-factor. *(Token foundation is a day-one parallel track feeding S3–S8.)* |
 | **S10 Search + Audit-log view** | Postgres-FTS search + Admin audit-log screen | search permission-filtered server-side ("N hidden by your access scope" footer); `Indexer` interface keeps OpenSearch a v1 drop-in; Admin Audit-Log screen (filters, before/after diff, verify-chain); **[PROOF]** audit read API exposes **no** write verbs (route inventory assertion). |
-| **S11 Backup/restore CLI + hardening (exit)** | `easysynq backup/restore/upgrade`; source-dependent restore verification; air-gap; NFR/security | Initial CLIs work. A durable archive always contains the PG dump + blob-locator manifest; encryption is conditional, and realm/config/checkpoint are best-effort legs that may be absent. Current restore verifies into a scratch database and a unique prefix in the configured shared scratch bucket while reading the configured source store; it supplies no source-loss recovery or cutover proof. PITR↔blob-snapshot alignment, role-preserving cutover, and a self-contained recovery generation remain future work (R37). The air-gapped bundle installs offline (digest-pinned); sensitive columns are envelope-encrypted; Caddy ships a strict static CSP, HSTS, frame-ancestors-none, and a TLS 1.2+ floor; the NFR smoke and operator runbooks shipped. Upgrade orchestration has pre-backup/migrate/health stages, but full production upgrade safety remains open. |
+| **S11 Backup/restore CLI + hardening (exit)** | `easysynq backup/restore/upgrade`; source-dependent restore verification; air-gap; NFR/security | Initial CLIs work. A durable archive always contains the PG dump + blob-locator manifest; encryption is conditional, and realm/config/checkpoint are best-effort legs that may be absent. Current restore verifies into a scratch database and a unique prefix in the configured shared scratch bucket while reading the configured source store; it supplies no source-loss recovery or cutover proof. PITR↔blob-snapshot alignment, role-preserving cutover, and a self-contained recovery generation remain future work (R37). The air-gapped bundle installs offline — it carries the three locally built images as well as the pinned third-party set, and `install.sh --offline` neither pulls nor builds; the third-party half is digest-pinnable at release while the built images are identified by the `VERSION` tag (RES-AIRGAP-BUILT-IMAGE-PINNING). Sensitive columns are envelope-encrypted; Caddy ships a strict static CSP, HSTS, frame-ancestors-none, and a TLS 1.2+ floor; the NFR smoke and operator runbooks shipped. Upgrade orchestration has pre-backup/migrate/health stages, but full production upgrade safety remains open. |
 
 ### 7.1 Acceptance-criteria → slice traceability
 
@@ -418,7 +418,7 @@ first three are the strategic ones worth an explicit call.
 - [x] **D4** shipped S+M Compose overlays; PostgreSQL FTS in both, with OpenSearch reserved;
   OpenAPI-first; deny-by-default; 12-factor; `beat` exactly 1.
 - [x] R3 deny-wins PDP pure + unit-tested · R12 decoupled chain-linker with bounded-lag alarm · R13 off-host sink configurable (+not-tamper-evident warning when absent) · **R37 source-dependent scratch verification exercised (S11); source-loss recovery and cutover remain open**.
-- [x] NFR P95 budgets (server-side smoke, S11); migrations reversible + CI-gated; air-gapped bundle installs (digest-pin + release guard); security headers + TLS 1.2+ (Caddy default floor, `caddy validate`-confirmed); secrets rotatable. **WCAG 2.2 AA = deferred with the v1 web track** (the MVP ships the backend + the setup-wizard/admin web only; the full clause-aligned SPA + its axe/manual a11y pass is v1).
+- [x] NFR P95 budgets (server-side smoke, S11); migrations reversible + CI-gated; air-gapped bundle installs offline (third-party digest-pin available at release; its guard is manual — RES-AIRGAP-BUILT-IMAGE-PINNING); security headers + TLS 1.2+ (Caddy default floor, `caddy validate`-confirmed); secrets rotatable. **WCAG 2.2 AA = deferred with the v1 web track** (the MVP ships the backend + the setup-wizard/admin web only; the full clause-aligned SPA + its axe/manual a11y pass is v1).
 - [x] `easysynq backup/restore/upgrade` proven; tested-restore drill passes (G-C); WORM-verify hard gate enforced (G-B); operator runbooks delivered (`docs/runbooks/`).
 - [x] Avery→Mara handoff demoable (`tests/integration/test_handoff.py`; the live browser OIDC round-trip is a documented manual proof).
 

@@ -227,8 +227,11 @@ The TLS 1.1 attempt must be refused.
 ## 7. Air-gapped and Hyper-V notes
 
 For air-gapped installation, build the bundle on a connected release host only after every
-non-development image is pinned by digest. Verify the transferred checksum before `docker load`;
-then use `--tls internal`. See [Install air-gapped](../runbooks/install-airgapped.md).
+non-development image is pinned by digest. The bundle carries the images this repository builds as
+well as the pinned third-party ones, so the target never compiles anything. Verify the transferred
+checksum before `docker load`; then install with `--tls internal --offline`, which forbids every
+pull and build and names any image the transfer missed. See
+[Install air-gapped](../runbooks/install-airgapped.md).
 
 For Hyper-V, use the supplied VHDX, seed ISO, and elevated PowerShell installer. The appliance uses
 an internal CA, exposes day-2 helper commands, and still requires port 9443. See the

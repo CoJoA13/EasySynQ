@@ -103,6 +103,9 @@ seed-personas:
     bash scripts/seed-personas.sh
 
 # --- packaging ---
+# Build the air-gap bundle: builds easysynq/{api,web,keycloak} from this checkout, pulls the pinned
+# third-party set, and `docker save`s all of it to dist/ (+ .sha256 + .manifest.txt). Needs Docker +
+# network; several GB and a long first run. The target installs it with `install.sh … --offline`.
 airgap:
     bash scripts/airgap-bundle.sh
 

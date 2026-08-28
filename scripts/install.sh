@@ -10,15 +10,18 @@ cd "$ROOT"
 PROFILE="s"
 HOST_NAME=""
 TLS_MODE="acme"
+OFFLINE=0
 ENV_FILE="$ROOT/.env"
 ENV_ONLY="${EASYSYNQ_ENV_ONLY:-0}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: install.sh [s|m] --host <fqdn> [--tls acme|internal]
+usage: install.sh [s|m] --host <fqdn> [--tls acme|internal] [--offline]
 
   --host      Browser-facing DNS name (without scheme or port).
   --tls       acme (default; publicly resolvable DNS) or internal (private/LAN CA).
+  --offline   Air-gapped install from a loaded bundle: never pull, never build. Requires
+              --tls internal (ACME is unreachable offline). See runbooks/install-airgapped.md.
 
 EASYSYNQ_ENV_ONLY=1 omits --host and only generates the .env for appliance provisioning.
 EOF
@@ -41,6 +44,10 @@ while [ $# -gt 0 ]; do
       TLS_MODE="$2"
       shift 2
       ;;
+    --offline)
+      OFFLINE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -60,6 +67,12 @@ case "$TLS_MODE" in
   acme|internal) ;;
   *) usage; exit 2 ;;
 esac
+# ACME needs outbound HTTP to Let's Encrypt, which an air-gapped host does not have. Refuse the
+# contradiction here rather than let Caddy fail to obtain a certificate after the stack is up.
+if [ "$OFFLINE" = "1" ] && [ "$TLS_MODE" != "internal" ]; then
+  echo "install: --offline requires --tls internal (ACME is unreachable without outbound HTTP)" >&2
+  exit 2
+fi
 
 if [ "$ENV_ONLY" != "1" ]; then
   [ -n "$HOST_NAME" ] || { usage; exit 2; }
@@ -131,6 +144,16 @@ else
   echo "install: $ENV_FILE already exists — preserving its secrets and operator settings."
 fi
 
+# The locally built images are named easysynq/{api,web,keycloak}:$EASYSYNQ_IMAGE_TAG in
+# compose.yml. Derive the tag from the repo's VERSION file so a bundle built from this checkout
+# (scripts/airgap-bundle.sh) resolves to the same refs here — the air-gapped target then reuses the
+# loaded images instead of building (C13). Written on every path, including a reused .env, so an
+# upgraded install stops referring to the previous release's tag.
+# Assign first: a command substitution used directly as an ARGUMENT does not propagate its exit
+# status, so `set -e` would not fire and a failing app-images.sh would write an empty tag.
+IMAGE_TAG="$(bash "$ROOT/scripts/app-images.sh" --tag)"
+set_kv EASYSYNQ_IMAGE_TAG "$IMAGE_TAG"
+
 # Env-only mode (the appliance provisioner): generate/keep the .env, skip the stack startup —
 # the caller applies its own hostname and internal-TLS settings before `up`.
 if [ "$ENV_ONLY" = "1" ]; then
@@ -181,9 +204,65 @@ COMPOSE=(
   -f "infra/compose/compose.${PROFILE}.yml"
   -f infra/compose/compose.production.yml
 )
+# The offline overlay turns every pull into an immediate "image not found" instead of a network
+# timeout the air-gapped host can never satisfy.
+[ "$OFFLINE" = "1" ] && COMPOSE+=(-f infra/compose/compose.offline.yml)
+
+UP=(up -d --build)
+if [ "$OFFLINE" = "1" ]; then
+  # --no-build is the half pull_policy cannot express: the application services carry a build:
+  # stanza, and Compose builds a missing image even when it is forbidden to pull one.
+  UP=(up -d --no-build)
+
+  # Name every missing image BEFORE Compose runs, so a partially transferred bundle reports what
+  # to fix rather than an opaque build failure deep in the dependency order. `config --images` is
+  # derived from the resolved model, so it stays correct as services are added.
+  echo "install: verifying the loaded image set (offline)..."
+  # Capture into a variable rather than reading from a process substitution: the latter discards
+  # the exit status, so a failing `config` would leave MISSING empty and read as success.
+  # sort -u because the api image backs four services and would otherwise be listed four times.
+  COMPOSED_IMAGES="$("${COMPOSE[@]}" config --images | sort -u)"
+  [ -n "$COMPOSED_IMAGES" ] || {
+    echo "install: 'docker compose config --images' resolved no images — refusing to continue" >&2
+    exit 1
+  }
+  MISSING=()
+  while IFS= read -r image; do
+    [ -n "$image" ] || continue
+    docker image inspect "$image" >/dev/null 2>&1 || MISSING+=("$image")
+  done <<<"$COMPOSED_IMAGES"
+  if [ "${#MISSING[@]}" -gt 0 ]; then
+    echo "install: these images are not loaded on this host:" >&2
+    printf '  %s\n' "${MISSING[@]}" >&2
+    echo "install: build the bundle on a connected host (\`just airgap\`), transfer it, and run" >&2
+    echo "         'docker load -i easysynq-airgap.tar' before retrying." >&2
+    exit 1
+  fi
+
+  # EASYSYNQ_IMAGE_TAG comes from the static VERSION file, so a present image proves the tag
+  # matched — not that the bundle was built from THIS checkout. The build stamps its revision;
+  # compare it, so a stale bundle cannot silently run old application code against new migrations.
+  BUILT_REVISION="$(docker image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "easysynq/api:${IMAGE_TAG}" 2>/dev/null || true)"
+  HERE_REVISION="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+  # An image built by an ordinary online `up --build` carries no label; some Docker versions render
+  # a missing template key as "<no value>" rather than empty. Both mean "nothing to compare".
+  if [ -z "$BUILT_REVISION" ] || [ "$BUILT_REVISION" = "unknown" ] \
+     || [ "$BUILT_REVISION" = "<no value>" ] || [ -z "$HERE_REVISION" ]; then
+    echo "install: loaded images report revision '${BUILT_REVISION:-none}'; this checkout reports" \
+         "'${HERE_REVISION:-none}' — cannot compare, continuing."
+  elif [ "$BUILT_REVISION" != "$HERE_REVISION" ]; then
+    echo "install: the loaded bundle was built from revision $BUILT_REVISION, but this checkout is" >&2
+    echo "         at $HERE_REVISION. Install from the checkout the bundle was built from, or" >&2
+    echo "         rebuild the bundle from this one — mixing them runs old application code" >&2
+    echo "         against new migrations and configuration." >&2
+    exit 1
+  fi
+fi
 
 echo "install: starting the stack (profile: $PROFILE)..."
-"${COMPOSE[@]}" up -d --build
+"${COMPOSE[@]}" "${UP[@]}"
 
 # KC_HOSTNAME controls the issuer URL but does not authorize SPA callbacks. Append the selected URI
 # through the Admin API; updating the complete representation preserves operator-added callbacks.

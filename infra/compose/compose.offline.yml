@@ -1,0 +1,49 @@
+# Offline overlay (C13): forbid every image pull, so a missing image fails immediately and LOCALLY
+# instead of reaching for a registry the air-gapped host can never contact.
+#
+# Stack this on an air-gapped target after `docker load`-ing the bundle built by
+# scripts/airgap-bundle.sh. `scripts/install.sh --offline` adds it automatically and also passes
+# `up --no-build`.
+#
+# BOTH halves are required, and `--no-build` alone is NOT enough: for a service that has a `build:`
+# stanza, `--no-build` does not suppress the fetch, it CONVERTS IT INTO A PULL. A missing
+# easysynq/api then sends the host to docker.io/easysynq/api — a hang offline, and a
+# publicly-registrable user namespace this project does not own if the host has any egress.
+# `pull_policy: never` closes that; it does not affect an ordinary online `up`, which still builds.
+#
+# This is separate from compose.airgap.yml (which only selects Caddy's internal CA) because the
+# Hyper-V appliance provisioner stacks the air-gap TLS overlay while still building and pulling
+# online on first run.
+services:
+  # pulled
+  postgres:
+    pull_policy: never
+  redis:
+    pull_policy: never
+  minio:
+    pull_policy: never
+  minio-init:
+    pull_policy: never
+  keycloak-init:
+    pull_policy: never
+  renderer:
+    pull_policy: never
+  tika:
+    pull_policy: never
+  proxy:
+    pull_policy: never
+  mailpit:
+    pull_policy: never
+  # built here and carried in the bundle — these are the ones --no-build would otherwise pull
+  keycloak:
+    pull_policy: never
+  migrate:
+    pull_policy: never
+  api:
+    pull_policy: never
+  worker:
+    pull_policy: never
+  beat:
+    pull_policy: never
+  web:
+    pull_policy: never

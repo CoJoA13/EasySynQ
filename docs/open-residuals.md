@@ -254,6 +254,29 @@ under-shoot the eventual basis-derived horizon. In v1 nothing writes `retention_
 capture, so the gap is vacuous today; the basis-fill slice must inherit the re-extension duty or
 the storage floor silently stays at the capture-derived horizon.
 
+## RES-AIRGAP-BUILT-IMAGE-PINNING
+
+Status: OPEN
+Owner: Repository owner
+Source: C13 air-gap packaging model, 2026-08-28 (`scripts/airgap-bundle.sh`, `infra/images.lock`)
+Reason: The bundle ships the three images this repository builds (`easysynq/api`, `easysynq/web`,
+`easysynq/keycloak`) with a PROVENANCE stamp but no CONTENT identity. Each carries
+`org.opencontainers.image.revision`, which `install.sh --offline` compares against the target
+checkout, so a mismatched pairing is refused — but the label is self-asserted and unsigned, the tag
+comes from a static `VERSION`, and the images are exempt by design from
+`scripts/check-compose-images-lock.sh`. Nothing proves the tarball a target loaded is byte-for-byte
+the artifact the release built. The third-party half is digest-pinnable, but its guard is inert:
+`test_images_lock_pinned.py` skips unless `EASYSYNQ_RELEASE=1`, and no workflow sets it, so a
+release ships floating tags unless the operator remembers the manual step.
+Closure contract: Give the built images a content identity that survives transfer (record their
+digests in the bundle manifest at save time and verify them after `docker load`, or publish them to
+a registry and digest-pin them like the rest), and wire the digest-pin guard to something that
+actually runs on a release rather than an environment variable nobody sets.
+Last reviewed: 2026-08-28
+
+Until then the `.sha256` sidecar is the only integrity evidence for the bundle as a whole, and it
+proves transfer only — not that the tarball came from the release build.
+
 ## RES-AUDIT-EXPORT
 
 Status: OPEN

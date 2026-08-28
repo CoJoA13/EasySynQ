@@ -105,6 +105,27 @@ jobs:
             -f infra/compose/compose.s.yml \
             -f infra/compose/compose.airgap.yml \
             -f infra/compose/compose.production.yml config --quiet
+          # The exact stack `scripts/install.sh --offline` builds (C13). `config --images` must
+          # resolve the locally built images by name — that naming is what lets a `docker load` of
+          # the air-gap bundle satisfy Compose without a network build on the target.
+          docker compose --env-file .env.example \
+            -f infra/compose/compose.yml \
+            -f infra/compose/compose.s.yml \
+            -f infra/compose/compose.production.yml \
+            -f infra/compose/compose.offline.yml config --quiet
+          EASYSYNQ_IMAGE_TAG="$(bash scripts/app-images.sh --tag)"
+          export EASYSYNQ_IMAGE_TAG
+          composed_images="$(docker compose --env-file .env.example \
+            -f infra/compose/compose.yml \
+            -f infra/compose/compose.s.yml \
+            -f infra/compose/compose.production.yml \
+            -f infra/compose/compose.offline.yml config --images)"
+          while IFS= read -r bundled; do
+            printf '%s\n' "$composed_images" | grep -qxF "$bundled" || {
+              echo "::error::the air-gap bundle builds $bundled but no service resolves to it"
+              exit 1
+            }
+          done < <(bash scripts/app-images.sh)
       - name: install uv
         # exact pin — setup-uv stopped publishing floating major tags at v8
         uses: astral-sh/setup-uv@v9.0.0
