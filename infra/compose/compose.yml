@@ -15,8 +15,9 @@ name: easysynq
 
 # Every build: service also carries an explicit image: name. Compose reuses an already-loaded
 # image instead of building, which is what makes `docker load` of the air-gap bundle a complete
-# offline install (C13) — the tag comes from the repo's VERSION file via scripts/image-tag.sh,
-# which scripts/airgap-bundle.sh and scripts/install.sh both export as EASYSYNQ_IMAGE_TAG.
+# offline install (C13). The tag comes from the repo's VERSION file via scripts/app-images.sh:
+# scripts/airgap-bundle.sh builds and saves exactly those refs, and scripts/install.sh writes the
+# tag into .env as EASYSYNQ_IMAGE_TAG, which Compose reads through --env-file.
 x-api-build: &api-build
   context: ../..
   dockerfile: apps/api/Dockerfile

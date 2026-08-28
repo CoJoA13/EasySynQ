@@ -140,7 +140,10 @@ cmd_run() {
   # install.sh writes this too, but only on the first-run path that generates .env — an appliance
   # re-provision over an existing .env would otherwise keep building the `dev`-tagged fallback
   # images instead of this release's (C13).
-  set_kv EASYSYNQ_IMAGE_TAG "$(bash "$APP_DIR/scripts/app-images.sh" --tag)"
+  # Assign first: a command substitution used directly as an ARGUMENT does not propagate its exit
+  # status, so a failing app-images.sh would write an empty tag instead of aborting.
+  image_tag="$(bash "$APP_DIR/scripts/app-images.sh" --tag)"
+  set_kv EASYSYNQ_IMAGE_TAG "$image_tag"
   bash "$APP_DIR/scripts/validate-browser-origins.sh" --env-file "$APP_DIR/.env"
   # The sudo-less helpers (easysynq-status/--remint, easysynq-compose) read .env as the easysynq
   # user; install.sh leaves it root:root 0600. Group-read for easysynq adds no exposure — the

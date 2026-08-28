@@ -149,7 +149,10 @@ fi
 # (scripts/airgap-bundle.sh) resolves to the same refs here — the air-gapped target then reuses the
 # loaded images instead of building (C13). Written on every path, including a reused .env, so an
 # upgraded install stops referring to the previous release's tag.
-set_kv EASYSYNQ_IMAGE_TAG "$(bash "$ROOT/scripts/app-images.sh" --tag)"
+# Assign first: a command substitution used directly as an ARGUMENT does not propagate its exit
+# status, so `set -e` would not fire and a failing app-images.sh would write an empty tag.
+IMAGE_TAG="$(bash "$ROOT/scripts/app-images.sh" --tag)"
+set_kv EASYSYNQ_IMAGE_TAG "$IMAGE_TAG"
 
 # Env-only mode (the appliance provisioner): generate/keep the .env, skip the stack startup —
 # the caller applies its own hostname and internal-TLS settings before `up`.
@@ -215,18 +218,42 @@ if [ "$OFFLINE" = "1" ]; then
   # to fix rather than an opaque build failure deep in the dependency order. `config --images` is
   # derived from the resolved model, so it stays correct as services are added.
   echo "install: verifying the loaded image set (offline)..."
-  # sort -u: the api image backs four services, and listing it four times would read like four
-  # separate problems.
+  # Capture into a variable rather than reading from a process substitution: the latter discards
+  # the exit status, so a failing `config` would leave MISSING empty and read as success.
+  # sort -u because the api image backs four services and would otherwise be listed four times.
+  COMPOSED_IMAGES="$("${COMPOSE[@]}" config --images | sort -u)"
+  [ -n "$COMPOSED_IMAGES" ] || {
+    echo "install: 'docker compose config --images' resolved no images — refusing to continue" >&2
+    exit 1
+  }
   MISSING=()
   while IFS= read -r image; do
     [ -n "$image" ] || continue
     docker image inspect "$image" >/dev/null 2>&1 || MISSING+=("$image")
-  done < <("${COMPOSE[@]}" config --images | sort -u)
+  done <<<"$COMPOSED_IMAGES"
   if [ "${#MISSING[@]}" -gt 0 ]; then
     echo "install: these images are not loaded on this host:" >&2
     printf '  %s\n' "${MISSING[@]}" >&2
     echo "install: build the bundle on a connected host (\`just airgap\`), transfer it, and run" >&2
     echo "         'docker load -i easysynq-airgap.tar' before retrying." >&2
+    exit 1
+  fi
+
+  # EASYSYNQ_IMAGE_TAG comes from the static VERSION file, so a present image proves the tag
+  # matched — not that the bundle was built from THIS checkout. The build stamps its revision;
+  # compare it, so a stale bundle cannot silently run old application code against new migrations.
+  BUILT_REVISION="$(docker image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "easysynq/api:${IMAGE_TAG}" 2>/dev/null || true)"
+  HERE_REVISION="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+  if [ -z "$BUILT_REVISION" ] || [ "$BUILT_REVISION" = "unknown" ] || [ -z "$HERE_REVISION" ]; then
+    echo "install: loaded images report revision '${BUILT_REVISION:-none}'; this checkout reports" \
+         "'${HERE_REVISION:-none}' — cannot compare, continuing."
+  elif [ "$BUILT_REVISION" != "$HERE_REVISION" ]; then
+    echo "install: the loaded bundle was built from revision $BUILT_REVISION, but this checkout is" >&2
+    echo "         at $HERE_REVISION. Install from the checkout the bundle was built from, or" >&2
+    echo "         rebuild the bundle from this one — mixing them runs old application code" >&2
+    echo "         against new migrations and configuration." >&2
     exit 1
   fi
 fi

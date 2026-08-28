@@ -10,8 +10,14 @@ target is impossible offline (they need PyPI, npm, and the PostgreSQL apt repo),
 build host does it once and ships the layers.
 
 Transfer the **same checkout** you built from. Both hosts derive the image tag from the repo's
-`VERSION` file, which is how the target resolves the refs the bundle loaded without anyone typing a
-tag. A mismatched checkout is reported by name at install time, not as a mid-startup failure.
+`VERSION` file, so the target resolves the refs the bundle loaded without anyone typing a tag.
+
+`VERSION` alone cannot tell two checkouts apart — it is a static release string, not a build
+identity. So `airgap-bundle.sh` stamps the build's git revision onto each image it builds
+(`org.opencontainers.image.revision`) and records it in the manifest, and `install.sh --offline`
+refuses to start when the loaded images were built from a different revision than the checkout it
+is running from. On a checkout with no git metadata it reports the built revision and continues,
+since it has nothing to compare against.
 
 ## On a CONNECTED build host
 
@@ -20,8 +26,16 @@ tag. A mismatched checkout is reported by name at install time, not as a mid-sta
    just images-update      # prints image:tag@sha256:… for each line in infra/images.lock
    ```
    Replace the tag-pinned lines in `infra/images.lock` with the printed `@sha256:` refs and commit
-   for the release. A release CI run (`EASYSYNQ_RELEASE=1`) fails if any non-dev image is still a
-   floating tag (`test_images_lock_pinned.py`). Floating tags stay legal during normal development.
+   for the release. `test_images_lock_pinned.py` fails on any non-dev image still carrying a
+   floating tag, but it SKIPS unless `EASYSYNQ_RELEASE=1` is set — and no workflow sets it, so run
+   it by hand as part of the ceremony:
+
+   ```bash
+   EASYSYNQ_RELEASE=1 uv run --directory apps/api pytest tests/unit/test_images_lock_pinned.py
+   ```
+
+   Floating tags stay legal during normal development. The three images built from this repository
+   are identified by the `VERSION` tag rather than a digest, so this pins the third-party half only.
 
 2. **Build the bundle:**
    ```bash
@@ -50,8 +64,9 @@ tag. A mismatched checkout is reported by name at install time, not as a mid-sta
    ./scripts/install.sh s --host qms.corp.example --tls internal --offline
    ```
 
-   `--offline` stacks `compose.offline.yml` (every service is `pull_policy: never`) and starts the
-   stack with `up --no-build`, so nothing reaches the network. Before Compose runs at all, the
+   `--offline` stacks `compose.offline.yml` (every service becomes `pull_policy: never`) and starts
+   the stack with `up --no-build`. Both halves are needed: for a service that has a `build:` stanza,
+   `--no-build` does not suppress the fetch, it converts it into a *pull*. Before Compose runs at all, the
    installer inspects every image in the resolved composition and lists any that are not loaded —
    a partially transferred bundle names what is missing instead of failing deep in the startup
    order. `--offline` requires `--tls internal`; ACME cannot reach Let's Encrypt from here.

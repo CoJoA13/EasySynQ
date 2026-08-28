@@ -26,16 +26,26 @@ mkdir -p "$(dirname "$OUT")"
 TAG="$(bash "$ROOT/scripts/app-images.sh" --tag)"
 mapfile -t APP_IMAGES < <(bash "$ROOT/scripts/app-images.sh")
 
+# VERSION is a static release string, so the tag alone cannot tell two checkouts apart. Stamp the
+# build's revision onto every image so `install.sh --offline` can refuse a bundle that does not
+# match the checkout it is being installed from. "unknown" when built outside a git tree — the
+# installer then reports rather than compares.
+REVISION="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+
 # --- build the application images (the offline-install half that used to be missing) -------------
-echo "airgap: building application images at tag $TAG"
-docker build -f "$ROOT/apps/api/Dockerfile" -t "easysynq/api:$TAG" "$ROOT"
-docker build -f "$ROOT/apps/web/Dockerfile" -t "easysynq/web:$TAG" "$ROOT/apps/web"
-docker build -f "$ROOT/infra/compose/keycloak/Dockerfile" -t "easysynq/keycloak:$TAG" \
+echo "airgap: building application images at tag $TAG (revision $REVISION)"
+docker build --label "org.opencontainers.image.revision=$REVISION" \
+  -f "$ROOT/apps/api/Dockerfile" -t "easysynq/api:$TAG" "$ROOT"
+docker build --label "org.opencontainers.image.revision=$REVISION" \
+  -f "$ROOT/apps/web/Dockerfile" -t "easysynq/web:$TAG" "$ROOT/apps/web"
+docker build --label "org.opencontainers.image.revision=$REVISION" \
+  -f "$ROOT/infra/compose/keycloak/Dockerfile" -t "easysynq/keycloak:$TAG" \
   "$ROOT/infra/compose/keycloak"
 
 # --- fetch the pinned third-party images, normalised to the refs Compose asks for ----------------
 # Collect the image refs from images.lock (skip comments/blank lines; field 2 = image:tag[@sha256])
-mapfile -t LOCKED < <(grep -vE '^\s*#|^\s*$' "$ROOT/infra/images.lock" | awk '{print $2}')
+IMAGES_LOCK="${EASYSYNQ_IMAGES_LOCK:-$ROOT/infra/images.lock}"
+mapfile -t LOCKED < <(grep -vE '^\s*#|^\s*$' "$IMAGES_LOCK" | awk '{print $2}')
 
 SAVE=("${APP_IMAGES[@]}")
 for ref in "${LOCKED[@]}"; do
@@ -54,6 +64,7 @@ docker save "${SAVE[@]}" -o "$OUT"
 
 {
   printf '# EasySynQ air-gap bundle — version %s\n' "$TAG"
+  printf '# built from revision %s\n' "$REVISION"
   printf '# Load with: docker load -i %s\n' "$(basename "$OUT")"
   printf '# built (this repository):\n'
   printf '%s\n' "${APP_IMAGES[@]}"
@@ -61,6 +72,10 @@ docker save "${SAVE[@]}" -o "$OUT"
   printf '%s\n' "${LOCKED[@]}"
 } > "$OUT.manifest.txt"
 
-sha256sum "$OUT" > "$OUT.sha256"
+# Write the sidecar with a RELATIVE filename. `sha256sum "$OUT"` records the build host's absolute
+# path, so `sha256sum -c` on the air-gapped target opens a path that does not exist there and
+# reports "FAILED open or read" — on the very first step of the offline install. It also stamps the
+# builder's home directory into a shipped artifact.
+( cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" ) > "$OUT.sha256"
 echo "airgap: done. On the target: sha256sum -c $(basename "$OUT").sha256 && docker load -i $(basename "$OUT")"
 echo "airgap: then install offline with: ./scripts/install.sh s --host <fqdn> --tls internal --offline"
