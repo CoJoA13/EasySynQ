@@ -11,6 +11,7 @@ PROFILE="s"
 HOST_NAME=""
 TLS_MODE="acme"
 OFFLINE=0
+BUNDLE_MANIFEST=""
 ENV_FILE="$ROOT/.env"
 ENV_ONLY="${EASYSYNQ_ENV_ONLY:-0}"
 
@@ -22,6 +23,9 @@ usage: install.sh [s|m] --host <fqdn> [--tls acme|internal] [--offline]
   --tls       acme (default; publicly resolvable DNS) or internal (private/LAN CA).
   --offline   Air-gapped install from a loaded bundle: never pull, never build. Requires
               --tls internal (ACME is unreachable offline). See runbooks/install-airgapped.md.
+  --bundle-manifest <path>
+              The .manifest.txt beside the transferred tarball. With --offline, verifies the
+              loaded images ARE the ones that bundle carried. Strongly recommended.
 
 EASYSYNQ_ENV_ONLY=1 omits --host and only generates the .env for appliance provisioning.
 EOF
@@ -47,6 +51,11 @@ while [ $# -gt 0 ]; do
     --offline)
       OFFLINE=1
       shift
+      ;;
+    --bundle-manifest)
+      [ $# -ge 2 ] || { usage; exit 2; }
+      BUNDLE_MANIFEST="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -237,6 +246,16 @@ if [ "$OFFLINE" = "1" ]; then
     echo "install: build the bundle on a connected host (\`just airgap\`), transfer it, and run" >&2
     echo "         'docker load -i easysynq-airgap.tar' before retrying." >&2
     exit 1
+  fi
+
+  # The tag and the revision label prove "same checkout"; only the manifest's recorded image ids
+  # prove these are the images THIS bundle carried, rather than an older tarball built from the
+  # same commit.
+  if [ -n "$BUNDLE_MANIFEST" ]; then
+    bash "$ROOT/scripts/verify-bundle.sh" "$BUNDLE_MANIFEST"
+  else
+    echo "install: no --bundle-manifest given — cannot verify the loaded images came from the" >&2
+    echo "         transferred bundle. Pass the .manifest.txt beside the tarball to check." >&2
   fi
 
   # EASYSYNQ_IMAGE_TAG comes from the static VERSION file, so a present image proves the tag

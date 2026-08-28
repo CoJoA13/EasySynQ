@@ -3,6 +3,9 @@ name: ci
 on:
   push:
     branches: [main]
+    # A version tag is what makes the release gate below fire. Without this trigger the digest-pin
+    # guard had nothing to run on and a release shipped floating image tags on a green CI run.
+    tags: ['v*']
   pull_request:
 
 # A newer push to the same PR supersedes the in-flight run — cancel it. Push (main) runs each get
@@ -395,6 +398,29 @@ jobs:
   # Dependabot bump to compose.yml (the new `docker-compose` ecosystem) must ALSO land in images.lock,
   # or the offline bundle ships the stale ref while Compose asks for the new one (Codex #153). Assert
   # every Compose `image:` ref plus the optimized Keycloak Dockerfile base is pinned in images.lock.
+  # The RELEASE gate. test_images_lock_pinned.py refuses a floating tag on any non-dev image, but
+  # it SKIPS unless EASYSYNQ_RELEASE=1 — and nothing set it, so the check was inert and a release
+  # could ship unpinned third-party images with every check green (audit follow-up). Tag-only,
+  # because floating tags stay legal during ordinary development.
+  release-gate:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "apps/api/uv.lock"
+      - name: sync
+        working-directory: apps/api
+        run: uv sync --frozen
+      - name: every non-dev image must be digest-pinned
+        working-directory: apps/api
+        env:
+          EASYSYNQ_RELEASE: "1"
+        run: uv run pytest tests/unit/test_images_lock_pinned.py -q
+
   compose-images-lock:
     runs-on: ubuntu-latest
     steps:

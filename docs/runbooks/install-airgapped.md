@@ -26,16 +26,16 @@ since it has nothing to compare against.
    just images-update      # prints image:tag@sha256:… for each line in infra/images.lock
    ```
    Replace the tag-pinned lines in `infra/images.lock` with the printed `@sha256:` refs and commit
-   for the release. `test_images_lock_pinned.py` fails on any non-dev image still carrying a
-   floating tag, but it SKIPS unless `EASYSYNQ_RELEASE=1` is set — and no workflow sets it, so run
-   it by hand as part of the ceremony:
+   for the release. Check it before tagging:
 
    ```bash
-   EASYSYNQ_RELEASE=1 uv run --directory apps/api pytest tests/unit/test_images_lock_pinned.py
+   just release-check
    ```
 
-   Floating tags stay legal during normal development. The three images built from this repository
-   are identified by the `VERSION` tag rather than a digest, so this pins the third-party half only.
+   CI runs the same guard on any `v*` tag (the `release-gate` job), so a tagged release cannot ship
+   a floating third-party tag. Floating tags stay legal during normal development. The three images
+   built from this repository are identified by their image id in the bundle manifest rather than a
+   registry digest — they are never pushed, so they have none.
 
 2. **Build the bundle:**
    ```bash
@@ -55,14 +55,26 @@ since it has nothing to compare against.
 
 3. Transfer `easysynq-airgap.tar` (+ `.sha256`) and the repo checkout, then:
    ```bash
-   sha256sum -c easysynq-airgap.tar.sha256      # verify transfer integrity
+   sha256sum -c easysynq-airgap.tar.sha256      # the tarball survived transfer intact
    docker load -i easysynq-airgap.tar
+   bash scripts/verify-bundle.sh easysynq-airgap.tar.manifest.txt
    ```
+
+   The three checks answer different questions. The checksum proves the *tarball* is intact; the
+   images' `org.opencontainers.image.revision` label proves they were built from the checkout you
+   are installing from; only `verify-bundle.sh` proves the images now loaded are the ones **this**
+   bundle carried — an older tarball built from the same commit loads the same tags and satisfies
+   the other two. It compares each built image's id, which is stable across `docker save`/`load`.
 4. Run the production installer in offline mode:
 
    ```bash
-   ./scripts/install.sh s --host qms.corp.example --tls internal --offline
+   ./scripts/install.sh s --host qms.corp.example --tls internal --offline \
+       --bundle-manifest easysynq-airgap.tar.manifest.txt
    ```
+
+   `--bundle-manifest` re-runs the bundle verification as part of the install, so a partially
+   replaced image set cannot slip past between the manual check and the start. Without it the
+   installer says so rather than staying silent.
 
    `--offline` stacks `compose.offline.yml` (every service becomes `pull_policy: never`) and starts
    the stack with `up --no-build`. Both halves are needed: for a service that has a `build:` stanza,

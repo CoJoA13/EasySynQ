@@ -109,6 +109,13 @@ seed-personas:
 airgap:
     bash scripts/airgap-bundle.sh
 
+# The release gate: assert every non-dev image in infra/images.lock is @sha256-pinned. The check
+# lives in test_images_lock_pinned.py and SKIPS unless EASYSYNQ_RELEASE=1, so before this recipe
+# nothing ran it — a release shipped floating tags whenever the operator forgot the manual step.
+# CI also runs it on a v* tag; this is the local equivalent.
+release-check:
+    cd apps/api && EASYSYNQ_RELEASE=1 uv run pytest tests/unit/test_images_lock_pinned.py -q
+
 # Resolve every image in infra/images.lock to an @sha256 digest (a RELEASE-CEREMONY step — needs a
 # connected host + Docker; never run in CI or on the air-gapped target). Prints the pinned refs to
 # append to images.lock so a release ships immutable, digest-pinned images (doc 03 §15, S11).

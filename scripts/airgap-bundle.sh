@@ -66,8 +66,16 @@ docker save "${SAVE[@]}" -o "$OUT"
   printf '# EasySynQ air-gap bundle — version %s\n' "$TAG"
   printf '# built from revision %s\n' "$REVISION"
   printf '# Load with: docker load -i %s\n' "$(basename "$OUT")"
-  printf '# built (this repository):\n'
-  printf '%s\n' "${APP_IMAGES[@]}"
+  printf '# Then verify what landed: bash scripts/verify-bundle.sh %s.manifest.txt\n' \
+    "$(basename "$OUT")"
+  # Each built image is recorded with its IMAGE ID — the sha256 of its config, which is stable
+  # across docker save/load (verified). A never-pushed image has no registry digest
+  # (`RepoDigests` is empty), so this is its only content identity, and it is what lets the target
+  # prove the images it loaded are the ones this bundle carried rather than an older leftover.
+  printf '# built (this repository) — "<ref> <image id>":\n'
+  for image in "${APP_IMAGES[@]}"; do
+    printf '%s %s\n' "$image" "$(docker image inspect --format '{{.Id}}' "$image")"
+  done
   printf '# pulled (infra/images.lock, saved under the tag compose.yml resolves):\n'
   printf '%s\n' "${LOCKED[@]}"
 } > "$OUT.manifest.txt"
