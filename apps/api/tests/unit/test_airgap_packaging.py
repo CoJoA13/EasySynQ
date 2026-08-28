@@ -222,9 +222,15 @@ def test_bundle_retags_a_digest_pinned_ref_to_the_compose_tag() -> None:
 # --- 3b. run the whole bundle script against a controlled fake docker -------------------------
 
 _FAKE_DOCKER = """#!/usr/bin/env bash
-# Records its argv and, for `save -o FILE`, materialises FILE so the script can hash it.
+# Records its argv, answers `image inspect --format {{.Id}}`, and for `save -o FILE` materialises
+# FILE so the script can hash it.
 set -euo pipefail
 printf '%s\\n' "$*" >> "$DOCKER_CALL_LOG"
+if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then
+  # A deterministic stand-in id, so the manifest's built-image lines are exercised.
+  echo "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  exit 0
+fi
 if [ "${1:-}" = "save" ]; then
   out=""
   while [ $# -gt 0 ]; do
@@ -394,6 +400,113 @@ def test_installer_env_only_aborts_rather_than_writing_an_empty_tag(tmp_path: Pa
     env_text = (tree / ".env").read_text() if (tree / ".env").exists() else ""
     assert "EASYSYNQ_IMAGE_TAG=\n" not in env_text
     assert "EASYSYNQ_IMAGE_TAG=" not in env_text.replace("EASYSYNQ_IMAGE_TAG=dev", "")
+
+
+# --- the bundle must be provable, and the release gate must actually run -----------------------
+
+
+def test_manifest_records_a_content_identity_for_every_built_image(tmp_path: Path) -> None:
+    """The tag and the revision label both prove "same checkout", not "same bundle".
+
+    An older tarball built from the same commit loads the same tags and satisfies both. The IMAGE
+    ID (the sha256 of the config, stable across docker save/load — verified) is the only content
+    identity a never-pushed image has: `RepoDigests` is empty until it is pushed to a registry.
+    """
+    out, _ = _run_bundle(tmp_path)
+    manifest = out.with_suffix(".tar.manifest.txt").read_text()
+    tag = _read("VERSION").strip()
+    for name in ("api", "web", "keycloak"):
+        line = next(
+            (ln for ln in manifest.splitlines() if ln.startswith(f"easysynq/{name}:{tag} ")), None
+        )
+        assert line is not None, f"easysynq/{name} has no recorded image id:\n{manifest}"
+        assert line.split()[1].startswith("sha256:")
+
+
+def test_the_verifier_rejects_an_image_that_is_not_the_bundle_s(tmp_path: Path) -> None:
+    """Behavioural: run the real verifier against a docker that reports a different id."""
+    manifest = tmp_path / "m.txt"
+    manifest.write_text("# built:\neasysynq/api:0.1.0 sha256:" + "a" * 64 + "\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "docker"
+    fake.write_text('#!/usr/bin/env bash\necho "sha256:' + "b" * 64 + '"\n')
+    fake.chmod(0o755)
+    result = subprocess.run(  # noqa: S603 - repository-owned script with an isolated fake docker
+        [BASH, str(ROOT / "scripts" / "verify-bundle.sh"), str(manifest)],
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+    )
+    assert result.returncode != 0
+    assert "does not match the bundle" in result.stderr
+
+
+def test_the_verifier_accepts_a_matching_image(tmp_path: Path) -> None:
+    recorded = "sha256:" + "c" * 64
+    manifest = tmp_path / "m.txt"
+    manifest.write_text(f"# built:\neasysynq/api:0.1.0 {recorded}\npostgres:16\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "docker"
+    fake.write_text(f'#!/usr/bin/env bash\necho "{recorded}"\n')
+    fake.chmod(0o755)
+    result = subprocess.run(  # noqa: S603 - repository-owned script with an isolated fake docker
+        [BASH, str(ROOT / "scripts" / "verify-bundle.sh"), str(manifest)],
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "1 built image(s) match" in result.stdout
+
+
+def test_the_verifier_refuses_a_manifest_with_no_recorded_ids(tmp_path: Path) -> None:
+    """A pre-digest manifest must not read as a pass — that would be the worst outcome."""
+    manifest = tmp_path / "m.txt"
+    manifest.write_text("# built:\neasysynq/api:0.1.0\npostgres:16\n")
+    result = subprocess.run(  # noqa: S603 - repository-owned script, no docker call reached
+        [BASH, str(ROOT / "scripts" / "verify-bundle.sh"), str(manifest)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "records no image ids" in result.stderr
+
+
+def test_the_release_gate_runs_on_a_version_tag() -> None:
+    """test_images_lock_pinned.py SKIPS unless EASYSYNQ_RELEASE=1, and nothing set it — the guard
+    was inert, so a release could ship floating third-party tags with every check green."""
+    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
+    assert "v*" in workflow[True]["push"]["tags"], "no tag trigger means the gate never fires"
+    gate = workflow["jobs"]["release-gate"]
+    assert gate["if"] == "startsWith(github.ref, 'refs/tags/v')"
+    steps = [s for s in gate["steps"] if s.get("env", {}).get("EASYSYNQ_RELEASE") == "1"]
+    assert steps, "the gate must actually set EASYSYNQ_RELEASE=1"
+    assert "test_images_lock_pinned" in steps[0]["run"]
+
+
+def test_a_local_release_check_exists() -> None:
+    """CI fires only on a tag; the ceremony needs a way to check BEFORE tagging.
+
+    Assert the recipe body, not the string: the justfile comment above it also mentions
+    EASYSYNQ_RELEASE, so a substring check passes against a gutted recipe.
+    """
+    lines = _read("justfile").splitlines()
+    start = lines.index("release-check:")
+    body = [ln for ln in lines[start + 1 :] if ln.startswith((" ", "\t"))]
+    assert body, "release-check has no body"
+    assert any("EASYSYNQ_RELEASE=1" in ln and "pytest" in ln for ln in body), (
+        f"release-check does not run the digest-pin guard: {body}"
+    )
+
+
+def test_offline_install_can_verify_the_bundle_it_loaded() -> None:
+    install = _read("scripts/install.sh")
+    assert "--bundle-manifest" in install
+    assert 'bash "$ROOT/scripts/verify-bundle.sh" "$BUNDLE_MANIFEST"' in install
+    # Silence would imply verification happened.
+    assert "cannot verify the loaded images came from the" in install
 
 
 # --- 4. the offline install neither pulls nor builds ------------------------------------------
