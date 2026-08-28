@@ -4993,8 +4993,10 @@ paths:
       tags: [dcr]
       operationId: listDcrs
       summary: >-
-        List the org's DCRs. Filter state / change_type / target_document_id / created_by /
-        reason_class. Needs changeRequest.read.
+        List DCRs, row-filtered to what the caller may changeRequest.read at each DCR's target
+        document's scope (a no-grant caller gets 200 + empty, never 403; a CREATE DCR with no
+        target authorizes at SYSTEM scope). Filter state / change_type / target_document_id /
+        created_by / reason_class.
       parameters:
         - { name: state, in: query, required: false, schema: { $ref: "#/components/schemas/DcrState" } }
         - name: change_type
@@ -5012,19 +5014,23 @@ paths:
           schema: { $ref: "#/components/schemas/DcrReasonClass" }
       responses:
         "200":
-          description: The org's DCRs.
+          description: The DCRs visible to the caller's changeRequest.read scope.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data: { type: array, items: { $ref: "#/components/schemas/Dcr" } }
+        # 403 here is the account-state gate only (setup_incomplete / inactive) — an authorization
+        # shortfall filters rows instead.
         "403": { $ref: "#/components/responses/ProblemResponse" }
   /dcrs/{dcr_id}:
     get:
       tags: [dcr]
       operationId: getDcr
-      summary: A DCR with its append-only stage-event trail. Needs changeRequest.read.
+      summary: >-
+        A DCR with its append-only stage-event trail. Needs changeRequest.read at the target
+        document's scope (SYSTEM for a CREATE DCR).
       parameters:
         - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -5144,7 +5150,11 @@ paths:
     get:
       tags: [dcr]
       operationId: getDcrImpact
-      summary: The DCR's auto-populated impact_assessment rows (S-dcr-2). Needs changeRequest.read.
+      summary: >-
+        The DCR's auto-populated impact_assessment rows (S-dcr-2). Needs changeRequest.read at
+        the target document's scope; neighbour identifiers, the record sample, and the
+        obsoletion advisory are filtered to the caller's read scope like the where-used panel
+        (the persisted assessment stays complete).
       parameters:
         - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:

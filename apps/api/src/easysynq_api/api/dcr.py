@@ -17,6 +17,7 @@ SYSTEM overrides meanwhile (the family precedent). Reads gate at SYSTEM + an org
 
 from __future__ import annotations
 
+import copy
 import datetime
 import uuid
 from typing import Any
@@ -28,7 +29,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
-from ..db.models._dcr_enums import DcrChangeType, DcrReasonClass, DcrSourceLinkType, DcrState
+from ..db.models._dcr_enums import (
+    DcrChangeType,
+    DcrReasonClass,
+    DcrSourceLinkType,
+    DcrState,
+    ImpactDimension,
+)
 from ..db.models._vault_enums import ChangeSignificance
 from ..db.models.app_user import AppUser
 from ..db.models.dcr import Dcr
@@ -64,6 +71,12 @@ from ..services.vault import (
 from ..services.vault import repository as vault_repo
 from ..services.vault.release_scope import enrich_release_sod_scope
 from ..tasks.lifecycle import release_due_versions
+from .documents import (
+    _panel_request_context,
+    _readable_doc_predicate,
+    _redact_obsoletion_reasons,
+    _visible_record_sample,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["dcr"])
 
@@ -625,18 +638,76 @@ async def raise_dcr_from_capa_endpoint(
     )
 
 
+async def _filter_impact_for_caller(
+    session: AsyncSession,
+    caller: AppUser,
+    request: Request,
+    target_document_id: uuid.UUID | None,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """R57 over the impact READ (authz-reviewer catch on the U2 scoping): the persisted
+    ``auto_populated`` snapshot embeds where-used slices — neighbour document identifiers, a
+    record sample, the obsoletion advisory's referencing identifiers — that the where-used
+    panel per-row filters for the SAME caller. U2 made this surface reachable by scoped
+    readers, so the read applies the same discipline (the stored rows and the assess path
+    stay complete). Dicts are deep-copied before mutation so the ORM JSONB is never touched."""
+    ctx = _panel_request_context(request)
+    doc_grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
+    doc_visible = _readable_doc_predicate(session, doc_grants, ctx)
+    for row in rows:
+        ap = copy.deepcopy(row["auto_populated"])
+        row["auto_populated"] = ap
+        if not isinstance(ap, dict):
+            continue
+        if row["dimension"] == ImpactDimension.dependent_documents.value:
+            for bucket in (
+                "child_documents",
+                "parent_documents",
+                "referenced_by",
+                "forms_templates",
+            ):
+                vals = ap.get(bucket)
+                if isinstance(vals, list):
+                    ap[bucket] = [
+                        r
+                        for r in vals
+                        if isinstance(r, dict) and await doc_visible(r["document_id"])
+                    ]
+        elif row["dimension"] == ImpactDimension.records_produced_under.value:
+            sample = ap.get("sample")
+            if isinstance(sample, list):
+                ap["sample"] = await _visible_record_sample(session, caller, ctx, sample)
+        elif row["dimension"] == ImpactDimension.clause_coverage.value:
+            gap = ap.get("obsoletion_star_gap")
+            if (
+                isinstance(gap, dict)
+                and isinstance(gap.get("reasons"), list)
+                and target_document_id is not None
+            ):
+                await _redact_obsoletion_reasons(
+                    session, doc_visible, target_document_id, gap["reasons"]
+                )
+    return rows
+
+
 @router.get("/dcrs/{dcr_id}/impact")
 async def get_dcr_impact_endpoint(
     dcr_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_dcr_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """The DCR's auto-populated impact_assessment rows (gate ``changeRequest.read``)."""
+    """The DCR's auto-populated impact_assessment rows (gate ``changeRequest.read`` at the
+    target document's scope), R57-filtered per caller like the where-used panel."""
     dcr = await dcr_repo.get_dcr(session, dcr_id)
     if dcr is None or dcr.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="DCR not found")
     rows = [_impact(ia) for ia in await dcr_repo.list_impact_assessments(session, dcr_id)]
-    return {"data": rows}
+    return {
+        "data": await _filter_impact_for_caller(
+            session, caller, request, dcr.target_document_id, rows
+        )
+    }
 
 
 @router.put("/dcrs/{dcr_id}/impact")

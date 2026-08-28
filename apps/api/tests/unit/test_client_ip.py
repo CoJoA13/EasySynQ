@@ -26,7 +26,8 @@ def _request(headers: dict[str, str], client: tuple[str, int] | None) -> Request
 
 @pytest.mark.parametrize("client_ip", [pack_client_ip, ack_client_ip])
 def test_forged_leftmost_xff_is_ignored(client_ip) -> None:  # type: ignore[no-untyped-def]
-    # Caddy appends the real peer to any client-supplied XFF: "forged, real" → take "real".
+    # Modern Caddy (>=2.5) REPLACES an untrusted client's XFF with the single real-peer entry;
+    # older 2.x appended — the rightmost entry is the true client under both behaviors.
     req = _request({"x-forwarded-for": "6.6.6.6, 10.0.0.7"}, ("172.18.0.2", 40000))
     assert client_ip(req) == "10.0.0.7"
 

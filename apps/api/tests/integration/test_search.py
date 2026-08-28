@@ -13,7 +13,7 @@ from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from easysynq_api.db.models.authz_grant import PermissionOverride
@@ -288,7 +288,10 @@ async def test_concrete_type_deny_is_consistent_across_document_read_surfaces(
 
 
 async def test_ip_allow_predicated_read_matches_on_row_filters(
-    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
 ) -> None:
     """[Audit U1] The document.read row filters (/search, /search/suggest, GET /documents) thread
     the live source_ip into their RequestContext, so an ip_allow-predicated grant evaluates
@@ -340,3 +343,15 @@ async def test_ip_allow_predicated_read_matches_on_row_filters(
     r = await app_client.get("/api/v1/documents", headers=ho)
     assert r.status_code == 200, r.text
     assert doc["id"] not in [d["id"] for d in r.json()["data"]]
+
+    # The threaded value follows the request PEER, not any constant (false-pass-hunter pin: a
+    # hardcoded "127.0.0.1" would pass every leg above). Through a transport presenting
+    # 203.0.113.9 the roles invert: the 203-bound reader sees the doc, the 127-bound one loses it.
+    alt_transport = ASGITransport(app=app_under_test, client=("203.0.113.9", 12345))
+    async with AsyncClient(transport=alt_transport, base_url="http://test") as alt:
+        r = await alt.get(f"/api/v1/search?q=Ipbound{token}", headers=ho)
+        assert doc["id"] in [h_["id"] for h_ in r.json()["results"]]
+        r = await alt.get("/api/v1/documents", headers=ho)
+        assert doc["id"] in [d["id"] for d in r.json()["data"]]
+        r = await alt.get(f"/api/v1/search?q=Ipbound{token}", headers=hm)
+        assert r.json()["results"] == []
