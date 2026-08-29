@@ -1,4 +1,4 @@
-import { Group, Paper, Text } from "@mantine/core";
+import { ScorecardBandShell } from "../../lib/ScorecardBandShell";
 import type { ObjectiveRag, ObjectiveScorecard } from "../../lib/types";
 import { StatusBadge } from "../../lib/StatusBadge";
 import { RAG_LABEL, RAG_TONE } from "./labels";
@@ -17,22 +17,21 @@ const KEYS: ObjectiveRag[] = ["green", "amber", "red", "unmeasured"];
 
 export function ObjectiveScorecardBand({ total, onTarget, byRag }: Props) {
   return (
-    <Paper withBorder p="md" radius="md" bg="var(--es-surface-2)">
-      <Group justify="space-between" wrap="wrap">
-        <Text>
+    <ScorecardBandShell
+      headline={
+        <>
           {onTarget} / {total} on target
-        </Text>
-        <Group gap="xs">
-          {KEYS.map((k) => (
-            <StatusBadge
-              key={k}
-              tone={RAG_TONE[k]}
-              label={`${byRag[k]} ${RAG_LABEL[k].toLowerCase()}`}
-              kind="Objectives"
-            />
-          ))}
-        </Group>
-      </Group>
-    </Paper>
+        </>
+      }
+    >
+      {KEYS.map((k) => (
+        <StatusBadge
+          key={k}
+          tone={RAG_TONE[k]}
+          label={`${byRag[k]} ${RAG_LABEL[k].toLowerCase()}`}
+          kind="Objectives"
+        />
+      ))}
+    </ScorecardBandShell>
   );
 }

@@ -3,22 +3,20 @@ import {
   Box,
   Button,
   Container,
-  Group,
   Paper,
   SegmentedControl,
   SimpleGrid,
   Table,
   Text,
-  Title,
 } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
-import { AsOf } from "../../lib/AsOf";
 import { TruncationNotice } from "../../app/shell/TruncationNotice";
 import { RegisterFilterBar } from "../registers/RegisterFilterBar";
 import type { RegisterFilterState } from "../registers/registerFilters";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import {
@@ -105,9 +103,7 @@ export function AuditsListPage() {
   if (forbidden) {
     return (
       <Container size="xl" py="md">
-        <Title order={2} mb="md">
-          Internal audit
-        </Title>
+        <RegisterPageHeader title="Internal audit" />
         <NoAccessState
           message={
             <>
@@ -129,9 +125,7 @@ export function AuditsListPage() {
   if (isError) {
     return (
       <Container size="xl" py="md">
-        <Title order={2} mb="md">
-          Internal audit
-        </Title>
+        <RegisterPageHeader title="Internal audit" />
         <ErrorState title="Couldn't load audits" onRetry={() => refetch()} />
       </Container>
     );
@@ -150,11 +144,11 @@ export function AuditsListPage() {
 
   return (
     <Container size="xl" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={2}>Internal audit</Title>
-        {can("audit.create") && <Button onClick={() => setNewOpen(true)}>New audit</Button>}
-      </Group>
-      <AsOf at={dataUpdatedAt} />
+      <RegisterPageHeader
+        title="Internal audit"
+        actions={can("audit.create") && <Button onClick={() => setNewOpen(true)}>New audit</Button>}
+        updatedAt={dataUpdatedAt}
+      />
       {/* The date window only. This page already renders a "State" control, and a duplicate
           accessible name breaks getByLabelText. The window is the one facet no register had, and the
           only one that reaches entries older than the server's scan window; the API accepts the

@@ -1,9 +1,17 @@
-import { Badge, Button, Container, Group, Stack, Table, Text, Title } from "@mantine/core";
+import {
+  Badge,
+  Button,
+  Container,
+  Group,
+  Stack,
+  Table,
+  Text,
+} from "@mantine/core";
 import { useOrgDate } from "../../app/shell/useOrgDate";
 import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
-import { AsOf } from "../../lib/AsOf";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { DirectoryUser, Ncr } from "../../lib/types";
 import { DispositionModal } from "./DispositionModal";
@@ -30,9 +38,7 @@ export function NcrsPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={3} mb="md">
-          Nonconforming Output (NCR)
-        </Title>
+        <RegisterPageHeader title="Nonconforming Output (NCR)" order={3} />
         <NoAccessState
           message={
             <>
@@ -54,9 +60,7 @@ export function NcrsPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <Title order={3} mb="md">
-          Nonconforming Output (NCR)
-        </Title>
+        <RegisterPageHeader title="Nonconforming Output (NCR)" order={3} />
         <ErrorState title="Couldn't load NCRs" onRetry={() => refetch()} />
       </Container>
     );
@@ -65,11 +69,12 @@ export function NcrsPage() {
   const rows = data ?? [];
   return (
     <Container size="lg" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={3}>Nonconforming Output (NCR)</Title>
-        {can("ncr.create") && <Button onClick={() => setFormOpen(true)}>Raise NCR</Button>}
-      </Group>
-      <AsOf at={dataUpdatedAt} />
+      <RegisterPageHeader
+        title="Nonconforming Output (NCR)"
+        order={3}
+        actions={can("ncr.create") && <Button onClick={() => setFormOpen(true)}>Raise NCR</Button>}
+        updatedAt={dataUpdatedAt}
+      />
       {rows.length === 0 ? (
         <EmptyState message="No NCRs raised yet." />
       ) : (

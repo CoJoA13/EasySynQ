@@ -1,4 +1,4 @@
-import { Group, Paper, Text } from "@mantine/core";
+import { ScorecardBandShell } from "../../lib/ScorecardBandShell";
 import type { ContextIssue } from "../../lib/types";
 import { StatusBadge } from "../../lib/StatusBadge";
 import { CLASSIFICATION_GLYPH, CLASSIFICATION_TONE } from "./labels";
@@ -17,32 +17,31 @@ export function ContextScorecardBand({ rows }: { rows: ContextIssue[] }) {
   const neverReviewed = rows.filter((r) => r.last_reviewed_at === null).length;
 
   return (
-    <Paper withBorder p="md" radius="md" bg="var(--es-surface-2)">
-      <Group justify="space-between" wrap="wrap">
-        <Text>
+    <ScorecardBandShell
+      headline={
+        <>
           {active} of {total} active
-        </Text>
-        <Group gap="xs">
-          <StatusBadge
-            tone={CLASSIFICATION_TONE.internal}
-            glyph={CLASSIFICATION_GLYPH.internal}
-            label={`${internal} internal`}
-            kind="Context"
-          />
-          <StatusBadge
-            tone={CLASSIFICATION_TONE.external}
-            glyph={CLASSIFICATION_GLYPH.external}
-            label={`${external} external`}
-            kind="Context"
-          />
-          {closed > 0 && <StatusBadge tone="neutral" label={`${closed} closed`} kind="Context" />}
-          <StatusBadge
-            tone={neverReviewed > 0 ? "warning" : "neutral"}
-            label={`${neverReviewed} never reviewed`}
-            kind="Context"
-          />
-        </Group>
-      </Group>
-    </Paper>
+        </>
+      }
+    >
+      <StatusBadge
+        tone={CLASSIFICATION_TONE.internal}
+        glyph={CLASSIFICATION_GLYPH.internal}
+        label={`${internal} internal`}
+        kind="Context"
+      />
+      <StatusBadge
+        tone={CLASSIFICATION_TONE.external}
+        glyph={CLASSIFICATION_GLYPH.external}
+        label={`${external} external`}
+        kind="Context"
+      />
+      {closed > 0 && <StatusBadge tone="neutral" label={`${closed} closed`} kind="Context" />}
+      <StatusBadge
+        tone={neverReviewed > 0 ? "warning" : "neutral"}
+        label={`${neverReviewed} never reviewed`}
+        kind="Context"
+      />
+    </ScorecardBandShell>
   );
 }

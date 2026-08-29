@@ -3,18 +3,16 @@ import {
   Anchor,
   Button,
   Container,
-  Group,
   SegmentedControl,
   Select,
   Stack,
   Table,
   Text,
-  Title,
 } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import type { InterestedParty, InterestedPartyInfluence } from "../../lib/types";
-import { AsOf } from "../../lib/AsOf";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { StatusBadge } from "../../lib/StatusBadge";
@@ -153,9 +151,7 @@ export function InterestedPartiesRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Interested parties
-        </Title>
+        <RegisterPageHeader title="Interested parties" />
         <NoAccessState message="You don't have access to the Interested Parties register." />
       </Container>
     );
@@ -163,9 +159,7 @@ export function InterestedPartiesRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Interested parties
-        </Title>
+        <RegisterPageHeader title="Interested parties" />
         <ErrorState
           title="Couldn't load the interested-parties register"
           message="Something went wrong. Please try again."
@@ -184,14 +178,13 @@ export function InterestedPartiesRegisterPage() {
 
   return (
     <Container size="lg" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={2}>Interested parties</Title>
-        {headEditable && canManage && (
+      <RegisterPageHeader
+        title="Interested parties"
+        actions={headEditable && canManage && (
           <Button onClick={() => setCreateOpen(true)}>New party</Button>
         )}
-      </Group>
-
-      <AsOf at={dataUpdatedAt} />
+        updatedAt={dataUpdatedAt}
+      />
       {banner && (
         <Alert color="gray" variant="light" mt="xs">
           {banner}

@@ -49,6 +49,39 @@ early tends to cost more than the duplication it removes, and the divergence is 
 incidental. Revisit if a fourth register family appears, or if the panels converge to near-identical
 under a change that has to be made three times.
 
+### Revisited at S-ui-4 (2026-08-29) — the measurement was wrong; the decision mostly stands
+
+The trigger above was tested against the shipped code. Two of its three named members keep the
+acceptance; the third does not, and the original numbers were understated on every metric.
+
+**Corrected measurement.** The files have not materially drifted since the entry was written (one
+post-creation commit, correctly domain-specific), so the gap is a measurement error rather than
+decay. `RegisterLifecyclePanel` is 83.9–87.9% line-identical raw, and **96.5–98.3%** once the
+domain nouns and hook names are normalised and comments are stripped; `PublishRegisterModal` is
+87.3–88.6% raw and **95.6–98.2%** normalised. The complete residual is four prose strings in the
+panel, two in the modal, and three hook names. There is no structural divergence at all — no
+differing conditional, gate, state or element — and the three `*RegisterState` types are each an
+alias of the same `DocumentCurrentState`, so even the type divergence is nominal.
+
+**Limb 1 — "a fourth register family appears": does not fire.** Only risk, context and interested
+parties carry a register-head publish/release console. The objectives lifecycle is per-entity
+(`useObjectiveApproval`, a governing-vs-pending revision card), not a register head.
+
+**Limb 2 — "converge to near-identical under a change that has to be made three times": splits by
+member.** The panel and modal converged, but nothing has forced a three-times edit on them and the
+interface programme does not: their `<Card withBorder mt="md">` sets no `radius`, so the 16px card
+rule reaches it once through the Mantine theme's `components` block. The **scorecard band** is
+different — all three (and objectives' fourth) hardcode `<Paper … radius="md">`, an explicit prop
+that a theme default cannot override, so the same rule would have been four hand edits.
+
+**Decision, owner, 2026-08-29: collapse the scorecard band only.** `lib/ScorecardBandShell.tsx`
+now owns the shared `Paper`/`Group`/`Text` shell for all four bands; every band keeps its own
+rollup arithmetic and badge vocabulary, which is the part that is genuinely domain-specific. The
+`RegisterLifecyclePanel` and `PublishRegisterModal` acceptance **stands** on the corrected numbers:
+three call sites is below the bar this repository applies to shared abstractions, and the
+duplication has cost nothing measurable in its lifetime. The revisit trigger is unchanged and still
+live for those two.
+
 ## Part 2 — New Stakeholder Decisions (just locked by the product owner)
 
 These four decisions were locked by the product owner as part of this reconcile-and-harden pass. They are normative and bind every section.
