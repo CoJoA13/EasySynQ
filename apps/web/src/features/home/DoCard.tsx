@@ -3,7 +3,7 @@ import { useAckCount } from "../../app/shell/useAckCount";
 import { useDriftStatus } from "../drift/hooks";
 import { QuadrantCard, TileNoAccess, TileSkeleton } from "./QuadrantCard";
 import { StatLine } from "./StatLine";
-import { driftRag, driftStatusText, worstRag, type Rag } from "./rag";
+import { driftRag, driftStatusText, quadrantSignal, type QuadrantObservation } from "./rag";
 
 // DO (Cl 7–8): controlled-document integrity (mirror + blob drift) + superseded copies still in
 // circulation + the caller's acknowledgements (self-scoped — DO stays visible to everyone via acks).
@@ -12,19 +12,20 @@ export function DoCard() {
   const { count: ackCount, isError: ackError, isLoading: ackLoading } = useAckCount();
 
   const lines: ReactNode[] = [];
-  const rags: Rag[] = [];
+  // Each rendered line also records its observation, so the header folds from the tile itself.
+  const obs: QuadrantObservation[] = [];
 
   if (!dr.forbidden && !dr.isError && dr.data) {
     const rag = driftRag(dr.data);
-    rags.push(rag);
-    lines.push(
-      <StatLine
-        key="int"
-        label={`Mirror & blob integrity — ${driftStatusText(dr.data)}`}
-        tone={rag}
-      />,
-    );
+    const label = `Mirror & blob integrity — ${driftStatusText(dr.data)}`;
+    obs.push({ label, rag });
+    lines.push(<StatLine key="int" label={label} tone={rag} />);
     if (dr.data.superseded_copies.copies > 0) {
+      obs.push({
+        value: dr.data.superseded_copies.copies,
+        label: "superseded copies in circulation",
+        rag: "neutral",
+      });
       lines.push(
         <StatLine
           key="sc"
@@ -38,6 +39,7 @@ export function DoCard() {
   // Only show the ack line on a real count — an errored read (count 0 on failure) renders nothing, never
   // a misleading "0 acknowledgements" (the silent-zero the TopBar bell also guards against).
   if (!ackError && ackCount > 0) {
+    obs.push({ value: ackCount, label: "acknowledgements awaiting you", rag: "neutral" });
     lines.push(
       <StatLine key="ack" value={ackCount} label="acknowledgements awaiting you" tone="neutral" />,
     );
@@ -54,7 +56,10 @@ export function DoCard() {
     <QuadrantCard
       phase="DO"
       clauseLabel="Cl 7–8"
-      rag={rags.length ? worstRag(rags) : null}
+      // The header asserts NOTHING while the body cannot show anything. Without this gate a tile
+      // rendering TileNoAccess still announced a signal folded from a read the body suppresses —
+      // surfacing in the header exactly the count the tile is declining to show.
+      signal={allForbidden || loading || obs.length === 0 ? null : quadrantSignal(obs)}
       openTo="/drift"
       openLabel="Open drift status"
     >

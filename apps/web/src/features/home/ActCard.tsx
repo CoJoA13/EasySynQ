@@ -9,8 +9,8 @@ import {
   countRag,
   initiativesInProgressCount,
   ncrsAwaitingCount,
-  worstRag,
-  type Rag,
+  quadrantSignal,
+  type QuadrantObservation,
 } from "./rag";
 
 // ACT (Cl 10): open CAPAs (amber when >0) + NCRs awaiting disposition (red when >0) + complaints awaiting
@@ -23,35 +23,42 @@ export function ActCard() {
   const init = useInitiatives();
 
   const lines: ReactNode[] = [];
-  const rags: Rag[] = [];
+  // Every rendered StatLine also records the observation behind it, so the header signal is folded
+  // from exactly what the tile shows rather than computed a second way (S-ui-3).
+  const obs: QuadrantObservation[] = [];
 
   if (!ca.forbidden && !ca.isError && ca.data) {
     const n = capasOpenCount(ca.data);
     const rag = countRag(n, "amber");
-    rags.push(rag);
     // U14: this KPI counts client-side over the CAPA register, whose scan window is capped.
     // When the window filled, the count is a FLOOR — say so rather than under-report a
     // compliance number as if it were exact.
-    lines.push(
-      <StatLine key="capa" value={ca.truncated ? `${n}+` : n} label="CAPAs open" tone={rag} />,
-    );
+    const value = ca.truncated ? `${n}+` : n;
+    obs.push({ value, label: "CAPAs open", rag });
+    lines.push(<StatLine key="capa" value={value} label="CAPAs open" tone={rag} />);
   }
   if (!nc.forbidden && !nc.isError && nc.data) {
     const n = ncrsAwaitingCount(nc.data);
     const rag = countRag(n, "red");
-    rags.push(rag);
+    obs.push({ value: n, label: "NCRs awaiting disposition", rag });
     lines.push(<StatLine key="ncr" value={n} label="NCRs awaiting disposition" tone={rag} />);
   }
   if (!co.forbidden && !co.isError && co.data) {
     const n = complaintsAwaitingCount(co.data);
     const rag = countRag(n, "amber");
-    rags.push(rag);
+    obs.push({ value: n, label: "complaints awaiting triage", rag });
     lines.push(<StatLine key="comp" value={n} label="complaints awaiting triage" tone={rag} />);
   }
   if (!init.forbidden && !init.isError && init.data) {
     const n = initiativesInProgressCount(init.data);
-    // Neutral, informational — deliberately NOT pushed to `rags` (improvement activity never reds/drags
-    // the ACT tile; the tile RAG stays the worst of the actionable CAPA/NCR/complaint signals).
+    // Neutral, informational. It IS recorded as an observation so a caller who can see only this
+    // line still gets a header that names it — but `neutral` is the lowest severity, so it can never
+    // raise the tile above the actionable CAPA/NCR/complaint signals.
+    obs.push({
+      value: init.truncated ? `${n}+` : n,
+      label: "initiatives in progress",
+      rag: "neutral",
+    });
     lines.push(
       <StatLine
         key="init"
@@ -75,7 +82,10 @@ export function ActCard() {
     <QuadrantCard
       phase="ACT"
       clauseLabel="Cl 10"
-      rag={rags.length ? worstRag(rags) : null}
+      // The header asserts NOTHING while the body cannot show anything. Without this gate a tile
+      // rendering TileNoAccess still announced a signal folded from a read the body suppresses —
+      // surfacing in the header exactly the count the tile is declining to show.
+      signal={allForbidden || loading || obs.length === 0 ? null : quadrantSignal(obs)}
       openTo="/capa"
       openLabel="Open CAPA & NCR"
     >

@@ -31,7 +31,11 @@ it("shows objectives on target + overdue reviews, RAG red when an objective is r
   );
   expect(within(card).getByLabelText("2 document reviews overdue")).toBeInTheDocument();
   await waitFor(() =>
-    expect(within(card).getByLabelText(/status: action required/i)).toBeInTheDocument(),
+    expect(
+      within(within(card).getByRole("group", { name: "PLAN signal" })).getByText(
+        /status: action required/i,
+      ),
+    ).toBeInTheDocument(),
   );
 });
 
@@ -97,7 +101,11 @@ it("shows the high-risk line from the GOVERNING summary (action required when > 
     expect(within(card).getByLabelText("2 high / critical risks")).toBeInTheDocument(),
   );
   // a high/critical risk drives the headline to Action required even with green objectives + 0 overdue
-  expect(within(card).getByLabelText(/status: action required/i)).toBeInTheDocument();
+  expect(
+    within(within(card).getByRole("group", { name: "PLAN signal" })).getByText(
+      /status: action required/i,
+    ),
+  ).toBeInTheDocument();
 });
 
 it("shows an honest 'no published register' line when the register is unpublished", async () => {

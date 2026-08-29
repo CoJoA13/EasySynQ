@@ -133,6 +133,17 @@
   --es-check:       #c98a14;  --es-check-soft: #fcf2dd;  --es-check-text: #8f6107;
   --es-act:         #1f9d5b;  --es-act-soft:   #e4f6ec;  --es-act-text:   #157346;
 
+  /* --- Quadrant header band (S-ui-3) -----------------------------------------------------------
+     `-header` is the tint the signal band is painted on and `-clause` is its SECOND text tier (the
+     clause range), a step below `-text`. In light the band reuses the `-soft` tint, which already
+     reads clearly against the white card. Every `-text` and `-clause` value clears 4.5:1 on its own
+     `-header`; the two tiers separate mainly by size and weight, with colour as a secondary cue,
+     because CHECK's headroom above the AA floor is only wide enough for a 1.04 colour step. */
+  --es-plan-header:  #ecedfb;  --es-plan-clause:  #5b62bc;  /* 6.97 / 4.61 on the tint */
+  --es-do-header:    #e3f0fa;  --es-do-clause:    #387198;  /* 5.55 / 4.55 */
+  --es-check-header: #fcf2dd;  --es-check-clause: #856830;  /* 4.87 / 4.70 */
+  --es-act-header:   #e4f6ec;  --es-act-clause:   #3d7758;  /* 5.23 / 4.70 */
+
   /* --- Layout dimensions --- */
   /* rem so the shell grows with the reader's font size. Mantine converted the previous NUMERIC
      AppShell props to rem, so px here would shrink the chrome relative to its own contents. */
@@ -210,6 +221,16 @@
   --es-do:          #59a6e0;  --es-do-soft:    #112433;  --es-do-text:    #8cc6f0;
   --es-check:       #e0a93a;  --es-check-soft: #2a2113;  --es-check-text: #f0c878;
   --es-act:         #3cc77e;  --es-act-soft:   #14271d;  --es-act-text:   #6fe0a4;
+
+  /* Quadrant header band. Deliberately LIFTED off `-soft` rather than reusing it: measured against
+     the card it sits on, the `-soft` tints land at 1.12-1.14, numerically level with light's
+     1.11-1.16 on white — but that is not perceptual parity, because a small deviation from white
+     is far easier to see than the same ratio against near-black. These sit at 1.33-1.43 so the band
+     reads as a deliberate strip rather than a wash. Owner-reviewed before implementation. */
+  --es-plan-header:  #2b3050;  --es-plan-clause:  #959de0;  /* 6.35 / 4.98 on the tint */
+  --es-do-header:    #1a3749;  --es-do-clause:    #74acd2;  /* 6.79 / 5.08 */
+  --es-check-header: #3a2d1c;  --es-check-clause: #c1a15f;  /* 8.42 / 5.43 */
+  --es-act-header:   #1e3a2c;  --es-act-clause:   #5ab98a;  /* 7.59 / 5.15 */
 }
 
 /* --- Mantine `dimmed` remap (S-ui-1) ---------------------------------------------------------
