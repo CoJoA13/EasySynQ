@@ -1,4 +1,5 @@
 import {
+  Badge,
   createTheme,
   defaultVariantColorsResolver,
   Drawer,
@@ -181,6 +182,16 @@ export const theme = createTheme({
     }),
     Drawer: Drawer.extend({
       defaultProps: { closeButtonProps: { "aria-label": "Close" } },
+    }),
+    // Mantine caps a Badge at `max-width: 100%` and ellipsises its label, so inside a squeezed
+    // table cell a status reads "ACTION REQUIR…" or "DRA…" — a status a sighted reader cannot
+    // read is not a status. (The accessible name is unaffected: StatusBadge sets its own
+    // aria-label, so screen readers always had the full text. This is a visual defect only.)
+    // Letting the badge size to its content widens the column, which widens the table, which the
+    // register's Table.ScrollContainer already scrolls — the tables are horizontally scrollable by
+    // design, so growth is absorbed rather than clipped.
+    Badge: Badge.extend({
+      styles: { root: { maxWidth: "none" }, label: { overflow: "visible" } },
     }),
   },
 });

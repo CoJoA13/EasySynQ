@@ -24,7 +24,7 @@ export function RegisterFilterBar({ value, onChange }: Props) {
   const set = (patch: Partial<RegisterFilterState>) => onChange({ ...value, ...patch });
 
   return (
-    <Group gap="xs" align="flex-end" wrap="wrap">
+    <Group gap="xs" align="flex-end" wrap="wrap" mb="md">
       <TextInput
         type="date"
         size="xs"
