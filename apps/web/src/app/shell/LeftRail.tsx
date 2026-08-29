@@ -121,7 +121,7 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
     // 403 a no-grant caller — the page's own calm NoAccessState handles that.
     {
       to: "/reports/document-control",
-      label: "Document register",
+      label: "Controlled register",
       prefix: "/reports/document-control",
       icon: IconRegister,
     },

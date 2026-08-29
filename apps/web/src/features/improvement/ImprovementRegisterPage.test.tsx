@@ -379,7 +379,7 @@ test("a Cancel move requires a comment before the confirm button enables", async
   await u.click(await screen.findByRole("button", { name: "Cancel initiative" }));
   const confirm = await screen.findByRole("button", { name: "Confirm cancellation" });
   expect(confirm).toBeDisabled();
-  await u.type(screen.getByLabelText(/^Comment/), "Superseded by a broader programme.");
+  await u.type(screen.getByLabelText(/^Comment/), "Superseded by a broader program.");
   expect(confirm).toBeEnabled();
 });
 

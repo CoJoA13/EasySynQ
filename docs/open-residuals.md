@@ -13,7 +13,7 @@ Reason: The register pages do not agree on a heading level, and most of them ren
 `AppShell` contributes no page heading; `HomePage`, `LibraryPage`, `ReportsRegisterPage` and
 `IngestionRunsPage` title at `order={1}`; eleven registers (the ten in
 `apps/web/e2e/support/registers.ts` plus `CapaBoardPage`) title at `order={2}`; the two CAPA
-sub-registers title at `order={3}`; and `ProgrammePage` titles at `order={3}` with an `order={4}`
+sub-registers title at `order={3}`; and `ProgramPage` titles at `order={3}` with an `order={4}`
 sub-heading. So a reader landing on a register meets a document whose
 outline begins at `h2` or `h3` with no `h1` above it, and the level a given register uses carries no
 meaning beyond how it was written. S-ui-4 centralised the markup in `lib/RegisterPageHeader.tsx`
@@ -26,7 +26,7 @@ inside a retheme slice. Centralising it first is what makes the later fix a one-
 Closure contract: Decide the intended outline for a register route and apply it in
 `RegisterPageHeader`, updating every suite that pins a level, and prove the result with an
 axe assertion for a single `h1` and no skipped level on at least one register route in
-`apps/web/e2e/register-accessibility.spec.ts`. The programme's final sweep slice already owes an
+`apps/web/e2e/register-accessibility.spec.ts`. The program's final sweep slice already owes an
 a11y pass per route; this record names the specific defect that pass must close.
 Last reviewed: 2026-08-29
 
@@ -65,9 +65,9 @@ Archivo plus a system monospace; it gives the accent and the focus ring as `#2A6
 shipped accent is the brand mark's teal and the focus ring is a solid teal token corrected for WCAG
 2.2 SC 1.4.11; and it states shell metrics of a 56px top bar and a 264px rail, where the shipped
 layout tokens are 58px and 244px and `AppShell` now reads them. The accent and focus-ring
-divergences predate this programme, but were inert while nothing consumed the tokens; S-ui-1 is the
+divergences predate this program, but were inert while nothing consumed the tokens; S-ui-1 is the
 slice that made them authoritative, so the divergence is now load-bearing rather than latent. The
-programme plan schedules the correction under its final sweep slice, which has not shipped, and a
+program plan schedules the correction under its final sweep slice, which has not shipped, and a
 deferral recorded only in a plan file is not in the live ledger this document owns.
 Closure contract: Bring doc 11 into agreement with `apps/web/src/theme/tokens.css` for typography,
 accent, focus ring and shell metrics, citing the token names rather than restating literal values so
@@ -117,7 +117,7 @@ Last reviewed: 2026-08-28
 
 Status: OPEN
 Owner: Repository owner
-Source: Programme 0 security stop, 2026-08-08;
+Source: Program 0 security stop, 2026-08-08;
 [GHSA-w48q-cv73-mx4w](https://github.com/advisories/GHSA-w48q-cv73-mx4w)
 Reason: The deprecated PostgreSQL MCP package selected by the approved plan resolves a high-severity
 advisory with no compatible fix, so the repository PostgreSQL connector and its owner-database port

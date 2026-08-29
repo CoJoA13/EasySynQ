@@ -29,7 +29,7 @@ main document, workflow, compliance, reporting, audit, ingestion, drift, objecti
 DCR, improvement, risk, context, interested-party, identity-provisioning, first-run setup, and read-only
 Records surfaces. Retention Policy and Evidence Pack management remain without dedicated SPA routes.
 
-The latest completed work is the S-ui interface programme, slices S-ui-1 to S-ui-4. Routes, information architecture, the API, and every permission
+The latest completed work is the S-ui interface program, slices S-ui-1 to S-ui-4. Routes, information architecture, the API, and every permission
 and gating behaviour are unchanged. It is otherwise a surface and layout rework, with one behavioural
 exception: S-ui-2 also corrected cache invalidation for the caller's own task list, which was previously
 refreshed only by the change-request, improvement and leadership decision branches, so a document
@@ -133,7 +133,7 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; this slice does
 not rewrite that implementation-evidence field merely because its branch SHA differs.
 
-Fresh 2026-08-29 evidence for the S-ui programme. The numeric frontmatter above now describes the tree at
+Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above now describes the tree at
 `main` after S-ui-4, which also carries the slices that shipped between 2026-08-17 and this date; the
 2026-08-17 paragraphs below are retained as the evidence for their own tree and are not restated as
 current.
@@ -161,14 +161,14 @@ pull-request checks with `release-gate` skipped as designed. Its four integratio
 response-contract job passed all 284 schemas. Those figures are unchanged from the S-ui-3 run
 (`33239332445`, branch head `05cd1663`), which is what a front-end-only slice should produce; they are
 re-read here rather than carried forward. The slice merged to `main` as `2626ba9`. Contract checking is in sync on this tree at SHA-256
-`e66fa80c1e7c6ffec3f0a1321a59fea2440cf1f48beb6677c1dbe26cd87243cf`, which supersedes the 2026-08-17 hash
+`041da0299dde316f1a6c2ca8acb1106171960ea44e52c19b8b88afd3bf5f7958`, which supersedes the S-ui-3 hash `e66fa80c…` and the 2026-08-17 hash
 recorded below.
 
-`docs/11-ui-ux-design-system.md` was not updated by this programme and now disagrees with the shipped
+`docs/11-ui-ux-design-system.md` was not updated by this program and now disagrees with the shipped
 tokens on typography, accent, focus ring and shell metrics; that gap is recorded as
 `RES-DOC11-TOKEN-DRIFT` in [`open-residuals.md`](open-residuals.md).
 
-The integration and response-contract suites were NOT run locally for this programme; their counts above
+The integration and response-contract suites were NOT run locally for this program; their counts above
 are taken from that CI run rather than from a local execution, because the local Docker-backed fixtures
 were not exercised. Firefox, WebKit, assistive-technology sessions, SMTP delivery, deployment, live
 acceptance and the disposable Fedora proof did not run and are not described as passed.
@@ -255,7 +255,7 @@ workflow now exposes twelve jobs and sixteen aggregate/leaf checks, fifteen of w
 pull request; `release-gate` is skipped outside the release ceremony. Sixteen checks expand from twelve
 jobs because `integration-shards` fans out four ways and `web-shards` two.
 
-## Programme 0 acceptance status
+## Program 0 acceptance status
 
 - PostgreSQL MCP: **disabled** after the reviewed package failed the high-severity advisory gate. No
   connector, launcher, package lock, owner-database port overlay, or orphan database role ships. The sole
@@ -264,6 +264,6 @@ jobs because `integration-shards` fans out four ways and `web-shards` two.
   media checksum, evidence commit, or PASS result is recorded because the required Fedora 44 Everything
   netinstall and Workstation Live media plus a usable `qemu:///system` proof host were not available.
   Completion requires the manual PR/release gate in [`runbooks/fedora-proof.md`](runbooks/fedora-proof.md).
-- Local focused Python acceptance: **PASS on 2026-08-08 with CPython 3.12.13**. The Programme 0
+- Local focused Python acceptance: **PASS on 2026-08-08 with CPython 3.12.13**. The Program 0
   dependency-tooling, deployment-configuration, and CI-workflow matrix completed 80 tests. This does not
   replace the full repository suites or the pending Fedora VM proof.

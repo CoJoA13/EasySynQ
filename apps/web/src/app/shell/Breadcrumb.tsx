@@ -21,7 +21,7 @@ const LABELS: Record<string, string> = {
   complaints: "Complaints",
   ncrs: "NCRs",
   audits: "Internal audit",
-  programme: "Programme",
+  program: "Program",
   dcrs: "Change requests",
   diff: "Visual diff",
   imports: "Import",

@@ -5,7 +5,7 @@ import { MutationErrorState } from "../../lib/states";
 import { useProcesses } from "./hooks";
 import { useCreatePlan } from "./mutations";
 
-// Add a plan to a programme. The process picker rides process.read (omitted on 403 — degrade);
+// Add a plan to a program. The process picker rides process.read (omitted on 403 — degrade);
 // the lead picker rides the user directory (omitted when empty). Date = plain YYYY-MM-DD input.
 export function PlanForm({
   programId,

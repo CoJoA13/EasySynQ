@@ -87,7 +87,7 @@
     },
     {
       "name": "audits",
-      "description": "Internal audits (slice S-aud-1, doc 02 Cl 9.2, doc 10 §5) — the maintained audit programme + its plans (the schedule) and the retained audit records walked through a linear lifecycle FSM (Scheduled→Planned→InProgress→FindingsDraft→Reported→Closing→Closed). Programmes/plans need audit.plan (QMS Owner, SYSTEM scope); audits are created with audit.create and conducted/closed with audit.conduct / audit.close (PROCESS scope, resolved from the plan's auditee process with a SYSTEM-override fallback); reads need audit.read. All keys are the seeded doc-07 catalog. An audit is a kind=RECORD subtype, so its lifecycle events also surface at /documents/{id}/audit-events. Findings + the NC→CAPA close gate land in S-aud-2."
+      "description": "Internal audits (slice S-aud-1, doc 02 Cl 9.2, doc 10 §5) — the maintained audit program + its plans (the schedule) and the retained audit records walked through a linear lifecycle FSM (Scheduled→Planned→InProgress→FindingsDraft→Reported→Closing→Closed). Programs/plans need audit.plan (QMS Owner, SYSTEM scope); audits are created with audit.create and conducted/closed with audit.conduct / audit.close (PROCESS scope, resolved from the plan's auditee process with a SYSTEM-override fallback); reads need audit.read. All keys are the seeded doc-07 catalog. An audit is a kind=RECORD subtype, so its lifecycle events also surface at /documents/{id}/audit-events. Findings + the NC→CAPA close gate land in S-aud-2."
     },
     {
       "name": "capa",
@@ -5846,10 +5846,10 @@
           "audits"
         ],
         "operationId": "listAuditPrograms",
-        "summary": "The org's audit programmes. Needs audit.read.",
+        "summary": "The org's audit programs. Needs audit.read.",
         "responses": {
           "200": {
-            "description": "The audit programmes.",
+            "description": "The audit programs.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5879,7 +5879,7 @@
           "audits"
         ],
         "operationId": "createAuditProgram",
-        "summary": "Create an audit programme (the maintained Cl 9.2 schedule container). Needs audit.plan.",
+        "summary": "Create an audit program (the maintained Cl 9.2 schedule container). Needs audit.plan.",
         "requestBody": {
           "required": true,
           "content": {
@@ -5892,7 +5892,7 @@
         },
         "responses": {
           "201": {
-            "description": "The created programme.",
+            "description": "The created program.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5924,10 +5924,10 @@
           "audits"
         ],
         "operationId": "getAuditProgram",
-        "summary": "A single audit programme. Needs audit.read.",
+        "summary": "A single audit program. Needs audit.read.",
         "responses": {
           "200": {
-            "description": "The programme.",
+            "description": "The program.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5949,7 +5949,7 @@
           "audits"
         ],
         "operationId": "updateAuditProgram",
-        "summary": "Maintain a programme (title/period/coverage/archived; partial). Needs audit.plan.",
+        "summary": "Maintain a program (title/period/coverage/archived; partial). Needs audit.plan.",
         "requestBody": {
           "required": true,
           "content": {
@@ -5962,7 +5962,7 @@
         },
         "responses": {
           "200": {
-            "description": "The updated programme.",
+            "description": "The updated program.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5997,7 +5997,7 @@
           "audits"
         ],
         "operationId": "listAuditPlans",
-        "summary": "The plans under a programme. Needs audit.read.",
+        "summary": "The plans under a program. Needs audit.read.",
         "responses": {
           "200": {
             "description": "The plans.",
@@ -6033,7 +6033,7 @@
           "audits"
         ],
         "operationId": "createAuditPlan",
-        "summary": "Schedule a plan under a programme. Needs audit.plan.",
+        "summary": "Schedule a plan under a program. Needs audit.plan.",
         "requestBody": {
           "required": true,
           "content": {
@@ -6062,7 +6062,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           },
           "409": {
-            "description": "The programme is archived (program_archived).",
+            "description": "The program is archived (program_archived).",
             "content": {
               "application/problem+json": {
                 "schema": {

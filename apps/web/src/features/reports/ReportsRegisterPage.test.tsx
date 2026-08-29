@@ -194,7 +194,7 @@ describe("ReportsRegisterPage", () => {
     const sort = screen.getByRole("button", { name: "Sort by Identifier" });
     await user.click(sort);
 
-    expect(document.title).toBe("EasySynQ — Document register");
+    expect(document.title).toBe("EasySynQ — Controlled register");
     expect(sort).toHaveFocus();
     expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
   });

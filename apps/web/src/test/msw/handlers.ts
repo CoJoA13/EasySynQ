@@ -1461,7 +1461,7 @@ export const auditProgramsFixture = {
     {
       id: "ap000001-0001-0001-0001-000000000001",
       identifier: "AUDPROG-000001",
-      title: "2026 Internal Audit Programme",
+      title: "2026 Internal Audit Program",
       period: "2026",
       coverage: null,
       archived: false,
@@ -1470,7 +1470,7 @@ export const auditProgramsFixture = {
     {
       id: "ap000002-0002-0002-0002-000000000002",
       identifier: "AUDPROG-000002",
-      title: "2025 Programme",
+      title: "2025 Program",
       period: "2025",
       coverage: null,
       archived: true,

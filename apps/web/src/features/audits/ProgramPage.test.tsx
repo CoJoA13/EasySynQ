@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 import { TONE_GLYPH } from "../../lib/status";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
-import { ProgrammePage } from "./ProgrammePage";
+import { ProgramPage } from "./ProgramPage";
 
 function grant(keys: string[]) {
   server.use(
@@ -19,48 +19,48 @@ function grant(keys: string[]) {
   );
 }
 
-test("lists programmes with canonical status badges; write affordances hidden without audit.plan", async () => {
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+test("lists programs with canonical status badges; write affordances hidden without audit.plan", async () => {
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   expect(await screen.findByText("AUDPROG-000001")).toBeInTheDocument();
   const active = screen.getByRole("row", { name: /AUDPROG-000001/ });
-  expect(within(active).getByLabelText("Programme status: Active")).toHaveTextContent(
+  expect(within(active).getByLabelText("Program status: Active")).toHaveTextContent(
     TONE_GLYPH.success,
   );
   const archived = screen.getByRole("row", { name: /AUDPROG-000002/ });
-  expect(within(archived).getByLabelText("Programme status: Archived")).toHaveTextContent(
+  expect(within(archived).getByLabelText("Program status: Archived")).toHaveTextContent(
     TONE_GLYPH.neutral,
   );
-  expect(screen.queryByRole("button", { name: /New programme/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /New program/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /Edit/ })).toBeNull();
 });
 
-test("programme rows are structural and expose one pressed native selection control", async () => {
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+test("program rows are structural and expose one pressed native selection control", async () => {
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   const firstRow = await screen.findByRole("row", { name: /AUDPROG-000001/ });
   const secondRow = screen.getByRole("row", { name: /AUDPROG-000002/ });
   expect(firstRow).not.toHaveAttribute("tabindex");
   expect(
     within(firstRow).getByRole("button", {
-      name: "Select programme AUDPROG-000001: 2026 Internal Audit Programme",
+      name: "Select program AUDPROG-000001: 2026 Internal Audit Program",
       pressed: true,
     }),
   ).toBeInTheDocument();
   expect(
     within(secondRow).getByRole("button", {
-      name: "Select programme AUDPROG-000002: 2025 Programme",
+      name: "Select program AUDPROG-000002: 2025 Program",
       pressed: false,
     }),
   ).toBeInTheDocument();
 });
 
-test("programme arrow navigation changes focus without changing selection", async () => {
+test("program arrow navigation changes focus without changing selection", async () => {
   const u = userEvent.setup();
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   const first = await screen.findByRole("button", {
-    name: /^Select programme AUDPROG-000001:/,
+    name: /^Select program AUDPROG-000001:/,
   });
   const second = screen.getByRole("button", {
-    name: /^Select programme AUDPROG-000002:/,
+    name: /^Select program AUDPROG-000002:/,
   });
   first.focus();
   await u.keyboard("{ArrowDown}");
@@ -70,11 +70,11 @@ test("programme arrow navigation changes focus without changing selection", asyn
   expect(screen.getByText("Plans — AUDPROG-000001")).toBeInTheDocument();
 });
 
-test.each(["{Enter}", " "])("the native programme control selects with %s", async (key) => {
+test.each(["{Enter}", " "])("the native program control selects with %s", async (key) => {
   const u = userEvent.setup();
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   const second = await screen.findByRole("button", {
-    name: /^Select programme AUDPROG-000002:/,
+    name: /^Select program AUDPROG-000002:/,
   });
   second.focus();
   await u.keyboard(key);
@@ -82,10 +82,10 @@ test.each(["{Enter}", " "])("the native programme control selects with %s", asyn
   expect(screen.getByText("Plans — AUDPROG-000002")).toBeInTheDocument();
 });
 
-test("ordinary cells and Edit do not change programme selection", async () => {
+test("ordinary cells and Edit do not change program selection", async () => {
   grant(["audit.plan"]);
   const u = userEvent.setup();
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   const secondRow = await screen.findByRole("row", { name: /AUDPROG-000002/ });
   await u.click(within(secondRow).getByText("2025"));
   expect(screen.getByText("Plans — AUDPROG-000001")).toBeInTheDocument();
@@ -99,7 +99,7 @@ test("ordinary cells and Edit do not change programme selection", async () => {
   expect(screen.getByText("Plans — AUDPROG-000001")).toBeInTheDocument();
 });
 
-test("creating a programme POSTs title + period", async () => {
+test("creating a program POSTs title + period", async () => {
   grant(["audit.plan"]);
   let body: { title?: string; period?: string } | null = null;
   server.use(
@@ -120,14 +120,14 @@ test("creating a programme POSTs title + period", async () => {
     }),
   );
   const u = userEvent.setup();
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
-  await u.click(await screen.findByRole("button", { name: /New programme/ }));
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
+  await u.click(await screen.findByRole("button", { name: /New program/ }));
   const dialog = await screen.findByRole("dialog");
-  await u.type(within(dialog).getByLabelText(/Title/), "2027 Programme");
+  await u.type(within(dialog).getByLabelText(/Title/), "2027 Program");
   await u.type(within(dialog).getByLabelText(/Period/), "2027");
-  await u.click(within(dialog).getByRole("button", { name: /Save programme/ }));
+  await u.click(within(dialog).getByRole("button", { name: /Save program/ }));
   await waitFor(() => expect(body).not.toBeNull());
-  expect(body!.title).toBe("2027 Programme");
+  expect(body!.title).toBe("2027 Program");
   expect(body!.period).toBe("2027");
 });
 
@@ -140,7 +140,7 @@ test("editing pre-fills and PATCHes; the archive toggle rides the same form", as
       return HttpResponse.json({
         id: String(params.id),
         identifier: "AUDPROG-000001",
-        title: "2026 Internal Audit Programme",
+        title: "2026 Internal Audit Program",
         period: "2026",
         coverage: null,
         archived: true,
@@ -149,13 +149,13 @@ test("editing pre-fills and PATCHes; the archive toggle rides the same form", as
     }),
   );
   const u = userEvent.setup();
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   const row = await screen.findByRole("row", { name: /AUDPROG-000001/ });
   await u.click(within(row).getByRole("button", { name: /Edit/ }));
   const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByLabelText(/Title/)).toHaveValue("2026 Internal Audit Programme");
+  expect(within(dialog).getByLabelText(/Title/)).toHaveValue("2026 Internal Audit Program");
   await u.click(within(dialog).getByLabelText(/Archived/));
-  await u.click(within(dialog).getByRole("button", { name: /Save programme/ }));
+  await u.click(within(dialog).getByRole("button", { name: /Save program/ }));
   await waitFor(() => expect(body).not.toBeNull());
   expect(body!.archived).toBe(true);
 });
@@ -166,19 +166,19 @@ test("renders a calm no-access panel on a 403 (audit.read)", async () => {
       HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 }),
     ),
   );
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
-  expect(await screen.findByText(/don't have access to the audit programme/)).toBeInTheDocument();
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
+  expect(await screen.findByText(/don't have access to the audit program/)).toBeInTheDocument();
 });
 
 test("no axe violations", async () => {
-  const { container } = renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  const { container } = renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   await screen.findByText("AUDPROG-000001");
   expect(await axe(container)).toHaveNoViolations();
 });
 
-test("shows the selected programme's plans (process + lead resolved, degrade-friendly)", async () => {
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
-  // Newest programme (AUDPROG-000001) is selected by default → its plans render.
+test("shows the selected program's plans (process + lead resolved, degrade-friendly)", async () => {
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
+  // Newest program (AUDPROG-000001) is selected by default → its plans render.
   expect(await screen.findByText("Plans — AUDPROG-000001")).toBeInTheDocument();
   const planRows = await screen.findAllByRole("row", { name: /2026-/ });
   expect(within(planRows[0]!).getByText("2026-05-28")).toBeInTheDocument();
@@ -187,7 +187,7 @@ test("shows the selected programme's plans (process + lead resolved, degrade-fri
   expect(within(planRows[0]!).getByText("FRM-AUD-002")).toBeInTheDocument();
 });
 
-test("Add plan POSTs to the selected programme (date + process + checklist ref)", async () => {
+test("Add plan POSTs to the selected program (date + process + checklist ref)", async () => {
   grant(["audit.plan"]);
   let body: Record<string, unknown> | null = null;
   let target = "";
@@ -210,7 +210,7 @@ test("Add plan POSTs to the selected programme (date + process + checklist ref)"
     }),
   );
   const u = userEvent.setup();
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   await u.click(await screen.findByRole("button", { name: /Add plan/ }));
   const dialog = await screen.findByRole("dialog");
   await u.type(within(dialog).getByLabelText(/Scheduled date/), "2026-11-01");
@@ -225,19 +225,19 @@ test("Add plan POSTs to the selected programme (date + process + checklist ref)"
   expect(body!["checklist_ref"]).toBe("FRM-AUD-002");
 });
 
-test("an archived selected programme hides Add plan; a racing 409 surfaces calmly", async () => {
+test("an archived selected program hides Add plan; a racing 409 surfaces calmly", async () => {
   grant(["audit.plan"]);
   const u = userEvent.setup();
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
-  // Select the archived programme → no Add plan.
-  await u.click(await screen.findByRole("button", { name: /^Select programme AUDPROG-000002:/ }));
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
+  // Select the archived program → no Add plan.
+  await u.click(await screen.findByRole("button", { name: /^Select program AUDPROG-000002:/ }));
   expect(screen.queryByRole("button", { name: /Add plan/ })).toBeNull();
   // Back on the active one, a server 409 (race: archived elsewhere) renders calmly in the modal.
-  await u.click(screen.getByRole("button", { name: /^Select programme AUDPROG-000001:/ }));
+  await u.click(screen.getByRole("button", { name: /^Select program AUDPROG-000001:/ }));
   server.use(
     http.post("/api/v1/audit-programs/:id/plans", () =>
       HttpResponse.json(
-        { code: "program_archived", title: "Cannot add a plan to an archived programme" },
+        { code: "program_archived", title: "Cannot add a plan to an archived program" },
         { status: 409 },
       ),
     ),
@@ -246,7 +246,7 @@ test("an archived selected programme hides Add plan; a racing 409 surfaces calml
   const dialog = await screen.findByRole("dialog");
   await u.click(within(dialog).getByRole("button", { name: /Save plan/ }));
   expect(
-    await within(dialog).findByText(/Cannot add a plan to an archived programme/),
+    await within(dialog).findByText(/Cannot add a plan to an archived program/),
   ).toBeInTheDocument();
 });
 
@@ -258,7 +258,7 @@ test("the process picker is omitted when GET /processes 403s (degrade)", async (
     ),
   );
   const u = userEvent.setup();
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   await u.click(await screen.findByRole("button", { name: /Add plan/ }));
   const dialog = await screen.findByRole("dialog");
   expect(within(dialog).getByLabelText(/Scheduled date/)).toBeInTheDocument();
@@ -275,7 +275,7 @@ test("clearing a pre-filled Period sends an explicit empty string on save", asyn
       return HttpResponse.json({
         id: String(params.id),
         identifier: "AUDPROG-000001",
-        title: "2026 Internal Audit Programme",
+        title: "2026 Internal Audit Program",
         period: null,
         coverage: null,
         archived: false,
@@ -284,12 +284,12 @@ test("clearing a pre-filled Period sends an explicit empty string on save", asyn
     }),
   );
   const u = userEvent.setup();
-  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   const row = await screen.findByRole("row", { name: /AUDPROG-000001/ });
   await u.click(within(row).getByRole("button", { name: /Edit/ }));
   const dialog = await screen.findByRole("dialog");
   await u.clear(within(dialog).getByLabelText(/Period/));
-  await u.click(within(dialog).getByRole("button", { name: /Save programme/ }));
+  await u.click(within(dialog).getByRole("button", { name: /Save program/ }));
   await waitFor(() => expect(body).not.toBeNull());
   expect(body!["period"]).toBe("");
 });

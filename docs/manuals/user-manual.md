@@ -246,11 +246,11 @@ is not an org-wide assertion.
 ### Internal audit
 
 The **Audits** tab lists internal audits and supports creating one when authorized. The
-**Programme** tab manages audit programmes and plans.
+**Program** tab manages audit programs and plans.
 
 A typical flow is:
 
-1. create/select a programme and plan;
+1. create/select a program and plan;
 2. create an audit from a plan;
 3. advance the audit through its legal states;
 4. log findings as NC, Observation, or OFI;

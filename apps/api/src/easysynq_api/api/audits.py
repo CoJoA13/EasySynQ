@@ -1,6 +1,6 @@
 """The internal-audit surface (slice S-aud-1; doc 02 Cl 9.2, doc 10 §5, doc 15).
 
-Programmes + plans are the maintained schedule (gate ``audit.plan``, SYSTEM scope — QMS Owner);
+Programs + plans are the maintained schedule (gate ``audit.plan``, SYSTEM scope — QMS Owner);
 audits are retained records created from a plan (``audit.create``, SYSTEM scope — Internal Auditor)
 and walked through the FSM (``audit.conduct`` / ``audit.close``, PROCESS scope — resolved from the
 audit's plan's auditee process, with a SYSTEM-override fallback per the v1 override posture). Reads
@@ -263,7 +263,7 @@ _finding_read = require(
 _raise_initiative = require("improvement.manage", async_scope_resolver=_finding_scope)
 
 
-# --- programmes -------------------------------------------------------------------------------
+# --- programs -------------------------------------------------------------------------------
 
 
 @router.post("/audit-programs", status_code=status.HTTP_201_CREATED)
@@ -295,7 +295,7 @@ async def get_program_endpoint(
 ) -> dict[str, Any]:
     program = await audits_repo.get_audit_program(session, program_id)
     if program is None or program.org_id != caller.org_id:
-        raise ProblemException(status=404, code="not_found", title="Audit programme not found")
+        raise ProblemException(status=404, code="not_found", title="Audit program not found")
     return _program(program)
 
 
@@ -348,7 +348,7 @@ async def list_plans_endpoint(
 ) -> dict[str, Any]:
     program = await audits_repo.get_audit_program(session, program_id)
     if program is None or program.org_id != caller.org_id:
-        raise ProblemException(status=404, code="not_found", title="Audit programme not found")
+        raise ProblemException(status=404, code="not_found", title="Audit program not found")
     rows = await audits_repo.list_audit_plans(session, program_id)
     return {"data": [_plan(p) for p in rows]}
 
@@ -440,7 +440,7 @@ async def plan_audit_endpoint(
 ) -> dict[str, Any]:
     """Scheduled → Planned (the lead auditor finalizes the plan). The audit-INSTANCE FSM is
     uniformly auditor-driven (audit.conduct / audit.close, PROCESS scope); audit.plan governs the
-    programme + plan SCHEDULE, not an instance transition."""
+    program + plan SCHEDULE, not an instance transition."""
     audit = await advance_audit(session, caller, audit_id, AuditState.Planned)
     return await _audit_full(session, audit)
 

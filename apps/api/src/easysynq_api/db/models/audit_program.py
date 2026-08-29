@@ -1,7 +1,7 @@
-"""The Audit Programme — the maintained Cl 9.2 schedule container (slice S-aud-1; doc 02 §2,
+"""The Audit Program — the maintained Cl 9.2 schedule container (slice S-aud-1; doc 02 §2,
 doc 10 §5.2, doc 14 §9).
 
-doc 14 lists ``audit_program`` as "a maintained document", but a programme is a lightweight
+doc 14 lists ``audit_program`` as "a maintained document", but a program is a lightweight
 *scheduling container* (a period + coverage + a set of planned audits), not a controlled document
 with renditions / clause-mappings / a mirror presence. Modelling it as a ``kind=DOCUMENT`` subtype
 with no ``document_version`` would leave a version-less *Effective* document that the mirror join
