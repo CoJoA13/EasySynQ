@@ -35,6 +35,54 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
   create/enable surface; provisioning is a direct operator INSERT), so an operator who later toggles a
   sink `enabled` false→true should bump it, or the grace window is measured from creation.
 
+## INTERFACE
+
+### S-ui-1 to S-ui-3 — the Option C interface programme
+
+Recorded 2026-08-29 after merging `#505`, `#506` and `#507`. Owner-approved
+[`plan`](superpowers/plans/2026-08-29-s-ui-signal-board.md); the plan carries the token tables, the
+measured contrast figures, and the corrections made to it during implementation. Surface and layout
+only — no route, information-architecture, API or permission change.
+
+**S-ui-1** made the design tokens authoritative. The token file already described a complete system,
+but typography, spacing, elevation and layout each had zero consumers, so those four rendered at
+Mantine's defaults. The accent moved from indigo to the brand mark's teal, and Archivo was
+self-hosted under the SIL OFL 1.1 because the CSP is `font-src 'self'` and the air-gap bundle has no
+egress. Three of the plan's own prescriptions proved wrong when measured and are corrected inline in
+it: the muted-text remap it specified was inert in the light scheme, because Mantine declares that
+variable at a specificity a bare `:root` cannot beat; its warm palette regressed two contrast pairs
+on a surface its audit never tested; and a positional mapping of the token ramp onto Mantine's
+t-shirt scale would have shrunk the dominant text and dropped every validation message to 11px.
+
+**S-ui-2** gave the shell an icon vocabulary. A hand-rolled inline set already existed, contrary to
+the plan's premise that there were none, so the slice extended it rather than starting one. The rail
+carries one navigation count — the caller's own open tasks — because no aggregate counts endpoint
+exists and per-register numbers come from capped scans. Making that count always visible exposed a
+pre-existing data bug: the task list was refreshed by only three of the decision branches, so a
+document approval, a periodic-review completion, every CAPA decision and both acknowledgement paths
+left it stale.
+
+**S-ui-3** made each Home quadrant's header a derived signal, folded from the same observations the
+tile beneath it renders. A header therefore states an observed count and the label it belongs to,
+never a compliance verdict, and cannot drift from its tile — the defect that prompted the rule was a
+header reading "on track" above six open CAPAs. Dark quadrant tints were designed and owner-reviewed
+before implementation rather than derived from the light values, because numerical parity against a
+near-black card is not perceptual parity.
+
+Two defects across the programme defeated every automated gate and are worth preserving as evidence
+of a standing limitation. A CSS custom-property override lost on specificity and was inert in the
+light scheme; and a card layout clipped the Home quadrants' only navigation action out of view at
+every breakpoint. Neither was visible to ESLint, strict TypeScript or the complete Vitest suite,
+because jsdom performs no layout and resolves no stylesheet cascade. Both are now covered by
+executable guards: a token contrast gate that derives its pairs from the token naming convention
+rather than a hand-kept list, and `apps/web/e2e/home-geometry.spec.ts`, which measures each
+quadrant's action against its card in a real browser at 320 and 1280 pixels.
+
+Named residual at the time of recording: `RES-ARCHIVO-SYMBOL-GLYPHS` (the shipped Archivo subsets
+carry no glyph for the status vocabulary, so those characters render from the fallback stack) and
+`RES-DOC11-TOKEN-DRIFT` (doc 11 still describes the pre-programme typography, accent, focus ring and
+shell metrics). Both live in [`open-residuals.md`](open-residuals.md).
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration
