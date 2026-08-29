@@ -4,6 +4,28 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
+## RES-DOC11-TOKEN-DRIFT
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-1 to S-ui-3, 2026-08-29
+Reason: `docs/11-ui-ux-design-system.md` now contradicts the shipped design tokens on four points. It
+names Inter as the self-hosted sans and JetBrains Mono as the monospace, where the shipped stack is
+Archivo plus a system monospace; it gives the accent and the focus ring as `#2A6FDB`, where the
+shipped accent is the brand mark's teal and the focus ring is a solid teal token corrected for WCAG
+2.2 SC 1.4.11; and it states shell metrics of a 56px top bar and a 264px rail, where the shipped
+layout tokens are 58px and 244px and `AppShell` now reads them. The accent and focus-ring
+divergences predate this programme, but were inert while nothing consumed the tokens; S-ui-1 is the
+slice that made them authoritative, so the divergence is now load-bearing rather than latent. The
+programme plan schedules the correction under its final sweep slice, which has not shipped, and a
+deferral recorded only in a plan file is not in the live ledger this document owns.
+Closure contract: Bring doc 11 into agreement with `apps/web/src/theme/tokens.css` for typography,
+accent, focus ring and shell metrics, citing the token names rather than restating literal values so
+the two cannot drift again; or, if a value in doc 11 is the intended design and the token is wrong,
+change the token instead and prove the contrast gate still passes. Either way the fix must name
+which of the two documents is authoritative for a design value.
+Last reviewed: 2026-08-29
+
 ## RES-ARCHIVO-SYMBOL-GLYPHS
 
 Status: OPEN

@@ -1,18 +1,18 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-17"
+as_of: "2026-08-29"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-first-admin-provisioning"
-migration_head: "0088"
-next_migration: "0089"
-api_unit_tests: 1835
-web_test_files: 267
-web_tests: 1946
+last_shipped_slice: "S-ui-3"
+migration_head: "0091"
+next_migration: "0092"
+api_unit_tests: 1996
+web_test_files: 273
+web_tests: 2230
 contract_tests: 284
-integration_passed: 1163
+integration_passed: 1224
 integration_skipped: 2
-ci_jobs: 11
-ci_checks: 15
+ci_jobs: 12
+ci_checks: 16
 ---
 
 # Current execution snapshot
@@ -29,7 +29,36 @@ main document, workflow, compliance, reporting, audit, ingestion, drift, objecti
 DCR, improvement, risk, context, interested-party, identity-provisioning, first-run setup, and read-only
 Records surfaces. Retention Policy and Evidence Pack management remain without dedicated SPA routes.
 
-The latest completed slice removes normal first-install dependence on the Keycloak console, a Keycloak
+The latest completed work is the S-ui interface programme, slices S-ui-1 to S-ui-3. Routes, information architecture, the API, and every permission
+and gating behaviour are unchanged. It is otherwise a surface and layout rework, with one behavioural
+exception: S-ui-2 also corrected cache invalidation for the caller's own task list, which was previously
+refreshed only by the change-request, improvement and leadership decision branches, so a document
+approval, a periodic-review completion, every CAPA decision and both acknowledgement paths left it stale.
+
+The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
+and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
+than hardcoding its dimensions. Before this the theme already took its font families and its status colour
+pairs from tokens, but the typography, spacing, elevation and layout ramps each had zero consumers, so
+those four rendered at Mantine's defaults. The accent is the brand mark's teal, so the mark and the interface agree.
+`Archivo` is self-hosted under `apps/web/public/fonts/` under the SIL Open Font License 1.1, because the
+Caddy CSP sets `font-src 'self'` and the air-gap bundle has no egress. Muted text reaches WCAG AA by
+remapping Mantine's own `--mantine-color-dimmed` onto the token, which corrects roughly 331 `c="dimmed"`
+call sites without component edits; correcting the token alone would not have changed them.
+
+The left rail leads each destination with a hand-rolled inline SVG glyph, marks each PDCA section with
+that phase's hue beside the phase name, and shows one navigation count: the caller's own open tasks. That
+is the only count the RAIL can state honestly, because no aggregate counts endpoint exists and the
+per-register numbers are derived by scanning capped register windows; the top bar's notification bell
+carries the shell's other count. It follows the established
+never-a-confident-zero rule, so a failed count renders as unavailable rather than as zero.
+
+The Home quadrants render a tinted header band carrying the phase, its clause range and that quadrant's
+current signal. The signal is folded from the same observations the tiles beneath it render, so a header
+states an observed count and the label that count belongs to, never a compliance verdict, and it cannot
+drift from the tile it summarises. Dark-scheme quadrant tints are designed rather than derived from the
+light values.
+
+Earlier first-run provisioning removes normal first-install dependence on the Keycloak console, a Keycloak
 subject, or the retired fixed-`qmsadmin` helper. While setup is `UNINITIALIZED`, `/setup` accepts the
 one-time EasySynQ bootstrap proof, creates and links the first Keycloak identity and EasySynQ user, assigns
 the seeded System Administrator role, and displays a generated temporary password once. The SPA retains
@@ -96,6 +125,47 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; this slice does
 not rewrite that implementation-evidence field merely because its branch SHA differs.
 
+Fresh 2026-08-29 evidence for the S-ui programme. The numeric frontmatter above now describes the tree at
+`main` after S-ui-3, which also carries the slices that shipped between 2026-08-17 and this date; the
+2026-08-17 paragraphs below are retained as the evidence for their own tree and are not restated as
+current.
+
+API unit passed 1,996 tests with 2 expected skips in 31.29 seconds, both skips being the release-ceremony
+image-digest and image-build opt-ins. Web Vitest passed 273 files and 2,230 tests with exit code 0. The
+Playwright browser suite passed 42 of 42 Chromium tests with one worker and zero retries, two of which are
+the new Home quadrant geometry cases. Ruff lint and format-check passed; mypy reported no issues in 449
+source files; web ESLint exited 0; strict `tsc --noEmit` passed for both the application and browser
+projects; the production build completed. `check-repo-authority.sh`, `check-no-site-data.sh` and the
+91-fixture agent-authority test all passed. Alembic reported `0091_documents_list_index (head)`, making
+`0092` next.
+
+Pull-request CI run `33239332445`, on the pre-merge S-ui-3 branch head `05cd1663`, passed all fifteen
+pull-request checks with `release-gate` skipped as designed. Its four integration shards passed 272, 209,
+389 and 354 tests — 1,224 with the two expected shared-database skips, both in the second shard — and the
+published response-contract job passed all 284 schemas. Push run `33239610817` on the merged commit
+`2a592edc` also succeeded; the shard figures above are the pull-request run's, because that is where the
+per-shard logs were read. Contract checking is in sync on this tree at SHA-256
+`e66fa80c1e7c6ffec3f0a1321a59fea2440cf1f48beb6677c1dbe26cd87243cf`, which supersedes the 2026-08-17 hash
+recorded below.
+
+`docs/11-ui-ux-design-system.md` was not updated by this programme and now disagrees with the shipped
+tokens on typography, accent, focus ring and shell metrics; that gap is recorded as
+`RES-DOC11-TOKEN-DRIFT` in [`open-residuals.md`](open-residuals.md).
+
+The integration and response-contract suites were NOT run locally for this programme; their counts above
+are taken from that CI run rather than from a local execution, because the local Docker-backed fixtures
+were not exercised. Firefox, WebKit, assistive-technology sessions, SMTP delivery, deployment, live
+acceptance and the disposable Fedora proof did not run and are not described as passed.
+
+The three UI slices were additionally reviewed by an adversarial multi-lens pass whose confirmed findings
+were folded before merge. Two are worth recording because they defeated the automated gates entirely: a
+CSS custom-property override that lost on specificity and was inert in the light scheme, and a card layout
+that clipped the Home quadrants' only navigation action out of view at every breakpoint. Neither was
+visible to ESLint, strict TypeScript or the complete Vitest suite, because jsdom performs no layout and
+resolves no stylesheet cascade. Both are now covered by executable guards — a token contrast gate that
+derives its pairs from the token naming convention, and `apps/web/e2e/home-geometry.spec.ts`, which
+measures each quadrant's action against its card at 320 and 1280 pixels in a real browser.
+
 Fresh 2026-08-17 durable evidence measured the complete affected inventories after the first-administrator
 PR review fixes.
 API unit job `job-mswq4zse-b59b5405` passed 1,835 tests with one expected release-ceremony image-digest
@@ -135,7 +205,8 @@ passed; mypy found no issues in 444 source files; web ESLint exited 0; and the p
 build transformed 1,107 modules with only the existing large-chunk advisory. Contract checking is in sync
 at SHA-256 `bec600ffcc53e6f73871c46e0a52ae520902a50e78e1b1e72d1265927cebb90b`;
 Alembic reported only `0088_bootstrap_credential (head)`, making `0089` next. Executable workflow parsing
-still finds eleven job definitions and fifteen expanded aggregate/leaf checks.
+found eleven job definitions and fifteen expanded aggregate/leaf checks at that date; it now finds
+twelve and sixteen. The one added job and check is `release-gate`, from the release-gate slice.
 
 The final requirements/security whole-branch review found no Critical issue, fixed its authority,
 current-comment, negative-Redis-state, and exact bearer-free allowlist findings in commits
@@ -164,7 +235,9 @@ SELinux, libvirt, Docker, or a live application stack.
 The dedicated `web-browser` job installs the locked web tree and Chromium with its Linux dependencies,
 runs the complete browser suite, and uploads ignored diagnostics only on failure. Stable check `web` uses
 `always()` and explicitly rejects a non-success result from either `web-shards` or `web-browser`; the
-workflow now exposes eleven jobs and fifteen aggregate/leaf checks.
+workflow now exposes twelve jobs and sixteen aggregate/leaf checks, fifteen of which run on an ordinary
+pull request; `release-gate` is skipped outside the release ceremony. Sixteen checks expand from twelve
+jobs because `integration-shards` fans out four ways and `web-shards` two.
 
 ## Programme 0 acceptance status
 
