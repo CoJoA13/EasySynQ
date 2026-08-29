@@ -83,6 +83,86 @@ carry no glyph for the status vocabulary, so those characters render from the fa
 `RES-DOC11-TOKEN-DRIFT` (doc 11 still describes the pre-programme typography, accent, focus ring and
 shell metrics). Both live in [`open-residuals.md`](open-residuals.md).
 
+### S-ui-4 — the register pattern, and the accepted-duplication question answered
+
+Recorded 2026-08-29 after merging `#509` as `2626ba9`. Front-end-only: no migration, no permission
+key, no endpoint, no contract change. The Alembic head stayed `0091_documents_list_index`.
+
+Two shared components. `lib/RegisterPageHeader.tsx` now renders the title, its permission-gated
+action and the freshness stamp for eleven register pages, in all three of their forbidden, error and
+loaded branches — thirty-three sites that had each been written by hand, and that had already
+diverged: every page carried a second, Group-less form of its own header in the two failure
+branches, and the CAPA board carried both forms across three sites while rendering no header at all
+during loading. `lib/ScorecardBandShell.tsx` takes the byte-identical outer shell of the four
+scorecard bands; each band keeps its own rollup arithmetic and badge vocabulary, which is the part
+that is actually the domain.
+
+**Three of the plan's own claims for this slice were wrong, and are corrected inline in it.** The
+plan said the CAPA, risk and audit registers already shared `RegisterLifecyclePanel`; they share
+`RegisterFilterBar`, and the triplicated panel belongs to a different trio. It said the shared
+register composition — filter bar, table, empty and forbidden states — needed building; `states.tsx`,
+`RegisterToolbar.tsx` and `registerControls.ts` already supplied all of it, and rebuilding would
+have been rework. The genuinely missing piece was the page header, which is what shipped.
+
+**The accepted-duplication decision was revisited against a fresh measurement and the recorded one
+was wrong.** The decisions register had accepted the risk, context and interested-parties
+triplication on figures of about 74 and 80 per cent. Measured on the shipped files, which have not
+materially drifted since, the lifecycle panel is 83.9 to 87.9 per cent line-identical raw and 96.5
+to 98.3 per cent once domain nouns and hook names are normalised; the publish modal is 87.3 to 88.6
+and 95.6 to 98.2. There is no structural divergence at all — no differing conditional, gate, state
+or element — and all three register-state types alias the same `DocumentCurrentState`, so even the
+type divergence is nominal. The entry's revisit trigger has two limbs. A fourth register family has
+not appeared: the objectives lifecycle is per-entity, not a register head. The second limb splits by
+member, and the deciding fact is that an explicit prop defeats a Mantine theme default — the four
+bands hardcode their radius, so a future card-radius decision costs four hand edits, while the
+lifecycle panel and publish modal set none and would cost nothing. The owner's decision was to
+collapse the band and leave the panel and modal accepted on the corrected numbers.
+
+**A defect this slice introduced and then removed is worth recording, because the reasoning was
+wrong before the code was.** The band shell first shipped at the interface programme's 16-pixel card
+radius, justified in both the component and the decisions register by the claim that the same rule
+already reached the lifecycle panel through the Mantine theme. It does not. The theme's component
+block carries only modal and drawer entries, its default radius is the 8-pixel step, and the Home
+quadrant cards use the 12-pixel one — so the programme's card-radius rule has not landed anywhere,
+and moving one band to 16 pixels made it the only such surface in the application, directly above an
+8-pixel card on the three pages the duplication entry is about. The shell now keeps the radius the
+four bands had, making the collapse a structural extraction with no rendered change, and the
+register states its argument in the conditional rather than the present tense.
+
+**Two proofs were found to be inert before they were trusted.** The browser geometry spec written
+for the new header could not fail: the end-to-end harness authenticates a caller with no
+permissions, so no register renders its header action and the spec only ever measured a lone
+heading. Forcing the row not to wrap, and clipping the title outright with an ellipsis, both left it
+green. The harness now takes an optional per-scenario permission grant, defaulting to none so every
+existing caller is unaffected, and each register is measured both granted and denied. Writing that
+override exposed its own bug — the SPA keeps only ALLOW entries and reads a key off each, so a bare
+list of key strings was silently discarded — which the child-count assertion caught rather than
+degrading quietly. The spec now states which of its assertions are evidence and which are not: at
+the narrowest supported viewport the header row is 256 pixels and these titles render between 116
+and 237, so with the default wrap the title always has room and a clipping assertion there cannot
+fail. Separately, nothing pinned the adoption itself, because the shared header renders the same
+accessible name the hand-rolled title did and any of the eleven pages could have reverted with the
+whole suite green; `registerHeaderAdoption.test.ts` is a source-text contract in the idiom of the
+existing responsive-register one, and reverting a single branch turns it red.
+
+**Honest deferrals.** A shared four-branch page frame was scoped and deliberately not built. An
+always-taken return destroys TypeScript control-flow narrowing on the five pages that guard with a
+narrowing early return; rendering the title during loading, which is the better behaviour, breaks
+two suites that identify the loaded state by its heading alone; and a shared table wrapper is
+blocked outright by the responsive-register source-text contract, which requires each of nine page
+files to contain its own scroll-container literal. The Document Library and Records registers were
+left un-adopted as poor structural fits — Library has real server-side pagination where every other
+register has a bounded window, and Records has no forbidden branch at all. Register heading levels
+were centralised but not normalised: they still run at one, two and three across the SPA and most
+register routes render no top-level heading, which is an accessibility change with its own test
+surface. The first two are recorded as `RES-REGISTER-PAGE-FRAME` and the third as
+`RES-REGISTER-HEADING-LEVELS`.
+
+Test deltas, measured on the merged tree. Web Vitest moved from 273 files and 2,230 tests to **276
+files and 2,251 tests**; the Playwright Chromium suite moved from **42 to 52**. The API unit suite
+was untouched at 1,996 passed with the same two release-ceremony skips. Pull-request CI passed all
+fifteen checks with `release-gate` skipped as designed.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration

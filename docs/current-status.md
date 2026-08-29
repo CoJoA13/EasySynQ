@@ -2,12 +2,12 @@
 easysynq_status_schema: 1
 as_of: "2026-08-29"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-ui-3"
+last_shipped_slice: "S-ui-4"
 migration_head: "0091"
 next_migration: "0092"
 api_unit_tests: 1996
-web_test_files: 273
-web_tests: 2230
+web_test_files: 276
+web_tests: 2251
 contract_tests: 284
 integration_passed: 1224
 integration_skipped: 2
@@ -29,11 +29,19 @@ main document, workflow, compliance, reporting, audit, ingestion, drift, objecti
 DCR, improvement, risk, context, interested-party, identity-provisioning, first-run setup, and read-only
 Records surfaces. Retention Policy and Evidence Pack management remain without dedicated SPA routes.
 
-The latest completed work is the S-ui interface programme, slices S-ui-1 to S-ui-3. Routes, information architecture, the API, and every permission
+The latest completed work is the S-ui interface programme, slices S-ui-1 to S-ui-4. Routes, information architecture, the API, and every permission
 and gating behaviour are unchanged. It is otherwise a surface and layout rework, with one behavioural
 exception: S-ui-2 also corrected cache invalidation for the caller's own task list, which was previously
 refreshed only by the change-request, improvement and leadership decision branches, so a document
 approval, a periodic-review completion, every CAPA decision and both acknowledgement paths left it stale.
+
+S-ui-4 shared the register page header across eleven register routes and the scorecard band shell across
+four, and answered the accepted-duplication question the decisions register had parked. That entry's
+measurement was corrected there: the risk, context and interested-parties lifecycle panel and publish
+modal are far closer to identical than recorded, with no structural divergence, and the owner's decision
+was to collapse the scorecard band only and leave the panel and modal accepted. A shared four-branch page
+frame, the Library and Records registers, and register heading-level normalisation were all deliberately
+left out; the first and last are tracked in [`open-residuals.md`](open-residuals.md).
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
@@ -126,25 +134,33 @@ compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d4465941
 not rewrite that implementation-evidence field merely because its branch SHA differs.
 
 Fresh 2026-08-29 evidence for the S-ui programme. The numeric frontmatter above now describes the tree at
-`main` after S-ui-3, which also carries the slices that shipped between 2026-08-17 and this date; the
+`main` after S-ui-4, which also carries the slices that shipped between 2026-08-17 and this date; the
 2026-08-17 paragraphs below are retained as the evidence for their own tree and are not restated as
 current.
 
-API unit passed 1,996 tests with 2 expected skips in 31.29 seconds, both skips being the release-ceremony
-image-digest and image-build opt-ins. Web Vitest passed 273 files and 2,230 tests with exit code 0. The
-Playwright browser suite passed 42 of 42 Chromium tests with one worker and zero retries, two of which are
-the new Home quadrant geometry cases. Ruff lint and format-check passed; mypy reported no issues in 449
-source files; web ESLint exited 0; strict `tsc --noEmit` passed for both the application and browser
-projects; the production build completed. `check-repo-authority.sh`, `check-no-site-data.sh` and the
-91-fixture agent-authority test all passed. Alembic reported `0091_documents_list_index (head)`, making
-`0092` next.
+Measured on the merged S-ui-4 tree `2626ba9`. API unit passed 1,996 tests with 2 expected skips in 35.65
+seconds, both skips being the release-ceremony image-digest and image-build opt-ins — unchanged, because
+S-ui-4 touched no API code. Web Vitest passed 276 files and 2,251 tests with exit code 0, up from 273 and
+2,230: S-ui-4 added the shared header and band-shell unit suites and a source-text adoption contract. The
+Playwright browser suite passed 52 of 52 Chromium tests with one worker and zero retries, up from 42; the
+ten new cases measure each shared register header both for a granted caller, whose action renders, and for
+a denied one, whose header must carry no element standing in for the affordance they lack. Web ESLint
+exited 0 and strict `tsc --noEmit` passed for both the application and browser projects; the production
+build completed. `check-repo-authority.sh`, `check-no-site-data.sh` and the 91-fixture agent-authority
+test all passed. Alembic reported `0091_documents_list_index (head)`, making `0092` next — S-ui-4 added no
+migration.
 
-Pull-request CI run `33239332445`, on the pre-merge S-ui-3 branch head `05cd1663`, passed all fifteen
+One measurement caveat worth carrying forward. `npm run test:browser` is `build:browser && playwright
+test`; invoking `playwright test` alone serves a previously built bundle, so a source change — including a
+deliberate mutation used as proof — does not reach the browser and the suite reports a stale result. Any
+Playwright evidence must come from the full script.
+
+Pull-request CI run `33264035498`, on the pre-merge S-ui-4 branch head `ddd893d`, passed all fifteen
 pull-request checks with `release-gate` skipped as designed. Its four integration shards passed 272, 209,
-389 and 354 tests — 1,224 with the two expected shared-database skips, both in the second shard — and the
-published response-contract job passed all 284 schemas. Push run `33239610817` on the merged commit
-`2a592edc` also succeeded; the shard figures above are the pull-request run's, because that is where the
-per-shard logs were read. Contract checking is in sync on this tree at SHA-256
+389 and 354 tests — 1,224 with the two expected shared-database skips — and the published
+response-contract job passed all 284 schemas. Those figures are unchanged from the S-ui-3 run
+(`33239332445`, branch head `05cd1663`), which is what a front-end-only slice should produce; they are
+re-read here rather than carried forward. The slice merged to `main` as `2626ba9`. Contract checking is in sync on this tree at SHA-256
 `e66fa80c1e7c6ffec3f0a1321a59fea2440cf1f48beb6677c1dbe26cd87243cf`, which supersedes the 2026-08-17 hash
 recorded below.
 
