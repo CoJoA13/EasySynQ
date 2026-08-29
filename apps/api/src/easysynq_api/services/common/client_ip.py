@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 # Latched: this reports a standing deployment fact, and the condition is caller-reachable.
 _WARNED_UNTRUSTED_FORWARDER = False
+_WARNED_ALL_HOPS_TRUSTED = False
 
 # The walk is linear in the number of hops and the header is caller-influenced, so the work is
 # bounded. The bound applies to the WALK rather than to the header's length: reading right-to-left
@@ -47,6 +48,17 @@ _WARNED_UNTRUSTED_FORWARDER = False
 # let pure padding turn a perfectly readable chain into "unknown" — and an unknown address is not
 # a neutral outcome (see the module docstring). Real chains are a handful of hops.
 _MAX_FORWARDED_HOPS = 32
+
+
+class _AllHopsTrusted(str):
+    """The peer, returned because every forwarded hop was itself a trusted proxy.
+
+    A plain ``str`` so every consumer treats it as the address it is; the distinct type exists
+    only so the adapter can recognise the one remaining case where the application attributes a
+    request to the proxy and say so, instead of failing silently.
+    """
+
+    __slots__ = ()
 
 
 def _is_trusted(text: str, trusted: tuple[IpNetwork, ...]) -> bool:
@@ -128,10 +140,11 @@ def resolve_client_ip(
             continue
         return address
 
-    # Every hop we read was a trusted proxy — either the chain is entirely our own infrastructure
-    # or it is longer than the walk budget. No client address was ever observed, so the nearest
-    # thing we actually know is the peer.
-    return peer
+    # Every hop we read was a trusted proxy, so no client address was ever observed and the
+    # nearest thing we know is the peer. ``None`` marks this so the caller can report it: a
+    # healthy topology does not reach here, and attributing a request to the proxy is exactly the
+    # misconfiguration this module exists to remove.
+    return _AllHopsTrusted(peer)
 
 
 def client_ip(request: Request) -> str | None:
@@ -155,6 +168,15 @@ def client_ip(request: Request) -> str | None:
             "client_ip.unreadable_forwarded_chain",
             extra={"peer": peer, "forwarded_hops": len(forwarded.split(","))},
         )
+    elif isinstance(resolved, _AllHopsTrusted):
+        # Every hop the edge forwarded was itself inside the trusted set, so the request is being
+        # attributed to the proxy. Either the trusted set is wider than the actual proxies — and
+        # is therefore discarding real client addresses — or the edge is not forwarding what we
+        # think. Both are silent otherwise, and both defeat ip_allow entirely.
+        global _WARNED_ALL_HOPS_TRUSTED
+        if not _WARNED_ALL_HOPS_TRUSTED:
+            _WARNED_ALL_HOPS_TRUSTED = True
+            logger.warning("client_ip.every_forwarded_hop_is_trusted", extra={"peer": peer})
     elif forwarded and peer is not None and not _is_trusted(peer, trusted):
         # The far more likely misconfiguration, and the one that was previously silent: something
         # is forwarding a client address and we are ignoring it because the peer is not on the

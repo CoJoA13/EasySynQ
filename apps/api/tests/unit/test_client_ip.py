@@ -317,6 +317,17 @@ def test_the_default_agrees_with_the_subnet_compose_actually_creates():
     assert ipaddress.ip_network(declared.group(1)) == _COMPOSE_SUBNET
     assert ipaddress.ip_network(declared.group(1)) in Settings().trusted_proxy_networks
 
+    # The TEMPLATE value matters independently of the code default: install.sh copies
+    # .env.example to .env, so on a fresh install that string is what the API actually loads and
+    # the code default is never consulted. Drift there would ship with every test passing.
+    template = (_REPO_ROOT / ".env.example").read_text()
+    entry = re.search(r"^TRUSTED_PROXY_CIDRS=(.*)$", template, re.MULTILINE)
+    assert entry is not None, ".env.example no longer carries TRUSTED_PROXY_CIDRS"
+    assert _COMPOSE_SUBNET in parse_trusted_proxy_cidrs(entry.group(1)), (
+        ".env.example must trust the subnet Compose creates, or a fresh install attributes "
+        "every request to the proxy"
+    )
+
 
 def test_the_test_transports_peer_resolves_under_the_shipped_default():
     # httpx's ASGITransport reports 127.0.0.1 and sends no forwarded header, so the whole
@@ -360,6 +371,34 @@ def test_a_forwarded_header_we_are_ignoring_is_reported_once(trusting, caplog):
 def test_no_warning_when_the_edge_is_configured_correctly(trusting, caplog):
     trusting("10.0.0.0/24")
     client_ip_module._WARNED_UNTRUSTED_FORWARDER = False
+    with caplog.at_level(logging.WARNING):
+        assert client_ip(_request({"x-forwarded-for": CLIENT}, (PROXY, 40000))) == CLIENT
+    assert caplog.text == ""
+
+
+def test_a_chain_of_only_trusted_hops_is_reported_as_a_misconfiguration(trusting, caplog):
+    """The last path that attributed a request to the proxy in silence.
+
+    It is reached when the trusted set is wider than the actual proxies — so real client entries
+    are being skipped as hops — or when the edge is not forwarding what we assume. Both defeat
+    ip_allow completely and blank the evidence attribution, and neither shows up anywhere else.
+    """
+    trusting("10.0.0.0/24")
+    client_ip_module._WARNED_ALL_HOPS_TRUSTED = False
+    with caplog.at_level(logging.WARNING):
+        assert client_ip(_request({"x-forwarded-for": OTHER_PROXY}, (PROXY, 40000))) == PROXY
+    assert "client_ip.every_forwarded_hop_is_trusted" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert client_ip(_request({"x-forwarded-for": OTHER_PROXY}, (PROXY, 40000))) == PROXY
+    assert caplog.text == "", "a standing deployment fact must not flood the log"
+
+
+def test_a_healthy_chain_does_not_report_a_misconfiguration(trusting, caplog):
+    # Anti-vacuity for the pin above: the ordinary case must stay silent.
+    trusting("10.0.0.0/24")
+    client_ip_module._WARNED_ALL_HOPS_TRUSTED = False
     with caplog.at_level(logging.WARNING):
         assert client_ip(_request({"x-forwarded-for": CLIENT}, (PROXY, 40000))) == CLIENT
     assert caplog.text == ""

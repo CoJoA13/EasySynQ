@@ -186,6 +186,11 @@ def test_the_edge_does_not_preserve_a_caller_supplied_forwarded_chain_by_default
     assert "\nCADDY_TRUSTED_PROXIES=\n" in _read(".env.example"), (
         "Caddy must replace the forwarded chain unless an operator names an upstream edge"
     )
+    # The placeholder is substituted from the CONTAINER's environment, and a value in .env reaches
+    # Compose for interpolation only. Without this passthrough the directive always expands to
+    # empty and an operator who configured both documented halves would still have every request
+    # attributed to the proxy — the exact silent failure, reached by following the documentation.
+    assert "CADDY_TRUSTED_PROXIES: ${CADDY_TRUSTED_PROXIES:-}" in _read("infra/compose/compose.yml")
 
 
 # --- U34: the image installs exactly what the lockfile pins ------------------------------------

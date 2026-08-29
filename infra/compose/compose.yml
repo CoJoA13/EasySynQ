@@ -285,6 +285,10 @@ services:
       # "tls internal" (the self-signed CA) since ACME is unreachable offline.
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
       CADDY_TLS_DIRECTIVE: ${CADDY_TLS_DIRECTIVE:-}
+      # Empty unless a load balancer fronts Caddy. Without this passthrough the Caddyfile's
+      # placeholder always expands to empty, and an operator who configured both documented halves
+      # would get the failure the setting exists to prevent — silently.
+      CADDY_TRUSTED_PROXIES: ${CADDY_TRUSTED_PROXIES:-}
       # Browser presigned upload/download go DIRECTLY to the object store (a different origin), so the
       # SPA CSP connect-src must allow it (dev loopback :9000 or production HTTPS :9443).
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}

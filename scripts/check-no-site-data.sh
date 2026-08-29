@@ -95,9 +95,10 @@ fi
 # 8.8.8.8/8.8.4.4 (well-known anycast resolvers, placeholder-grade) · the FOUR-part ISO 9001:2015
 # clause numbers (7.1.5.1/7.1.5.2/8.2.3.1/8.2.3.2 — the complete set in the standard) ·
 # 3.3.1.0 (the apache/tika image pin; a version bump that reds here is extended deliberately) ·
-# 172.16.0.0 (the BASE of Docker's built-in bridge address pool, named as the shipped
-# TRUSTED_PROXY_CIDRS default — repo-defined container topology, not a site address). Only that
-# exact base is sanctioned: any other 172.16.x.y still reds, so a real address cannot ride in.
+# 172.16.0.0 (the pinned `internal` subnet from infra/compose/compose.yml, named as the shipped
+# TRUSTED_PROXY_CIDRS default — repo-defined container topology, not a site address; it sits below
+# the daemon's own allocation pool so it cannot collide). Only that exact base is sanctioned: any
+# other 172.16.x.y still reds, so a real address cannot ride in.
 hits="$(grep -nHoIE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "${FILES[@]}" 2>/dev/null \
   | grep -vE ':(10\.0\.0\.[0-9]{1,3}|10\.99\.99\.99|192\.0\.2\.[0-9]{1,3}|198\.51\.100\.[0-9]{1,3}|203\.0\.113\.[0-9]{1,3}|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|0\.0\.0\.0|255\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|8\.8\.8\.8|8\.8\.4\.4|7\.1\.5\.[12]|8\.2\.3\.[12]|3\.3\.1\.0|172\.16\.0\.0)$' || true)"
 [ -z "$hits" ] || report "IPv4 address outside the sanctioned documentation/placeholder set (R61):" $hits

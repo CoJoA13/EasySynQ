@@ -116,12 +116,12 @@ assert_contains "Owner-like prefix on line 2 is not exempt" "$RUN_OUTPUT" "ident
 assert_not_contains "owner-token diagnostic does not echo the identity" "$RUN_OUTPUT" "ExampleOwner"
 
 # The container-topology widening must stay a single literal. `172.16.0.0` is sanctioned as the
-# base of Docker's bridge pool (the shipped TRUSTED_PROXY_CIDRS default); every other address in
-# that space must still red, or the exemption becomes a hiding place for a real one. Both shapes
-# are assembled at runtime so this regression test is not itself rejected by the gate.
+# pinned `internal` subnet (the shipped TRUSTED_PROXY_CIDRS default); every other address in that
+# space must still red, or the exemption becomes a hiding place for a real one. Both shapes are
+# assembled at runtime so this regression test is not itself rejected by the gate.
 repo="$TEST_ROOT/docker-pool-base"
 new_repo "$repo"
-printf 'TRUSTED_PROXY_CIDRS=%s.%s.0.0/12\n' "172" "16" >"$repo/settings.txt"
+printf 'TRUSTED_PROXY_CIDRS=%s.%s.0.0/24\n' "172" "16" >"$repo/settings.txt"
 git -C "$repo" add settings.txt
 run_gate "$repo" "$PATH"
 assert_exit "the Docker bridge-pool base is sanctioned" 0 "$RUN_CODE"
