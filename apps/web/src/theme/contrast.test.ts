@@ -195,24 +195,75 @@ describe.each(SCHEMES)("%s scheme", (_scheme, tokens) => {
 });
 
 describe("tint coverage", () => {
-  test("every tint token in the file is actually exercised by a pair", () => {
-    // The header above claims there is no exclusion list. That claim was untrue when written:
-    // --es-accent-soft-2 had no pair, and it was sitting at 4.35:1 against --es-accent-text in
-    // light (6.26:1 before this slice) — a regression the gate silently permitted. A prose promise
-    // of completeness is worth nothing; this makes it mechanical, so a NEW tint token fails here
-    // until someone states what foreground is allowed on it.
-    const covered = new Set(TINT_PAIRS.map(([, bg]) => bg));
-    const tintTokens = Object.keys(light).filter(
-      (k) => /-soft(-2)?$/.test(k) || k === "--es-add-bg" || k === "--es-del-bg",
-    );
-    expect(tintTokens.length, "no tint tokens found — the parser probably broke").toBeGreaterThan(
-      5,
-    );
-    for (const tint of tintTokens) {
+  // Pairs are DERIVED from the token names, not hand-listed. The previous version filtered for
+  // `*-soft*` plus two named `-bg` tokens, which meant the filter itself had quietly become the
+  // exclusion list it was written to abolish: S-ui-3's `--es-*-header` tints matched none of those
+  // patterns and sailed straight past the gate. The convention in this file is that a background
+  // token `--es-<name>-<soft|soft-2|header|bg>` is read by the foreground `--es-<name>-text` (and,
+  // for a header band, additionally `--es-<name>-clause`). Deriving from that convention means a
+  // NEW tint is covered the moment it is declared, with no list to remember to update.
+  const BACKGROUND_SUFFIXES = ["soft", "soft-2", "header", "bg"] as const;
+
+  function derivePairs(tokens: Record<string, string>): Array<[string, string]> {
+    const pairs: Array<[string, string]> = [];
+    for (const key of Object.keys(tokens)) {
+      for (const suffix of BACKGROUND_SUFFIXES) {
+        const m = new RegExp(`^--es-(.+)-${suffix}$`).exec(key);
+        // `--es-bg` is the page surface, not a tint: it has no `--es--text` partner and is already
+        // covered by the SURFACES matrix above.
+        if (!m || !m[1]) continue;
+        for (const fg of [`--es-${m[1]}-text`, `--es-${m[1]}-clause`]) {
+          if (tokens[fg]) pairs.push([fg, key]);
+        }
+      }
+    }
+    return pairs;
+  }
+
+  const derived = derivePairs(light);
+
+  test("the derivation finds the tints (guards against the regex silently matching nothing)", () => {
+    expect(derived.length).toBeGreaterThanOrEqual(15);
+    // The S-ui-3 header band specifically — the case the old hand-written filter missed.
+    expect(derived).toContainEqual(["--es-plan-text", "--es-plan-header"]);
+    expect(derived).toContainEqual(["--es-plan-clause", "--es-plan-header"]);
+  });
+
+  describe.each(SCHEMES)("%s scheme", (_scheme, tokens) => {
+    test.each(derivePairs(tokens))("%s clears AA on %s", (fg, bg) => {
+      const ratio = contrast(tokens[fg]!, tokens[bg]!);
       expect(
-        covered,
-        `${tint} is defined but no TINT_PAIRS entry puts a foreground on it`,
-      ).toContain(tint);
+        floor2(ratio),
+        `${fg} (${tokens[fg]}) on ${bg} (${tokens[bg]})`,
+      ).toBeGreaterThanOrEqual(AA_TEXT);
+    });
+  });
+
+  test("no tint is declared without a foreground partner", () => {
+    // Found by mutating this file's own guard: a background token whose `--es-<name>-text` partner
+    // does not exist derives ZERO pairs, so it is covered by nothing and the suite stays green. An
+    // orphan tint is therefore a failure in its own right, not merely an absence of pairs.
+    for (const key of Object.keys(light)) {
+      for (const suffix of BACKGROUND_SUFFIXES) {
+        const m = new RegExp(`^--es-(.+)-${suffix}$`).exec(key);
+        if (!m || !m[1]) continue;
+        const partners = [`--es-${m[1]}-text`, `--es-${m[1]}-clause`].filter((f) => light[f]);
+        expect(
+          partners.length,
+          `${key} is a tint with no --es-${m[1]}-text or --es-${m[1]}-clause to read on it`,
+        ).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("every hand-listed TINT_PAIR is also produced by the derivation", () => {
+    // If a hand-written pair is NOT derivable, the naming convention has drifted — and the next
+    // tint added under the drifted name will escape the gate exactly as `-header` did.
+    const derivedKeys = new Set(derived.map(([fg, bg]) => `${fg}|${bg}`));
+    for (const [fg, bg] of TINT_PAIRS) {
+      expect(derivedKeys, `${fg} on ${bg} is not derivable from the token names`).toContain(
+        `${fg}|${bg}`,
+      );
     }
   });
 });

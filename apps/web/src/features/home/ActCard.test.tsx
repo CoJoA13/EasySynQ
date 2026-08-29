@@ -115,7 +115,11 @@ it("shows open CAPAs, awaiting NCRs and complaints, RAG red on an awaiting NCR",
   expect(within(card).getByLabelText("1 NCRs awaiting disposition")).toBeInTheDocument();
   expect(within(card).getByLabelText("1 complaints awaiting triage")).toBeInTheDocument();
   await waitFor(() =>
-    expect(within(card).getByLabelText(/status: action required/i)).toBeInTheDocument(),
+    expect(
+      within(within(card).getByRole("group", { name: "ACT signal" })).getByText(
+        /status: action required/i,
+      ),
+    ).toBeInTheDocument(),
   );
 });
 
@@ -140,6 +144,12 @@ it("renders no-access when the actionable reads are forbidden, even though the i
   );
   // The initiatives line must NOT leak through the no-access state.
   expect(within(card).queryByLabelText(/initiatives in progress/)).toBeNull();
+  // Nor may the HEADER, which folds the same observations. Asserted directly on the signal band
+  // rather than via the card's accessible names: S-ui-3 removed the header's aria-label, which is
+  // what the queryByLabelText above used to reach — so without this the leak became unguarded.
+  const band = within(card).getByRole("group", { name: "ACT signal" });
+  expect(within(band).queryByText(/initiatives in progress/)).not.toBeInTheDocument();
+  expect(within(band).queryByText(/status:/i)).not.toBeInTheDocument();
 });
 
 // ---- S-improvement-3b: the "initiatives in progress" StatLine ----
@@ -174,9 +184,15 @@ it("the initiatives line is neutral and never raises the tile RAG above the acti
     expect(within(card).getByLabelText("3 initiatives in progress")).toBeInTheDocument(),
   );
   // Tile RAG = worst of the actionable signals (all green) — never amber/red from the initiatives line.
-  expect(within(card).getByLabelText(/status: on track/i)).toBeInTheDocument();
-  expect(within(card).queryByLabelText(/status: action required/i)).toBeNull();
-  expect(within(card).queryByLabelText(/status: needs attention/i)).toBeNull();
+  const signal = within(card).getByRole("group", { name: "ACT signal" });
+  expect(within(signal).getByText(/status: on track/i)).toBeInTheDocument();
+  expect(within(signal).queryByText(/status: action required/i)).toBeNull();
+  // And the severity actually announced is the remapped one — RAG_META.neutral.label is "No data",
+  // which would contradict the real count shown beside it.
+  expect(within(signal).queryByText(/no data/i)).not.toBeInTheDocument();
+  // Was queryByLabelText, which matched the removed StatusBadge's aria-label and so could no longer
+  // fail; the severity is now plain text inside the band.
+  expect(within(signal).queryByText(/status: needs attention/i)).not.toBeInTheDocument();
 });
 
 it("shows the initiatives line alongside a partially-accessible tile (one actionable read available)", async () => {
@@ -237,4 +253,37 @@ it("marks the CAPA count as a floor when the register scan window was truncated"
   const card = await screen.findByRole("group", { name: /act quadrant/i });
   await waitFor(() => expect(within(card).getByLabelText("1+ CAPAs open")).toBeInTheDocument());
   expect(within(card).queryByLabelText("1 CAPAs open")).not.toBeInTheDocument();
+});
+
+it("the header names something the tile actually shows", async () => {
+  // The invariant the derived signal exists to guarantee: the header is folded from the same
+  // observations the StatLines render, so its text must correspond to a line the reader can see.
+  // Drift — a card pushing an observation whose value or label differs from its StatLine — is
+  // invisible to every other test here, because each asserts the header and the lines separately.
+  //
+  // Scope, stated honestly: this reaches the DRIVING observation only, since that is the sole one
+  // the header can express. Verified by mutating it in both directions (label and value); mutating
+  // a NON-driving observation does not fail this test, and cannot, because nothing renders it.
+  renderWithProviders(<ActCard />);
+  const card = await screen.findByRole("group", { name: /act quadrant/i });
+  const band = within(card).getByRole("group", { name: "ACT signal" });
+  await waitFor(() => expect(within(card).getByLabelText(/CAPAs open/)).toBeInTheDocument());
+
+  // The header's observation text, with the visually-hidden severity stripped off.
+  const headerText = (band.textContent ?? "").replace(/Status:.*$/, "").trim();
+  const observation = headerText
+    .replace(/^ACT\s*Cl 10\s*/, "")
+    .replace(/^[^0-9A-Za-z]+/, "")
+    .trim();
+  expect(observation.length).toBeGreaterThan(0);
+
+  // StatLine exposes "<value> <label>" as its accessible name — the same string the header builds.
+  const lineNames = within(card)
+    .getAllByRole("group")
+    .map((g) => g.getAttribute("aria-label"))
+    .filter((n): n is string => Boolean(n));
+  expect(
+    lineNames,
+    `header said "${observation}" but the tile shows ${JSON.stringify(lineNames)}`,
+  ).toContain(observation);
 });

@@ -31,7 +31,11 @@ it("shows clean integrity, superseded copies and the ack count", async () => {
   );
   expect(within(card).getByLabelText("3 superseded copies in circulation")).toBeInTheDocument();
   expect(within(card).getByLabelText("2 acknowledgements awaiting you")).toBeInTheDocument();
-  await waitFor(() => expect(within(card).getByLabelText(/status: on track/i)).toBeInTheDocument());
+  await waitFor(() =>
+    expect(
+      within(within(card).getByRole("group", { name: "DO signal" })).getByText(/status: on track/i),
+    ).toBeInTheDocument(),
+  );
 });
 
 it("stays visible via the self-scoped ack count even when drift is forbidden", async () => {
@@ -62,7 +66,9 @@ it("shows a neutral couldn't-load (not green) when drift errors with no acks", a
     expect(within(card).getByText(/couldn't load this section/i)).toBeInTheDocument(),
   );
   expect(within(card).queryByText(/all caught up/i)).not.toBeInTheDocument();
-  expect(within(card).queryByLabelText(/status: on track/i)).not.toBeInTheDocument();
+  expect(
+    within(within(card).getByRole("group", { name: "DO signal" })).queryByText(/status:/i),
+  ).not.toBeInTheDocument();
 });
 
 it("shows couldn't-load (NOT no-access) when drift is forbidden AND the ack count fails", async () => {

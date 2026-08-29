@@ -108,3 +108,70 @@ export const complaintsAwaitingCount = (c: Complaint[]): number =>
 const INITIATIVE_IN_PROGRESS: InitiativeStage[] = ["Open", "InProgress", "Completed"];
 export const initiativesInProgressCount = (i: Initiative[]): number =>
   i.filter((x) => INITIATIVE_IN_PROGRESS.includes(x.stage)).length;
+
+// ── Quadrant header signal (S-ui-3) ────────────────────────────────────────────────────────────
+// The signal-board header states WHAT WAS OBSERVED, never a verdict. During design review an ACT
+// header read "✓ on track" above six open CAPAs, which is exactly the compliance judgement this
+// product is careful never to imply — and it was possible because the header rendered a RAG *label*
+// ("On track") that had drifted from the counts in the tile beneath it.
+//
+// The fix is structural rather than editorial: the header text is DERIVED from the same
+// observations the StatLines render, so it cannot disagree with them, and it is always a count plus
+// the label that count belongs to. There is no phrasing in this module that could be read as a
+// judgement about conformity.
+
+export interface QuadrantObservation {
+  /**
+   * The count exactly as the tile shows it — including a "12+" floor when the scan window filled.
+   * Omitted for a STATUS line that carries no number ("no published risk register yet"), which the
+   * tiles also render; such an observation contributes its label alone.
+   */
+  value?: number | string;
+  /** The SAME label the StatLine below uses. One vocabulary, so header and tile cannot diverge. */
+  label: string;
+  rag: Rag;
+}
+
+export interface QuadrantSignal {
+  rag: Rag;
+  /** The non-colour channel (DP-5): the signal survives with colour removed. */
+  glyph: string;
+  /** An observed count and the label it belongs to. Never a verdict. */
+  text: string;
+  /**
+   * The severity word announced beside the text.
+   *
+   * `neutral` covers two genuinely different situations and they must not share a word: NOTHING WAS
+   * READ (announce "No data") versus AN INFORMATIONAL COUNT WAS READ (announce "Informational",
+   * matching StatLine's own remap). Reusing RAG_META.neutral.label for both would have a screen
+   * reader say "No data" beside "3 initiatives in progress".
+   */
+  statusLabel: string;
+}
+
+/**
+ * Fold a quadrant's observations into its header signal.
+ *
+ * The reported observation is the FIRST one at the worst RAG, so the header names the count that
+ * actually drove the severity — not a summary of it. With nothing observed the signal is neutral and
+ * says so, rather than presenting an absence of data as an absence of problems.
+ */
+export function quadrantSignal(observations: QuadrantObservation[]): QuadrantSignal {
+  if (observations.length === 0) {
+    return {
+      rag: "neutral",
+      glyph: RAG_META.neutral.glyph,
+      text: "no data",
+      statusLabel: RAG_META.neutral.label,
+    };
+  }
+  const rag = worstRag(observations.map((o) => o.rag));
+  const driving = observations.find((o) => o.rag === rag) ?? observations[0]!;
+  const hasValue = driving.value !== undefined && driving.value !== "";
+  return {
+    rag,
+    glyph: RAG_META[rag].glyph,
+    text: hasValue ? `${driving.value} ${driving.label}` : driving.label,
+    statusLabel: rag === "neutral" ? "Informational" : RAG_META[rag].label,
+  };
+}

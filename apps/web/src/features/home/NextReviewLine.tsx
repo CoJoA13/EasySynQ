@@ -7,19 +7,32 @@ import { StatLine } from "./StatLine";
 // asserted verdict. A forbidden/errored/unset read renders NOTHING so it can never drag the tile red.
 const STATE_TONE: Record<string, Rag> = { overdue: "red", due_soon: "amber", current: "green" };
 
-export function NextReviewLine() {
-  const { data, forbidden, isError } = useMgmtReviewNextDue();
+/**
+ * The line's content, as data. CheckCard folds the CHECK header from this SAME function, so the
+ * header and the line cannot disagree — the card previously derived its own observation from
+ * `review_state` alone, ignoring the not-configured and none-released branches below, and could
+ * therefore state a review cadence the tile never displayed.
+ */
+export function nextReviewObservation(
+  q: ReturnType<typeof useMgmtReviewNextDue>,
+): { label: string; rag: Rag } | null {
+  const { data, forbidden, isError } = q;
   if (forbidden || isError || !data) return null;
-  if (!data.owner_configured) {
-    return <StatLine label="Review cadence not configured" tone="neutral" />;
-  }
+  if (!data.owner_configured) return { label: "Review cadence not configured", rag: "neutral" };
   if (!data.next_review_due || !data.review_state) {
-    return <StatLine label="No management review released yet" tone="neutral" />;
+    return { label: "No management review released yet", rag: "neutral" };
   }
-  const tone = STATE_TONE[data.review_state] ?? "neutral";
-  const label =
-    data.review_state === "overdue"
-      ? `Management review overdue (was due ${data.next_review_due})`
-      : `Next management review due ${data.next_review_due}`;
-  return <StatLine label={label} tone={tone} />;
+  return {
+    label:
+      data.review_state === "overdue"
+        ? `Management review overdue (was due ${data.next_review_due})`
+        : `Next management review due ${data.next_review_due}`,
+    rag: STATE_TONE[data.review_state] ?? "neutral",
+  };
+}
+
+export function NextReviewLine() {
+  const observation = nextReviewObservation(useMgmtReviewNextDue());
+  if (!observation) return null;
+  return <StatLine label={observation.label} tone={observation.rag} />;
 }
