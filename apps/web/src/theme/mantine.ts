@@ -5,6 +5,7 @@ import {
   Drawer,
   type MantineColorsTuple,
   Modal,
+  ScrollArea,
   type VariantColorsResolver,
 } from "@mantine/core";
 import type { Tone } from "../lib/status";
@@ -193,5 +194,13 @@ export const theme = createTheme({
     Badge: Badge.extend({
       styles: { root: { maxWidth: "none" }, label: { overflow: "visible" } },
     }),
+    // Mantine's ScrollArea hides its scrollbar until hover (`type: "hover"`), and every register
+    // table sits in a Table.ScrollContainer built on one. So a table wider than its viewport
+    // scrolls with NO visual cue that it does — measured on /context at 1115px, the table is 880px
+    // inside an 807px port and the "Last reviewed" column sits 73px past the clip edge with
+    // `scrollbar-width: none`. The owner read that as a misspelled header ("Last reviewe"), which
+    // is exactly the failure: content is unreachable and nothing says so. `auto` shows the bar
+    // whenever the content actually overflows, and nothing when it does not.
+    ScrollArea: ScrollArea.extend({ defaultProps: { type: "auto" } }),
   },
 });

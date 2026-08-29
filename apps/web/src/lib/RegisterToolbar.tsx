@@ -89,7 +89,19 @@ export function SortableTh<K extends string>({
           event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })
         }
         aria-label={`Sort by ${label}`}
-        style={{ display: "inline-flex", alignItems: "center", gap: 4, font: "inherit" }}
+        // The label is the column's identity, so keep it whole. Left breakable, the `<span>`
+        // is a flex item whose automatic minimum size is its longest WORD, so `table-layout:
+        // auto` may allocate a sortable column less than its label needs and hand the surplus
+        // to the free-text column beside it — measured, "Current / target" broke onto two
+        // lines at 1000px. Growth past the register's ScrollContainer floor is absorbed by
+        // that scroll container, which is exactly what it is there for.
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          font: "inherit",
+          whiteSpace: "nowrap",
+        }}
       >
         <span>{label}</span>
         {active ? (

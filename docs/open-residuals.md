@@ -4,6 +4,27 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
+## RES-CAPA-BOARD-NO-BROWSER-COVERAGE
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-5c, 2026-08-29
+Reason: `/capa` has no browser-test coverage at all, so layout defects on it cannot be proved or
+fixed under the rule this repository applies everywhere else. `apps/web/e2e/support/registers.ts`
+lists ten register cases and CAPA is not among them, and `apps/web/e2e/support/api.ts` fulfils no
+`/api/v1/capas` route, so no Playwright scenario can reach the board. Two defects the owner reported
+from a live walkthrough are consequently unfixed: the row of Source/Severity/State filter Selects is
+narrower than the summary card above it, so the block edges do not line up, and a narrow vertical
+gap sits between the "Open CAPAs" and "By source" cards. A one-line fix for the first
+(`grow preventGrowOverflow={false}` on the filter Group) was written, verified against every named
+gate, and then REVERTED rather than shipped unmeasured — the CAPA board is a size-and-position
+change and jsdom resolves no layout, which is exactly the blind spot that let three earlier S-ui
+slices ship a visible defect behind a fully green suite.
+Closure contract: Add a `capa` case to `apps/web/e2e/support/registers.ts` and the matching
+`/api/v1/capas` fixture route to `apps/web/e2e/support/api.ts`, then fix the filter-row alignment and
+the inter-card gap with a Playwright assertion that fails against the current code and passes after.
+Last reviewed: 2026-08-29
+
 ## RES-REGISTER-HEADING-LEVELS
 
 Status: OPEN
