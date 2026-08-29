@@ -207,7 +207,12 @@ export function ObjectivesRegisterPage() {
                     <Table.Tr key={o.id}>
                       <Table.Td>
                         <Group gap="xs" wrap="nowrap">
-                          <Anchor component={Link} to={`/objectives/${o.id}`} data-rownav>
+                          <Anchor
+                            component={Link}
+                            to={`/objectives/${o.id}`}
+                            data-rownav
+                            style={{ whiteSpace: "nowrap" }}
+                          >
                             {o.identifier}
                           </Anchor>
                           {/* O-6c: exception-marking — the steady state (Effective) stays unmarked;
