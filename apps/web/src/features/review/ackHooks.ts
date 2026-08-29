@@ -28,6 +28,8 @@ export function useAcknowledgeTask() {
       void qc.invalidateQueries({ queryKey: ["task", taskId] });
       void qc.invalidateQueries({ queryKey: ["tasks"] });
       void qc.invalidateQueries({ queryKey: ["ack-count"] });
+      // See useDecideTask: ["my-tasks"] is a distinct key and now feeds the always-mounted rail badge.
+      void qc.invalidateQueries({ queryKey: ["my-tasks"] });
       void qc.invalidateQueries({ queryKey: ["documents"] });
       if (documentId) void qc.invalidateQueries({ queryKey: ["document", documentId] });
     },
@@ -61,6 +63,7 @@ export function useBulkAcknowledge() {
     });
     void qc.invalidateQueries({ queryKey: ["tasks"] });
     void qc.invalidateQueries({ queryKey: ["ack-count"] });
+    void qc.invalidateQueries({ queryKey: ["my-tasks"] });
     void qc.invalidateQueries({ queryKey: ["documents"] });
     return { ok, failed };
   }

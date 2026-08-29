@@ -1,4 +1,5 @@
 import { Anchor, Breadcrumbs, Text } from "@mantine/core";
+import { IconChevronRight } from "../../lib/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
@@ -73,6 +74,12 @@ function RecordBreadcrumbLabel({ recordId }: { recordId: string }) {
   return <>{record?.identifier ?? DETAIL_LABELS.records}</>;
 }
 
+// The separator is decorative: the list already conveys the trail, so exposing a chevron per gap
+// would just add noise to every screen-reader pass over the breadcrumb.
+function BreadcrumbSeparator() {
+  return <IconChevronRight size={14} style={{ display: "block", color: "var(--es-text-muted)" }} />;
+}
+
 export interface BreadcrumbProps {
   notFound?: boolean;
 }
@@ -96,7 +103,7 @@ export function Breadcrumb({ notFound = false }: BreadcrumbProps) {
   });
   if (notFound) {
     return (
-      <Breadcrumbs aria-label="Breadcrumb">
+      <Breadcrumbs aria-label="Breadcrumb" separator={<BreadcrumbSeparator />}>
         <Anchor component={Link} to="/">
           Home
         </Anchor>
@@ -123,7 +130,7 @@ export function Breadcrumb({ notFound = false }: BreadcrumbProps) {
     }),
   ];
   return (
-    <Breadcrumbs aria-label="Breadcrumb">
+    <Breadcrumbs aria-label="Breadcrumb" separator={<BreadcrumbSeparator />}>
       {crumbs.map((c, i) =>
         i === crumbs.length - 1 || !c.linkable ? (
           <Text key={`${i}-${c.to}`} c={i === crumbs.length - 1 ? "dimmed" : undefined}>

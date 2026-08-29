@@ -453,6 +453,21 @@ export async function installRegisterApi(
       return;
     }
 
+    // SHELL, not per-scenario. The LeftRail's /tasks entry carries an open-task count (S-ui-2), and
+    // the rail is mounted by AppShell on EVERY route — so this request now arrives in every
+    // scenario, not just scenario.route === "tasks". Leaving it gated sent all other scenarios into
+    // the fail-closed tail below. Non-tasks scenarios get an empty list, which resolveTaskCount
+    // reads as a TRUE ZERO and renders with no badge, so the narrow-viewport geometry assertions
+    // are unaffected; the tasks scenario keeps its populated fixture.
+    if (
+      method === "GET" &&
+      url.pathname === "/api/v1/tasks" &&
+      hasOnlySearchParams(url, { assignee: "me", state: "PENDING" })
+    ) {
+      await fulfillJson(route, scenario.route === "tasks" ? tasks : []);
+      return;
+    }
+
     if (
       scenario.route === "audits" &&
       method === "GET" &&
@@ -657,16 +672,6 @@ export async function installRegisterApi(
       url.search === ""
     ) {
       await fulfillJson(route, interestedPartyRegisterStatusFixture);
-      return;
-    }
-
-    if (
-      scenario.route === "tasks" &&
-      method === "GET" &&
-      url.pathname === "/api/v1/tasks" &&
-      hasOnlySearchParams(url, { assignee: "me", state: "PENDING" })
-    ) {
-      await fulfillJson(route, tasks);
       return;
     }
 

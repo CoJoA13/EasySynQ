@@ -1,5 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
+import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, it, test } from "vitest";
 import { server } from "../../test/msw/server";
@@ -36,18 +37,78 @@ test("LeftRail shows Home + the four PDCA phase headings (with clause ranges)", 
   expect(screen.getByText(/ACT ·/)).toBeInTheDocument();
 });
 
-test("Library + Review and approve sit under the DO section", () => {
+test("Library + Review and approve sit under the DO section", async () => {
   renderWithProviders(<LeftRail />, { route: "/library" });
   const doSection = screen.getByRole("group", { name: "DO section" });
   expect(within(doSection).getByRole("link", { name: "Library" })).toHaveAttribute(
     "href",
     "/library",
   );
-  expect(within(doSection).getByRole("link", { name: "Review and approve" })).toHaveAttribute(
-    "href",
-    "/tasks",
+  // Settle-aware and prefix-matched ON PURPOSE. The /tasks entry appends its open-task count to its
+  // own accessible name once the count query lands, so an exact-name assertion here would pass only
+  // while the query was still in flight — a green that depends on timing, not on placement. This
+  // test is about PLACEMENT; the count semantics are pinned by the three tests below.
+  await waitFor(() =>
+    expect(within(doSection).getByRole("link", { name: /^Review and approve/ })).toHaveAttribute(
+      "href",
+      "/tasks",
+    ),
   );
-  expect(within(doSection).getByRole("link", { name: "Records" })).toHaveAttribute("href", "/records");
+  expect(within(doSection).getByRole("link", { name: "Records" })).toHaveAttribute(
+    "href",
+    "/records",
+  );
+});
+
+test("the /tasks entry announces its open-task count, so AT gets what the badge shows", async () => {
+  // The default handler returns one task.
+  renderWithProviders(<LeftRail />, { route: "/" });
+  expect(
+    await screen.findByRole("link", { name: "Review and approve, 1 open task" }),
+  ).toHaveAttribute("href", "/tasks");
+});
+
+test("a true zero shows no badge and leaves the name bare", async () => {
+  server.use(http.get("/api/v1/tasks", () => HttpResponse.json([])));
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  renderWithProviders(<LeftRail />, { route: "/", queryClient });
+
+  // Synchronise on the LANDED DATA, not on the DOM. The pending rail renders the bare label too
+  // (taskCountLabel returns the base for kind:"pending"), so findByRole with the bare name resolves
+  // on the first poll — before the empty response arrives — and the assertions below would then run
+  // against the pre-settle rail and prove nothing about the zero case. The cache is the
+  // deterministic signal, matching the ["clauses"] pattern used elsewhere in this file.
+  await waitFor(() => expect(queryClient.getQueryData(["my-tasks"])).toEqual([]));
+
+  const link = screen.getByRole("link", { name: "Review and approve" });
+  expect(link).toHaveAttribute("href", "/tasks");
+  // Nothing to flag — and specifically not a "0", in the badge OR the accessible name.
+  expect(within(link).queryByText("0")).not.toBeInTheDocument();
+  expect(link.getAttribute("aria-label")).not.toMatch(/\b0\b/);
+});
+
+test("a FAILED count never renders as zero (the never-a-confident-zero rule)", async () => {
+  server.use(http.get("/api/v1/tasks", () => new HttpResponse(null, { status: 500 })));
+  renderWithProviders(<LeftRail />, { route: "/" });
+  // The name says the count is unavailable rather than silently reading as "no open tasks",
+  // which is what a bare label or a "0" badge would both imply.
+  const link = await screen.findByRole("link", {
+    name: "Review and approve, task count unavailable",
+  });
+  expect(within(link).queryByText("0")).not.toBeInTheDocument();
+});
+
+test("every rail entry carries an aria-hidden icon that does not pollute its accessible name", async () => {
+  renderWithProviders(<LeftRail />, { route: "/" });
+  const home = await screen.findByRole("link", { name: "Home" });
+  // The trap this guards: an icon rendered inside the NavLink WITHOUT aria-hidden becomes part of
+  // the accessible name, and every exact-name query in this file stops matching.
+  const svg = home.querySelector("svg");
+  expect(svg).not.toBeNull();
+  expect(svg).toHaveAttribute("aria-hidden", "true");
+  for (const link of screen.getAllByRole("link")) {
+    expect(link.querySelector("svg"), `${link.textContent} has no icon`).not.toBeNull();
+  }
 });
 
 test("Records is unconditional because PROCESS-scoped record.read is not visible to the SYSTEM permissions query", async () => {
@@ -176,4 +237,29 @@ it("shows the Objectives entry only with objective.read", async () => {
 test("surfaces the canonical glyph legend trigger", () => {
   renderWithProviders(<LeftRail />, { route: "/" });
   expect(screen.getByRole("button", { name: "Status legend" })).toBeInTheDocument();
+});
+
+test("the rail has no axe violations once its count has landed", async () => {
+  const { container } = renderWithProviders(<LeftRail />, { route: "/" });
+  // Settle-aware ON PURPOSE. Auditing before the count resolves would audit a DIFFERENT rail: no
+  // badge, no count in the accessible name, and the permission-gated entries not yet mounted. The
+  // interesting state for an audit is the fully populated one.
+  await screen.findByRole("link", { name: /^Review and approve,/ });
+  expect(await axe(container)).toHaveNoViolations();
+});
+
+test("the PDCA phase hue is decoration, never the only carrier of the grouping", async () => {
+  // DP-5: colour alone must not encode meaning. The marker bar is aria-hidden and the phase NAME
+  // sits beside it as text, so the grouping survives with colour removed entirely.
+  renderWithProviders(<LeftRail />, { route: "/" });
+  const plan = await screen.findByRole("group", { name: "PLAN section" });
+  expect(within(plan).getByText(/^PLAN ·/)).toBeInTheDocument();
+  // Anchored to the marker's own element. A bare [aria-hidden="true"] selector matches the first
+  // rail ICON instead — every icon is an aria-hidden <svg> with no text — so removing the marker
+  // entirely would still have satisfied it. The marker is the div carrying the phase hue.
+  const marker = plan.querySelector<HTMLElement>('div[aria-hidden="true"]');
+  expect(marker, "the phase marker bar is missing").not.toBeNull();
+  expect(marker!.style.background).toContain("--es-plan");
+  // If the bar ever became the only signal, this is the assertion that would have to be deleted.
+  expect(marker).not.toHaveTextContent(/\w/);
 });

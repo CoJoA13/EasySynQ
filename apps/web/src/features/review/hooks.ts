@@ -74,6 +74,14 @@ export function useDecideTask() {
     onSuccess: (_d, { taskId, subjectType, subjectId }) => {
       void qc.invalidateQueries({ queryKey: ["task", taskId] });
       void qc.invalidateQueries({ queryKey: ["tasks"] });
+      // Unconditional, and hoisted out of the per-subject branches. Deciding ANY task changes the
+      // caller's own open-task set by definition, but ["my-tasks"] is a separate cache key from
+      // ["tasks"], so invalidating the latter does not cover it. It was previously refreshed only in
+      // the DCR / IMPROVEMENT_INITIATIVE / LEADERSHIP_AUTHORIZATION branches, leaving a DOCUMENT
+      // approval, a PERIODIC_REVIEW completion and every CAPA decision to serve a stale list. That
+      // was survivable while ["my-tasks"] only fed Home; the S-ui-2 rail badge reads it on EVERY
+      // route, so a stale count would follow the user around the app.
+      void qc.invalidateQueries({ queryKey: ["my-tasks"] });
       if (subjectType === "DOCUMENT") {
         void qc.invalidateQueries({ queryKey: ["document", subjectId] });
         void qc.invalidateQueries({ queryKey: ["document-approval", subjectId] });
@@ -92,7 +100,6 @@ export function useDecideTask() {
         void qc.invalidateQueries({ queryKey: ["dcr", subjectId] });
         void qc.invalidateQueries({ queryKey: ["dcrs"] });
         void qc.invalidateQueries({ queryKey: ["dcr-impact", subjectId] });
-        void qc.invalidateQueries({ queryKey: ["my-tasks"] });
       } else if (subjectType === "IMPROVEMENT_INITIATIVE") {
         // subjectId IS the initiative id — the verify sign closed it; refresh the drawer + its trail
         // + the authorization cycle + the register/Home dashboard line (S-improvement-4).
@@ -100,7 +107,6 @@ export function useDecideTask() {
         void qc.invalidateQueries({ queryKey: ["initiatives"] });
         void qc.invalidateQueries({ queryKey: ["initiative-stage-events", subjectId] });
         void qc.invalidateQueries({ queryKey: ["initiative-authorization", subjectId] });
-        void qc.invalidateQueries({ queryKey: ["my-tasks"] });
       } else if (subjectType === "LEADERSHIP_AUTHORIZATION") {
         // subjectId IS the document id (POL/OBJ/MR share the documented_information id). verify flips
         // `authorized` → the release-gate panel re-reads it and re-enables Release; the document FSM is
@@ -109,7 +115,6 @@ export function useDecideTask() {
         void qc.invalidateQueries({ queryKey: ["document", subjectId] });
         void qc.invalidateQueries({ queryKey: ["objective", subjectId] });
         void qc.invalidateQueries({ queryKey: ["management-review", subjectId] });
-        void qc.invalidateQueries({ queryKey: ["my-tasks"] });
       } else {
         void qc.invalidateQueries({ queryKey: ["capa", subjectId] });
         void qc.invalidateQueries({ queryKey: ["capas"] });
