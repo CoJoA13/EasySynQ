@@ -71,19 +71,19 @@ export function RouteErrorPage({
           {/* A stale chunk can only be fixed by a reload, so it leads; retrying the render
               would re-read the same memoized rejection forever. */}
           {staleChunk ? null : (
-            <Button color="indigo" style={{ minHeight: 44 }} onClick={onRetry}>
+            <Button style={{ minHeight: 44 }} onClick={onRetry}>
               Try this page again
             </Button>
           )}
           <Button
-            color={staleChunk ? "indigo" : "gray"}
+            color={staleChunk ? undefined : "gray"}
             variant={staleChunk ? "filled" : "subtle"}
             style={{ minHeight: 44 }}
             onClick={onReload}
           >
             Reload EasySynQ
           </Button>
-          <Button component={Link} to="/" variant="light" color="indigo" style={{ minHeight: 44 }}>
+          <Button component={Link} to="/" variant="light" style={{ minHeight: 44 }}>
             Go to dashboard
           </Button>
         </Stack>

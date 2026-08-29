@@ -26,9 +26,17 @@ export function AppShell({ notFound = false }: AppShellProps) {
   useHotkeys([["mod+K", openSearch]], []);
   useHotkeys([["/", openSearch]]);
   return (
+    // Shell dimensions come from the layout tokens, not literals. tokens.css is the single source
+    // for both Mantine and Tailwind, and these two ramps existed with ZERO readers before S-ui-1.
+    // Mantine's rem() passes a bare `var(...)` through untouched (it only converts numbers and
+    // px/number-like strings), so the custom property reaches --app-shell-header-height verbatim.
     <MantineAppShell
-      header={{ height: 60 }}
-      navbar={{ width: 256, breakpoint: "md", collapsed: { mobile: !navOpened } }}
+      header={{ height: "var(--es-topbar-h)" }}
+      navbar={{
+        width: "var(--es-sidebar-w)",
+        breakpoint: "md",
+        collapsed: { mobile: !navOpened },
+      }}
       padding="md"
     >
       {/* Skip-link: zIndex above the Mantine header (z-index 100) so keyboard focus isn't

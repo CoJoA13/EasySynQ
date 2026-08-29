@@ -71,7 +71,7 @@ export function AuthStartupScreen({ status, onRetry, onReload }: AuthStartupScre
         aria-live="polite"
         aria-label="Connecting to sign-in"
       >
-        <Loader color="indigo" aria-hidden="true" />
+        <Loader aria-hidden="true" />
         <Text fw={600}>Connecting to sign-in…</Text>
         <Text c="var(--es-text-2)" size="sm" ta="center">
           Please wait while we securely connect you.
@@ -90,7 +90,6 @@ export function AuthStartupScreen({ status, onRetry, onReload }: AuthStartupScre
         <Stack gap="xs">
           <Button
             fullWidth
-            color="indigo"
             loading={retryBusy}
             disabled={retryBusy}
             aria-busy={retryBusy || undefined}

@@ -30,16 +30,10 @@ export function NotFoundPage(): JSX.Element {
           <Text c="var(--es-text-2)">The page you requested isn't available in EasySynQ.</Text>
         </Stack>
         <Stack gap="xs">
-          <Button component={Link} to="/" color="indigo" style={{ minHeight: 44 }}>
+          <Button component={Link} to="/" style={{ minHeight: 44 }}>
             Go to dashboard
           </Button>
-          <Button
-            component={Link}
-            to="/library"
-            variant="light"
-            color="indigo"
-            style={{ minHeight: 44 }}
-          >
+          <Button component={Link} to="/library" variant="light" style={{ minHeight: 44 }}>
             Open document library
           </Button>
         </Stack>
