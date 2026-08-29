@@ -4,6 +4,23 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
+## RES-IP-ALLOW-EXACT-MATCH
+
+Status: OPEN
+Owner: Repository owner
+Source: S-proxy-trust, 2026-08-28
+Reason: The `ip_allow` grant predicate compares the resolved client address to its list by exact
+string, while doc 07 described it as restricting to source ranges. The divergence was inert while
+every request resolved to the reverse proxy's own address and the predicate therefore matched
+nothing; now that a real client address reaches it, an administrator who enters a CIDR gets a grant
+that silently denies everything instead of narrowing. Doc 07 has been corrected to the implemented
+semantics, so the ledger carries the capability gap rather than a documentation error.
+Closure contract: Either accept exact-address matching and reject a range-shaped entry at the point
+an administrator submits it, with a proof that the refusal names the offending value; or implement
+containment matching and prove it preserves the lossless-representation contract that Evidence Pack
+build replay depends on (R58), including the expanded-IPv6 spelling that its integration proof pins.
+Last reviewed: 2026-08-28
+
 ## RES-POSTGRES-MCP-REPLACEMENT
 
 Status: OPEN

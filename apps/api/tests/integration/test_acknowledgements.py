@@ -1094,6 +1094,12 @@ async def test_acknowledgement_append_only_db_grant(
         row = await s.get(Acknowledgement, ack_id)
         assert row is not None
         assert row.client_ip != "tamper"
+        # [S-proxy-trust] Pin the VALUE, not just its difference from the tampered one. `None`
+        # also satisfies `!= "tamper"`, so on its own that assertion cannot tell an intact row
+        # from one where client-IP attribution has silently stopped working — and this column is
+        # Part-11-adjacent evidence, so a blank is a real loss. 127.0.0.1 is the ASGI transport's
+        # peer, which the shipped TRUSTED_PROXY_CIDRS default covers.
+        assert row.client_ip == "127.0.0.1"
 
 
 # ---------------------------------------------------------------------------

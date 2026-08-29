@@ -33,7 +33,11 @@ security-npm:
 
 # --- dev servers ---
 api-dev:
-    cd apps/api && uv run uvicorn easysynq_api.main:app --reload --host 0.0.0.0 --port 8000
+    # --forwarded-allow-ips "" for the same reason the api image pins it: uvicorn's default trusts
+    # loopback's X-Forwarded-For and rewrites request.client before any application code runs, so
+    # a local caller could choose its own apparent address and TRUSTED_PROXY_CIDRS would never see
+    # the real peer. One trust mechanism, in the application.
+    cd apps/api && uv run uvicorn easysynq_api.main:app --reload --host 0.0.0.0 --port 8000 --forwarded-allow-ips ""
 
 web-dev:
     cd apps/web && npm run dev

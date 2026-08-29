@@ -33,6 +33,7 @@ from ...logging import request_id_var
 from ...problems import ProblemException
 from ..authz import AuthzAuditSink, enforce
 from ..authz.resource import resource_from_doc
+from ..common.client_ip import client_ip
 from ..vault import repository as vault_repo
 from ..workflow import engine as wf_engine
 from . import queries
@@ -52,17 +53,6 @@ def _rid() -> uuid.UUID | None:
         return uuid.UUID(raw)
     except ValueError:
         return None
-
-
-def _client_ip(request: Request) -> str | None:
-    # The pack_share XFF-aware shape (Caddy fronts the API, so the socket peer is the proxy).
-    # Audit U21: the RIGHTMOST entry — the value the trusted proxy appended for the actual
-    # peer; the leftmost is client-controlled and would let an acknowledger forge the IP
-    # recorded in the immutable Part-11-adjacent evidence row.
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[-1].strip()
-    return request.client.host if request.client else None
 
 
 def _not_found() -> ProblemException:
@@ -229,7 +219,7 @@ async def decide_doc_ack(
         document_version_id=pinned_version_id,
         user_id=actor.id,
         acknowledged_at=_now(),
-        client_ip=_client_ip(request),
+        client_ip=client_ip(request),
         created_reason=reason,
     )
     session.add(ack_row)

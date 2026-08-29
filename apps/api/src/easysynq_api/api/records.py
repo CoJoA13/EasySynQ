@@ -40,6 +40,7 @@ from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..domain.records.retention import retention_until
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
+from ..services.common.client_ip import client_ip
 from ..services.records import (
     EvidenceInput,
     advance_disposition,
@@ -493,7 +494,7 @@ async def _retention_until_for(session: AsyncSession, record: Record) -> datetim
 def _request_context(request: Request) -> RequestContext:
     return RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
 
 

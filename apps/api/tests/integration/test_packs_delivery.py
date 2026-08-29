@@ -79,6 +79,18 @@ async def _audit_count(pack_id: uuid.UUID, event_type: EventType) -> int:
         )
 
 
+async def _download_client_ips(pack_id: uuid.UUID) -> set[str | None]:
+    """Every client address recorded by a PACK_DOWNLOADED event for this pack."""
+    async with get_sessionmaker()() as s:
+        rows = await s.scalars(
+            select(AuditEvent).where(
+                AuditEvent.object_id == pack_id,
+                AuditEvent.event_type == EventType.PACK_DOWNLOADED,
+            )
+        )
+        return {(row.after or {}).get("client_ip") for row in rows}
+
+
 async def _set_expiry(link_id: uuid.UUID, when: datetime.datetime) -> None:
     async with get_sessionmaker()() as s:
         link = await s.get(PackShareLink, link_id)
@@ -297,6 +309,9 @@ async def test_pack_share_full_delivery_flow(
         assert links.json()[0]["download_count"] == 2
         assert await _audit_count(pack_uuid, EventType.PACK_SHARED) == 1
         assert await _audit_count(pack_uuid, EventType.PACK_DOWNLOADED) == 2
+        # [S-proxy-trust] Counting events cannot see a blank attribution. The downloader's
+        # address is the only identity a public share link records, so read the payload.
+        assert await _download_client_ips(pack_uuid) == {"127.0.0.1"}
 
         # Revoke → the public link is dead IMMEDIATELY (the next request re-checks the DB row).
         link_id = body["id"]

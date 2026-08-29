@@ -44,6 +44,7 @@ from ..services.authz import (
 )
 from ..services.authz.register_caps import register_capabilities
 from ..services.authz.resource import resource_from_doc
+from ..services.common.client_ip import client_ip
 from ..services.context import (
     add_context_issue,
     find_head,
@@ -132,7 +133,7 @@ async def _readable_context(
     grants = await gather_grants(session, caller.id, caller.org_id, "register.read")
     ctx = RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
     if not authorize(grants, "register.read", ResourceContext.system(), ctx).allow:
         return []
@@ -213,7 +214,7 @@ async def get_register_endpoint(
     FE probe can't replicate ``_register_release_scope``). GET-only; the action routes stay lean
     (the FE refetches this after each mutation)."""
     head = await find_head(session, caller.org_id)
-    source_ip = request.client.host if request.client else None
+    source_ip = client_ip(request)
     release_scope = await _register_release_scope(session, head) if head is not None else None
     caps = await register_capabilities(
         session, caller, release_scope=release_scope, source_ip=source_ip

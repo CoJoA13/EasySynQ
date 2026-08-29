@@ -24,6 +24,7 @@ from ..db.models.app_user import AppUser
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..services.authz import gather_grants
+from ..services.common.client_ip import client_ip
 from ..services.search import SearchHit, get_indexer
 from ..services.vault import repository as vault_repo
 
@@ -79,7 +80,7 @@ async def search_endpoint(
         session,
         caller,
         candidates,
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
     visible = visible[:limit]
     refs = await vault_repo.clause_numbers_for_docs(session, [h.doc_id for h in visible])
@@ -116,7 +117,7 @@ async def suggest_endpoint(
     # Audit U1: thread source_ip so ip_allow-predicated grants/DENYs evaluate on this row filter.
     ctx = RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
     # S-process-scope-1: process links per suggestion so a PROCESS-scoped document.read matches.
     process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [s.doc_id for s in raw])

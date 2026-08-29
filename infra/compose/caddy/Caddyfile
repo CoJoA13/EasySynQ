@@ -3,6 +3,22 @@
 # it to your domain for automatic TLS, or use the internal issuer when air-gapped.
 {
 	admin off
+
+	# Measured against caddy:2 (v2.11.4): by DEFAULT Caddy REPLACES X-Forwarded-For with the single
+	# address it observed, discarding whatever the caller sent — which is why a client cannot forge
+	# the address the API attributes a request to. It only APPENDS, preserving an upstream chain,
+	# for a peer named here. Empty by default: with Caddy as the outermost proxy, replacing is the
+	# stronger behaviour and there is no upstream chain worth keeping.
+	#
+	# Set this ONLY when a further load balancer sits in front of Caddy, and name ONLY that load
+	# balancer, e.g. CADDY_TRUSTED_PROXIES='trusted_proxies static 203.0.113.0/24'. Naming a broad
+	# range here re-opens forgery: any caller inside it would have its own X-Forwarded-For
+	# preserved and passed on. The API side needs the matching entry in TRUSTED_PROXY_CIDRS — both
+	# halves are required, because Caddy decides what reaches the API and the API decides what it
+	# believes.
+	servers {
+		{$CADDY_TRUSTED_PROXIES}
+	}
 }
 
 {$SITE_ADDRESS::80} {

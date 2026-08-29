@@ -97,6 +97,36 @@ flowchart TB
 
 ---
 
+### 1.4 Which address a request is attributed to
+
+The application runs behind a reverse proxy, so the socket peer is the proxy and not the caller.
+Two consumers depend on knowing the difference: the `ip_allow` ABAC predicate (section 07), and the
+client address recorded in acknowledgement and evidence-pack-download evidence.
+
+`TRUSTED_PROXY_CIDRS` is the trust boundary. `X-Forwarded-For` is read **only** when the socket peer
+falls inside one of its networks; from any other peer the header is ignored entirely and the socket
+peer is used. When the header is read, the chain is walked from the right — the end each proxy
+writes — and the first entry outside the trusted networks is the attributed address. A chain that
+cannot be parsed attributes no address at all rather than an unverified one.
+
+Two properties follow, and both are load-bearing:
+
+- A caller reaching the application directly cannot choose the address recorded against it, because
+  its own header is never consulted.
+- An address inside a trusted network is treated as a proxy hop and skipped. The setting must
+  therefore name the proxies and nothing else; a range that also contains real clients would
+  discard their addresses. It defaults to exactly the pinned Compose subnet the edge sits on.
+
+The edge enforces the same boundary independently. Caddy replaces `X-Forwarded-For` with the single
+address it observed unless an upstream peer is named in its own `trusted_proxies`, so in the shipped
+topology a caller-supplied chain never reaches the application at all. A deployment with a further
+load balancer in front of Caddy must configure both halves.
+
+Only one mechanism resolves the address. The ASGI server's own forwarded-header handling is
+disabled (`--forwarded-allow-ips ""`), because a second layer rewriting the peer before the
+application sees it would evaluate the trust check against an already-substituted value.
+
+
 ## 2. Authentication (AuthN)
 
 AuthN is brokered entirely by **Keycloak** (locked stack decision). EasySynQ never stores user passwords itself; it consumes OIDC tokens. This collapses three mandated identity modes into one hardened, externally-audited component and pre-positions MFA + re-authentication for Part 11.
@@ -308,7 +338,7 @@ The audit trail is the **spine of ISO 9001 traceability** and the **evidentiary 
 | `before` | `jsonb` (nullable) | Prior state of changed fields (redacted of secrets) |
 | `after` | `jsonb` (nullable) | New state of changed fields |
 | `request_id` | uuid | Correlates with structured app logs / traces |
-| `client_ip` | inet | Source IP (proxy-forwarded, validated) |
+| `client_ip` | inet | Source IP. **Reserved — not populated in v1**; no writer sets it. Client-address evidence is recorded on `acknowledgement.client_ip` and in the `PACK_DOWNLOADED` payload, resolved per §1.4. |
 | `user_agent` | text | Client hint |
 | `auth_context` | `jsonb` | `acr`/`amr` (factors used), session id — **reused by Part 11 to prove re-auth at signing** |
 | `prev_hash` | bytea (**nullable until linked**) | SHA-256 of the previous row's `row_hash` in this org's chain; populated by the single-threaded chain-linker, not in the action transaction (reconciled per Decisions Register R12) |

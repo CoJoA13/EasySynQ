@@ -28,6 +28,7 @@ from ...domain.authz.types import Decision
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ...redis_client import redis_client
+from ..common.client_ip import client_ip
 from .audit import AuthzAuditEvent, AuthzAuditSink, DbAuthzAuditSink
 from .repository import (
     gather_grants,
@@ -86,7 +87,7 @@ async def evaluate(
     """Build request context, run the PDP, and emit the audit hook (allow AND deny)."""
     ctx = RequestContext(
         now=_now(),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
         actor_user_id=str(user.id),
     )
     return await evaluate_with_context(
@@ -236,7 +237,7 @@ async def _is_system_tier(session: AsyncSession, granter: AppUser) -> bool:
     system-tier one — sidestepping the tie-winner nondeterminism when a principal holds BOTH a
     system-tier and a content-tier ``permission.grant`` (``gather_grants`` returns them unordered,
     the PDP ranks both SYSTEM grants alike). ``source_ip`` is None (the two-tier callers hold no
-    request); ``ip_allow`` on a ``permission.grant`` is v1-deferred (no carrier), and fail-closed
+    request); ``ip_allow`` on a ``permission.grant`` has no bound-role carrier in v1; fail-closed
     (an ip-restricted grant conferring no system tier without a matching IP) is the safe call."""
     grants = await gather_grants(session, granter.id, granter.org_id, "permission.grant")
     system_grants = [g for g in grants if not (g.predicates or {}).get("content_only")]

@@ -36,6 +36,7 @@ from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.common import listing
+from ..services.common.client_ip import client_ip
 from ..services.improvement import (
     create_initiative,
     request_authorization,
@@ -254,7 +255,7 @@ async def list_initiatives_endpoint(
     # Audit U1: thread source_ip so ip_allow-predicated grants/DENYs evaluate on this row filter.
     ctx = RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
     visible = [
         i

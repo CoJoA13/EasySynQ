@@ -51,6 +51,7 @@ from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_a
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.authz.resource import resource_from_doc
 from ..services.capa import raise_dcr_from_capa
+from ..services.common.client_ip import client_ip
 from ..services.dcr import (
     annotate_impact,
     assess_dcr,
@@ -414,7 +415,7 @@ async def list_dcrs_endpoint(
     grants = await gather_grants(session, caller.id, caller.org_id, "changeRequest.read")
     ctx = RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
     doc_ids = [d.target_document_id for d, _i, _t in rows if d.target_document_id is not None]
     docs: dict[uuid.UUID, DocumentedInformation] = {}

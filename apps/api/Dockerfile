@@ -79,6 +79,12 @@ USER easysynq
 
 EXPOSE 8000
 # Uvicorn workers under Gunicorn (doc 03 §1)
+# `--forwarded-allow-ips ""` disables uvicorn's own ProxyHeadersMiddleware, which would otherwise
+# rewrite `request.client` from X-Forwarded-For before the application sees it. Gunicorn defaults
+# this to `127.0.0.1,::1`, so on any loopback-reachable deployment a caller could choose its own
+# apparent peer address — and the application's trust check would then be evaluating a value the
+# caller supplied. TRUSTED_PROXY_CIDRS is the single place that decides whose forwarded chain is
+# believed; two mechanisms stacked would silently re-open what one of them closes.
 CMD ["uv", "run", "gunicorn", "easysynq_api.main:app", \
-     "-k", "uvicorn.workers.UvicornWorker", \
+     "-k", "uvicorn.workers.UvicornWorker", "--forwarded-allow-ips", "", \
      "-b", "0.0.0.0:8000", "--workers", "2", "--timeout", "60"]

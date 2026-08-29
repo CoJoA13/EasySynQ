@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R66) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, and R66 locks browser-first first-administrator provisioning inside setup.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R67) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, and R67 locks the client address a request is attributed to.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -68,7 +68,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R66
+## Part 3 — Resolutions R1–R67
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2045,6 +2045,59 @@ fixture, and current manual must migrate atomically; no compatibility shim is re
 manuals/runbooks, and the appliance setup handoff.
 
 Bumps the resolutions range **R1–R65 → R1–R66**.
+
+---
+
+### R67 — The client address a request is attributed to — 2026-08-28
+
+Nothing decided whose word to take for a request's origin, and two opposite failures followed from
+that single omission. Every authorization surface read the socket peer, which behind the shipped
+reverse proxy is the proxy itself, so the `ip_allow` predicate compared an administrator's allowlist
+against the edge and matched nothing — a universal denial in the shape of a narrowing rule. The two
+paths that wrote client-address evidence instead believed `X-Forwarded-For` unconditionally, which
+is correct only behind a proxy that appends and lets any caller reaching the application directly
+name its own address in immutable evidence.
+
+**Normative rules.**
+
+1. One resolution answers the question for every consumer — authorization context and recorded
+   evidence alike. A surface may not derive a client address by another route.
+2. `X-Forwarded-For` is evidence only from a socket peer inside `TRUSTED_PROXY_CIDRS`. From any
+   other peer it is ignored and the socket peer is the attributed address.
+3. The forwarded chain is read from the end proxies write. The attributed address is the first
+   entry outside the trusted networks; an entry inside them is a proxy hop and is skipped.
+4. The trusted set names proxies and nothing else. A range containing real clients discards their
+   addresses under rule 3, so the default is exactly the pinned container subnet the edge occupies.
+5. An unreadable chain attributes no address. `null` is not a neutral outcome — the PDP drops any
+   grant whose `ip_allow` it cannot satisfy, DENY grants included — so this state must be reachable
+   only from the deployment's own edge, never from caller-controlled input.
+6. The address is compared and stored exactly as presented. `ip_allow` matches by string, so no
+   canonicalization may occur on the path to a decision or to a stored value (this is the same
+   lossless-representation requirement R58 places on Evidence Pack build replay).
+7. Exactly one layer resolves the address. Forwarded-header handling in the ASGI server and any
+   other intermediary that rewrites the peer is disabled, because a second layer substituting the
+   peer would leave the trust check evaluating an already-substituted value.
+8. The edge enforces the same boundary independently: it replaces the forwarded header with its own
+   observation unless an upstream peer is explicitly named to it. A deployment with a further load
+   balancer configures both halves or neither.
+
+**Clarification (S-proxy-trust, 2026-08-28).** R43's decision that `acknowledgement.client_ip` is
+Text and not INET stands, but its stated rationale — that the value is attacker-controllable
+`X-Forwarded-For` input that would fail an INET write on a malformed header — no longer describes
+the system. A malformed chain now yields `null` rather than a bad string. The decision rests instead
+on rule 6: the column must hold the presented representation losslessly, and an INET column
+canonicalizes. R58 is unaffected; the value it replays is produced by this same resolution.
+
+**Compatibility.** No migration and no schema change. `audit_event.client_ip` remains reserved and
+unpopulated. Deployments that put a load balancer in front of the shipped edge, or that change the
+pinned container subnet, must widen `TRUSTED_PROXY_CIDRS` deliberately; a malformed value refuses
+startup rather than silently narrowing the trusted set.
+
+**Back-propagation:** docs 07 (the `ip_allow` predicate row), docs 12 §1.4 and the §4.2 audit-schema
+row, the administrator/IT manual configuration inventory, `.env.example`, and
+[`RES-IP-ALLOW-EXACT-MATCH`](open-residuals.md) for the exact-string-versus-range gap this exposes.
+
+Bumps the resolutions range **R1–R66 → R1–R67**.
 
 ---
 

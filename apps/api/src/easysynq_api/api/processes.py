@@ -41,6 +41,7 @@ from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import gather_grants, require
+from ..services.common.client_ip import client_ip
 from ..services.owner_assignment import assign_process_owner, revoke_process_owner
 from ..services.vault import repository as repo
 
@@ -236,12 +237,13 @@ async def _readable_processes(
     byte-identical; a bound Process Owner's PROCESS-scoped grant narrows to their owned processes
     (S-process-scope-2 — this unblocks the create-in-process picker). ``source_ip`` is threaded so
     the probe evaluates an ``ip_allow`` predicate exactly as the replaced ``require()`` enforce did
-    (the PEP builds it the same way; ``ip_allow`` is v1-deferred but kept faithful here)."""
+    (the PEP builds it the same way; what is v1.x-deferred is the ``guest_grant`` carrier, not the
+    predicate — it is live, and since S-proxy-trust it compares a real client address)."""
     procs = await repo.list_processes(session, caller.org_id)
     grants = await gather_grants(session, caller.id, caller.org_id, "process.read")
     ctx = RequestContext(
         now=datetime.datetime.now(datetime.UTC),
-        source_ip=request.client.host if request.client else None,
+        source_ip=client_ip(request),
     )
     return [
         p

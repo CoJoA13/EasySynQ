@@ -12,6 +12,7 @@ before anything else ran.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -98,6 +99,98 @@ def test_uv_run_never_syncs_at_container_start() -> None:
     )
     assert "UV_FROZEN=1" in dockerfile
     assert "UV_NO_CACHE=1" in dockerfile
+
+
+def test_the_api_image_leaves_forwarded_headers_to_the_application() -> None:
+    """Two proxy-trust mechanisms stacked silently re-open what one of them closes.
+
+    uvicorn installs ``ProxyHeadersMiddleware`` unconditionally and gunicorn hands it a default
+    ``forwarded_allow_ips`` of ``127.0.0.1,::1``. Measured against the pinned uvicorn: with that
+    default, a loopback caller sending ``X-Forwarded-For`` has ``scope["client"]`` rewritten to a
+    value it chose, *before* any application code runs — so the ``TRUSTED_PROXY_CIDRS`` check
+    would be evaluating the caller's own claim as though it were the socket peer. An empty list
+    disables the rewrite, leaving ``services/common/client_ip.py`` the only place that decides
+    whose forwarded chain is believed.
+
+    The CMD is parsed rather than substring-matched: a commented-out flag reads identically.
+    """
+    dockerfile = _read("apps/api/Dockerfile")
+    joined = dockerfile.replace("\\\n", " ")
+    cmd = next(
+        (line for line in _instructions(joined) if line.startswith("CMD ")),
+        None,
+    )
+    assert cmd is not None, "the api image has no CMD instruction"
+    argv = json.loads(cmd[len("CMD ") :])
+    assert "--forwarded-allow-ips" in argv, (
+        "gunicorn defaults to trusting loopback's X-Forwarded-For; pin the flag off"
+    )
+    assert argv[argv.index("--forwarded-allow-ips") + 1] == "", (
+        "an empty allow-list is what disables uvicorn's rewrite"
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [".env.example", "infra/compose/compose.yml", "apps/api/Dockerfile", "justfile"],
+)
+def test_nothing_reintroduces_the_uvicorn_forwarded_trust(path: str) -> None:
+    # The api service loads the repo-root .env, so this variable anywhere in the shipped
+    # configuration would re-enable the rewrite the CMD above turns off.
+    assert "FORWARDED_ALLOW_IPS" not in _read(path)
+
+
+def test_the_dev_server_disables_the_same_rewrite_as_the_image() -> None:
+    """`just api-dev` runs bare uvicorn, whose default DOES trust loopback's X-Forwarded-For.
+
+    Measured through the real middleware: a local caller sending the header has `request.client`
+    rewritten to an address of its choosing before `TRUSTED_PROXY_CIDRS` is consulted, which makes
+    every ip_allow grant satisfiable and every audit attribution forgeable on a developer machine.
+    The image pins the flag off; the recipe that bypasses the image has to pin it too.
+    """
+    lines = _read("justfile").splitlines()
+    start = lines.index("api-dev:")
+    body = [
+        line.strip()
+        for line in lines[start + 1 :]
+        # stop at the next recipe (an unindented, non-blank line)
+        if line.startswith((" ", "\t")) or not line.strip()
+    ]
+    end = next(
+        (i for i, line in enumerate(lines[start + 1 :]) if line and not line[0].isspace()), None
+    )
+    if end is not None:
+        body = [line.strip() for line in lines[start + 1 : start + 1 + end]]
+    # The prose explaining the flag contains the flag, so a substring check over the whole recipe
+    # passes against a command that no longer carries it. Only the executed lines count.
+    command = " ".join(line for line in body if line and not line.startswith("#"))
+    assert "uvicorn" in command, "the api-dev recipe no longer launches uvicorn"
+    assert "--forwarded-allow-ips" in command, (
+        "just api-dev runs uvicorn directly and must disable its proxy-header rewrite"
+    )
+
+
+def test_the_edge_does_not_preserve_a_caller_supplied_forwarded_chain_by_default() -> None:
+    """Caddy REPLACES X-Forwarded-For unless a peer is named in `trusted_proxies`.
+
+    Measured against caddy:2 (v2.11.4): with no `trusted_proxies`, a caller-sent header is
+    discarded and the API receives only the address Caddy observed; naming a peer switches Caddy
+    to appending, which preserves whatever that peer sent. So a non-empty default here would hand
+    every caller a way to prepend an address the API might then believe. The value is
+    operator-supplied and empty in the template, and this pins the empty default.
+    """
+    caddyfile = _read("infra/compose/caddy/Caddyfile")
+    assert "{$CADDY_TRUSTED_PROXIES}" in caddyfile, (
+        "the upstream-load-balancer remedy documented in .env.example needs this directive"
+    )
+    assert "\nCADDY_TRUSTED_PROXIES=\n" in _read(".env.example"), (
+        "Caddy must replace the forwarded chain unless an operator names an upstream edge"
+    )
+    # The placeholder is substituted from the CONTAINER's environment, and a value in .env reaches
+    # Compose for interpolation only. Without this passthrough the directive always expands to
+    # empty and an operator who configured both documented halves would still have every request
+    # attributed to the proxy — the exact silent failure, reached by following the documentation.
+    assert "CADDY_TRUSTED_PROXIES: ${CADDY_TRUSTED_PROXIES:-}" in _read("infra/compose/compose.yml")
 
 
 # --- U34: the image installs exactly what the lockfile pins ------------------------------------

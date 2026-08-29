@@ -261,8 +261,9 @@ Relevant `.env` groups:
 - `OPS_ALERT_CHANNELS` — comma-separated `syslog,smtp,webhook`;
 - `OPS_ALERT_SMTP_TO`, `OPS_ALERT_WEBHOOK_*`, `OPS_ALERT_SYSLOG_ADDRESS`;
 - `AUDIT_WITNESS_REQUIRED` and `AUDIT_WITNESS_GRACE_HOURS`;
-- `BACKUP_PATH` and encryption/signing-key paths; and
-- browser origins, which must stay a coherent FQDN tuple.
+- `BACKUP_PATH` and encryption/signing-key paths;
+- browser origins, which must stay a coherent FQDN tuple; and
+- `TRUSTED_PROXY_CIDRS` — the peers whose `X-Forwarded-For` this API believes. It decides which address appears in audit and acknowledgement evidence and which address an `ip_allow` grant is compared against, so widen it only to a real edge and never to a range your clients sit on. A malformed entry refuses startup.
 
 After changing `.env`, recreate/restart only the affected services and re-check readiness.
 

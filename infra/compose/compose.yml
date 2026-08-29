@@ -285,6 +285,10 @@ services:
       # "tls internal" (the self-signed CA) since ACME is unreachable offline.
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
       CADDY_TLS_DIRECTIVE: ${CADDY_TLS_DIRECTIVE:-}
+      # Empty unless a load balancer fronts Caddy. Without this passthrough the Caddyfile's
+      # placeholder always expands to empty, and an operator who configured both documented halves
+      # would get the failure the setting exists to prevent — silently.
+      CADDY_TRUSTED_PROXIES: ${CADDY_TRUSTED_PROXIES:-}
       # Browser presigned upload/download go DIRECTLY to the object store (a different origin), so the
       # SPA CSP connect-src must allow it (dev loopback :9000 or production HTTPS :9443).
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
@@ -310,6 +314,16 @@ services:
 networks:
   internal:
     driver: bridge
+    # Pinned rather than left to the daemon. TRUSTED_PROXY_CIDRS has to name the network Caddy
+    # actually sits on, and an auto-assigned subnet cannot be named in advance: Docker allocates
+    # from its built-in pool at network-create time, which is the 172.17-172.31 blocks and then
+    # 192.168.x.0/20 once those are exhausted. A default that guessed wrong would silently
+    # attribute every request to the proxy again. 172.16.0.0/24 sits deliberately BELOW the
+    # daemon's pool, so it cannot collide with another Compose project's network on the same host.
+    # Change it only together with TRUSTED_PROXY_CIDRS — a unit test pins the two in agreement.
+    ipam:
+      config:
+        - subnet: 172.16.0.0/24
 
 volumes:
   pgdata:
