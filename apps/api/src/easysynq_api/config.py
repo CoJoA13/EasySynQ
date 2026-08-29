@@ -138,14 +138,19 @@ class Settings(BaseSettings):
     # The default is deliberately NOT empty. ``install.sh`` preserves an existing ``.env``, so an
     # upgraded deployment never picks up a new template key; an empty default would leave every
     # such install attributing acknowledgement and pack-download evidence to the proxy — worse
-    # than the behaviour this setting replaces — behind a green health check. ``172.16.0.0/12``
-    # is Docker's entire built-in bridge pool, so it holds whichever subnet the daemon assigns
-    # without pinning one in Compose; loopback covers a bare local ``uvicorn`` and matches
-    # gunicorn's own default. ``10.0.0.0/8`` and the 192.168 pool are deliberately EXCLUDED: an
-    # organisation whose real clients sit on such a LAN would have genuine client entries treated
-    # as proxy hops and skipped. An operator behind an additional upstream load balancer, or on a
-    # daemon with custom address pools, adds that edge's CIDR here.
-    trusted_proxy_cidrs: str = "127.0.0.1/32,::1/128,172.16.0.0/12"
+    # than the behaviour this setting replaces — behind a green health check.
+    #
+    # It names exactly the pinned ``internal`` subnet from infra/compose/compose.yml, and nothing
+    # wider. A broad private range is the wrong shape in BOTH directions: an entry inside a
+    # trusted network is read as a proxy hop and skipped, so trusting, say, all of 172.16/12 would
+    # discard the genuine client address of any organisation whose clients or VPN sit in that
+    # space — the upper half of that range is a major cloud provider's default VPC — while also
+    # letting anything on such a LAN assert an address. One pinned subnet makes the trusted set
+    # exactly the container network and nothing else.
+    # Loopback covers a bare local ``uvicorn``. An operator who changes the Compose subnet, or who
+    # puts a further load balancer in front of Caddy, must widen this deliberately — and for the
+    # load-balancer case must also let Caddy preserve the chain (see .env.example).
+    trusted_proxy_cidrs: str = "127.0.0.1/32,::1/128,172.16.0.0/24"
 
     @field_validator("trusted_proxy_cidrs")
     @classmethod

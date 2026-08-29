@@ -17,10 +17,14 @@ attaches to a grant — could never match a real client. It did not merely fail 
 denied universally, which reads to an operator as a broken grant rather than a broken topology.
 
 The rule is therefore symmetric, and the trust decision comes first: **believe the forwarded
-chain only from a peer the operator has declared a proxy** (``TRUSTED_PROXY_CIDRS``). Ambiguity
-resolves to ``None``, which is fail-safe in both directions — the PDP already refuses an
-``ip_allow`` grant when ``source_ip`` is ``None``, and ``None`` is an honest "unknown" in an
-audit row where a guess would be a lie.
+chain only from a peer the operator has declared a proxy** (``TRUSTED_PROXY_CIDRS``).
+
+Where the chain cannot be read at all the answer is ``None`` — an honest "unknown" in an audit
+row, where a guess would be a lie. ``None`` is **not** universally fail-safe, and it must not be
+reachable from caller-controlled input: the PDP drops any grant whose ``ip_allow`` cannot be
+satisfied, and it applies that filter to DENY grants too, so an unknown address suppresses an
+``ip_allow``-carrying DENY exactly as it fails an ALLOW. Every branch below that yields ``None``
+is therefore reserved for input only our own edge can produce.
 """
 
 from __future__ import annotations
@@ -34,10 +38,14 @@ from ...config import IpNetwork, get_settings
 
 logger = logging.getLogger(__name__)
 
-# A forged X-Forwarded-For is unbounded attacker input and the walk below is linear in the
-# number of hops. Real chains are a handful; anything past these bounds is refused outright
-# rather than trusted or truncated (truncating would let padding hide the real entry).
-_MAX_FORWARDED_LENGTH = 2048
+# Latched: this reports a standing deployment fact, and the condition is caller-reachable.
+_WARNED_UNTRUSTED_FORWARDER = False
+
+# The walk is linear in the number of hops and the header is caller-influenced, so the work is
+# bounded. The bound applies to the WALK rather than to the header's length: reading right-to-left
+# means a caller can only prepend entries that are never reached, so refusing a long header would
+# let pure padding turn a perfectly readable chain into "unknown" — and an unknown address is not
+# a neutral outcome (see the module docstring). Real chains are a handful of hops.
 _MAX_FORWARDED_HOPS = 32
 
 
@@ -52,7 +60,12 @@ def _is_trusted(text: str, trusted: tuple[IpNetwork, ...]) -> bool:
         address = ipaddress.ip_address(text)
     except ValueError:
         return False
-    return any(address in network for network in trusted)
+    # A dual-stack listener reports an IPv4 peer as ``::ffff:10.0.0.1``, which no IPv4 network
+    # contains. Comparing the mapped form keeps such a peer trusted; the normalisation is confined
+    # to this decision and never touches the value returned, which must stay lossless.
+    mapped = getattr(address, "ipv4_mapped", None)
+    candidates = (address, mapped) if mapped is not None else (address,)
+    return any(c in network for network in trusted for c in candidates)
 
 
 def _as_address(entry: str) -> str | None:
@@ -99,18 +112,13 @@ def resolve_client_ip(
     if not forwarded:
         # A trusted proxy that forwarded nothing: the proxy is all we know.
         return peer
-    if len(forwarded) > _MAX_FORWARDED_LENGTH:
-        return None
 
-    hops = forwarded.split(",")
-    if len(hops) > _MAX_FORWARDED_HOPS:
-        return None
-
-    # Walk right-to-left: each proxy APPENDS the peer it saw, so the rightmost entry is the one
-    # written by the nearest proxy and the leftmost is whatever the original caller sent. Skipping
-    # trusted hops and stopping at the first untrusted one yields the outermost address that a
-    # proxy we trust actually observed — never a value the client chose.
-    for hop in reversed(hops):
+    # Walk right-to-left over at most the last _MAX_FORWARDED_HOPS entries: each proxy writes the
+    # peer it saw at the right-hand end, so the rightmost entry is the nearest proxy's own
+    # observation and anything further left is progressively less vouched for. Skipping trusted
+    # hops and stopping at the first untrusted one yields the outermost address that a proxy we
+    # trust actually observed — never a value the caller chose, since a caller can only prepend.
+    for hop in reversed(forwarded.split(",")[-_MAX_FORWARDED_HOPS:]):
         address = _as_address(hop)
         if address is None:
             # A malformed hop makes the rest of the chain unreadable: we cannot tell whether the
@@ -120,7 +128,9 @@ def resolve_client_ip(
             continue
         return address
 
-    # Every hop was a trusted proxy, so no client address was ever recorded.
+    # Every hop we read was a trusted proxy — either the chain is entirely our own infrastructure
+    # or it is longer than the walk budget. No client address was ever observed, so the nearest
+    # thing we actually know is the peer.
     return peer
 
 
@@ -132,15 +142,31 @@ def client_ip(request: Request) -> str | None:
     — would be exploitable rather than merely incomplete: a caller can send its own line and let
     the proxy append to another, so the line we read would be entirely of its choosing.
     """
+    trusted = get_settings().trusted_proxy_networks
     peer = request.client.host if request.client else None
     forwarded = ",".join(request.headers.getlist("x-forwarded-for"))
-    resolved = resolve_client_ip(peer, forwarded, get_settings().trusted_proxy_networks)
+    resolved = resolve_client_ip(peer, forwarded, trusted)
+
     if resolved is None and peer is not None:
-        # Only reachable when a peer we DO trust forwarded a chain we cannot read, so this is a
-        # signal about our own edge rather than about the caller. Worth a warning: downstream the
-        # unknown address silently denies every ip_allow grant and blanks the audit attribution.
+        # A peer we DO trust forwarded a chain we cannot read: a signal about our own edge, not
+        # about the caller. Downstream the unknown address blanks the audit attribution and stops
+        # an ip_allow grant of either effect from matching.
         logger.warning(
             "client_ip.unreadable_forwarded_chain",
             extra={"peer": peer, "forwarded_hops": len(forwarded.split(","))},
         )
+    elif forwarded and peer is not None and not _is_trusted(peer, trusted):
+        # The far more likely misconfiguration, and the one that was previously silent: something
+        # is forwarding a client address and we are ignoring it because the peer is not on the
+        # allowlist. That is correct behaviour for an unknown caller and a serious deployment
+        # fault if the peer is in fact the fronting proxy — every request then gets attributed to
+        # the proxy and every ip_allow grant denies, with a green health check throughout. Warned
+        # once per process because an untrusted caller can trigger it at will.
+        global _WARNED_UNTRUSTED_FORWARDER
+        if not _WARNED_UNTRUSTED_FORWARDER:
+            _WARNED_UNTRUSTED_FORWARDER = True
+            logger.warning(
+                "client_ip.forwarded_header_from_untrusted_peer",
+                extra={"peer": peer},
+            )
     return resolved

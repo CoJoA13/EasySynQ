@@ -237,7 +237,7 @@ async def _is_system_tier(session: AsyncSession, granter: AppUser) -> bool:
     system-tier one — sidestepping the tie-winner nondeterminism when a principal holds BOTH a
     system-tier and a content-tier ``permission.grant`` (``gather_grants`` returns them unordered,
     the PDP ranks both SYSTEM grants alike). ``source_ip`` is None (the two-tier callers hold no
-    request); ``ip_allow`` on a ``permission.grant`` is v1-deferred (no carrier), and fail-closed
+    request); ``ip_allow`` on a ``permission.grant`` has no bound-role carrier in v1; fail-closed
     (an ip-restricted grant conferring no system tier without a matching IP) is the safe call."""
     grants = await gather_grants(session, granter.id, granter.org_id, "permission.grant")
     system_grants = [g for g in grants if not (g.predicates or {}).get("content_only")]

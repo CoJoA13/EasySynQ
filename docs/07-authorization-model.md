@@ -412,7 +412,7 @@ Scope predicates carry an optional **validity window** and context constraints, 
 |---|---|
 | `valid_from` / `valid_until` | Grant inactive outside the window (auto-expiry; Vision UJ-7) |
 | `evidence_pack_id` | Restrict reads to artifacts inside one assembled pack |
-| `ip_allow` (optional) | Restrict to admin-listed source addresses. Matching is exact-string, not CIDR: list each address as the client presents it. The address compared is the request's resolved client IP — the socket peer, or the address forwarded by a peer inside `TRUSTED_PROXY_CIDRS` (doc 12 §6.1). An unresolvable address denies the grant. |
+| `ip_allow` (optional) | Restrict to admin-listed source addresses. Matching is exact-string, not CIDR: list each address as the client presents it. The address compared is the request's resolved client IP — the socket peer, or the address forwarded by a peer inside `TRUSTED_PROXY_CIDRS` (doc 12 §1.4). An unresolvable address denies the grant. |
 | `read_only` (forced) | Strips all non-`*.read`/`*.print_controlled` actions regardless of bundle |
 
 ---

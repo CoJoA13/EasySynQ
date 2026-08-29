@@ -470,7 +470,7 @@ async def _can_request_leadership_authorization(
     endpoint enforces (``_approve`` = ``require("document.approve")`` over ``_document_scope``: NO
     sig_hook, NO process_ids; the SoD overlay is inert here — the scope carries no author/approver —
     so a plain ``authorize`` matches the endpoint's effective result). ``source_ip`` is threaded the
-    way the PEP's ``evaluate`` builds it (``request.client.host``) so an ``ip_allow``-narrowed grant
+    way the PEP's ``evaluate`` builds it (the shared ``client_ip`` resolver) so an ``ip_allow``
     evaluates IDENTICALLY to the POST gate (Codex P2: omitting it made the probe over-strict — the
     PDP rejects an ``ip_allow`` predicate when ``source_ip`` is None, while the POST set it from the
     request → a hidden button the server would actually allow). The AUTHZ answer ONLY — the FE ANDs

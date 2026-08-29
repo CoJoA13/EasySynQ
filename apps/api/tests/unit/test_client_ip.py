@@ -14,6 +14,8 @@ under a different topology. Addresses are the sanctioned R61 placeholder ranges 
 
 import ipaddress
 import logging
+import re
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -24,6 +26,11 @@ from easysynq_api.services.common import client_ip as client_ip_module
 from easysynq_api.services.common.client_ip import client_ip, resolve_client_ip
 
 pytestmark = pytest.mark.unit
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+# The subnet infra/compose/compose.yml pins for the `internal` network. Named once here so the
+# exclusion probes below are derived from it rather than hand-written.
+_COMPOSE_SUBNET = ipaddress.ip_network("172.16.0.0/24")
 
 PROXY = "10.0.0.1"
 OTHER_PROXY = "10.0.0.2"
@@ -94,10 +101,30 @@ def test_a_malformed_hop_makes_the_whole_chain_unusable():
     assert resolve_client_ip(PROXY, f"{CLIENT}, not-an-address, {OTHER_PROXY}", TRUSTED) is None
 
 
-def test_an_absurdly_long_chain_is_refused_rather_than_truncated():
-    # Truncating would let padding push the real entry out of view.
-    assert resolve_client_ip(PROXY, ", ".join([OTHER_PROXY] * 64), TRUSTED) is None
-    assert resolve_client_ip(PROXY, "10.0.0.9," * 4096, TRUSTED) is None
+def test_padding_cannot_turn_a_readable_chain_into_an_unknown_address():
+    # The load-bearing case, and the one the earlier header-length bound got wrong. A caller can
+    # only PREPEND entries, and the walk reads from the right, so a padded chain is still readable
+    # at the end that matters. Refusing it outright would have handed any caller a way to force
+    # "unknown" — which is not a neutral outcome: the PDP drops an ip_allow grant it cannot
+    # satisfy, DENY grants included, so an unknown address suppresses an ip_allow DENY.
+    padded = ", ".join([FORGED] * 64 + [CLIENT])
+    assert resolve_client_ip(PROXY, padded, TRUSTED) == CLIENT
+    assert resolve_client_ip(PROXY, ("198.51.100.9," * 4096) + CLIENT, TRUSTED) == CLIENT
+
+
+def test_the_walk_stops_at_its_budget_rather_than_reading_an_unbounded_chain():
+    """Bounded work on caller-influenced input.
+
+    The budget is only observable when something untrusted lies BEYOND it: a chain of trusted hops
+    alone exhausts either way and yields the proxy, so asserting that shape would pass against no
+    bound at all. Here the untrusted entry sits past the budget and must stay unread — the answer
+    is the proxy, the last thing actually examined.
+    """
+    beyond_budget = ", ".join([CLIENT] + [OTHER_PROXY] * 64)
+    assert resolve_client_ip(PROXY, beyond_budget, TRUSTED) == PROXY
+    # Anti-vacuity: the same entry inside the budget IS read.
+    within_budget = ", ".join([CLIENT] + [OTHER_PROXY] * 4)
+    assert resolve_client_ip(PROXY, within_budget, TRUSTED) == CLIENT
 
 
 def test_bounds_admit_a_realistic_chain():
@@ -246,23 +273,49 @@ def test_an_ordinary_resolution_stays_silent(trusting, caplog):
 # --- the shipped default ------------------------------------------------------------------------
 
 
-def test_the_shipped_default_covers_the_compose_edge_and_loopback():
-    # Docker assigns easysynq_internal a subnet from its built-in bridge pool at network-create
-    # time, so the shipped default names the whole pool rather than pinning a subnet in Compose.
-    # An empty default would attribute every acknowledgement and pack download to the proxy on
-    # any deployment that upgrades without editing .env — worse than the behaviour it replaces.
+def test_the_shipped_default_is_exactly_the_pinned_compose_subnet_and_loopback():
+    # An empty default would attribute every acknowledgement and pack download to the proxy on any
+    # deployment that upgrades without editing .env — worse than the behaviour it replaces — so
+    # the default must be non-empty AND must name the network Caddy is actually on.
     networks = Settings().trusted_proxy_networks
     assert ipaddress.ip_address("127.0.0.1") in networks[0]
     assert any(ipaddress.ip_address("::1") in n for n in networks)
-    assert ipaddress.ip_network("172.16.0.0/12") in networks
+    assert _COMPOSE_SUBNET in networks
 
 
-def test_the_shipped_default_excludes_ranges_that_carry_real_clients():
-    # An organisation whose clients sit on a corporate LAN in these ranges would otherwise have
-    # genuine client entries skipped by the right-to-left walk as though they were proxy hops.
+def test_the_shipped_default_does_not_spill_into_neighbouring_private_space():
+    """The property that matters is narrowness, and it has to be proved against addresses the
+    default might plausibly have swallowed — not against ranges it obviously excludes.
+
+    An address inside a trusted network is read as a proxy hop and SKIPPED, so a default one size
+    too wide silently discards the real client address of any site whose clients or VPN sit in
+    that space. The probes are derived from the pinned subnet rather than written as literals, so
+    widening the default to its enclosing /16 or /12 fails here immediately.
+    """
     networks = Settings().trusted_proxy_networks
-    assert not any(ipaddress.ip_address("10.0.0.9") in n for n in networks)
-    assert not any(ipaddress.ip_address("192.0.2.9") in n for n in networks)
+    base = int(_COMPOSE_SUBNET.network_address)
+    probes = {
+        "the next /24 up": base + 256,
+        "elsewhere in the enclosing /16": base + (200 << 8),
+        "the top of the enclosing /12 (a common cloud VPC range)": base + (15 << 16),
+    }
+    for label, value in probes.items():
+        address = ipaddress.ip_address(value)
+        assert not any(address in n for n in networks), f"default is too wide: {label}"
+
+
+def test_the_default_agrees_with_the_subnet_compose_actually_creates():
+    """Two files have to say the same thing, and nothing else would notice if they drifted.
+
+    The subnet is pinned in Compose precisely so the trusted set can name it; if someone changes
+    one and not the other, Caddy stops being trusted and every request silently reverts to being
+    attributed to the proxy, behind a green health check.
+    """
+    compose = (_REPO_ROOT / "infra/compose/compose.yml").read_text()
+    declared = re.search(r"^\s*- subnet:\s*(\S+)\s*$", compose, re.MULTILINE)
+    assert declared is not None, "infra/compose/compose.yml no longer pins the internal subnet"
+    assert ipaddress.ip_network(declared.group(1)) == _COMPOSE_SUBNET
+    assert ipaddress.ip_network(declared.group(1)) in Settings().trusted_proxy_networks
 
 
 def test_the_test_transports_peer_resolves_under_the_shipped_default():
@@ -272,3 +325,41 @@ def test_the_test_transports_peer_resolves_under_the_shipped_default():
     # And the expanded-IPv6 loopback the pack replay test pins must survive byte-identically.
     expanded = "0:0:0:0:0:0:0:1"
     assert resolve_client_ip(expanded, None, Settings().trusted_proxy_networks) == expanded
+
+
+def test_a_dual_stack_peer_is_still_recognised_as_the_proxy():
+    # A listener bound to :: reports an IPv4 peer in mapped form, which no IPv4 network contains.
+    # Without normalising the comparison the proxy would quietly stop being trusted and every
+    # request would revert to being attributed to it. The returned value stays lossless.
+    assert resolve_client_ip("::ffff:10.0.0.1", CLIENT, TRUSTED) == CLIENT
+    assert resolve_client_ip("::ffff:10.0.0.1", None, TRUSTED) == "::ffff:10.0.0.1"
+
+
+def test_a_forwarded_header_we_are_ignoring_is_reported_once(trusting, caplog):
+    """The misconfiguration that actually happens, and that was previously silent.
+
+    If the fronting proxy is not on the allowlist the header is correctly ignored — and every
+    request is then attributed to the proxy while every ip_allow grant denies, with nothing in
+    the logs and a green health check. The opposite branch (a trusted peer forwarding an
+    unreadable chain) cannot occur behind the shipped edge, so on its own it warned about the
+    case that never happens.
+    """
+    trusting("")
+    client_ip_module._WARNED_UNTRUSTED_FORWARDER = False
+    with caplog.at_level(logging.WARNING):
+        assert client_ip(_request({"x-forwarded-for": FORGED}, (CLIENT, 40000))) == CLIENT
+    assert "client_ip.forwarded_header_from_untrusted_peer" in caplog.text
+
+    # Latched: an untrusted caller can trigger this at will, so it must not flood the log.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert client_ip(_request({"x-forwarded-for": FORGED}, (CLIENT, 40000))) == CLIENT
+    assert caplog.text == ""
+
+
+def test_no_warning_when_the_edge_is_configured_correctly(trusting, caplog):
+    trusting("10.0.0.0/24")
+    client_ip_module._WARNED_UNTRUSTED_FORWARDER = False
+    with caplog.at_level(logging.WARNING):
+        assert client_ip(_request({"x-forwarded-for": CLIENT}, (PROXY, 40000))) == CLIENT
+    assert caplog.text == ""
