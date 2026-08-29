@@ -27,7 +27,7 @@ export function RegisterToolbar({
   children?: ReactNode;
 }) {
   return (
-    <Group justify="space-between" align="flex-end" wrap="wrap" gap="sm">
+    <Group justify="space-between" align="flex-end" wrap="wrap" gap="sm" mt="md" mb="md">
       <Group
         align="flex-end"
         wrap="wrap"

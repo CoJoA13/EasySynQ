@@ -1,4 +1,4 @@
-import { Group, Title } from "@mantine/core";
+import { Box, Group, Title } from "@mantine/core";
 import type { ReactNode } from "react";
 import { AsOf } from "./AsOf";
 
@@ -37,13 +37,17 @@ export function RegisterPageHeader({
   actions?: ReactNode;
   updatedAt?: number | null;
 }) {
+  // The spacing is on the WRAPPER, not on the title row. With `mb` on the Group the gap fell
+  // BETWEEN the title and its own freshness stamp, pushing the stamp away from the thing it
+  // describes and leaving nothing beneath it — so whatever followed (a scorecard band, a filter
+  // row, a table) sat flush against the stamp with no separation at all. One block, one gap below.
   return (
-    <>
-      <Group justify="space-between" mb="md">
+    <Box mb="md">
+      <Group justify="space-between">
         <Title order={order}>{title}</Title>
         {actions}
       </Group>
       <AsOf at={updatedAt} />
-    </>
+    </Box>
   );
 }
