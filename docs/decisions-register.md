@@ -69,14 +69,24 @@ parties carry a register-head publish/release console. The objectives lifecycle 
 
 **Limb 2 — "converge to near-identical under a change that has to be made three times": splits by
 member.** The panel and modal converged, but nothing has forced a three-times edit on them and the
-interface programme does not: their `<Card withBorder mt="md">` sets no `radius`, so the 16px card
-rule reaches it once through the Mantine theme's `components` block. The **scorecard band** is
+interface programme will not: their `<Card withBorder mt="md">` sets no `radius`, so it follows
+`theme.defaultRadius` and a future card-radius decision costs it nothing. The **scorecard band** is
 different — all three (and objectives' fourth) hardcode `<Paper … radius="md">`, an explicit prop
-that a theme default cannot override, so the same rule would have been four hand edits.
+that a theme default cannot override, so the same decision would be four hand edits.
+
+To be exact about what is and is not shipped, because this rationale is forward-looking rather than
+observed: the programme's §2.4 "16px card radius" rule **has not landed anywhere**. The theme sets
+`defaultRadius: "md"` (8px) and its `components` block carries only `Modal` and `Drawer` entries —
+there is no `Card` or `Paper` default — and S-ui-3 gave the Home quadrant cards `radius="lg"`
+(12px). `ScorecardBandShell` therefore keeps `radius="md"`, exactly as the four bands had it, so
+the collapse is a pure structural extraction with no rendered change. The claim above is that the
+band **would** cost four edits and the console zero, whenever §2.4 is settled app-wide; it is not a
+claim that anything has already converged.
 
 **Decision, owner, 2026-08-29: collapse the scorecard band only.** `lib/ScorecardBandShell.tsx`
-now owns the shared `Paper`/`Group`/`Text` shell for all four bands; every band keeps its own
-rollup arithmetic and badge vocabulary, which is the part that is genuinely domain-specific. The
+now owns the shared `Paper`/`Group`/`Text` shell for all four bands at their existing radius; every
+band keeps its own rollup arithmetic and badge vocabulary, which is the genuinely domain-specific
+part, and no band changes what it renders. The
 `RegisterLifecyclePanel` and `PublishRegisterModal` acceptance **stands** on the corrected numbers:
 three call sites is below the bar this repository applies to shared abstractions, and the
 duplication has cost nothing measurable in its lifetime. The revisit trigger is unchanged and still

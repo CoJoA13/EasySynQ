@@ -10,15 +10,19 @@ Status: OPEN
 Owner: Repository owner
 Source: S-ui-4, 2026-08-29
 Reason: The register pages do not agree on a heading level, and most of them render no `h1` at all.
-`AppShell` contributes no page heading, `HomePage` titles at `order={1}`, `LibraryPage` and
-`ReportsRegisterPage` title at `order={1}`, eleven registers title at `order={2}`, and the two CAPA
-sub-registers title at `order={3}`. So a reader landing on a register meets a document whose
+`AppShell` contributes no page heading; `HomePage`, `LibraryPage`, `ReportsRegisterPage` and
+`IngestionRunsPage` title at `order={1}`; eleven registers (the ten in
+`apps/web/e2e/support/registers.ts` plus `CapaBoardPage`) title at `order={2}`; the two CAPA
+sub-registers title at `order={3}`; and `ProgrammePage` titles at `order={3}` with an `order={4}`
+sub-heading. So a reader landing on a register meets a document whose
 outline begins at `h2` or `h3` with no `h1` above it, and the level a given register uses carries no
 meaning beyond how it was written. S-ui-4 centralised the markup in `lib/RegisterPageHeader.tsx`
-but deliberately kept `order` a caller prop rather than normalising it: several suites pin the
-level (`AuditsListPage.test.tsx` asserts `{ level: 2, name: "Internal audit" }`), so levelling the
-registers is an accessibility change with its own test surface and does not belong inside a
-retheme slice. Centralising it first is what makes the later fix a one-file change.
+but deliberately kept `order` a caller prop rather than normalising it. One existing suite pins a
+register heading level — `AuditsListPage.test.tsx` asserts `{ level: 2, name: "Internal audit" }`
+and uses it as its load gate — and the component's `order?: 2 | 3` union covers only what the
+eleven adopters use, so the `order={1}` and `order={4}` pages each widen it when they adopt.
+Levelling the registers is an accessibility change with its own test surface and does not belong
+inside a retheme slice. Centralising it first is what makes the later fix a one-file change.
 Closure contract: Decide the intended outline for a register route and apply it in
 `RegisterPageHeader`, updating every suite that pins a level, and prove the result with an
 axe assertion for a single `h1` and no skipped level on at least one register route in

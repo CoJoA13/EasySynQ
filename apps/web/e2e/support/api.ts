@@ -26,6 +26,13 @@ export interface RegisterScenario {
   route: RegisterCase["key"];
   override?: RegisterRequestOverride;
   maxContent?: boolean;
+  /**
+   * SYSTEM-scope permission keys granted to the harness caller. Defaults to `[]` — an ungranted
+   * reader — which is what every scenario used before this existed and what they still get by
+   * omitting it. Pass keys to make a permission-gated write affordance render, so a spec can
+   * measure the surface an operator with rights actually sees rather than only the denied one.
+   */
+  permissions?: readonly string[];
 }
 
 export type RegisterRequestOutcome = "http-503" | "network-error" | "loaded";
@@ -434,7 +441,13 @@ export async function installRegisterApi(
     if (method === "GET" && url.pathname === "/api/v1/me/permissions" && url.search === "") {
       await fulfillJson(route, {
         scope: { level: "SYSTEM", selector: null },
-        permissions: [],
+        // The SPA reads `{ key, effect }` entries and keeps only ALLOW (app/shell/usePermissions.ts),
+        // so a bare key list would be silently dropped and every affordance would stay hidden.
+        permissions: (scenario.permissions ?? []).map((key) => ({
+          key,
+          effect: "ALLOW",
+          source: "harness",
+        })),
       });
       return;
     }

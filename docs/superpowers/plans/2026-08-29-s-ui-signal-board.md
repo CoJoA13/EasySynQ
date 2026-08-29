@@ -1,7 +1,9 @@
 # S-ui-signal-board — Option C interface direction, Archivo, and the muted-text remediation
 
-> **Status:** in progress. **S-ui-1 through S-ui-4 implemented 2026-08-29** (#505 foundation, #506
-> shell, #507 Home, and the register pattern in this slice); S-ui-5 onward not started. All four §7
+> **Status:** in progress. **S-ui-1 to S-ui-3 merged 2026-08-29** (#505 foundation, #506 shell,
+> #507 Home); **S-ui-4 (register pattern) in review**; S-ui-5 onward not started. The dated
+> execution snapshot in `docs/current-status.md` is authoritative for what has actually shipped —
+> it moves under the `/finish-slice` ritual, not from this file. All four §7
 > owner decisions are resolved. Owner selected **Option C (Signal board)** from
 > the four-artboard comparison on 2026-08-29 and asked for Archivo to be adopted and the contrast
 > remediation folded into the same programme.
@@ -329,8 +331,8 @@ place the "never assert a verdict" rule is enforced. `rag.ts` already exists and
 
 **What the slice actually did.** Built `lib/RegisterPageHeader.tsx` (title, permission-gated
 action, freshness stamp) and adopted it on eleven register pages across all three of their
-loaded / forbidden / error branches — collapsing, among others, the three divergent header forms
-`CapaBoardPage` carried. Built `lib/ScorecardBandShell.tsx` for the four scorecard bands, which is
+loaded / forbidden / error branches — collapsing, among others, the two divergent header forms
+`CapaBoardPage` carried across its three header sites. Built `lib/ScorecardBandShell.tsx` for the four scorecard bands, which is
 the one limb of the accepted-duplication entry whose revisit trigger fires. Did **not** rebuild the
 filter bar, the state primitives, or a table wrapper.
 

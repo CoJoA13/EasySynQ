@@ -25,15 +25,18 @@ it("renders the headline and every chip", () => {
   expect(within(wrap).getByText("9 low")).toBeInTheDocument();
 });
 
-// The reason this shell exists. The four bands passed `radius="md"` explicitly, so the Mantine
-// theme's Paper default could never reach them and the programme's 16px card rule would have been
-// four hand edits. Asserting the resolved custom property (not a px literal) keeps the palette in
-// tokens.css as the single source of truth — a hardcoded "16px" here would be a second one.
-it("carries the 16px card radius from the design token, not a literal", () => {
+// The reason this shell exists. Each of the four bands set `radius` EXPLICITLY, which defeats a
+// Mantine theme default, so a card-radius change costs four hand edits without a shared shell and
+// one with it. The value is deliberately unchanged from the bands this replaces — the programme's
+// 16px rule is not shipped (theme `defaultRadius` is `md`; S-ui-3's quadrant cards are `lg`), so
+// moving it here alone would make this the only 16px surface in the app. This test's job is to pin
+// that the radius now comes from ONE place and resolves through the token scale rather than a px
+// literal; whoever settles §2.4 app-wide changes one line here and this assertion with it.
+it("takes its radius from one place, through the token scale", () => {
   const { container } = renderShell("0 of 0", []);
   const paper = container.querySelector(".mantine-Paper-root");
   expect(paper).not.toBeNull();
-  expect(paper?.getAttribute("style") ?? "").toContain("var(--mantine-radius-xl)");
+  expect(paper?.getAttribute("style") ?? "").toContain("var(--mantine-radius-md)");
 });
 
 // A band with no chips must still render its headline — an empty register is a legitimate state and
