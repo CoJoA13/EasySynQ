@@ -13,15 +13,14 @@ import {
   Stack,
   Table,
   Text,
-  Title,
 } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
-import { AsOf } from "../../lib/AsOf";
 import { TruncationNotice } from "../../app/shell/TruncationNotice";
 import { RegisterFilterBar } from "../registers/RegisterFilterBar";
 import type { RegisterFilterState } from "../registers/registerFilters";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
@@ -108,9 +107,7 @@ export function CapaBoardPage() {
   if (forbidden) {
     return (
       <Container size="md" py="md">
-        <Title order={2} mb="md">
-          Nonconformity and CAPA
-        </Title>
+        <RegisterPageHeader title="Nonconformity and CAPA" />
         <NoAccessState
           message={
             <>
@@ -132,9 +129,7 @@ export function CapaBoardPage() {
   if (isError) {
     return (
       <Container size="md" py="md">
-        <Title order={2} mb="md">
-          Nonconformity and CAPA
-        </Title>
+        <RegisterPageHeader title="Nonconformity and CAPA" />
         <ErrorState title="Couldn't load CAPAs" onRetry={() => refetch()} />
       </Container>
     );
@@ -147,22 +142,23 @@ export function CapaBoardPage() {
 
   return (
     <Container size="xl" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={2}>Nonconformity and CAPA</Title>
-        <Group gap="sm">
-          {canRaiseCapa && <Button onClick={() => setRaiseOpen(true)}>Raise CAPA</Button>}
-          <SegmentedControl
-            value={view}
-            onChange={(v) => setView(v as "board" | "list")}
-            data={[
-              { value: "board", label: "Board" },
-              { value: "list", label: "List" },
-            ]}
-          />
-        </Group>
-      </Group>
-
-      <AsOf at={dataUpdatedAt} />
+      <RegisterPageHeader
+        title="Nonconformity and CAPA"
+        actions={
+          <Group gap="sm">
+            {canRaiseCapa && <Button onClick={() => setRaiseOpen(true)}>Raise CAPA</Button>}
+            <SegmentedControl
+              value={view}
+              onChange={(v) => setView(v as "board" | "list")}
+              data={[
+                { value: "board", label: "Board" },
+                { value: "list", label: "List" },
+              ]}
+            />
+          </Group>
+        }
+        updatedAt={dataUpdatedAt}
+      />
       {/* Only the date window. This page already has client-side Severity / Stage / Source
           selects that narrow the loaded rows; duplicating them here would render two controls
           with the same label. The date window is the one facet no register had, and the only one

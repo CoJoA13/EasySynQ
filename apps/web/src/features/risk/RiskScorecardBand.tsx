@@ -1,4 +1,4 @@
-import { Group, Paper, Text } from "@mantine/core";
+import { ScorecardBandShell } from "../../lib/ScorecardBandShell";
 import type { RiskBand, RiskRow } from "../../lib/types";
 import { StatusBadge } from "../../lib/StatusBadge";
 import { RISK_BAND_LABEL, RISK_BAND_ORDER, RISK_BAND_TONE } from "./labels";
@@ -21,22 +21,21 @@ export function RiskScorecardBand({ rows }: { rows: RiskRow[] }) {
     byBand.unscored > 0 ? [...RISK_BAND_ORDER, "unscored"] : RISK_BAND_ORDER;
 
   return (
-    <Paper withBorder p="md" radius="md" bg="var(--es-surface-2)">
-      <Group justify="space-between" wrap="wrap">
-        <Text>
+    <ScorecardBandShell
+      headline={
+        <>
           {highRisk} of {rows.length} high or critical
-        </Text>
-        <Group gap="xs">
-          {chips.map((b) => (
-            <StatusBadge
-              key={b}
-              tone={RISK_BAND_TONE[b]}
-              label={`${byBand[b]} ${RISK_BAND_LABEL[b].toLowerCase()}`}
-              kind="Risks"
-            />
-          ))}
-        </Group>
-      </Group>
-    </Paper>
+        </>
+      }
+    >
+      {chips.map((b) => (
+        <StatusBadge
+          key={b}
+          tone={RISK_BAND_TONE[b]}
+          label={`${byBand[b]} ${RISK_BAND_LABEL[b].toLowerCase()}`}
+          kind="Risks"
+        />
+      ))}
+    </ScorecardBandShell>
   );
 }

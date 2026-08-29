@@ -4,6 +4,56 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
+## RES-REGISTER-HEADING-LEVELS
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-4, 2026-08-29
+Reason: The register pages do not agree on a heading level, and most of them render no `h1` at all.
+`AppShell` contributes no page heading; `HomePage`, `LibraryPage`, `ReportsRegisterPage` and
+`IngestionRunsPage` title at `order={1}`; eleven registers (the ten in
+`apps/web/e2e/support/registers.ts` plus `CapaBoardPage`) title at `order={2}`; the two CAPA
+sub-registers title at `order={3}`; and `ProgrammePage` titles at `order={3}` with an `order={4}`
+sub-heading. So a reader landing on a register meets a document whose
+outline begins at `h2` or `h3` with no `h1` above it, and the level a given register uses carries no
+meaning beyond how it was written. S-ui-4 centralised the markup in `lib/RegisterPageHeader.tsx`
+but deliberately kept `order` a caller prop rather than normalising it. One existing suite pins a
+register heading level — `AuditsListPage.test.tsx` asserts `{ level: 2, name: "Internal audit" }`
+and uses it as its load gate — and the component's `order?: 2 | 3` union covers only what the
+eleven adopters use, so the `order={1}` and `order={4}` pages each widen it when they adopt.
+Levelling the registers is an accessibility change with its own test surface and does not belong
+inside a retheme slice. Centralising it first is what makes the later fix a one-file change.
+Closure contract: Decide the intended outline for a register route and apply it in
+`RegisterPageHeader`, updating every suite that pins a level, and prove the result with an
+axe assertion for a single `h1` and no skipped level on at least one register route in
+`apps/web/e2e/register-accessibility.spec.ts`. The programme's final sweep slice already owes an
+a11y pass per route; this record names the specific defect that pass must close.
+Last reviewed: 2026-08-29
+
+## RES-REGISTER-PAGE-FRAME
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-4, 2026-08-29
+Reason: Twelve register pages still hand-roll the same four-branch scaffold — a forbidden branch, a
+loading branch, an error branch and the loaded page, each wrapping its body in its own `Container`.
+S-ui-4 shared the header inside those branches but not the scaffold around them, and three findings
+from its adversarial review are why. An always-taken return destroys TypeScript control-flow
+narrowing on the five pages that currently guard with a narrowing early return, so a frame would
+need a generic render-prop body rather than `children`. Rendering the page title during loading —
+which the frame would do, and which is the better behaviour — breaks two suites that identify the
+loaded state by its heading alone (`AuditsListPage.test.tsx` and `DcrsRegisterPage.test.tsx`'s
+equal-width contract). And `CapaBoardPage` is the one page whose branches disagree on container
+size, `md` in three branches against `xl` in the loaded page, so adopting a frame there is a
+deliberate visual change rather than a mechanical one.
+Closure contract: Either build the frame with a render-prop body, re-anchor the two heading-gated
+suites on a load-only sentinel, and record the CapaBoardPage container unification as an intended
+change; or record that the scaffold stays per-page and remove this record. A shared table wrapper
+is separately blocked and must not be attempted: `apps/web/src/lib/responsiveRegisterContract.test.ts`
+is a source-text contract requiring each of nine page files to contain its own literal
+`<Table.ScrollContainer minWidth={N}>`.
+Last reviewed: 2026-08-29
+
 ## RES-DOC11-TOKEN-DRIFT
 
 Status: OPEN

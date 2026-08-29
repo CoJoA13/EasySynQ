@@ -1,7 +1,15 @@
-import { Anchor, Box, Button, Container, Group, Select, Table, Title } from "@mantine/core";
+import {
+  Anchor,
+  Box,
+  Button,
+  Container,
+  Select,
+  Table,
+} from "@mantine/core";
 import { useOrgDate } from "../../app/shell/useOrgDate";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import type { Dcr, DcrChangeType, DcrReasonClass, DcrState } from "../../lib/types";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { RegisterToolbar, SortableTh, SubjectCell } from "../../lib/RegisterToolbar";
@@ -13,7 +21,6 @@ import {
   useUrlParam,
 } from "../../lib/registerControls";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
-import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { DcrDrawer } from "./DcrDrawer";
 import { DcrStateBadge } from "./DcrStateBadge";
@@ -113,9 +120,7 @@ export function DcrsRegisterPage() {
   if (forbidden) {
     return (
       <Container size="xl" py="md">
-        <Title order={2} mb="md">
-          Change requests
-        </Title>
+        <RegisterPageHeader title="Change requests" />
         <NoAccessState message="You don't have access to the change-request register. It's available to roles holding the change-request read permission." />
       </Container>
     );
@@ -130,9 +135,7 @@ export function DcrsRegisterPage() {
   if (isError) {
     return (
       <Container size="xl" py="md">
-        <Title order={2} mb="md">
-          Change requests
-        </Title>
+        <RegisterPageHeader title="Change requests" />
         <ErrorState title="Couldn't load change requests" onRetry={() => refetch()} />
       </Container>
     );
@@ -140,12 +143,11 @@ export function DcrsRegisterPage() {
 
   return (
     <Container size="xl" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={2}>Change requests</Title>
-        {can("changeRequest.create") && <Button onClick={() => setRaising(true)}>Raise DCR</Button>}
-      </Group>
-
-      <AsOf at={dataUpdatedAt} />
+      <RegisterPageHeader
+        title="Change requests"
+        actions={can("changeRequest.create") && <Button onClick={() => setRaising(true)}>Raise DCR</Button>}
+        updatedAt={dataUpdatedAt}
+      />
 
       {rows.length === 0 ? (
         <EmptyState message="No change requests yet." />

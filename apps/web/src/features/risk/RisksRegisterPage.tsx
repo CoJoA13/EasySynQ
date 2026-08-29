@@ -7,15 +7,14 @@ import {
   SegmentedControl,
   Table,
   Text,
-  Title,
 } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import type { RiskBand, RiskRow } from "../../lib/types";
 import { TruncationNotice } from "../../app/shell/TruncationNotice";
 import { RegisterFilterBar } from "../registers/RegisterFilterBar";
 import type { RegisterFilterState } from "../registers/registerFilters";
-import { AsOf } from "../../lib/AsOf";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
@@ -149,9 +148,7 @@ export function RisksRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Risk & opportunity register
-        </Title>
+        <RegisterPageHeader title="Risk & opportunity register" />
         <NoAccessState message="You don't have access to the risk & opportunity register." />
       </Container>
     );
@@ -159,9 +156,7 @@ export function RisksRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Risk & opportunity register
-        </Title>
+        <RegisterPageHeader title="Risk & opportunity register" />
         <ErrorState
           title="Couldn't load the risk & opportunity register"
           message="Something went wrong. Please try again."
@@ -180,12 +175,11 @@ export function RisksRegisterPage() {
 
   return (
     <Container size="lg" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={2}>Risk & opportunity register</Title>
-        {headEditable && canCreate && <Button onClick={() => setCreateOpen(true)}>New risk</Button>}
-      </Group>
-
-      <AsOf at={dataUpdatedAt} />
+      <RegisterPageHeader
+        title="Risk & opportunity register"
+        actions={headEditable && canCreate && <Button onClick={() => setCreateOpen(true)}>New risk</Button>}
+        updatedAt={dataUpdatedAt}
+      />
       {/* The date window only. This page already renders a "Type" control, and a duplicate
           accessible name breaks getByLabelText. The window is the one facet no register had, and the
           only one that reaches entries older than the server's scan window; the API accepts the

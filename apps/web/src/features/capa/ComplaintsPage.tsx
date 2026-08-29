@@ -1,8 +1,14 @@
-import { Anchor, Button, Container, Group, Table, Text, Title } from "@mantine/core";
+import {
+  Anchor,
+  Button,
+  Container,
+  Table,
+  Text,
+} from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
-import { AsOf } from "../../lib/AsOf";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { Complaint } from "../../lib/types";
 import { SEVERITY_LABEL } from "./columns";
@@ -19,9 +25,7 @@ export function ComplaintsPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={3} mb="md">
-          Complaints
-        </Title>
+        <RegisterPageHeader title="Complaints" order={3} />
         <NoAccessState
           message={
             <>
@@ -43,9 +47,7 @@ export function ComplaintsPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <Title order={3} mb="md">
-          Complaints
-        </Title>
+        <RegisterPageHeader title="Complaints" order={3} />
         <ErrorState title="Couldn't load complaints" onRetry={() => refetch()} />
       </Container>
     );
@@ -54,11 +56,12 @@ export function ComplaintsPage() {
   const rows = data ?? [];
   return (
     <Container size="lg" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={3}>Complaints</Title>
-        {can("record.create") && <Button onClick={() => setFormOpen(true)}>Log complaint</Button>}
-      </Group>
-      <AsOf at={dataUpdatedAt} />
+      <RegisterPageHeader
+        title="Complaints"
+        order={3}
+        actions={can("record.create") && <Button onClick={() => setFormOpen(true)}>Log complaint</Button>}
+        updatedAt={dataUpdatedAt}
+      />
       {rows.length === 0 ? (
         <EmptyState message="No complaints logged yet." />
       ) : (

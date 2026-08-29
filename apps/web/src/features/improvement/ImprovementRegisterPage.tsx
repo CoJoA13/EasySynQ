@@ -1,11 +1,18 @@
-import { Anchor, Box, Button, Container, Group, Select, Table, Title } from "@mantine/core";
+import {
+  Anchor,
+  Box,
+  Button,
+  Container,
+  Select,
+  Table,
+} from "@mantine/core";
 import { useOrgDate } from "../../app/shell/useOrgDate";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
-import { AsOf } from "../../lib/AsOf";
 import { TruncationNotice } from "../../app/shell/TruncationNotice";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
@@ -106,9 +113,7 @@ export function ImprovementRegisterPage() {
   if (forbidden) {
     return (
       <Container size="xl" py="md">
-        <Title order={2} mb="md">
-          Improvement
-        </Title>
+        <RegisterPageHeader title="Improvement" />
         <NoAccessState message="You don't have access to the improvement register. It's available to roles holding the improvement read permission." />
       </Container>
     );
@@ -123,9 +128,7 @@ export function ImprovementRegisterPage() {
   if (isError) {
     return (
       <Container size="xl" py="md">
-        <Title order={2} mb="md">
-          Improvement
-        </Title>
+        <RegisterPageHeader title="Improvement" />
         <ErrorState title="Couldn't load improvement initiatives" onRetry={() => void refetch()} />
       </Container>
     );
@@ -133,14 +136,13 @@ export function ImprovementRegisterPage() {
 
   return (
     <Container size="xl" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={2}>Improvement</Title>
-        {can("improvement.manage") && (
+      <RegisterPageHeader
+        title="Improvement"
+        actions={can("improvement.manage") && (
           <Button onClick={() => setRaising(true)}>New initiative</Button>
         )}
-      </Group>
-
-      <AsOf at={dataUpdatedAt} />
+        updatedAt={dataUpdatedAt}
+      />
       <TruncationNotice truncated={truncated} noun="initiatives" />
 
       {rows.length === 0 ? (

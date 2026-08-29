@@ -3,17 +3,15 @@ import {
   Anchor,
   Button,
   Container,
-  Group,
   SegmentedControl,
   Stack,
   Table,
   Text,
-  Title,
 } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import type { ContextIssue } from "../../lib/types";
-import { AsOf } from "../../lib/AsOf";
 import { readSearchParamState } from "../../lib/effectiveView";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { StatusBadge } from "../../lib/StatusBadge";
@@ -138,9 +136,7 @@ export function ContextRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Context of the organization
-        </Title>
+        <RegisterPageHeader title="Context of the organization" />
         <NoAccessState message="You don't have access to the Context register." />
       </Container>
     );
@@ -148,9 +144,7 @@ export function ContextRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Context of the organization
-        </Title>
+        <RegisterPageHeader title="Context of the organization" />
         <ErrorState
           title="Couldn't load the context register"
           message="Something went wrong. Please try again."
@@ -169,14 +163,13 @@ export function ContextRegisterPage() {
 
   return (
     <Container size="lg" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={2}>Context of the organization</Title>
-        {headEditable && canManage && (
+      <RegisterPageHeader
+        title="Context of the organization"
+        actions={headEditable && canManage && (
           <Button onClick={() => setCreateOpen(true)}>New issue</Button>
         )}
-      </Group>
-
-      <AsOf at={dataUpdatedAt} />
+        updatedAt={dataUpdatedAt}
+      />
       {banner && (
         <Alert color="gray" variant="light" mt="xs">
           {banner}

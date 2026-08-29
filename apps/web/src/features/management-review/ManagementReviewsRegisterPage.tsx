@@ -1,8 +1,17 @@
-import { Alert, Anchor, Box, Button, Container, Group, Table, Text, Title } from "@mantine/core";
+import {
+  Alert,
+  Anchor,
+  Box,
+  Button,
+  Container,
+  Group,
+  Table,
+  Text,
+} from "@mantine/core";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
-import { AsOf } from "../../lib/AsOf";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
@@ -70,9 +79,7 @@ export function ManagementReviewsRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Management reviews
-        </Title>
+        <RegisterPageHeader title="Management reviews" />
         <NoAccessState message="You don't have access to Management Reviews. It's available to the Quality Manager." />
       </Container>
     );
@@ -80,9 +87,7 @@ export function ManagementReviewsRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Management reviews
-        </Title>
+        <RegisterPageHeader title="Management reviews" />
         <ErrorState title="Couldn't load management reviews" onRetry={() => refetch()} />
       </Container>
     );
@@ -96,13 +101,13 @@ export function ManagementReviewsRegisterPage() {
   }
   return (
     <Container size="lg" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={2}>Management reviews</Title>
-        {can("mgmtReview.create") && (
+      <RegisterPageHeader
+        title="Management reviews"
+        actions={can("mgmtReview.create") && (
           <Button onClick={() => setCreateOpen(true)}>New management review</Button>
         )}
-      </Group>
-      <AsOf at={dataUpdatedAt} />
+        updatedAt={dataUpdatedAt}
+      />
       {data.data.length === 0 ? (
         <Alert color="gray" title="No management reviews yet" mt="md">
           {can("mgmtReview.create")

@@ -7,13 +7,12 @@ import {
   SegmentedControl,
   Table,
   Text,
-  Title,
 } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { NewObjectiveModal } from "./NewObjectiveModal";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import type { Objective } from "../../lib/types";
-import { AsOf } from "../../lib/AsOf";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveScorecard } from "./hooks";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
@@ -85,9 +84,7 @@ export function ObjectivesRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Quality objectives
-        </Title>
+        <RegisterPageHeader title="Quality objectives" />
         <NoAccessState message="You don't have access to Quality Objectives. It's available to the Quality Manager and Process Owner roles." />
       </Container>
     );
@@ -96,9 +93,7 @@ export function ObjectivesRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
-          Quality objectives
-        </Title>
+        <RegisterPageHeader title="Quality objectives" />
         <ErrorState
           title="Couldn't load quality objectives"
           message="Something went wrong loading the objectives. Please try again."
@@ -118,14 +113,13 @@ export function ObjectivesRegisterPage() {
 
   return (
     <Container size="lg" py="md">
-      <Group justify="space-between" mb="md">
-        <Title order={2}>Quality objectives</Title>
-        {can("objective.manage") && (
+      <RegisterPageHeader
+        title="Quality objectives"
+        actions={can("objective.manage") && (
           <Button onClick={() => setCreateOpen(true)}>New objective</Button>
         )}
-      </Group>
-
-      <AsOf at={dataUpdatedAt} />
+        updatedAt={dataUpdatedAt}
+      />
       <ObjectiveScorecardBand total={data.total} onTarget={data.on_target} byRag={data.by_rag} />
 
       {data.objectives.length === 0 ? (

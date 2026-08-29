@@ -1,7 +1,10 @@
 # S-ui-signal-board — Option C interface direction, Archivo, and the muted-text remediation
 
-> **Status:** in progress. **S-ui-1 (Foundation) implemented 2026-08-29**; S-ui-2 onward not
-> started. All four §7 owner decisions are resolved. Owner selected **Option C (Signal board)** from
+> **Status:** in progress. **S-ui-1 to S-ui-3 merged 2026-08-29** (#505 foundation, #506 shell,
+> #507 Home); **S-ui-4 (register pattern) in review**; S-ui-5 onward not started. The dated
+> execution snapshot in `docs/current-status.md` is authoritative for what has actually shipped —
+> it moves under the `/finish-slice` ritual, not from this file. All four §7
+> owner decisions are resolved. Owner selected **Option C (Signal board)** from
 > the four-artboard comparison on 2026-08-29 and asked for Archivo to be adopted and the contrast
 > remediation folded into the same programme.
 > **Corrections made during implementation** are marked inline in §2.2, §4 and §5 — the §4 remap as
@@ -306,10 +309,44 @@ tinted signal headers, `MyTasksRail` as a bordered list with typed action chips.
 place the "never assert a verdict" rule is enforced. `rag.ts` already exists and is the right home.
 
 ### S-ui-4 · Register pattern
-One shared register composition (header, filter bar, table, empty/forbidden states) applied first to
-**CAPA, Risk, Audit** — they already share `RegisterLifecyclePanel` and their triplication was
-accepted under U28, so this is the moment to decide whether the new pattern collapses it or keeps
-the accepted duplication. **Owner decision, not an implementer's call.**
+
+> **Three corrections, all verified against the code on 2026-08-29 before implementation.** The
+> paragraph as originally written was wrong in each of its three claims, and is kept below with the
+> corrections inline because two of the errors would have caused real rework.
+>
+> 1. **CAPA / Risk / Audit do not share `RegisterLifecyclePanel`.** They share
+>    `features/registers/RegisterFilterBar.tsx` (the created-date window, from #502). The
+>    triplicated `RegisterLifecyclePanel` (148 lines ×3) is in `features/risk/`,
+>    `features/context/` and `features/interested-parties/` — a different trio. The plan conflated
+>    the two.
+> 2. **"Accepted under U28" is real but uncitable by that token.** The acceptance is
+>    `docs/decisions-register.md` → "Accepted duplication: the risk / context / interested-parties
+>    register stacks", added by `6c60160` (#502). The section never uses the string "U28", which is
+>    why grepping for it finds only this plan.
+> 3. **Most of the "shared register composition" already exists.** `lib/states.tsx` supplies
+>    Loading/Error/NoAccess/Empty/Inline/Skeleton/MutationError; `lib/RegisterToolbar.tsx` supplies
+>    the search toolbar, `SortableTh` and `SubjectCell`; `lib/registerControls.ts` and
+>    `lib/useRowKeyboardNav.ts` supply the hooks. Rebuilding them would have been rework. The
+>    genuinely missing piece was the **page header**.
+
+**What the slice actually did.** Built `lib/RegisterPageHeader.tsx` (title, permission-gated
+action, freshness stamp) and adopted it on eleven register pages across all three of their
+loaded / forbidden / error branches — collapsing, among others, the two divergent header forms
+`CapaBoardPage` carried across its three header sites. Built `lib/ScorecardBandShell.tsx` for the four scorecard bands, which is
+the one limb of the accepted-duplication entry whose revisit trigger fires. Did **not** rebuild the
+filter bar, the state primitives, or a table wrapper.
+
+**Deliberately not built: a `RegisterPageFrame`** (the four-branch forbidden/loading/error/loaded
+scaffold). Adversarial review found three blockers worth recording: an always-taken return destroys
+TypeScript control-flow narrowing on the five pages that use a narrowing early return; rendering
+the title during loading breaks `AuditsListPage.test.tsx`'s heading-based load gate and
+`DcrsRegisterPage.test.tsx`'s container-width contract, both of which identify the loaded state by
+the heading alone; and `lib/responsiveRegisterContract.test.ts` is a **source-text** contract over
+nine page files, so a shared table wrapper is not merely undesirable but presently impossible.
+
+**The U28 decision, taken by the owner on 2026-08-29 against the measured diff:** collapse the
+scorecard band; leave the lifecycle panel and publish modal accepted. Reasoning and corrected
+numbers are in the decisions register.
 
 ### S-ui-5..n · Remaining registers and detail surfaces
 Documents/Library, Records, Objectives, Context, Interested parties, Improvement, DCR, Management
@@ -352,7 +389,7 @@ surface there, and vitest takes about six minutes.
 | # | Decision | Owner's answer |
 |---|---|---|
 | 1 | Accent → brand teal | **Adopted.** Light `#0a7a6f`, dark `#0ea394`. Shipped in S-ui-1. |
-| 2 | U28 revisited at S-ui-4 | **Deferred to S-ui-4**, against the concrete shared-composition diff. |
+| 2 | U28 revisited at S-ui-4 | **Resolved 2026-08-29 against the measured diff: collapse the scorecard band only.** The panel/modal acceptance stands on corrected numbers (96.5–98.3%, not the recorded 74%). See the decisions register. |
 | 3 | Icon set | **Hand-rolled (~25 SVGs).** No lockfile or air-gap-bundle addition. |
 | 4 | Dark-scheme parity | **In scope for S-ui-3.** Dark quadrant tints to be designed and owner-reviewed before build, not derived. |
 
