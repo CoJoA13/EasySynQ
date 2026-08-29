@@ -59,8 +59,8 @@ it("renders the freshness stamp when given one", () => {
 });
 
 // AsOf already returns null for a falsy stamp; this pins that the header does not add chrome of its
-// own around it, so a page with no query stamp (the audit programme's plans header) renders clean.
+// own around it, so a page with no query stamp (the audit program's plans header) renders clean.
 it("renders no freshness stamp when none is supplied", () => {
-  renderHeader({ title: "Audit programme" });
+  renderHeader({ title: "Audit program" });
   expect(within(screen.getByTestId("wrap")).queryByText(/Updated/)).toBeNull();
 });

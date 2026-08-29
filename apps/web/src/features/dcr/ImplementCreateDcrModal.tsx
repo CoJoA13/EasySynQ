@@ -60,7 +60,7 @@ export function ImplementCreateDcrModal({
       <Stack gap="sm">
         {error && <Alert color="red">{error}</Alert>}
         <Text size="sm">
-          Pick the approved document authored to fulfil this change request. Implementing releases
+          Pick the approved document authored to fulfill this change request. Implementing releases
           its approved version and links it here.
         </Text>
         {docsError ? (

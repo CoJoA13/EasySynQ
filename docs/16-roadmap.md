@@ -107,7 +107,7 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > - **Ingestion engine (UJ-2)** — scan/inventory → extract/classify → dedup/version-families/proposal → human-in-the-loop
 >   review → COMMIT, with `import_provenance` + `signature_event(meaning=import_baseline)` (R2) — S-ing-1..5 (+ the S-ing-4b
 >   review UI). OpenSearch stays **absent (R34)**: near-dup ships as in-process MinHash behind a reserved `DedupDetector` seam.
-> - **Audits/Findings/CAPA (UJ-5/UJ-6)** — internal-audit programmes/plans + `audit_finding` + the NC→CAPA auto-link +
+> - **Audits/Findings/CAPA (UJ-5/UJ-6)** — internal-audit programs/plans + `audit_finding` + the NC→CAPA auto-link +
 >   the multi-stage CAPA close-out (RootCause → ActionPlan → Implement → Verify → Close, the M4 gate) + the block-until-corrected
 >   audit-close gate — S-aud-1/2 + S-capa-1/2/3 + the **declarative workflow engine** S-wf-engine (R39).
 > - **Revision & Change Depth (DCR, R40)** — read + write + diff (metadata + text + visual) + annotate + CREATE-implement,

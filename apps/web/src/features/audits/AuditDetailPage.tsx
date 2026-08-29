@@ -12,13 +12,13 @@ import { AuditLifecyclePanel } from "./AuditLifecyclePanel";
 import { LogFindingModal } from "./LogFindingModal";
 
 // The /audits/:id destination (outside the tab layout — the documents/:id precedent). Hosts the
-// plan/programme context card + (Tasks 13/14) the lifecycle panel and the findings card. The FSM
+// plan/program context card + (Tasks 13/14) the lifecycle panel and the findings card. The FSM
 // write scope is the plan's auditee process (SYSTEM fallback) — resolved HERE and passed down.
 export function AuditDetailPage() {
   const { id } = useParams<{ id: string }>();
   const audit = useAudit(id ?? null);
   const plan = useAuditPlan(audit.data?.plan_id ?? null);
-  const programs = useAuditPrograms(); // cached list — programme title lookup, no extra endpoint
+  const programs = useAuditPrograms(); // cached list — program title lookup, no extra endpoint
   const processes = useProcesses();
   const { data: directory } = useUserDirectory();
   const [logOpen, setLogOpen] = useState(false);

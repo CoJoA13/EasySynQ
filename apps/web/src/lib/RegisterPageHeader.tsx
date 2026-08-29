@@ -18,13 +18,13 @@ import { AsOf } from "./AsOf";
 // `order` stays a prop rather than being normalised. The eleven adopters run at 2 and 3, and
 // AuditsListPage.test.tsx pins `{ level: 2, name: "Internal audit" }` AND uses it as its load gate,
 // so levelling them is an accessibility change with its own test surface — recorded as
-// RES-REGISTER-HEADING-LEVELS for the programme's a11y pass, not smuggled into a retheme slice.
+// RES-REGISTER-HEADING-LEVELS for the program's a11y pass, not smuggled into a retheme slice.
 // The union is `2 | 3` because that is what the adopters use; the `order={1}` registers (Library,
-// Reports, Ingestion) and ProgrammePage's `order={4}` sub-heading each widen it by one line.
+// Reports, Ingestion) and ProgramPage's `order={4}` sub-heading each widen it by one line.
 //
 // `updatedAt` is optional because the forbidden and error branches have no loaded query to stamp:
 // they pass nothing, and AsOf renders nothing for a null/undefined/0 stamp, so the absent case
-// needs no branch here. (features/audits/ProgrammePage.tsx is the one hand-rolled register header
+// needs no branch here. (features/audits/ProgramPage.tsx is the one hand-rolled register header
 // left in the tree — it needs `order={3}` and no stamp, which this API already supports.)
 export function RegisterPageHeader({
   title,

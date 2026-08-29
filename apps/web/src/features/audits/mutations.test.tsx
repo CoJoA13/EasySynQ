@@ -70,6 +70,6 @@ function CreateProgramProbe() {
 
 test("useCreateProgram POSTs /audit-programs", async () => {
   renderWithProviders(<CreateProgramProbe />);
-  act(() => createProgram.mutate({ title: "New programme" }));
+  act(() => createProgram.mutate({ title: "New program" }));
   expect(await screen.findByText("AUDPROG-000003")).toBeInTheDocument();
 });

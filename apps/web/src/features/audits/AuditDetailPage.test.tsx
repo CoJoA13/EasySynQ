@@ -28,7 +28,7 @@ function harness(id: string) {
   );
 }
 
-test("renders header (identifier · title · state) + plan/programme context", async () => {
+test("renders header (identifier · title · state) + plan/program context", async () => {
   harness("au000001-0001-0001-0001-000000000001");
   expect(await screen.findByText("REC-000061")).toBeInTheDocument();
   expect(screen.getByText("Purchasing & Suppliers audit")).toBeInTheDocument();
@@ -36,12 +36,12 @@ test("renders header (identifier · title · state) + plan/programme context", a
   // renders its glyph + label as separate nodes, so assert the badge's label text directly.
   expect(screen.getAllByText("In progress").length).toBeGreaterThan(0);
   expect(screen.getByText("Mara Quality")).toBeInTheDocument(); // lead via directory
-  // Plan context: scheduled date + checklist ref + auditee process + the programme title.
+  // Plan context: scheduled date + checklist ref + auditee process + the program title.
   expect(await screen.findByText(/2026-05-28/)).toBeInTheDocument();
   expect(screen.getByText(/FRM-AUD-002/)).toBeInTheDocument();
   // getAllBy: FindingsCard now also renders "Purchasing" as a process_ref badge (Task 14).
   expect(screen.getAllByText(/Purchasing$/).length).toBeGreaterThan(0);
-  expect(screen.getByText(/2026 Internal Audit Programme/)).toBeInTheDocument();
+  expect(screen.getByText(/2026 Internal Audit Program/)).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "Internal audit" })).not.toBeInTheDocument();
 });
 

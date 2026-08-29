@@ -290,7 +290,7 @@ class EventType(enum.Enum):
     IMPORT_ITEM_FAILED = "IMPORT_ITEM_FAILED"
     IMPORT_RUN_COMPLETED = "IMPORT_RUN_COMPLETED"
     IMPORT_RUN_PARTIAL = "IMPORT_RUN_PARTIAL"
-    # ISO internal-audit family (S-aud-1, doc 02 Cl 9.2 / doc 10 §5 / doc 14 §14). Programme + plan
+    # ISO internal-audit family (S-aud-1, doc 02 Cl 9.2 / doc 10 §5 / doc 14 §14). Program + plan
     # are own-table containers → object_type=audit (the reserved AuditObjectType.audit value, no ADD
     # VALUE); the audit RECORD's create + FSM events reuse object_type=record (audit.id is a record
     # id) so GET /documents/{id}/audit-events surfaces them. AUDIT_TRANSITIONED carries before/after

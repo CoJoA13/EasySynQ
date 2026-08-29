@@ -71,8 +71,8 @@ const AuditsListPage = lazy(() =>
 const AuditDetailPage = lazy(() =>
   import("./features/audits/AuditDetailPage").then((m) => ({ default: m.AuditDetailPage })),
 );
-const ProgrammePage = lazy(() =>
-  import("./features/audits/ProgrammePage").then((m) => ({ default: m.ProgrammePage })),
+const ProgramPage = lazy(() =>
+  import("./features/audits/ProgramPage").then((m) => ({ default: m.ProgramPage })),
 );
 const IngestionRunsPage = lazy(() =>
   import("./features/ingestion/IngestionRunsPage").then((m) => ({ default: m.IngestionRunsPage })),
@@ -359,7 +359,7 @@ function AppContent() {
             </Route>
             <Route path="audits" element={<AuditsLayout />}>
               <Route index element={<AuditsListPage />} />
-              <Route path="programme" element={<ProgrammePage />} />
+              <Route path="program" element={<ProgramPage />} />
             </Route>
             <Route path="audits/:id" element={<AuditDetailPage />} />
             <Route path="imports" element={<IngestionRunsPage />} />

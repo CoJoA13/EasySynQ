@@ -1,15 +1,15 @@
 import { Container, Tabs } from "@mantine/core";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
-// The Internal-Audit front door's secondary nav (S-web-7d): Audits (index) · Programme.
+// The Internal-Audit front door's secondary nav (S-web-7d): Audits (index) · Program.
 // The /audits/:id detail page sits OUTSIDE this layout (it is a destination, not a tab).
 const TABS = [
   { value: "audits", label: "Audits", path: "/audits" },
-  { value: "programme", label: "Programme", path: "/audits/programme" },
+  { value: "program", label: "Program", path: "/audits/program" },
 ] as const;
 
 function activeTab(pathname: string): string {
-  return pathname.startsWith("/audits/programme") ? "programme" : "audits";
+  return pathname.startsWith("/audits/program") ? "program" : "audits";
 }
 
 export function AuditsLayout() {

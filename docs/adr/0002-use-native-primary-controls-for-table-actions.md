@@ -8,7 +8,7 @@
 
 EasySynQ's high-traffic register tables generally keep rows structural and put one native link or button
 inside the identifying cell. Two remaining tables attach activation to `Table.Tr`: CAPA List duplicates
-button keyboard behavior on a focusable row, while Audit Programme leaves row selection unavailable to
+button keyboard behavior on a focusable row, while Audit Program leaves row selection unavailable to
 keyboard users and also contains an independent Edit button.
 
 The application needs a consistent semantic boundary that preserves table structure, browser keyboard
@@ -32,7 +32,7 @@ component. Existing native controls remain unchanged.
 
 Keyboard and assistive-technology users encounter ordinary links and buttons rather than simulated
 interactive rows. Pointer users must activate the visible primary control instead of clicking any cell.
-Nested actions such as Audit Programme Edit remain independent, and the shared arrow helper needs a
+Nested actions such as Audit Program Edit remain independent, and the shared arrow helper needs a
 narrow event-origin guard.
 
 The direct implementation is deliberately small, but it provides no automatic prevention against a
@@ -49,7 +49,7 @@ part, so another abstraction would add API surface without a third consumer.
 
 ### Stretched or overlaid whole-row control
 
-A stretched control preserves a large pointer target but becomes fragile around Audit Programme's Edit
+A stretched control preserves a large pointer target but becomes fragile around Audit Program's Edit
 button. It creates stacking, click-exclusion, focus-indication, and accessible hit-area complexity.
 
 ### Interactive row with ARIA and synthetic keys

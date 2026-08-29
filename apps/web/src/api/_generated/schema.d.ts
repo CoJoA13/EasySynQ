@@ -1680,10 +1680,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The org's audit programmes. Needs audit.read. */
+        /** The org's audit programs. Needs audit.read. */
         get: operations["listAuditPrograms"];
         put?: never;
-        /** Create an audit programme (the maintained Cl 9.2 schedule container). Needs audit.plan. */
+        /** Create an audit program (the maintained Cl 9.2 schedule container). Needs audit.plan. */
         post: operations["createAuditProgram"];
         delete?: never;
         options?: never;
@@ -1700,14 +1700,14 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** A single audit programme. Needs audit.read. */
+        /** A single audit program. Needs audit.read. */
         get: operations["getAuditProgram"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Maintain a programme (title/period/coverage/archived; partial). Needs audit.plan. */
+        /** Maintain a program (title/period/coverage/archived; partial). Needs audit.plan. */
         patch: operations["updateAuditProgram"];
         trace?: never;
     };
@@ -1720,10 +1720,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** The plans under a programme. Needs audit.read. */
+        /** The plans under a program. Needs audit.read. */
         get: operations["listAuditPlans"];
         put?: never;
-        /** Schedule a plan under a programme. Needs audit.plan. */
+        /** Schedule a plan under a program. Needs audit.plan. */
         post: operations["createAuditPlan"];
         delete?: never;
         options?: never;
@@ -11355,7 +11355,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The audit programmes. */
+            /** @description The audit programs. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11382,7 +11382,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The created programme. */
+            /** @description The created program. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -11405,7 +11405,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The programme. */
+            /** @description The program. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11433,7 +11433,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The updated programme. */
+            /** @description The updated program. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11498,7 +11498,7 @@ export interface operations {
             };
             403: components["responses"]["ProblemResponse"];
             404: components["responses"]["ProblemResponse"];
-            /** @description The programme is archived (program_archived). */
+            /** @description The program is archived (program_archived). */
             409: {
                 headers: {
                     [name: string]: unknown;

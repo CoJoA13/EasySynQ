@@ -6,7 +6,7 @@ import { MutationErrorState } from "../../lib/states";
 import { useAuditPlans, useAuditPrograms } from "./hooks";
 import { useCreateAudit } from "./mutations";
 
-// POST /audits needs a plan_id — the cascade picks programme → that programme's plans. The lead
+// POST /audits needs a plan_id — the cascade picks program → that program's plans. The lead
 // auditor defaults server-side to the plan's lead; the optional picker rides the user directory
 // (degrades to absent when the directory is empty/denied).
 export function NewAuditModal({ opened, onClose }: { opened: boolean; onClose: () => void }) {
@@ -39,18 +39,18 @@ export function NewAuditModal({ opened, onClose }: { opened: boolean; onClose: (
   return (
     <Modal opened={opened} onClose={onClose} title="New audit">
       {programs.isError ? (
-        <Alert color="red" title="Couldn't load programmes">
+        <Alert color="red" title="Couldn't load programs">
           Please try again.
         </Alert>
       ) : !programs.isLoading && programRows.length === 0 ? (
         <Text c="dimmed">
-          No audit plans yet — create a programme and add a plan on the Programme tab first.
+          No audit plans yet — create a program and add a plan on the Program tab first.
         </Text>
       ) : (
         <Stack gap="sm">
           <Select
-            label="Programme"
-            placeholder="Pick a programme"
+            label="Program"
+            placeholder="Pick a program"
             data={programRows.map((p) => ({ value: p.id, label: `${p.identifier} — ${p.title}` }))}
             value={programId}
             onChange={(v) => {
@@ -60,7 +60,7 @@ export function NewAuditModal({ opened, onClose }: { opened: boolean; onClose: (
           />
           <Select
             label="Plan"
-            placeholder={programId ? "Pick a plan" : "Pick a programme first"}
+            placeholder={programId ? "Pick a plan" : "Pick a program first"}
             disabled={!programId}
             data={planRows.map((p) => ({
               value: p.id,

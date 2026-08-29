@@ -42,7 +42,7 @@ export function ProgramForm({
   }
 
   return (
-    <Modal opened={opened} onClose={onClose} title={program ? "Edit programme" : "New programme"}>
+    <Modal opened={opened} onClose={onClose} title={program ? "Edit program" : "New program"}>
       <Stack gap="sm">
         <TextInput
           label="Title"
@@ -64,14 +64,14 @@ export function ProgramForm({
           />
         )}
         {active.isError && (
-          <MutationErrorState title="Couldn't save the programme" error={active.error} />
+          <MutationErrorState title="Couldn't save the program" error={active.error} />
         )}
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
             Cancel
           </Button>
           <Button onClick={submit} disabled={!title.trim()} loading={active.isPending}>
-            Save programme
+            Save program
           </Button>
         </Group>
       </Stack>

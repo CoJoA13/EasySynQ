@@ -69,13 +69,13 @@ parties carry a register-head publish/release console. The objectives lifecycle 
 
 **Limb 2 — "converge to near-identical under a change that has to be made three times": splits by
 member.** The panel and modal converged, but nothing has forced a three-times edit on them and the
-interface programme will not: their `<Card withBorder mt="md">` sets no `radius`, so it follows
+interface program will not: their `<Card withBorder mt="md">` sets no `radius`, so it follows
 `theme.defaultRadius` and a future card-radius decision costs it nothing. The **scorecard band** is
 different — all three (and objectives' fourth) hardcode `<Paper … radius="md">`, an explicit prop
 that a theme default cannot override, so the same decision would be four hand edits.
 
 To be exact about what is and is not shipped, because this rationale is forward-looking rather than
-observed: the programme's §2.4 "16px card radius" rule **has not landed anywhere**. The theme sets
+observed: the program's §2.4 "16px card radius" rule **has not landed anywhere**. The theme sets
 `defaultRadius: "md"` (8px) and its `components` block carries only `Modal` and `Drawer` entries —
 there is no `Card` or `Paper` default — and S-ui-3 gave the Home quadrant cards `radius="lg"`
 (12px). `ScorecardBandShell` therefore keeps `radius="md"`, exactly as the four bands had it, so
@@ -661,7 +661,7 @@ Several modelling + governance choices were locked by the product owner and an a
   finding-create/correct window is **open-until-Closed** — findings may be logged/corrected in any
   non-terminal audit state, rejected only once the audit is Closed.*)
 - **`audit_program` is an own-table scheduling container, NOT a `documented_information` subtype** — a
-  deliberate divergence from doc 14's "a maintained document" phrasing. A programme is a period + coverage +
+  deliberate divergence from doc 14's "a maintained document" phrasing. A program is a period + coverage +
   a set of planned audits; a version-less `kind=DOCUMENT` would leave an Effective document with no
   `document_version` (silently dropped by the mirror join, but mis-listed by the document library + its
   detail/download paths). `audit_plan` is likewise an own-table. The **retained evidence** —
@@ -671,7 +671,7 @@ Several modelling + governance choices were locked by the product owner and an a
   not the lifecycle column).
 - **No new permission keys for this family.** `audit.*` / `finding.*` / `ncr.*` / `capa.*` already exist in
   the closed doc-07 catalog (0004) and are granted to roles — `audit_object_type` reuses the reserved
-  `record` value for the record subtypes and the reserved `audit` value for programme/plan container events
+  `record` value for the record subtypes and the reserved `audit` value for program/plan container events
   (zero ADD VALUE). The only catalog work is the S-capa-1 grant-*backfill* of three already-defined-but-
   ungranted keys (no new keys; not a catalog extension).
 

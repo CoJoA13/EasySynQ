@@ -473,7 +473,7 @@ erDiagram
 
 | Entity | Key attributes | Notes / source |
 |---|---|---|
-| `audit_program` | `id` PK, `org_id`, `identifier`, `title`, `period`, `coverage` jsonb, `archived`, `created_by`, `created_at` | **Own-table** scheduling container (R39 — a deliberate divergence from `kind=DOCUMENT`: a programme has no version/mirror presence; a version-less Effective document would be mis-listed). The retained `audit`/`audit_finding`/`capa` evidence stays a `record` subtype. mig `0034`. |
+| `audit_program` | `id` PK, `org_id`, `identifier`, `title`, `period`, `coverage` jsonb, `archived`, `created_by`, `created_at` | **Own-table** scheduling container (R39 — a deliberate divergence from `kind=DOCUMENT`: a program has no version/mirror presence; a version-less Effective document would be mis-listed). The retained `audit`/`audit_finding`/`capa` evidence stays a `record` subtype. mig `0034`. |
 | `audit_plan` | `id` PK, `program_id` FK, `auditee_process_id`, `lead_auditor_user_id`, `scheduled_date`, `checklist_ref` | `10 §5.2`. |
 | `audit` | `id` PK/FK (a `record`, AUDIT), `plan_id` FK, `lead_auditor`, `dates`, `result_summary`, `state` enum(`Scheduled`,`Planned`,`InProgress`,`FindingsDraft`,`Reported`,`Closing`,`Closed`) | A **retained** record (`10 §5.1`). The DATE-valued `started_at` and `completed_at` are stamped in the canonical R56 organization calendar; UTC remains authoritative for instant-valued audit events. |
 | `audit_finding` | `id` PK/FK (a `record`, AUDIT_FINDING), `audit_id` FK, `finding_type` enum(`NC`,`OBSERVATION`,`OFI`), `severity`, `clause_ref`, `process_ref`, `auto_capa_id` null | NC **auto-creates** linked CAPA (`02`, `06 §2`, `10 §5.3`). |

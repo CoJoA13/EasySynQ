@@ -50,7 +50,7 @@ from ..vault.review import today_org
 from . import repository as repo
 
 _PROGRAM_PREFIX = (
-    "AUDPROG"  # {AUDPROG}-{SEQ} identifier (doc 04 §7); programmes are org-wide (no area)
+    "AUDPROG"  # {AUDPROG}-{SEQ} identifier (doc 04 §7); programs are org-wide (no area)
 )
 
 
@@ -79,7 +79,7 @@ def _emit(
     after: dict[str, Any] | None = None,
 ) -> None:
     """Append an audit_event BEFORE commit (the emit_record_event pattern), parameterized on
-    object_type so programme/plan events key on ``audit``, the audit record on ``record``."""
+    object_type so program/plan events key on ``audit``, the audit record on ``record``."""
     session.add(
         AuditEvent(
             org_id=actor.org_id,
@@ -113,7 +113,7 @@ def _validation_error(field: str, code: str, message: str) -> ProblemException:
     )
 
 
-# --- Audit Programme --------------------------------------------------------------------------
+# --- Audit Program --------------------------------------------------------------------------
 
 
 async def create_audit_program(
@@ -160,7 +160,7 @@ async def update_audit_program(
 ) -> AuditProgram:
     program = await repo.get_audit_program(session, program_id)
     if program is None or program.org_id != actor.org_id:
-        raise _not_found("Audit programme")
+        raise _not_found("Audit program")
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
     if title is not None and title != program.title:
@@ -209,9 +209,9 @@ async def create_audit_plan(
 ) -> AuditPlan:
     program = await repo.get_audit_program(session, program_id)
     if program is None or program.org_id != actor.org_id:
-        raise _not_found("Audit programme")
+        raise _not_found("Audit program")
     if program.archived:
-        raise _conflict("program_archived", "Cannot add a plan to an archived programme")
+        raise _conflict("program_archived", "Cannot add a plan to an archived program")
     if auditee_process_id is not None:
         proc = await session.get(Process, auditee_process_id)
         if proc is None or proc.org_id != actor.org_id:

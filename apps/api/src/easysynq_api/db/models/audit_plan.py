@@ -1,8 +1,8 @@
-"""The Audit Plan — one scheduled audit of a process under a programme (slice S-aud-1; doc 10 §5.2,
+"""The Audit Plan — one scheduled audit of a process under a program (slice S-aud-1; doc 10 §5.2,
 doc 14 §9).
 
 An own-table (no shared PK): a plan is a scheduling row, not a retained record. ``program_id`` is
-RESTRICT (a programme with plans cannot be dropped from under them). ``auditee_process_id`` /
+RESTRICT (a program with plans cannot be dropped from under them). ``auditee_process_id`` /
 ``lead_auditor_user_id`` / ``scheduled_date`` are nullable so a plan can be drafted before it is
 fully specified. doc 14 cardinality: one plan → one audit (``audit.plan_id`` NOT NULL).
 """

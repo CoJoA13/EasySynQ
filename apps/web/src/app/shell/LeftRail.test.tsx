@@ -179,11 +179,11 @@ test("shows the gated Compliance entry when the caller holds the key", async () 
   expect(await screen.findByText("Compliance")).toBeInTheDocument();
 });
 
-test("the Document register entry is always shown (a PROCESS-scoped report.read holder needs it too; the page handles 403)", async () => {
+test("the Controlled register entry is always shown (a PROCESS-scoped report.read holder needs it too; the page handles 403)", async () => {
   // default MSW /me/permissions returns no key at all — the entry must still render (mirrors the
   // Risk/Context/Internal-audit ungated precedent above).
   renderWithProviders(<LeftRail />, { route: "/" });
-  const link = await screen.findByRole("link", { name: "Document register" });
+  const link = await screen.findByRole("link", { name: "Controlled register" });
   expect(link).toHaveAttribute("href", "/reports/document-control");
 });
 

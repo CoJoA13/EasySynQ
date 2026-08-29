@@ -17,7 +17,7 @@ function harness() {
   );
 }
 
-test("cascade: picking a programme loads its plans; submit POSTs plan_id and navigates", async () => {
+test("cascade: picking a program loads its plans; submit POSTs plan_id and navigates", async () => {
   let body: { plan_id?: string; title?: string } | null = null;
   server.use(
     http.post("/api/v1/audits", async ({ request }) => {
@@ -33,8 +33,8 @@ test("cascade: picking a programme loads its plans; submit POSTs plan_id and nav
   const dialog = await screen.findByRole("dialog");
   // Submit is disabled until a plan is picked.
   expect(within(dialog).getByRole("button", { name: /Create audit/ })).toBeDisabled();
-  await u.click(within(dialog).getByLabelText(/Programme/));
-  await u.click(await screen.findByRole("option", { name: /2026 Internal Audit Programme/ }));
+  await u.click(within(dialog).getByLabelText(/Program/));
+  await u.click(await screen.findByRole("option", { name: /2026 Internal Audit Program/ }));
   await u.click(within(dialog).getByLabelText(/^Plan/));
   await u.click(await screen.findByRole("option", { name: /2026-05-28/ }));
   await u.type(within(dialog).getByLabelText(/Title/), "Purchasing audit Q3");
@@ -45,9 +45,9 @@ test("cascade: picking a programme loads its plans; submit POSTs plan_id and nav
   expect(await screen.findByText("DETAIL-PAGE")).toBeInTheDocument();
 });
 
-test("calm empty-state guidance when no programmes exist", async () => {
+test("calm empty-state guidance when no programs exist", async () => {
   server.use(http.get("/api/v1/audit-programs", () => HttpResponse.json({ data: [] })));
   harness();
   expect(await screen.findByText(/No audit plans yet/)).toBeInTheDocument();
-  expect(screen.getByText(/Programme tab/)).toBeInTheDocument();
+  expect(screen.getByText(/Program tab/)).toBeInTheDocument();
 });

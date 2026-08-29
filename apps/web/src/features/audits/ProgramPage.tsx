@@ -10,10 +10,10 @@ import { useAuditPlans, useAuditPrograms, useProcesses } from "./hooks";
 import { PlanForm } from "./PlanForm";
 import { ProgramForm } from "./ProgramForm";
 
-export function ProgrammePage() {
+export function ProgramPage() {
   const { data, isLoading, isError, forbidden, refetch } = useAuditPrograms();
   const { can } = usePermissions();
-  // null = closed; "new" = create; a programme = edit. Keyed remount resets the form state.
+  // null = closed; "new" = create; a program = edit. Keyed remount resets the form state.
   const [editing, setEditing] = useState<AuditProgram | "new" | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [planFormOpen, setPlanFormOpen] = useState(false);
@@ -32,12 +32,12 @@ export function ProgrammePage() {
     return (
       <Container size="xl" py="md">
         <Title order={3} mb="md">
-          Audit programme
+          Audit program
         </Title>
         <NoAccessState
           message={
             <>
-              You don't have access to the audit programme. It's available to roles holding{" "}
+              You don't have access to the audit program. It's available to roles holding{" "}
               <code>audit.read</code>.
             </>
           }
@@ -48,7 +48,7 @@ export function ProgrammePage() {
   if (isLoading) {
     return (
       <Container size="xl" py="md">
-        <LoadingState label="Loading programmes" />
+        <LoadingState label="Loading programs" />
       </Container>
     );
   }
@@ -56,9 +56,9 @@ export function ProgrammePage() {
     return (
       <Container size="xl" py="md">
         <Title order={3} mb="md">
-          Audit programme
+          Audit program
         </Title>
-        <ErrorState title="Couldn't load programmes" onRetry={() => refetch()} />
+        <ErrorState title="Couldn't load programs" onRetry={() => refetch()} />
       </Container>
     );
   }
@@ -66,11 +66,11 @@ export function ProgrammePage() {
   return (
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
-        <Title order={3}>Audit programme</Title>
-        {can("audit.plan") && <Button onClick={() => setEditing("new")}>New programme</Button>}
+        <Title order={3}>Audit program</Title>
+        {can("audit.plan") && <Button onClick={() => setEditing("new")}>New program</Button>}
       </Group>
       {rows.length === 0 ? (
-        <EmptyState message="No programmes yet." />
+        <EmptyState message="No programs yet." />
       ) : (
         <Table striped highlightOnHover mb="lg">
           <Table.Thead>
@@ -92,7 +92,7 @@ export function ProgrammePage() {
                     data-rownav
                     onClick={() => setSelectedId(p.id)}
                     aria-pressed={selected?.id === p.id}
-                    aria-label={`Select programme ${p.identifier}: ${p.title}`}
+                    aria-label={`Select program ${p.identifier}: ${p.title}`}
                   >
                     {p.identifier}
                   </Anchor>
@@ -106,7 +106,7 @@ export function ProgrammePage() {
                   <StatusBadge
                     tone={p.archived ? "neutral" : "success"}
                     label={p.archived ? "Archived" : "Active"}
-                    kind="Programme status"
+                    kind="Program status"
                   />
                 </Table.Td>
                 <Table.Td>
@@ -132,7 +132,7 @@ export function ProgrammePage() {
             )}
           </Group>
           {(plans.data ?? []).length === 0 ? (
-            <EmptyState message="No plans in this programme yet." />
+            <EmptyState message="No plans in this program yet." />
           ) : (
             <Table striped>
               <Table.Thead>

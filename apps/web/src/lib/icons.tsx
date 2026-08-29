@@ -288,7 +288,7 @@ export function IconDrift(props: IconProps) {
   );
 }
 
-// Document register — the tabular read of controlled documents.
+// Controlled register — the tabular read of controlled documents.
 export function IconRegister(props: IconProps) {
   return (
     <Svg {...props}>

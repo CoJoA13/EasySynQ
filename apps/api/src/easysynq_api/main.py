@@ -169,7 +169,7 @@ def create_app() -> FastAPI:
     app.include_router(clauses_router)  # S9: read-only ISO clause spine (GET /clauses)
     app.include_router(processes_router)  # S9c: process IA (graph + authoring + /processes/map)
     app.include_router(records_router)  # S-rec-1: records capture + evidence-linking + correction
-    app.include_router(audits_router)  # S-aud-1: internal-audit programmes/plans/audits + FSM
+    app.include_router(audits_router)  # S-aud-1: internal-audit programs/plans/audits + FSM
     app.include_router(capa_router)  # S-capa-1: CAPA core + intake (capas/complaints/ncrs)
     app.include_router(objectives_router)  # S-obj-1: clause-6.2 Quality Objectives (obj.*/kpi.*)
     # S-mr-1: clause-9.3 Management Review (mgmtReview.*)

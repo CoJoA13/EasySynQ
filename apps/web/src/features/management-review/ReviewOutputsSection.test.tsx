@@ -132,7 +132,7 @@ it("opens AddOutputModal and requires an owner before save is enabled for an ACT
   const dialog = await screen.findByRole("dialog");
   // A DECISION (the default type) needs only a description to save.
   const description = within(dialog).getByLabelText(/Description/i);
-  await userEvent.type(description, "Adopt the revised audit programme");
+  await userEvent.type(description, "Adopt the revised audit program");
   // Save enabled for a DECISION with a description.
   expect(within(dialog).getByRole("button", { name: /^Add$|Save|Add output/i })).toBeEnabled();
 

@@ -27,7 +27,7 @@ it("renders the headline and every chip", () => {
 
 // The reason this shell exists. Each of the four bands set `radius` EXPLICITLY, which defeats a
 // Mantine theme default, so a card-radius change costs four hand edits without a shared shell and
-// one with it. The value is deliberately unchanged from the bands this replaces — the programme's
+// one with it. The value is deliberately unchanged from the bands this replaces — the program's
 // 16px rule is not shipped (theme `defaultRadius` is `md`; S-ui-3's quadrant cards are `lg`), so
 // moving it here alone would make this the only 16px surface in the app. This test's job is to pin
 // that the radius now comes from ONE place and resolves through the token scale rather than a px
