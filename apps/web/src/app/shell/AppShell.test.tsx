@@ -558,3 +558,25 @@ test("route-error recovery after detail close leaves focus with the recovered fe
   expect(document.title).toBe("EasySynQ — Library");
   expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
 });
+
+test("the shell takes its dimensions from the layout tokens, not literals", () => {
+  // S-ui-1: --es-topbar-h / --es-sidebar-w existed with ZERO readers while AppShell hardcoded
+  // `header={{ height: 60 }}` / `navbar={{ width: 256 }}`. Mantine writes these into a <style>
+  // block as --app-shell-* custom properties, and a CSS var passes through rem() untouched, so
+  // the token reference survives verbatim — which is exactly what this asserts.
+  renderWithProviders(<AppShell />);
+
+  const shellVars = [...document.querySelectorAll("style")]
+    .map((s) => s.textContent ?? "")
+    .find((css) => css.includes("--app-shell-header-height"));
+
+  expect(shellVars, "Mantine emitted no AppShell dimension block").toBeDefined();
+  expect(shellVars).toContain("--app-shell-header-height:var(--es-topbar-h)");
+  expect(shellVars).toContain("--app-shell-navbar-width:var(--es-sidebar-w)");
+  // The offsets drive main-content padding; a literal here would desynchronise the two.
+  expect(shellVars).toContain("--app-shell-header-offset:var(--es-topbar-h)");
+  expect(shellVars).toContain("--app-shell-navbar-offset:var(--es-sidebar-w)");
+  // Guard the regression directly: the retired literals must not reappear.
+  expect(shellVars).not.toMatch(/--app-shell-header-height:\s*(60px|3\.75rem)/);
+  expect(shellVars).not.toMatch(/--app-shell-navbar-width:\s*(256px|16rem)/);
+});

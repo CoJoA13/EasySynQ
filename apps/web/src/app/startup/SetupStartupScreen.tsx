@@ -79,7 +79,7 @@ export function SetupStartupScreen({ status, onRetry, onReload }: SetupStartupSc
         aria-live="polite"
         aria-label={phaseCopy.loading.label}
       >
-        <Loader color="indigo" aria-hidden="true" />
+        <Loader aria-hidden="true" />
         <Text fw={600}>{phaseCopy.loading.status}</Text>
         <Text c="var(--es-text-2)" size="sm" ta="center">
           {phaseCopy.loading.guidance}
@@ -98,7 +98,6 @@ export function SetupStartupScreen({ status, onRetry, onReload }: SetupStartupSc
         <Stack gap="xs">
           <Button
             fullWidth
-            color="indigo"
             loading={retryBusy}
             disabled={retryBusy}
             aria-busy={retryBusy || undefined}

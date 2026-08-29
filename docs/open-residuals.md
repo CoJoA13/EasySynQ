@@ -4,6 +4,26 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
+## RES-ARCHIVO-SYMBOL-GLYPHS
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-1, 2026-08-29
+Reason: The self-hosted Archivo subsets ship Google's standard `latin` and `latin-ext` unicode
+ranges, which contain no glyph for the canonical non-colour status vocabulary in `lib/status.ts`
+(`checkmark`, `quarter-circle`, `cross`, `filled` and `hollow circle`, `star`) nor for the left and
+right arrows, although they do contain the up and down arrows. Those characters therefore render
+from the fallback stack while the surrounding label renders in Archivo. Measured in the browser
+against the built bundle: every affected glyph renders at a normal advance width, so this is a
+typeface inconsistency, not missing or tofu output, and the status vocabulary falls back uniformly
+so the DP-5 non-colour channel stays internally consistent within itself. Widening the declared
+`unicode-range` cannot fix it, because the subset files do not contain the glyphs to begin with.
+Closure contract: Either accept the mixed rendering and record it against DP-5 in doc 11 with the
+measured evidence; or ship a wider Archivo cut built from the upstream variable font, proving the
+added glyph coverage, the resulting file size, and that the air-gap bundle and the `font-src 'self'`
+CSP still hold.
+Last reviewed: 2026-08-29
+
 ## RES-IP-ALLOW-EXACT-MATCH
 
 Status: OPEN

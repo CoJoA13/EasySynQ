@@ -1,5 +1,6 @@
 /* Mantine styles are imported first in main.tsx; Tailwind layers come after so the
    reset does not clobber Mantine component styles (doc 18 §2 ordering caveat). */
+@import "./theme/fonts.css";
 @import "./theme/tokens.css";
 
 @import "tailwindcss";

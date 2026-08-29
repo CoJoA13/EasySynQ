@@ -41,7 +41,7 @@ export function ApplicationErrorScreen({
             </Text>
           </Stack>
           <Stack gap="xs">
-            <Button fullWidth color="indigo" style={{ minHeight: 44 }} onClick={onReload}>
+            <Button fullWidth style={{ minHeight: 44 }} onClick={onReload}>
               Reload EasySynQ
             </Button>
             <Button
