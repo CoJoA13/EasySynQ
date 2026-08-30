@@ -62,25 +62,41 @@ for (const { key, path, width } of SCROLL_CASES) {
     await page.goto(path);
     await expect(page.getByRole("textbox", { name: "Search" })).toBeVisible();
 
-    const s = await page.evaluate(() => {
-      // Scope to the TABLE's own viewport. A register page has several ScrollAreas (the SWOT
-      // board, the party-type board), and grabbing the first one measured a container that never
-      // overflows — which the `overflows` assertion below caught rather than passing vacuously.
-      const table = document.querySelector("table");
-      const port = table?.closest(".mantine-ScrollArea-viewport") as HTMLElement | null;
-      if (!port) throw new Error("no scroll viewport around the table");
-      const root = port.closest(".mantine-ScrollArea-root");
-      const bar = root?.querySelector(".mantine-ScrollArea-scrollbar") as HTMLElement | null;
-      return {
-        overflows: port.scrollWidth > port.clientWidth,
-        // Mantine always sets scrollbar-width:none on the viewport and draws its own bar, so the
-        // native computed style reports "none" whether or not a bar is shown. Measure the element.
-        barShown: bar ? getComputedStyle(bar).display !== "none" : false,
-      };
-    });
+    const read = () =>
+      page.evaluate(() => {
+        // Scope to the TABLE's own viewport. A register page has several ScrollAreas (the SWOT
+        // board, the party-type board), and grabbing the first one measured a container that never
+        // overflows — which the `overflows` assertion below caught rather than passing vacuously.
+        const table = document.querySelector("table");
+        const port = table?.closest(".mantine-ScrollArea-viewport") as HTMLElement | null;
+        if (!port) throw new Error("no scroll viewport around the table");
+        const root = port.closest(".mantine-ScrollArea-root");
+        // Qualify by ORIENTATION: a root holds BOTH bars, and the vertical one is `display: none`
+        // here because nothing overflows vertically, so a bare `.mantine-ScrollArea-scrollbar`
+        // could return the hidden one.
+        const bar = root?.querySelector(
+          '.mantine-ScrollArea-scrollbar[data-orientation="horizontal"]',
+        ) as HTMLElement | null;
+        return {
+          overflows: port.scrollWidth > port.clientWidth,
+          // Mantine always sets scrollbar-width:none on the viewport and draws its own bar, so the
+          // native computed style reports "none" whether or not a bar is shown. Measure the element.
+          barShown: bar ? getComputedStyle(bar).display !== "none" : false,
+        };
+      });
 
-    // The fixture must actually overflow, or the assertion below is vacuous.
-    expect(s.overflows).toBe(true);
-    expect(s.barShown).toBe(true);
+    // The fixture must actually overflow, or the assertion below is vacuous. Layout has settled by
+    // the time the search box is visible, so this one does not need polling.
+    expect((await read()).overflows).toBe(true);
+
+    // ...but the bar DOES. `ScrollAreaScrollbarAuto` holds `useState(false)` and renders nothing
+    // until one of its two ResizeObservers fires and flips it, so at the instant the search box
+    // becomes visible the element may not exist yet — `barShown` reads false on a tree whose
+    // behaviour is correct. A single synchronous snapshot therefore reddens CI at random: it took
+    // out `interested-parties` on one run and `context` on the next, on identical trees that both
+    // passed locally. Poll instead. This stays load-bearing — with the theme's `ScrollArea` entry
+    // removed the type reverts to `hover`, the bar never appears unprompted, and the poll times
+    // out — which was re-verified after this change, not assumed from before it.
+    await expect.poll(async () => (await read()).barShown, { timeout: 5_000 }).toBe(true);
   });
 }

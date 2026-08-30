@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R67) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, and R67 locks the client address a request is attributed to.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R68) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, and R68 locks American-US English as the house spelling standard for user-facing text.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -76,8 +76,9 @@ that a theme default cannot override, so the same decision would be four hand ed
 
 To be exact about what is and is not shipped, because this rationale is forward-looking rather than
 observed: the program's §2.4 "16px card radius" rule **has not landed anywhere**. The theme sets
-`defaultRadius: "md"` (8px) and its `components` block carries only `Modal` and `Drawer` entries —
-there is no `Card` or `Paper` default — and S-ui-3 gave the Home quadrant cards `radius="lg"`
+`defaultRadius: "md"` (8px) and its `components` block carries no `Card` or `Paper` default — it held
+only `Modal` and `Drawer` when this was written, and S-ui-5b and S-ui-5c added `Badge` and
+`ScrollArea`, none of which set a radius — and S-ui-3 gave the Home quadrant cards `radius="lg"`
 (12px). `ScorecardBandShell` therefore keeps `radius="md"`, exactly as the four bands had it, so
 the collapse is a pure structural extraction with no rendered change. The claim above is that the
 band **would** cost four edits and the console zero, whenever §2.4 is settled app-wide; it is not a
@@ -111,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R67
+## Part 3 — Resolutions R1–R68
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2141,6 +2142,65 @@ row, the administrator/IT manual configuration inventory, `.env.example`, and
 [`RES-IP-ALLOW-EXACT-MATCH`](open-residuals.md) for the exact-string-versus-range gap this exposes.
 
 Bumps the resolutions range **R1–R66 → R1–R67**.
+
+---
+
+### R68 — American-US English is the house spelling standard for user-facing text — 2026-08-29
+
+Nothing had decided which English the product speaks, so it spoke both. The audit-schedule surface
+was the case that surfaced it: every identifier was already American — the table `audit_program`, the
+model `AuditProgram`, the route `/audit-programs`, the column `program_id`, the problem code
+`program_archived`, and `ProgramForm.tsx` — while every string a user actually read said
+"programme", including two `ProblemException` titles. The SPA carried both spellings in the same
+directory.
+
+**Normative rules.**
+
+1. American-US spelling is the standard for **user-facing product text**: SPA copy, accessible
+   names, API `ProblemException` titles and detail messages, OpenAPI summaries and descriptions, and
+   the user and administrator manuals. It reaches the current-authority documents only for **product
+   terminology** — an audit *program*, never an audit *programme* — and does not reharmonise their
+   contributor prose, which keeps the register of its neighbours. This entry is itself the example:
+   it says "program" throughout and "behaviour" where the surrounding documents do.
+2. It does **not** reach an identifier of any kind, and identifiers are never renamed to satisfy it:
+   no table, column, enum member, permission key, problem `code`, `operationId`, route path on the
+   API side, or Python/TypeScript symbol. `"Cancelled"` is the standing example — it reads as
+   British but is an enum value crossing the API and database boundary, and is untouched.
+3. It is a knowing divergence from ISO's own English where the two disagree. The official English
+   text of ISO 9001:2015 §9.2.2 and of ISO 19011 says "audit programme"; US-published editions say
+   "audit program". The product uses the American form and this entry is the record of that choice,
+   so a later reader does not correct it back as a typo.
+4. Historical evidence is **not** swept. `slice-history.md`, dated reviews, and superseded plans and
+   specs keep the spelling they shipped with; rewriting them would falsify dated evidence. Only
+   current-authority documents are corrected.
+5. A repository-wide replace must not touch a dated figure. S-ui-5a's sweep rewrote the contract
+   hash inside `current-status.md`'s **S-ui-4** evidence paragraph, attributing to tree `2626ba9` a
+   hash that first existed in the sweep's own commit; the restored figure is `e66fa80c…`. After any
+   such sweep, diff the authority documents separately and confirm every figure still belongs to the
+   tree its paragraph names.
+6. The rule applies going forward without asking. Text that predates it is corrected
+   opportunistically when its file is next edited, not in a dedicated sweep — `colour`, `grey` and
+   `labelled` survive in comments and test names, where no user reads them.
+
+**Compatibility.** No migration, no schema change, no permission key, and no contract-breaking
+change: the sweep renamed no field and no enum. It did regenerate the OpenAPI document, because
+descriptions are part of it — contract lock `e66fa80c…` → `041da029…`. The one identifier-shaped
+change is the SPA's own route, `/audits/programme` → `/audits/program`, which now agrees with the
+API's. The old path has no redirect, and what it does instead is worse than a 404: the sibling
+`<Route path="audits/:id">` catches it with `id="programme"`, so a stale bookmark renders
+`AuditDetailPage`, issues `GET /api/v1/audits/programme` and lands in that page's `ErrorState` — the
+reader is told the audit failed to load, not that the page moved. The application's own not-found
+branch is never reached.
+
+**Known incomplete.** The ingestion rule pack still keys two matchers on the British spelling as a
+case-insensitive substring needle, so a document titled per this standard does not fire them — a
+classification consequence, not a cosmetic one. Tracked as
+[`RES-RULEPACK-BRITISH-KEYWORDS`](open-residuals.md).
+
+**Back-propagation:** `AGENTS.md` and the contributor guidance that governs new user-facing copy,
+the user and administrator manuals, and any future slice adding SPA or API strings.
+
+Bumps the resolutions range **R1–R67 → R1–R68**.
 
 ---
 

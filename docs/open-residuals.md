@@ -4,6 +4,131 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
+## RES-DOC-SURFACE-LABEL
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-5a, 2026-08-29 (owner wording decision taken at the S-ui-5 close)
+Reason: The controlled-document report surface is named four different things. `LeftRail.tsx:124`
+says "Controlled register", `Breadcrumb.tsx:19` says "Controlled document register",
+`ReportsRegisterPage.tsx:200` titles the page "Controlled Document Register", and
+`docs/manuals/user-manual.md` still says "Document register" at lines 45 and 242. S-ui-5a changed the
+rail entry and the `effectiveView.ts` title map, and its commit message states that the breadcrumb
+moved with them; the diff shows `Breadcrumb.tsx` changed only its `audits` child segment
+(`programme` → `program`), so the document-control entry was never touched. The manual is the one
+that is actually wrong rather than merely inconsistent: line 242 reads "Use **Document register** for
+the controlled-document report", naming a rail entry that no longer exists under that name, so a
+reader following the manual cannot find the control it describes. The owner reviewed the three
+candidate wordings and chose **"Master document list"**, on the grounds that a QMS and audit audience
+recognises the ISO 7.5.3 artefact faster under that name than under either current form.
+Closure contract: Rename all four sites to "Master document list" (title case only where the page
+heading requires it), update every suite that pins one of the old accessible names — including the
+`effectiveView` document-title assertion in `ReportsRegisterPage.test.tsx` — and correct both
+user-manual lines. Adding the source-text pin required by `RES-REGISTER-LABEL-NO-PIN` in the same
+change is the cheapest moment to do it.
+Last reviewed: 2026-08-29
+
+## RES-REGISTER-LABEL-NO-PIN
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-5a, 2026-08-29
+Reason: The shell's navigation labels have no source-text contract, so a page reverting to an earlier
+label is invisible to every suite. This is the failure mode S-ui-4 already met and closed for a
+different cohort: the shared register header preserves the accessible name the hand-rolled title
+rendered, so any of eleven pages could have reverted with all tests green, and
+`src/lib/registerHeaderAdoption.test.ts` was written precisely to make that visible. The rail label,
+the breadcrumb `LABELS` map and the `effectiveView.ts` title map are in the same position now — three
+files that must agree on one string, with only `ReportsRegisterPage.test.tsx`'s document-title
+assertion incidentally covering one of them, and nothing at all tying the three together. S-ui-5a's
+own divergence is the proof: the breadcrumb silently disagreed with the rail for a whole slice.
+Closure contract: Add a source-text contract in the idiom of
+`src/lib/registerHeaderAdoption.test.ts` and `src/lib/responsiveRegisterContract.test.ts` —
+`import.meta.glob(..., { eager: true, query: "?raw" })` over `LeftRail.tsx`, `Breadcrumb.tsx` and
+`effectiveView.ts` — asserting that the three carry the same label for each shell destination, and
+prove it by reverting one of them and watching the test redden.
+Last reviewed: 2026-08-29
+
+## RES-RISK-MATRIX-LEGEND
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-5c, 2026-08-29 (owner-approved at the S-ui-5 close; approved but not yet shipped)
+Reason: The risk matrix's legend overflows the matrix it belongs to. `RiskMatrix.tsx` caps the SVG at
+`maxWidth: VIEW_W` (306px, `M.left + GRID + M.right`) but its enclosing `<Stack>` sets no maximum, so
+the band-tone legend beneath the grid stretches to the full container width and no longer reads as
+the grid's key. The fix is one property — `style={{ maxWidth: VIEW_W }}` on that `Stack` — and it was
+written and confirmed to work.
+
+It was held back on the belief that it visibly reflows a page the owner had already reviewed, and the
+owner accepted that trade. **Measurement has since shown the concern was backwards and the reflow does
+not happen.** The matrix and the scorecard band sit in one `Group` with `wrap="wrap"`, so the matrix
+column's width decides when the band wraps beneath it. Uncapped, that column takes the legend's
+max-content — measured 396 pixels, 90 wider than the 306-pixel grid it keys — and the band drops below
+it at 1230 pixels and narrower. Capped, the column is 306 and the band stays beside it down to 1140.
+The fix therefore makes the band wrap **less** often, by 90 pixels, and there is no width at which it
+moves the band from beside the matrix to below it. The only positional change is at widths where the
+band already sits below, where the narrower legend takes one more line and the band starts about 26
+pixels lower.
+Closure contract: Apply the `maxWidth` cap and prove it in a real browser, because jsdom resolves no
+layout: assert the legend's rendered width no longer exceeds the grid's at a width where it currently
+does, and pin the band's wrap breakpoint so a later change cannot move it silently. `/risks` is already one of the ten cases in
+`apps/web/e2e/support/registers.ts`, so no harness work is needed.
+Last reviewed: 2026-08-29
+
+## RES-IP-REGISTER-COLUMN-JUMP
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-5c, 2026-08-29 (owner-deferred at the S-ui-5 walkthrough close)
+Reason: The interested-parties register's columns change width when the filter selection changes, so
+rows appear to shift sideways between two views of the same data. The cause is
+`table-layout: auto` sizing each enum column to the widest value currently rendered: filtering to a
+subset removes the widest `Category`, `Influence`, `Interest` or `Status` value, the column shrinks,
+and every column after it moves. The known fix is `layout="fixed"` on the register's `Table` with
+pinned pixel widths on those four columns. The adversarial reviewer called pinned widths fragile —
+they rot the moment a label changes or a new enum value is added — and required that the widths be
+harvested LAST, because S-ui-5c's `white-space: nowrap` on `SortableTh` changed the header
+min-content of every register and any width measured before it is stale. The owner reviewed this
+against the other two walkthrough items and deferred it as the lowest-value of the three.
+Closure contract: Either harvest the post-S-ui-5c column widths in a real browser, pin them under
+`layout="fixed"`, and add a Playwright case to `apps/web/e2e/register-table-legibility.spec.ts` that
+measures one column's left edge in two filter states and fails when it moves; or establish that a
+min-width floor per enum column is stable enough without pinning exact widths, and prove that
+instead. jsdom cannot see either, so a Vitest assertion is not acceptable evidence. If neither is
+worth the fragility, record that the columns stay fluid and remove this record.
+Last reviewed: 2026-08-29
+
+## RES-RULEPACK-BRITISH-KEYWORDS
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-5a, 2026-08-29
+Reason: S-ui-5a adopted American-US spelling as the house standard for user-facing text and swept the
+SPA, the API's user-visible strings and the current-authority documents, but did not reach
+`apps/api/src/easysynq_api/domain/ingestion/rule_packs/iso9001_rule_pack_v1.yaml`, which still carries
+the British form in two places with different consequences. The `explanation` string "Header reads
+like an audit programme/plan" is user-visible — `apps/web/src/features/ingestion/ItemDetailDrawer.tsx`
+renders each fired matcher's explanation beside its weight — so the old spelling still reaches a
+reader on the ingestion surface. More consequentially, two matchers key on `"audit programme"` as a
+case-insensitive substring NEEDLE (`rule_classifier.py`, `any(kw in low for kw in m.keywords)`), so a
+document titled per the newly adopted standard — "Audit Program 2026" — does not fire them at all: it
+loses the weight-30 header signal on the audit-schedule rule and the weight-55 signal on the Clause
+9.2 rule, and may land in a lower confidence band than the identical British-spelled document. The
+house-standard change therefore has a classification consequence, not only a spelling one. It was not
+fixed inside S-ui-5a because editing a versioned, weight-calibrated resource is out of scope for a
+spelling slice: even a change that looks additive has to be shown not to disturb the calibration
+before it ships, which is what the versioned-rule-pack design exists to force.
+Closure contract: Replace the needle `"audit programme"` with `"audit program"` in both matchers, and
+correct the `explanation` string to the house standard. Replacement rather than addition is correct
+and is the cheaper proof: the US form is a strict prefix of the British one, so the shorter needle
+matches BOTH spellings, so nothing that fires today stops firing. Replacement also sidesteps the
+double-count question that ADDING a second needle would raise: with one needle there is nothing to
+double-count, and the change is monotone — it can only add matches, never remove one. Re-run the calibration test that reproduces the doc 09 §6.5 worked examples, confirm
+the published accuracy band is unchanged, and add a case asserting that a header reading
+"Audit Program" and one reading "Audit Programme" score identically.
+Last reviewed: 2026-08-29
+
 ## RES-CAPA-BOARD-NO-BROWSER-COVERAGE
 
 Status: OPEN
