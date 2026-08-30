@@ -166,13 +166,12 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; this slice does
 not rewrite that implementation-evidence field merely because its branch SHA differs.
 
-Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above describes the **S-ui-5d
-branch**, not `main`: its web figures (277 files, 2,253 tests) include that slice's two new suites and
-are ahead of `main` until it merges. Everything else in the frontmatter is unchanged by S-ui-5d. The
-S-ui-5c, S-ui-4 and 2026-08-17 paragraphs below are retained as the evidence for their own trees and are
-not restated as current.
+Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above describes `main` after
+S-ui-5d, whose web figures (277 files, 2,253 tests) include that slice's two new suites; everything else
+in the frontmatter is unchanged by it. The S-ui-5c, S-ui-4 and 2026-08-17 paragraphs below are retained
+as the evidence for their own trees and are not restated as current.
 
-Measured locally on the S-ui-5d branch. API unit passed **1,996 tests with the same 2 expected skips**
+Measured locally on the merged S-ui-5d tree `bdd8f2f`. API unit passed **1,996 tests with the same 2 expected skips**
 in 35.41 seconds; Ruff lint and format-check were clean over 769 files and mypy found no issue in 449
 source files. Web Vitest passed **277 files and 2,253 tests** in 428.77 seconds — up two tests and one
 file, the new `src/lib/shellLabelContract.test.ts`. The full `npm run test:browser` script passed **69

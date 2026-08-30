@@ -440,7 +440,7 @@ as designed.
 
 ### S-ui-5d — one name for the master document list, and the legend inside its grid
 
-Recorded 2026-08-29. Closes `RES-DOC-SURFACE-LABEL`, `RES-REGISTER-LABEL-NO-PIN` and
+Recorded 2026-08-29 after merging `#515` as `bdd8f2f`. Closes `RES-DOC-SURFACE-LABEL`, `RES-REGISTER-LABEL-NO-PIN` and
 `RES-RISK-MATRIX-LEGEND`, all three opened hours earlier by the S-ui-5 record above — which is the
 ledger working as intended rather than churn: the record named the work, the owner chose between the
 options it laid out, and the fix closed it with linked evidence. No migration and no permission key;
