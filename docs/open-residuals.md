@@ -73,9 +73,22 @@ gap sits between the "Open CAPAs" and "By source" cards. A one-line fix for the 
 gate, and then REVERTED rather than shipped unmeasured — the CAPA board is a size-and-position
 change and jsdom resolves no layout, which is exactly the blind spot that let three earlier S-ui
 slices ship a visible defect behind a fully green suite.
-Closure contract: Add a `capa` case to `apps/web/e2e/support/registers.ts` and the matching
-`/api/v1/capas` fixture route to `apps/web/e2e/support/api.ts`, then fix the filter-row alignment and
-the inter-card gap with a Playwright assertion that fails against the current code and passes after.
+⚠ The obvious closure — adding a `capa` entry to `REGISTER_CASES` — does NOT work, and was checked
+rather than assumed. `RegisterCase` is table-shaped (`floor`, `headers`, `finalHeader`), and the
+generic specs consume those: `register-geometry.spec.ts` asserts `containerScrollWidth` and
+`tableWidth` are at least the case's `floor`. `CapaBoardPage` renders a kanban `ScrollArea` of six
+260-pixel columns AND a `<Table>` beneath it, but that table has **no** `Table.ScrollContainer` — the
+file is not among the nine in `responsiveRegisterContract.test.ts` — so those assertions would measure
+something that is not there. Joining the shared cohort would either fail or need conditionals that
+weaken it for the ten registers that do fit.
+Closure contract: Add a `/api/v1/capas` fixture route to `apps/web/e2e/support/api.ts` — hoisted into
+the always-fulfilled block if the shell requests it, since that file's tail is a fail-closed `throw` —
+and give `/capa` its OWN spec rather than a `REGISTER_CASES` entry, in the idiom of
+`e2e/risk-matrix-legend.spec.ts`. Then fix the filter-row alignment and the inter-card gap with
+assertions that fail against the current code and pass after. Two changes S-ui-5b and S-ui-5c already
+made to this uncovered route should be pinned by the same spec while it is being written: the
+`RegisterFilterBar` bottom margin, and the theme's `ScrollArea type: "auto"`, which gives the board's
+always-overflowing kanban a permanently visible horizontal scrollbar.
 Last reviewed: 2026-08-29
 
 ## RES-REGISTER-HEADING-LEVELS

@@ -166,13 +166,13 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; this slice does
 not rewrite that implementation-evidence field merely because its branch SHA differs.
 
-Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above describes the **S-ui-5d
-branch**, not `main`: its web figures (277 files, 2,253 tests) include that slice's two new suites and
-are ahead of `main` until it merges. Everything else in the frontmatter is unchanged by S-ui-5d. The
-S-ui-5c, S-ui-4 and 2026-08-17 paragraphs below are retained as the evidence for their own trees and are
-not restated as current.
+Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above describes `main` after
+S-ui-5d, whose web figures (277 files, 2,253 tests) include that slice's one new unit suite —
+its other new suite, `e2e/risk-matrix-legend.spec.ts`, is Playwright and lands in the 69-case browser
+figure instead; everything else in the frontmatter is unchanged by it. The S-ui-5c, S-ui-4 and 2026-08-17 paragraphs below are retained
+as the evidence for their own trees and are not restated as current.
 
-Measured locally on the S-ui-5d branch. API unit passed **1,996 tests with the same 2 expected skips**
+Measured locally on the merged S-ui-5d tree `bdd8f2f`. API unit passed **1,996 tests with the same 2 expected skips**
 in 35.41 seconds; Ruff lint and format-check were clean over 769 files and mypy found no issue in 449
 source files. Web Vitest passed **277 files and 2,253 tests** in 428.77 seconds — up two tests and one
 file, the new `src/lib/shellLabelContract.test.ts`. The full `npm run test:browser` script passed **69
@@ -194,7 +194,8 @@ The integration and published response-contract suites were NOT run locally for 
 frontmatter's 1,224 integration and 284 contract figures are still carried from the S-ui-4 CI run. That
 carry is weaker here than it was for S-ui-5b and S-ui-5c, which were front-end-only: S-ui-5d changes an
 API response value and the OpenAPI document, so those suites are exactly the ones with something new to
-say about it. Its pull-request CI exercises them; no local run was performed. Firefox, WebKit,
+say about it. Its pull-request CI run `33289631692` exercised them, passing all fifteen executing
+pull-request checks with `release-gate` skipped as designed; no local run was performed. Firefox, WebKit,
 assistive-technology sessions, SMTP delivery, deployment, live acceptance and the disposable Fedora
 proof did not run and are not described as passed.
 
@@ -236,8 +237,9 @@ objectives' "Current / target" wrap and both scroll cases — and showing it too
 Restoring the pre-fix `RegisterToolbar.tsx` and re-running the full `test:browser` script reddened
 exactly one wrap case; removing the theme's `ScrollArea` entry reddened both scroll cases, each having
 asserted its `overflows` precondition first. Context's "Last reviewed" and risks' "Risk / opportunity"
-each measured a single line box before the fix too, so they are belt-and-braces rather than evidence. Second, the Controlled register — the surface
-whose silent horizontal scrolling prompted the `ScrollArea` change — is reachable by no Playwright
+each measured a single line box before the fix too, so they are belt-and-braces rather than evidence. Second, the master document list — the surface
+whose silent horizontal scrolling prompted the `ScrollArea` change, and which S-ui-5d has since
+renamed from "Controlled register" — is reachable by no Playwright
 scenario at all, because `reports` is not among the ten register cases in `e2e/support/registers.ts`; its
 fix is inferred from the shared theme default, not measured. Third, that theme default also reaches two
 bare `ScrollArea` consumers no test covers and no commit message mentions: the navigation rail
