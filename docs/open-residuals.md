@@ -58,14 +58,21 @@ Reason: The risk matrix's legend overflows the matrix it belongs to. `RiskMatrix
 `maxWidth: VIEW_W` (306px, `M.left + GRID + M.right`) but its enclosing `<Stack>` sets no maximum, so
 the band-tone legend beneath the grid stretches to the full container width and no longer reads as
 the grid's key. The fix is one property — `style={{ maxWidth: VIEW_W }}` on that `Stack` — and it was
-written and confirmed to work. It was not shipped in S-ui-5c because it visibly reflows a page the
-owner had already reviewed: above roughly 1295 pixels the `/risks` scorecard band currently sits
-beside the matrix, and constraining the matrix column makes the band wrap below it instead. The owner
-reviewed that trade and accepted the reflow.
-Closure contract: Apply the `maxWidth` cap, and prove both halves in a real browser, because jsdom
-resolves no layout: assert the legend's width no longer exceeds the grid's at a width where it
-currently does, and record the `/risks` band position above and below the ~1295px breakpoint so the
-accepted reflow is measured rather than assumed. `/risks` is already one of the ten cases in
+written and confirmed to work.
+
+It was held back on the belief that it visibly reflows a page the owner had already reviewed, and the
+owner accepted that trade. **Measurement has since shown the concern was backwards and the reflow does
+not happen.** The matrix and the scorecard band sit in one `Group` with `wrap="wrap"`, so the matrix
+column's width decides when the band wraps beneath it. Uncapped, that column takes the legend's
+max-content — measured 396 pixels, 90 wider than the 306-pixel grid it keys — and the band drops below
+it at 1230 pixels and narrower. Capped, the column is 306 and the band stays beside it down to 1140.
+The fix therefore makes the band wrap **less** often, by 90 pixels, and there is no width at which it
+moves the band from beside the matrix to below it. The only positional change is at widths where the
+band already sits below, where the narrower legend takes one more line and the band starts about 26
+pixels lower.
+Closure contract: Apply the `maxWidth` cap and prove it in a real browser, because jsdom resolves no
+layout: assert the legend's rendered width no longer exceeds the grid's at a width where it currently
+does, and pin the band's wrap breakpoint so a later change cannot move it silently. `/risks` is already one of the ten cases in
 `apps/web/e2e/support/registers.ts`, so no harness work is needed.
 Last reviewed: 2026-08-29
 

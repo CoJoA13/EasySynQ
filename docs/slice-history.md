@@ -356,25 +356,29 @@ three slices meant re-running their suites, and `web browser (Chromium)` reddene
 `33285801424` while the identical tree passed 67 of 67 locally. The failing case was S-ui-5c's
 `interested-parties shows a scrollbar when its table overflows at 1115px`, and its shape was
 diagnostic: the `overflows` precondition passed and only `barShown` failed, so the table did overflow
-and the assertion was not vacuous. The cause is not timing. A Mantine `ScrollArea` root holds **both**
-scrollbars — measured on that page, horizontal at `data-state="visible"` and `display: flex`,
-vertical at `data-state="hidden"` and `display: none`, with the port 880 pixels wide inside 807 and no
-vertical overflow at all — and each `ScrollAreaScrollbarAuto` mounts independently from its own
-`ResizeObserver`, so their document order is not guaranteed. The spec asked for
-`.mantine-ScrollArea-scrollbar` unqualified, so `querySelector` returns whichever mounted first; when
-that is the hidden vertical bar it reports `barShown: false` beside a horizontal bar that is right
-there and shown.
+and the assertion was not vacuous.
+
+The first diagnosis was **wrong**, and how it was caught is the useful part. A `ScrollArea` root does
+hold both bars — measured on that page, horizontal at `data-state="visible"` and `display: flex`,
+vertical at `data-state="hidden"` and `display: none`, the port 880 pixels inside 807 with no vertical
+overflow at all — so an unqualified `.mantine-ScrollArea-scrollbar` really can return the hidden
+vertical one. That was fixed by qualifying `[data-orientation="horizontal"]`, and CI reddened **again**
+— on `context` this time rather than `interested-parties`. A failure that moves between runs on
+identical trees is a race, not a wrong selector, and the moved case is what said so.
+
+The real cause is that `ScrollAreaScrollbarAuto` holds `useState(false)` and renders nothing until one
+of its two `ResizeObserver`s fires and flips it. At the instant the search box becomes visible the bar
+element may not exist yet, so a single synchronous snapshot reads `barShown: false` on a tree whose
+behaviour is correct. The assertion is now polled; the orientation qualifier is kept, because the
+ambiguity it removes is real even though it was not the cause. The earlier CPU-throttle experiment is
+why this took two rounds — a 20× throttle slows the observer and the `waitFor` equally, so it cannot
+reproduce a race between them, and reading it as evidence against the race hypothesis was the mistake.
 
 That is a **false FAILURE** — the mirror image of the false PASS this repository normally hunts, and
-worth naming as its own category, because it reddens a correct tree and the reflex is to re-run the
-job until it goes green. It is also the same wrong-element family the spec's own header already
-records catching once, in the comment explaining that grabbing the first `ScrollArea` on the page
-measured a container that never overflows; the file caught one and shipped another. The selector is
-now qualified `[data-orientation="horizontal"]`. Removing the theme's `ScrollArea` entry still reddens
-both scroll cases, so the fix did not turn them into tautologies. Three hypotheses were tested and
-discarded before this one — a mount race, CPU-speed sensitivity, and font-driven row-height
-differences — the second by reproducing under a 20× CPU throttle, where the bar was present on the
-first synchronous read every time.
+worth naming as its own category, because it reddens a correct tree and the reflex it invites is to
+re-run the job until it goes green. Removing the theme's `ScrollArea` entry still reddens both scroll
+cases under the polling form — re-verified after the change rather than carried over from before it,
+because a poll that merely times out would have become a tautology.
 
 **A correction to the S-ui-4 record, made here rather than silently.** S-ui-5a's authority-document
 spelling sweep also replaced the contract hash *inside* the S-ui-4 evidence paragraph of
@@ -399,10 +403,13 @@ pull-request body. It is now `R68`.
 unfixed by these slices and were put to the owner at their close on 2026-08-29. The CAPA board's
 filter-row alignment and inter-card gap stay blocked on that board having no browser coverage at all
 (`RES-CAPA-BOARD-NO-BROWSER-COVERAGE`); adding a `capa` case to the harness is the unlock, and no
-decision was needed. The risk-matrix legend overflows its 306-pixel matrix, and the fix — a
-`maxWidth` cap on the matrix `Stack` — works but visibly reflows `/risks`, because the scorecard band
-currently sits beside the matrix above roughly 1295 pixels and would begin wrapping below it; the
-owner accepted that reflow and the fix is queued rather than shipped here. The interested-parties
+decision was needed. The risk-matrix legend overflows its 306-pixel matrix — measured 396
+pixels wide, 90 more than the grid it keys — and the fix is a `maxWidth` cap on the matrix `Stack`. It
+was held back on the belief that it reflows `/risks`, and the owner accepted that trade; measuring it
+afterwards showed the belief was **backwards**. The band wraps below the matrix at 1230 pixels and
+narrower today, and at 1140 and narrower once capped, so the fix makes the band wrap *less* often by
+90 pixels and moves no band from beside the matrix to below it. It is queued rather than shipped here,
+now on a corrected premise (`RES-RISK-MATRIX-LEGEND`). The interested-parties
 register's enum columns change width between filter states; `layout="fixed"` with pinned pixel widths
 would fix it, but the widths must be harvested after S-ui-5c's nowrap headers changed every
 register's header min-content, and the reviewer called pinned widths fragile — the owner deferred it

@@ -66,8 +66,10 @@ things, and the user manual's version is a wrong navigation instruction; the own
 document list"** for all four),
 [`RES-REGISTER-LABEL-NO-PIN`](open-residuals.md) (those labels have no source-text contract, which is
 how the breadcrumb silently disagreed with the rail for a whole slice),
-[`RES-RISK-MATRIX-LEGEND`](open-residuals.md) (fix written and owner-approved together with the `/risks`
-reflow it causes above roughly 1295 pixels, not yet shipped),
+[`RES-RISK-MATRIX-LEGEND`](open-residuals.md) (fix written and owner-approved; the `/risks` reflow it
+was thought to cause was measured afterwards and does not happen — capping the matrix makes the
+scorecard band wrap below it 90 pixels *later*, at 1140 rather than 1230 — so it stands on a corrected
+premise and is not yet shipped),
 [`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred),
 [`RES-RULEPACK-BRITISH-KEYWORDS`](open-residuals.md) (the sweep missed the ingestion rule pack, where
 the consequence is classification rather than cosmetic), and the pre-existing
@@ -178,13 +180,13 @@ because S-ui-5a renamed `ProgrammePage.test.tsx` to `ProgramPage.test.tsx` witho
 assertion count and the other two slices added browser specs rather than unit ones. The full
 `npm run test:browser` script, build included, passed **67 of 67 Chromium tests** in 1.3 minutes with one
 worker and zero retries — but only after fixing a defect in one of the specs being recorded. S-ui-5c's
-`interested-parties` scroll case reddened `web browser (Chromium)` on CI run `33285801424` while the
-identical tree passed locally: a `ScrollArea` root holds both a visible horizontal bar and a hidden
-vertical one, each mounting from its own `ResizeObserver`, and the spec's unqualified
-`.mantine-ScrollArea-scrollbar` sometimes returned the hidden one. That is a **false failure**, the
-mirror of the false pass this repository normally guards against. The selector is now qualified by
-orientation, and removing the theme's `ScrollArea` entry still reddens both scroll cases. Playwright is
-up from 52: S-ui-5a added none, S-ui-5b's `e2e/register-rhythm.spec.ts` added
+scroll cases reddened `web browser (Chromium)` twice on trees that passed locally, and the failing case
+moved between runs, which is what identified it as a race rather than the wrong selector first
+suspected: `ScrollAreaScrollbarAuto` renders nothing until one of its `ResizeObserver`s fires, so a
+single synchronous snapshot can read `barShown: false` while the behaviour is correct. The assertion is
+now polled, and the mutation was re-verified against the polling form because a poll that merely times
+out would be a tautology. That is a **false failure**, the mirror of the false pass this repository
+normally guards against. Playwright is up from 52: S-ui-5a added none, S-ui-5b's `e2e/register-rhythm.spec.ts` added
 ten and S-ui-5c's `e2e/register-table-legibility.spec.ts` added five, across nine spec files once
 `playwright.config.ts`'s `testIgnore` excludes the two harness probes. `uv run alembic heads` reported
 `0091_documents_list_index (head)`, making `0092` next; none of the three slices added a migration.
