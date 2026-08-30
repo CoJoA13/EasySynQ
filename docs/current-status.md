@@ -2,7 +2,7 @@
 easysynq_status_schema: 1
 as_of: "2026-08-29"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-ui-4"
+last_shipped_slice: "S-ui-5c"
 migration_head: "0091"
 next_migration: "0092"
 api_unit_tests: 1996
@@ -29,11 +29,14 @@ main document, workflow, compliance, reporting, audit, ingestion, drift, objecti
 DCR, improvement, risk, context, interested-party, identity-provisioning, first-run setup, and read-only
 Records surfaces. Retention Policy and Evidence Pack management remain without dedicated SPA routes.
 
-The latest completed work is the S-ui interface program, slices S-ui-1 to S-ui-4. Routes, information architecture, the API, and every permission
-and gating behaviour are unchanged. It is otherwise a surface and layout rework, with one behavioural
-exception: S-ui-2 also corrected cache invalidation for the caller's own task list, which was previously
-refreshed only by the change-request, improvement and leadership decision branches, so a document
-approval, a periodic-review completion, every CAPA decision and both acknowledgement paths left it stale.
+The latest completed work is the S-ui interface program, slices S-ui-1 to S-ui-5c. Routes and information
+architecture are unchanged, as is every permission and gating behaviour, and no migration or permission key
+was added. It is otherwise a surface and layout rework, with two exceptions that are not cosmetic. S-ui-2
+corrected cache invalidation for the caller's own task list, which was previously refreshed only by the
+change-request, improvement and leadership decision branches, so a document approval, a periodic-review
+completion, every CAPA decision and both acknowledgement paths left it stale. And S-ui-5a is the one slice
+in the program that is not front-end-only: it changes API `ProblemException` titles, OpenAPI descriptions
+and the contract lock.
 
 S-ui-4 shared the register page header across eleven register routes and the scorecard band shell across
 four, and answered the accepted-duplication question the decisions register had parked. That entry's
@@ -42,6 +45,34 @@ modal are far closer to identical than recorded, with no structural divergence, 
 was to collapse the scorecard band only and leave the panel and modal accepted. A shared four-branch page
 frame, the Library and Records registers, and register heading-level normalisation were all deliberately
 left out; the first and last are tracked in [`open-residuals.md`](open-residuals.md).
+
+S-ui-5a, S-ui-5b and S-ui-5c are corrections found by the owner walking through the running
+application, not by a gate. S-ui-5a adopted American-US spelling as the house standard for user-facing
+product text; the rule, its exact scope, and the reasons it knowingly diverges from ISO's own English
+are **R68** in [`decisions-register.md`](decisions-register.md), which is where that standard first
+acquired an authority home — until this pass it existed only in a pull-request body. It renamed no
+field, enum or key, but it did change two user-visible API strings and the OpenAPI descriptions, so the
+contract lock moved `e66fa80c…` → `041da029…`. S-ui-5b set a 16-pixel gap at each seam after the page
+header, where every seam had measured zero, and stopped Mantine truncating status badge labels in
+squeezed cells; `e2e/register-rhythm.spec.ts` bounds each gap to 8-24 pixels rather than pinning 16, so
+what is proven is separation without double-spacing, not the exact rhythm. S-ui-5c fixed two distinct
+mechanisms the owner had reported as one: sortable column headers wrapping, fixed with `nowrap` on the
+shared `SortableTh`, and table overflow being invisible, fixed by defaulting `ScrollArea` to
+`type: "auto"`.
+
+Everything these three slices deliberately left unfixed now has a ledger record:
+[`RES-DOC-SURFACE-LABEL`](open-residuals.md) (the controlled-document surface is named four different
+things, and the user manual's version is a wrong navigation instruction; the owner chose **"Master
+document list"** for all four),
+[`RES-REGISTER-LABEL-NO-PIN`](open-residuals.md) (those labels have no source-text contract, which is
+how the breadcrumb silently disagreed with the rail for a whole slice),
+[`RES-RISK-MATRIX-LEGEND`](open-residuals.md) (fix written and owner-approved together with the `/risks`
+reflow it causes above roughly 1295 pixels, not yet shipped),
+[`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred),
+[`RES-RULEPACK-BRITISH-KEYWORDS`](open-residuals.md) (the sweep missed the ingestion rule pack, where
+the consequence is classification rather than cosmetic), and the pre-existing
+[`RES-CAPA-BOARD-NO-BROWSER-COVERAGE`](open-residuals.md). The owner's rail-foot idea — a colour-scheme
+toggle, perhaps a clock — is a feature request rather than a defect and is deliberately not tracked.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
@@ -134,9 +165,51 @@ compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d4465941
 not rewrite that implementation-evidence field merely because its branch SHA differs.
 
 Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above now describes the tree at
-`main` after S-ui-4, which also carries the slices that shipped between 2026-08-17 and this date; the
-2026-08-17 paragraphs below are retained as the evidence for their own tree and are not restated as
-current.
+`main` after S-ui-5c, which also carries the slices that shipped between 2026-08-17 and this date; the
+S-ui-4 and 2026-08-17 paragraphs below are retained as the evidence for their own trees and are not
+restated as current.
+
+Measured locally on the merged S-ui-5c tree `6f0e0fd`. API unit passed **1,996 tests with the same 2
+expected skips** in 32.86 seconds, the release-ceremony image-digest and image-build opt-ins; S-ui-5a
+edited API docstrings, comments and two `ProblemException` titles, and no **API** unit test asserts
+those strings. One web unit test does, `ProgramPage.test.tsx:249`, but against its own MSW fixture, so
+it pins nothing about the API. Web Vitest passed **276 files and 2,251 tests** with exit code 0 in 353.26 seconds — unchanged,
+because S-ui-5a renamed `ProgrammePage.test.tsx` to `ProgramPage.test.tsx` without changing its
+assertion count and the other two slices added browser specs rather than unit ones. The full
+`npm run test:browser` script, build included, passed **67 of 67 Chromium tests** in 1.3 minutes with one
+worker and zero retries, up from 52: S-ui-5a added none, S-ui-5b's `e2e/register-rhythm.spec.ts` added
+ten and S-ui-5c's `e2e/register-table-legibility.spec.ts` added five, across nine spec files once
+`playwright.config.ts`'s `testIgnore` excludes the two harness probes. `uv run alembic heads` reported
+`0091_documents_list_index (head)`, making `0092` next; none of the three slices added a migration.
+Contract checking is in sync on this tree at SHA-256
+`041da0299dde316f1a6c2ca8acb1106171960ea44e52c19b8b88afd3bf5f7958`, regenerated by
+`scripts/gen-contracts.sh` in S-ui-5a and superseding the S-ui-4 hash `e66fa80c…`. Each of the three
+pull requests passed all fifteen executing pull-request checks with `release-gate` skipped as designed.
+
+The integration and published response-contract suites were NOT run locally for these three slices; the
+frontmatter's 1,224 integration and 284 contract figures are carried from the S-ui-4 CI run, which is
+sound for S-ui-5b and S-ui-5c because they are front-end-only, but is NOT fresh evidence for S-ui-5a,
+which changed API strings and the OpenAPI document. S-ui-5a's own pull-request CI exercised those
+suites; no local re-run was performed here. Firefox, WebKit, assistive-technology sessions, SMTP
+delivery, deployment, live acceptance and the disposable Fedora proof did not run and are not described
+as passed.
+
+Three coverage limits of the new browser specs are worth stating, because a count of 67 reads as broader
+than it is. First, of `register-table-legibility.spec.ts`'s five cases only three are load-bearing —
+objectives' "Current / target" wrap and both scroll cases — and showing it took two mutations, not one.
+Restoring the pre-fix `RegisterToolbar.tsx` and re-running the full `test:browser` script reddened
+exactly one wrap case; removing the theme's `ScrollArea` entry reddened both scroll cases, each having
+asserted its `overflows` precondition first. Context's "Last reviewed" and risks' "Risk / opportunity"
+each measured a single line box before the fix too, so they are belt-and-braces rather than evidence. Second, the Controlled register — the surface
+whose silent horizontal scrolling prompted the `ScrollArea` change — is reachable by no Playwright
+scenario at all, because `reports` is not among the ten register cases in `e2e/support/registers.ts`; its
+fix is inferred from the shared theme default, not measured. Third, that theme default also reaches two
+bare `ScrollArea` consumers no test covers and no commit message mentions: the navigation rail
+(`AppShell.tsx:67`), which now shows a persistent bar on a short viewport, and the CAPA board
+(`CapaBoardPage.tsx:232`), whose six 260-pixel columns always overflow, so it now carries a permanently
+visible horizontal scrollbar. `ScrollArea.Autosize` in the notification bell is unaffected — it resolves
+under a separate theme key. Both are plausibly the intended improvement, but neither is measured, and the
+second lands on the one route S-ui-5c declared unmeasurable.
 
 Measured on the merged S-ui-4 tree `2626ba9`. API unit passed 1,996 tests with 2 expected skips in 35.65
 seconds, both skips being the release-ceremony image-digest and image-build opt-ins — unchanged, because
@@ -160,9 +233,12 @@ pull-request checks with `release-gate` skipped as designed. Its four integratio
 389 and 354 tests — 1,224 with the two expected shared-database skips — and the published
 response-contract job passed all 284 schemas. Those figures are unchanged from the S-ui-3 run
 (`33239332445`, branch head `05cd1663`), which is what a front-end-only slice should produce; they are
-re-read here rather than carried forward. The slice merged to `main` as `2626ba9`. Contract checking is in sync on this tree at SHA-256
-`041da0299dde316f1a6c2ca8acb1106171960ea44e52c19b8b88afd3bf5f7958`, which supersedes the S-ui-3 hash `e66fa80c…` and the 2026-08-17 hash
-recorded below.
+re-read here rather than carried forward. The slice merged to `main` as `2626ba9`. Contract checking was in
+sync on that tree at SHA-256 `e66fa80c1e7c6ffec3f0a1321a59fea2440cf1f48beb6677c1dbe26cd87243cf`, which
+superseded the 2026-08-17 hash recorded below. (That figure was briefly overwritten here with the later
+S-ui-5a hash by an authority-document spelling sweep, and is restored: `git show
+2626ba9:packages/contracts/.contract.lock` is `e66fa80c…`, and the lock's history shows `041da029…` first
+appearing at `030c89d`.)
 
 `docs/11-ui-ux-design-system.md` was not updated by this program and now disagrees with the shipped
 tokens on typography, accent, focus ring and shell metrics; that gap is recorded as

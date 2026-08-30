@@ -17,11 +17,12 @@ import type { ReactNode } from "react";
 // count, is why the band shares and the console does not.
 //
 // The value stays `md`. The program's §2.4 "16px card radius" rule is NOT shipped: the theme sets
-// `defaultRadius: "md"` (8px) and its `components` block carries only Modal and Drawer entries, and
-// S-ui-3 gave the Home quadrant cards `radius="lg"` (12px). Moving this band alone to 16px would
-// have made it the only 16px surface in the application, sitting directly above an 8px lifecycle
-// card on all three register pages. Extracting the shell is what makes that rule a one-line change
-// whenever it is settled app-wide; settling it is not this slice's business.
+// `defaultRadius: "md"` (8px) and its `components` block sets no Card or Paper radius (it held only
+// Modal and Drawer when this was written; S-ui-5b and S-ui-5c added Badge and ScrollArea, and
+// neither sets one), and S-ui-3 gave the Home quadrant cards `radius="lg"` (12px). Moving this band
+// alone to 16px would have made it the only 16px surface in the application, directly above an 8px
+// lifecycle card on all three register pages. Extracting the shell is what makes that rule a
+// one-line change whenever it is settled app-wide; settling it is not this slice's business.
 //
 // `headline` is the band's left-hand summary sentence, `children` its chips. Both are rendered as
 // given: a band that computes "3 of 12 high or critical" is stating an observed count, never a

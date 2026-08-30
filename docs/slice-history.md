@@ -163,6 +163,247 @@ files and 2,251 tests**; the Playwright Chromium suite moved from **42 to 52**. 
 was untouched at 1,996 passed with the same two release-ceremony skips. Pull-request CI passed all
 fifteen checks with `release-gate` skipped as designed.
 
+### S-ui-5a to S-ui-5c — the walkthrough corrections
+
+Recorded 2026-08-29 after merging `#511` as `030c89d`, `#512` as `150a215` and `#513` as `6f0e0fd`.
+No migration, no permission key, no endpoint; the Alembic head stayed `0091_documents_list_index`.
+S-ui-5a is the one slice in the whole interface program that is not front-end-only — it changes API
+strings, OpenAPI descriptions and the contract lock — while S-ui-5b and S-ui-5c touch only
+`apps/web`.
+
+The origin of all three is worth preserving as evidence in its own right: every defect they fix was
+found by the owner looking at the running application, not by a gate. The interface program's
+automated suites were green throughout.
+
+**S-ui-5a set American-US spelling as the house standard for user-facing text**, with `Programme` →
+`Program` as the trigger case. The rename was safe because "programme" was prose everywhere and
+never an identifier: the table is `audit_program`, the model `AuditProgram`, the route
+`/audit-programs`, the column `program_id`, the problem code `program_archived`, and the SPA already
+carried `ProgramForm.tsx` beside `ProgrammePage.tsx`. No field, enum or key was renamed. The single
+identifier change observable at a BOUNDARY is the SPA's own route, `/audits/programme` →
+`/audits/program`, which now agrees with the API's. Internally the same commit also renamed the
+exported component and its two module files, the `AuditsLayout` tab discriminator and the
+`Breadcrumb` `LABELS` key — none of which crosses the API, the contract or the database.
+
+The API had to move with it rather than after it. `title="Audit programme not found"` and the
+archived-programme rejection are user-visible strings, so an SPA-only sweep would have left
+"programme" showing inside an error raised by a page that no longer used the word. The API strings,
+the OpenAPI descriptions and the regenerated contract moved in one commit — lock `e66fa80c…` →
+`041da029…`, produced by `scripts/gen-contracts.sh` rather than hand-edited.
+
+This is a deliberate divergence from ISO's own English, not a typo fix. "Audit programme" is the
+term in the official English text of ISO 9001:2015 §9.2.2 and of ISO 19011; US-published editions
+say "audit program". The owner chose the US form knowingly. Three things were deliberately left
+alone. `"Cancelled"` reads as British but is an **enum value** crossing the API and database
+boundary — 28 quoted uses in the SPA, and 17 occurrences on 16 lines of `openapi.yaml` plus 17 more in
+the generated `dist/openapi.json` — and is untouched. (`#511`'s own message says "16 in the contract";
+that is the line count, not the occurrence count, and it omits the generated document.) The 417 "programme"
+occurrences in `slice-history.md`, dated reviews and plans are historical evidence rather than
+current guidance; only the 23 in current-authority documents were swept. And `colour`, `grey`,
+`labelled` and their kin appear solely in code comments and test names, where no user reads them.
+
+Two things were missed rather than decided, both in the ingestion classifier's rule pack, and both
+are recorded as `RES-RULEPACK-BRITISH-KEYWORDS`. Its `explanation` string "Header reads like an
+audit programme/plan" **is** user-visible — `ItemDetailDrawer.tsx:247` renders it beside the weight
+— so the British form still reaches a reader on the ingestion surface. More consequentially, the
+matchers key on `"audit programme"` as a case-insensitive substring **needle**
+(`rule_classifier.py:176`, `any(kw in low for kw in m.keywords)`), so a document named per the newly
+adopted house standard — "Audit Program 2026" — does not fire them at all, losing 30 points on the
+audit-schedule rule and 55 on the Clause 9.2 rule. The house-standard change therefore has a
+classification consequence, not just a spelling one. It is deliberately not fixed here: the rule
+pack is a versioned, weight-calibrated resource, and adding a keyword changes scoring, which belongs
+in a slice that re-runs the calibration corpus.
+
+The retired SPA route has no redirect, and what it does instead is worse than a 404. `/audits/programme`
+still resolves — the sibling `<Route path="audits/:id">` catches it with `id="programme"`, so an old
+bookmark renders `AuditDetailPage`, issues `GET /api/v1/audits/programme`, and lands in that page's
+`ErrorState`. The application's own not-found branch is never reached, so the reader is told the audit
+failed to load rather than that the page moved. The rename's other correctness risk is guarded:
+`AuditsLayout.test.tsx` keeps its route-shadow assertion, proving the new static `program` segment
+still outranks `/audits/:id` — which is the same precedence that makes the stale link resolve.
+
+The same slice answered a labelling question from the same walkthrough. The rail read "Document
+register" while the page it opens is headed "Controlled Document Register". They are genuinely
+different surfaces: `/library` is the working browse view, with the clause tree, facets, pagination
+and the authoring entry point, while `/reports/document-control` is the generated, signed
+register-of-record carrying provenance — generated by, at, scope, SHA-256 — which is the ISO 7.5.3
+master list handed to an auditor. The rail entry now reads "Controlled register", as does the
+document-title map in `effectiveView.ts`.
+
+⚠ **The breadcrumb did not move with them, and the commit message says it did.** `#511`'s message
+states that "the rail entry and its breadcrumb now read 'Controlled register'"; the diff shows
+`Breadcrumb.tsx` changed only its `audits` child segment, `programme: "Programme"` →
+`program: "Program"`. Its `"document-control"` entry is still `"Controlled document register"`, so
+the surface now carries **four** names: `LeftRail.tsx:124` "Controlled register",
+`Breadcrumb.tsx:19` "Controlled document register", `ReportsRegisterPage.tsx:200` `<h1>` "Controlled
+Document Register", and `docs/manuals/user-manual.md` — which the same commit edited for spelling —
+still saying "Document register" at lines 45 and 242. The manual is the one that is actually wrong
+rather than merely inconsistent: line 242 reads "Use **Document register** for the controlled-document
+report", naming a rail entry that no longer exists under that name. This is recorded rather than
+quietly corrected because the wording was an open owner question at the time of writing; it has since
+been answered — see the closing note.
+
+**S-ui-5b gave the registers a vertical rhythm and stopped the status badges truncating.** Measured
+on six registers, every seam after the page header was a zero gap. The 16 pixels that existed sat on
+the title `Group`'s own bottom margin, so the gap fell *between* the title and its freshness stamp —
+pushing the stamp away from the thing it describes, and leaving the scorecard band, the toolbar and
+the table stacked flush beneath it with no separation at all. The fix moves the spacing onto a
+wrapper `Box mb="md"` inside `RegisterPageHeader`, and adds `mt="md" mb="md"` to `RegisterToolbar`
+and `mb="md"` to `RegisterFilterBar`. It is four lines, and it is four lines only because S-ui-4
+centralised these pieces first.
+
+One reverted attempt is worth recording. A margin on the scorecard band was tried and removed: the
+band is a direct page child on objectives but sits inside a page-level `Stack` on context and
+interested parties, so a margin there lands inconsistently. The margin belongs on the **toolbar**,
+because the toolbar holds regardless of what precedes it — a band, a SWOT board, a risk matrix or a
+tile row, none of which agree on their own bottom spacing.
+
+Mantine caps a `Badge` at `max-width: 100%` and ellipsises its label, so a squeezed cell rendered
+`ACTION REQUIR…`, `NEEDS ATTENTI…` and `DRA…`. A status a sighted reader cannot read is not a
+status. It is fixed once in the theme's `components` block — `Badge` root `maxWidth: "none"` with
+the label `overflow: "visible"` — rather than per component, because more than a dozen files render
+a raw `Badge` directly. The change is visual only: `StatusBadge` sets its own `aria-label`, so the
+accessible name was never affected, and the extra width is absorbed by each register's existing
+`Table.ScrollContainer`.
+
+⚠ **The defect does not reproduce at a comfortable desktop width.** Measured truncated labels: none
+at 1280, none at 1115, **six at 1000** — `Draft` at 31 of 34 pixels, `Needs attention` at 97 of 100,
+`Not yet measured` at 97 of 108 — and none again at 900, where the table has handed over to its
+scroll container. A guard written at 1280 would have proved nothing, so `e2e/register-rhythm.spec.ts`
+measures the badges at 1000, the width the owner's screenshots were taken at. Its rhythm cases stay
+at 1280, where the seams are the same and the viewport is the ordinary one.
+
+**S-ui-5c kept column headers whole and made table scrolling visible.** The owner reported these as
+one thing — "headers cut off" — and measurement split them into two mechanisms needing two different
+fixes. That split is the substance of the slice.
+
+On `/objectives`, "Current / target" genuinely wraps: one line box at 1280 and at 1115, **two at
+1000**. A sortable label was a breakable `<span>` inside a flex button, so its automatic minimum
+size was its longest *word*, and `table-layout: auto` was then free to allocate the column less than
+its label needs and hand the surplus to the free-text `lineClamp` column beside it. The fix is
+`white-space: nowrap` on the shared `SortableTh`, which reaches every sortable register header at
+once; the objectives identifier `Anchor` took the same rule so the row's own link cannot break
+either. That `Anchor` edit is unmentioned in S-ui-5c's own message, and it is the closure of a
+deferral S-ui-5b had named in its "still open" list as "the Objectives Ref column wrapping" — so the
+item disappeared from the record in both directions, closed by a commit that did not say it had
+closed it. It carries no test. ⚠ **S-ui-5b made this worse before it was fixed** — letting badges size to their content
+correctly raised the badge columns' min-content, which left strictly less for the header columns in
+the same table width.
+
+On `/context`, "Last reviewed" does **not** wrap: one line box, with 73 pixels hidden to the right
+at 1115. The table is 880 pixels inside an 807-pixel scrollport, so the column sits past the clip
+edge — and Mantine's `ScrollArea` hides its scrollbar until hover, so nothing indicated that the
+table scrolled. The owner read the result as a misspelled header, which is the failure stated
+exactly: content unreachable, with nothing saying so. `ScrollArea` now defaults to `type: "auto"` in
+the theme. That is one edit, no page files, and deliberately **not** a change to any
+`Table.ScrollContainer` literal, which `responsiveRegisterContract.test.ts` pins across nine files.
+The bar appears only when content actually overflows: measured `display: flex` on `/context` (880 in
+807) and `none` on `/objectives` (807 in 807). The same mechanism explains the owner's other report,
+the Controlled register's right-hand columns being "cut off" — that table is 1500 pixels in a
+narrower port and was scrolling silently too.
+
+⚠ **A theme default has a wider blast radius than the surface it was aimed at, and this one reached
+two places the commit does not mention.** `Table.ScrollContainer` renders `component={ScrollArea}`,
+which is why the fix works — but so do two bare consumers. `AppShell.tsx:67` is the navigation rail
+(`<MantineAppShell.Section grow component={ScrollArea}>`), which now shows a persistent bar on a
+viewport short enough to overflow it; and `CapaBoardPage.tsx:232` wraps six 260-pixel columns, about
+1,640 pixels of content in roughly 1,000, so the CAPA board now carries a permanently visible
+horizontal scrollbar where it previously showed none until hover. `NotificationBell.tsx:124` is
+**not** affected: `ScrollArea.Autosize` resolves its props under the separate `ScrollAreaAutosize`
+theme key. Both changes are arguably the intended improvement — the rail and the board do scroll, and
+saying so is the whole point — but they are unmeasured, and the second lands on `/capa`, the exact
+route this same slice declared unmeasurable when it reverted the filter-row fix. S-ui-5b had already
+done the same thing one commit earlier: `RegisterFilterBar` gained `mb="md"` and has three consumers,
+one of which is `CapaBoardPage.tsx:166`. The discipline was stated more strictly than it was kept.
+
+**One fix was written, verified and then deliberately not shipped.** The CAPA board's filter row is
+narrower than the summary card above it, and a one-line correction
+(`grow preventGrowOverflow={false}` on the filter `Group`) passed every named gate. It was reverted
+rather than merged, because `/capa` has no browser coverage at all — it is absent from both
+`e2e/support/registers.ts` and the end-to-end API harness — so a size-and-position change on it
+cannot be proved, which is precisely the blind spot that let three earlier S-ui slices ship a
+visible defect behind a fully green suite. It is recorded as
+`RES-CAPA-BOARD-NO-BROWSER-COVERAGE`, with the reverted fix written into the record.
+
+**What the new specs do and do not prove.** `register-table-legibility.spec.ts` runs five cases across
+three registers, and three are load-bearing — but two different mutations were needed to show it, and
+one does not establish the other. Restoring the pre-fix `RegisterToolbar.tsx` and re-running the full
+`test:browser` script reddened exactly one case, objectives' "Current / target" at 1000 pixels;
+removing the `ScrollArea` entry from the theme reddened both scroll cases, each of which asserts its
+`overflows` precondition first, so neither failure was vacuous. The remaining two, context's "Last
+reviewed" and risks' "Risk / opportunity", each measured a single line box before the fix as well, so
+they are belt-and-braces rather than evidence.
+`register-rhythm.spec.ts` runs ten cases across five of the ten registers in
+`e2e/support/registers.ts`; tasks, audits, management-reviews, improvement and records are not
+covered by either new spec, and the Controlled register — the surface whose silent scrolling
+prompted the ScrollArea change — cannot be reached by any Playwright scenario at all, because
+`reports` is not among the harness's register cases. Both specs run as the harness's default
+ungranted reader, so they measure the denied arrangement only.
+
+**Three measurement traps, each caught before it became evidence.** A line-box count must come from
+a `Range` — `selectNodeContents` then `getClientRects().length` — because `getClientRects()` on the
+label element itself always returns 1: a flex item is blockified, so an assertion on it can never
+fail. The scroll assertion first checks that the fixture actually overflows before asserting the bar
+appears, which caught a selector that had grabbed a different `ScrollArea` on the page entirely. And
+the standing one bit three more times: `npm run test:browser` is `build:browser && playwright test`,
+so a bare `npx playwright test` serves a stale bundle and a deliberate mutation never reaches the
+browser. Three false passes were logged before it was caught by mutating a visible heading to a
+nonsense string and watching the suite stay green — which is the control to reach for whenever a
+browser mutation looks inert.
+
+**A correction to the S-ui-4 record, made here rather than silently.** S-ui-5a's authority-document
+spelling sweep also replaced the contract hash *inside* the S-ui-4 evidence paragraph of
+`current-status.md`, so that paragraph claimed the merged S-ui-4 tree `2626ba9` was in sync at
+`041da029…`. It was not. `git show 2626ba9:packages/contracts/.contract.lock` is `e66fa80c…`, and
+the lock's own history shows `041da029…` first appearing at `030c89d`, this slice. The historical
+figure has been restored to `e66fa80c…` and the new hash now belongs to the S-ui-5 paragraph that
+earned it. Updating a dated snapshot with a later fact is the one edit these authority homes
+explicitly forbid, and a global sweep is how it happens without anyone deciding to.
+
+Two further authority statements were falsified by this program and are corrected here.
+`decisions-register.md` argued that the §2.4 sixteen-pixel card-radius rule "has not landed
+anywhere", and its evidence was that the theme's `components` block "carries only `Modal` and
+`Drawer` entries". After S-ui-5b and S-ui-5c it carries four — `Badge` and `ScrollArea` joined them —
+so the sentence that was load-bearing for the conclusion had become untrue while the conclusion
+itself stayed correct, because neither new entry sets a radius. The register and its mirror comment
+in `ScorecardBandShell.tsx` now say that. And the owner's spelling decision, which constrains the
+user-facing text of every future slice, had **no authority home at all**: it existed only in `#511`'s
+pull-request body. It is now `R68`.
+
+**Honest deferrals, and what the owner decided about them.** Three walkthrough items were left
+unfixed by these slices and were put to the owner at their close on 2026-08-29. The CAPA board's
+filter-row alignment and inter-card gap stay blocked on that board having no browser coverage at all
+(`RES-CAPA-BOARD-NO-BROWSER-COVERAGE`); adding a `capa` case to the harness is the unlock, and no
+decision was needed. The risk-matrix legend overflows its 306-pixel matrix, and the fix — a
+`maxWidth` cap on the matrix `Stack` — works but visibly reflows `/risks`, because the scorecard band
+currently sits beside the matrix above roughly 1295 pixels and would begin wrapping below it; the
+owner accepted that reflow and the fix is queued rather than shipped here. The interested-parties
+register's enum columns change width between filter states; `layout="fixed"` with pinned pixel widths
+would fix it, but the widths must be harvested after S-ui-5c's nowrap headers changed every
+register's header min-content, and the reviewer called pinned widths fragile — the owner deferred it
+as the lowest-value of the three, recorded as `RES-IP-REGISTER-COLUMN-JUMP`. On the wording, the
+owner chose **"Master document list"** for the document-register surface, replacing all four of the
+names it currently carries; that rename is a code change and belongs to the next slice, not to this
+record. One item carries no residual by design: the owner's rail-foot idea — a colour-scheme toggle,
+perhaps a clock — is a feature request rather than a defect. Everything else deferred here has a
+record. The ingestion rule-pack spelling gap is `RES-RULEPACK-BRITISH-KEYWORDS`; the approved-but-
+unshipped legend fix is `RES-RISK-MATRIX-LEGEND`; the rename is `RES-DOC-SURFACE-LABEL`; and the
+renamed labels' missing source-text pin — a page reverting to "Document register" would be invisible
+to every suite, exactly as the eleven header adoptions were before S-ui-4 pinned them — is
+`RES-REGISTER-LABEL-NO-PIN`.
+
+Test deltas, measured on the merged tree `6f0e0fd`. Web Vitest was unchanged at **276 files and
+2,251 tests** — S-ui-5a renamed `ProgrammePage.test.tsx` to `ProgramPage.test.tsx` without changing
+its count, and S-ui-5b and S-ui-5c added browser specs rather than unit ones. The Playwright Chromium
+suite moved from **52 to 67** in nine spec files: S-ui-5a added none, S-ui-5b's
+`e2e/register-rhythm.spec.ts` added ten, and S-ui-5c's `e2e/register-table-legibility.spec.ts` added
+five. The API unit suite is unchanged at **1,996 passed with the same two release-ceremony skips**;
+S-ui-5a edited only docstrings, comments and `ProblemException` titles, and no **API** unit test
+asserts those strings. One web unit test does — `ProgramPage.test.tsx:249` matches the archived-plan
+title, against its own MSW fixture at `:240`, which the same commit had to edit in lockstep. That
+assertion is self-referential and pins nothing about the API. Each pull request passed all fifteen pull-request checks with `release-gate` skipped
+as designed.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration
