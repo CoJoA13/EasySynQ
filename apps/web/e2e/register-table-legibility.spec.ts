@@ -70,7 +70,17 @@ for (const { key, path, width } of SCROLL_CASES) {
       const port = table?.closest(".mantine-ScrollArea-viewport") as HTMLElement | null;
       if (!port) throw new Error("no scroll viewport around the table");
       const root = port.closest(".mantine-ScrollArea-root");
-      const bar = root?.querySelector(".mantine-ScrollArea-scrollbar") as HTMLElement | null;
+      // Qualify by ORIENTATION. A ScrollArea root holds BOTH bars — measured here, horizontal
+      // `data-state="visible"` / `display: flex` and vertical `data-state="hidden"` /
+      // `display: none` — and each `ScrollAreaScrollbarAuto` mounts independently off its own
+      // ResizeObserver, so their document order is not guaranteed. A bare
+      // `.mantine-ScrollArea-scrollbar` therefore sometimes returns the HIDDEN vertical bar and
+      // reports `barShown: false` while the horizontal bar is right there and shown. That is a
+      // false FAILURE (it reddened CI on a tree whose behaviour was correct), and the same
+      // wrong-element family as the whole-page ScrollArea this file's header already records.
+      const bar = root?.querySelector(
+        '.mantine-ScrollArea-scrollbar[data-orientation="horizontal"]',
+      ) as HTMLElement | null;
       return {
         overflows: port.scrollWidth > port.clientWidth,
         // Mantine always sets scrollbar-width:none on the viewport and draws its own bar, so the

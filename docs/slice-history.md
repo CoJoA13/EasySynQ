@@ -351,6 +351,31 @@ browser. Three false passes were logged before it was caught by mutating a visib
 nonsense string and watching the suite stay green — which is the control to reach for whenever a
 browser mutation looks inert.
 
+**Running the gate for this record found a defect in the record's own evidence.** Recording these
+three slices meant re-running their suites, and `web browser (Chromium)` reddened on CI run
+`33285801424` while the identical tree passed 67 of 67 locally. The failing case was S-ui-5c's
+`interested-parties shows a scrollbar when its table overflows at 1115px`, and its shape was
+diagnostic: the `overflows` precondition passed and only `barShown` failed, so the table did overflow
+and the assertion was not vacuous. The cause is not timing. A Mantine `ScrollArea` root holds **both**
+scrollbars — measured on that page, horizontal at `data-state="visible"` and `display: flex`,
+vertical at `data-state="hidden"` and `display: none`, with the port 880 pixels wide inside 807 and no
+vertical overflow at all — and each `ScrollAreaScrollbarAuto` mounts independently from its own
+`ResizeObserver`, so their document order is not guaranteed. The spec asked for
+`.mantine-ScrollArea-scrollbar` unqualified, so `querySelector` returns whichever mounted first; when
+that is the hidden vertical bar it reports `barShown: false` beside a horizontal bar that is right
+there and shown.
+
+That is a **false FAILURE** — the mirror image of the false PASS this repository normally hunts, and
+worth naming as its own category, because it reddens a correct tree and the reflex is to re-run the
+job until it goes green. It is also the same wrong-element family the spec's own header already
+records catching once, in the comment explaining that grabbing the first `ScrollArea` on the page
+measured a container that never overflows; the file caught one and shipped another. The selector is
+now qualified `[data-orientation="horizontal"]`. Removing the theme's `ScrollArea` entry still reddens
+both scroll cases, so the fix did not turn them into tautologies. Three hypotheses were tested and
+discarded before this one — a mount race, CPU-speed sensitivity, and font-driven row-height
+differences — the second by reproducing under a 20× CPU throttle, where the bar was present on the
+first synchronous read every time.
+
 **A correction to the S-ui-4 record, made here rather than silently.** S-ui-5a's authority-document
 spelling sweep also replaced the contract hash *inside* the S-ui-4 evidence paragraph of
 `current-status.md`, so that paragraph claimed the merged S-ui-4 tree `2626ba9` was in sync at

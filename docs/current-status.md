@@ -177,7 +177,14 @@ it pins nothing about the API. Web Vitest passed **276 files and 2,251 tests** w
 because S-ui-5a renamed `ProgrammePage.test.tsx` to `ProgramPage.test.tsx` without changing its
 assertion count and the other two slices added browser specs rather than unit ones. The full
 `npm run test:browser` script, build included, passed **67 of 67 Chromium tests** in 1.3 minutes with one
-worker and zero retries, up from 52: S-ui-5a added none, S-ui-5b's `e2e/register-rhythm.spec.ts` added
+worker and zero retries — but only after fixing a defect in one of the specs being recorded. S-ui-5c's
+`interested-parties` scroll case reddened `web browser (Chromium)` on CI run `33285801424` while the
+identical tree passed locally: a `ScrollArea` root holds both a visible horizontal bar and a hidden
+vertical one, each mounting from its own `ResizeObserver`, and the spec's unqualified
+`.mantine-ScrollArea-scrollbar` sometimes returned the hidden one. That is a **false failure**, the
+mirror of the false pass this repository normally guards against. The selector is now qualified by
+orientation, and removing the theme's `ScrollArea` entry still reddens both scroll cases. Playwright is
+up from 52: S-ui-5a added none, S-ui-5b's `e2e/register-rhythm.spec.ts` added
 ten and S-ui-5c's `e2e/register-table-legibility.spec.ts` added five, across nine spec files once
 `playwright.config.ts`'s `testIgnore` excludes the two harness probes. `uv run alembic heads` reported
 `0091_documents_list_index (head)`, making `0092` next; none of the three slices added a migration.
