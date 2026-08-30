@@ -63,7 +63,13 @@ export function RiskMatrix({ rows, selected }: { rows: RiskRow[]; selected?: Ris
   const yOf = (s: number) => M.top + (5 - s) * CELL;
 
   return (
-    <Stack gap="xs">
+    // The SVG caps itself at VIEW_W (306px) but the legend below it is an ordinary flex Group, so
+    // without a cap on the SHARED parent the legend stretches to the container width and stops
+    // reading as the grid's key — measured on /risks, a 306px grid over a legend more than twice
+    // its width. Capping the Stack keeps the two the same width at every viewport. This narrows
+    // the matrix COLUMN, so above ~1295px the page's scorecard band now wraps below the matrix
+    // instead of sitting beside it; that reflow is intended and was owner-approved (S-ui-5d).
+    <Stack gap="xs" style={{ maxWidth: VIEW_W }}>
       <svg
         role="img"
         aria-label={summary}

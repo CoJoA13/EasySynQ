@@ -26,7 +26,7 @@ function row(id: string, clauses: string[], processes: string[]): RegisterRow {
 
 const REPORT: DocumentControlRegister = {
   provenance: {
-    report_name: "Controlled Document Register",
+    report_name: "Master Document List",
     generated_by: "reader",
     generated_at: "2026-07-28T12:00:00+00:00",
     as_of: "2026-07-28T12:00:00+00:00",

@@ -4158,7 +4158,7 @@ paths:
       tags: [reports]
       operationId: getDocumentControlRegister
       summary: >-
-        Controlled Document Register — the ISO 9001 §7.5.3 master list. Needs report.read (SYSTEM
+        Master Document List — the ISO 9001 §7.5.3 register of controlled documents. Needs report.read (SYSTEM
         or PROCESS scope); rows filtered per-row by document.read.
       description: >-
         A provenance-stamped, content-hashed full register (no pagination — the content hash must
@@ -4247,7 +4247,7 @@ paths:
           description: Only documents linked (process-link) to this process id.
       responses:
         "200":
-          description: The Controlled Document Register — provenance header + the full row set.
+          description: The Master Document List — provenance header + the full row set.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DocumentControlRegister" }
@@ -8650,7 +8650,7 @@ components:
         via a recompute over the returned rows.
       required: [report_name, generated_by, generated_at, as_of, scope, app_version, filters, row_count, content_hash, process_scope, excluded_processes]
       properties:
-        report_name: { type: string, example: "Controlled Document Register" }
+        report_name: { type: string, example: "Master Document List" }
         generated_by: { type: string, description: The caller's display name / email / id. }
         generated_at: { type: string, format: date-time }
         as_of: { type: string, format: date-time, description: Mirrors generated_at — the instant the register was materialized. }

@@ -6,7 +6,7 @@ lifecycle state:
 
 * Library: ``GET /documents`` (filter, not 403);
 * detail: ``GET /documents/{id}`` (403 on deny);
-* Controlled Document Register: ``GET /reports/document-control`` (``report.read`` surface gate,
+* Master Document List: ``GET /reports/document-control`` (``report.read`` surface gate,
   then per-row ``document.read``).
 
 ``document.read_draft`` and ``document.read_obsolete`` remain version-content/history permissions;

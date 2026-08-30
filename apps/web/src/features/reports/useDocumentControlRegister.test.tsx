@@ -20,7 +20,7 @@ function wrapper({ children }: { children: ReactNode }) {
 
 const SAMPLE = {
   provenance: {
-    report_name: "Controlled Document Register",
+    report_name: "Master Document List",
     generated_by: "Mara",
     generated_at: "2026-07-19T12:00:00+00:00",
     as_of: "2026-07-19T12:00:00+00:00",

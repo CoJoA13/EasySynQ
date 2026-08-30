@@ -45,7 +45,7 @@ function truncateSha(sha: string): string {
   return sha.length > 12 ? `${sha.slice(0, 12)}…` : sha;
 }
 
-// The Controlled Document Register report (ISO 9001 §7.5.3 master list). Read-only, auditor-facing: a
+// The Master Document List report (ISO 9001 §7.5.3). Read-only, auditor-facing: a
 // provenance banner (defensibility header + content hash) over a filterable/sortable master list.
 // Reuses the shared register primitives (RegisterToolbar/SortableTh/registerControls) + the calm
 // states, and the Library's facet infrastructure (FacetBar/filters.ts + a register-only process
@@ -197,9 +197,9 @@ export function ReportsRegisterPage() {
   return (
     <Container size="xl" py="md">
       <Stack gap="md">
-        <Title order={1}>Controlled Document Register</Title>
+        <Title order={1}>Master document list</Title>
         {forbidden ? (
-          <NoAccessState message="You need the report.read permission to view the Controlled Document Register." />
+          <NoAccessState message="You need the report.read permission to view the master document list." />
         ) : isLoading ? (
           <LoadingState label="Loading the register" />
         ) : isError || !data ? (

@@ -88,7 +88,7 @@ test.each([
 });
 
 test.each([
-  ["/reports/document-control", "Controlled document register", "document-control"],
+  ["/reports/document-control", "Master document list", "document-control"],
   ["/management-reviews", "Management reviews", "management-reviews"],
   ["/interested-parties", "Interested parties", "interested-parties"],
   ["/records", "Records", "records"],

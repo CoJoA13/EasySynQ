@@ -1,5 +1,5 @@
 # apps/api/src/easysynq_api/services/reports/document_control.py
-"""The Controlled Document Register report (ISO 9001 §7.5.3 master list; doc 13 §6.1, doc 15 §8.15).
+"""The Master Document List report (ISO 9001 §7.5.3; doc 13 §6.1, doc 15 §8.15).
 
 ``GET /reports/document-control`` (api/reports.py) returns the org's master list of controlled
 Documents — permission-filtered by ``document.read`` (the ``list_documents`` row-filter), with an
@@ -45,7 +45,7 @@ from ..vault import repository as vault_repo
 from ..vault.document_filters import DeferredEffectiveFromFilter
 from ..vault.review import review_state
 
-_REPORT_NAME = "Controlled Document Register"
+_REPORT_NAME = "Master Document List"
 
 # FIX F floor value: an Obsolete version with no ``effective_from`` (shouldn't happen in practice —
 # a version only ever reaches Obsolete via a prior Effective/Superseded state, both of which set

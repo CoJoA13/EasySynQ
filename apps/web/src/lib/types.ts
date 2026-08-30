@@ -2129,7 +2129,7 @@ export interface NotificationDeliveryHealth {
   };
 }
 
-// GET /reports/document-control — the Controlled Document Register (hard-gated report.read SYSTEM;
+// GET /reports/document-control — the Master Document List (hard-gated report.read SYSTEM;
 // 403 for callers without the key).
 export interface ClauseRef {
   clause: string;

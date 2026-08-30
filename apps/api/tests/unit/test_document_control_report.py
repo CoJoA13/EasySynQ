@@ -83,7 +83,7 @@ def test_build_provenance_shape_excludes_hash_from_its_own_input():
         process_scope=None,
         excluded_processes=None,
     )
-    assert prov["report_name"] == "Controlled Document Register"
+    assert prov["report_name"] == "Master Document List"
     assert prov["generated_at"] == now.isoformat()
     assert prov["as_of"] == now.isoformat()
     assert prov["scope"] == "org:DEFAULT"

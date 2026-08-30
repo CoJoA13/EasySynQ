@@ -42,7 +42,7 @@ The left rail groups the QMS by Plan–Do–Check–Act:
 | Home | PDCA health summary and your task rail |
 | PLAN | Objectives; Risk & opportunity register; Context; Interested parties |
 | DO | Library; Records; Review and approve; Import |
-| CHECK | Compliance; Internal audit; Management reviews; Drift; Document register |
+| CHECK | Compliance; Internal audit; Management reviews; Drift; Master document list |
 | ACT | Nonconformity and CAPA; Improvement; Change requests |
 
 Each PDCA group header shows its clause range (for example "PLAN · Cl 4–6"). The clause spine
@@ -237,9 +237,9 @@ The Compliance Checklist scores mandatory ISO documented-information coverage as
 or Gap and also surfaces overdue review information. It is an evidence/coverage aid, not an
 automatic certification judgment.
 
-### Controlled Document Register
+### Master Document List
 
-Use **Document register** for the controlled-document report. Apply supported filters and read the
+Use **Master document list** for the controlled-document report. Apply supported filters and read the
 provenance banner: it identifies generation time and scope, including exclusions. A filtered report
 is not an org-wide assertion.
 

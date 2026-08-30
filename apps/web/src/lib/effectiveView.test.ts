@@ -339,7 +339,7 @@ describe("classifyEffectiveView", () => {
     ["/notifications", "Notifications"],
     ["/search", "Search"],
     ["/compliance", "Compliance"],
-    ["/reports/document-control", "Controlled register"],
+    ["/reports/document-control", "Master document list"],
     ["/capa", "CAPA"],
     ["/capa/complaints", "Complaints"],
     ["/capa/ncrs", "NCRs"],

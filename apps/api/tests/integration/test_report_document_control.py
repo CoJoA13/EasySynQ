@@ -1,4 +1,4 @@
-"""Task 2 — the Controlled Document Register SERVICE (services/reports/document_control.py):
+"""Task 2 — the Master Document List SERVICE (services/reports/document_control.py):
 authz-filtered query + batched enrichment, exercised over a real testcontainer DB (doc 13 §6.1,
 doc 15 §8.15). Task 3 adds the HTTP route's two-layer gate (surface report.read at SYSTEM or
 PROCESS scope + the per-row document.read filter, incl. its lifecycle_state predicate). Run-scoped:
@@ -545,7 +545,7 @@ async def test_endpoint_returns_register_with_provenance(
     body = resp.json()
     assert set(body) == {"provenance", "rows"}
     prov = body["provenance"]
-    assert prov["report_name"] == "Controlled Document Register"
+    assert prov["report_name"] == "Master Document List"
     assert prov["row_count"] == len(body["rows"])
     assert prov["content_hash"] == register_content_hash(body["rows"])
     assert prov["scope"].startswith("org:")
