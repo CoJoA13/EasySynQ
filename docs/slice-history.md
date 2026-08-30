@@ -403,7 +403,9 @@ pull-request body. It is now `R68`.
 unfixed by these slices and were put to the owner at their close on 2026-08-29. The CAPA board's
 filter-row alignment and inter-card gap stay blocked on that board having no browser coverage at all
 (`RES-CAPA-BOARD-NO-BROWSER-COVERAGE`); adding a `capa` case to the harness is the unlock, and no
-decision was needed. The risk-matrix legend overflows its 306-pixel matrix — measured 396
+decision was needed. (That unlock was later checked rather than assumed and does **not** work — the
+shared `RegisterCase` is table-shaped and the CAPA board's table has no scroll container — so the
+record's own closure contract now routes `/capa` to its own spec instead.) The risk-matrix legend overflows its 306-pixel matrix — measured 396
 pixels wide, 90 more than the grid it keys — and the fix is a `maxWidth` cap on the matrix `Stack`. It
 was held back on the belief that it reflows `/risks`, and the owner accepted that trade; measuring it
 afterwards showed the belief was **backwards**. The band wraps below the matrix at 1233 pixels and
@@ -496,7 +498,7 @@ pixels, which fails against the pre-fix tree, so that improvement is evidence ra
 The lesson generalises: a layout concern stated in prose is a hypothesis, and this one survived into an
 owner decision before anyone measured it.
 
-Test deltas, measured on the branch. Web Vitest moved from 276 files and 2,251 tests to **277 and
+Test deltas, measured on the merged tree `bdd8f2f`. Web Vitest moved from 276 files and 2,251 tests to **277 and
 2,253**; the Playwright Chromium suite moved from **67 to 69**. The API unit suite is unchanged at
 **1,996 passed with the same two release-ceremony skips** — the rename touched API strings, two test
 assertions and a test-module docstring, not counts. Ruff, both strict `tsc` projects, the production build, mypy across
