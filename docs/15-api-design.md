@@ -138,7 +138,7 @@ starts at that date's local midnight, while `lte` includes through that date's l
 The server compares the equivalent UTC instants to the stored `timestamptz`; an offset-bearing
 date-time remains the explicit instant supplied by the caller. Relative web buckets derive today's
 date and subtract calendar days in `GET /me`'s `org_timezone`, never by slicing a UTC timestamp.
-The Controlled Document Register materializes raw date bounds using the canonical timezone it
+The Master Document List materializes raw date bounds using the canonical timezone it
 resolves inside its REPEATABLE READ snapshot, so selection, rendered dates, and provenance cannot
 straddle an organization-timezone configuration change.
 

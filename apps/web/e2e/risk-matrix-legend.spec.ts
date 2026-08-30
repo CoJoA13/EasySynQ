@@ -15,12 +15,21 @@ import { installRegisterApi } from "./support/api";
 // which is what makes it evidence rather than decoration.
 const read = async (page: import("@playwright/test").Page) =>
   page.evaluate(() => {
+    // Walked positionally, but every hop is then CHECKED, because `parentElement` and
+    // `lastElementChild` are non-null for almost any rendered tree — an unchecked walk would keep
+    // measuring confidently after a refactor moved the legend, and report a passing comparison
+    // between two elements that are no longer the grid and its key.
     const svg = document.querySelector("svg[role='img']");
     if (!svg) throw new Error("no risk matrix svg");
     const stack = svg.parentElement;
     const group = stack?.parentElement;
     const legend = stack?.lastElementChild;
     if (!stack || !group || !legend) throw new Error("unexpected matrix structure");
+    if (legend === svg) throw new Error("legend resolved to the svg — the Stack has one child");
+    if (!legend.textContent?.trim()) throw new Error("legend resolved to an element with no text");
+    // The band key renders one badge per risk band, so anything with fewer is not the legend.
+    if (legend.children.length < 2)
+      throw new Error("legend has too few children to be the band key");
     const kids = Array.from(group.children);
     if (kids.length < 2) throw new Error("matrix has no sibling band to measure against");
     const round = (n: number) => Math.round(n);

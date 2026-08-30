@@ -18,6 +18,9 @@ const sources = import.meta.glob(
   { eager: true, query: "?raw", import: "default" },
 ) as Record<string, string>;
 
+// Path literals contain `/` and `-`; escape before embedding one in a RegExp.
+const rx = (literal: string): string => literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const src = (suffix: string): string => {
   const hit = Object.entries(sources).find(([path]) => path.endsWith(suffix));
   if (!hit) throw new Error(`no source loaded for ${suffix}`);
@@ -33,10 +36,15 @@ const DESTINATIONS: ReadonlyArray<readonly [string, string, string]> = [
 describe("shell destinations carry one label across rail, breadcrumb and title map", () => {
   for (const [path, segment, label] of DESTINATIONS) {
     it(`${path} is "${label}" in all three`, () => {
-      // The rail: a NAV entry whose `to` is this path must carry this label. Matched together so a
-      // label moving to a different entry cannot satisfy this by appearing somewhere else.
-      expect(src("LeftRail.tsx")).toContain(`to: "${path}",`);
-      expect(src("LeftRail.tsx")).toContain(`label: "${label}",`);
+      // The rail: the NAV entry whose `to` is this path must ITSELF carry this label. Extract that
+      // one entry first — `[^{}]*` cannot cross a brace, so the match is bounded to a single object
+      // literal — because two independent whole-file `toContain` calls would also pass when the
+      // label had moved to a DIFFERENT rail entry, which is the drift this file exists to catch.
+      const railEntry = new RegExp(`\\{[^{}]*to: "${rx(path)}",[^{}]*\\}`, "s").exec(
+        src("LeftRail.tsx"),
+      );
+      expect(railEntry, `no rail NAV entry with to: "${path}"`).not.toBeNull();
+      expect(railEntry![0]).toContain(`label: "${label}",`);
 
       // The breadcrumb: keyed by the last path segment, not the full path.
       expect(src("Breadcrumb.tsx")).toContain(`"${segment}": "${label}",`);

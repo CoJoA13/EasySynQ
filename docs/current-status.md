@@ -166,10 +166,11 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; this slice does
 not rewrite that implementation-evidence field merely because its branch SHA differs.
 
-Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above now describes the tree at
-`main` after S-ui-5c, which also carries the slices that shipped between 2026-08-17 and this date; the
-S-ui-4 and 2026-08-17 paragraphs below are retained as the evidence for their own trees and are not
-restated as current.
+Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above describes the **S-ui-5d
+branch**, not `main`: its web figures (277 files, 2,253 tests) include that slice's two new suites and
+are ahead of `main` until it merges. Everything else in the frontmatter is unchanged by S-ui-5d. The
+S-ui-5c, S-ui-4 and 2026-08-17 paragraphs below are retained as the evidence for their own trees and are
+not restated as current.
 
 Measured locally on the S-ui-5d branch. API unit passed **1,996 tests with the same 2 expected skips**
 in 35.41 seconds; Ruff lint and format-check were clean over 769 files and mypy found no issue in 449
@@ -188,6 +189,14 @@ beside the matrix at 1200 pixels, which is what establishes that the cap *widens
 rather than narrowing it. Reverting only the breadcrumb, which is precisely the S-ui-5a defect, reddens
 both cases in the new label contract; leaving a stale label beside the new one reddens only the second,
 so neither assertion is redundant.
+
+The integration and published response-contract suites were NOT run locally for S-ui-5d, and the
+frontmatter's 1,224 integration and 284 contract figures are still carried from the S-ui-4 CI run. That
+carry is weaker here than it was for S-ui-5b and S-ui-5c, which were front-end-only: S-ui-5d changes an
+API response value and the OpenAPI document, so those suites are exactly the ones with something new to
+say about it. Its pull-request CI exercises them; no local run was performed. Firefox, WebKit,
+assistive-technology sessions, SMTP delivery, deployment, live acceptance and the disposable Fedora
+proof did not run and are not described as passed.
 
 Measured locally on the merged S-ui-5c tree `6f0e0fd`. API unit passed **1,996 tests with the same 2
 expected skips** in 32.86 seconds, the release-ceremony image-digest and image-build opt-ins; S-ui-5a

@@ -406,9 +406,11 @@ filter-row alignment and inter-card gap stay blocked on that board having no bro
 decision was needed. The risk-matrix legend overflows its 306-pixel matrix — measured 396
 pixels wide, 90 more than the grid it keys — and the fix is a `maxWidth` cap on the matrix `Stack`. It
 was held back on the belief that it reflows `/risks`, and the owner accepted that trade; measuring it
-afterwards showed the belief was **backwards**. The band wraps below the matrix at 1230 pixels and
-narrower today, and at 1140 and narrower once capped, so the fix makes the band wrap *less* often by
-90 pixels and moves no band from beside the matrix to below it. It is queued rather than shipped here,
+afterwards showed the belief was **backwards**. The band wraps below the matrix at 1233 pixels and
+narrower today, and at 1144 and narrower once capped, so the fix makes the band wrap *less* often by
+89 pixels and moves no band from beside the matrix to below it. (These three figures were first taken
+from a five-pixel sweep and read 1230, 1140 and 90; S-ui-5d re-measured at one-pixel resolution and
+they are corrected here to the precise values rather than left disagreeing with the later entry.) It is queued rather than shipped here,
 now on a corrected premise (`RES-RISK-MATRIX-LEGEND`). The interested-parties
 register's enum columns change width between filter states; `layout="fixed"` with pinned pixel widths
 would fix it, but the widths must be harvested after S-ui-5c's nowrap headers changed every
@@ -458,7 +460,10 @@ SHA-256 block handed to an auditor — so leaving it behind would have reproduce
 element lower down the same page. Two casings are carried on purpose and are not a slip: the interface
 labels are sentence case, "Master document list", because they are wayfinding; the artefact's formal
 name in the provenance stamp is Title Case, "Master Document List", because that is the document's
-title. `ReportsRegisterPage.test.tsx` previously asserted `getAllByText(...).length >= 2` on the single
+title. The rename was also back-propagated to the two normative sections the shipped docstring cites,
+`doc 13 §6.1` and `doc 15 §8.15`, so a reader following that pointer does not land on a specification
+naming the artefact something the product no longer calls it — without which the surface would have
+kept a fifth name in the one place that is normative. `ReportsRegisterPage.test.tsx` previously asserted `getAllByText(...).length >= 2` on the single
 string the heading and the stamp then shared; it now pins each separately, which is stronger, and
 `getByText` is case-sensitive so neither query can satisfy itself with the other's string.
 
@@ -481,8 +486,9 @@ worth keeping.** It was believed that capping the matrix column would push the `
 from beside the matrix to below it, and the owner accepted that reflow when approving the fix.
 Measurement showed the opposite. The matrix and the band sit in one `Group` with `wrap="wrap"`, so the
 matrix column's width decides when the band wraps beneath it; uncapped, that column takes the legend's
-max-content of 396 pixels and the band drops below at 1230 pixels and narrower, while capped the column
-is 306 and the band stays beside it down to 1140. The cap therefore buys **90 pixels more**
+max-content of 396 pixels and the band drops below at 1233 pixels and narrower, while capped the column
+is 306 and the band drops below only at 1144 and narrower. Measured at one-pixel resolution: the band is
+beside the matrix from 1234 uncapped and from 1145 capped, so the cap buys **89 pixels more**
 side-by-side width and moves no band from beside to below. The only positional change is at widths
 where the band already sits below, where the narrower legend takes one more line and the band starts
 about 26 pixels lower. `e2e/risk-matrix-legend.spec.ts` asserts the band is beside the matrix at 1200
@@ -492,8 +498,8 @@ owner decision before anyone measured it.
 
 Test deltas, measured on the branch. Web Vitest moved from 276 files and 2,251 tests to **277 and
 2,253**; the Playwright Chromium suite moved from **67 to 69**. The API unit suite is unchanged at
-**1,996 passed with the same two release-ceremony skips** — the rename touched API strings and their
-three test assertions, not counts. Ruff, both strict `tsc` projects, the production build, mypy across
+**1,996 passed with the same two release-ceremony skips** — the rename touched API strings, two test
+assertions and a test-module docstring, not counts. Ruff, both strict `tsc` projects, the production build, mypy across
 449 source files, and the three repository authority gates were all clean.
 
 ## IDENTITY ONBOARDING
