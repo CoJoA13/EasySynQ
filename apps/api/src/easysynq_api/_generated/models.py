@@ -1770,7 +1770,7 @@ class RegisterProvenance(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    report_name: Annotated[str, Field(examples=["Controlled Document Register"])]
+    report_name: Annotated[str, Field(examples=["Master Document List"])]
     generated_by: Annotated[str, Field(description="The caller's display name / email / id.")]
     generated_at: AwareDatetime
     as_of: Annotated[

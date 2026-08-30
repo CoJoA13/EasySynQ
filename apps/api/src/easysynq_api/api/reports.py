@@ -92,7 +92,7 @@ async def document_control_register_endpoint(
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """The Controlled Document Register (ISO 9001 §7.5.3 master list) — a provenance-stamped,
+    """The Master Document List (ISO 9001 §7.5.3) — a provenance-stamped,
     content-hashed master list of every controlled Document the caller may read. Full set (no
     pagination); facet filters via the shared ``filter[field][op]`` grammar. Read-only (no
     audit_event).

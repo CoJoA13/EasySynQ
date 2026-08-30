@@ -555,7 +555,7 @@ export const complianceFixture = {
 // onUnhandledRequest:"error"; per-test overrides supply populated rows/403).
 export const documentControlRegisterFixture = {
   provenance: {
-    report_name: "Controlled Document Register",
+    report_name: "Master Document List",
     generated_by: "test",
     generated_at: "2026-07-19T12:00:00+00:00",
     as_of: "2026-07-19T12:00:00+00:00",

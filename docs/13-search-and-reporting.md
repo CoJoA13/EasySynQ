@@ -1,11 +1,11 @@
 # Search, Navigation & Reporting / Dashboards
 
-This section specifies how users **find** anything in the Controlled Vault and how they **see the state** of the QMS at a glance. It defines a unified full-text-plus-metadata search with faceted filtering, clause/process navigation, saved searches, and find-where-used (impact analysis); then it specifies the reporting and dashboard layer for QMS health — the Management-Review dashboard, the persona-targeted KPI dashboards, the canonical document-control reports (Controlled Document Register, Revision-History report, Distribution-and-Acknowledgement report), and auditor-grade PDF/Excel exports. Everything here is a **lens over the one QMS** (per the domain model's three-lenses rule): search and reports never duplicate truth. All results are **permission-filtered server-side, deny-by-default** (architecture invariant #4), so a user — including a time-boxed external auditor (Olsen) — only ever sees, searches, or exports what their effective permissions grant.
+This section specifies how users **find** anything in the Controlled Vault and how they **see the state** of the QMS at a glance. It defines a unified full-text-plus-metadata search with faceted filtering, clause/process navigation, saved searches, and find-where-used (impact analysis); then it specifies the reporting and dashboard layer for QMS health — the Management-Review dashboard, the persona-targeted KPI dashboards, the canonical document-control reports (Master Document List, Revision-History report, Distribution-and-Acknowledgement report), and auditor-grade PDF/Excel exports. Everything here is a **lens over the one QMS** (per the domain model's three-lenses rule): search and reports never duplicate truth. All results are **permission-filtered server-side, deny-by-default** (architecture invariant #4), so a user — including a time-boxed external auditor (Olsen) — only ever sees, searches, or exports what their effective permissions grant.
 
 > **Implementation status (audited 2026-07-30).** The shipped search is PostgreSQL FTS over
 > authorized Effective-document metadata (identifier, title, legacy identifier, and area code);
 > hits display clause references, while clause-number lookup uses the Library filter. The global
-> palette, results page, Compliance Checklist, and Controlled Document Register ship. Body/OCR
+> palette, results page, Compliance Checklist, and Master Document List ship. Body/OCR
 > content search, OpenSearch, facets, saved searches, generic audit-log search, and the broader
 > dashboard/export catalog below remain target design.
 
@@ -82,7 +82,7 @@ flowchart LR
 
 > **Status (audited 2026-07-30):** Shipped (S10 backend + S-web-6 UI) = the
 > **Effective-document metadata plane** (identifier, title, legacy identifier, and area code), the
-> ⌘K palette, the ★ Compliance Checklist, and the Controlled Document Register. Clause references
+> ⌘K palette, the ★ Compliance Checklist, and the Master Document List. Clause references
 > are returned for display but are not query terms. **Deferred:** the **content plane** (body-text /
 > OCR FTS), OpenSearch faceting, saved searches, generic audit-log search, and the remaining
 > §3–§7 report catalog. The §2 narrative below describes the full target design.
@@ -354,7 +354,7 @@ The widget set is **deliberately aligned to the ISO 9001:2015 §9.3.2 required m
 | Recently effective | Calendar/due strip | Newly Released this period + upcoming effective dates |
 | Soon-due reviews | Calendar strip | Reviews due in next 30/60/90 d |
 
-Backing reports launched from here: **Controlled Document Register**, **Revision-History report**, **Distribution-and-Acknowledgement report** (§6).
+Backing reports launched from here: **Master Document List**, **Revision-History report**, **Distribution-and-Acknowledgement report** (§6).
 
 ### 5.4 Approvals & My Tasks dashboard (reconciled per Decisions Register R23)
 
@@ -428,7 +428,7 @@ Header: process owner (OrgRole), RACI, "(unlinked) artifacts" nudge if governanc
 
 These are the audit-defensible, parameterized, exportable reports a certification auditor expects. Each carries a **report header block** for defensibility: report name, generated-by, generated-at (with timezone), as-of timestamp, applied filters/scope, EasySynQ version, page x/y, and a **content hash** of the data set (so an exported file's integrity is verifiable).
 
-### 6.1 Controlled Document Register ("master document list")
+### 6.1 Master Document List (the controlled document register)
 
 **The master list of every controlled Document.** Default scope: all Documents the requester may see;
 filterable by clause/process/type/status/owner (same facet object as search). As built, entry to the
@@ -561,5 +561,5 @@ The pack is **scope-limited** to exactly the audit's clauses/processes/date-rang
 3. **Find-where-used** is a first-class impact tool sourced from authoritative PG link tables; obsoleting an artifact runs a where-used safety check to prevent silent loss of `★` coverage.
 4. **Dashboards are live and persona-scoped**; the Management-Review dashboard is structured exactly to ISO 9001:2015 §9.3.2 inputs and produces a fileable §9.3 record.
 5. **KPIs and reports compute from PostgreSQL only** (authoritative), with RAG from explicit configured thresholds — status against a rule, never an auto-compliance judgment (N9).
-6. **The three canonical document-control reports** (Controlled Document Register, Revision-History, Distribution-and-Acknowledgement) plus the broader templates all share one parameterized engine and export to auditor-grade **PDF/Excel** with embedded provenance + content-hash and an audited export event.
+6. **The three canonical document-control reports** (Master Document List, Revision-History, Distribution-and-Acknowledgement) plus the broader templates all share one parameterized engine and export to auditor-grade **PDF/Excel** with embedded provenance + content-hash and an audited export event.
 7. **Extensibility preserved:** `framework_id`/M:N `clause_map` make multi-standard search/reporting additive; the append-only `signature_event` data flows into exports today and is the seam for future Part 11 signed reports — neither built now.

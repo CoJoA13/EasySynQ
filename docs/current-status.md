@@ -2,12 +2,12 @@
 easysynq_status_schema: 1
 as_of: "2026-08-29"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-ui-5c"
+last_shipped_slice: "S-ui-5d"
 migration_head: "0091"
 next_migration: "0092"
 api_unit_tests: 1996
-web_test_files: 276
-web_tests: 2251
+web_test_files: 277
+web_tests: 2253
 contract_tests: 284
 integration_passed: 1224
 integration_skipped: 2
@@ -29,7 +29,7 @@ main document, workflow, compliance, reporting, audit, ingestion, drift, objecti
 DCR, improvement, risk, context, interested-party, identity-provisioning, first-run setup, and read-only
 Records surfaces. Retention Policy and Evidence Pack management remain without dedicated SPA routes.
 
-The latest completed work is the S-ui interface program, slices S-ui-1 to S-ui-5c. Routes and information
+The latest completed work is the S-ui interface program, slices S-ui-1 to S-ui-5d. Routes and information
 architecture are unchanged, as is every permission and gating behaviour, and no migration or permission key
 was added. It is otherwise a surface and layout rework, with two exceptions that are not cosmetic. S-ui-2
 corrected cache invalidation for the caller's own task list, which was previously refreshed only by the
@@ -60,19 +60,19 @@ mechanisms the owner had reported as one: sortable column headers wrapping, fixe
 shared `SortableTh`, and table overflow being invisible, fixed by defaulting `ScrollArea` to
 `type: "auto"`.
 
-Everything these three slices deliberately left unfixed now has a ledger record:
-[`RES-DOC-SURFACE-LABEL`](open-residuals.md) (the controlled-document surface is named four different
-things, and the user manual's version is a wrong navigation instruction; the owner chose **"Master
-document list"** for all four),
-[`RES-REGISTER-LABEL-NO-PIN`](open-residuals.md) (those labels have no source-text contract, which is
-how the breadcrumb silently disagreed with the rail for a whole slice),
-[`RES-RISK-MATRIX-LEGEND`](open-residuals.md) (fix written and owner-approved; the `/risks` reflow it
-was thought to cause was measured afterwards and does not happen — capping the matrix makes the
-scorecard band wrap below it 90 pixels *later*, at 1140 rather than 1230 — so it stands on a corrected
-premise and is not yet shipped),
-[`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred),
-[`RES-RULEPACK-BRITISH-KEYWORDS`](open-residuals.md) (the sweep missed the ingestion rule pack, where
-the consequence is classification rather than cosmetic), and the pre-existing
+S-ui-5d then closed the three of those the owner chose to act on. The controlled-document surface had
+acquired four different names, one of which — the user manual's — was a wrong navigation instruction
+naming a rail entry that no longer existed; every one of them is now **"Master document list"**,
+including the API's `report_name`, which is the formal title in the provenance stamp and is therefore
+Title Case where the interface labels are sentence case. That reached the OpenAPI document, so the
+contract lock moved `041da029…` → `2b8c2503…`. `src/lib/shellLabelContract.test.ts` now pins the rail,
+breadcrumb and document-title map to one string per destination, which is the guard whose absence let
+the breadcrumb disagree with the rail for a whole slice. And the risk-matrix legend is capped to the
+grid it keys.
+
+What remains deferred is [`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred),
+[`RES-RULEPACK-BRITISH-KEYWORDS`](open-residuals.md) (the spelling sweep missed the ingestion rule
+pack, where the consequence is classification rather than cosmetic), and the pre-existing
 [`RES-CAPA-BOARD-NO-BROWSER-COVERAGE`](open-residuals.md). The owner's rail-foot idea — a colour-scheme
 toggle, perhaps a clock — is a feature request rather than a defect and is deliberately not tracked.
 
@@ -166,10 +166,37 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; this slice does
 not rewrite that implementation-evidence field merely because its branch SHA differs.
 
-Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above now describes the tree at
-`main` after S-ui-5c, which also carries the slices that shipped between 2026-08-17 and this date; the
-S-ui-4 and 2026-08-17 paragraphs below are retained as the evidence for their own trees and are not
-restated as current.
+Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above describes the **S-ui-5d
+branch**, not `main`: its web figures (277 files, 2,253 tests) include that slice's two new suites and
+are ahead of `main` until it merges. Everything else in the frontmatter is unchanged by S-ui-5d. The
+S-ui-5c, S-ui-4 and 2026-08-17 paragraphs below are retained as the evidence for their own trees and are
+not restated as current.
+
+Measured locally on the S-ui-5d branch. API unit passed **1,996 tests with the same 2 expected skips**
+in 35.41 seconds; Ruff lint and format-check were clean over 769 files and mypy found no issue in 449
+source files. Web Vitest passed **277 files and 2,253 tests** in 428.77 seconds — up two tests and one
+file, the new `src/lib/shellLabelContract.test.ts`. The full `npm run test:browser` script passed **69
+of 69 Chromium tests** in 1.4 minutes, up two: `e2e/risk-matrix-legend.spec.ts`. ESLint, both strict
+`tsc` projects and the production build were clean, as were `check-repo-authority.sh`,
+`check-no-site-data.sh` and the 91-fixture agent-authority test. `gen-contracts.sh --check` reports the
+contract in sync at SHA-256 `2b8c25038de77414cf0d2ef1473611dd2a9c5e335915a54a3bcca2304bf45f3b`,
+regenerated rather than hand-edited and superseding `041da029…`; the Alembic head stayed
+`0091_documents_list_index`, so `0092` is still next.
+
+Every claim S-ui-5d makes about layout is mutation-verified, because jsdom can see none of it. Removing
+the `maxWidth` cap reddens both new browser cases — including the one asserting the scorecard band sits
+beside the matrix at 1200 pixels, which is what establishes that the cap *widens* the side-by-side range
+rather than narrowing it. Reverting only the breadcrumb, which is precisely the S-ui-5a defect, reddens
+both cases in the new label contract; leaving a stale label beside the new one reddens only the second,
+so neither assertion is redundant.
+
+The integration and published response-contract suites were NOT run locally for S-ui-5d, and the
+frontmatter's 1,224 integration and 284 contract figures are still carried from the S-ui-4 CI run. That
+carry is weaker here than it was for S-ui-5b and S-ui-5c, which were front-end-only: S-ui-5d changes an
+API response value and the OpenAPI document, so those suites are exactly the ones with something new to
+say about it. Its pull-request CI exercises them; no local run was performed. Firefox, WebKit,
+assistive-technology sessions, SMTP delivery, deployment, live acceptance and the disposable Fedora
+proof did not run and are not described as passed.
 
 Measured locally on the merged S-ui-5c tree `6f0e0fd`. API unit passed **1,996 tests with the same 2
 expected skips** in 32.86 seconds, the release-ceremony image-digest and image-build opt-ins; S-ui-5a

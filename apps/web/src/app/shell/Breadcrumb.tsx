@@ -16,7 +16,7 @@ const LABELS: Record<string, string> = {
   settings: "Settings",
   compliance: "Compliance",
   reports: "Reports",
-  "document-control": "Controlled document register",
+  "document-control": "Master document list",
   capa: "Nonconformity and CAPA",
   complaints: "Complaints",
   ncrs: "NCRs",

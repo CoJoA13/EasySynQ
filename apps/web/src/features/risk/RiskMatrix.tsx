@@ -63,7 +63,17 @@ export function RiskMatrix({ rows, selected }: { rows: RiskRow[]; selected?: Ris
   const yOf = (s: number) => M.top + (5 - s) * CELL;
 
   return (
-    <Stack gap="xs">
+    // The SVG caps itself at VIEW_W (306px) but the legend below it is an ordinary flex Group, so
+    // without a cap on the SHARED parent the legend takes its own max-content — measured 396px on
+    // /risks — and the band-tone key runs 90px wider than the grid it keys. Capping the Stack keeps
+    // the two the same width at every viewport.
+    //
+    // ⚠ This was held back for a slice on the belief that capping the column would push the page's
+    // scorecard band from beside the matrix to below it. Measurement showed the OPPOSITE: the band
+    // and the matrix share one `Group wrap="wrap"`, so the matrix column's width decides when the
+    // band wraps, and shrinking 396 -> 306 buys 89px MORE side-by-side width (the band drops below
+    // at <=1233px uncapped and <=1144px capped). e2e/risk-matrix-legend.spec.ts pins that direction.
+    <Stack gap="xs" style={{ maxWidth: VIEW_W }}>
       <svg
         role="img"
         aria-label={summary}

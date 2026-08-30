@@ -406,9 +406,11 @@ filter-row alignment and inter-card gap stay blocked on that board having no bro
 decision was needed. The risk-matrix legend overflows its 306-pixel matrix — measured 396
 pixels wide, 90 more than the grid it keys — and the fix is a `maxWidth` cap on the matrix `Stack`. It
 was held back on the belief that it reflows `/risks`, and the owner accepted that trade; measuring it
-afterwards showed the belief was **backwards**. The band wraps below the matrix at 1230 pixels and
-narrower today, and at 1140 and narrower once capped, so the fix makes the band wrap *less* often by
-90 pixels and moves no band from beside the matrix to below it. It is queued rather than shipped here,
+afterwards showed the belief was **backwards**. The band wraps below the matrix at 1233 pixels and
+narrower today, and at 1144 and narrower once capped, so the fix makes the band wrap *less* often by
+89 pixels and moves no band from beside the matrix to below it. (These three figures were first taken
+from a five-pixel sweep and read 1230, 1140 and 90; S-ui-5d re-measured at one-pixel resolution and
+they are corrected here to the precise values rather than left disagreeing with the later entry.) It is queued rather than shipped here,
 now on a corrected premise (`RES-RISK-MATRIX-LEGEND`). The interested-parties
 register's enum columns change width between filter states; `layout="fixed"` with pinned pixel widths
 would fix it, but the widths must be harvested after S-ui-5c's nowrap headers changed every
@@ -435,6 +437,70 @@ asserts those strings. One web unit test does — `ProgramPage.test.tsx:249` mat
 title, against its own MSW fixture at `:240`, which the same commit had to edit in lockstep. That
 assertion is self-referential and pins nothing about the API. Each pull request passed all fifteen pull-request checks with `release-gate` skipped
 as designed.
+
+### S-ui-5d — one name for the master document list, and the legend inside its grid
+
+Recorded 2026-08-29. Closes `RES-DOC-SURFACE-LABEL`, `RES-REGISTER-LABEL-NO-PIN` and
+`RES-RISK-MATRIX-LEGEND`, all three opened hours earlier by the S-ui-5 record above — which is the
+ledger working as intended rather than churn: the record named the work, the owner chose between the
+options it laid out, and the fix closed it with linked evidence. No migration and no permission key;
+the Alembic head stayed `0091_documents_list_index`. Not front-end-only — the contract lock moved
+`041da029…` → `2b8c2503…`.
+
+**The surface had four names and now has one.** The rail said "Controlled register", the breadcrumb
+"Controlled document register", the page heading "Controlled Document Register", and the user manual
+"Document register" — the last being the only one that was actually *wrong* rather than merely
+inconsistent, because it instructed the reader to use a rail entry that no longer existed under that
+name. The owner chose **"Master document list"**, on the grounds that a QMS and audit audience
+recognises the ISO 7.5.3 artefact faster under that name than under any of the four.
+
+The rename deliberately reaches the API. `services/reports/document_control.py`'s `_REPORT_NAME` is
+returned as `report_name` and rendered in the page's provenance stamp — the generated-by, at, scope and
+SHA-256 block handed to an auditor — so leaving it behind would have reproduced the same defect one
+element lower down the same page. Two casings are carried on purpose and are not a slip: the interface
+labels are sentence case, "Master document list", because they are wayfinding; the artefact's formal
+name in the provenance stamp is Title Case, "Master Document List", because that is the document's
+title. The rename was also back-propagated to the two normative sections the shipped docstring cites,
+`doc 13 §6.1` and `doc 15 §8.15`, so a reader following that pointer does not land on a specification
+naming the artefact something the product no longer calls it — without which the surface would have
+kept a fifth name in the one place that is normative. `ReportsRegisterPage.test.tsx` previously asserted `getAllByText(...).length >= 2` on the single
+string the heading and the stamp then shared; it now pins each separately, which is stronger, and
+`getByText` is case-sensitive so neither query can satisfy itself with the other's string.
+
+**The guard that was missing is the more durable half.** `src/lib/shellLabelContract.test.ts` is a
+source-text contract in the idiom of `registerHeaderAdoption.test.ts`, pinning the rail entry, the
+breadcrumb `LABELS` key and the `effectiveView.ts` title map to one string per destination. S-ui-5a is
+why it exists: it renamed the rail and the title map, its commit message stated the breadcrumb moved
+with them, and the breadcrumb had not been touched — three names, for a whole slice, with every suite
+green, because each file was individually correct and only their disagreement was the defect. The
+contract has two cases and both earn their place: reverting only the breadcrumb reddens both, while
+leaving a stale label *beside* the new one reddens only the second. Registers are deliberately out of
+scope here; their heading levels remain `RES-REGISTER-HEADING-LEVELS`.
+
+**The risk-matrix legend now fits the grid it keys**, via `style={{ maxWidth: VIEW_W }}` on the shared
+`Stack` — the SVG already capped itself at 306 pixels, but the legend beneath it did not, so the
+band-tone key rendered 396 pixels wide, 90 wider than the grid it describes.
+
+⚠ **The reason this was held back for a whole slice turned out to be false, and the measurement is
+worth keeping.** It was believed that capping the matrix column would push the `/risks` scorecard band
+from beside the matrix to below it, and the owner accepted that reflow when approving the fix.
+Measurement showed the opposite. The matrix and the band sit in one `Group` with `wrap="wrap"`, so the
+matrix column's width decides when the band wraps beneath it; uncapped, that column takes the legend's
+max-content of 396 pixels and the band drops below at 1233 pixels and narrower, while capped the column
+is 306 and the band drops below only at 1144 and narrower. Measured at one-pixel resolution: the band is
+beside the matrix from 1234 uncapped and from 1145 capped, so the cap buys **89 pixels more**
+side-by-side width and moves no band from beside to below. The only positional change is at widths
+where the band already sits below, where the narrower legend takes one more line and the band starts
+about 26 pixels lower. `e2e/risk-matrix-legend.spec.ts` asserts the band is beside the matrix at 1200
+pixels, which fails against the pre-fix tree, so that improvement is evidence rather than assertion.
+The lesson generalises: a layout concern stated in prose is a hypothesis, and this one survived into an
+owner decision before anyone measured it.
+
+Test deltas, measured on the branch. Web Vitest moved from 276 files and 2,251 tests to **277 and
+2,253**; the Playwright Chromium suite moved from **67 to 69**. The API unit suite is unchanged at
+**1,996 passed with the same two release-ceremony skips** — the rename touched API strings, two test
+assertions and a test-module docstring, not counts. Ruff, both strict `tsc` projects, the production build, mypy across
+449 source files, and the three repository authority gates were all clean.
 
 ## IDENTITY ONBOARDING
 

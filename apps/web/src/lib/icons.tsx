@@ -288,7 +288,7 @@ export function IconDrift(props: IconProps) {
   );
 }
 
-// Controlled register — the tabular read of controlled documents.
+// Master document list — the tabular read of controlled documents.
 export function IconRegister(props: IconProps) {
   return (
     <Svg {...props}>

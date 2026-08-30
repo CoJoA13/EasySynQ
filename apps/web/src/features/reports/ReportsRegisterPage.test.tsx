@@ -14,7 +14,7 @@ import type { DocumentControlRegister } from "../../lib/types";
 
 const REG: DocumentControlRegister = {
   provenance: {
-    report_name: "Controlled Document Register",
+    report_name: "Master Document List",
     generated_by: "Mara",
     generated_at: "2026-07-19T12:00:00+00:00",
     as_of: "2026-07-19T12:00:00+00:00",
@@ -194,7 +194,7 @@ describe("ReportsRegisterPage", () => {
     const sort = screen.getByRole("button", { name: "Sort by Identifier" });
     await user.click(sort);
 
-    expect(document.title).toBe("EasySynQ — Controlled register");
+    expect(document.title).toBe("EasySynQ — Master document list");
     expect(sort).toHaveFocus();
     expect(screen.getByRole("status", { name: "Page navigation" })).toHaveTextContent("");
   });
@@ -203,8 +203,12 @@ describe("ReportsRegisterPage", () => {
     server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)));
     renderWithProviders(<ReportsRegisterPage />);
     expect(await screen.findByText("SOP-QA-001")).toBeInTheDocument();
-    // The page title AND the provenance banner's report_name both render this string.
-    expect(screen.getAllByText("Controlled Document Register").length).toBeGreaterThanOrEqual(2);
+    // These two are deliberately DIFFERENT strings, so pin each rather than counting one twice.
+    // The heading is a sentence-case UI label; the provenance banner carries the artefact's formal
+    // Title Case name, which comes from the API's `report_name` and is what an auditor is handed.
+    // getByText is case-sensitive, so neither query can satisfy itself with the other's string.
+    expect(screen.getByRole("heading", { name: "Master document list" })).toBeInTheDocument();
+    expect(screen.getByText("Master Document List")).toBeInTheDocument();
     expect(screen.getByText(/sha256:abc123/)).toBeInTheDocument();
     expect(screen.getByText("Rev A")).toBeInTheDocument();
     expect(
