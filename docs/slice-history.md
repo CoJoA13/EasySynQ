@@ -672,7 +672,8 @@ this slice touches no TypeScript. The three repository authority gates are clean
 
 ### S-rulepack-approval-block — the last British needle, and why an addition needs a different proof
 
-Recorded 2026-08-31. Closes the residual S-rulepack-audit-program's review opened and opens nothing in
+Recorded 2026-08-31 after merging [`#520`](https://github.com/CoJoA13/EasySynQ/pull/520) as
+`7ec59ca`. Closes the residual S-rulepack-audit-program's review opened and opens nothing in
 its place: the classifier now carries no known spelling gap. No migration (the Alembic head stayed
 `0091_documents_list_index`), no permission key, no endpoint and no contract change. Filed beside the
 slice above because it is the last step of the same R68 arc, but the repair is a different shape and
@@ -753,7 +754,8 @@ redden on any future recalibration for no good reason. That reasoning applies eq
 so naming the third does not change the test decision — but a reader of the neutral history should
 not be left believing this change can only ADD caution, because it cannot only add caution.
 
-Test deltas, measured on the S-rulepack-approval-block branch. API unit moved from **1,998 to 2,001**
+Test deltas, measured on the branch, whose tree the squash preserved byte-for-byte as `7ec59ca`
+(verified by `git diff`, not asserted). API unit moved from **1,998 to 2,001**
 passed with the same two release-ceremony skips — three new tests in an existing file, so the file
 count is unchanged. Ruff lint and format-check were clean over 769 files and mypy found no issue in
 449 source files. The web, integration and response-contract suites were NOT run and are not restated:

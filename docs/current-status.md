@@ -189,10 +189,13 @@ argued from the corpus text: all 45 entries were classified under both the old a
 and zero of them differ in any field. The corpus keeps only "Approved by" phrasings, which is why
 nothing moved; it was not edited to make the band hold.
 
-Measured locally on the S-rulepack-approval-block branch. API unit passed **2,001 with the same 2
+Measured locally on the branch, whose tree the squash preserved byte-for-byte as `7ec59ca` —
+verified by `git diff`, not asserted. API unit passed **2,001 with the same 2
 expected skips**; Ruff lint and format-check were clean over 769 files and mypy found no issue in 449
-source files. The web, integration and response-contract suites were not run and are not described as
-passed. Five mutations were run against the tree the tests execute, each reddening for its predicted
+source files. The web, integration and response-contract suites were not run LOCALLY and no local
+result is claimed for them; `#520`'s own CI did exercise them, settling at **15 passing checks of 16**
+with `release-gate` reporting "skipping" as usual. Their frontmatter counts stay carried rather than
+refreshed, because fresh counts were not captured from those runs. Five mutations were run against the tree the tests execute, each reddening for its predicted
 reason: reverting the fix, deleting BOTH needles outright, storing the new needle capitalised,
 deleting `_eval_predicate`'s `.lower()`, and implementing the US spelling as a separate pack matcher
 instead of extending the predicate. Two are isolating. The `.lower()` deletion reddens the
