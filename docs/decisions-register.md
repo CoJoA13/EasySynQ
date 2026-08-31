@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R68) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, and R68 locks American-US English as the house spelling standard for user-facing text.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R69) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, and R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R68
+## Part 3 — Resolutions R1–R69
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2206,6 +2206,61 @@ a block carrying both spellings still scores once.
 the user and administrator manuals, and any future slice adding SPA or API strings.
 
 Bumps the resolutions range **R1–R67 → R1–R68**.
+
+---
+
+### R69 — The interface colour scheme is an account preference, AUTO stays selectable, and the rail-foot clock reads org time — 2026-08-31
+
+**Context.** The SPA has run `MantineProvider defaultColorScheme="auto"` since S-ui-1, and
+`tokens.css` has carried a complete, independently contrast-verified dark block for just as long.
+What was missing was never the dark scheme — it was a writer. No component called `setColorScheme`,
+so the preference machinery had no input and the scheme simply tracked the operating system. The
+owner asked for a rail foot carrying a scheme control and possibly a clock; three decisions had to be
+settled before it could be built, and two premises in the original framing were false (the dark
+scheme was already complete, and browser-level persistence was already wired).
+
+**Normative rules.**
+
+1. **The colour-scheme preference lives on the ACCOUNT**, in `app_user.color_scheme` (migration
+   `0092`), exposed on `GET /me` and written by `PATCH /me/preferences`. The SPA additionally caches
+   it in `localStorage` and treats the account as the authority. The cache is not a convenience: the
+   SPA holds its tokens **in memory only**, so every reload starts logged-out and re-authenticates,
+   and during that token-less window there is no `/me` to read — an account-only preference would
+   therefore flash the wrong scheme on every single load. Equally, a browser-only preference does not
+   follow the user to a second machine. Each store answers the case the other cannot.
+2. **`AUTO` is a real, selectable value**, not merely the initial one. A user who chooses LIGHT or
+   DARK can return to OS-following. Without this, the behaviour the product shipped for its whole
+   life becomes unreachable the first time anyone touches the control.
+3. **A rail-foot clock displays the ORGANIZATION timezone**, not browser-local, and is labelled so it
+   cannot be mistaken for local time. This follows the existing `useOrgDate` convention (U20, the C11
+   class), which already renders every register and timeline date on the organization calendar
+   because that is how records and audit events are stamped. A browser-local clock would not merely
+   risk confusion — it would contradict a shipped convention, disagreeing with the timeline directly
+   above it for any user east or west of the organization.
+
+**No permission key.** A user editing their own preference rides the authentication-only `GET /me`
+precedent: the target is always `get_current_user`, the route accepts no user id, and it can reach no
+other account — so there is nothing for a key to gate. Accepting an id is precisely what would turn
+it into an admin surface, and an integration test pins that a second account is untouched.
+
+**Compatibility.** Migration `0092` adds the column nullable, backfills every existing account to
+`AUTO` — so no user sees a change until they choose one — and then sets NOT NULL. It carries no
+`server_default` on either side, because an enum default reflects back as `'AUTO'::color_scheme` and
+is a standing `alembic check` drift source; this mirrors the existing `app_user.status` column. The
+contract gains `ColorScheme`, `MePreferencesUpdate` and the `PATCH /me/preferences` operation, and
+`AppUser.color_scheme` is required, so the lock moved `2b8c2503…` → `786f6782…`.
+
+**Scope.** This entry settles the model. The rail-foot component itself — the three-state control and
+the clock — is a separate slice; only the persistence and its contract ship with this decision.
+
+**Back-propagation:** `15-api-design.md` §5.2 and `14-data-model.md`'s `app_user` row (both done
+here), the SPA shell when the rail foot lands, and any future SMALL scalar per-user preference, which
+should extend `MePreferencesUpdate` rather than add a route of its own. That is not a rule against
+sibling routes in general: `/me/notification-preferences` is correctly its own surface, because
+digest modes, quiet hours and per-class channels are a modelled domain with their own table, not a
+scalar.
+
+Bumps the resolutions range **R1–R68 → R1–R69**.
 
 ---
 

@@ -36,6 +36,30 @@ user_status_enum = SAEnum(
 )
 
 
+class ColorScheme(enum.Enum):
+    """The user's own interface colour-scheme preference (R69).
+
+    ``AUTO`` is the default and means "follow the operating system", which is the behaviour the SPA
+    shipped before a control existed (``MantineProvider defaultColorScheme="auto"``). It stays a
+    real, selectable value rather than merely the initial one, so a user who picks LIGHT or DARK can
+    get OS-following back.
+    """
+
+    LIGHT = "LIGHT"
+    DARK = "DARK"
+    AUTO = "AUTO"
+
+
+COLOR_SCHEME_VALUES = tuple(m.value for m in ColorScheme)
+
+color_scheme_enum = SAEnum(
+    ColorScheme,
+    name="color_scheme",
+    values_callable=lambda e: [m.value for m in e],
+    create_type=False,
+)
+
+
 class AppUser(Base):
     __tablename__ = "app_user"
 
@@ -58,6 +82,14 @@ class AppUser(Base):
         nullable=False,
     )
     mfa_enrolled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # No server_default, matching `status` above: an enum server_default reflects back as
+    # `'AUTO'::color_scheme` and is a standing `alembic check` drift source. 0092 backfills the
+    # existing rows instead, and every insert goes through this Python-side default.
+    color_scheme: Mapped[ColorScheme] = mapped_column(
+        color_scheme_enum,
+        default=ColorScheme.AUTO,
+        nullable=False,
+    )
     is_guest: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     manager_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

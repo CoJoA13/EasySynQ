@@ -414,23 +414,17 @@ class Status3(StrEnum):
     RETIRED = "RETIRED"
 
 
-class AppUser(BaseModel):
+class ColorScheme(StrEnum):
+    LIGHT = "LIGHT"
+    DARK = "DARK"
+    AUTO = "AUTO"
+
+
+class MePreferencesUpdate(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    id: UUID
-    keycloak_subject: str
-    display_name: str | None = None
-    email: str | None = None
-    status: Status3
-    is_guest: bool
-    org_timezone: Annotated[
-        str,
-        Field(
-            description="Canonical organization/working-calendar IANA timezone for date rendering.",
-            examples=["America/Chicago"],
-        ),
-    ]
+    color_scheme: ColorScheme | None = None
 
 
 class UserAdmin(BaseModel):
@@ -4879,6 +4873,26 @@ class ReviewOutputUpdate(BaseModel):
     description: Annotated[str | None, Field(max_length=4000, min_length=1)] = None
     owner_user_id: UUID | None = None
     due_date: date_aliased | None = None
+
+
+class AppUser(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: UUID
+    keycloak_subject: str
+    display_name: str | None = None
+    email: str | None = None
+    status: Status3
+    is_guest: bool
+    org_timezone: Annotated[
+        str,
+        Field(
+            description="Canonical organization/working-calendar IANA timezone for date rendering.",
+            examples=["America/Chicago"],
+        ),
+    ]
+    color_scheme: ColorScheme
 
 
 class Document(BaseModel):

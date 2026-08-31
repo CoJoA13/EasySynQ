@@ -230,6 +230,7 @@ or `/auth/logout` routes.
 | POST | `/auth/step-up` | Reserved Part 11 seam. v1 performs no re-authentication and returns an acknowledgement with `acr_satisfied=true` and `enforced=false`; it does not mint or upgrade a token. |
 | GET | `/me` | Current `app_user` profile. |
 | GET | `/me/permissions?scope_level=&scope_id=` | Resolved effective permissions for the caller in a given scope (drives UI gating). |
+| PATCH | `/me/preferences` | Update the caller's own interface preferences (R69; `color_scheme`). Authentication-only and partial — it takes no user id, so it can reach no other account, and an omitted property is left unchanged. Returns the full updated user. |
 | GET | `/tasks?assignee=me&state=PENDING` | Canonical self-scoped **My Tasks** inbox for assignments and candidate-pool work. There is no separate `/me/actions` alias. |
 | GET | `/notifications?unread_only=true` | Awareness inbox, newest first; authenticated-self and always scoped to the caller. |
 | POST | `/notifications/{id}/read` / `/notifications/read-all` | Mark one notification, or every unread notification for the caller, as read. |
@@ -248,7 +249,7 @@ Every authenticated route declares (a) the **required permission key(s)** (from 
 
 | Domain | Base path(s) | Backing entities (`14`) |
 |---|---|---|
-| Auth / Identity | `/auth/config`, `/auth/step-up`, `/me`, `/me/permissions` | `app_user`, Keycloak |
+| Auth / Identity | `/auth/config`, `/auth/step-up`, `/me`, `/me/permissions`, `/me/preferences` | `app_user`, Keycloak |
 | Notifications | `/notifications`, `/notifications/stream`, `/me/notification-preferences` | `notification`, `notification_preference` |
 | Users | `/users` | `app_user` |
 | Roles | `/roles` | `role`, `role_grant`, `role_assignment` |
