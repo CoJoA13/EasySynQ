@@ -10,8 +10,11 @@ import { installRegisterApi } from "./support/api";
 // The second case is the one worth explaining. The matrix and the page's scorecard band sit in one
 // `Group wrap="wrap"`, so the matrix column's width decides when the band drops beneath it. The
 // fix was held back on the belief that capping the column would push the band below; measurement
-// showed the opposite. Uncapped the band wraps at <=1230px, capped at <=1140px, so the cap buys 90px
-// MORE side-by-side width. Asserting "beside at 1200" therefore fails against the pre-fix tree,
+// showed the opposite. Uncapped the band wraps at <=1233px, capped at <=1144px, so the cap buys 89px
+// MORE side-by-side width. (These figures were first taken from a five-pixel sweep and read 1230,
+// 1140 and 90; S-ui-5d re-measured at one-pixel resolution and docs/slice-history.md carries the
+// corrected values. This comment was missed by that correction.)
+// Asserting "beside at 1200" therefore fails against the pre-fix tree,
 // which is what makes it evidence rather than decoration.
 const read = async (page: import("@playwright/test").Page) =>
   page.evaluate(() => {

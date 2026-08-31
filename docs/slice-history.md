@@ -504,6 +504,103 @@ Test deltas, measured on the merged tree `bdd8f2f`. Web Vitest moved from 276 fi
 assertions and a test-module docstring, not counts. Ruff, both strict `tsc` projects, the production build, mypy across
 449 source files, and the three repository authority gates were all clean.
 
+### S-ui-6 — the CAPA board gets a browser, and a summary row that earns its width
+
+Recorded 2026-08-30. Closes `RES-CAPA-BOARD-NO-BROWSER-COVERAGE` and opens
+`RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER` in its place. Front-end-only: no migration (the Alembic head
+stayed `0091_documents_list_index`), no permission key, no endpoint and no contract change — the
+contract lock is untouched at `2b8c2503…`.
+
+**The unlock was the one the record had already been corrected to.** `#516` had replaced this
+residual's original closure contract — "add a `capa` case to `e2e/support/registers.ts`" — after
+checking rather than assuming it, and that correction held up: `RegisterCase` is table-shaped and
+`/capa`'s table has no `Table.ScrollContainer`, so the shared specs would measure something absent.
+`/capa` is instead a new `ScenarioRoute` (`RegisterCase["key"] | "capa"`) with its own spec. Wiring it
+needed four reads, one of which no reading of `CapaBoardPage` predicts: `/directory/users`, because the
+page mounts `<CapaDrawer>` unconditionally and that component's `useUserDirectory()` runs even at a
+null capaId. A fifth was closed pre-emptively — `CapaDrawer` also asks `usePermissions({ level:
+"SYSTEM" })` whenever its CAPA has no process, which builds `?scope_level=SYSTEM`, a URL that reaches
+the fail-closed `throw`. It does not fire today only because that observer shares the query key
+`["me-permissions","SYSTEM",null]` with `TopBar`'s unscoped call, whose effect runs first and wins the
+queryFn. That ordering is stable but incidental, so the harness now answers it.
+
+**The first reported defect reproduces, and gets worse as the window widens.** The three facet selects
+took their natural width — a fixed ~648-pixel row — while the summary grid above them tracks the
+viewport, so the two blocks' right edges parted by 44 pixels at 1000 and **324 at 1280**. `grow`
+with `preventGrowOverflow={false}` closes it, and the flush assertion is pinned at both widths.
+
+**The second reported defect did not reproduce as described, and the divergence is the point.** The
+record named "a narrow vertical gap between the Open CAPAs and By source cards". Measured, that seam is
+16 pixels at 1280, 1200, 1115, 1000 and 900 — the theme's `md`, identical to every other gap on the
+page and to the peer summary grids on `/home`, `AuditsListPage` and the ingestion run tiles. Nothing
+anomalous. Shown the measurement, the owner's answer was that the gap was not what they had seen. What
+the row actually spends is width: two cards of 477 pixels at 1280 and 638 at 1600 to render one digit
+and three pills, every mark inside the leftmost ~60 pixels, so the seam reads as conspicuous because it
+is the only thing in an otherwise blank band. Shrinking the cards to their content was ruled out — it
+recreates the first defect in mirror image, now that the filter row beneath them is full width. The
+owner chose to fill the row instead: four tiles (open, overdue, by severity, by source), all derived
+from rows the board has ALREADY loaded, so no new endpoint and no second query. ⚠ **This is a
+deliberate divergence from the written closure contract**, which said to fix the gap "with assertions
+that fail against the current code and pass after". No such assertion exists, because the gutter did
+not change; it is instead pinned at 16 pixels and labelled belt-and-braces, so a later slice that
+alters it does so on purpose. Both adversarial reviewers raised this independently and were right to.
+
+**A false PASS shipped in the first draft and was caught by review.** The new test asserted that the
+Overdue tile counts the server's `overdue` flag. It could not: exactly one fixture row carried a
+`target_completion_date` and it was the same row flagged overdue, so `c.overdue` and
+`c.target_completion_date !== null` were indistinguishable, and mutating the page to re-derive the flag
+client-side left the suite fully green. The fixture's Closed row now carries a PAST target date with
+`overdue: false` — which is what `_capa` actually answers for a terminal CAPA, so the fixture is more
+faithful as well as more discriminating — and that mutation now reddens. The generalisable half is that
+a fixture in which two different predicates select the same row cannot distinguish them, and the test
+reads as evidence anyway.
+
+**The four tiles described two populations, and now describe one.** `openCount` always excluded
+Closed/Rejected and `overdue` is non-terminal by construction, but the histograms counted every loaded
+row — so the row rendered "Open CAPAs 5" beside a severity breakdown summing to 7. The shape was
+pre-existing for by-source in a two-tile row; putting four aggregates side by side and adding severity
+*as a triage aid* is what made it a defect, because on a mature board it reads "Open CAPAs 1" next to
+"Critical · 12" on the axis operators trust. Both breakdowns are now scoped to the live rows, and the
+test asserts they TOTAL the open count rather than pinning three literals, so it survives a fixture
+edit. By-source changes behaviour: `Audit · 3` becomes `Audit · 2`.
+
+**`SeverityBadge` grew an optional `count`** rather than the summary minting a second grey severity
+pill, which is the ad-hoc colour map S-statusbadge-2 removed. Appending the count also keeps the
+aggregate accessible names (`Severity: Critical · 1`) distinct from the per-card ones (`Severity:
+Critical`) on the same board, so exact-match `getByLabelText` stays single-match. The four other
+callers omit the prop and render byte-identically.
+
+**Every browser claim is mutation-verified separately**, because one mutation does not license a
+multi-part claim and jsdom sees none of this. Reverting `grow` reddens both flush cases; removing
+`RegisterFilterBar`'s `mb="md"` reddens the date-window case (16px → 0px); flipping the theme
+`ScrollArea` to `type: "hover"` reddens the scrollbar case and visibly slows the run from 4.4 to 8.9
+seconds as the poll times out, which is what shows the poll is polling rather than tautological; moving
+the Overdue glyph back into the caption `Group` reddens the caption case. Two changes that had shipped
+to this uncovered route unmeasured — S-ui-5b's filter-bar margin and S-ui-5c's `ScrollArea` default —
+are pinned here for the first time. The scrollbar case POLLS rather than snapshots, which is the
+S-ui-5c false-failure.
+
+⚠ **Two assertions in the first draft could not fail, and both are recorded rather than quietly
+dropped.** The caption-alignment case measured each tile's `firstElementChild`, which resolves to
+whatever wrapper a tile uses and whose top is the card's content top in every arrangement — so the
+mutation that reintroduces the exact stagger read as inert. Relocating the measurement to the caption
+TEXT made it redden. And the 320-pixel overflow case does NOT redden under `wrap="nowrap"`, because
+flex-shrink absorbs that; it reddens when a control carries an intrinsic width past the viewport
+(measured 432 > 320). Its comment now claims only the latter. The `selectCount` and `tileCount`
+preconditions are labelled belt-and-braces because `read()` already throws on both.
+
+**A dated figure corrected in passing.** `e2e/risk-matrix-legend.spec.ts` still carried the
+five-pixel-sweep values 1230, 1140 and 90, which the S-ui-5d entry above records as superseded by a
+one-pixel re-measurement to 1233, 1144 and 89. The docs were corrected in `#516`; the spec comment was
+missed. It now carries the corrected figures and says which correction had missed it.
+
+Test deltas, measured locally on the branch. Web Vitest moved from 277 files and 2,253 tests to **277
+and 2,257** — four new tests across two EXISTING files, so the file count is unchanged. The Playwright
+Chromium suite moved from **69 to 76**, seven of them the new `e2e/capa-board.spec.ts`. ESLint, both
+strict `tsc` projects and the production build were clean. The API unit, integration and
+response-contract suites were NOT run: this slice changes no Python, no migration and no contract, so
+their frontmatter figures are carried unchanged and are not restated as freshly verified.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration

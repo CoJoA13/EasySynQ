@@ -10,14 +10,26 @@ import { SEVERITY_LABEL, SEVERITY_TONE } from "./columns";
 export function SeverityBadge({
   severity,
   size = "sm",
+  count,
 }: {
   severity: NcSeverity;
   size?: MantineSize;
+  /**
+   * Optional occurrence count, for an AGGREGATE pill ("Critical · 3") rather than one item's
+   * severity. Additive: omitting it renders exactly what every existing caller renders today.
+   *
+   * It lives here rather than in a second grey badge so the severity pill stays single-sourced
+   * (S-statusbadge-2) — an aggregate that invented its own colour map is the thing that decision
+   * removed. Appending the count also keeps the accessible name distinct from the per-card pills
+   * on the same page, so `getByLabelText` stays single-match.
+   */
+  count?: number;
 }) {
+  const label = SEVERITY_LABEL[severity];
   return (
     <StatusBadge
       tone={SEVERITY_TONE[severity]}
-      label={SEVERITY_LABEL[severity]}
+      label={count === undefined ? label : `${label} · ${count}`}
       kind="Severity"
       size={size}
     />

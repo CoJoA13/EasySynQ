@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-29"
+as_of: "2026-08-30"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-ui-5d"
+last_shipped_slice: "S-ui-6"
 migration_head: "0091"
 next_migration: "0092"
 api_unit_tests: 1996
 web_test_files: 277
-web_tests: 2253
+web_tests: 2257
 contract_tests: 284
 integration_passed: 1224
 integration_skipped: 2
@@ -29,7 +29,7 @@ main document, workflow, compliance, reporting, audit, ingestion, drift, objecti
 DCR, improvement, risk, context, interested-party, identity-provisioning, first-run setup, and read-only
 Records surfaces. Retention Policy and Evidence Pack management remain without dedicated SPA routes.
 
-The latest completed work is the S-ui interface program, slices S-ui-1 to S-ui-5d. Routes and information
+The latest completed work is the S-ui interface program, slices S-ui-1 to S-ui-6. Routes and information
 architecture are unchanged, as is every permission and gating behaviour, and no migration or permission key
 was added. It is otherwise a surface and layout rework, with two exceptions that are not cosmetic. S-ui-2
 corrected cache invalidation for the caller's own task list, which was previously refreshed only by the
@@ -70,11 +70,14 @@ breadcrumb and document-title map to one string per destination, which is the gu
 the breadcrumb disagree with the rail for a whole slice. And the risk-matrix legend is capped to the
 grid it keys.
 
-What remains deferred is [`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred),
+What remains deferred is [`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred) and
 [`RES-RULEPACK-BRITISH-KEYWORDS`](open-residuals.md) (the spelling sweep missed the ingestion rule
-pack, where the consequence is classification rather than cosmetic), and the pre-existing
-[`RES-CAPA-BOARD-NO-BROWSER-COVERAGE`](open-residuals.md). The owner's rail-foot idea — a colour-scheme
-toggle, perhaps a clock — is a feature request rather than a defect and is deliberately not tracked.
+pack, where the consequence is classification rather than cosmetic). S-ui-6 closed the CAPA board's
+coverage gap and replaced it with the narrower
+[`RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER`](open-residuals.md): that slice's spec measures the board
+view, and the page's secondary List table has no scroll container, so the one table on `/capa` is still
+unmeasured. The owner's rail-foot idea — a colour-scheme toggle, perhaps a clock — is a feature request
+rather than a defect and is deliberately not tracked.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
@@ -163,14 +166,30 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
 the facts it freshly verifies; partial or unavailable checks must be reported as such. The implementation
-compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; this slice does
-not rewrite that implementation-evidence field merely because its branch SHA differs.
+compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
+the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
+differs.
 
-Fresh 2026-08-29 evidence for the S-ui program. The numeric frontmatter above describes `main` after
-S-ui-5d, whose web figures (277 files, 2,253 tests) include that slice's one new unit suite —
-its other new suite, `e2e/risk-matrix-legend.spec.ts`, is Playwright and lands in the 69-case browser
-figure instead; everything else in the frontmatter is unchanged by it. The S-ui-5c, S-ui-4 and 2026-08-17 paragraphs below are retained
-as the evidence for their own trees and are not restated as current.
+Fresh 2026-08-30 evidence for S-ui-6. The numeric frontmatter above describes `main` after that slice,
+whose four new Vitest tests land in two EXISTING files — so `web_tests` moves 2,253 → **2,257** while
+`web_test_files` stays 277 — and whose seven new browser cases (`e2e/capa-board.spec.ts`) land in the
+Playwright figure, which is not frontmatter. S-ui-6 changes no Python, no migration and no contract, so
+`api_unit_tests`, `integration_passed`, `integration_skipped`, `contract_tests`, `migration_head` and
+`next_migration` are carried unchanged and are NOT restated as freshly verified. The S-ui-5d, S-ui-5c,
+S-ui-4 and 2026-08-17 paragraphs below are retained as the evidence for their own trees and are not
+restated as current — in particular the "69 of 69 Chromium tests" figure below belongs to tree
+`bdd8f2f`, not to this one.
+
+Measured locally on the S-ui-6 branch. Web Vitest passed **277 files and 2,257 tests** in 343.86
+seconds. The full `npm run test:browser` script — build included, which is the only form that proves
+anything, since a bare `playwright test` serves a stale `.playwright-dist` — passed **76 of 76 Chromium
+tests** in 1.4 minutes, up seven. ESLint over `src` and `e2e`, both strict `tsc` projects and the
+production build were clean. Every layout claim in the new spec was mutation-verified individually;
+two assertions in the first draft were found INERT against their own mutations and were rewritten
+until they reddened, which is recorded in the slice-history entry rather than smoothed over. The API
+unit, integration and response-contract suites were not run locally and are not described as passed;
+neither were Firefox, WebKit, assistive-technology sessions, SMTP delivery, deployment, live
+acceptance or the disposable Fedora proof.
 
 Measured locally on the merged S-ui-5d tree `bdd8f2f`. API unit passed **1,996 tests with the same 2 expected skips**
 in 35.41 seconds; Ruff lint and format-check were clean over 769 files and mypy found no issue in 449

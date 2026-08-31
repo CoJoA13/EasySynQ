@@ -25,6 +25,7 @@ import { readSearchParamState } from "../../lib/effectiveView";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { Capa, CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
+import { TONE_GLYPH, type Tone } from "../../lib/status";
 import { CapaCard } from "./CapaCard";
 import { CapaDrawer } from "./CapaDrawer";
 import {
@@ -34,6 +35,7 @@ import {
   SEVERITY_LABEL,
   SOURCE_LABEL,
 } from "./columns";
+import { SeverityBadge } from "./SeverityBadge";
 import { useProcesses } from "../objectives/hooks";
 import { useCapas } from "./hooks";
 import { RaiseCapaModal } from "./RaiseCapaModal";
@@ -135,9 +137,24 @@ export function CapaBoardPage() {
     );
   }
 
-  const openCount = rows.filter((c) => !TERMINAL.includes(c.close_state)).length;
+  // ONE population for all four tiles. `openCount` always excluded terminal CAPAs and `overdue` is
+  // non-terminal by construction (the server forces the flag false for Closed/Rejected), but the
+  // histograms counted every loaded row — so the row read "Open CAPAs 5" beside a severity
+  // breakdown summing to 7. On a mature board that is not a rounding oddity: an org with 1 open and
+  // 40 closed CAPAs showed "Open CAPAs 1" next to "Critical · 12", and severity is the axis an
+  // operator triages on. Scoping the histograms to the live rows makes the four tiles arithmetic —
+  // both breakdowns now total `openCount`, which `CapaBoardPage.test.tsx` asserts directly.
+  const live = rows.filter((c) => !TERMINAL.includes(c.close_state));
+  const openCount = live.length;
+  // Server-computed (api/capa.py::_capa): already false for Closed/Rejected and evaluated in the
+  // org's timezone, so this is a plain count and never re-derives the date comparison client-side.
+  const overdueCount = rows.filter((c) => c.overdue).length;
+  const overdueTone: Tone = overdueCount > 0 ? "danger" : "success";
+  const bySeverity = (Object.keys(SEVERITY_LABEL) as NcSeverity[])
+    .map((s) => ({ severity: s, n: live.filter((c) => c.severity === s).length }))
+    .filter((x) => x.n > 0);
   const bySource = (Object.keys(SOURCE_LABEL) as CapaSource[])
-    .map((s) => ({ source: s, n: rows.filter((c) => c.source === s).length }))
+    .map((s) => ({ source: s, n: live.filter((c) => c.source === s).length }))
     .filter((x) => x.n > 0);
 
   return (
@@ -165,7 +182,12 @@ export function CapaBoardPage() {
           that reaches entries older than the server's scan window. */}
       <RegisterFilterBar value={registerFilters} onChange={setRegisterFilters} />
       <TruncationNotice truncated={truncated} noun="CAPAs" />
-      <SimpleGrid cols={{ base: 1, sm: 2 }} mb="md">
+      {/* Four tiles, not two. Two cards spent the whole page width on one digit and three pills —
+          477px of card each at 1280 and 638px at 1600, with every mark in the leftmost ~60px — so
+          the row read as a blank band with a seam in it. Severity and overdue are the two aggregates
+          an operator actually opens this board for, and both come from rows ALREADY loaded: no new
+          endpoint, no second query. The `{ base: 1, sm: 2, lg: 4 }` ramp is RunSummaryTiles'. */}
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} mb="md">
         <Card withBorder padding="sm">
           <Text size="xs" c="dimmed">
             Open CAPAs
@@ -173,6 +195,34 @@ export function CapaBoardPage() {
           <Text fz="xl" fw={700}>
             {openCount}
           </Text>
+        </Card>
+        <Card withBorder padding="sm">
+          <Text size="xs" c="dimmed">
+            Overdue
+          </Text>
+          {/* The glyph rides the VALUE, not the caption. Sharing a Group with the caption centred a
+              13px label against a 16px glyph and dropped this tile's caption ~2px below the other
+              three — a visible stagger across a row whose whole point is that things line up. */}
+          <Group gap={6} align="center" wrap="nowrap">
+            <Text fz="xl" fw={700}>
+              {overdueCount}
+            </Text>
+            {/* The non-colour channel (DP-7): the caption and the count still carry the meaning
+                with the colour removed. */}
+            <Text aria-hidden size="sm" c={`var(--es-${overdueTone}-text)`}>
+              {TONE_GLYPH[overdueTone]}
+            </Text>
+          </Group>
+        </Card>
+        <Card withBorder padding="sm">
+          <Text size="xs" c="dimmed" mb={4}>
+            By severity
+          </Text>
+          <Group gap="xs">
+            {bySeverity.map((x) => (
+              <SeverityBadge key={x.severity} severity={x.severity} count={x.n} />
+            ))}
+          </Group>
         </Card>
         <Card withBorder padding="sm">
           <Text size="xs" c="dimmed" mb={4}>
@@ -188,7 +238,12 @@ export function CapaBoardPage() {
         </Card>
       </SimpleGrid>
 
-      <Group mb="md" gap="sm">
+      {/* `grow` because these three selects are a BLOCK, not a toolbar: at their natural width the
+          row is a fixed ~648px while the summary grid above it tracks the viewport, so the right
+          edges part company by 44px at 1000 and 324px at 1280 — the mismatch grows with the window.
+          `preventGrowOverflow={false}` lets a select exceed its 1/3 share rather than truncating a
+          long option label. Measured in e2e/capa-board.spec.ts. */}
+      <Group mb="md" gap="sm" grow preventGrowOverflow={false}>
         <Select
           aria-label="Source"
           placeholder="All sources"

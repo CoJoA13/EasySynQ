@@ -36,3 +36,17 @@ test("maps each severity to its canonical tone glyph (locks the intended semanti
     unmount();
   }
 });
+
+test("an optional count makes an AGGREGATE pill with a distinct accessible name", () => {
+  // The summary histogram on /capa needs "Critical · 3" without minting a second severity pill.
+  // The name must differ from the per-item pill's, because both render on the same board and a
+  // duplicate accessible name breaks getByLabelText's single-match contract.
+  render(
+    <MantineProvider theme={theme}>
+      <SeverityBadge severity="Major" count={3} />
+    </MantineProvider>,
+  );
+  expect(screen.getByText("Major · 3")).toBeInTheDocument();
+  expect(screen.getByLabelText("Severity: Major · 3")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Severity: Major")).toBeNull();
+});

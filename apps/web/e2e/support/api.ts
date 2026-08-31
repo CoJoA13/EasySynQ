@@ -2,6 +2,7 @@ import type { Page, Route } from "@playwright/test";
 import {
   auditListFixture,
   auditProgramsFixture,
+  capaListFixture,
   contextListFixture,
   contextRegisterStatusFixture,
   dcrListFixture,
@@ -22,8 +23,20 @@ import {
 } from "../../src/test/msw/handlers";
 import type { RegisterCase } from "./registers";
 
+/**
+ * The route a scenario drives.
+ *
+ * `/capa` is deliberately NOT a `RegisterCase`. That interface is table-shaped (`floor`, `headers`,
+ * `finalHeader`) and the shared specs consume those — `register-geometry.spec.ts` asserts a case's
+ * `containerScrollWidth` and `tableWidth` against its `floor`. `CapaBoardPage` renders a kanban
+ * `ScrollArea` AND a `<Table>` that has no `Table.ScrollContainer` (the file is absent from the nine
+ * pinned by `responsiveRegisterContract.test.ts`), so those assertions would measure something that
+ * is not there. `/capa` gets its own spec instead and needs the harness only to answer its reads.
+ */
+export type ScenarioRoute = RegisterCase["key"] | "capa";
+
 export interface RegisterScenario {
-  route: RegisterCase["key"];
+  route: ScenarioRoute;
   override?: RegisterRequestOverride;
   maxContent?: boolean;
   /**
@@ -501,11 +514,27 @@ export async function installRegisterApi(
       return;
     }
 
+    // Served whole, not spread: `capaListFixture` is `satisfies CapaList`, so BOTH the envelope
+    // (`{ data, truncated }` — api/capa.py::list_capas_endpoint) and the row shape (`_capa`) are
+    // checked by tsc in one place, for this harness and the vitest MSW suite alike.
+    if (
+      scenario.route === "capa" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/capas" &&
+      url.search === ""
+    ) {
+      await fulfillJson(route, capaListFixture);
+      return;
+    }
+
+    // `capa` joins these because `CapaBoardPage` mounts `<CapaDrawer>` unconditionally — with a null
+    // capaId it renders nothing, but its `useUserDirectory()` still runs (CapaDrawer.tsx:22).
     if (
       (scenario.route === "audits" ||
         scenario.route === "dcrs" ||
         scenario.route === "improvement" ||
-        scenario.route === "records") &&
+        scenario.route === "records" ||
+        scenario.route === "capa") &&
       method === "GET" &&
       url.pathname === "/api/v1/directory/users" &&
       url.search === ""
@@ -625,8 +654,13 @@ export async function installRegisterApi(
       return;
     }
 
+    // `capa` joins these because `CapaBoardPage` calls `useProcesses()` UNCONDITIONALLY — it probes
+    // capa.create at the caller's first readable process so the Raise affordance can reach a bound
+    // Process Owner, who never holds that key at SYSTEM.
     if (
-      (scenario.route === "improvement" || scenario.route === "risks") &&
+      (scenario.route === "improvement" ||
+        scenario.route === "risks" ||
+        scenario.route === "capa") &&
       method === "GET" &&
       url.pathname === "/api/v1/processes" &&
       url.search === ""
@@ -635,8 +669,33 @@ export async function installRegisterApi(
       return;
     }
 
+    // A LATENT trap, closed rather than left to chance. `CapaDrawer` mounts unconditionally and
+    // asks `usePermissions({ level: "SYSTEM" })` whenever its CAPA has no process — always true at
+    // `capaId: null` — which builds `?scope_level=SYSTEM`. That URL reaches no handler below and
+    // would hit the fail-closed `throw`. It does not fire today ONLY because that observer shares
+    // the query key `["me-permissions","SYSTEM",null]` with TopBar's unscoped `usePermissions()`,
+    // whose effect runs first and wins the queryFn. That ordering is stable but incidental.
     if (
-      scenario.route === "risks" &&
+      method === "GET" &&
+      url.pathname === "/api/v1/me/permissions" &&
+      hasOnlySearchParams(url, { scope_level: "SYSTEM" })
+    ) {
+      await fulfillJson(route, {
+        scope: { level: "SYSTEM", selector: null },
+        permissions: (scenario.permissions ?? []).map((key) => ({
+          key,
+          effect: "ALLOW",
+          source: "harness",
+        })),
+      });
+      return;
+    }
+
+    // The refined question `usePermissions({ level: "PROCESS", id })` asks. Answered `[]` — the
+    // ungranted reader this harness authenticates everywhere — so a scenario that wants the Raise
+    // affordance grants `capa.create` through `scenario.permissions` at SYSTEM instead.
+    if (
+      (scenario.route === "risks" || scenario.route === "capa") &&
       method === "GET" &&
       url.pathname === "/api/v1/me/permissions" &&
       hasOnlySearchParams(url, { scope_level: "PROCESS", scope_id: primaryProcessId })
