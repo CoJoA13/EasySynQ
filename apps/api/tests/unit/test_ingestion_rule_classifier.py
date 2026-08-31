@@ -242,3 +242,64 @@ def test_custom_scoring_ambiguous_margin_changes_ambiguity() -> None:
     # a tighter margin 3 (via the pack) → the same 5-pt gap is no longer ambiguous
     tight = RulePack(version="t", type_rules=rules, scoring=ScoringConfig(ambiguous_margin=3))
     assert not RuleHeuristicClassifier(tight).classify(f, clause_pdca={}).ambiguous
+
+
+@pytest.mark.parametrize(
+    ("header", "note"),
+    [
+        ("Internal Audit {spelling}", "a sibling needle covers the clause rule"),
+        ("Audit {spelling} 2026", "nothing covers for the lost needle"),
+    ],
+)
+def test_audit_program_scores_identically_in_both_spellings(
+    clf: RuleHeuristicClassifier, header: str, note: str
+) -> None:
+    """R68 adopted US spelling for user-facing text; this pack's matchers are SUBSTRING needles, so
+    the sweep that missed them was a classification bug, not a cosmetic one.
+
+    Two matchers keyed on ``"audit programme"``: the weight-30 audit-schedule header signal and the
+    weight-55 Clause 9.2 signal. A document titled per the newly adopted standard fired NEITHER. The
+    repair is REPLACEMENT rather than addition, which is also the cheaper proof: ``"audit program"``
+    is a strict prefix of ``"audit programme"``, so the shorter needle matches both spellings,
+    nothing that fired before stops firing, and there is no second needle to double-count. The
+    change can only ADD matches, never remove one.
+
+    Both headers are here because the consequence differs in ONE dimension, and that dimension is
+    the mechanism. Measured against the pre-fix pack on exactly the features below, both headers
+    lost the same 30 points of type confidence and the same band — 45/LOW against 75/MEDIUM. They
+    differ only in the clause dimension: "Internal Audit Program" held clause confidence at 75
+    because the Clause 9.2 rule's sibling needle ``"internal audit"`` fired regardless, while
+    "Audit Program 2026" had nothing to cover for it and fell to 20. A test written only against
+    the first header would miss that second loss entirely.
+    """
+
+    def features(spelling: str) -> FileFeatures:
+        return FileFeatures(
+            filename=f"Audit {spelling} 2026.xlsx",
+            rel_path=f"Records/Audits/Audit {spelling} 2026.xlsx",
+            ext="xlsx",
+            header_block=header.format(spelling=spelling),
+            full_text="signed by the lead auditor on 2026-03-14. audit schedule per process",
+        )
+
+    us = clf.classify(features("Program"), clause_pdca=_CLAUSE_PDCA)
+    gb = clf.classify(features("Programme"), clause_pdca=_CLAUSE_PDCA)
+
+    # The whole result, not a chosen subset: every confidence, the band, the clause set, the PDCA
+    # phase AND the fired-evidence tuple. A future needle edit that re-splits the spellings cannot
+    # then hide behind a band boundary that happens to absorb the lost weight.
+    assert us == gb, note
+
+    # LOAD-BEARING, and it has to be the SCORE. Equality alone only guards the two spellings being
+    # re-SPLIT; it says nothing about the needle still existing. Deleting `"audit program"` from
+    # both matchers outright leaves the spellings equal — at 45/LOW, the pre-fix value — so the
+    # whole fix can be removed with the suite green. Pinning what the needle actually supplies is
+    # what closes that: 75 is reachable only when the header signal fires.
+    assert us.type_conf == 75
+    assert us.clause_conf == 75
+
+    # Belt-and-braces, NOT evidence: both are satisfied by other matchers in this fixture — AUDIT
+    # wins on the folder token plus the dated-signature predicate, and 9.2 scores on "lead auditor"
+    # in the content — so neither can fail while the needle is absent.
+    assert us.type_code == "AUDIT"
+    assert "9.2" in us.clause_numbers

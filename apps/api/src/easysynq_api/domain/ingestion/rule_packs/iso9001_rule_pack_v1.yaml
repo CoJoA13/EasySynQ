@@ -11,7 +11,7 @@
 # ReDoS confinement), keywords (case-insensitive substring on filename/header/content/path), or
 # predicate (a named structural predicate: has_revision_history / has_approval_block /
 # has_dated_signatures). Clause candidates are catalog clause NUMBERS (requirement-node leaves).
-version: "rule-heuristic-1"
+version: "rule-heuristic-1.1"
 
 # ----------------------------------------------------------------- Scoring cutoffs (doc 09 §6.3-§6.5)
 # The score->band cutoffs + dimension weights, externalized here so an org override rides this pack's
@@ -77,7 +77,7 @@ type_rules:
     domain: record
     matchers:
       - {signal: header_keyword, target: header, keywords: ["internal audit report", "audit report"], weight: 45, explanation: "Header reads 'Internal Audit Report'"}
-      - {signal: header_keyword, target: header, keywords: ["audit programme", "audit plan", "audit checklist"], weight: 30, explanation: "Header reads like an audit programme/plan"}
+      - {signal: header_keyword, target: header, keywords: ["audit program", "audit plan", "audit checklist"], weight: 30, explanation: "Header reads like an audit program/plan"}
       - {signal: folder_path_token, target: path, keywords: ["audits", "audit"], weight: 25, explanation: "Lives under /Records/Audits/"}
       - {signal: structural_shape, predicate: has_dated_signatures, weight: 20, explanation: "Carries dated auditor signatures"}
   - candidate: MGMT_REVIEW
@@ -138,7 +138,7 @@ clause_rules:
       - {signal: content_keyword, target: content, keywords: ["nonconforming output", "control of nonconforming", "nonconformity"], weight: 45, explanation: "Control of nonconforming outputs (Clause 8.7)"}
   - candidate: "9.2"
     matchers:
-      - {signal: header_keyword, target: header, keywords: ["internal audit", "audit report", "audit programme"], weight: 55, explanation: "Internal audit (Clause 9.2)"}
+      - {signal: header_keyword, target: header, keywords: ["internal audit", "audit report", "audit program"], weight: 55, explanation: "Internal audit (Clause 9.2)"}
       - {signal: content_keyword, target: content, keywords: ["audit criteria", "audit findings", "lead auditor"], weight: 20, explanation: "Internal-audit vocabulary (Clause 9.2)"}
   - candidate: "9.3"
     matchers:

@@ -506,7 +506,7 @@ assertions and a test-module docstring, not counts. Ruff, both strict `tsc` proj
 
 ### S-ui-6 — the CAPA board gets a browser, and a summary row that earns its width
 
-Recorded 2026-08-30. Closes `RES-CAPA-BOARD-NO-BROWSER-COVERAGE` and opens
+Recorded 2026-08-30 after merging [`#517`](https://github.com/CoJoA13/EasySynQ/pull/517) as `c28040f`. Closes `RES-CAPA-BOARD-NO-BROWSER-COVERAGE` and opens
 `RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER` in its place. Front-end-only: no migration (the Alembic head
 stayed `0091_documents_list_index`), no permission key, no endpoint and no contract change — the
 contract lock is untouched at `2b8c2503…`.
@@ -594,12 +594,81 @@ five-pixel-sweep values 1230, 1140 and 90, which the S-ui-5d entry above records
 one-pixel re-measurement to 1233, 1144 and 89. The docs were corrected in `#516`; the spec comment was
 missed. It now carries the corrected figures and says which correction had missed it.
 
-Test deltas, measured locally on the branch. Web Vitest moved from 277 files and 2,253 tests to **277
+Test deltas, measured on the S-ui-6 branch, whose tree the squash preserved byte-for-byte as `c28040f`. Web Vitest moved from 277 files and 2,253 tests to **277
 and 2,257** — four new tests across two EXISTING files, so the file count is unchanged. The Playwright
 Chromium suite moved from **69 to 76**, seven of them the new `e2e/capa-board.spec.ts`. ESLint, both
 strict `tsc` projects and the production build were clean. The API unit, integration and
 response-contract suites were NOT run: this slice changes no Python, no migration and no contract, so
 their frontmatter figures are carried unchanged and are not restated as freshly verified.
+
+### S-rulepack-audit-program — the spelling standard reaches the classifier, and moves the pin
+
+Recorded 2026-08-31. Closes `RES-RULEPACK-BRITISH-KEYWORDS` and opens
+`RES-APPROVAL-BLOCK-BRITISH-KEYWORD`. Filed here rather than under an ingestion heading because it is
+the tail of the R68 arc: S-ui-5a adopted US spelling and swept the SPA, the API's user-visible strings
+and the authority docs, and this is the one place that sweep could not safely reach. No migration (the
+Alembic head stayed `0091_documents_list_index`), no permission key, no endpoint and no contract
+change.
+
+**Why a spelling miss was a classification defect.** `iso9001_rule_pack_v1.yaml` keyed two matchers on
+`"audit programme"`, and `rule_classifier.py::_fires` is `any(kw in text.lower())` — a case-insensitive
+SUBSTRING needle, not a display string. A document titled per the newly adopted standard fired
+neither. The repair is REPLACEMENT, which is also the cheaper proof: `"audit program"` is a strict
+prefix of `"audit programme"`, so the shorter needle matches both spellings, nothing that fired before
+stops firing, and there is no second needle to double-count. The corpus keeps its British-spelled
+entries precisely because that is what proves it — rewriting them to the US form would have been
+train-on-test AND would have deleted the only coverage that the British form still matches.
+
+⚠ **The record's own prediction was wrong in an instructive way.** It said such a document loses "the
+weight-30 header signal on the audit-schedule rule and the weight-55 signal on the Clause 9.2 rule".
+Measured against the pre-fix pack, the loss is not uniform. Both headers lose the same 30 points of
+type confidence and the same band — 45/LOW against 75/MEDIUM. They differ only in the clause
+dimension: a header reading "Internal Audit Program" holds clause confidence at 75 because the Clause
+9.2 rule's SIBLING needle `"internal audit"` fires regardless, while "Audit Program 2026" has nothing
+to cover for it and falls to 20. The test is parametrized over both headers for exactly that reason;
+one written only against the first would miss the second loss entirely.
+
+⚠ **The first draft of that test could not fail, and the way it could not is worth keeping.** It
+asserted whole-result equality between the two spellings plus two "anti-tautology" lines
+(`type_code == "AUDIT"`, `"9.2" in clause_numbers`). Both of those are satisfied by OTHER matchers in
+the fixture — AUDIT wins on the folder token plus the dated-signature predicate, and 9.2 scores on
+"lead auditor" in the content — so deleting the needle from both matchers OUTRIGHT, rather than
+reverting it, left the whole repository green: 20 passed, the accuracy harness included. Equality
+guards the two spellings being re-SPLIT; it says nothing about the fix still existing. Pinning the
+score the needle actually supplies (`type_conf == 75`, `clause_conf == 75`) closes it, and the test
+now reddens under both mutations. The general shape: an equality assertion between two variants is
+blind to the removal of the thing that makes them equal.
+
+**The pin moved, and that is the load-bearing decision here.** `classifier_version` reads straight off
+the pack's `version` field, so this — the first pack edit that changes a score — made one version
+string denote two matcher sets. That is not cosmetic: the string is written into permanent vault
+import provenance, and `files_pending_classify` resumes a run by selecting files with no
+`import_classification` row *for that version*. A run killed mid-`Classifying` across the deploy would
+keep pre-fix rows for its first batches and get post-fix rows for the rest, with no re-run able to
+refresh them because the resume key matches. The owner chose to bump to `rule-heuristic-1.1`, which is
+the path `classify.py` was built for: it reassigns `run.classifier_version` unconditionally on every
+entry, so a resumed run adopts the new pin, every file re-classifies under one matcher set, and the
+read paths stay pinned — its own comment says a re-classify with a new version "never double-counts or
+duplicates file rows". `VALIDATION.md`, the corpus `_meta`, the loader pin and doc 09 all move with
+it; `test_ingestion_commit.py` does not, because its `"rule-heuristic-1"` is arbitrary report-render
+fixture data rather than a claim about the live pack.
+
+**The published INTERIM band was re-measured against `1.1` rather than carried over**, because R10
+ties a band to a version. Every figure came back identical — kind 0.911, type 1.000, clause precision
+0.889, clause recall 1.000 over 45 entries — and across all 45 corpus entries the only delta between
+the two packs is the `evidence[].explanation` text. The bump exists for attribution, not because the
+band changed.
+
+⚠ **One claim deliberately NOT made.** Monotone *matches* is not monotone *results*. A rising AUDIT
+score can narrow a top-two gap and flip `ambiguous` to true, which lands a file in the AMBIGUOUS band —
+the design-intended Needs-Decision route. Zero corpus entries do this and it is not a defect, but "no
+document's classification can change" would be a false restatement of "nothing that fires today stops
+firing", and the two are not the same sentence.
+
+Test deltas, measured on the branch. API unit moved from **1,996 to 1,998** passed with the same two
+release-ceremony skips — the two new parametrize cases. Ruff lint and format-check were clean over 769
+files and mypy found no issue in 449 source files. The web suites were NOT run and are not restated:
+this slice touches no TypeScript. The three repository authority gates are clean.
 
 ## IDENTITY ONBOARDING
 

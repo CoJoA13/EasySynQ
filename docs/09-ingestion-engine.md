@@ -260,7 +260,8 @@ Extraction failures (corrupt file, unknown sub-format) do **not** fail the run: 
 This is the analytical heart. The classifier assigns, **per file**, four independent dimensions, **each with its own confidence score** and a human-readable **evidence list** (so Mara sees *why*). It is deliberately transparent and pluggable.
 
 > **Implemented in S-ing-2** as the pure `RuleHeuristicClassifier` (`classifier_version =
-> "rule-heuristic-1"`) behind the `ClassifierProvider` seam, scoring against a versioned YAML rule
+> "rule-heuristic-1.1"`; S-ing-2 shipped `"rule-heuristic-1"`, and the pin moved when the first
+> score-changing matcher edit landed) behind the `ClassifierProvider` seam, scoring against a versioned YAML rule
 > pack (`domain/ingestion/rule_packs/iso9001_rule_pack_v1.yaml`). The §6.3 formula is a **capped
 > weighted sum** `min(100, Σ fired-matcher weights)` (weights calibrated to reproduce the §6.5 worked
 > examples). The **row-level review band is the type (headline) confidence** + a separate `ambiguous`

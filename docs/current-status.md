@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-30"
+as_of: "2026-08-31"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-ui-6"
+last_shipped_slice: "S-rulepack-audit-program"
 migration_head: "0091"
 next_migration: "0092"
-api_unit_tests: 1996
+api_unit_tests: 1998
 web_test_files: 277
 web_tests: 2257
 contract_tests: 284
@@ -70,9 +70,9 @@ breadcrumb and document-title map to one string per destination, which is the gu
 the breadcrumb disagree with the rail for a whole slice. And the risk-matrix legend is capped to the
 grid it keys.
 
-What remains deferred is [`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred) and
-[`RES-RULEPACK-BRITISH-KEYWORDS`](open-residuals.md) (the spelling sweep missed the ingestion rule
-pack, where the consequence is classification rather than cosmetic). S-ui-6 closed the CAPA board's
+What remains deferred is [`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred).
+S-rulepack-audit-program closed the rule-pack half of the spelling standard and left the narrower
+[`RES-APPROVAL-BLOCK-BRITISH-KEYWORD`](open-residuals.md) behind it. S-ui-6 closed the CAPA board's
 coverage gap and replaced it with the narrower
 [`RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER`](open-residuals.md): that slice's spec measures the board
 view, and the page's secondary List table has no scroll container, so the one table on `/capa` is still
@@ -170,6 +170,19 @@ compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d4465941
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
 
+Fresh 2026-08-31 evidence for S-rulepack-audit-program. It moves `api_unit_tests` 1,996 → **1,998**
+(two new parametrize cases in an existing file) and nothing else in the frontmatter: it touches no
+TypeScript, so the web figures are carried unchanged and NOT restated as freshly verified, and it adds
+no migration or contract. It does move `classifier_version` `rule-heuristic-1` → **`rule-heuristic-1.1`**,
+which is not a frontmatter field but is the fact most likely to be needed next: the pin is written into
+permanent vault import provenance, and a resumed import run adopts it and re-classifies under one
+matcher set. The published INTERIM accuracy band was re-measured against the new pin and is unchanged
+at kind 0.911 / type 1.000 / clause precision 0.889 / clause recall 1.000 over 45 entries.
+
+Measured locally on the branch. API unit passed **1,998 with the same 2 expected skips**; Ruff lint and
+format-check were clean over 769 files and mypy found no issue in 449 source files. The web, integration
+and response-contract suites were not run and are not described as passed.
+
 Fresh 2026-08-30 evidence for S-ui-6. The numeric frontmatter above describes `main` after that slice,
 whose four new Vitest tests land in two EXISTING files — so `web_tests` moves 2,253 → **2,257** while
 `web_test_files` stays 277 — and whose seven new browser cases (`e2e/capa-board.spec.ts`) land in the
@@ -180,7 +193,7 @@ S-ui-4 and 2026-08-17 paragraphs below are retained as the evidence for their ow
 restated as current — in particular the "69 of 69 Chromium tests" figure below belongs to tree
 `bdd8f2f`, not to this one.
 
-Measured locally on the S-ui-6 branch. Web Vitest passed **277 files and 2,257 tests** in 343.86
+Measured locally on the S-ui-6 branch, whose tree the squash preserved byte-for-byte as `c28040f`. Web Vitest passed **277 files and 2,257 tests** in 343.86
 seconds. The full `npm run test:browser` script — build included, which is the only form that proves
 anything, since a bare `playwright test` serves a stale `.playwright-dist` — passed **76 of 76 Chromium
 tests** in 1.4 minutes, up seven. ESLint over `src` and `e2e`, both strict `tsc` projects and the

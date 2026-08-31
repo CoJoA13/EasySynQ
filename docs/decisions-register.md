@@ -2192,10 +2192,12 @@ API's. The old path has no redirect, and what it does instead is worse than a 40
 reader is told the audit failed to load, not that the page moved. The application's own not-found
 branch is never reached.
 
-**Known incomplete.** The ingestion rule pack still keys two matchers on the British spelling as a
-case-insensitive substring needle, so a document titled per this standard does not fire them — a
-classification consequence, not a cosmetic one. Tracked as
-[`RES-RULEPACK-BRITISH-KEYWORDS`](open-residuals.md).
+**Reached the rule pack.** Both matchers that keyed on the British spelling as a case-insensitive
+substring needle now key on the US form, which is a strict prefix and therefore matches both. That
+edit changed a score for the first time, so `classifier_version` moved `rule-heuristic-1` →
+`rule-heuristic-1.1`: the pin is written into permanent vault import provenance and one string must
+not denote two matcher sets. One predicate remains — `has_approval_block` still keys only on
+"authorised by" — tracked as [`RES-APPROVAL-BLOCK-BRITISH-KEYWORD`](open-residuals.md).
 
 **Back-propagation:** `AGENTS.md` and the contributor guidance that governs new user-facing copy,
 the user and administrator manuals, and any future slice adding SPA or API strings.
