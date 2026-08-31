@@ -179,7 +179,7 @@ permanent vault import provenance, and a resumed import run adopts it and re-cla
 matcher set. The published INTERIM accuracy band was re-measured against the new pin and is unchanged
 at kind 0.911 / type 1.000 / clause precision 0.889 / clause recall 1.000 over 45 entries.
 
-Measured locally on the branch. API unit passed **1,998 with the same 2 expected skips**; Ruff lint and
+Measured locally on the branch, whose tree the squash preserved byte-for-byte as `bb12945`. API unit passed **1,998 with the same 2 expected skips**; Ruff lint and
 format-check were clean over 769 files and mypy found no issue in 449 source files. The web, integration
 and response-contract suites were not run and are not described as passed.
 
