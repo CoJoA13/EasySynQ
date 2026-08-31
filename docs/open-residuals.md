@@ -27,29 +27,6 @@ instead. jsdom cannot see either, so a Vitest assertion is not acceptable eviden
 worth the fragility, record that the columns stay fluid and remove this record.
 Last reviewed: 2026-08-29
 
-## RES-APPROVAL-BLOCK-BRITISH-KEYWORD
-
-Status: OPEN
-Owner: Repository owner
-Source: S-rulepack-audit-program, 2026-08-31 (surfaced by the adversarial review of that slice)
-Reason: The same defect class as the one that slice fixed, one predicate over.
-`rule_classifier.py::_eval_predicate`'s `has_approval_block` keys on the single British-spelled
-substring `"authorised by"`, so an approval block reading "Authorized by:" does not fire it. R68
-makes that spelling the house standard for user-facing text, which raises how often a customer
-document will carry the US form. It is bounded rather than urgent: such a block almost always also
-carries "Approved by", which the predicate does match, so the miss usually costs nothing. It is
-pre-existing since S-ing-2 and was NOT introduced by the audit-program fix, which is why it was not
-folded into that slice — a predicate is not a keyword list, and widening one is a different change
-from shortening a needle.
-Closure contract: Add the US form to `has_approval_block` and prove the two spellings score
-identically, in the idiom of `test_audit_program_scores_identically_in_both_spellings` — pinning the
-SCORE the predicate supplies, not merely the equality of the two results, because equality alone
-stays green when the predicate is deleted outright. ⚠ Unlike the needle fix, this is NOT a strict
-prefix, so it is an ADDITION rather than a replacement and must be shown not to double-count: check
-whether a block carrying both spellings fires the predicate once. Then decide the
-`classifier_version` question the same way S-rulepack-audit-program did — a score-changing predicate
-edit bumps the pin.
-Last reviewed: 2026-08-31
 ## RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER
 
 Status: OPEN

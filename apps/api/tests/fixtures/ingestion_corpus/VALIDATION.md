@@ -1,4 +1,4 @@
-# Classifier accuracy band — `rule-heuristic-1.1` (INTERIM, SYNTHETIC CORPUS ONLY)
+# Classifier accuracy band — `rule-heuristic-1.2` (INTERIM, SYNTHETIC CORPUS ONLY)
 
 > **Status: INTERIM — synthetic corpus only.** The figures below are **NOT representative of real
 > production QMS shares** and must not be cited as production-confidence accuracy. The v1.x
@@ -8,16 +8,35 @@
 
 Per Decisions Register **R10** + doc 09 **§6.4a**, every `classifier_version` ships a *measured*
 per-dimension accuracy band and a published validation method. This documents the band for the v1
-`RuleHeuristicClassifier` (`classifier_version = "rule-heuristic-1.1"`).
+`RuleHeuristicClassifier` (`classifier_version = "rule-heuristic-1.2"`).
 
-> **On the `1` → `1.1` bump.** The pin moved when the first score-changing matcher edit landed: two
-> matchers keyed on the British-spelled needle `"audit programme"`, which the US-spelling standard
-> (R68) made a classification defect rather than a cosmetic one. The band below was **re-measured**
-> against `1.1` rather than carried over, and every figure came back identical to `1`'s — the
-> shortened needle is a strict prefix, so it is a superset of the old matches, and no corpus entry's
-> score, band, clause set or PDCA phase moves. The bump exists for attribution, not because the band
-> changed: `classifier_version` is written into permanent vault import provenance, and one string
-> must not denote two matcher sets.
+> **On the `1` → `1.1` → `1.2` bumps.** The pin moves whenever a score-changing matcher or predicate
+> edit lands. It has moved twice, both times for the same cause: the US-spelling standard (R68)
+> turned a British-spelled needle into a *classification* defect rather than a cosmetic one.
+>
+> - **`1.1`** shortened the two `"audit programme"` matchers to `"audit program"`. That is a strict
+>   prefix, so it is a REPLACEMENT — a superset of the old matches, with no second needle to
+>   double-count.
+> - **`1.2`** added `"authorized by"` to the `has_approval_block` predicate. The two spellings of
+>   "authorised" share no substring, so this one is an ADDITION, which raises a question the prefix
+>   repair did not: whether a block carrying both spellings scores twice. It does not — `any` yields
+>   one boolean and the caller adds each matcher's weight once — and
+>   `test_approval_block_with_both_spellings_scores_once` asserts it directly rather than by
+>   inference.
+>
+> The band below was **re-measured** against `1.2` rather than carried over, and every figure came
+> back identical. That is measured, not argued from the corpus text: all 45 entries were classified
+> under both predicates and **zero** of them differ in any field — score, band, clause set, PDCA
+> phase or fired evidence. Both bumps exist for attribution, not because the band changed:
+> `classifier_version` is written into permanent vault import provenance, and one string must not
+> denote two scoring behaviours.
+>
+> ⚠ `1.2`'s edit is in `rule_classifier.py::_eval_predicate`, **not** in the pack YAML, yet the pin
+> still moves. `classifier_version` is sourced from the pack's `version` and denotes the whole
+> scoring behaviour — the §6.3 cutoffs and the named structural predicates included, not just the
+> matcher list. The corollary is that a custom org pack carrying its own `version` would *not*
+> inherit a predicate bump. No caller passes `load_rule_pack` a custom path in v1 —
+> `default_rule_pack` is the only one — so that gap is latent rather than live.
 
 ## What was measured
 

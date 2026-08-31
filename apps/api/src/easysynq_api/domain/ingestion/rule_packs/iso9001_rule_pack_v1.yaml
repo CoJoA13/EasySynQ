@@ -11,7 +11,7 @@
 # ReDoS confinement), keywords (case-insensitive substring on filename/header/content/path), or
 # predicate (a named structural predicate: has_revision_history / has_approval_block /
 # has_dated_signatures). Clause candidates are catalog clause NUMBERS (requirement-node leaves).
-version: "rule-heuristic-1.1"
+version: "rule-heuristic-1.2"
 
 # ----------------------------------------------------------------- Scoring cutoffs (doc 09 §6.3-§6.5)
 # The score->band cutoffs + dimension weights, externalized here so an org override rides this pack's

@@ -670,6 +670,96 @@ release-ceremony skips — the two new parametrize cases. Ruff lint and format-c
 files and mypy found no issue in 449 source files. The web suites were NOT run and are not restated:
 this slice touches no TypeScript. The three repository authority gates are clean.
 
+### S-rulepack-approval-block — the last British needle, and why an addition needs a different proof
+
+Recorded 2026-08-31. Closes the residual S-rulepack-audit-program's review opened and opens nothing in
+its place: the classifier now carries no known spelling gap. No migration (the Alembic head stayed
+`0091_documents_list_index`), no permission key, no endpoint and no contract change. Filed beside the
+slice above because it is the last step of the same R68 arc, but the repair is a different shape and
+that difference is the whole slice.
+
+**Why the previous slice could not simply have included it.** `rule_classifier.py::_eval_predicate`'s
+`has_approval_block` keyed on the British-spelled substring `"authorised by"`, so an approval block
+reading "Authorized by:" did not fire it. That is the same defect class one predicate over — but
+`"audit program"` is a strict PREFIX of `"audit programme"`, which let `1.1` SHORTEN a needle and match
+both spellings with no second needle in play. `"authorised by"` and `"authorized by"` share no
+substring at all, so this repair has to ADD one. An addition raises a question a replacement cannot:
+whether a block that spells it both ways now scores twice. It does not — `any` yields one boolean and
+`_score_rules` adds each matcher's weight once — but that is a property of the current implementation
+rather than of the change, so it is asserted directly instead of inferred.
+
+**The control case is what makes the score pin evidence.** The proof idiom is the one
+`test_audit_program_scores_identically_in_both_spellings` established: pin the SCORE the needle
+supplies, never the equality of the two spellings, because equality survives deleting the whole fix.
+This slice adds the step that idiom was still missing. Its fixture scores 60 on kind with the
+predicate silent — filename doc-code 30 plus header keyword 30, with the folder deliberately
+`Uploads/QA` so no controlled-document path token can contribute — and 75 with it firing. Asserting
+the 60 FIRST is what fixes the baseline, so the 15 that separates them is demonstrably this
+predicate's and not the sibling `has_revision_history` at 25 or the folder token at 15. Without the
+control, `kind_conf == 75` would say only that the fixture reaches 75 somehow.
+
+**Five mutations, each reddening for its predicted reason.** Reverting the fix and deleting BOTH
+needles outright each drop the score pins to `60 == 75` — the second is the mutation that left the
+previous slice's first draft green, and it now fails three tests. Storing the added needle
+capitalised reddens two of them, since a capitalised needle never fires at all — so it is NOT what
+makes the case-insensitivity test non-decorative, and the first draft of this entry credited it
+wrongly. What that test uniquely covers is the `.lower()` in `_eval_predicate`: deleting that call
+reddens it and nothing else, **1 failed against 2,000 passed**. The last mutation is the isolating
+one for the double-count guard. Implementing the US spelling as a SEPARATE pack matcher instead of
+extending the predicate — a plausible alternative that passes every other assertion — is the only
+shape that can genuinely double-count, and it fails at `assert 90 == 75`.
+
+**The pin moved again, and this time the edit is not in the pack.** `classifier_version` went
+`rule-heuristic-1.1` → `rule-heuristic-1.2` on the same reasoning as before: the string is written
+into permanent vault import provenance and must not denote two scoring behaviours. The wrinkle worth
+recording is that this edit lives in `_eval_predicate`, in Python, while `version` lives in the YAML.
+The pin still moves, because `classifier_version` is sourced from the pack and denotes the whole
+scoring behaviour — the §6.3 cutoffs and the named structural predicates included, not just the
+matcher list. The corollary is that a custom org pack carrying its own `version` would not inherit a
+predicate bump; no caller passes `load_rule_pack` a custom path in v1 (`default_rule_pack` is the
+only one), so that is latent rather than live, and it is noted in `VALIDATION.md` rather than opened as a residual.
+
+**The band was re-measured against `1.2`**, because R10 ties a band to a version. Every figure came
+back identical — kind 0.911, type 1.000, clause precision 0.889, clause recall 1.000 over 45 entries.
+That is measured rather than argued from the corpus text: all 45 entries were classified under both
+the old and the new predicate and ZERO differ in any field. The corpus was not edited to make this
+hold; it happens to carry only "Approved by" phrasings, and rewriting them to exercise the new needle
+would have been train-on-test.
+
+⚠ **What this does change, measured rather than asserted — and one direction is not benign.**
+"Nothing that fires today stops firing" is again true and again not the same sentence as "no
+document's classification can change". `has_approval_block` appears on exactly one matcher, the
+DOCUMENT kind rule at weight 15, so the added needle can only RAISE a DOCUMENT kind score. THREE
+consequence classes follow, each constructed and measured against the old and new predicate:
+
+1. **A file crosses the `kind_unknown_floor`.** Scoring 15 before, 30 after, so `kind` moves
+   UNKNOWN → DOCUMENT.
+2. **A file gains ambiguity.** RECORD led 55 to 45; it becomes DOCUMENT 60 to RECORD 55, inside the
+   `ambiguous_margin` of 10, so `ambiguous` flips false → true and the band becomes AMBIGUOUS — the
+   design-intended Needs-Decision route.
+3. **A file LOSES ambiguity, which is the direction that reduces review.** The margin is two-sided
+   and the first draft of this paragraph treated it as one-way. A file already tied at DOCUMENT 75 /
+   RECORD 75 becomes DOCUMENT 90 / RECORD 75, so `ambiguous` flips true → false. Measured on
+   `Procedures/SOP-QA-014 Inspection 2026.docx` (header "Standard Operating Procedure - Calibration
+   Log", a dated-signature body): the band moves AMBIGUOUS → **HIGH**, with type SOP 85 on both
+   sides. That takes the row off the Needs-Decision queue and out of `ambiguous_unresolved`, which
+   `services/ingestion/review.py` appends to the **blocking** commit checklist — so the flag is not
+   cosmetic. Enumerating every reachable kind-score pair from the pack weights, the two directions
+   are exactly symmetric: 18 pairs gain ambiguity and 18 lose it.
+
+Zero of the 45 corpus entries exhibit any of the three, and none is pinned as a test: they
+characterise a consequence of the weights, not a contract, and a test over a constructed file would
+redden on any future recalibration for no good reason. That reasoning applies equally to all three,
+so naming the third does not change the test decision — but a reader of the neutral history should
+not be left believing this change can only ADD caution, because it cannot only add caution.
+
+Test deltas, measured on the S-rulepack-approval-block branch. API unit moved from **1,998 to 2,001**
+passed with the same two release-ceremony skips — three new tests in an existing file, so the file
+count is unchanged. Ruff lint and format-check were clean over 769 files and mypy found no issue in
+449 source files. The web, integration and response-contract suites were NOT run and are not restated:
+this slice touches no TypeScript, no migration and no contract. The three repository authority gates
+are clean.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration
