@@ -6,6 +6,7 @@ import { useLocation } from "react-router-dom";
 import { expect, test } from "vitest";
 import { TONE_GLYPH } from "../../lib/status";
 import type { MePermissions } from "../../lib/types";
+import { capaListFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { CapaBoardPage } from "./CapaBoardPage";
@@ -26,7 +27,10 @@ test("groups CAPAs into lifecycle columns (ActionPlan+Implement merge; Rejected 
 test("the Open tile counts non-terminal CAPAs and by-source breaks down", async () => {
   renderWithProviders(<CapaBoardPage />, { route: "/capa" });
   expect(await screen.findByText("5")).toBeInTheDocument();
-  expect(screen.getByText("Audit · 3")).toBeInTheDocument();
+  // `Audit · 2`, not `· 3`: by-source is now scoped to the SAME non-terminal population the Open
+  // tile counts. The fixture's third audit CAPA (ca000006) is Closed, so it no longer appears here.
+  // This is a deliberate behaviour change — see the sibling total-equals-open-count test.
+  expect(screen.getByText("Audit · 2")).toBeInTheDocument();
 });
 
 test("the summary row carries overdue and a severity histogram, not just open + source", async () => {
@@ -47,7 +51,50 @@ test("the summary row carries overdue and a severity histogram, not just open + 
   // count also keeps these accessible names distinct from the per-card pills on the same board.
   expect(screen.getByLabelText("Severity: Critical · 1")).toBeInTheDocument();
   expect(screen.getByLabelText("Severity: Major · 3")).toBeInTheDocument();
-  expect(screen.getByLabelText("Severity: Minor · 3")).toBeInTheDocument();
+  expect(screen.getByLabelText("Severity: Minor · 1")).toBeInTheDocument();
+});
+
+test("every summary tile describes the SAME population — the breakdowns total the open count", async () => {
+  // The load-bearing one. The fixture holds 7 CAPAs of which 5 are non-terminal, so a histogram
+  // over all loaded rows totals 7 and sits beside an "Open CAPAs 5" tile claiming otherwise. That
+  // is arithmetic an operator can catch, and it gets worse with age: 1 open beside 40 closed reads
+  // "Open CAPAs 1" next to "Critical · 12". Asserting the TOTAL rather than three literals is what
+  // makes this survive a fixture edit — any row added to the fixture keeps both sides in step.
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  const openTile = (await screen.findByText("Open CAPAs")).closest(".mantine-Card-root");
+  const openCount = Number(within(openTile as HTMLElement).getByText(/^\d+$/).textContent);
+  expect(openCount).toBe(5);
+
+  const totalFor = (caption: string) => {
+    const tile = screen.getByText(caption).closest(".mantine-Card-root");
+    return within(tile as HTMLElement)
+      .getAllByText(/·\s*\d+$/)
+      .reduce((sum, el) => sum + Number(el.textContent!.split("·")[1]!.trim()), 0);
+  };
+  expect(totalFor("By severity")).toBe(openCount);
+  expect(totalFor("By source")).toBe(openCount);
+
+  // Zero-count facets are suppressed rather than rendered as "· 0" — the fixture uses neither the
+  // "Mgmt review" nor the "Risk" source, and no severity is empty, so nothing should read `· 0`.
+  expect(screen.queryByText(/·\s*0$/)).toBeNull();
+});
+
+test("a board with nothing overdue shows the success glyph, not the danger one", async () => {
+  // The healthy-org branch, which the shipped fixture never renders because exactly one row is
+  // overdue. Without this the `overdueCount > 0` ternary has one arm no suite ever evaluates.
+  server.use(
+    http.get("/api/v1/capas", () =>
+      HttpResponse.json({
+        ...capaListFixture,
+        data: capaListFixture.data.map((c) => ({ ...c, overdue: false })),
+      }),
+    ),
+  );
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  const overdueTile = (await screen.findByText("Overdue")).closest(".mantine-Card-root");
+  expect(within(overdueTile as HTMLElement).getByText("0")).toBeInTheDocument();
+  expect(within(overdueTile as HTMLElement).getByText(TONE_GLYPH.success)).toBeInTheDocument();
+  expect(within(overdueTile as HTMLElement).queryByText(TONE_GLYPH.danger)).toBeNull();
 });
 
 test("filtering by severity narrows the cards", async () => {

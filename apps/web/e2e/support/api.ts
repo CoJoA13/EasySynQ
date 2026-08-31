@@ -514,18 +514,16 @@ export async function installRegisterApi(
       return;
     }
 
-    // Shaped from the real serializer, not the page: `api/capa.py::list_capas_endpoint` returns
-    // `{ data: [...], truncated: bool }`, and `useCapas` reads BOTH (`query.data.data` and
-    // `query.data.truncated`). `capaListFixture` is the same `satisfies Capa[]` rows the vitest
-    // suite uses, so the row shape stays pinned to `_capa` in one place; `truncated` is added here
-    // because that fixture is typed `{ data: Capa[] }` and omits it.
+    // Served whole, not spread: `capaListFixture` is `satisfies CapaList`, so BOTH the envelope
+    // (`{ data, truncated }` — api/capa.py::list_capas_endpoint) and the row shape (`_capa`) are
+    // checked by tsc in one place, for this harness and the vitest MSW suite alike.
     if (
       scenario.route === "capa" &&
       method === "GET" &&
       url.pathname === "/api/v1/capas" &&
       url.search === ""
     ) {
-      await fulfillJson(route, { ...capaListFixture, truncated: false });
+      await fulfillJson(route, capaListFixture);
       return;
     }
 
@@ -668,6 +666,28 @@ export async function installRegisterApi(
       url.search === ""
     ) {
       await fulfillJson(route, processesFixture);
+      return;
+    }
+
+    // A LATENT trap, closed rather than left to chance. `CapaDrawer` mounts unconditionally and
+    // asks `usePermissions({ level: "SYSTEM" })` whenever its CAPA has no process — always true at
+    // `capaId: null` — which builds `?scope_level=SYSTEM`. That URL reaches no handler below and
+    // would hit the fail-closed `throw`. It does not fire today ONLY because that observer shares
+    // the query key `["me-permissions","SYSTEM",null]` with TopBar's unscoped `usePermissions()`,
+    // whose effect runs first and wins the queryFn. That ordering is stable but incidental.
+    if (
+      method === "GET" &&
+      url.pathname === "/api/v1/me/permissions" &&
+      hasOnlySearchParams(url, { scope_level: "SYSTEM" })
+    ) {
+      await fulfillJson(route, {
+        scope: { level: "SYSTEM", selector: null },
+        permissions: (scenario.permissions ?? []).map((key) => ({
+          key,
+          effect: "ALLOW",
+          source: "harness",
+        })),
+      });
       return;
     }
 

@@ -7,6 +7,7 @@ import type {
   AuditPlanList,
   AuditProgramList,
   Capa,
+  CapaList,
   Clause,
   Complaint,
   ContextIssue,
@@ -660,7 +661,11 @@ export const capaListFixture = {
       origin_finding_id: null,
       raised_by: null,
       created_at: "2026-04-30T09:00:00+00:00",
-      target_completion_date: null,
+      // A PAST target date on a CLOSED CAPA, which `_capa` answers `overdue: false` for regardless
+      // of the date. Before this row carried one, exactly ONE row had a target date and it was the
+      // same row flagged overdue — so `c.overdue` and `c.target_completion_date !== null` were
+      // indistinguishable, and a consumer re-deriving the flag client-side passed every test.
+      target_completion_date: "2026-04-01",
       overdue: false,
     },
     {
@@ -679,7 +684,10 @@ export const capaListFixture = {
       overdue: false,
     },
   ],
-} satisfies { data: Capa[] };
+  // The real serializer ALWAYS returns this (api/capa.py::list_capas_endpoint); omitting it let the
+  // page's `?? false` paper over an envelope change that no suite would have caught.
+  truncated: false,
+} satisfies CapaList;
 
 export const capaDetailFixture = {
   ...capaListFixture.data[0]!,

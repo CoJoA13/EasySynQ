@@ -26,6 +26,7 @@ interface BoardGeometry {
   kanbanOverflows: boolean;
   tileCount: number;
   captionTops: number[];
+  tileGaps: number[];
 }
 
 const read = async (page: import("@playwright/test").Page): Promise<BoardGeometry> =>
@@ -106,6 +107,17 @@ const read = async (page: import("@playwright/test").Page): Promise<BoardGeometr
       kanbanOverflows: scroller.scrollWidth > scroller.clientWidth + 1,
       tileCount: grid.children.length,
       captionTops,
+      // Gaps between tiles that share a row (a wrapped tile's gap is meaningless).
+      tileGaps: Array.from(grid.children)
+        .slice(1)
+        .map((tile, i) => ({ prev: grid.children[i]!, tile }))
+        .filter(
+          ({ prev, tile }) =>
+            Math.abs(prev.getBoundingClientRect().top - tile.getBoundingClientRect().top) < 2,
+        )
+        .map(({ prev, tile }) =>
+          round(tile.getBoundingClientRect().left - prev.getBoundingClientRect().right),
+        ),
     };
   });
 
@@ -125,11 +137,13 @@ for (const width of [1280, 1000]) {
     await openBoard(page, width);
     const m = await read(page);
 
-    // Preconditions, so a vacuous arrangement cannot satisfy the comparison: three controls, on one
-    // row, under a summary grid wide enough to have actually been mismatched.
-    expect(m.selectCount).toBe(3);
+    // Genuine preconditions: a wrapped filter row or a collapsed grid would satisfy the edge
+    // comparison vacuously.
     expect(m.selectsShareOneRow).toBe(true);
     expect(m.gridWidth).toBeGreaterThan(600);
+    // Belt-and-braces, NOT a measurement: `read()` locates the three selects by a hard-coded name
+    // array and throws when one is missing, so this can never be anything but 3.
+    expect(m.selectCount).toBe(3);
 
     expect(m.selectsLeft).toBe(m.gridLeft);
     expect(Math.abs(m.selectsRight - m.gridRight)).toBeLessThanOrEqual(1);
@@ -182,9 +196,38 @@ test("the four capa summary tiles caption on one line", async ({ page }) => {
   await openBoard(page, 1280);
   const m = await read(page);
 
+  // Belt-and-braces, NOT a measurement: `read()` already throws unless the grid holds exactly 4.
   expect(m.tileCount).toBe(4);
-  // Precondition: a single-column (stacked) arrangement would satisfy nothing here, and a row of
-  // equal tops would be trivially true if the grid had collapsed to one tile.
+  // Genuine precondition: at a narrow viewport the tiles stack and equal caption tops would be
+  // impossible rather than merely true, so the assertion below must run on the four-up arrangement.
   expect(m.gridWidth).toBeGreaterThan(600);
   expect(new Set(m.captionTops).size).toBe(1);
+});
+
+// Belt-and-braces, and labelled as such because it passes against the pre-slice tree too. The
+// residual named an inter-card gap as its second defect; measurement found the seam to be the
+// theme's `md` at every width, uniform with every other gap on the page, and the owner redirected
+// the fix to filling the row instead. This pins the gutter as DELIBERATELY unchanged, so a later
+// slice that alters it does so on purpose rather than by drift.
+test("the capa summary gutter is the theme's md, unchanged by the four-up row", async ({ page }) => {
+  await openBoard(page, 1280);
+  const m = await read(page);
+  expect(m.tileGaps.length).toBe(3);
+  expect(new Set(m.tileGaps)).toEqual(new Set([16]));
+});
+
+// Capable of failing, and worth stating exactly HOW, because the first version of this comment
+// claimed more than the test delivers. `preventGrowOverflow={false}` lets a select exceed its 1/3
+// share, so the worry was that it pushes the row past a narrow viewport. Forcing `wrap="nowrap"`
+// does NOT redden this — flex-shrink absorbs it — so the grow/wrap interaction is not what is
+// guarded here. Pinning a select wider than the viewport DOES redden it (measured: 432 > 320). So
+// what this pins is that no control in this row carries an intrinsic width past the viewport, which
+// is the failure mode a `grow` row invites; the wrap behaviour itself is unmeasured.
+test("the capa filter row never overflows the document at 320px", async ({ page }) => {
+  await openBoard(page, 320);
+  const overflow = await page.evaluate(() => {
+    const root = document.documentElement;
+    return { scrollWidth: root.scrollWidth, clientWidth: root.clientWidth };
+  });
+  expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
 });

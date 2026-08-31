@@ -137,16 +137,24 @@ export function CapaBoardPage() {
     );
   }
 
-  const openCount = rows.filter((c) => !TERMINAL.includes(c.close_state)).length;
+  // ONE population for all four tiles. `openCount` always excluded terminal CAPAs and `overdue` is
+  // non-terminal by construction (the server forces the flag false for Closed/Rejected), but the
+  // histograms counted every loaded row — so the row read "Open CAPAs 5" beside a severity
+  // breakdown summing to 7. On a mature board that is not a rounding oddity: an org with 1 open and
+  // 40 closed CAPAs showed "Open CAPAs 1" next to "Critical · 12", and severity is the axis an
+  // operator triages on. Scoping the histograms to the live rows makes the four tiles arithmetic —
+  // both breakdowns now total `openCount`, which `CapaBoardPage.test.tsx` asserts directly.
+  const live = rows.filter((c) => !TERMINAL.includes(c.close_state));
+  const openCount = live.length;
   // Server-computed (api/capa.py::_capa): already false for Closed/Rejected and evaluated in the
   // org's timezone, so this is a plain count and never re-derives the date comparison client-side.
   const overdueCount = rows.filter((c) => c.overdue).length;
   const overdueTone: Tone = overdueCount > 0 ? "danger" : "success";
   const bySeverity = (Object.keys(SEVERITY_LABEL) as NcSeverity[])
-    .map((s) => ({ severity: s, n: rows.filter((c) => c.severity === s).length }))
+    .map((s) => ({ severity: s, n: live.filter((c) => c.severity === s).length }))
     .filter((x) => x.n > 0);
   const bySource = (Object.keys(SOURCE_LABEL) as CapaSource[])
-    .map((s) => ({ source: s, n: rows.filter((c) => c.source === s).length }))
+    .map((s) => ({ source: s, n: live.filter((c) => c.source === s).length }))
     .filter((x) => x.n > 0);
 
   return (
