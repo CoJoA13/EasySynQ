@@ -57,40 +57,33 @@ the published accuracy band is unchanged, and add a case asserting that a header
 "Audit Program" and one reading "Audit Programme" score identically.
 Last reviewed: 2026-08-29
 
-## RES-CAPA-BOARD-NO-BROWSER-COVERAGE
+## RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER
 
 Status: OPEN
 Owner: Repository owner
-Source: S-ui-5c, 2026-08-29
-Reason: `/capa` has no browser-test coverage at all, so layout defects on it cannot be proved or
-fixed under the rule this repository applies everywhere else. `apps/web/e2e/support/registers.ts`
-lists ten register cases and CAPA is not among them, and `apps/web/e2e/support/api.ts` fulfils no
-`/api/v1/capas` route, so no Playwright scenario can reach the board. Two defects the owner reported
-from a live walkthrough are consequently unfixed: the row of Source/Severity/State filter Selects is
-narrower than the summary card above it, so the block edges do not line up, and a narrow vertical
-gap sits between the "Open CAPAs" and "By source" cards. A one-line fix for the first
-(`grow preventGrowOverflow={false}` on the filter Group) was written, verified against every named
-gate, and then REVERTED rather than shipped unmeasured — the CAPA board is a size-and-position
-change and jsdom resolves no layout, which is exactly the blind spot that let three earlier S-ui
-slices ship a visible defect behind a fully green suite.
-⚠ The obvious closure — adding a `capa` entry to `REGISTER_CASES` — does NOT work, and was checked
-rather than assumed. `RegisterCase` is table-shaped (`floor`, `headers`, `finalHeader`), and the
-generic specs consume those: `register-geometry.spec.ts` asserts `containerScrollWidth` and
-`tableWidth` are at least the case's `floor`. `CapaBoardPage` renders a kanban `ScrollArea` of six
-260-pixel columns AND a `<Table>` beneath it, but that table has **no** `Table.ScrollContainer` — the
-file is not among the nine in `responsiveRegisterContract.test.ts` — so those assertions would measure
-something that is not there. Joining the shared cohort would either fail or need conditionals that
-weaken it for the ten registers that do fit.
-Closure contract: Add a `/api/v1/capas` fixture route to `apps/web/e2e/support/api.ts` — hoisted into
-the always-fulfilled block if the shell requests it, since that file's tail is a fail-closed `throw` —
-and give `/capa` its OWN spec rather than a `REGISTER_CASES` entry, in the idiom of
-`e2e/risk-matrix-legend.spec.ts`. Then fix the filter-row alignment and the inter-card gap with
-assertions that fail against the current code and pass after. Two changes S-ui-5b and S-ui-5c already
-made to this uncovered route should be pinned by the same spec while it is being written: the
-`RegisterFilterBar` bottom margin, and the theme's `ScrollArea type: "auto"`, which gives the board's
-always-overflowing kanban a permanently visible horizontal scrollbar.
-Last reviewed: 2026-08-29
-
+Source: S-ui-6, 2026-08-30
+Reason: S-ui-6 gave `/capa` its first browser coverage, but that coverage measures the BOARD view
+only. The page's `List` view renders a bare `<Table>` with no `Table.ScrollContainer`, which is why
+`CapaBoardPage.tsx` is absent from the nine files pinned by
+`apps/web/src/lib/responsiveRegisterContract.test.ts` and why the shared table-shaped specs cannot
+reach it — the same fact that made a `REGISTER_CASES` entry the wrong unlock in the first place. So
+after a slice titled "give the CAPA board browser coverage", the one table on `/capa` is still the
+unmeasured surface: its five columns can overflow a narrow viewport with no scroll affordance and no
+gate would see it, which is exactly the defect S-ui-5c fixed for the other ten registers by giving the
+theme `ScrollArea` a `type: "auto"` that this table never receives because it has no ScrollArea. The
+open question is whether the CAPA list should join the nine-page cohort at all, or whether a kanban
+board with a secondary list is a different shape that wants a different answer — which is a design
+call, not a defect to fix silently inside a coverage slice.
+Closure contract: Decide whether `/capa`'s List view joins the `responsiveRegisterContract` cohort.
+If it does, wrap its `<Table>` in a `Table.ScrollContainer` with a `minWidth`, add the file to that
+test's nine-file list (making it ten), and extend `apps/web/e2e/capa-board.spec.ts` with a case that
+switches to the List view and asserts localized horizontal scrolling at a width where the table
+overflows — probing a RANGE of widths first, since the other registers reproduce at 1000 and 1115
+rather than at 1280. If it does not, record why a board's secondary list is exempt and remove this
+record. `/capa` also has no 320px case and no denied/granted header pair, unlike the ten
+`REGISTER_CASES` routes; 320px was measured clean by hand during S-ui-6 but is unpinned, and folding
+it in belongs with whichever answer is taken here.
+Last reviewed: 2026-08-30
 ## RES-REGISTER-HEADING-LEVELS
 
 Status: OPEN

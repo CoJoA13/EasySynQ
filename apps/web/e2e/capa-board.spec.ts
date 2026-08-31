@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { installRegisterApi } from "./support/api";
 
 /**
- * The CAPA board's browser coverage (RES-CAPA-BOARD-NO-BROWSER-COVERAGE).
+ * The CAPA board's browser coverage, added by S-ui-6.
  *
  * `/capa` is deliberately not a `REGISTER_CASES` entry — see the `ScenarioRoute` note in
  * `support/api.ts` for why the table-shaped shared specs cannot measure this page — so it gets its
