@@ -603,7 +603,7 @@ their frontmatter figures are carried unchanged and are not restated as freshly 
 
 ### S-rulepack-audit-program — the spelling standard reaches the classifier, and moves the pin
 
-Recorded 2026-08-31. Closes `RES-RULEPACK-BRITISH-KEYWORDS` and opens
+Recorded 2026-08-31 after merging [`#518`](https://github.com/CoJoA13/EasySynQ/pull/518) as `bb12945`. Closes `RES-RULEPACK-BRITISH-KEYWORDS` and opens
 `RES-APPROVAL-BLOCK-BRITISH-KEYWORD`. Filed here rather than under an ingestion heading because it is
 the tail of the R68 arc: S-ui-5a adopted US spelling and swept the SPA, the API's user-visible strings
 and the authority docs, and this is the one place that sweep could not safely reach. No migration (the
@@ -665,7 +665,7 @@ the design-intended Needs-Decision route. Zero corpus entries do this and it is 
 document's classification can change" would be a false restatement of "nothing that fires today stops
 firing", and the two are not the same sentence.
 
-Test deltas, measured on the branch. API unit moved from **1,996 to 1,998** passed with the same two
+Test deltas, measured on the branch, whose tree the squash preserved byte-for-byte as `bb12945`. API unit moved from **1,996 to 1,998** passed with the same two
 release-ceremony skips — the two new parametrize cases. Ruff lint and format-check were clean over 769
 files and mypy found no issue in 449 source files. The web suites were NOT run and are not restated:
 this slice touches no TypeScript. The three repository authority gates are clean.
