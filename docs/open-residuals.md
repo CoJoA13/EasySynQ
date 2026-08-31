@@ -27,36 +27,29 @@ instead. jsdom cannot see either, so a Vitest assertion is not acceptable eviden
 worth the fragility, record that the columns stay fluid and remove this record.
 Last reviewed: 2026-08-29
 
-## RES-RULEPACK-BRITISH-KEYWORDS
+## RES-APPROVAL-BLOCK-BRITISH-KEYWORD
 
 Status: OPEN
 Owner: Repository owner
-Source: S-ui-5a, 2026-08-29
-Reason: S-ui-5a adopted American-US spelling as the house standard for user-facing text and swept the
-SPA, the API's user-visible strings and the current-authority documents, but did not reach
-`apps/api/src/easysynq_api/domain/ingestion/rule_packs/iso9001_rule_pack_v1.yaml`, which still carries
-the British form in two places with different consequences. The `explanation` string "Header reads
-like an audit programme/plan" is user-visible — `apps/web/src/features/ingestion/ItemDetailDrawer.tsx`
-renders each fired matcher's explanation beside its weight — so the old spelling still reaches a
-reader on the ingestion surface. More consequentially, two matchers key on `"audit programme"` as a
-case-insensitive substring NEEDLE (`rule_classifier.py`, `any(kw in low for kw in m.keywords)`), so a
-document titled per the newly adopted standard — "Audit Program 2026" — does not fire them at all: it
-loses the weight-30 header signal on the audit-schedule rule and the weight-55 signal on the Clause
-9.2 rule, and may land in a lower confidence band than the identical British-spelled document. The
-house-standard change therefore has a classification consequence, not only a spelling one. It was not
-fixed inside S-ui-5a because editing a versioned, weight-calibrated resource is out of scope for a
-spelling slice: even a change that looks additive has to be shown not to disturb the calibration
-before it ships, which is what the versioned-rule-pack design exists to force.
-Closure contract: Replace the needle `"audit programme"` with `"audit program"` in both matchers, and
-correct the `explanation` string to the house standard. Replacement rather than addition is correct
-and is the cheaper proof: the US form is a strict prefix of the British one, so the shorter needle
-matches BOTH spellings, so nothing that fires today stops firing. Replacement also sidesteps the
-double-count question that ADDING a second needle would raise: with one needle there is nothing to
-double-count, and the change is monotone — it can only add matches, never remove one. Re-run the calibration test that reproduces the doc 09 §6.5 worked examples, confirm
-the published accuracy band is unchanged, and add a case asserting that a header reading
-"Audit Program" and one reading "Audit Programme" score identically.
-Last reviewed: 2026-08-29
-
+Source: S-rulepack-audit-program, 2026-08-31 (surfaced by the adversarial review of that slice)
+Reason: The same defect class as the one that slice fixed, one predicate over.
+`rule_classifier.py::_eval_predicate`'s `has_approval_block` keys on the single British-spelled
+substring `"authorised by"`, so an approval block reading "Authorized by:" does not fire it. R68
+makes that spelling the house standard for user-facing text, which raises how often a customer
+document will carry the US form. It is bounded rather than urgent: such a block almost always also
+carries "Approved by", which the predicate does match, so the miss usually costs nothing. It is
+pre-existing since S-ing-2 and was NOT introduced by the audit-program fix, which is why it was not
+folded into that slice — a predicate is not a keyword list, and widening one is a different change
+from shortening a needle.
+Closure contract: Add the US form to `has_approval_block` and prove the two spellings score
+identically, in the idiom of `test_audit_program_scores_identically_in_both_spellings` — pinning the
+SCORE the predicate supplies, not merely the equality of the two results, because equality alone
+stays green when the predicate is deleted outright. ⚠ Unlike the needle fix, this is NOT a strict
+prefix, so it is an ADDITION rather than a replacement and must be shown not to double-count: check
+whether a block carrying both spellings fires the predicate once. Then decide the
+`classifier_version` question the same way S-rulepack-audit-program did — a score-changing predicate
+edit bumps the pin.
+Last reviewed: 2026-08-31
 ## RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER
 
 Status: OPEN

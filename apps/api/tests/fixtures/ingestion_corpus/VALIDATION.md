@@ -1,4 +1,4 @@
-# Classifier accuracy band — `rule-heuristic-1` (INTERIM, SYNTHETIC CORPUS ONLY)
+# Classifier accuracy band — `rule-heuristic-1.1` (INTERIM, SYNTHETIC CORPUS ONLY)
 
 > **Status: INTERIM — synthetic corpus only.** The figures below are **NOT representative of real
 > production QMS shares** and must not be cited as production-confidence accuracy. The v1.x
@@ -8,7 +8,16 @@
 
 Per Decisions Register **R10** + doc 09 **§6.4a**, every `classifier_version` ships a *measured*
 per-dimension accuracy band and a published validation method. This documents the band for the v1
-`RuleHeuristicClassifier` (`classifier_version = "rule-heuristic-1"`).
+`RuleHeuristicClassifier` (`classifier_version = "rule-heuristic-1.1"`).
+
+> **On the `1` → `1.1` bump.** The pin moved when the first score-changing matcher edit landed: two
+> matchers keyed on the British-spelled needle `"audit programme"`, which the US-spelling standard
+> (R68) made a classification defect rather than a cosmetic one. The band below was **re-measured**
+> against `1.1` rather than carried over, and every figure came back identical to `1`'s — the
+> shortened needle is a strict prefix, so it is a superset of the old matches, and no corpus entry's
+> score, band, clause set or PDCA phase moves. The bump exists for attribution, not because the band
+> changed: `classifier_version` is written into permanent vault import provenance, and one string
+> must not denote two matcher sets.
 
 ## What was measured
 

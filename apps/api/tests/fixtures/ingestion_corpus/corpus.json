@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "classifier_version": "rule-heuristic-1",
+    "classifier_version": "rule-heuristic-1.1",
     "note": "INTERIM SYNTHETIC validation corpus (S-ing-2, doc 09 §6.4a). Hand-authored from the §6.2 signal taxonomy + §6.5 worked examples — NOT tuned to the rule-pack weights (a hold-out, to avoid train-on-test). NOT representative of real production QMS shares; see VALIDATION.md. Each entry: {name, features:{filename, rel_path, ext, header_block, full_text}, kind, type, clauses[]}."
   },
   "entries": [

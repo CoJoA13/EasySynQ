@@ -264,12 +264,13 @@ def test_audit_program_scores_identically_in_both_spellings(
     nothing that fired before stops firing, and there is no second needle to double-count. The
     change can only ADD matches, never remove one.
 
-    Both headers are here because the consequence is NOT uniform, and the difference is the
-    mechanism. Measured against the pre-fix pack, "Internal Audit Program" lost 30 points of type
-    confidence but held its band and its clause confidence, because the Clause 9.2 rule's sibling
-    needle ``"internal audit"`` fired anyway. "Audit Program 2026" had nothing to cover for it and
-    lost the band outright: type 45 vs 75 (LOW vs MEDIUM) and clause confidence 20 vs 75. A test
-    written only against the first header would understate the defect it exists to prevent.
+    Both headers are here because the consequence differs in ONE dimension, and that dimension is
+    the mechanism. Measured against the pre-fix pack on exactly the features below, both headers
+    lost the same 30 points of type confidence and the same band — 45/LOW against 75/MEDIUM. They
+    differ only in the clause dimension: "Internal Audit Program" held clause confidence at 75
+    because the Clause 9.2 rule's sibling needle ``"internal audit"`` fired regardless, while
+    "Audit Program 2026" had nothing to cover for it and fell to 20. A test written only against
+    the first header would miss that second loss entirely.
     """
 
     def features(spelling: str) -> FileFeatures:
@@ -289,7 +290,16 @@ def test_audit_program_scores_identically_in_both_spellings(
     # then hide behind a band boundary that happens to absorb the lost weight.
     assert us == gb, note
 
-    # Anti-tautology: the equality above would hold vacuously if NEITHER spelling matched anything.
-    # Both must actually fire the audit signals the matchers exist to fire.
+    # LOAD-BEARING, and it has to be the SCORE. Equality alone only guards the two spellings being
+    # re-SPLIT; it says nothing about the needle still existing. Deleting `"audit program"` from
+    # both matchers outright leaves the spellings equal — at 45/LOW, the pre-fix value — so the
+    # whole fix can be removed with the suite green. Pinning what the needle actually supplies is
+    # what closes that: 75 is reachable only when the header signal fires.
+    assert us.type_conf == 75
+    assert us.clause_conf == 75
+
+    # Belt-and-braces, NOT evidence: both are satisfied by other matchers in this fixture — AUDIT
+    # wins on the folder token plus the dated-signature predicate, and 9.2 scores on "lead auditor"
+    # in the content — so neither can fail while the needle is absent.
     assert us.type_code == "AUDIT"
     assert "9.2" in us.clause_numbers
