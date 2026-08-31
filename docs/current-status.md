@@ -2,10 +2,10 @@
 easysynq_status_schema: 1
 as_of: "2026-08-31"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-rulepack-audit-program"
+last_shipped_slice: "S-rulepack-approval-block"
 migration_head: "0091"
 next_migration: "0092"
-api_unit_tests: 1998
+api_unit_tests: 2001
 web_test_files: 277
 web_tests: 2257
 contract_tests: 284
@@ -71,8 +71,9 @@ the breadcrumb disagree with the rail for a whole slice. And the risk-matrix leg
 grid it keys.
 
 What remains deferred is [`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred).
-S-rulepack-audit-program closed the rule-pack half of the spelling standard and left the narrower
-[`RES-APPROVAL-BLOCK-BRITISH-KEYWORD`](open-residuals.md) behind it. S-ui-6 closed the CAPA board's
+S-rulepack-audit-program closed the rule-pack half of the spelling standard and left a narrower
+predicate behind it; S-rulepack-approval-block has now closed that too, and opened nothing in its
+place, so the classifier carries no known spelling gap. S-ui-6 closed the CAPA board's
 coverage gap and replaced it with the narrower
 [`RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER`](open-residuals.md): that slice's spec measures the board
 view, and the page's secondary List table has no scroll container, so the one table on `/capa` is still
@@ -169,6 +170,36 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
+
+Fresh 2026-08-31 evidence for S-rulepack-approval-block. It moves `api_unit_tests` 1,998 →
+**2,001** (three new tests in an existing file) and nothing else in the frontmatter: it touches no
+TypeScript, so the web figures are carried unchanged and NOT restated as freshly verified, and it
+adds no migration and no contract. It moves `classifier_version` `rule-heuristic-1.1` →
+**`rule-heuristic-1.2`** — the second bump in two slices, for the same cause both times: R68's
+US-spelling standard reaching a needle that is a classification signal rather than a label. Two
+things differ from the `1.1` bump and both matter to a reader resuming an import. The edit is in
+`rule_classifier.py::_eval_predicate`, not the pack YAML, and the pin still moves because
+`classifier_version` denotes the whole scoring behaviour, cutoffs and named predicates included. And
+it is an ADDITION rather than a prefix shortening, because "authorised by" and "authorized by" share
+no substring — so this slice also had to establish that a block spelling it both ways scores once.
+
+The published INTERIM accuracy band was re-measured against `1.2` and is unchanged at kind 0.911 /
+type 1.000 / clause precision 0.889 / clause recall 1.000 over 45 entries. That is measured, not
+argued from the corpus text: all 45 entries were classified under both the old and the new predicate
+and zero of them differ in any field. The corpus keeps only "Approved by" phrasings, which is why
+nothing moved; it was not edited to make the band hold.
+
+Measured locally on the S-rulepack-approval-block branch. API unit passed **2,001 with the same 2
+expected skips**; Ruff lint and format-check were clean over 769 files and mypy found no issue in 449
+source files. The web, integration and response-contract suites were not run and are not described as
+passed. Five mutations were run against the tree the tests execute, each reddening for its predicted
+reason: reverting the fix, deleting BOTH needles outright, storing the new needle capitalised,
+deleting `_eval_predicate`'s `.lower()`, and implementing the US spelling as a separate pack matcher
+instead of extending the predicate. Two are isolating. The `.lower()` deletion reddens the
+case-insensitivity case and nothing else across the suite (1 failed, 2,000 passed), which is what
+that case uniquely covers — the capitalised-needle mutation reddens two tests and does not isolate
+it. The separate-matcher mutation is the only shape that can genuinely double-count, and it failed
+at `assert 90 == 75`.
 
 Fresh 2026-08-31 evidence for S-rulepack-audit-program. It moves `api_unit_tests` 1,996 → **1,998**
 (two new parametrize cases in an existing file) and nothing else in the frontmatter: it touches no

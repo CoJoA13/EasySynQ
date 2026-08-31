@@ -156,8 +156,19 @@ def _eval_predicate(name: str, f: FileFeatures) -> bool:
     if name == "has_revision_history":
         return "revision history" in text or bool(sh.get("has_revision_history"))
     if name == "has_approval_block":
+        # Both spellings of "authorised" are carried. Unlike the "audit program(me)" needles, this
+        # pair shares no common substring, so the R68 repair here is an ADDITION, not a shortening.
+        # ``any`` short-circuits and the caller adds the matcher weight once per matcher, so a block
+        # carrying BOTH spellings still contributes exactly one weight-15 hit, never two.
         return any(
-            k in text for k in ("approved by", "prepared by", "reviewed by", "authorised by")
+            k in text
+            for k in (
+                "approved by",
+                "prepared by",
+                "reviewed by",
+                "authorised by",
+                "authorized by",
+            )
         )
     if name == "has_dated_signatures":
         return ("signature" in text or "signed" in text) and _DATE_RE.search(text) is not None

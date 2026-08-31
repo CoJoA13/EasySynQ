@@ -26,7 +26,7 @@ def _write(tmp_path: Path, body: str) -> Path:
 
 def test_default_pack_loads_and_validates() -> None:
     pack = default_rule_pack()
-    assert pack.version == "rule-heuristic-1.1"
+    assert pack.version == "rule-heuristic-1.2"
     assert pack.type_rules and pack.kind_rules and pack.clause_rules
     # every type rule has a domain and at least one matcher
     for rule in pack.type_rules:

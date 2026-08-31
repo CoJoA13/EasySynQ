@@ -303,3 +303,121 @@ def test_audit_program_scores_identically_in_both_spellings(
     # in the content — so neither can fail while the needle is absent.
     assert us.type_code == "AUDIT"
     assert "9.2" in us.clause_numbers
+
+
+def _approval_block_features(body: str) -> FileFeatures:
+    """A plain controlled document whose ONLY approval-block signal is ``body``.
+
+    Deliberately scores 60 on kind before the predicate fires — the filename doc-code (30) plus the
+    header keyword (30) — and nothing else. The folder is ``Uploads/QA`` so no controlled-document
+    path token adds a third source, and the body carries neither "revision history" nor a
+    signature word, so neither sibling predicate can supply the weight under test.
+    """
+    return FileFeatures(
+        filename="SOP-QA-001 Cleaning.docx",
+        rel_path="Uploads/QA/SOP-QA-001 Cleaning.docx",
+        ext="docx",
+        header_block="Standard Operating Procedure",
+        full_text=body,
+    )
+
+
+def _approval_evidence(result: object) -> list[object]:
+    """The fired weight-15 structural-shape entries on kind/DOCUMENT — i.e. ``has_approval_block``.
+
+    Its sibling predicate on the same rule and dimension is ``has_revision_history`` at weight 25,
+    so the weight discriminates the two without pinning the pack's explanation text.
+    """
+    return [
+        e
+        for e in result.evidence  # type: ignore[attr-defined]
+        if e.dimension == "kind"
+        and e.candidate == "DOCUMENT"
+        and e.signal_type == "structural_shape"
+        and e.weight == 15
+    ]
+
+
+def test_approval_block_fires_for_both_spellings_of_authorised(
+    clf: RuleHeuristicClassifier,
+) -> None:
+    """The predicate S-rulepack-audit-program's review flagged and deliberately left open.
+
+    The same defect class as S-rulepack-audit-program, one predicate over — but NOT the same repair.
+    "audit program" is a strict prefix of "audit programme", so that fix could SHORTEN one needle
+    and match both spellings. "authorised by" and "authorized by" share no substring, so this one
+    has to ADD a needle, which raises the question a replacement could not: whether a block
+    carrying both spellings now scores twice. It does not, and that is asserted directly.
+
+    The control case is what makes the rest evidence. Without it, ``kind_conf == 75`` says only that
+    the fixture reaches 75 somehow — and this rule has a second structural predicate plus a folder
+    token that could each supply weight. Pinning the 60 first fixes the baseline, so the 15 that
+    separates it from 75 is demonstrably the predicate's own and no other matcher's.
+    """
+    neither = _classify(
+        clf, _approval_block_features("issued to the quality manager on 2026-04-02.")
+    )
+    gb = _classify(
+        clf, _approval_block_features("authorised by the quality manager on 2026-04-02.")
+    )
+    us = _classify(
+        clf, _approval_block_features("authorized by the quality manager on 2026-04-02.")
+    )
+
+    # CONTROL, and load-bearing. 60 = doc-code 30 + header 30, with the predicate silent. If some
+    # other matcher in this fixture supplied the approval weight, this would already read 75 and
+    # every assertion below would be true of a fixture that proves nothing.
+    assert neither.kind_conf == 60
+    assert _approval_evidence(neither) == []
+
+    # LOAD-BEARING, and it has to be the SCORE, not the equality. Before the fix `us` scored 60 and
+    # `gb` scored 75; deleting BOTH needles instead of reverting leaves them equal again at 60, so
+    # `us == gb` alone stays green with the whole predicate gutted. 75 is reachable only when the
+    # weight-15 structural matcher actually fires.
+    assert gb.kind_conf == 75
+    assert us.kind_conf == 75
+
+    # The whole result, not a chosen subset: every confidence, the band, the clause set and the
+    # fired-evidence tuple. Guards a future edit that re-splits the two spellings behind a band
+    # boundary that happens to absorb the 15.
+    assert us == gb
+
+
+def test_approval_block_with_both_spellings_scores_once(clf: RuleHeuristicClassifier) -> None:
+    """The addition does not double-count: one block, both spellings, one weight-15 hit.
+
+    This is the risk a strict-prefix repair does not carry. ``any`` short-circuits and the caller
+    adds ``m.weight`` once per MATCHER, so the two needles cannot both pay — but the guard is cheap
+    and the failure it catches is silent: a second matcher entry in the pack, or a ``sum`` over the
+    needles, would score 90 here and quietly re-band documents that merely spell it both ways.
+    """
+    one = _classify(
+        clf, _approval_block_features("authorised by the quality manager on 2026-04-02.")
+    )
+    both = _classify(
+        clf,
+        _approval_block_features(
+            "authorised by the plant manager and authorized by the quality manager on 2026-04-02."
+        ),
+    )
+
+    assert both.kind_conf == 75  # not 90
+    assert len(_approval_evidence(both)) == 1  # the direct form: one fired matcher, not two
+    assert both == one
+
+
+def test_approval_block_is_case_insensitive_for_the_us_spelling(
+    clf: RuleHeuristicClassifier,
+) -> None:
+    """A real approval block is title-cased; every other body in this file is lowercase.
+
+    That makes this the only case in the suite that exercises ``_eval_predicate``'s ``.lower()``.
+    Deleting that call reddens THIS test and nothing else — 1 failed against 2,000 passed — which is
+    the coverage it uniquely supplies. It is NOT what catches a needle stored capitalised: that
+    mutation reddens the first test too, because a capitalised needle never fires at all.
+    """
+    titled = _classify(
+        clf, _approval_block_features("Authorized By: the Quality Manager, 2026-04-02.")
+    )
+    assert titled.kind_conf == 75
+    assert len(_approval_evidence(titled)) == 1

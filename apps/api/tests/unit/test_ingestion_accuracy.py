@@ -1,4 +1,4 @@
-"""The measured accuracy band for ``classifier_version='rule-heuristic-1.1'`` (S-ing-2, R10/§6.4a).
+"""The measured accuracy band for ``classifier_version='rule-heuristic-1.2'`` (S-ing-2, R10/§6.4a).
 
 This IS the validation harness: it runs the v1 ``RuleHeuristicClassifier`` over a held-out, labeled
 synthetic corpus (``tests/fixtures/ingestion_corpus/corpus.json``) and asserts the measured

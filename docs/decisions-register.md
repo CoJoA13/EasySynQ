@@ -2196,8 +2196,11 @@ branch is never reached.
 substring needle now key on the US form, which is a strict prefix and therefore matches both. That
 edit changed a score for the first time, so `classifier_version` moved `rule-heuristic-1` →
 `rule-heuristic-1.1`: the pin is written into permanent vault import provenance and one string must
-not denote two matcher sets. One predicate remains — `has_approval_block` still keys only on
-"authorised by" — tracked as [`RES-APPROVAL-BLOCK-BRITISH-KEYWORD`](open-residuals.md).
+not denote two matcher sets. The review of that slice found one predicate it had not reached —
+`has_approval_block` keyed only on "authorised by" — which S-rulepack-approval-block then closed,
+moving the pin again to `rule-heuristic-1.2`. That repair could not reuse the prefix trick, because
+the two spellings of "authorised" share no substring: it ADDS a needle, so it also had to show that
+a block carrying both spellings still scores once.
 
 **Back-propagation:** `AGENTS.md` and the contributor guidance that governs new user-facing copy,
 the user and administrator manuals, and any future slice adding SPA or API strings.
