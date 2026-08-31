@@ -4,6 +4,7 @@ import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { useLocation } from "react-router-dom";
 import { expect, test } from "vitest";
+import { TONE_GLYPH } from "../../lib/status";
 import type { MePermissions } from "../../lib/types";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
@@ -26,6 +27,27 @@ test("the Open tile counts non-terminal CAPAs and by-source breaks down", async 
   renderWithProviders(<CapaBoardPage />, { route: "/capa" });
   expect(await screen.findByText("5")).toBeInTheDocument();
   expect(screen.getByText("Audit · 3")).toBeInTheDocument();
+});
+
+test("the summary row carries overdue and a severity histogram, not just open + source", async () => {
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  // `overdue` is server-computed and already false for Closed/Rejected, so the tile is a plain
+  // count of the flag — one row in the fixture carries it.
+  // Scoped to the tile: the kanban column headers each carry a count badge, so a bare
+  // getByText("1") matches several elements and would not pin the number to Overdue at all.
+  const overdueTile = (await screen.findByText("Overdue")).closest(".mantine-Card-root");
+  expect(overdueTile).not.toBeNull();
+  expect(within(overdueTile as HTMLElement).getByText("1")).toBeInTheDocument();
+  // The danger glyph is the non-colour channel (DP-7): with a non-zero overdue count the tile must
+  // still read as bad news when the colour is stripped.
+  expect(within(overdueTile as HTMLElement).getByText(TONE_GLYPH.danger)).toBeInTheDocument();
+
+  // The histogram rides the canonical severity pill (SEVERITY_TONE via SeverityBadge), NOT a second
+  // grey badge that would reintroduce the ad-hoc colour map S-statusbadge-2 removed. Appending the
+  // count also keeps these accessible names distinct from the per-card pills on the same board.
+  expect(screen.getByLabelText("Severity: Critical · 1")).toBeInTheDocument();
+  expect(screen.getByLabelText("Severity: Major · 3")).toBeInTheDocument();
+  expect(screen.getByLabelText("Severity: Minor · 3")).toBeInTheDocument();
 });
 
 test("filtering by severity narrows the cards", async () => {
