@@ -35,6 +35,15 @@ _PACK_ERASURE_REVISION = "0082_pack_legal_erasure"
 _PACK_PRINCIPAL_REVISION = "0083_pack_build_principal"
 # Clause 7 has exactly 17 seeded rows: the 13 flipped by 0084 + the 4-row 7.5 subtree.
 _CLAUSE7_ROW_COUNT = 17
+# `audit_event` is partitioned by month, and 0010 seeds a FIXED runway of 2026-06/07/08 only. The
+# rolling top-up is done by the app (the `roll_partitions` Beat, plus the `ensure_partitions` boot
+# hook) and by the integration conftest — but this test drives Alembic against its own scratch
+# database with neither, so it sees exactly those three months. Writing at `now()` therefore worked
+# until 2026-09-01 and then failed for every branch with `no partition of relation "audit_event"
+# found`. The instant is incidental to what this test asserts, so it is pinned inside the seeded
+# runway and the test is now independent of the wall clock.
+_SEEDED_PARTITION_INSTANT = "2026-08-15 12:00:00+00"
+
 _CANONICAL_CHECK = "ck_process_edge_no_self_loop"
 _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
 _RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
@@ -743,11 +752,12 @@ def test_populated_historical_transitions_and_head_repairs(
                         "INSERT INTO audit_event "
                         "(org_id, occurred_at, actor_id, actor_type, event_type, object_type, "
                         "object_id) "
-                        "VALUES (:org, now(), :actor, 'user', 'PACK_INVALIDATED', "
-                        "'evidence_pack', :object_id)"
+                        "VALUES (:org, CAST(:occurred_at AS timestamptz), :actor, 'user', "
+                        "'PACK_INVALIDATED', 'evidence_pack', :object_id)"
                     ),
                     {
                         "org": org_id,
+                        "occurred_at": _SEEDED_PARTITION_INSTANT,
                         "actor": user_id,
                         "object_id": invalidated_pack_id,
                     },

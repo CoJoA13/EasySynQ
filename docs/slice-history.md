@@ -762,6 +762,43 @@ count is unchanged. Ruff lint and format-check were clean over 769 files and myp
 this slice touches no TypeScript, no migration and no contract. The three repository authority gates
 are clean.
 
+### S-partition-runway-test — the audit partition runway expired, and one test had no top-up
+
+Recorded 2026-09-01. A one-line repair to `tests/migration/test_migration_coherence.py`, filed as its
+own slice because it is not caused by any feature work and it blocked every branch at once.
+
+**What broke, and exactly why it broke on a date rather than on a commit.** `audit_event` is
+partitioned by month with deliberately NO default partition, and migration `0010` seeds a fixed
+runway — `_INITIAL_PARTITION_STARTS = ("2026-06-01", "2026-07-01", "2026-08-01")`, three months from
+its own authoring date. Keeping that runway ahead is the APPLICATION's job: the daily
+`roll_partitions` Beat, plus the `ensure_partitions` hook in `main.py`'s lifespan, which exists
+precisely "so a fresh install after Aug 2026 has a covering month". The integration conftest performs
+the same top-up itself. `test_migration_coherence.py` does neither — it drives Alembic straight at a
+scratch database — so it saw exactly those three months, and its `INSERT INTO audit_event … now()`
+started failing at 2026-09-01T00:00Z with `no partition of relation "audit_event" found`.
+
+**Confirmed as repository breakage, not slice breakage, before anything was edited.** The failure
+first appeared while finishing S-railfoot-pref, whose diff touches the same test file — the shape
+most likely to be misattributed. Checking `main` out into a clean worktree reproduced it identically,
+which settled the question in one command and is the reason this is a separate PR rather than a
+correction folded into that slice.
+
+**The repair pins the instant rather than extending the runway.** The row's timestamp is incidental —
+the test only needs a `PACK_INVALIDATED` event to exist so the downgrade refuses — so it now writes a
+fixed instant inside the seeded months. Extending `0010` was rejected: it is a shipped migration, and
+a hard-coded runway only postpones the same failure. Topping up the way the integration conftest does
+was also rejected, because it would leave the test dependent on today's date; pinning makes it
+independent of the wall clock permanently. This is the documented house rule for any test writing an
+`audit_event`, applied to the one place that had not adopted it.
+
+Production was never at risk, and the record should be clear about that: the boot hook and the Beat
+both keep a live installation's runway current. Only a clock-driven write against a
+freshly-migrated-and-otherwise-untouched database could see the gap.
+
+No test delta — the file's single test neither grows nor shrinks. API unit passed **2,001** with the
+same two release-ceremony skips, `tests/migration` passes, Ruff and mypy are clean. The web,
+integration and response-contract suites were NOT run and are not restated.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration
