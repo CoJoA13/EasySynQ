@@ -2,7 +2,7 @@
 easysynq_status_schema: 1
 as_of: "2026-08-31"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-rulepack-approval-block"
+last_shipped_slice: "S-partition-runway-test"
 migration_head: "0091"
 next_migration: "0092"
 api_unit_tests: 2001
@@ -170,6 +170,29 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
+
+Fresh 2026-09-01 evidence for S-partition-runway-test. A one-line test repair with no frontmatter
+movement: no test is added or removed, so `api_unit_tests` stays 2,001, and nothing else in the
+numeric block is touched.
+
+⚠ **It fixes a time bomb that had already gone off.** `audit_event` is partitioned by month and
+migration `0010` seeds a FIXED runway of 2026-06/07/08. The rolling top-up is the application's job —
+the daily `roll_partitions` Beat plus the `ensure_partitions` boot hook in `main.py` — and the
+integration conftest does its own top-up. `tests/migration/test_migration_coherence.py` has neither:
+it drives Alembic against its own scratch database, so it sees exactly those three months. It
+inserted a `PACK_INVALIDATED` row at `now()`, which worked until 2026-08-31 and from 2026-09-01
+failed with `no partition of relation "audit_event" found` on EVERY branch, `main` included. That was
+confirmed on `main` in a clean worktree before anything was changed, so it is dated repository
+breakage rather than a slice regression. The instant is incidental to what the test asserts, so it is
+pinned inside the seeded runway and the test no longer depends on the wall clock.
+
+Production was never affected: `main.py`'s lifespan already calls `ensure_partitions` on boot for
+exactly this reason, and the Beat keeps the runway ≥2 months ahead.
+
+Measured locally on the S-partition-runway-test branch. `tests/migration` passes; API unit passed
+**2,001 with the same 2 expected skips**; Ruff lint and format-check were clean over 769 files and
+mypy found no issue in 449 source files. The web, integration and response-contract suites were not
+run and are not described as passed.
 
 Fresh 2026-08-31 evidence for S-rulepack-approval-block. It moves `api_unit_tests` 1,998 →
 **2,001** (three new tests in an existing file) and nothing else in the frontmatter: it touches no
