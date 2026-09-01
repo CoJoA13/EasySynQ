@@ -764,7 +764,8 @@ are clean.
 
 ### S-partition-runway-test — the audit partition runway expired, and one test had no top-up
 
-Recorded 2026-09-01. A one-line repair to `tests/migration/test_migration_coherence.py`, filed as its
+Recorded 2026-09-01 after merging [`#525`](https://github.com/CoJoA13/EasySynQ/pull/525) as
+`f0959fa`. A one-line repair to `tests/migration/test_migration_coherence.py`, filed as its
 own slice because it is not caused by any feature work and it blocked every branch at once.
 
 **What broke, and exactly why it broke on a date rather than on a commit.** `audit_event` is
@@ -801,7 +802,8 @@ integration and response-contract suites were NOT run and are not restated.
 
 ### S-railfoot-pref — the colour scheme becomes an account preference (R69)
 
-Recorded 2026-09-01. The first half of the rail-foot feature: the persistence the control will write
+Recorded 2026-09-01 after merging [`#522`](https://github.com/CoJoA13/EasySynQ/pull/522) as
+`b679efc`. The first half of the rail-foot feature: the persistence the control will write
 to. Migration `0092`, a contract change, no permission key, and no web code — the rail-foot component
 itself is the next slice.
 
@@ -861,7 +863,8 @@ dropped the column and the enum type with all three rows surviving, and the re-u
 default reflects back as `'AUTO'::color_scheme` and is a standing `alembic check` drift source — which
 mirrors the existing `app_user.status` column and is why the check stays clean.
 
-Test deltas, measured on the S-railfoot-pref branch. API unit moved from **2,001 to 2,003** passed
+Test deltas, measured on the branch, whose tree the squash preserved byte-for-byte as `b679efc`
+(verified by `git diff`, not asserted). API unit moved from **2,001 to 2,003** passed
 with the same two release-ceremony skips. `tests/integration/test_auth_me.py` passed all eleven,
 seven of them new. Ruff lint and format-check were clean over 769 files, mypy found no issue in 449
 source files, and `gen-contracts.sh --check` reports the contract in sync at `786f6782…`. The

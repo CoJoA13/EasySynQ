@@ -189,8 +189,8 @@ downgrade dropped the column and the enum type with all three rows surviving, an
 `alembic check` were clean again. The column carries NO `server_default` on either side, which is why
 `alembic check` is clean: an enum default reflects back as `'AUTO'::color_scheme`.
 
-Measured locally on the S-railfoot-pref branch, rebased onto `f0959fa` so it carries the
-partition-runway repair. API unit passed **2,003 with the same 2 expected
+Measured locally on the branch, rebased onto `f0959fa` so it carries the partition-runway repair,
+and whose tree the squash preserved byte-for-byte as `b679efc` — verified by `git diff`, not asserted. API unit passed **2,003 with the same 2 expected
 skips**; Ruff lint and format-check were clean over 769 files and mypy found no issue in 449 source
 files; `gen-contracts.sh --check` reports the contract in sync. The eleven tests in
 `tests/integration/test_auth_me.py` passed, seven of them new, and the authenticated
@@ -240,7 +240,8 @@ pinned inside the seeded runway and the test no longer depends on the wall clock
 Production was never affected: `main.py`'s lifespan already calls `ensure_partitions` on boot for
 exactly this reason, and the Beat keeps the runway ≥2 months ahead.
 
-Measured locally on the S-partition-runway-test branch. `tests/migration` passes; API unit passed
+Measured locally on the branch, whose tree the squash preserved byte-for-byte as `f0959fa`
+(verified by `git diff`, not asserted). `tests/migration` passes; API unit passed
 **2,001 with the same 2 expected skips**; Ruff lint and format-check were clean over 769 files and
 mypy found no issue in 449 source files. The web, integration and response-contract suites were not
 run and are not described as passed.
