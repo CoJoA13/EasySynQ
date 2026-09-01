@@ -9,9 +9,10 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .._generated.models import MePreferencesUpdate
 from ..auth.dependencies import get_current_user
 from ..config import get_settings
-from ..db.models.app_user import AppUser
+from ..db.models.app_user import AppUser, ColorScheme
 from ..db.session import get_session
 from ..services.authz.effective import compute_effective_permissions
 from ..services.common.org_clock import current_org_tz
@@ -42,11 +43,40 @@ def _represent(user: AppUser) -> dict[str, Any]:
         # timezone for this request. Expose that same value so the SPA can render UTC wire
         # timestamps on the organization calendar date instead of the browser's date.
         "org_timezone": str(current_org_tz()),
+        # A SQLAlchemy column default is applied at FLUSH, not at construction, so a transient
+        # AppUser reads None here. The column is NOT NULL, so a persisted row never can — the
+        # fallback is reachable only for an unflushed instance, and AUTO is both this column's
+        # default and the behaviour the SPA had before R69, so it is the right value rather than a
+        # mask for a missing one.
+        "color_scheme": (user.color_scheme or ColorScheme.AUTO).value,
     }
 
 
 @router.get("/me")
 async def me(user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+    return _represent(user)
+
+
+@router.patch("/me/preferences")
+async def update_my_preferences(
+    body: MePreferencesUpdate,
+    user: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Update the caller's OWN interface preferences (R69).
+
+    Authentication-only, the ``/me`` precedent: the target is always ``get_current_user``, so this
+    route can reach no other account and there is nothing for a permission key to gate. It takes no
+    user id for the same reason — accepting one is what would turn it into an admin surface.
+
+    A partial update. ``None`` means "not supplied" and leaves the stored value alone, so an empty
+    body is a valid no-op rather than a reset; the generated model forbids unknown properties, so a
+    misspelled key is a 422 and never a silent no-op.
+    """
+    if body.color_scheme is not None:
+        user.color_scheme = ColorScheme(body.color_scheme.value)
+    await session.commit()
+    await session.refresh(user)
     return _represent(user)
 
 

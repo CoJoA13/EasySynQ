@@ -268,6 +268,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update the caller's own interface preferences.
+         * @description Authentication-only — it writes the caller's OWN preferences and can reach no other user, so it gates nothing and takes no permission key (the GET /me precedent). A partial update: an omitted property is left unchanged. Returns the full updated user so the SPA can replace its /me cache without a second round trip.
+         */
+        patch: operations["updateMyPreferences"];
+        trace?: never;
+    };
     "/me/permissions": {
         parameters: {
             query?: never;
@@ -4507,6 +4527,16 @@ export interface components {
              * @example America/Chicago
              */
             org_timezone: string;
+            color_scheme: components["schemas"]["ColorScheme"];
+        };
+        /**
+         * @description The user's own interface color-scheme preference (R69). AUTO means follow the operating system and is the default; it stays selectable so a user who picks LIGHT or DARK can return to OS-following. Stored on the account so it survives the SPA's in-memory-token reload.
+         * @enum {string}
+         */
+        ColorScheme: "LIGHT" | "DARK" | "AUTO";
+        /** @description A partial update of the caller's OWN preferences. Every property is optional; an omitted property is left unchanged. An empty object is a valid no-op. */
+        MePreferencesUpdate: {
+            color_scheme?: components["schemas"]["ColorScheme"];
         };
         /** @description The admin roster representation (S8d) — AppUser + mfa_enrolled + assigned role names. */
         UserAdmin: {
@@ -8258,6 +8288,48 @@ export interface operations {
             };
             /** @description Missing, invalid, or expired token. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateMyPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MePreferencesUpdate"];
+            };
+        };
+        responses: {
+            /** @description The updated current user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppUser"];
+                };
+            };
+            /** @description Missing, invalid, or expired token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The body is not a valid preferences update. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

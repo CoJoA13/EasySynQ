@@ -799,6 +799,99 @@ No test delta — the file's single test neither grows nor shrinks. API unit pas
 same two release-ceremony skips, `tests/migration` passes, Ruff and mypy are clean. The web,
 integration and response-contract suites were NOT run and are not restated.
 
+### S-railfoot-pref — the colour scheme becomes an account preference (R69)
+
+Recorded 2026-09-01. The first half of the rail-foot feature: the persistence the control will write
+to. Migration `0092`, a contract change, no permission key, and no web code — the rail-foot component
+itself is the next slice.
+
+**Two premises in the original brief were false, and the scope turned on both.** The brief read as
+"build a dark mode and remember it". Checked against the tree: `tokens.css` has carried a complete
+`:root[data-mantine-color-scheme="dark"]` block since S-ui-1, independently contrast-verified by
+`contrast.test.ts`, which reads the dark block separately rather than transforming the light ratios.
+And `main.tsx` has run `MantineProvider defaultColorScheme="auto"` all along, with Mantine's
+localStorage manager in place. So neither the dark scheme nor the persistence machinery was missing.
+What was missing was a WRITER: no component anywhere calls `setColorScheme`, so the machinery had no
+input and the scheme simply tracked the operating system. Correcting the premises shrank the feature
+to its real content — a control, and somewhere durable to put its output.
+
+**Why the account and not just the browser.** The SPA keeps its tokens IN MEMORY only, so every
+reload starts logged-out and re-authenticates. During that token-less window there is no `/me` to
+read, so an account-only preference would flash the wrong scheme on every single load; a
+browser-only one would not follow the user to a second machine. The decision is therefore both, with
+the account as the authority and `localStorage` as a pre-auth cache — each store answers exactly the
+case the other cannot. That reasoning, not the wider scope, is why R69 lands where it does.
+
+**`AUTO` stays a real value.** It is selectable, not merely initial. A two-state control would make
+the behaviour the product shipped for its entire life unreachable the first time anyone touched it,
+and an integration test pins the return path specifically because nothing else in the suite would.
+
+**The clock reads organization time.** `useOrgDate` (U20, the C11 class) already renders every
+register and timeline date on the organization calendar, because that is how records and audit events
+are stamped, and `org_timezone` already ships on `/me`. A browser-local clock would not merely risk
+confusion — it would disagree with the timeline directly above it for any user east or west of the
+organization. That decision is recorded here; the clock itself is in the next slice.
+
+**No permission key**, on the authentication-only `GET /me` precedent. The target is always
+`get_current_user` and the route accepts no user id, so it can reach no other account and there is
+nothing to gate. Accepting an id is exactly what would turn it into an admin surface, so that is
+proven rather than asserted: a mutation that widens the write to every user in the org is caught by
+the cross-account isolation test and by nothing else.
+
+⚠ **A SQLAlchemy column default lands at FLUSH, not at construction.** Adding `color_scheme` broke
+the EXISTING `_represent` timezone unit test, because it builds a transient `AppUser` whose new
+attribute reads `None`, and `user.color_scheme.value` raised. The column is NOT NULL so a persisted
+row can never reach that branch; `_represent` falls back to `AUTO`, which is both the column default
+and the pre-R69 behaviour, so it is the right value rather than a mask. The test asserts AUTO rather
+than merely "does not raise", because a fallback to LIGHT or DARK would also not raise and would
+silently override the operating system.
+
+⚠ **PostgreSQL's `::` cast shorthand collides with SQLAlchemy's `:param` syntax.** The backfill was
+first written with a bind parameter immediately followed by the double-colon cast, and `text()` never
+registered the bind at all: the migration died at load with `doesn't define a bound parameter`. An
+explicit `CAST(... AS color_scheme)` is the fix, the same idiom the JSONB seed rule prescribes. The
+local migration gate caught it; a green unit suite could not have.
+
+**The populated-database proof, separately from the round trip.** A fresh-DB round trip cannot see a
+backfill — there are no rows to backfill — so both were run. On a throwaway PG16: `upgrade head`,
+`downgrade base`, `upgrade head`, `alembic check` clean. Then three `app_user` rows were inserted at
+`0091`; the upgrade backfilled all three to `AUTO` and set `is_nullable` to `NO`, the downgrade
+dropped the column and the enum type with all three rows surviving, and the re-upgrade and
+`alembic check` were clean again. The column carries no `server_default` on either side — an enum
+default reflects back as `'AUTO'::color_scheme` and is a standing `alembic check` drift source — which
+mirrors the existing `app_user.status` column and is why the check stays clean.
+
+Test deltas, measured on the S-railfoot-pref branch. API unit moved from **2,001 to 2,003** passed
+with the same two release-ceremony skips. `tests/integration/test_auth_me.py` passed all eleven,
+seven of them new. Ruff lint and format-check were clean over 769 files, mypy found no issue in 449
+source files, and `gen-contracts.sh --check` reports the contract in sync at `786f6782…`. The
+authenticated response-contract sweep moved from **284 to 285**, the one addition being
+`updateMyPreferences`. `integration_passed` is NOT restated: a whole-suite local run is not the
+supported mode (CI shards it four ways; one process shares a database across every file), and this
+local toolchain cannot pass the restore drill regardless — its PostgreSQL 17+ `pg_restore` emits
+`SET transaction_timeout = 0` at a postgres:16 testcontainer. Baselining settled that it is an
+environment limit and not a regression: `test_setup.py` and `test_restore.py` give an identical
+**7 failed, 101 passed** with this slice stashed and applied.
+
+⚠ **Three drafts of this paragraph, two of them wrong, and the error moved rather than shrank.**
+The first said the slice "touches no TypeScript", which is false — a contract change regenerates
+`apps/web/src/api/_generated/schema.d.ts`. The second said the web gate therefore "had to be" run,
+because adding `AppUser.color_scheme` to `required` tightens a type the fixtures are checked against.
+That is also false, and the adversarial review caught it across three independent lenses: the
+generated schema has **zero importers** and `tsconfig.json` sets `skipLibCheck: true`, so the
+tightening cannot reach `tsc` by any path. The gate was run and is clean, but it is a precaution, not
+a proof.
+
+What the exercise did expose is worth more than the claim it replaced. The only coupling between the
+serializer and the SPA is by HAND: `meFixture` and the e2e `/me` fixture are pinned with `satisfies`
+against the hand-written `Me` interface in `useMe.ts`, so a field added to `_represent` is invisible
+to them until a person adds it. They had already diverged. This slice adds `color_scheme` to `Me` and
+to both fixtures and records the absent guard rather than inventing one — the house rule is to pin
+every MSW fixture to a real serializer response, and nothing enforces it. ESLint over `src` and `e2e`, both strict `tsc`
+projects and the production build are clean, and Vitest passed **277 files and 2,257 tests** — unchanged, since the slice adds no web test, but freshly verified rather
+than carried, because the reason to run them was the regenerated schema and not a new assertion.
+`npm run test:browser` was not run: this slice renders nothing.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration

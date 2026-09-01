@@ -11,6 +11,10 @@ export interface Me {
   email: string | null;
   status: string;
   org_timezone: string;
+  // R69. Mirrors `_represent` in apps/api/src/easysynq_api/api/auth.py. NOTE this interface is
+  // hand-written, not the generated `AppUser` schema, so nothing type-checks it against the
+  // contract — a field added server-side stays invisible here until someone adds it by hand.
+  color_scheme: "LIGHT" | "DARK" | "AUTO";
 }
 
 export function useMe() {

@@ -1,14 +1,14 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-08-31"
+as_of: "2026-09-01"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-partition-runway-test"
-migration_head: "0091"
-next_migration: "0092"
-api_unit_tests: 2001
+last_shipped_slice: "S-railfoot-pref"
+migration_head: "0092"
+next_migration: "0093"
+api_unit_tests: 2003
 web_test_files: 277
 web_tests: 2257
-contract_tests: 284
+contract_tests: 285
 integration_passed: 1224
 integration_skipped: 2
 ci_jobs: 12
@@ -77,8 +77,10 @@ place, so the classifier carries no known spelling gap. S-ui-6 closed the CAPA b
 coverage gap and replaced it with the narrower
 [`RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER`](open-residuals.md): that slice's spec measures the board
 view, and the page's secondary List table has no scroll container, so the one table on `/capa` is still
-unmeasured. The owner's rail-foot idea — a colour-scheme toggle, perhaps a clock — is a feature request
-rather than a defect and is deliberately not tracked.
+unmeasured. The owner's rail-foot idea — a colour-scheme toggle, perhaps a clock — stopped being an
+untracked idea on 2026-08-31: its three open questions were put to the owner and answered, and the
+answers are binding as **R69**. S-railfoot-pref ships the persistence half; the rail-foot component
+itself is the next slice.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
@@ -170,6 +172,55 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
+
+Fresh 2026-09-01 evidence for S-railfoot-pref. It moves `api_unit_tests` 2,001 → **2,003**,
+`migration_head` `0091` → **`0092`** and `next_migration` to **`0093`**. It is the first half of the
+rail-foot feature: the account-level colour-scheme preference the control will write to, decided as
+**R69**, which the register records along with its own range bump. The contract gains
+`ColorScheme`, `MePreferencesUpdate` and `PATCH /me/preferences`, and `AppUser.color_scheme` is
+required, so the lock moved `2b8c2503…` → **`786f6782…`**. No permission key: the route takes no user
+id and can reach no other account, riding the authentication-only `GET /me` precedent.
+
+Migration `0092` was round-tripped on a throwaway PG16 — `upgrade head`, `downgrade base`,
+`upgrade head`, and `alembic check` clean — and then, separately, on a POPULATED database, because a
+fresh-DB round trip cannot see a backfill or a populated-downgrade abort. Three `app_user` rows were
+inserted at `0091`; the upgrade backfilled all three to `AUTO`, `is_nullable` became `NO`, the
+downgrade dropped the column and the enum type with all three rows surviving, and the re-upgrade and
+`alembic check` were clean again. The column carries NO `server_default` on either side, which is why
+`alembic check` is clean: an enum default reflects back as `'AUTO'::color_scheme`.
+
+Measured locally on the S-railfoot-pref branch, rebased onto `f0959fa` so it carries the
+partition-runway repair. API unit passed **2,003 with the same 2 expected
+skips**; Ruff lint and format-check were clean over 769 files and mypy found no issue in 449 source
+files; `gen-contracts.sh --check` reports the contract in sync. The eleven tests in
+`tests/integration/test_auth_me.py` passed, seven of them new, and the authenticated
+response-contract sweep passed **285**, up one for the new operation — so `contract_tests` moves
+284 → **285** as freshly verified rather than carried. `integration_passed` and `integration_skipped`
+stay CARRIED and are explicitly not claimed for this tree. A whole-suite local run is not the
+supported mode — CI runs `integration-shards (1..4)`, while one process shares a single database
+across every file — and the local toolchain additionally cannot pass the restore drill at all,
+because its `pg_restore` is PostgreSQL 17+ and emits `SET transaction_timeout = 0` against the
+postgres:16 testcontainer. That was confirmed as an environment limit rather than a regression by baselining it:
+`test_setup.py` plus `test_restore.py` produce an identical **7 failed, 101 passed** with this
+slice's changes stashed and applied. The web gate was run as a precaution and is NOT
+load-bearing here. ⚠ Two earlier versions of this paragraph claimed otherwise and both were wrong;
+the adversarial review caught it. The contract regeneration does rewrite
+`apps/web/src/api/_generated/schema.d.ts`, but that file has **zero importers** and `tsconfig.json`
+sets `skipLibCheck: true`, so tightening `AppUser.required` cannot reach `tsc` at all. The real and
+only coupling is by hand: `meFixture` and the e2e `/me` fixture are pinned with `satisfies` against
+the HAND-WRITTEN `Me` interface in `useMe.ts`, not the generated schema — which is precisely why a
+field added server-side stays invisible to them. This slice adds `color_scheme` to `Me` and to both
+fixtures. Nothing structurally ties them to `_represent`; that gap is real, is not closed here, and
+is the reason the check mattered even though the gate could not have failed. ESLint over `src` and
+`e2e`, both strict `tsc` projects and the production build are clean, and Vitest passed **277 files
+and 2,257 tests**. Those two figures are therefore freshly verified
+rather than carried, even though neither moved — this slice adds no web test, and the point of
+running them was the regenerated schema, not a new assertion. `npm run test:browser` was NOT run:
+this slice renders nothing. Four
+mutations were run and each reddened only the
+proof it should — dropping the commit, turning the partial update into a reset, using the wrong
+transient fallback, and widening the write to every user in the org, which is caught solely by the
+cross-account isolation test.
 
 Fresh 2026-09-01 evidence for S-partition-runway-test. A one-line test repair with no frontmatter
 movement: no test is added or removed, so `api_unit_tests` stays 2,001, and nothing else in the

@@ -115,6 +115,7 @@ const currentUser = {
   email: "mara@example.com",
   status: "ACTIVE",
   org_timezone: "UTC",
+  color_scheme: "AUTO",
 };
 
 const emptyNotifications = notificationFixtures.slice(0, 0);

@@ -2885,6 +2885,7 @@ export const meFixture = {
   status: "ACTIVE",
   is_guest: false,
   org_timezone: "UTC",
+  color_scheme: "AUTO",
 } satisfies Me & { is_guest: boolean };
 
 export const handlers = [

@@ -814,6 +814,58 @@
         }
       }
     },
+    "/me/preferences": {
+      "patch": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "updateMyPreferences",
+        "summary": "Update the caller's own interface preferences.",
+        "description": "Authentication-only — it writes the caller's OWN preferences and can reach no other user, so it gates nothing and takes no permission key (the GET /me precedent). A partial update: an omitted property is left unchanged. Returns the full updated user so the SPA can replace its /me cache without a second round trip.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MePreferencesUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated current user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppUser"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or expired token.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is not a valid preferences update.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/me/permissions": {
       "get": {
         "tags": [
@@ -15197,7 +15249,8 @@
           "keycloak_subject",
           "status",
           "is_guest",
-          "org_timezone"
+          "org_timezone",
+          "color_scheme"
         ],
         "properties": {
           "id": {
@@ -15236,6 +15289,28 @@
             "type": "string",
             "description": "Canonical organization/working-calendar IANA timezone for date rendering.",
             "example": "America/Chicago"
+          },
+          "color_scheme": {
+            "$ref": "#/components/schemas/ColorScheme"
+          }
+        }
+      },
+      "ColorScheme": {
+        "type": "string",
+        "enum": [
+          "LIGHT",
+          "DARK",
+          "AUTO"
+        ],
+        "description": "The user's own interface color-scheme preference (R69). AUTO means follow the operating system and is the default; it stays selectable so a user who picks LIGHT or DARK can return to OS-following. Stored on the account so it survives the SPA's in-memory-token reload."
+      },
+      "MePreferencesUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "A partial update of the caller's OWN preferences. Every property is optional; an omitted property is left unchanged. An empty object is a valid no-op.",
+        "properties": {
+          "color_scheme": {
+            "$ref": "#/components/schemas/ColorScheme"
           }
         }
       },
