@@ -24,7 +24,11 @@ async function expectFirstFilterReachable(
   firstFilter: NonNullable<RegisterCase["firstFilter"]>,
 ): Promise<void> {
   const filterOptions = firstFilter.name ? { name: firstFilter.name, exact: true } : undefined;
-  const filter = page.getByRole(firstFilter.role, filterOptions);
+  // Scoped to main, not the page. A register filter may be an UNNAMED radiogroup (audits), and the
+  // shell itself now contains one — R69's rail-foot theme control — so a page-wide unnamed role
+  // query resolves to two elements and fails Playwright's strict mode. The register's own geometry
+  // is what this spec measures, so main is the correct scope regardless; the shell is free to grow.
+  const filter = page.getByRole("main").getByRole(firstFilter.role, filterOptions);
   await expect(filter).toBeVisible();
 
   if (firstFilter.role === "textbox") {

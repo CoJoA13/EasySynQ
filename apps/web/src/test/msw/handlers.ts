@@ -3636,6 +3636,15 @@ export const handlers = [
     HttpResponse.json({ ...docFixture[0], id: String(params.id), current_state: "Effective" }),
   ),
   http.get("/api/v1/me", () => HttpResponse.json(meFixture)),
+  // R69. Echoes the requested value back inside the full user, matching `_represent` — the real
+  // endpoint returns the whole updated AppUser so the SPA can replace its /me cache in one trip.
+  http.patch("/api/v1/me/preferences", async ({ request }) => {
+    const body = (await request.json()) as { color_scheme?: string } | null;
+    return HttpResponse.json({
+      ...meFixture,
+      ...(body?.color_scheme ? { color_scheme: body.color_scheme } : {}),
+    });
+  }),
   http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state: "OPERATIONAL" })),
   http.get("/api/v1/auth/config", () =>
     HttpResponse.json({

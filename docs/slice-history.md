@@ -895,6 +895,110 @@ projects and the production build are clean, and Vitest passed **277 files and 2
 than carried, because the reason to run them was the regenerated schema and not a new assertion.
 `npm run test:browser` was not run: this slice renders nothing.
 
+### S-railfoot-ui — the rail foot: a three-state theme control and an organization clock (R69)
+
+Recorded 2026-09-01. The second half of the rail-foot feature and the end of it: S-railfoot-pref
+shipped the account persistence, this ships what writes to it. Web-only — no Python, no migration, no
+contract.
+
+**Where it lives, and why that is the whole positional decision.** The foot is a second, NON-growing
+`AppShell.Section` placed OUTSIDE the nav's `grow ScrollArea`. Putting it inside — the obvious way to
+add something to the rail — would let it scroll away with the nav list, so on a short viewport the
+theme control and the clock would be unreachable while every Vitest assertion stayed green, because
+`getByRole` finds a control whether or not a browser would paint it somewhere a person can reach.
+`e2e/rail-foot.spec.ts` measures it at 500px and asserts the PRECONDITION first — that the nav
+genuinely overflows at that height — because on a tall viewport the spec would pass for the trivial
+reason that nothing scrolls.
+
+**Two design bugs were found by tests rather than reasoned about, and both are worth the record.**
+
+The first: the control was bound to the ACCOUNT value while selection applied the LOCAL scheme, so
+after a failed save it displayed AUTO over a visibly light page. It now binds to the live preference,
+which is the correct reading in every state — before `/me` resolves (the cache is already painted),
+after the reconcile, after a choice, and after a failure.
+
+The second is subtler and was found by instrumenting rather than guessing. The failing test looked
+like a test artifact, so the hook's renders were logged: `LIGHT → LIGHT/pref=AUTO → AUTO`. The
+reconcile lands AFTER `/me` resolves — so a user who clicks the control before `/me` arrives had
+their choice silently overwritten by the account value, which is not a narrow window on a cold load.
+An explicit choice now ends the automatic reconcile for the session, on the principle that the user's
+own action is more recent evidence of intent than a background fetch; a reload reconciles from the
+account again. `does not let a late /me overwrite a choice made before it resolved` pins it.
+
+⚠ **The first draft of the failure branch defeated its own purpose.** `onError` reset the reconcile
+ref so a later `/me` could win — which meant the effect immediately saw the unchanged account value
+as a fresh change and snapped the page back, so the user's choice vanished the instant the save
+failed. The ref is now left alone: the choice survives as a browser-level preference for the session,
+the account remains the authority, and the mutation-feedback report is what tells them it did not
+save.
+
+⚠ **The browser gate caught a regression this slice introduced.** A Mantine `SegmentedControl`
+renders `role="radiogroup"`, and the audits register's first filter is an UNNAMED radiogroup, so
+`register-geometry.spec.ts`'s page-wide `getByRole("radiogroup")` began resolving to two elements and
+failed strict mode. This is the duplicate-`aria-label` trap one role over, and the general lesson is
+larger than this slice: adding ANY control to the shell can collide with an unnamed page-level role
+query in a page spec. The repair scopes that query to `main` — the correct scope for a spec measuring
+register geometry regardless — rather than contorting the new control. Confirmed as this slice's
+regression and not a flake by stashing: 24 of 24 pass on the same tree without these changes.
+
+⚠ **And the new spec was itself wrong in an instructive way.** Mantine visually hides the real radio
+`<input>`, so Playwright refuses to click it ("element is not visible", sixty retries) while jsdom
+has no visibility model and `userEvent.click` on that same input succeeds. The component tests were
+clicking something a person cannot reach. The browser spec clicks the LABEL, and asserts on
+`document.documentElement.dataset.mantineColorScheme` — the attribute every
+`[data-mantine-color-scheme]` token block keys on — rather than on the radio's checked state, which
+would only prove that a radio is a radio.
+
+**The clock is org time, and its correctness is unit-tested away from the DOM.** `formatOrgClock` is
+pure given an explicit instant, so midnight, a half-hour offset zone, a DST transition and an invalid
+IANA name are all covered without a browser or a clock; the component test proves only the wiring. It
+returns `null` rather than a fallback, and the component then renders nothing — showing the browser's
+time under an "Organization time" label would look authoritative and be wrong.
+
+**What the adversarial review corrected, all folded here.** It confirmed seven findings of
+twenty-five raised, and four were real defects rather than test-precision points. A permanent
+failure banner whose "Try again" wrote a SUPERSEDED value — pick DARK, save fails, pick LIGHT,
+succeeds, and the standing banner still offered to write DARK; the entry is now dismissed on success
+and the retry re-reads current intent from a ref. `disabled={saving}` disabled the element holding
+FOCUS, dropping it to `<body>` on every theme change, and was protecting nothing the optimistic
+local apply did not already cover. The failure notification itself had no test anywhere. And
+deleting the clock's tick interval reddened nothing — a stopped clock is wrong for fifty-nine
+minutes in every hour and looks entirely normal.
+
+⚠ **A test that asserted the right thing for the wrong reason.** The "no clock when the timezone is
+unusable" case synchronised on the SegmentedControl, which `RailFoot` renders unconditionally at
+mount with no dependency on `/me` — so the assertion ran while `me` was still undefined, the
+`!timeZone` guard returned null on `undefined`, and the `"Not/AZone"` fixture was never read at all.
+Measured: zero `Intl.DateTimeFormat` constructions in the whole test. It now waits on a `/me`-derived
+beacon, so the absence is caused by the zone being rejected rather than by a query still in flight.
+This is the house rule about negative async assertions, applied to a case that looked fine.
+
+⚠ **A correction that was itself wrong, twice.** The original comment credited `hourCycle: "h23"`
+with pinning midnight. The review said that option is inert and `hour12: false` does the work, and
+the comment was duly changed to say so. Measuring settled it differently again: removing EITHER
+alone leaves all fifteen tests green, and removing BOTH reddens four. They are redundant
+belt-and-braces and neither is individually load-bearing. Three statements, and only the measured one
+is true — the lesson is the one this repo already wrote down, that a confirmed finding can still
+carry false particulars, and it was not applied the first time.
+
+**Mutations, each reddening only what it should.** Removing the explicit-choice guard reddens two
+(the race returns); binding the control to the account value reddens two; sending Mantine's
+lower-case value instead of the wire enum reddens two; formatting the clock without the timezone
+reddens six. From the folded findings: a browser-local fallback when `formatOrgClock` returns null
+reddens the absence test; deleting the tick interval reddens the advance test; dropping `report()`
+and dropping `dismiss()` each redden the notification test; and the three `hour12`/`hourCycle`
+combinations behave as described above. ⚠ Dropping the `onSuccess` cache advance initially reddened NOTHING — real behaviour
+with no test. It is not redundant with the session guard, which keeps the session consistent while
+the cache advance keeps `["me"]` truthful for every other reader, so it was pinned with a probe (the
+control cannot observe it, since the live and account values are deliberately different) and the
+mutation re-run to confirm the new test catches it.
+
+Test deltas, measured on the S-railfoot-ui branch. Vitest moved from 277 files and 2,257 tests to
+**278 and 2,273** — one new file, and six of the sixteen new tests land in the existing
+`src/lib/time.test.ts`. The Playwright Chromium suite moved **76 → 78**. ESLint over `src` and `e2e`,
+both strict `tsc` projects and the production build were clean. The API, migration, integration and
+response-contract suites were NOT run and are not restated: this slice changes no Python.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration

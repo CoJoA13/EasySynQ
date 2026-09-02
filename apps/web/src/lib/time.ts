@@ -75,3 +75,45 @@ export function formatRelativeTime(input: string | number, now: number = Date.no
   }
   return formatTimestamp(then);
 }
+
+// The wall-clock time observed in the canonical ORGANIZATION timezone, as a stable HH:MM plus the
+// zone's own short name (R69's rail-foot clock). Deliberately NOT browser-local: records and audit
+// events are stamped in org time, and `useOrgDate` already renders every register date that way, so
+// a browser-local clock in the same frame would disagree with the timeline directly above it.
+//
+// Pure given an explicit `now`, so every boundary — midnight, a half-hour offset, a DST transition,
+// a missing or malformed zone — is unit-testable with no browser and no clock. `hour12: false`
+// and `hourCycle: "h23"` together pin 24-hour output with midnight as "00:00" regardless of runtime
+// locale. ⚠ They are REDUNDANT, and that is measured rather than assumed: removing either one alone
+// leaves all 15 tests green, and removing BOTH reddens four. Neither is individually load-bearing,
+// so do not describe one as the guard — an earlier comment here credited `hourCycle`, a correction
+// then credited `hour12`, and both statements were wrong.
+export function formatOrgClock(
+  now: number | Date,
+  timeZone: string | null | undefined,
+): { time: string; zone: string } | null {
+  const instant = now instanceof Date ? now : new Date(now);
+  if (!timeZone || Number.isNaN(instant.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      hourCycle: "h23",
+      timeZoneName: "short",
+    }).formatToParts(instant);
+    const value = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value;
+    const hour = value("hour");
+    const minute = value("minute");
+    const zone = value("timeZoneName");
+    if (!hour || !minute || !zone) return null;
+    return { time: `${hour}:${minute}`, zone };
+  } catch {
+    // An invalid IANA name throws a RangeError. A clock that cannot be trusted must not be shown at
+    // all — rendering the browser's time under an org-time label would be worse than rendering
+    // nothing, because it looks authoritative and is wrong.
+    return null;
+  }
+}
