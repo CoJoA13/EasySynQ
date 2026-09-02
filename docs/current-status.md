@@ -195,7 +195,8 @@ therefore clicking something a person cannot reach. The browser spec clicks the 
 asserts on `document.documentElement.dataset.mantineColorScheme` rather than on the radio's checked
 state, because the latter would only prove that a radio is a radio.
 
-Measured locally on the S-railfoot-ui branch. Vitest passed **278 files and 2,273 tests**; the full
+Measured locally on the branch, whose tree the squash preserved byte-for-byte as `5ef71c2` —
+verified by `git diff`, not asserted. Vitest passed **278 files and 2,273 tests**; the full
 `npm run test:browser` — build included, the only form that proves anything — passed **78 of 78
 Chromium tests**; ESLint over `src` and `e2e`, both strict `tsc` projects and the production build
 were clean. The API, migration, integration and response-contract suites were NOT run and are not
