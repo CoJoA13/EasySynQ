@@ -10,6 +10,7 @@ import { MutationFeedbackOutlet } from "../../lib/mutationFeedback";
 import { RouteAnnouncement } from "../../lib/routeChrome";
 import { Breadcrumb } from "./Breadcrumb";
 import { LeftRail } from "./LeftRail";
+import { RailFoot } from "./RailFoot";
 import { TopBar } from "./TopBar";
 
 export interface AppShellProps {
@@ -66,6 +67,11 @@ export function AppShell({ notFound = false }: AppShellProps) {
             scrollable section the overflow is simply clipped and unreachable. */}
         <MantineAppShell.Section grow component={ScrollArea}>
           <LeftRail />
+        </MantineAppShell.Section>
+        {/* The foot does NOT grow and sits outside the ScrollArea, so the theme control and the
+            organization clock stay reachable at any viewport height while the nav list scrolls. */}
+        <MantineAppShell.Section>
+          <RailFoot />
         </MantineAppShell.Section>
       </MantineAppShell.Navbar>
       <MantineAppShell.Main id="main-content" tabIndex={-1}>

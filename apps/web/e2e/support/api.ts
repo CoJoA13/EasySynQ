@@ -452,6 +452,20 @@ export async function installRegisterApi(
       return;
     }
 
+    // R69's rail foot is part of the SHELL, so its write must live in this always-fulfilled block.
+    // Scenario-gating a shell request is what broke 33 of 40 browser tests in S-ui-2: the tail of
+    // this handler is a fail-closed throw, so an unrouted shell request fails every spec, not just
+    // the one exercising it. Echoing the requested value back matches the real endpoint, which
+    // returns the full updated user.
+    if (method === "PATCH" && url.pathname === "/api/v1/me/preferences") {
+      const body = request.postDataJSON() as { color_scheme?: string } | null;
+      await fulfillJson(route, {
+        ...currentUser,
+        ...(body?.color_scheme ? { color_scheme: body.color_scheme } : {}),
+      });
+      return;
+    }
+
     if (method === "GET" && url.pathname === "/api/v1/me/permissions" && url.search === "") {
       await fulfillJson(route, {
         scope: { level: "SYSTEM", selector: null },

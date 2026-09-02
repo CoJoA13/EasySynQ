@@ -2,12 +2,12 @@
 easysynq_status_schema: 1
 as_of: "2026-09-01"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-railfoot-pref"
+last_shipped_slice: "S-railfoot-ui"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2003
-web_test_files: 277
-web_tests: 2257
+web_test_files: 278
+web_tests: 2273
 contract_tests: 285
 integration_passed: 1224
 integration_skipped: 2
@@ -77,10 +77,10 @@ place, so the classifier carries no known spelling gap. S-ui-6 closed the CAPA b
 coverage gap and replaced it with the narrower
 [`RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER`](open-residuals.md): that slice's spec measures the board
 view, and the page's secondary List table has no scroll container, so the one table on `/capa` is still
-unmeasured. The owner's rail-foot idea — a colour-scheme toggle, perhaps a clock — stopped being an
-untracked idea on 2026-08-31: its three open questions were put to the owner and answered, and the
-answers are binding as **R69**. S-railfoot-pref ships the persistence half; the rail-foot component
-itself is the next slice.
+unmeasured. The owner's rail-foot idea — a colour-scheme toggle, perhaps a clock — is now DELIVERED
+and no longer an idea: its three open questions were put to the owner on 2026-08-31 and answered, the
+answers are binding as **R69**, S-railfoot-pref shipped the account persistence and S-railfoot-ui
+shipped the control and the organization clock. Nothing about it remains deferred.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
@@ -172,6 +172,34 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
+
+Fresh 2026-09-01 evidence for S-railfoot-ui, which completes the rail-foot feature. Web-only: it
+moves `web_test_files` 277 → **278** (one new file) and `web_tests` 2,257 → **2,273**, and the
+Playwright Chromium suite 76 → **78**, which is not a frontmatter field. It touches no Python, no
+migration and no contract, so `api_unit_tests`, `migration_head`, `next_migration`, `contract_tests`
+and the integration figures are carried unchanged and are NOT restated as freshly verified.
+
+⚠ **The browser gate caught a regression this slice introduced, and vitest could not have.** A
+Mantine `SegmentedControl` renders `role="radiogroup"`, and the audits register's first filter is an
+UNNAMED radiogroup, so `register-geometry.spec.ts`'s page-wide `getByRole("radiogroup")` began
+matching two elements and failed Playwright's strict mode. It is the duplicate-`aria-label` trap one
+role over: adding ANY control to the shell can collide with an unnamed page-level role query. The
+repair scopes that query to `main`, which is the correct scope for a spec measuring register
+geometry regardless, and leaves the shell free to grow. It was confirmed as this slice's regression
+rather than a flake by stashing: 24 of 24 pass on the same tree without these changes.
+
+⚠ **A second browser-only finding, in the new spec itself.** Mantine visually hides the real radio
+`<input>`, so Playwright refuses to click it — "element is not visible", sixty retries — while jsdom
+has no visibility model and `userEvent.click` on that same input succeeds. The component tests were
+therefore clicking something a person cannot reach. The browser spec clicks the label instead, and
+asserts on `document.documentElement.dataset.mantineColorScheme` rather than on the radio's checked
+state, because the latter would only prove that a radio is a radio.
+
+Measured locally on the S-railfoot-ui branch. Vitest passed **278 files and 2,273 tests**; the full
+`npm run test:browser` — build included, the only form that proves anything — passed **78 of 78
+Chromium tests**; ESLint over `src` and `e2e`, both strict `tsc` projects and the production build
+were clean. The API, migration, integration and response-contract suites were NOT run and are not
+described as passed: this slice changes no Python.
 
 Fresh 2026-09-01 evidence for S-railfoot-pref. It moves `api_unit_tests` 2,001 → **2,003**,
 `migration_head` `0091` → **`0092`** and `next_migration` to **`0093`**. It is the first half of the
