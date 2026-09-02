@@ -897,7 +897,8 @@ than carried, because the reason to run them was the regenerated schema and not 
 
 ### S-railfoot-ui — the rail foot: a three-state theme control and an organization clock (R69)
 
-Recorded 2026-09-01. The second half of the rail-foot feature and the end of it: S-railfoot-pref
+Recorded 2026-09-01 after merging [`#527`](https://github.com/CoJoA13/EasySynQ/pull/527) as
+`5ef71c2`. The second half of the rail-foot feature and the end of it: S-railfoot-pref
 shipped the account persistence, this ships what writes to it. Web-only — no Python, no migration, no
 contract.
 
@@ -993,7 +994,8 @@ the cache advance keeps `["me"]` truthful for every other reader, so it was pinn
 control cannot observe it, since the live and account values are deliberately different) and the
 mutation re-run to confirm the new test catches it.
 
-Test deltas, measured on the S-railfoot-ui branch. Vitest moved from 277 files and 2,257 tests to
+Test deltas, measured on the branch, whose tree the squash preserved byte-for-byte as `5ef71c2`
+(verified by `git diff`, not asserted). Vitest moved from 277 files and 2,257 tests to
 **278 and 2,273** — one new file, and six of the sixteen new tests land in the existing
 `src/lib/time.test.ts`. The Playwright Chromium suite moved **76 → 78**. ESLint over `src` and `e2e`,
 both strict `tsc` projects and the production build were clean. The API, migration, integration and
