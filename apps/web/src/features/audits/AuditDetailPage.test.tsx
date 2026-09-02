@@ -7,6 +7,7 @@ import { expect, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { AuditDetailPage } from "./AuditDetailPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 function grant(keys: string[]) {
   server.use(
@@ -64,6 +65,7 @@ test("no axe violations", async () => {
   const { container } = harness("au000001-0001-0001-0001-000000000001");
   await screen.findByText("REC-000061");
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 // diff-critic MAJOR regression: the modal must unmount on close — without it, the post-NC

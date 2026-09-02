@@ -1,15 +1,15 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-01"
+as_of: "2026-09-02"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-railfoot-ui"
+last_shipped_slice: "S-ui-a11y-outline"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2003
-web_test_files: 278
-web_tests: 2273
+web_test_files: 280
+web_tests: 2339
 contract_tests: 285
-integration_passed: 1224
+integration_passed: 1231
 integration_skipped: 2
 ci_jobs: 12
 ci_checks: 16
@@ -81,6 +81,40 @@ unmeasured. The owner's rail-foot idea — a colour-scheme toggle, perhaps a clo
 and no longer an idea: its three open questions were put to the owner on 2026-08-31 and answered, the
 answers are binding as **R69**, S-railfoot-pref shipped the account persistence and S-railfoot-ui
 shipped the control and the organization clock. Nothing about it remains deferred.
+
+S-ui-a11y-outline then closed the register heading-level record S-ui-4 opened and deliberately did
+not act on; its identifier is retired from the ledger and survives only in the dated
+[`slice-history.md`](slice-history.md) entries that raised it. Twenty-six of the thirty-three routed
+leaf pages rendered no `h1`; `/admin/users` and `/admin/processes` jumped from an `h1` to an `h4`;
+and `/documents/:id` topped out
+at `h3` while its own suite carried three passing axe assertions. Every routed page now renders
+exactly one `h1` in its loaded state and no route skips a level. The change is semantic only —
+Mantine's `Title` takes the tag and the font size as independent props, so every promoted heading
+carries a `size` equal to its previous `order` and renders identically; all seventy-eight Playwright
+tests, including every geometry and rhythm spec, passed unchanged. `RegisterPageHeader` no longer
+takes a level at all, which is what makes the eleven registers unable to diverge again.
+
+Neither existing accessibility gate could see any of that, on two independent grounds measured
+against axe-core rather than assumed: `page-has-heading-one` matches only the `<html>` element, so it
+is INAPPLICABLE for every container-scoped run — which is every `axe(container)` call in the suite —
+and `heading-order` fires at `moderate`, which the browser spec's `serious`/`critical` filter drops.
+The closed record's own closure contract asked for exactly the assertion that cannot fire. Three
+layers replace it and each was mutation-verified: a direct DOM walk, a source-text cohort contract
+checked against the route table, and an unscoped unfiltered browser run that failed on the pre-fix
+tree and passes on this one. What the slice does NOT do is add a title where a page has none, so the
+detail routes' non-loaded branches and the five headingless faces of `/imports/:runId` are recorded
+as `RES-REST-STATE-PAGE-HEADING`.
+
+Evidence for the slice: ESLint, both strict `tsc` projects, the production build, Vitest at **280
+files and 2,339 tests** and the Playwright Chromium suite at **78** were run locally and passed. The
+API, migration, integration and response-contract suites were not run locally — this slice changes no
+Python — but its pull-request CI exercised them and passed all fifteen executing checks with
+`release-gate` skipped as designed. Their frontmatter figures are re-read from that run rather than
+carried: API 2,003 with two skips and 285 contract schemas both unmoved, and `integration_passed`
+corrected **1,224 → 1,231** (shards of 274, 213, 387 and 357, two skips), a figure that had been
+carried since S-ui-4 without re-measurement. Firefox, WebKit, assistive-technology sessions, SMTP
+delivery, deployment, live acceptance and the disposable Fedora proof did not run and are not
+described as passed. No authenticated walkthrough of the changed routes was performed.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
@@ -361,7 +395,9 @@ both cases in the new label contract; leaving a stale label beside the new one r
 so neither assertion is redundant.
 
 The integration and published response-contract suites were NOT run locally for S-ui-5d, and the
-frontmatter's 1,224 integration and 284 contract figures are still carried from the S-ui-4 CI run. That
+then-frontmatter's 1,224 integration and 284 contract figures were still carried from the S-ui-4 CI run
+(both have since been re-read from a later run; the figures in this paragraph are the ones that stood
+when it was written and are deliberately not updated). That
 carry is weaker here than it was for S-ui-5b and S-ui-5c, which were front-end-only: S-ui-5d changes an
 API response value and the OpenAPI document, so those suites are exactly the ones with something new to
 say about it. Its pull-request CI run `33289631692` exercised them, passing all fifteen executing
@@ -394,7 +430,7 @@ Contract checking is in sync on this tree at SHA-256
 pull requests passed all fifteen executing pull-request checks with `release-gate` skipped as designed.
 
 The integration and published response-contract suites were NOT run locally for these three slices; the
-frontmatter's 1,224 integration and 284 contract figures are carried from the S-ui-4 CI run, which is
+then-frontmatter's 1,224 integration and 284 contract figures were carried from the S-ui-4 CI run, which was
 sound for S-ui-5b and S-ui-5c because they are front-end-only, but is NOT fresh evidence for S-ui-5a,
 which changed API strings and the OpenAPI document. S-ui-5a's own pull-request CI exercised those
 suites; no local re-run was performed here. Firefox, WebKit, assistive-technology sessions, SMTP

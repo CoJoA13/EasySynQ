@@ -6,6 +6,7 @@ import { expect, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { ComplaintsPage } from "./ComplaintsPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 function grant(keys: string[]) {
   server.use(
@@ -155,4 +156,5 @@ test("no axe violations", async () => {
   const { container } = renderWithProviders(<ComplaintsPage />, { route: "/capa/complaints" });
   await screen.findByText("CMP-000007");
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });

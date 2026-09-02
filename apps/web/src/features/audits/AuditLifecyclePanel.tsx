@@ -53,7 +53,7 @@ export function AuditLifecyclePanel({
 
   return (
     <Paper withBorder p="md">
-      <Title order={5} mb="sm">
+      <Title order={2} size="h5" mb="sm">
         Lifecycle
       </Title>
       <div style={{ marginBottom: "var(--mantine-spacing-md)" }}>

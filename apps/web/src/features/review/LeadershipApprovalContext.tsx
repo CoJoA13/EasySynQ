@@ -61,7 +61,9 @@ export function LeadershipApprovalContext({
         <Text size="xs" c="dimmed">
           {doc.identifier}
         </Text>
-        <Title order={3}>{doc.title}</Title>
+        <Title order={2} size="h3">
+          {doc.title}
+        </Title>
       </div>
       <StateBadge state={doc.current_state} />
       <Text size="sm" c="dimmed">

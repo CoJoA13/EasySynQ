@@ -54,31 +54,6 @@ record. `/capa` also has no 320px case and no denied/granted header pair, unlike
 `REGISTER_CASES` routes; 320px was measured clean by hand during S-ui-6 but is unpinned, and folding
 it in belongs with whichever answer is taken here.
 Last reviewed: 2026-08-30
-## RES-REGISTER-HEADING-LEVELS
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ui-4, 2026-08-29
-Reason: The register pages do not agree on a heading level, and most of them render no `h1` at all.
-`AppShell` contributes no page heading; `HomePage`, `LibraryPage`, `ReportsRegisterPage` and
-`IngestionRunsPage` title at `order={1}`; eleven registers (the ten in
-`apps/web/e2e/support/registers.ts` plus `CapaBoardPage`) title at `order={2}`; the two CAPA
-sub-registers title at `order={3}`; and `ProgramPage` titles at `order={3}` with an `order={4}`
-sub-heading. So a reader landing on a register meets a document whose
-outline begins at `h2` or `h3` with no `h1` above it, and the level a given register uses carries no
-meaning beyond how it was written. S-ui-4 centralised the markup in `lib/RegisterPageHeader.tsx`
-but deliberately kept `order` a caller prop rather than normalising it. One existing suite pins a
-register heading level — `AuditsListPage.test.tsx` asserts `{ level: 2, name: "Internal audit" }`
-and uses it as its load gate — and the component's `order?: 2 | 3` union covers only what the
-eleven adopters use, so the `order={1}` and `order={4}` pages each widen it when they adopt.
-Levelling the registers is an accessibility change with its own test surface and does not belong
-inside a retheme slice. Centralising it first is what makes the later fix a one-file change.
-Closure contract: Decide the intended outline for a register route and apply it in
-`RegisterPageHeader`, updating every suite that pins a level, and prove the result with an
-axe assertion for a single `h1` and no skipped level on at least one register route in
-`apps/web/e2e/register-accessibility.spec.ts`. The program's final sweep slice already owes an
-a11y pass per route; this record names the specific defect that pass must close.
-Last reviewed: 2026-08-29
 
 ## RES-REGISTER-PAGE-FRAME
 
@@ -422,3 +397,39 @@ Reason: The documented async audit CSV/JSON export shape is deferred and not mou
 Closure contract: Ship the D-9 async-job implementation with authorization, privacy-bounded output,
 durable job state, OpenAPI response behavior, and affected audit/evidence-pack proofs.
 Last reviewed: 2026-08-08
+
+## RES-REST-STATE-PAGE-HEADING
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-a11y-outline, 2026-09-02
+Reason: Every routed page now renders exactly one `h1` in its LOADED state, but the detail routes
+render no heading at all in their other rest states. `DocumentDetailPage`, `AuditDetailPage`,
+`ObjectiveDetailPage`, `ManagementReviewDetailPage`, `RecordDetailPage` and `DcrDiffPage` each guard
+with two to six early returns and carry their title in only one of them, so a reader who is denied the resource, or who hits a load error, meets a document with no
+heading. The `403` case is the one that matters: it is a permanent state for an ungranted reader,
+not a flicker. The eleven registers do not have this shape — `RegisterPageHeader` is rendered in the
+forbidden and error branches too — but they do drop the title in their LOADING branch, which is the
+same defect and is already named inside [`RES-REGISTER-PAGE-FRAME`](open-residuals.md). This record
+exists because that one is scoped to the register scaffold and names no detail route.
+
+`/imports/:runId` WAS the sharpest case and is now closed, on the owner's call, for consistency:
+`IngestionRunPage` carried `Import review` only in its 404/403 branch, so five of its six faces —
+the review cockpit among them, the primary human-paced surface of the whole ingestion flow —
+presented a document with no heading. The title is now chosen once above the face dispatch, so every
+face carries it. That is the pattern this record's closure contract should follow for the remaining
+routes: hoist the existing title above the branch, rather than add a different one per branch.
+This was deliberately excluded from S-ui-a11y-outline: that slice changed which heading level each
+existing title renders at and added no title anywhere, so folding in seven pages of new
+branch-rendering would have mixed a second defect into a diff whose whole claim is that nothing
+moved. Note the interaction with the gate the same slice added — `expectSoundHeadingOutline`
+asserts exactly one `h1`, so it cannot be pointed at a forbidden or loading branch until this is
+closed, and that is the honest limit of the slice's coverage rather than an oversight.
+Closure contract: Give every routed page a title in each of its rest states, or record that a
+denied/erroring detail route is exempt and say what a screen-reader user is expected to land on
+instead. Prove it by extending `expectSoundHeadingOutline` to at least one forbidden branch and one
+error branch per affected page, and confirm the assertion fails before the change. Sequence this
+against [`RES-REGISTER-PAGE-FRAME`](open-residuals.md), whose closure contract already has to decide
+whether a shared frame renders the title during loading; the two records should be answered together
+rather than one silently constraining the other.
+Last reviewed: 2026-09-02 (narrowed the same day: `/imports/:runId` closed)

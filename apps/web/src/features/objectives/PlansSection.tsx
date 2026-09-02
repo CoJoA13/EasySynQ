@@ -46,7 +46,9 @@ export function PlansSection({
   return (
     <Stack gap="sm">
       <Group justify="space-between">
-        <Title order={3}>Plans</Title>
+        <Title order={2} size="h3">
+          Plans
+        </Title>
         {manage && (
           <Button size="xs" onClick={() => setAddOpen(true)}>
             Add plan

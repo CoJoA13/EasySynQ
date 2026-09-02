@@ -9,6 +9,7 @@ import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../li
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { DcrDiffPage } from "./DcrDiffPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 const DCR_DIFF_ID = "dcrdiff1-0001-0001-0001-000000000001";
 
@@ -79,6 +80,7 @@ it("renders the header and the text redline by default for a REVISE Implemented 
   expect(screen.getByText("Text redline")).toBeInTheDocument();
 
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 it("toggles to the visual page-image diff", async () => {

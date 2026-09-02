@@ -65,7 +65,7 @@ for (const { key } of HEADED) {
 
 function headerGeometry(page: Page, heading: string) {
   return page
-    .getByRole("heading", { level: 2, name: heading, exact: true })
+    .getByRole("heading", { level: 1, name: heading, exact: true })
     .evaluate((el: Element) => {
       const row = el.parentElement;
       if (!row) throw new Error("Expected the page heading to sit inside a header row");

@@ -22,7 +22,7 @@ function grant(keys: string[]) {
 test("renders honest tiles (Total / Active / Closed) from the list", async () => {
   renderWithProviders(<AuditsListPage />, { route: "/audits" });
   expect(
-    await screen.findByRole("heading", { level: 2, name: "Internal audit" }),
+    await screen.findByRole("heading", { level: 1, name: "Internal audit" }),
   ).toBeInTheDocument();
   // 3 fixture audits: InProgress + Closing (active) and Closed.
   // Tile labels are "… audits" so they never collide with the segmented control's All/Active/Closed.

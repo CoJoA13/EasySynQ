@@ -326,7 +326,9 @@ function ManageUser({
       )}
       {canIssuePassword && (
         <Stack gap="xs">
-          <Title order={4}>Credentials</Title>
+          <Title order={3} size="h4">
+            Credentials
+          </Title>
           {issued ? (
             <ShowOncePassword password={issued} onDone={() => setIssued(null)} />
           ) : (
@@ -343,7 +345,9 @@ function ManageUser({
         </Stack>
       )}
       <Stack gap="xs">
-        <Title order={4}>Roles</Title>
+        <Title order={3} size="h4">
+          Roles
+        </Title>
         {assignments.data?.length ? (
           assignments.data.map((a) => (
             <Group key={a.id} justify="space-between">
@@ -384,7 +388,9 @@ function ManageUser({
       </Stack>
 
       <Stack gap="xs">
-        <Title order={4}>Permission overrides</Title>
+        <Title order={3} size="h4">
+          Permission overrides
+        </Title>
         <Text size="xs" c="dimmed">
           System-scoped overrides; finer scoping is available via the API. The two-tier guard
           applies.

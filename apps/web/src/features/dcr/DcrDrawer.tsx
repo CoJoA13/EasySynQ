@@ -52,7 +52,9 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
             <Text size="xs" c="dimmed">
               {dcr.identifier}
             </Text>
-            <Title order={4}>{CHANGE_TYPE_LABEL[dcr.change_type] ?? dcr.change_type}</Title>
+            <Title order={3} size="h4">
+              {CHANGE_TYPE_LABEL[dcr.change_type] ?? dcr.change_type}
+            </Title>
           </Stack>
         ) : (
           "Change request"
@@ -162,7 +164,7 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
           </Field>
 
           <div>
-            <Title order={5} mb="xs">
+            <Title order={4} size="h5" mb="xs">
               Impact assessment
             </Title>
             <DcrImpactTable
@@ -177,7 +179,7 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
           </div>
 
           <div>
-            <Title order={5} mb="xs">
+            <Title order={4} size="h5" mb="xs">
               History
             </Title>
             <DcrStageTimeline events={dcr.stage_events} directory={directory} />

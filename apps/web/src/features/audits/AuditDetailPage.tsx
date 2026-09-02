@@ -84,7 +84,9 @@ export function AuditDetailPage() {
           <Text c="dimmed" size="sm" fw={500}>
             {a.identifier ?? a.id.slice(0, 8)}
           </Text>
-          <Title order={3}>{a.title ?? "Internal audit"}</Title>
+          <Title order={1} size="h3">
+            {a.title ?? "Internal audit"}
+          </Title>
           <Text size="sm" c="dimmed">
             Lead auditor{" "}
             <Text span fw={500}>
@@ -107,7 +109,7 @@ export function AuditDetailPage() {
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 5 }}>
           <Paper withBorder p="md" mb="md">
-            <Title order={4} mb="xs">
+            <Title order={2} size="h4" mb="xs">
               Plan
             </Title>
             {p ? (

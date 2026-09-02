@@ -44,7 +44,7 @@ export function FindingsCard({
   if (findings.forbidden) {
     return (
       <Paper withBorder p="md">
-        <Title order={5} mb="xs">
+        <Title order={2} size="h5" mb="xs">
           Findings
         </Title>
         <Text size="sm" c="dimmed">
@@ -74,7 +74,9 @@ export function FindingsCard({
   return (
     <Paper withBorder p="md">
       <Group justify="space-between" mb="sm">
-        <Title order={5}>Findings ({rows.length})</Title>
+        <Title order={2} size="h5">
+          Findings ({rows.length})
+        </Title>
         {canCreate && !closed && (
           <Button size="xs" variant="light" onClick={onLog}>
             Log finding

@@ -17,6 +17,7 @@ import {
 } from "../../test/msw/handlers";
 import { DocumentDetailPage } from "./DocumentDetailPage";
 import { RouteAnnouncement, RouteChromeProvider, useRouteChrome } from "../../lib/routeChrome";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 const ID = "11111111-1111-1111-1111-111111111111";
 
@@ -187,6 +188,7 @@ test("DocumentDetailPage has no a11y violations (read-only)", async () => {
   const { container } = renderPage();
   await screen.findByRole("heading", { name: /Supplier Selection/ });
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 test("DocumentDetailPage has no a11y violations (with author actions)", async () => {
@@ -194,6 +196,7 @@ test("DocumentDetailPage has no a11y violations (with author actions)", async ()
   const { container } = renderPage();
   await screen.findByRole("button", { name: /Start revision/ });
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 describe("DocumentDetailPage URL-backed tabs", () => {
@@ -295,6 +298,7 @@ describe("DocumentDetailPage URL-backed tabs", () => {
     const { container } = renderPage(`/documents/${ID}?tab=history`);
     await screen.findByText("Version history");
     expect(await axe(container)).toHaveNoViolations();
+    expectSoundHeadingOutline();
   });
 });
 

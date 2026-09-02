@@ -23,16 +23,22 @@ function renderHeader(props: Parameters<typeof RegisterPageHeader>[0]) {
   );
 }
 
-it("renders the title at level 2 by default", () => {
+// A register page is the top of its own document, so the header always emits the one `h1`. This
+// is the assertion that would have to be deleted — not merely edited — to put the eleven registers
+// back to a page with no `h1`, which is why it is stated as a level and not as a tag name.
+it("renders the title as the page's h1", () => {
   renderHeader({ title: "Internal audit" });
-  expect(screen.getByRole("heading", { level: 2, name: "Internal audit" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 1, name: "Internal audit" })).toBeInTheDocument();
 });
 
-it("honours an explicit level so a sub-register keeps its own depth", () => {
-  renderHeader({ title: "Nonconforming Output (NCR)", order: 3 });
-  expect(
-    screen.getByRole("heading", { level: 3, name: "Nonconforming Output (NCR)" }),
-  ).toBeInTheDocument();
+// `size` is appearance only and must NOT reach the level. A sub-register that looks smaller is
+// still the top of its own document — the two CAPA sub-registers are sibling routes under a
+// headingless tab strip, so their old `order={3}` never encoded real nesting.
+it("keeps a smaller size on the h1 rather than lowering the level", () => {
+  renderHeader({ title: "Nonconforming Output (NCR)", size: "h3" });
+  const heading = screen.getByRole("heading", { level: 1, name: "Nonconforming Output (NCR)" });
+  expect(heading.tagName).toBe("H1");
+  expect(screen.queryByRole("heading", { level: 3 })).toBeNull();
 });
 
 it("renders the action a caller supplies", () => {
@@ -49,7 +55,7 @@ it("renders no action element at all when the permission gate is false", () => {
   const gate = false;
   renderHeader({ title: "Internal audit", actions: gate && <Button>New audit</Button> });
   expect(screen.queryByRole("button")).toBeNull();
-  const group = screen.getByRole("heading", { level: 2 }).parentElement;
+  const group = screen.getByRole("heading", { level: 1 }).parentElement;
   expect(group?.children).toHaveLength(1);
 });
 

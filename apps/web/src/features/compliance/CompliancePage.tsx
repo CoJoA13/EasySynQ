@@ -13,7 +13,7 @@ export function CompliancePage() {
   if (forbidden) {
     return (
       <Container size="md" py="md">
-        <Title order={2} mb="md">
+        <Title order={1} size="h2" mb="md">
           Compliance Checklist
         </Title>
         <NoAccessState
@@ -37,7 +37,7 @@ export function CompliancePage() {
   if (isError || !data) {
     return (
       <Container size="md" py="md">
-        <Title order={2} mb="md">
+        <Title order={1} size="h2" mb="md">
           Compliance Checklist
         </Title>
         <ErrorState title="Couldn't load the checklist" onRetry={() => refetch()} />
@@ -48,7 +48,7 @@ export function CompliancePage() {
   const { rollup, rows } = data;
   return (
     <Container size="lg" py="md">
-      <Title order={2} mb="xs">
+      <Title order={1} size="h2" mb="xs">
         Compliance Checklist
       </Title>
       <Text c="dimmed" size="sm" mb="md">

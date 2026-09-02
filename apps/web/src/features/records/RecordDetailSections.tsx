@@ -49,7 +49,7 @@ function Section({
   const id = sectionId(recordId, name);
   return (
     <Card component="section" withBorder aria-labelledby={id}>
-      <Title order={3} id={id} mb="sm">
+      <Title order={2} size="h3" id={id} mb="sm">
         {title}
       </Title>
       {children}

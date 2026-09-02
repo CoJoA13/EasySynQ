@@ -8,6 +8,7 @@ import { meFixture, ncrListFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { NcrsPage } from "./NcrsPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 function grant(keys: string[]) {
   server.use(
@@ -174,6 +175,7 @@ test("no axe violations", async () => {
   const { container } = renderWithProviders(<NcrsPage />, { route: "/capa/ncrs" });
   await screen.findByText("NCR-000052");
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 test("gives register headers a column scope (a11y)", async () => {

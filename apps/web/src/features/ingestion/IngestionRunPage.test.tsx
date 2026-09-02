@@ -8,6 +8,7 @@ import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { ingestionFileDetailFixture, ingestionRunFixture } from "../../test/msw/handlers";
 import { IngestionRunPage } from "./IngestionRunPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 const RID = ingestionRunFixture.id;
 const SECOND_RID = "b0000000-0000-0000-0000-000000000002";
@@ -253,6 +254,7 @@ test("a blocked partial resume exposes owner and identifier corrections, then re
     "New identifier for SOP-PUR-014 Purchasing.docx",
   );
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
   await user.type(identifierInput, "SOP-PUR-014-REPAIRED");
   const [ownerInput] = screen.getAllByLabelText("New owner for SOP-PUR-014 Purchasing.docx");
   await user.click(ownerInput!);
@@ -320,6 +322,7 @@ test("IngestionRunPage has no a11y violations (cockpit)", async () => {
   const { container } = renderPage();
   await screen.findByRole("tab", { name: /Needs decision/ });
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 test("IngestionRunPage has no a11y violations (404)", async () => {
@@ -331,4 +334,5 @@ test("IngestionRunPage has no a11y violations (404)", async () => {
   const { container } = renderPage();
   await screen.findByText("Import run not found.");
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });

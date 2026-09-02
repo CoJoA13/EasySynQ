@@ -146,7 +146,7 @@ export function DocumentDetailPage() {
 
   return (
     <Stack gap="lg">
-      <ArtifactHeader doc={doc} typeName={typeName} ownerName={ownerName} />
+      <ArtifactHeader doc={doc} typeName={typeName} ownerName={ownerName} order={1} />
 
       {/* Author actions (D-A): capability + state + lock gated; quiet-absent for readers (DP-6). */}
       <AuthorActions doc={doc} />
