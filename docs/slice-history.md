@@ -1101,7 +1101,12 @@ count moved, because the heading changes are invisible to the 119 heading querie
 alone. The Playwright Chromium suite is unchanged at **78**: this slice added assertions to existing
 browser tests rather than new ones. ESLint over `src` and `e2e`, both strict `tsc` projects and the
 production build were clean. The API, migration, integration and response-contract suites were NOT
-run and are not restated: this slice changes no Python.
+run LOCALLY and no local result is claimed for them — this slice changes no Python — but the pull
+request's own CI did exercise them, and their figures are re-read from run `33601966626` rather than
+carried forward: the API unit suite passed 2,003 with the same two release-ceremony skips, the
+response-contract job passed all 285 schemas, and the four integration shards passed 274, 213, 387
+and 357 — **1,231** with the two expected shared-database skips. That last figure corrects a carried
+one: `current-status.md` had recorded 1,224 since S-ui-3 and nothing since had re-measured it.
 
 Five files this branch touches are left un-prettiered on purpose — they are already dirty on `main`,
 and the ~127 lines of pre-existing drift do not belong in this diff. Thirty-two others WERE
