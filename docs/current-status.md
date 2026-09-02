@@ -2,12 +2,12 @@
 easysynq_status_schema: 1
 as_of: "2026-09-02"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-ui-a11y-outline"
+last_shipped_slice: "S-capa-width-railfoot-order"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2003
-web_test_files: 280
-web_tests: 2339
+web_test_files: 281
+web_tests: 2351
 contract_tests: 285
 integration_passed: 1231
 integration_skipped: 2
@@ -115,6 +115,26 @@ corrected **1,224 → 1,231** (shards of 274, 213, 387 and 357, two skips), a fi
 carried since S-ui-4 without re-measurement. Firefox, WebKit, assistive-technology sessions, SMTP
 delivery, deployment, live acceptance and the disposable Fedora proof did not run and are not
 described as passed. No authenticated walkthrough of the changed routes was performed.
+
+S-capa-width-railfoot-order then closed two defects the owner found by walking the running
+application, neither of them introduced by the slice above. The `/capa` tab strip shifted 90 pixels
+whenever the user changed face, because `CapaLayout` sized it by the active tab and a Mantine
+`Container` is centred: `lg` and `xl` differ by 180 pixels. CAPA was the only one of the three tabbed
+sections that varied — `AuditsLayout` and `DriftLayout` each pin one width across their layout and
+every child — so every CAPA face is now `xl`, which also closes the `CapaBoardPage` branch-width
+discrepancy that `RES-REGISTER-PAGE-FRAME` names as one of its blockers. ⚠ The old behaviour was
+TESTED rather than accidental, so those assertions were rewritten, not deleted, and a cross-face
+guard added: a per-face assertion structurally cannot observe movement between faces, which is how
+three green tests coexisted with the defect. The rail-foot clock now sits above the theme control and
+carries a six-digit date resolved in the organization zone — at 23:00 in a UTC-5 zone the UTC date is
+already tomorrow, so a browser-local date under that label would name the wrong day. The clock row's
+fit is MEASURED in a browser rather than computed, and `src/lib/tabSectionWidthContract.test.ts`
+guards the width invariant across all three tabbed sections rather than only the one that broke.
+
+Evidence: ESLint, both strict `tsc` projects, the production build, Vitest at **281 files and 2,351
+tests** and the Playwright Chromium suite at **79** were run locally and passed. No Python changed,
+so the API, migration, integration and response-contract figures above stand from the run that
+produced them.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather

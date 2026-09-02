@@ -1122,6 +1122,61 @@ reformatted, because the edits were made through the shell and so bypassed the r
 format-on-edit hook; CI runs no prettier step, so nothing would have caught that until the next
 person to touch one of those files inherited an unrelated reformat.
 
+### S-capa-width-railfoot-order — the CAPA tab strip stops moving, and the clock moves up
+
+Recorded 2026-09-02 after merging [`#PR`](https://github.com/CoJoA13/EasySynQ/pull/PR) as `SHA`.
+Two defects the owner found by walking the running application, neither of them from the slice that
+had just shipped. Web-only — no Python, no migration, no contract, no permission key.
+
+**The tab strip moved 90 pixels between faces, and the arithmetic is exact.** `CapaLayout` sized its
+strip `tab === "board" ? "xl" : "lg"`. A Mantine `Container` is centred and its `lg` and `xl` scales
+are 71.25rem and 82.5rem, so a 180-pixel width difference displaces the strip by half that whenever
+the user changes tab — which is the 285 → 375 shift the owner photographed. `/capa` was the only one
+of the three tabbed sections doing this: `AuditsLayout` pins `xl` with both children `xl` across all
+four branches, `DriftLayout` pins `lg` likewise. Every CAPA face is now `xl`, matching the closer
+precedent — `AuditsLayout` is also a tab layout over a register table — which additionally closes the
+`CapaBoardPage` `md`-in-three-branches against `xl`-when-loaded discrepancy that
+`RES-REGISTER-PAGE-FRAME` names as one of its three blockers.
+
+⚠ **The old behaviour was tested, not accidental.** `CapaLayout.test.tsx` asserted the strip was `xl`
+on the board and `lg` on the two list faces. It carried no rationale comment, and the intent it
+encodes — keep the strip aligned with its own face's content — is satisfied by unifying the widths
+as well, without the jump. So the assertions were rewritten rather than deleted, and a fourth test
+walks all three faces and compares, because a per-face assertion structurally cannot observe movement
+BETWEEN faces: three green tests coexisted with the defect for as long as it existed. Restoring the
+original expression reddens three of the four.
+
+**The clock now sits above the theme control and carries a six-digit date.** The date is resolved in
+the organization zone for a sharper reason than the time is: at 23:00 in a UTC-5 zone the UTC date is
+already tomorrow, so a browser-local date under an "Organization date" label names the wrong DAY, not
+merely the wrong hour. Three unit cases cover that, the zero padding that keeps the field six digits
+year-round, and a midnight crossing where date and time move together.
+
+⚠ **Both the reorder and the date are pure DOM facts with no behaviour attached**, so all ten existing
+`RailFoot` tests stayed green against either being reverted. Two new ones pin them — the date's text,
+and the clock preceding the control by document POSITION rather than by index, so the assertion
+survives a change in how the row is nested.
+
+⚠ **A width computed by hand is not evidence, and this slice caught itself doing it.** The date makes
+the clock row three fields plus two gaps inside a rail fixed at 244 pixels, with `wrap="nowrap"`. It
+was sized on paper and declared to fit — exactly what the repository's own rule forbids for anything
+about size or clipping, because jsdom resolves no layout and every Vitest assertion about the date
+passes whether the row fits, wraps, or overflows the rail entirely. `e2e/rail-foot.spec.ts` now
+MEASURES it, asserting two things because they fail differently: the date and time sharing a top edge
+catches a wrap, and the row not overflowing itself catches what `nowrap` does instead of wrapping.
+Shrinking `--es-sidebar-w` to 8rem overflows the row by 9 pixels and reddens it.
+
+**A guard for the class, not the instance.** `src/lib/tabSectionWidthContract.test.ts` forbids a
+computed `size` on any tab strip and requires each section's layout and every face it can show to
+agree on one width, counting every branch rather than the loaded one. Introducing the same expression
+into `DriftLayout` — a section this slice never touched — reddens it.
+
+Test deltas, measured on the branch. Vitest moved from 280 files and 2,339 tests to **281 and
+2,351**: one new file and twelve new tests, six of them the width contract. The Playwright Chromium
+suite moved **78 → 79**. ESLint over `src` and `e2e`, both strict `tsc` projects and the production
+build were clean. The API, migration, integration and response-contract suites were not run and are
+not restated: this slice changes no Python.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration
