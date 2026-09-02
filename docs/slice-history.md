@@ -1219,10 +1219,21 @@ in a follow-up. That is now **R70** in the decisions register, alongside the 24-
 the Codex stop-time gate caught that both had been written into a residual, this entry and a source
 comment while the authoritative home had no record of either. So the rail foot is the correct one and must not be reverted to resolve the mismatch,
 which is the reading a later contributor would otherwise reach. Tracked as
-`RES-DATE-FORMAT-CONVERGENCE`, whose closure contract names the real hazard: `YYYY-MM-DD` sorts
+`RES-DATE-TIME-DISPLAY-CONVERGENCE`, whose closure contract names the real hazard: `YYYY-MM-DD` sorts
 lexically and `MM/DD/YY` does not, so any consumer that sorts or compares a RENDERED date rather than
 the timestamp behind it breaks silently. That is a product-wide change and does not belong in the
 diff that created the divergence.
+
+⚠ **The gap turned out to be wider than the date, and a second Codex pass is what found it.** R70's
+rules 2 and 3 — 24-hour, organization timezone — are product-wide obligations, and the first draft of
+the record tracked only the date FORMAT, leaving them untracked. Measured: `formatTimestamp` passes
+`undefined` as the locale and supplies no `timeZone`, so it renders `Sep 2, 2026, 01:45 PM CDT` under
+`en-US` — 12-hour with a meridiem, in the viewer's browser zone, in a third date format, and
+differently per viewer locale. It is reached from `lib/AsOf.tsx`, which `RegisterPageHeader` places on
+every register page, plus seven other surfaces. Its browser-zone half is a correctness defect
+independent of R70: a record captured at 23:30 organization time is stamped with the NEXT DAY for a
+viewer east of the organization, in the same table as a `useOrgDate` column showing the correct day.
+The record and R70's own conformance paragraph now carry all of it.
 
 **24-hour time is now a stated requirement rather than an incidental.** The clock already rendered
 `00:00`, `13:45` and `23:59` — `hour12: false` and `hourCycle: "h23"` were there from R69 — but every

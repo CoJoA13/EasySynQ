@@ -444,30 +444,48 @@ whether a shared frame renders the title during loading; the two records should 
 rather than one silently constraining the other.
 Last reviewed: 2026-09-02 (narrowed the same day: `/imports/:runId` closed)
 
-## RES-DATE-FORMAT-CONVERGENCE
+## RES-DATE-TIME-DISPLAY-CONVERGENCE
 
 Status: OPEN
 Owner: Repository owner
 Source: S-capa-width-railfoot-order, 2026-09-02
-Reason: The interface renders dates in two formats at once. The rail-foot clock added by this slice
-uses the US month/day/year reading in six-digit form (`09/02/26`) via `formatOrgClock`, while every
-register row, timeline and detail surface uses `formatDateInTimeZone` through `useOrgDate`, which
-deliberately emits a locale-independent `YYYY-MM-DD` (`2026-09-02`). Both are visible in the same
-frame — the rail sits beside every register table. The standard itself is **R70** in
-[`decisions-register.md`](decisions-register.md), which is where it is decided; this record tracks
-only the work of converging on it. R70 rule 4 is the load-bearing one here: the rail-foot format is
-correct and must not be reverted to resolve the mismatch. The follow-up was
-deliberately not folded into the slice that created the divergence: changing every date display in
-the product is a far larger and more visible change than a rail-foot clock, and it belongs in a diff
-a reviewer can read as being about exactly that.
-⚠ `formatDateInTimeZone`'s own doc comment gives locale-independence as the REASON for `YYYY-MM-DD`,
-and an ISO-ordered string sorts lexically while `MM/DD/YY` does not. Any consumer that sorts,
-compares or parses a rendered date string — rather than the underlying timestamp — breaks silently
-under this change. That is the thing to look for, not the formatting itself.
-Closure contract: Move the product's date surfaces to the six-digit US reading, or record which
-surfaces are exempt and why. Before changing `formatDateInTimeZone`, enumerate every caller and
-prove none of them sorts, compares or parses its OUTPUT rather than the timestamp behind it; a
-`useOrgDate` value reaching a sort comparator is the failure this record exists to prevent. Prove
-the result with an executable assertion per changed surface, and confirm the assertion fails against
-the current `YYYY-MM-DD` output.
+Reason: **R70** locks three things for user-facing display — a six-digit `MM/DD/YY` date, 24-hour
+time, and both resolved in the organization timezone — and exactly one surface conforms: the
+rail-foot clock, via `formatOrgClock`. Everything else violates at least one rule today. This record
+tracks the conformance work; the standard itself is decided in
+[`decisions-register.md`](decisions-register.md) and is not re-opened here.
+
+The measured gap, which is wider than the date format that prompted the decision:
+
+- `apps/web/src/lib/time.ts::formatTimestamp` calls `Intl.DateTimeFormat(undefined, …)` with **no
+  `timeZone`** and no `hour12`/`hourCycle`. Executed, it renders `Sep 2, 2026, 01:45 PM CDT` under
+  `en-US` and `2 Sept 2026, 13:45 GMT-5` under `en-GB` — so it breaks rule 2 (12-hour with a
+  meridiem), breaks rule 3 (the viewer's browser zone, not the organization's), emits a THIRD date
+  format, and renders differently per viewer locale. It reaches `lib/AsOf.tsx`, which
+  `RegisterPageHeader` places on every register page, plus `RecordsTable`, `RecordDetailSections`,
+  `DriftStatusPage`, `SupersededCopiesPage`, `NotificationItem`, `ReviewInputsSection` and
+  `NotificationHealthPanel`. `formatRelativeTime` falls through to it beyond a week and inherits all
+  of it.
+- `formatDateInTimeZone` is org-zone-correct but emits `YYYY-MM-DD`, so it breaks rule 1 only. It is
+  the `useOrgDate` path behind every register and timeline date.
+
+⚠ The hazard is ORDERING, not formatting. `YYYY-MM-DD` sorts lexically and `MM/DD/YY` does not, so
+any consumer that sorts, compares or parses a RENDERED date rather than the timestamp behind it
+breaks with no type error and no failing render — just a register in the wrong order.
+
+⚠ `formatTimestamp`'s browser-zone behaviour is a correctness defect independent of R70, not merely
+a style mismatch: a record captured at 23:30 organization time is stamped with the *next day* for a
+viewer east of the organization, beside a `useOrgDate` column that shows the correct day. The two
+already disagree in the same table today.
+
+This was not folded into the slice that created the divergence. Changing every date and time display
+in the product is far larger and more visible than a rail-foot clock, and belongs in a diff a
+reviewer can read as being about exactly that.
+Closure contract: Bring every user-facing date and time onto R70 — six-digit `MM/DD/YY`, 24-hour,
+organization timezone — or record which surfaces are exempt and why. Before changing either
+formatter, enumerate every caller and prove none sorts, compares or parses its OUTPUT rather than the
+timestamp behind it; a rendered value reaching a sort comparator is the failure this record exists to
+prevent. Prove the result with an executable assertion per changed surface, and confirm each fails
+against the current output. `formatTimestamp`'s missing `timeZone` should be fixed first and can be
+proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02

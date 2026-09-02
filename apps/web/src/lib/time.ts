@@ -84,7 +84,7 @@ export function formatRelativeTime(input: string | number, now: number = Date.no
 // `useOrgDate` — still emits a locale-independent YYYY-MM-DD, so a reader sees `09/02/26` in the
 // rail beside `2026-09-02` in a table. R70 settles it: the US month/day/year reading in six-digit
 // form is the standard, and the OTHER surfaces change to match — tracked as
-// RES-DATE-FORMAT-CONVERGENCE. So do NOT "fix" this one back to YYYY-MM-DD to resolve the
+// RES-DATE-TIME-DISPLAY-CONVERGENCE. So do NOT "fix" this one back to YYYY-MM-DD to resolve the
 // mismatch; R70 rule 4 exists because that is the natural but backwards reading. The 24-hour time
 // beside it is R70 rule 2, which `hour12`/`hourCycle` below pin and a named test asserts as a
 // requirement rather than as an incidental. Deliberately NOT browser-local: records and audit

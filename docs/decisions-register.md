@@ -2292,11 +2292,29 @@ that merely happened to be 24-hour, so the requirement was recorded nowhere and 
    reading of the mismatch is the opposite — the rail foot is the newer and smaller surface, so a
    reviewer meeting the inconsistency will propose reverting it, which is backwards.
 
-**Scope.** This entry settles the standard. Only the rail-foot clock renders it today; moving the
-product's other date surfaces is separate work, tracked as `RES-DATE-FORMAT-CONVERGENCE` in
-`open-residuals.md`. It governs user-facing display only — it is not a wire format, not a filename,
-and not an identifier. Machine-readable timestamps stay ISO-8601 in the API, the contract and the
-audit trail, where ordering and unambiguous parsing are the point.
+**Scope.** This entry settles the standard. It governs user-facing display only — it is not a wire
+format, not a filename, and not an identifier. Machine-readable timestamps stay ISO-8601 in the API,
+the contract and the audit trail, where ordering and unambiguous parsing are the point.
+
+**Conformance today: one surface out of many, and the gap is wider than the date.** Only the
+rail-foot clock (`formatOrgClock`) satisfies all three rules. Recording this explicitly matters
+because rules 2 and 3 are product-wide obligations that a reader could otherwise assume were already
+met when the decision was written — they were not, and the first draft of this entry tracked only the
+date format, which left the time-format and timezone obligations untracked. Measured at the time of
+writing:
+
+- `formatTimestamp` passes `undefined` as the locale and supplies **no `timeZone`**, so it renders
+  `Sep 2, 2026, 01:45 PM CDT` under `en-US` — 12-hour with a meridiem (breaking rule 2), in the
+  viewer's browser zone rather than the organization's (breaking rule 3), in a third date format, and
+  differently for every viewer locale. It is reached from `lib/AsOf.tsx`, which appears on every
+  register page, and from seven other surfaces.
+- `formatDateInTimeZone` is org-zone-correct and breaks rule 1 only.
+
+The browser-zone half is a correctness defect on its own terms, independent of this decision: a
+record captured at 23:30 organization time is stamped with the next day for a viewer east of the
+organization, in the same table as a `useOrgDate` column showing the correct day. All of it is
+tracked in `RES-DATE-TIME-DISPLAY-CONVERGENCE`; none of it is a licence to defer, and a new surface
+must conform from the start rather than joining the backlog.
 
 ⚠ **The hazard in the convergence is ordering, not formatting.** `YYYY-MM-DD` sorts lexically and
 `MM/DD/YY` does not. Any consumer that sorts, compares or parses a RENDERED date string rather than
@@ -2306,7 +2324,7 @@ precondition of the convergence work, not a review comment on it.
 
 **Back-propagation:** `11-ui-ux-design-system.md` when its §3 rewrite lands (that document is
 separately known to be drifted — `RES-DOC11-TOKEN-DRIFT`), and every surface named by
-`RES-DATE-FORMAT-CONVERGENCE`. `lib/time.ts` carries the rule at the source in both formatters.
+`RES-DATE-TIME-DISPLAY-CONVERGENCE`. `lib/time.ts` carries the rule at the source in both formatters.
 
 Bumps the resolutions range **R1–R69 → R1–R70**.
 
