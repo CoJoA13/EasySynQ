@@ -5,6 +5,7 @@ import { expect, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { SearchResultsPage } from "./SearchResultsPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 test("renders ranked rows + the hidden_by_scope footer for ?q=", async () => {
   renderWithProviders(<SearchResultsPage />, { route: "/search?q=supplier" });
@@ -37,10 +38,12 @@ test("has no axe violations (results + empty)", async () => {
   const withResults = renderWithProviders(<SearchResultsPage />, { route: "/search?q=supplier" });
   await screen.findByRole("link", { name: "Supplier Selection & Evaluation" });
   expect(await axe(withResults.container)).toHaveNoViolations();
+  expectSoundHeadingOutline(withResults.container);
   withResults.unmount();
 
   const empty = renderWithProviders(<SearchResultsPage />, { route: "/search" });
   expect(await axe(empty.container)).toHaveNoViolations();
+  expectSoundHeadingOutline(empty.container);
 });
 
 test("shows a calm error state when the search request fails", async () => {

@@ -82,6 +82,29 @@ and no longer an idea: its three open questions were put to the owner on 2026-08
 answers are binding as **R69**, S-railfoot-pref shipped the account persistence and S-railfoot-ui
 shipped the control and the organization clock. Nothing about it remains deferred.
 
+S-ui-a11y-outline then closed the register heading-level record S-ui-4 opened and deliberately did
+not act on; its identifier is retired from the ledger and survives only in the dated
+[`slice-history.md`](slice-history.md) entries that raised it. Twenty-six of the thirty-three routed
+leaf pages rendered no `h1`; `/admin/users` and `/admin/processes` jumped from an `h1` to an `h4`;
+and `/documents/:id` topped out
+at `h3` while its own suite carried three passing axe assertions. Every routed page now renders
+exactly one `h1` in its loaded state and no route skips a level. The change is semantic only —
+Mantine's `Title` takes the tag and the font size as independent props, so every promoted heading
+carries a `size` equal to its previous `order` and renders identically; all seventy-eight Playwright
+tests, including every geometry and rhythm spec, passed unchanged. `RegisterPageHeader` no longer
+takes a level at all, which is what makes the eleven registers unable to diverge again.
+
+Neither existing accessibility gate could see any of that, on two independent grounds measured
+against axe-core rather than assumed: `page-has-heading-one` matches only the `<html>` element, so it
+is INAPPLICABLE for every container-scoped run — which is every `axe(container)` call in the suite —
+and `heading-order` fires at `moderate`, which the browser spec's `serious`/`critical` filter drops.
+The closed record's own closure contract asked for exactly the assertion that cannot fire. Three
+layers replace it and each was mutation-verified: a direct DOM walk, a source-text cohort contract
+checked against the route table, and an unscoped unfiltered browser run that failed on the pre-fix
+tree and passes on this one. What the slice does NOT do is add a title where a page has none, so the
+detail routes' non-loaded branches and the five headingless faces of `/imports/:runId` are recorded
+as `RES-REST-STATE-PAGE-HEADING`.
+
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
 than hardcoding its dimensions. Before this the theme already took its font families and its status colour

@@ -274,7 +274,7 @@ describe("Download minutes pack (PDF) button", () => {
     const { container } = renderAt(ID);
     await screen.findByRole("button", { name: "Download minutes pack (PDF)" });
     expect(await axe(container)).toHaveNoViolations();
-  expectSoundHeadingOutline();
+    expectSoundHeadingOutline();
   });
 
   it("shows the button when current_state is Effective", async () => {

@@ -46,6 +46,11 @@ describe("readHeadingOutline", () => {
     expect(readHeadingOutline(host)).toEqual([{ level: 1, text: "Visible" }]);
   });
 
+  it("skips a `hidden` heading too, so this agrees with axe's own heading-order", () => {
+    const host = mount("<h1>Visible</h1><section hidden><h2>Hidden section</h2></section>");
+    expect(readHeadingOutline(host)).toEqual([{ level: 1, text: "Visible" }]);
+  });
+
   it("drops a role=heading carrying no level at all rather than reporting NaN", () => {
     const host = mount('<h1>Real</h1><div role="heading">No level</div>');
     expect(readHeadingOutline(host)).toEqual([{ level: 1, text: "Real" }]);
@@ -102,7 +107,7 @@ describe("expectSoundHeadingOutline", () => {
 
   it("names the whole outline in the failure, so a thirty-file re-levelling is reviewable", () => {
     const host = mount("<h1>Page</h1><h3>Jumped</h3>");
-    expect(() => expectSoundHeadingOutline(host)).toThrow(/h1  Page[\s\S]*h3  Jumped/);
+    expect(() => expectSoundHeadingOutline(host)).toThrow(/h1 {2}Page[\s\S]*h3 {2}Jumped/);
   });
 
   // Both helpers default their root to `document.body`, and that default is what all 14 route test
@@ -124,6 +129,6 @@ describe("expectSoundHeadingOutline", () => {
 
   it("reports an empty heading as (empty) rather than rendering a blank line", () => {
     const host = mount("<h1></h1><h3>After</h3>");
-    expect(() => expectSoundHeadingOutline(host)).toThrow(/h1  \(empty\)/);
+    expect(() => expectSoundHeadingOutline(host)).toThrow(/h1 {2}\(empty\)/);
   });
 });

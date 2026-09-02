@@ -6,6 +6,7 @@ import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { TONE_GLYPH } from "../../lib/status";
 import { CompliancePage } from "./CompliancePage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 test("renders the rollup + ★ rows with a clause drill-through link", async () => {
   renderWithProviders(<CompliancePage />, { route: "/compliance" });
@@ -31,6 +32,7 @@ test("has no axe violations (rows + 403)", async () => {
   const ok = renderWithProviders(<CompliancePage />, { route: "/compliance" });
   await screen.findByText("External providers");
   expect(await axe(ok.container)).toHaveNoViolations();
+  expectSoundHeadingOutline(ok.container);
   ok.unmount();
 
   server.use(
@@ -41,6 +43,7 @@ test("has no axe violations (rows + 403)", async () => {
   const forbidden = renderWithProviders(<CompliancePage />, { route: "/compliance" });
   await screen.findByText(/don’t have access/);
   expect(await axe(forbidden.container)).toHaveNoViolations();
+  expectSoundHeadingOutline(forbidden.container);
 });
 
 test("gives register headers a column scope (a11y)", async () => {

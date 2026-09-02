@@ -298,7 +298,7 @@ describe("DocumentDetailPage URL-backed tabs", () => {
     const { container } = renderPage(`/documents/${ID}?tab=history`);
     await screen.findByText("Version history");
     expect(await axe(container)).toHaveNoViolations();
-  expectSoundHeadingOutline();
+    expectSoundHeadingOutline();
   });
 });
 

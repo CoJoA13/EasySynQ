@@ -67,7 +67,9 @@ export function AckInbox() {
 
   return (
     <Stack gap="md">
-      <Title order={1} size="h2">Acknowledgements</Title>
+      <Title order={1} size="h2">
+        Acknowledgements
+      </Title>
       {summary && (
         <Alert
           color={summary.includes("could not") ? "yellow" : "green"}

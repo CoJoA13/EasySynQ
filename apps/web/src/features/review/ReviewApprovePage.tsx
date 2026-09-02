@@ -112,7 +112,9 @@ export function ReviewApprovePage() {
     // The CAPA subject id is on the task (no document.read-gated instance read) → always present here.
     return (
       <Stack gap="lg">
-        <Title order={1} size="h2">Review and approve — Action plan</Title>
+        <Title order={1} size="h2">
+          Review and approve — Action plan
+        </Title>
         <Grid gutter="lg" align="flex-start">
           <Grid.Col span={{ base: 12, md: 7 }}>
             <CapaApprovalContext capaId={task.subject_id!} />
@@ -139,7 +141,9 @@ export function ReviewApprovePage() {
     // The subject id is on the task (S-web-7b's detail enrichment) → always present here.
     return (
       <Stack gap="lg">
-        <Title order={1} size="h2">Periodic review</Title>
+        <Title order={1} size="h2">
+          Periodic review
+        </Title>
         <Grid gutter="lg" align="flex-start">
           <Grid.Col span={{ base: 12, md: 7 }}>
             <PeriodicReviewContext documentId={task.subject_id!} />
@@ -166,7 +170,9 @@ export function ReviewApprovePage() {
     // always present here; the doc context is best-effort (a document.read 403 never blocks the ack).
     return (
       <Stack gap="lg">
-        <Title order={1} size="h2">Document acknowledgement</Title>
+        <Title order={1} size="h2">
+          Document acknowledgement
+        </Title>
         <Grid gutter="lg" align="flex-start">
           <Grid.Col span={{ base: 12, md: 7 }}>
             <DocAckContext documentId={task.subject_id!} />
@@ -199,7 +205,9 @@ export function ReviewApprovePage() {
       : null;
     return (
       <Stack gap="lg">
-        <Title order={1} size="h2">{title}</Title>
+        <Title order={1} size="h2">
+          {title}
+        </Title>
         <Grid gutter="lg" align="flex-start">
           <Grid.Col span={{ base: 12, md: 7 }}>
             <MgmtReviewContext reviewId={task.subject_id!} />
@@ -240,7 +248,9 @@ export function ReviewApprovePage() {
     // so the card shows whenever the task is PENDING.
     return (
       <Stack gap="lg">
-        <Title order={1} size="h2">Review and approve — Change request</Title>
+        <Title order={1} size="h2">
+          Review and approve — Change request
+        </Title>
         <Grid gutter="lg" align="flex-start">
           <Grid.Col span={{ base: 12, md: 7 }}>
             <DcrApprovalContext dcrId={task.subject_id!} />
@@ -264,7 +274,9 @@ export function ReviewApprovePage() {
     // server-side (404-collapse), NOT a can() check — so the card shows whenever the task is PENDING.
     return (
       <Stack gap="lg">
-        <Title order={1} size="h2">Authorize improvement — management sign-off</Title>
+        <Title order={1} size="h2">
+          Authorize improvement — management sign-off
+        </Title>
         <Grid gutter="lg" align="flex-start">
           <Grid.Col span={{ base: 12, md: 7 }}>
             <InitiativeApprovalContext initiativeId={task.subject_id!} />
@@ -293,7 +305,9 @@ export function ReviewApprovePage() {
     // membership, server-side (404-collapse), NOT a can() check — the card shows whenever PENDING.
     return (
       <Stack gap="lg">
-        <Title order={1} size="h2">Authorize release — Top-Management sign-off</Title>
+        <Title order={1} size="h2">
+          Authorize release — Top-Management sign-off
+        </Title>
         <Grid gutter="lg" align="flex-start">
           <Grid.Col span={{ base: 12, md: 7 }}>
             <LeadershipApprovalContext
@@ -320,7 +334,9 @@ export function ReviewApprovePage() {
 
   return (
     <Stack gap="lg">
-      <Title order={1} size="h2">Review and approve{doc ? ` — ${doc.identifier}` : ""}</Title>
+      <Title order={1} size="h2">
+        Review and approve{doc ? ` — ${doc.identifier}` : ""}
+      </Title>
       <Grid gutter="lg" align="flex-start">
         <Grid.Col span={{ base: 12, md: 7 }}>
           <Stack gap="md">

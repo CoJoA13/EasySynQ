@@ -66,7 +66,9 @@ export function ProgramPage() {
   return (
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
-        <Title order={1} size="h3">Audit program</Title>
+        <Title order={1} size="h3">
+          Audit program
+        </Title>
         {can("audit.plan") && <Button onClick={() => setEditing("new")}>New program</Button>}
       </Group>
       {rows.length === 0 ? (
@@ -124,7 +126,9 @@ export function ProgramPage() {
       {selected && (
         <>
           <Group justify="space-between" mb="sm">
-            <Title order={2} size="h4">Plans — {selected.identifier}</Title>
+            <Title order={2} size="h4">
+              Plans — {selected.identifier}
+            </Title>
             {can("audit.plan") && !selected.archived && (
               <Button variant="light" onClick={() => setPlanFormOpen(true)}>
                 Add plan

@@ -28,7 +28,9 @@ export function InitiativeApprovalContext({ initiativeId }: { initiativeId: stri
         <Text size="xs" c="dimmed">
           {initiative.identifier}
         </Text>
-        <Title order={2} size="h3">{initiative.title}</Title>
+        <Title order={2} size="h3">
+          {initiative.title}
+        </Title>
       </div>
       <Badge variant="light" color="gray">
         {INITIATIVE_STAGE_META[initiative.stage].label}

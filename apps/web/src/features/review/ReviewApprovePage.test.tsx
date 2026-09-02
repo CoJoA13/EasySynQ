@@ -414,7 +414,7 @@ describe("ReviewApprovePage DCR branch", () => {
     const { container } = mount("/tasks/task-dcr-1");
     await screen.findByText("DCR-2026-0001");
     expect(await axe(container)).toHaveNoViolations();
-  expectSoundHeadingOutline();
+    expectSoundHeadingOutline();
   });
 });
 
@@ -490,7 +490,7 @@ describe("ReviewApprovePage IMPROVEMENT_INITIATIVE branch (S-improvement-4)", ()
     const { container } = renderAtTask(improvementAuthTask.id);
     await screen.findByText("IMP-2026-0005");
     expect(await axe(container)).toHaveNoViolations();
-  expectSoundHeadingOutline();
+    expectSoundHeadingOutline();
   });
 });
 
@@ -548,6 +548,6 @@ describe("ReviewApprovePage LEADERSHIP_AUTHORIZATION branch (S-leadership-1)", (
     await screen.findByText("POL-001");
     await screen.findByRole("radio", { name: "Authorize release" });
     expect(await axe(container)).toHaveNoViolations();
-  expectSoundHeadingOutline();
+    expectSoundHeadingOutline();
   });
 });

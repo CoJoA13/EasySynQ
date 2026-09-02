@@ -92,7 +92,9 @@ function GeneralTasksInbox() {
 
   return (
     <Stack gap="md">
-      <Title order={1} size="h2">Review and approve</Title>
+      <Title order={1} size="h2">
+        Review and approve
+      </Title>
       {total === 0 ? (
         <EmptyState message="No tasks in your queue." />
       ) : (

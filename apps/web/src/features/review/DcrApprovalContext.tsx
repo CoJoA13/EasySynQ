@@ -30,7 +30,9 @@ export function DcrApprovalContext({ dcrId }: { dcrId: string }) {
         <Text size="xs" c="dimmed">
           {dcr.identifier}
         </Text>
-        <Title order={2} size="h3">{CHANGE_TYPE_LABEL[dcr.change_type] ?? dcr.change_type}</Title>
+        <Title order={2} size="h3">
+          {CHANGE_TYPE_LABEL[dcr.change_type] ?? dcr.change_type}
+        </Title>
       </div>
       <Group gap="xs">
         <DcrStateBadge state={dcr.state} />

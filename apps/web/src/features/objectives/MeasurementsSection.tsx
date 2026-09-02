@@ -22,7 +22,9 @@ export function MeasurementsSection({
   return (
     <Stack gap="sm">
       <Group justify="space-between">
-        <Title order={2} size="h3">Measurement history</Title>
+        <Title order={2} size="h3">
+          Measurement history
+        </Title>
         {can("kpi.record") && (
           <Button size="xs" onClick={() => setOpen(true)}>
             Record measurement

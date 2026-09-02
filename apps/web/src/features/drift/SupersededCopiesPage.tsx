@@ -56,7 +56,9 @@ export function SupersededCopiesPage() {
     <Container size="lg" py="md">
       <Stack gap="md">
         <div>
-          <Title order={1} size="h2">Superseded copies</Title>
+          <Title order={1} size="h2">
+            Superseded copies
+          </Title>
           <Text c="dimmed" size="sm">
             Exported/printed copies of versions that have since been superseded or obsoleted —{" "}
             {data.total.versions} versions · {data.total.copies} copies outstanding. Use this as the

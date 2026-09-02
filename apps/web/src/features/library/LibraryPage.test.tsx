@@ -10,6 +10,7 @@ import { docFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { LibraryPage } from "./LibraryPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 const DOC_A = docFixture[0]!;
 const DOC_B = docFixture[1]!;
@@ -248,6 +249,13 @@ test("a cold ?detail= deep-link opens the drawer (fetches the doc)", async () =>
       screen.getByRole("heading", { name: "Supplier Selection & Evaluation" }),
     ).toBeInTheDocument(),
   );
+  // The one arrangement in the SPA where two components could each claim the page's h1. Flipping
+  // ArtifactHeader's `order` default from 3 to 1 puts a second h1 here — under LibraryPage's own h1
+  // AND under the h2 Mantine renders for the drawer's title — and axe objects to neither, because
+  // it has no rule against a second h1. Nothing rendered this arrangement before, so the whole
+  // suite stayed green against it. A source pin on the default is not a substitute: it would not
+  // catch a drawer that stopped passing a `title`, which is the other way this outline breaks.
+  expectSoundHeadingOutline();
 });
 
 test.each([`detail=${DOC_A.id}&detail=${DOC_B.id}`, `detail=${DOC_B.id}&detail=${DOC_A.id}`])(

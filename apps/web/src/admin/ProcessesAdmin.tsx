@@ -163,7 +163,9 @@ function ManageOwners({
   return (
     <Stack gap="lg">
       <Stack gap="xs">
-        <Title order={3} size="h4">Current owners</Title>
+        <Title order={3} size="h4">
+          Current owners
+        </Title>
         {owners.isLoading ? (
           <LoadingState label={`Loading owners for ${process.name}`} mih={80} />
         ) : owners.data?.length ? (

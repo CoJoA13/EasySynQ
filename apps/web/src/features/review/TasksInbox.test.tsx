@@ -157,7 +157,7 @@ describe("TasksInbox routing", () => {
     const { container } = renderTasksWithRouteChrome(route);
     expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
-  expectSoundHeadingOutline();
+    expectSoundHeadingOutline();
   });
 
   // Regression: `/tasks` and `/tasks?type=DOC_ACK` are the SAME route element, so the bell→inbox

@@ -26,20 +26,28 @@ const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, [role='heading']";
 
 /** Every heading under `root`, in document order. Mirrors axe's `heading-order` candidate set. */
 export function readHeadingOutline(root: ParentNode = document.body): OutlineEntry[] {
-  return [...root.querySelectorAll<HTMLElement>(HEADING_SELECTOR)]
-    // A heading hidden from the accessibility tree is not part of the outline a screen reader walks.
-    .filter((node) => node.closest("[aria-hidden='true']") === null)
-    .map((node) => {
-      // An explicit aria-level wins over the tag, exactly as the accessibility tree resolves it.
-      const ariaLevel = Number(node.getAttribute("aria-level"));
-      const tagLevel = /^H[1-6]$/.test(node.tagName) ? Number(node.tagName[1]) : NaN;
-      return {
-        level: Number.isFinite(ariaLevel) && ariaLevel > 0 ? ariaLevel : tagLevel,
-        text: (node.textContent ?? "").trim(),
-      };
-    })
-    // A `[role=heading]` with neither a heading tag nor an aria-level has no level to check.
-    .filter((entry) => Number.isFinite(entry.level));
+  return (
+    [...root.querySelectorAll<HTMLElement>(HEADING_SELECTOR)]
+      // A heading hidden from the accessibility tree is not part of the outline a screen reader walks.
+      // `hidden` is checked alongside `aria-hidden` so this agrees with axe's own `heading-order`,
+      // which excludes both. jsdom resolves no cascade, so a `display: none` heading is beyond
+      // either gate — that is a false-FAIL direction, so it errs safe.
+      .filter(
+        (node) =>
+          node.closest("[aria-hidden='true']") === null && node.closest("[hidden]") === null,
+      )
+      .map((node) => {
+        // An explicit aria-level wins over the tag, exactly as the accessibility tree resolves it.
+        const ariaLevel = Number(node.getAttribute("aria-level"));
+        const tagLevel = /^H[1-6]$/.test(node.tagName) ? Number(node.tagName[1]) : NaN;
+        return {
+          level: Number.isFinite(ariaLevel) && ariaLevel > 0 ? ariaLevel : tagLevel,
+          text: (node.textContent ?? "").trim(),
+        };
+      })
+      // A `[role=heading]` with neither a heading tag nor an aria-level has no level to check.
+      .filter((entry) => Number.isFinite(entry.level))
+  );
 }
 
 function render(outline: OutlineEntry[]): string {

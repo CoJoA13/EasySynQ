@@ -50,7 +50,9 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
             <Text size="xs" c="dimmed">
               {capa.identifier ?? "CAPA"}
             </Text>
-            <Title order={3} size="h4">{capa.title ?? "(untitled)"}</Title>
+            <Title order={3} size="h4">
+              {capa.title ?? "(untitled)"}
+            </Title>
           </Stack>
         ) : (
           "CAPA"

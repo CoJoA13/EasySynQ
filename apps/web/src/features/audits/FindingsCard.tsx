@@ -74,7 +74,9 @@ export function FindingsCard({
   return (
     <Paper withBorder p="md">
       <Group justify="space-between" mb="sm">
-        <Title order={2} size="h5">Findings ({rows.length})</Title>
+        <Title order={2} size="h5">
+          Findings ({rows.length})
+        </Title>
         {canCreate && !closed && (
           <Button size="xs" variant="light" onClick={onLog}>
             Log finding

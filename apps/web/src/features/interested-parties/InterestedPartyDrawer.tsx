@@ -72,7 +72,9 @@ export function InterestedPartyDrawer({
             />
           </Group>
 
-          <Title order={3} size="h4">{party.party_name}</Title>
+          <Title order={3} size="h4">
+            {party.party_name}
+          </Title>
 
           <Box>
             <Text size="sm" fw={600}>

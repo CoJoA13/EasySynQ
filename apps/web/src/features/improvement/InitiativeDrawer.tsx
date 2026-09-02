@@ -56,7 +56,9 @@ export function InitiativeDrawer({
             <Text size="xs" c="dimmed">
               {initiative.identifier}
             </Text>
-            <Title order={3} size="h4">{initiative.title}</Title>
+            <Title order={3} size="h4">
+              {initiative.title}
+            </Title>
           </Stack>
         ) : (
           "Improvement initiative"

@@ -81,7 +81,9 @@ export function DcrDiffPage() {
         </Anchor>
       </div>
       <Group gap="sm" align="center">
-        <Title order={1} size="h2">{dcr.identifier}</Title>
+        <Title order={1} size="h2">
+          {dcr.identifier}
+        </Title>
         <Text c="dimmed">{CHANGE_TYPE_LABEL[dcr.change_type] ?? dcr.change_type}</Text>
         <DcrStateBadge state={dcr.state} />
       </Group>

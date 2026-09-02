@@ -160,11 +160,31 @@ const ROUTED_LEAF_PAGES = [
 // These render around a leaf page and must contribute NO heading, or the page below them would be
 // a second h1. CapaLayout, AuditsLayout and DriftLayout are tab strips: their children are sibling
 // routes, not nested documents, which is why those children each own an h1 of their own.
+//
+// The shell chrome is included for a sharper reason than the tab strips: a heading added to any of
+// these renders above every page's h1 on EVERY route at once, and the runtime assertion cannot see
+// it, because the route tests render page components WITHOUT the shell around them. Only two of the
+// thirty-three routes are ever measured through the real shell, in the browser suite.
+//
+// Mantine's Drawer/Modal `title` prop is NOT covered by this and does not need to be: it renders an
+// h2 inside a dialog, which is correct, and DetailDrawer/CommandPalette author no heading of their
+// own — which is the fact pinned here.
 const HEADINGLESS_LAYOUTS = [
   "app/shell/AppShell.tsx",
   "features/capa/CapaLayout.tsx",
   "features/audits/AuditsLayout.tsx",
   "features/drift/DriftLayout.tsx",
+] as const;
+
+// The shell chrome. Kept SEPARATE from the layouts above because the route table does not mount
+// these — AppShell renders them — so they must not count toward the mounted-set size pin.
+const SHELL_CHROME = [
+  "app/shell/TopBar.tsx",
+  "app/shell/LeftRail.tsx",
+  "app/shell/RailFoot.tsx",
+  "app/shell/Breadcrumb.tsx",
+  "app/shell/DetailDrawer.tsx",
+  "features/search/CommandPalette.tsx",
 ] as const;
 
 // /admin is the one genuine nesting in the route table: AdminShell renders the h1 and its four tab
@@ -230,6 +250,10 @@ describe("route heading contract", () => {
   });
 
   it.each(HEADINGLESS_LAYOUTS)("%s contributes no heading of its own", (path) => {
+    expect(titleOrders(sourceEndingWith(path))).toEqual([]);
+  });
+
+  it.each(SHELL_CHROME)("%s contributes no heading to every route at once", (path) => {
     expect(titleOrders(sourceEndingWith(path))).toEqual([]);
   });
 

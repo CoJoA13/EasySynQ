@@ -73,7 +73,9 @@ export function ReviewOutputsSection({
   return (
     <Stack gap="sm">
       <Group justify="space-between">
-        <Title order={2} size="h3">Review outputs (9.3.3)</Title>
+        <Title order={2} size="h3">
+          Review outputs (9.3.3)
+        </Title>
         {canEdit && (
           <Button size="xs" variant="light" onClick={() => setAddOpen(true)}>
             Add output

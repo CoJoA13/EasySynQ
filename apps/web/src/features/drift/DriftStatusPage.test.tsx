@@ -176,6 +176,6 @@ describe("DriftStatusPage", () => {
     const { container } = renderWithProviders(<DriftStatusPage />);
     await screen.findByText("Mirror scan");
     expect(await axe(container)).toHaveNoViolations();
-  expectSoundHeadingOutline();
+    expectSoundHeadingOutline();
   });
 });

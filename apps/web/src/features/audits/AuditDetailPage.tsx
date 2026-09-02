@@ -84,7 +84,9 @@ export function AuditDetailPage() {
           <Text c="dimmed" size="sm" fw={500}>
             {a.identifier ?? a.id.slice(0, 8)}
           </Text>
-          <Title order={1} size="h3">{a.title ?? "Internal audit"}</Title>
+          <Title order={1} size="h3">
+            {a.title ?? "Internal audit"}
+          </Title>
           <Text size="sm" c="dimmed">
             Lead auditor{" "}
             <Text span fw={500}>

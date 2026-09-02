@@ -63,6 +63,9 @@ export async function expectSoundHeadingOutline(page: Page): Promise<void> {
   });
   const shown = `document outline was:\n${outline.join("\n")}`;
   expect(violations, shown).toEqual([]);
-  expect(outline.filter((line) => line.startsWith("h1")), shown).toHaveLength(1);
+  expect(
+    outline.filter((line) => line.startsWith("h1")),
+    shown,
+  ).toHaveLength(1);
   expect(outline[0]?.slice(0, 2), shown).toBe("h1");
 }

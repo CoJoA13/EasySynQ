@@ -139,7 +139,9 @@ export function DriftStatusPage() {
     <Container size="lg" py="md">
       <Stack gap="lg">
         <div>
-          <Title order={1} size="h2">Drift status</Title>
+          <Title order={1} size="h2">
+            Drift status
+          </Title>
           <Text c="dimmed" size="sm">
             The vault&rsquo;s integrity detection legs: blob re-hash, mirror tamper/staleness, and
             outstanding superseded copies. The vault is the source of truth — these are detection

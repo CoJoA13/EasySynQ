@@ -107,7 +107,9 @@ export function ObjectiveDetailPage() {
             </Text>
             <StateBadge state={o.current_state} />
           </Group>
-          <Title order={1} size="h2">{o.title}</Title>
+          <Title order={1} size="h2">
+            {o.title}
+          </Title>
         </div>
         <CommitmentHero objective={o} />
         <ProposedRevisionCard objective={o} />
