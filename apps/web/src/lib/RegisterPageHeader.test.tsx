@@ -24,8 +24,8 @@ function renderHeader(props: Parameters<typeof RegisterPageHeader>[0]) {
 }
 
 // A register page is the top of its own document, so the header always emits the one `h1`. This
-// is the assertion that would have to be deleted — not merely edited — to reintroduce
-// RES-REGISTER-HEADING-LEVELS, which is why it is stated as a level and not as a tag name.
+// is the assertion that would have to be deleted — not merely edited — to put the eleven registers
+// back to a page with no `h1`, which is why it is stated as a level and not as a tag name.
 it("renders the title as the page's h1", () => {
   renderHeader({ title: "Internal audit" });
   expect(screen.getByRole("heading", { level: 1, name: "Internal audit" })).toBeInTheDocument();

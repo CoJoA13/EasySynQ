@@ -7,6 +7,7 @@ import { TONE_GLYPH } from "../../lib/status";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { ProgramPage } from "./ProgramPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 function grant(keys: string[]) {
   server.use(
@@ -174,6 +175,7 @@ test("no axe violations", async () => {
   const { container } = renderWithProviders(<ProgramPage />, { route: "/audits/program" });
   await screen.findByText("AUDPROG-000001");
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 test("shows the selected program's plans (process + lead resolved, degrade-friendly)", async () => {

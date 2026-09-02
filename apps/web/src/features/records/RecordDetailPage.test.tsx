@@ -10,6 +10,7 @@ import { Breadcrumb } from "../../app/shell/Breadcrumb";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { RecordDetailPage } from "./RecordDetailPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 const RECORD_ID = "re000001-0001-0001-0001-000000000001";
 const NEXT_RECORD_ID = "re000002-0002-0002-0002-000000000002";
@@ -222,6 +223,7 @@ test("renders the five detail groups, safe recursive values, and authorization-c
   expect(links.querySelector('a[href="/documents/44444444-4444-4444-4444-444444444444"]')).toBeNull();
   expect(within(links).getAllByText("Restricted related item")).toHaveLength(2);
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 test("omits empty optional sections and hides unreadable source and correction targets", async () => {

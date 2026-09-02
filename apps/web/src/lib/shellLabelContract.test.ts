@@ -10,8 +10,9 @@ import { describe, expect, it } from "vitest";
 // slice with every suite green, because there is no behaviour to observe — each file is
 // individually correct and only their DISAGREEMENT is the defect.
 //
-// The registers deliberately stay out of this. Their page headings run at several levels and are
-// tracked separately (RES-REGISTER-HEADING-LEVELS); what is pinned here is only the rail →
+// The registers deliberately stay out of this. Their heading LEVEL is pinned elsewhere — every
+// register titles itself through `RegisterPageHeader`, which always emits the page's one `h1`, and
+// ./routeHeadingContract.test.ts is what holds that. What is pinned HERE is only the rail →
 // breadcrumb → title triple, which must be one string per destination.
 const sources = import.meta.glob(
   ["../app/shell/LeftRail.tsx", "../app/shell/Breadcrumb.tsx", "./effectiveView.ts"],

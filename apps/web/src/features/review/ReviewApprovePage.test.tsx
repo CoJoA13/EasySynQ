@@ -20,6 +20,7 @@ import {
   periodicReviewTask,
 } from "../../test/msw/handlers";
 import { ReviewApprovePage } from "./ReviewApprovePage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 function mount(route: string) {
   return renderWithProviders(
@@ -153,6 +154,7 @@ test("CAPA review page has no axe violations (heading order)", async () => {
   const { container } = mount("/tasks/tkca1111-1111-1111-1111-111111111111");
   await screen.findByText(/Schedule supplier re-evaluations/);
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 describe("ReviewApprovePage — PERIODIC_REVIEW", () => {
@@ -412,6 +414,7 @@ describe("ReviewApprovePage DCR branch", () => {
     const { container } = mount("/tasks/task-dcr-1");
     await screen.findByText("DCR-2026-0001");
     expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
   });
 });
 
@@ -487,6 +490,7 @@ describe("ReviewApprovePage IMPROVEMENT_INITIATIVE branch (S-improvement-4)", ()
     const { container } = renderAtTask(improvementAuthTask.id);
     await screen.findByText("IMP-2026-0005");
     expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
   });
 });
 
@@ -544,5 +548,6 @@ describe("ReviewApprovePage LEADERSHIP_AUTHORIZATION branch (S-leadership-1)", (
     await screen.findByText("POL-001");
     await screen.findByRole("radio", { name: "Authorize release" });
     expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
   });
 });

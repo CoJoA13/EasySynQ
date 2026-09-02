@@ -14,6 +14,7 @@ import {
 } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { ObjectiveDetailPage } from "./ObjectiveDetailPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 const ID = "ob000001-0001-0001-0001-000000000001";
 
@@ -36,6 +37,7 @@ it("renders the header, commitment, plans and measurements", async () => {
   await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
   expect(within(screen.getByRole("table")).getByText("2026-04-01")).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 it("shows a not-found alert on a 404", async () => {

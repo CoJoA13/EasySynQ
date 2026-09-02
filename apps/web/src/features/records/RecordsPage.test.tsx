@@ -10,6 +10,7 @@ import { expectResponsiveTable } from "../../test/responsiveTable";
 import { docFixture, recordsFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { RecordsPage } from "./RecordsPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 function LocationProbe() {
   const location = useLocation();
@@ -74,6 +75,7 @@ test("renders the responsive Records register with one native detail link per ro
   expect(row).not.toHaveAttribute("tabindex");
   expect(within(row).getAllByRole("link")).toHaveLength(1);
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 test("replaces criteria while preserving unrelated URL state and pushes cursor pagination", async () => {

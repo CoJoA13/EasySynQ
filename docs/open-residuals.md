@@ -54,31 +54,6 @@ record. `/capa` also has no 320px case and no denied/granted header pair, unlike
 `REGISTER_CASES` routes; 320px was measured clean by hand during S-ui-6 but is unpinned, and folding
 it in belongs with whichever answer is taken here.
 Last reviewed: 2026-08-30
-## RES-REGISTER-HEADING-LEVELS
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ui-4, 2026-08-29
-Reason: The register pages do not agree on a heading level, and most of them render no `h1` at all.
-`AppShell` contributes no page heading; `HomePage`, `LibraryPage`, `ReportsRegisterPage` and
-`IngestionRunsPage` title at `order={1}`; eleven registers (the ten in
-`apps/web/e2e/support/registers.ts` plus `CapaBoardPage`) title at `order={2}`; the two CAPA
-sub-registers title at `order={3}`; and `ProgramPage` titles at `order={3}` with an `order={4}`
-sub-heading. So a reader landing on a register meets a document whose
-outline begins at `h2` or `h3` with no `h1` above it, and the level a given register uses carries no
-meaning beyond how it was written. S-ui-4 centralised the markup in `lib/RegisterPageHeader.tsx`
-but deliberately kept `order` a caller prop rather than normalising it. One existing suite pins a
-register heading level — `AuditsListPage.test.tsx` asserts `{ level: 2, name: "Internal audit" }`
-and uses it as its load gate — and the component's `order?: 2 | 3` union covers only what the
-eleven adopters use, so the `order={1}` and `order={4}` pages each widen it when they adopt.
-Levelling the registers is an accessibility change with its own test surface and does not belong
-inside a retheme slice. Centralising it first is what makes the later fix a one-file change.
-Closure contract: Decide the intended outline for a register route and apply it in
-`RegisterPageHeader`, updating every suite that pins a level, and prove the result with an
-axe assertion for a single `h1` and no skipped level on at least one register route in
-`apps/web/e2e/register-accessibility.spec.ts`. The program's final sweep slice already owes an
-a11y pass per route; this record names the specific defect that pass must close.
-Last reviewed: 2026-08-29
 
 ## RES-REGISTER-PAGE-FRAME
 
@@ -438,6 +413,14 @@ not a flicker. The eleven registers do not have this shape — `RegisterPageHead
 forbidden and error branches too — but they do drop the title in their LOADING branch, which is the
 same defect and is already named inside [`RES-REGISTER-PAGE-FRAME`](open-residuals.md). This record
 exists because that one is scoped to the register scaffold and names no detail route.
+
+`/imports/:runId` is the sharpest case and is NOT merely a rest state. `IngestionRunPage` is a
+four-faces controller that carries `Import review` only in its 404/403 branch, so the review
+cockpit — the primary human-paced working surface of the whole ingestion flow — presents a document
+with no heading, as do the commit-progress, scan-progress and terminal-summary faces. Five of its
+six faces have none. `ReviewCockpit` holds no visible page label of any kind, so unlike a
+mis-levelled title there is nothing to promote: closing this means adding a heading where the
+design currently has none, which is a visual decision rather than a mechanical one.
 This was deliberately excluded from S-ui-a11y-outline: that slice changed which heading level each
 existing title renders at and added no title anywhere, so folding in seven pages of new
 branch-rendering would have mixed a second defect into a diff whose whole claim is that nothing

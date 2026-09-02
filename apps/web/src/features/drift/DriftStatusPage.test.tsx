@@ -7,6 +7,7 @@ import { renderWithProviders } from "../../test/render";
 import { driftStatusFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { DriftStatusPage } from "./DriftStatusPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 describe("DriftStatusPage", () => {
   test("renders both scan cards with status badges and the counts bag", async () => {
@@ -175,5 +176,6 @@ describe("DriftStatusPage", () => {
     const { container } = renderWithProviders(<DriftStatusPage />);
     await screen.findByText("Mirror scan");
     expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
   });
 });

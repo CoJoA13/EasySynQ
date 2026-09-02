@@ -9,6 +9,7 @@ import { server } from "../../test/msw/server";
 import { leadershipAuthorizedStatus, leadershipRequiredStatus } from "../../test/msw/handlers";
 import type { MgmtReviewDetail } from "../../lib/types";
 import { ManagementReviewDetailPage } from "./ManagementReviewDetailPage";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 const ID = "mr-0001-0001-0001-000000000001";
 
@@ -70,6 +71,7 @@ it("has no accessibility violations", async () => {
   const { container } = renderAt(ID);
   await screen.findByRole("button", { name: "Compile inputs" });
   expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
 });
 
 it("hides every lifecycle action for a bare reader with no approval cycle", async () => {
@@ -272,6 +274,7 @@ describe("Download minutes pack (PDF) button", () => {
     const { container } = renderAt(ID);
     await screen.findByRole("button", { name: "Download minutes pack (PDF)" });
     expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
   });
 
   it("shows the button when current_state is Effective", async () => {

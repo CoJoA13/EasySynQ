@@ -9,6 +9,7 @@ import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { expectResponsiveTable } from "../../test/responsiveTable";
 import { TasksInbox } from "./TasksInbox";
+import { expectSoundHeadingOutline } from "../../test/headingOutline";
 
 function TasksWithRouteChrome() {
   useRouteChrome();
@@ -156,6 +157,7 @@ describe("TasksInbox routing", () => {
     const { container } = renderTasksWithRouteChrome(route);
     expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
+  expectSoundHeadingOutline();
   });
 
   // Regression: `/tasks` and `/tasks?type=DOC_ACK` are the SAME route element, so the bell→inbox
