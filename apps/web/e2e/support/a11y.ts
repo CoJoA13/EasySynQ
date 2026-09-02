@@ -25,6 +25,13 @@ const axePath = resolve(
  * So this helper must run UNSCOPED and must not filter by impact. It deliberately does not reuse
  * the other helper: that one's scope and severity floor are correct for what it checks, and
  * widening it would change the meaning of every existing assertion that calls it.
+ *
+ * ⚠ Those two rules are still not the whole contract, and the gap is not obvious: axe has NO rule
+ * that objects to a SECOND h1, and none that objects to an h2 rendered ABOVE the h1.
+ * `page-has-heading-one` only requires at least one, and `heading-order` permits ascending by any
+ * distance. Both arrangements were confirmed green against a deliberately broken page before these
+ * last two assertions were added. They are the same two checks `src/test/headingOutline.ts` makes,
+ * restated here because a route reached only by the browser layer would otherwise have neither.
  */
 export async function expectSoundHeadingOutline(page: Page): Promise<void> {
   await page.addScriptTag({ path: axePath });
@@ -54,5 +61,8 @@ export async function expectSoundHeadingOutline(page: Page): Promise<void> {
       ),
     };
   });
-  expect(violations, `document outline was:\n${outline.join("\n")}`).toEqual([]);
+  const shown = `document outline was:\n${outline.join("\n")}`;
+  expect(violations, shown).toEqual([]);
+  expect(outline.filter((line) => line.startsWith("h1")), shown).toHaveLength(1);
+  expect(outline[0]?.slice(0, 2), shown).toBe("h1");
 }

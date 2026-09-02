@@ -1,10 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { expectSoundHeadingOutline, readHeadingOutline } from "./headingOutline";
+
+// Hosts are appended to document.body so the default-root case can be exercised for real. The
+// global `cleanup()` only removes Testing Library's own containers, so these must be tracked and
+// removed here — otherwise every fixture accumulates and the default-root test reads the union of
+// every heading the file has ever mounted.
+const mounted: HTMLElement[] = [];
+afterEach(() => {
+  while (mounted.length > 0) mounted.pop()?.remove();
+});
 
 function mount(html: string): HTMLElement {
   const host = document.createElement("div");
   host.innerHTML = html;
   document.body.append(host);
+  mounted.push(host);
   return host;
 }
 
@@ -66,7 +76,17 @@ describe("expectSoundHeadingOutline", () => {
     expect(() => expectSoundHeadingOutline(host)).toThrow(/expected exactly one h1, found 2/);
   });
 
-  it("FAILS on a skipped level — the h1 to h4 jump measured on /admin/users", () => {
+  // The BOUNDARY case: exactly one level skipped. The h1 -> h4 case below cannot pin it — loosening
+  // the rule from "descend by at most 1" to "at most 2" leaves a three-level jump still failing, so
+  // the assertion named for the boundary has to BE the boundary.
+  it("FAILS on the smallest possible skip — h1 straight to h3", () => {
+    const host = mount("<h1>Page</h1><h3>Section</h3>");
+    expect(() => expectSoundHeadingOutline(host)).toThrow(
+      /heading level skipped: h1 "Page" is followed by h3 "Section"/,
+    );
+  });
+
+  it("FAILS on the h1 to h4 jump measured on /admin/users", () => {
     const host = mount("<h1>Administration</h1><h4>Users</h4>");
     expect(() => expectSoundHeadingOutline(host)).toThrow(
       /heading level skipped: h1 "Administration" is followed by h4 "Users"/,
@@ -83,6 +103,23 @@ describe("expectSoundHeadingOutline", () => {
   it("names the whole outline in the failure, so a thirty-file re-levelling is reviewable", () => {
     const host = mount("<h1>Page</h1><h3>Jumped</h3>");
     expect(() => expectSoundHeadingOutline(host)).toThrow(/h1  Page[\s\S]*h3  Jumped/);
+  });
+
+  // Both helpers default their root to `document.body`, and that default is what all 14 route test
+  // files rely on by calling with no argument. Every other test here passes an explicit host, so
+  // repointing the default was invisible to this file while reddening those fourteen.
+  it("defaults its root to document.body, which is how every route test calls it", () => {
+    mount("<h1>Page</h1><h2>Section</h2>");
+    expect(readHeadingOutline()).toEqual([
+      { level: 1, text: "Page" },
+      { level: 2, text: "Section" },
+    ]);
+    expect(() => expectSoundHeadingOutline()).not.toThrow();
+  });
+
+  it("says so plainly when a page renders no headings at all", () => {
+    const host = mount("<p>No headings here</p>");
+    expect(() => expectSoundHeadingOutline(host)).toThrow(/\(no headings rendered\)/);
   });
 
   it("reports an empty heading as (empty) rather than rendering a blank line", () => {
