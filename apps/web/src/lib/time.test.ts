@@ -97,12 +97,21 @@ describe("formatOrgClock", () => {
   // wrong DAY under an "Organization date" label misstates which working day a reader is looking at,
   // and the two disagree for five hours of every day in a UTC-5 zone.
   it("resolves the DATE in the org zone, not UTC", () => {
-    // 03:00Z on 2 September is still 22:00 on 1 September in Chicago, and already 12:00 on the 2nd
-    // in Tokyo — one instant, three different calendar days.
-    const instant = Date.parse("2026-09-02T03:00:00Z");
-    expect(formatOrgClock(instant, "UTC")?.date).toBe("09/02/26");
-    expect(formatOrgClock(instant, "America/Chicago")?.date).toBe("09/01/26");
-    expect(formatOrgClock(instant, "Asia/Tokyo")?.date).toBe("09/02/26");
+    // ⚠ The zones are extreme ON PURPOSE. An earlier version of this test used UTC / Chicago /
+    // Tokyo and its comment claimed "three different calendar days" — impossible, because those
+    // three span 14 hours and can show at most two dates, and at the instant chosen Tokyo returned
+    // the same date as UTC. That made one of its three assertions unable to discriminate at all.
+    // Midway (UTC-11) to Kiritimati (UTC+14) spans 25 hours, which is the only way one instant
+    // genuinely lands on three calendar days, so every assertion below can fail on its own.
+    const instant = Date.parse("2026-09-02T10:30:00Z");
+    expect(formatOrgClock(instant, "Pacific/Midway")?.date).toBe("09/01/26"); // 23:30, day before
+    expect(formatOrgClock(instant, "UTC")?.date).toBe("09/02/26"); // 10:30
+    expect(formatOrgClock(instant, "Pacific/Kiritimati")?.date).toBe("09/03/26"); // 00:30, day after
+    // Stated as a set so the property — one instant, three days — is asserted rather than implied.
+    const dates = ["Pacific/Midway", "UTC", "Pacific/Kiritimati"].map(
+      (zone) => formatOrgClock(instant, zone)?.date,
+    );
+    expect(new Set(dates).size).toBe(3);
   });
 
   it("renders the date as a zero-padded six-digit MM/DD/YY", () => {

@@ -60,24 +60,66 @@ function sourceFor(path: string): string {
   return hit;
 }
 
-/** Every `<Container size="…">` literal in a file, with comments stripped so prose cannot match. */
-function containerWidths(source: string): string[] {
+/**
+ * Every `<Container …>` opening tag in a file, brace-aware, with comments stripped.
+ *
+ * Brace-aware because `[^>]*?` terminates at the first `>` in the source, which inside a prop like
+ * `onClick={() => …}` is the arrow rather than the end of the tag — the tag then appears to carry
+ * no `size` and drops silently out of every check below.
+ */
+function containerTags(source: string): string[] {
   const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
-  return [...code.matchAll(/<Container[^>]*?\bsize="([a-z]+)"/gs)].map((m) => m[1]!);
+  const tags: string[] = [];
+  for (let i = code.indexOf("<Container"); i !== -1; i = code.indexOf("<Container", i + 1)) {
+    const next = code[i + "<Container".length];
+    if (next !== undefined && !/[\s/>]/.test(next)) continue;
+    let depth = 0;
+    let j = i + "<Container".length;
+    for (; j < code.length; j += 1) {
+      const c = code[j];
+      if (c === "{") depth += 1;
+      else if (c === "}") depth -= 1;
+      else if (c === ">" && depth === 0) break;
+    }
+    tags.push(code.slice(i, j + 1));
+  }
+  return tags;
 }
 
-/** A `size` that is an expression rather than a literal — the exact shape that caused the jump. */
-function hasComputedWidth(source: string): boolean {
-  const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
-  return /<Container[^>]*?\bsize=\{/s.test(code);
+/** The literal widths a file declares. */
+function containerWidths(source: string): string[] {
+  return containerTags(source)
+    .map((tag) => /\bsize="([a-z]+)"/.exec(tag)?.[1])
+    .filter((w): w is string => w !== undefined);
+}
+
+/**
+ * A `<Container>` this contract cannot read: `size` as an expression, or NO `size` at all.
+ *
+ * Both were live holes. The computed check was applied only to the layout, so reintroducing the
+ * exact defect expression on a FACE passed — which matters because the branch discrepancy this
+ * slice closed was on a face, not a layout. And a `<Container>` with no `size` silently takes
+ * Mantine's `md` default (960px), so a face could drop 360px below its siblings while every
+ * assertion here stayed green, because an unreadable tag contributed nothing to compare. Both
+ * mutations were run against the previous version and both passed.
+ */
+function unreadableContainers(source: string): string[] {
+  return containerTags(source).filter((tag) => !/\bsize="[a-z]+"/.test(tag));
 }
 
 describe("tabbed section container width contract", () => {
-  it.each(SECTIONS)("$name sizes its tab strip with a literal, never an expression", (section) => {
-    // A computed size is what let the width follow the active tab. Forbidding the SHAPE is what
-    // makes this a guard against the defect rather than against one value of it.
-    expect(hasComputedWidth(sourceFor(section.layout))).toBe(false);
-  });
+  it.each(SECTIONS)(
+    "$name sizes every container with a literal, never an expression",
+    (section) => {
+      // Applied to the FACES as well as the layout. A computed size is what let the width follow the
+      // active tab, and an absent one is worse — it takes Mantine's md default without saying so.
+      const files = [section.layout, ...section.faces];
+      const offenders = files.flatMap((f) =>
+        unreadableContainers(sourceFor(f)).map((tag) => `${f}: ${tag.replace(/\s+/g, " ").trim()}`),
+      );
+      expect(offenders).toEqual([]);
+    },
+  );
 
   it.each(SECTIONS)("$name agrees on one container width across the strip and every face", (s) => {
     const widths = [sourceFor(s.layout), ...s.faces.map(sourceFor)].flatMap(containerWidths);

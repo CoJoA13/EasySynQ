@@ -3,6 +3,7 @@ import {
   auditListFixture,
   auditProgramsFixture,
   capaListFixture,
+  complaintListFixture,
   contextListFixture,
   contextRegisterStatusFixture,
   dcrListFixture,
@@ -12,6 +13,7 @@ import {
   interestedPartyListFixture,
   interestedPartyRegisterStatusFixture,
   mgmtReviewListFixture,
+  ncrListFixture,
   notificationFixtures,
   objectiveFixtures,
   processesFixture,
@@ -759,6 +761,19 @@ export async function installRegisterApi(
       url.search === ""
     ) {
       await fulfillJson(route, interestedPartyRegisterStatusFixture);
+      return;
+    }
+
+    // The two CAPA sub-register reads. Without them the tab strip's width can only be measured on
+    // the board face, and the defect guarded is movement BETWEEN faces — so the one arrangement
+    // that exhibits it would be unreachable from a browser. Both fixtures come from the vitest
+    // handlers, so they are the shapes the serializers actually return rather than invented here.
+    if (scenario.route === "capa" && method === "GET" && url.pathname === "/api/v1/complaints") {
+      await fulfillJson(route, complaintListFixture);
+      return;
+    }
+    if (scenario.route === "capa" && method === "GET" && url.pathname === "/api/v1/ncrs") {
+      await fulfillJson(route, ncrListFixture);
       return;
     }
 

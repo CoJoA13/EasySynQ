@@ -77,7 +77,16 @@ export function formatRelativeTime(input: string | number, now: number = Date.no
 }
 
 // The wall-clock date and time observed in the canonical ORGANIZATION timezone, as a stable
-// MM/DD/YY plus HH:MM plus the zone's own short name (R69's rail-foot clock). Deliberately NOT browser-local: records and audit
+// MM/DD/YY plus HH:MM plus the zone's own short name (R69's rail-foot clock).
+//
+// ⚠ That date format DIVERGES from `formatDateInTimeZone` above, which every register row and
+// timeline renders through `useOrgDate` and which deliberately emits a locale-independent
+// YYYY-MM-DD. The two are on screen together, so a reader sees `09/02/26` in the rail beside
+// `2026-09-02` in a table. This is a deliberate owner decision, not an oversight: the rail foot was
+// asked for as a SIX-DIGIT date, which YYYY-MM-DD cannot be, and the rail is chrome rather than
+// record content. It is recorded here because the divergence is real and the argument for org time
+// a few lines down — that a value in the same frame must not disagree with the timeline above it —
+// applies to format as well as to zone. Revisiting it means changing what the owner asked for. Deliberately NOT browser-local: records and audit
 // events are stamped in org time, and `useOrgDate` already renders every register date that way, so
 // a browser-local clock in the same frame would disagree with the timeline directly above it.
 //

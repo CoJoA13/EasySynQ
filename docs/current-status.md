@@ -132,7 +132,7 @@ fit is MEASURED in a browser rather than computed, and `src/lib/tabSectionWidthC
 guards the width invariant across all three tabbed sections rather than only the one that broke.
 
 Evidence: ESLint, both strict `tsc` projects, the production build, Vitest at **281 files and 2,351
-tests** and the Playwright Chromium suite at **79** were run locally and passed. No Python changed,
+tests** and the Playwright Chromium suite at **80** were run locally and passed. No Python changed,
 so the API, migration, integration and response-contract figures above stand from the run that
 produced them.
 

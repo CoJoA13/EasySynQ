@@ -1167,13 +1167,59 @@ catches a wrap, and the row not overflowing itself catches what `nowrap` does in
 Shrinking `--es-sidebar-w` to 8rem overflows the row by 9 pixels and reddens it.
 
 **A guard for the class, not the instance.** `src/lib/tabSectionWidthContract.test.ts` forbids a
-computed `size` on any tab strip and requires each section's layout and every face it can show to
-agree on one width, counting every branch rather than the loaded one. Introducing the same expression
-into `DriftLayout` — a section this slice never touched — reddens it.
+`<Container>` this contract cannot read — a `size` given as an expression, or absent entirely — and
+requires each section's layout and every face it can show to agree on one width, counting every
+branch rather than the loaded one. Introducing the same expression into `DriftLayout`, a section this
+slice never touched, reddens it.
+
+**What the adversarial review corrected, all folded here, with nothing refuted across three lenses.**
+Five findings survived verification and four of them were real defects.
+
+⚠ **The headline claim had no browser evidence, and could not have got any.** Every viewport in the
+Playwright suite is 1280 or narrower, and at 1280 the content box is 1280 − 244 − 32 = 1004 pixels,
+which clamps BOTH `lg` and `xl` to the same width: the displacement there is zero. The jump first
+appears above ~1416 pixels. So the four rewritten Vitest assertions and the source contract all read
+an authored prop STRING, and nothing measured the position the owner actually reported — in a slice
+that had just applied the opposite doctrine to the clock row. `e2e/capa-board.spec.ts` now measures
+the strip at 1700 pixels across a real tab change, asserting first that the container is unclamped
+at that width so the arrangement under test genuinely occurs. Against the original expression it
+reports a displacement of **90 pixels** — the figure derived from the container scales, now
+measured rather than computed. Reaching the second face needed the harness to answer
+`/api/v1/complaints` and `/api/v1/ncrs`, whose fixtures come from the Vitest handlers rather than
+being invented for the browser.
+
+⚠ **The contract did not guard the class it claimed.** Its computed-shape check ran only against the
+layout, so reintroducing the exact defect expression on a FACE passed — which matters precisely
+because the discrepancy this slice closed was on a face. And a `<Container>` with no `size` at all
+silently takes Mantine's `md` default, 360 pixels below its siblings, while contributing nothing to
+compare. Both mutations were run against the first version and both were green. The tag scan is now
+brace-aware, runs over the faces as well, and treats an unreadable container as an offender.
+
+⚠ **A comment in one of this slice's own new tests asserted something impossible.** It claimed one
+instant on UTC, Chicago and Tokyo lands on "three different calendar days"; those three span
+fourteen hours and can show at most two, and at the instant chosen Tokyo returned the same date as
+UTC, so one of its three assertions could not discriminate at all. Only zones spanning more than
+twenty-four hours can produce three dates, so the case now uses Midway (UTC−11) and Kiritimati
+(UTC+14) — a twenty-five hour spread — and asserts the set size rather than implying it.
+
+**`RES-REGISTER-PAGE-FRAME` is reconciled rather than left contradicting this entry.** Its third
+blocker — the `CapaBoardPage` branch disagreement — is closed by this slice, and its closure contract
+had asked a frame slice to record that unification as an intended visual change, so the record now
+carries it: the board's forbidden, loading and error branches widened from 960 to 1320 pixels. The
+record also gains the constraint this slice imposed on it, rather than leaving it to be discovered
+mid-implementation: a frame that owns the `Container` leaves one width where the new contract expects
+one per face.
+
+**One divergence is recorded rather than fixed.** `formatOrgClock` emits `MM/DD/YY` while
+`formatDateInTimeZone` — every register row and timeline, through `useOrgDate` — deliberately emits a
+locale-independent `YYYY-MM-DD`, and the two are on screen together. That is an owner decision, not
+an oversight: the rail foot was asked for as a six-digit date, which `YYYY-MM-DD` cannot be. It is
+noted at the source because the argument for org time — that a value in the same frame must not
+disagree with the timeline above it — applies to format as well as to zone.
 
 Test deltas, measured on the branch. Vitest moved from 280 files and 2,339 tests to **281 and
 2,351**: one new file and twelve new tests, six of them the width contract. The Playwright Chromium
-suite moved **78 → 79**. ESLint over `src` and `e2e`, both strict `tsc` projects and the production
+suite moved **78 → 80**. ESLint over `src` and `e2e`, both strict `tsc` projects and the production
 build were clean. The API, migration, integration and response-contract suites were not run and are
 not restated: this slice changes no Python.
 

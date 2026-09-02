@@ -68,16 +68,26 @@ narrowing on the five pages that currently guard with a narrowing early return, 
 need a generic render-prop body rather than `children`. Rendering the page title during loading —
 which the frame would do, and which is the better behaviour — breaks two suites that identify the
 loaded state by its heading alone (`AuditsListPage.test.tsx` and `DcrsRegisterPage.test.tsx`'s
-equal-width contract). And `CapaBoardPage` is the one page whose branches disagree on container
-size, `md` in three branches against `xl` in the loaded page, so adopting a frame there is a
-deliberate visual change rather than a mechanical one.
-Closure contract: Either build the frame with a render-prop body, re-anchor the two heading-gated
-suites on a load-only sentinel, and record the CapaBoardPage container unification as an intended
-change; or record that the scaffold stays per-page and remove this record. A shared table wrapper
-is separately blocked and must not be attempted: `apps/web/src/lib/responsiveRegisterContract.test.ts`
-is a source-text contract requiring each of nine page files to contain its own literal
-`<Table.ScrollContainer minWidth={N}>`.
-Last reviewed: 2026-08-29
+equal-width contract). The third blocker is CLOSED: `CapaBoardPage` was the one page whose
+branches disagreed on container size, `md` in three branches against `xl` in the loaded page.
+S-capa-width-railfoot-order unified every `/capa` container at `xl` while fixing a separate defect
+(the tab strip shifting between faces), so that unification has already happened and IS the intended
+visual change this record's closure contract asked a frame slice to record: the board's forbidden,
+loading and error branches widened from 960 to 1320 pixels. Two blockers remain — the narrowing
+early return and the two heading-gated suites.
+Closure contract: Either build the frame with a render-prop body and re-anchor the two heading-gated
+suites on a load-only sentinel; or record that the scaffold stays per-page and remove this record. A
+shared table wrapper is separately blocked and must not be attempted:
+`apps/web/src/lib/responsiveRegisterContract.test.ts` is a source-text contract requiring each of
+nine page files to contain its own literal `<Table.ScrollContainer minWidth={N}>`.
+⚠ A SECOND source-text contract now constrains the frame the same way, and it was added by the same
+slice that closed the third blocker, so it is recorded here rather than discovered mid-implementation:
+`apps/web/src/lib/tabSectionWidthContract.test.ts` requires each tabbed section's layout AND every
+face to carry its own literal `<Container size="…">`. A frame that owns the Container leaves one
+width where the contract expects one per face, and its per-section assertion fails. Relaxing that
+contract for a section whose faces delegate to a frame is part of this record's work, not a surprise
+against it.
+Last reviewed: 2026-09-02 (third blocker closed by S-capa-width-railfoot-order)
 
 ## RES-DOC11-TOKEN-DRIFT
 
