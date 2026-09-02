@@ -1058,11 +1058,15 @@ h2 Records`) and passes after, which is production evidence rather than a synthe
 `registerHeaderAdoption`, checking its own cohort against `App.tsx`'s route table so a new route
 cannot silently skip it.
 
-**The gate earned itself immediately.** It found that `/imports/:runId` renders no heading on five of
-its six faces — including `ReviewCockpit`, the primary human-paced surface of the whole ingestion
-flow. That is a *missing* title rather than a wrong level, and `ReviewCockpit` holds no visible page
-label to promote, so closing it means adding a heading where the design has none. It is recorded as
-the sharpest paragraph in the new `RES-REST-STATE-PAGE-HEADING` rather than folded in.
+**The gate earned itself immediately, and the owner chose to act on what it found.** It reported that
+`/imports/:runId` rendered no heading on five of its six faces — including `ReviewCockpit`, the
+primary human-paced surface of the whole ingestion flow. That is a *missing* title rather than a
+wrong level, and `ReviewCockpit` holds no visible page label to promote, so it was first deferred:
+closing it means adding a heading where the design has none, which is a visual decision rather than a
+mechanical one. Put to the owner, the answer was to add it, for consistency with every other route.
+`IngestionRunPage` now CHOOSES its face first and titles it once, rather than each branch returning
+on its own; none of the four face components renders a `Container`, so hoisting the title changes
+nothing but the heading. Removing that title again reddens two assertions.
 
 **What the adversarial mutation hunt corrected, all folded here.** Two of its findings were the kind
 that makes a gate decorative. A raw `<h2>` added to `AppShell` — rendering above every page's `h1` on
@@ -1088,10 +1092,12 @@ brace-aware pass per file. ⚠ And the first static analyzer matched `<Title>` w
 look like they each rendered an un-ordered `<Title>`. A bare `<Title>` is an `h1` in Mantine, so
 trusting it would have "fixed" every calm-state panel in the SPA.
 
-**Deliberately not done.** Detail routes carry their title in only one of their two-to-six
-early-return branches, so a denied or erroring reader still meets a document with no heading; that is
-a missing title rather than a wrong level and is now `RES-REST-STATE-PAGE-HEADING`, sequenced against
-`RES-REGISTER-PAGE-FRAME`. The honest limit of the runtime gate follows from it: `expectSoundHeadingOutline`
+**Deliberately not done.** Apart from `/imports/:runId` above, this slice adds a title nowhere. The
+detail routes still carry theirs in only one of their two-to-six early-return branches, so a denied
+or erroring reader there meets a document with no heading; that is a missing title rather than a
+wrong level and is now `RES-REST-STATE-PAGE-HEADING`, sequenced against `RES-REGISTER-PAGE-FRAME`,
+whose closure contract names the ingestion hoist as the pattern to follow — move the title above the
+branch rather than write it into each one. The honest limit of the runtime gate follows from it: `expectSoundHeadingOutline`
 asserts exactly one `h1`, so it cannot be pointed at a forbidden or loading branch until that record
 closes. Nineteen of the thirty-three leaf pages are covered by the source-text contract only.
 

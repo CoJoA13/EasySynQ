@@ -30,6 +30,9 @@ export function IngestionRunPage() {
   if (isLoading && !run) {
     return (
       <Container size="lg" py="md">
+        <Title order={1} size="h2" mb="md">
+          Import review
+        </Title>
         <LoadingState label="Loading import run" />
       </Container>
     );
@@ -57,36 +60,53 @@ export function IngestionRunPage() {
   }
 
   const status = run.status;
-  if (REVIEW_STATES.has(status)) {
-    return <ReviewCockpit key={run.id} runId={run.id} run={run} />;
-  }
-  if (status === "Committing") {
-    return <CommitProgress run={run} />;
-  }
-  if (status === "PartiallyCommitted") {
-    const canCommit = can("import.commit");
+  // The face is CHOSEN first and titled once, rather than each branch returning on its own. Before
+  // this, only the 404/403 branch carried the title, so five of the six faces — the review cockpit
+  // among them, which is the primary human-paced surface of the whole ingestion flow — presented a
+  // document with no heading at all. None of these components renders a Container of its own, so
+  // hoisting the title changes nothing but the heading.
+  const face = (() => {
+    if (REVIEW_STATES.has(status)) {
+      return <ReviewCockpit key={run.id} runId={run.id} run={run} />;
+    }
+    if (status === "Committing") {
+      return <CommitProgress run={run} />;
+    }
+    if (status === "PartiallyCommitted") {
+      const canCommit = can("import.commit");
+      return (
+        <Stack gap="md">
+          <RunTerminalSummary
+            run={run}
+            onResume={canCommit ? () => commitRun.mutate() : undefined}
+            resuming={commitRun.isPending}
+          />
+          {canCommit && commitRun.error && (
+            <PartialCommitRepair runId={run.id} error={commitRun.error} />
+          )}
+        </Stack>
+      );
+    }
+    if (TERMINAL_STATES.has(status)) {
+      return <RunTerminalSummary run={run} />;
+    }
+    // pre-Proposed (Created/Scanning/Extracting/Classifying/… ) and any additive stage → scan
+    // progress. Cancel is gated on import.execute (ScanProgress hides the button when onCancel is
+    // undefined).
     return (
-      <Stack gap="md">
-        <RunTerminalSummary
-          run={run}
-          onResume={canCommit ? () => commitRun.mutate() : undefined}
-          resuming={commitRun.isPending}
-        />
-        {canCommit && commitRun.error && (
-          <PartialCommitRepair runId={run.id} error={commitRun.error} />
-        )}
-      </Stack>
+      <ScanProgress
+        run={run}
+        onCancel={can("import.execute") ? () => cancelRun.mutate() : undefined}
+      />
     );
-  }
-  if (TERMINAL_STATES.has(status)) {
-    return <RunTerminalSummary run={run} />;
-  }
-  // pre-Proposed (Created/Scanning/Extracting/Classifying/… ) and any additive stage → scan progress.
-  // Cancel is gated on import.execute (ScanProgress hides the button when onCancel is undefined).
+  })();
+
   return (
-    <ScanProgress
-      run={run}
-      onCancel={can("import.execute") ? () => cancelRun.mutate() : undefined}
-    />
+    <Stack gap="md">
+      <Title order={1} size="h2">
+        Import review
+      </Title>
+      {face}
+    </Stack>
   );
 }

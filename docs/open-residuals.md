@@ -405,22 +405,20 @@ Owner: Repository owner
 Source: S-ui-a11y-outline, 2026-09-02
 Reason: Every routed page now renders exactly one `h1` in its LOADED state, but the detail routes
 render no heading at all in their other rest states. `DocumentDetailPage`, `AuditDetailPage`,
-`ObjectiveDetailPage`, `ManagementReviewDetailPage`, `RecordDetailPage`, `DcrDiffPage` and
-`IngestionRunPage` each guard with two to six early returns and carry their title in only one of
-them, so a reader who is denied the resource, or who hits a load error, meets a document with no
+`ObjectiveDetailPage`, `ManagementReviewDetailPage`, `RecordDetailPage` and `DcrDiffPage` each guard
+with two to six early returns and carry their title in only one of them, so a reader who is denied the resource, or who hits a load error, meets a document with no
 heading. The `403` case is the one that matters: it is a permanent state for an ungranted reader,
 not a flicker. The eleven registers do not have this shape — `RegisterPageHeader` is rendered in the
 forbidden and error branches too — but they do drop the title in their LOADING branch, which is the
 same defect and is already named inside [`RES-REGISTER-PAGE-FRAME`](open-residuals.md). This record
 exists because that one is scoped to the register scaffold and names no detail route.
 
-`/imports/:runId` is the sharpest case and is NOT merely a rest state. `IngestionRunPage` is a
-four-faces controller that carries `Import review` only in its 404/403 branch, so the review
-cockpit — the primary human-paced working surface of the whole ingestion flow — presents a document
-with no heading, as do the commit-progress, scan-progress and terminal-summary faces. Five of its
-six faces have none. `ReviewCockpit` holds no visible page label of any kind, so unlike a
-mis-levelled title there is nothing to promote: closing this means adding a heading where the
-design currently has none, which is a visual decision rather than a mechanical one.
+`/imports/:runId` WAS the sharpest case and is now closed, on the owner's call, for consistency:
+`IngestionRunPage` carried `Import review` only in its 404/403 branch, so five of its six faces —
+the review cockpit among them, the primary human-paced surface of the whole ingestion flow —
+presented a document with no heading. The title is now chosen once above the face dispatch, so every
+face carries it. That is the pattern this record's closure contract should follow for the remaining
+routes: hoist the existing title above the branch, rather than add a different one per branch.
 This was deliberately excluded from S-ui-a11y-outline: that slice changed which heading level each
 existing title renders at and added no title anywhere, so folding in seven pages of new
 branch-rendering would have mixed a second defect into a diff whose whole claim is that nothing
@@ -434,4 +432,4 @@ error branch per affected page, and confirm the assertion fails before the chang
 against [`RES-REGISTER-PAGE-FRAME`](open-residuals.md), whose closure contract already has to decide
 whether a shared frame renders the title during loading; the two records should be answered together
 rather than one silently constraining the other.
-Last reviewed: 2026-09-02
+Last reviewed: 2026-09-02 (narrowed the same day: `/imports/:runId` closed)

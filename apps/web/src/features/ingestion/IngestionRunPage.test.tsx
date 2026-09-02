@@ -254,12 +254,7 @@ test("a blocked partial resume exposes owner and identifier corrections, then re
     "New identifier for SOP-PUR-014 Purchasing.docx",
   );
   expect(await axe(container)).toHaveNoViolations();
-  // NOT expectSoundHeadingOutline(): this face renders no heading at all. /imports/:runId is a
-  // four-faces controller and only its 404/403 face carries the page title, so five of its six
-  // faces — including the review cockpit, its primary working surface — present a document with
-  // no h1. That is a MISSING title rather than a wrong level, so fixing it would mean adding a
-  // heading where the design has none, which this slice deliberately does not do. Tracked as
-  // RES-REST-STATE-PAGE-HEADING; the 404 face below does carry the assertion.
+  expectSoundHeadingOutline();
   await user.type(identifierInput, "SOP-PUR-014-REPAIRED");
   const [ownerInput] = screen.getAllByLabelText("New owner for SOP-PUR-014 Purchasing.docx");
   await user.click(ownerInput!);
@@ -327,12 +322,7 @@ test("IngestionRunPage has no a11y violations (cockpit)", async () => {
   const { container } = renderPage();
   await screen.findByRole("tab", { name: /Needs decision/ });
   expect(await axe(container)).toHaveNoViolations();
-  // NOT expectSoundHeadingOutline(): this face renders no heading at all. /imports/:runId is a
-  // four-faces controller and only its 404/403 face carries the page title, so five of its six
-  // faces — including the review cockpit, its primary working surface — present a document with
-  // no h1. That is a MISSING title rather than a wrong level, so fixing it would mean adding a
-  // heading where the design has none, which this slice deliberately does not do. Tracked as
-  // RES-REST-STATE-PAGE-HEADING; the 404 face below does carry the assertion.
+  expectSoundHeadingOutline();
 });
 
 test("IngestionRunPage has no a11y violations (404)", async () => {
