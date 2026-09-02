@@ -79,14 +79,15 @@ export function formatRelativeTime(input: string | number, now: number = Date.no
 // The wall-clock date and time observed in the canonical ORGANIZATION timezone, as a stable
 // MM/DD/YY plus HH:MM plus the zone's own short name (R69's rail-foot clock).
 //
-// ⚠ That date format DIVERGES from `formatDateInTimeZone` above, which every register row and
-// timeline renders through `useOrgDate` and which deliberately emits a locale-independent
-// YYYY-MM-DD. The two are on screen together, so a reader sees `09/02/26` in the rail beside
-// `2026-09-02` in a table. This is a deliberate owner decision, not an oversight: the rail foot was
-// asked for as a SIX-DIGIT date, which YYYY-MM-DD cannot be, and the rail is chrome rather than
-// record content. It is recorded here because the divergence is real and the argument for org time
-// a few lines down — that a value in the same frame must not disagree with the timeline above it —
-// applies to format as well as to zone. Revisiting it means changing what the owner asked for. Deliberately NOT browser-local: records and audit
+// ⚠ This is the format the whole product is moving TO, and it currently disagrees with the rest of
+// the interface. `formatDateInTimeZone` above — every register row and timeline, through
+// `useOrgDate` — still emits a locale-independent YYYY-MM-DD, so a reader sees `09/02/26` in the
+// rail beside `2026-09-02` in a table. R70 settles it: the US month/day/year reading in six-digit
+// form is the standard, and the OTHER surfaces change to match — tracked as
+// RES-DATE-FORMAT-CONVERGENCE. So do NOT "fix" this one back to YYYY-MM-DD to resolve the
+// mismatch; R70 rule 4 exists because that is the natural but backwards reading. The 24-hour time
+// beside it is R70 rule 2, which `hour12`/`hourCycle` below pin and a named test asserts as a
+// requirement rather than as an incidental. Deliberately NOT browser-local: records and audit
 // events are stamped in org time, and `useOrgDate` already renders every register date that way, so
 // a browser-local clock in the same frame would disagree with the timeline directly above it.
 //

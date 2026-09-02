@@ -1210,15 +1210,29 @@ record also gains the constraint this slice imposed on it, rather than leaving i
 mid-implementation: a frame that owns the `Container` leaves one width where the new contract expects
 one per face.
 
-**One divergence is recorded rather than fixed.** `formatOrgClock` emits `MM/DD/YY` while
-`formatDateInTimeZone` — every register row and timeline, through `useOrgDate` — deliberately emits a
-locale-independent `YYYY-MM-DD`, and the two are on screen together. That is an owner decision, not
-an oversight: the rail foot was asked for as a six-digit date, which `YYYY-MM-DD` cannot be. It is
-noted at the source because the argument for org time — that a value in the same frame must not
-disagree with the timeline above it — applies to format as well as to zone.
+**One divergence is recorded rather than fixed, and its DIRECTION is now settled.** `formatOrgClock`
+emits `MM/DD/YY` while `formatDateInTimeZone` — every register row and timeline, through
+`useOrgDate` — deliberately emits a locale-independent `YYYY-MM-DD`, and the two are on screen
+together. The adversarial review raised it as an inconsistency; put to the owner, the answer was that
+the six-digit US month/day/year reading is the product STANDARD and the other surfaces converge on it
+in a follow-up. That is now **R70** in the decisions register, alongside the 24-hour rule below —
+the Codex stop-time gate caught that both had been written into a residual, this entry and a source
+comment while the authoritative home had no record of either. So the rail foot is the correct one and must not be reverted to resolve the mismatch,
+which is the reading a later contributor would otherwise reach. Tracked as
+`RES-DATE-FORMAT-CONVERGENCE`, whose closure contract names the real hazard: `YYYY-MM-DD` sorts
+lexically and `MM/DD/YY` does not, so any consumer that sorts or compares a RENDERED date rather than
+the timestamp behind it breaks silently. That is a product-wide change and does not belong in the
+diff that created the divergence.
+
+**24-hour time is now a stated requirement rather than an incidental.** The clock already rendered
+`00:00`, `13:45` and `23:59` — `hour12: false` and `hourCycle: "h23"` were there from R69 — but every
+assertion pinned a specific time that merely happened to be 24-hour, so the intent lived nowhere. The
+owner made it explicit on 2026-09-02 and a named test now asserts the property, including that no
+field carries a meridiem. Removing both options reddens six tests where it previously reddened four.
 
 Test deltas, measured on the branch. Vitest moved from 280 files and 2,339 tests to **281 and
-2,351**: one new file and twelve new tests, six of them the width contract. The Playwright Chromium
+2,352**: one new file and thirteen new tests, six of them the width contract and one the 24-hour
+requirement the owner stated after the review. The Playwright Chromium
 suite moved **78 → 80**. ESLint over `src` and `e2e`, both strict `tsc` projects and the production
 build were clean. The API, migration, integration and response-contract suites were not run and are
 not restated: this slice changes no Python.

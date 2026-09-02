@@ -443,3 +443,31 @@ against [`RES-REGISTER-PAGE-FRAME`](open-residuals.md), whose closure contract a
 whether a shared frame renders the title during loading; the two records should be answered together
 rather than one silently constraining the other.
 Last reviewed: 2026-09-02 (narrowed the same day: `/imports/:runId` closed)
+
+## RES-DATE-FORMAT-CONVERGENCE
+
+Status: OPEN
+Owner: Repository owner
+Source: S-capa-width-railfoot-order, 2026-09-02
+Reason: The interface renders dates in two formats at once. The rail-foot clock added by this slice
+uses the US month/day/year reading in six-digit form (`09/02/26`) via `formatOrgClock`, while every
+register row, timeline and detail surface uses `formatDateInTimeZone` through `useOrgDate`, which
+deliberately emits a locale-independent `YYYY-MM-DD` (`2026-09-02`). Both are visible in the same
+frame — the rail sits beside every register table. The standard itself is **R70** in
+[`decisions-register.md`](decisions-register.md), which is where it is decided; this record tracks
+only the work of converging on it. R70 rule 4 is the load-bearing one here: the rail-foot format is
+correct and must not be reverted to resolve the mismatch. The follow-up was
+deliberately not folded into the slice that created the divergence: changing every date display in
+the product is a far larger and more visible change than a rail-foot clock, and it belongs in a diff
+a reviewer can read as being about exactly that.
+⚠ `formatDateInTimeZone`'s own doc comment gives locale-independence as the REASON for `YYYY-MM-DD`,
+and an ISO-ordered string sorts lexically while `MM/DD/YY` does not. Any consumer that sorts,
+compares or parses a rendered date string — rather than the underlying timestamp — breaks silently
+under this change. That is the thing to look for, not the formatting itself.
+Closure contract: Move the product's date surfaces to the six-digit US reading, or record which
+surfaces are exempt and why. Before changing `formatDateInTimeZone`, enumerate every caller and
+prove none of them sorts, compares or parses its OUTPUT rather than the timestamp behind it; a
+`useOrgDate` value reaching a sort comparator is the failure this record exists to prevent. Prove
+the result with an executable assertion per changed surface, and confirm the assertion fails against
+the current `YYYY-MM-DD` output.
+Last reviewed: 2026-09-02

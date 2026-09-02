@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R69) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, and R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R70) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, and R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R69
+## Part 3 — Resolutions R1–R70
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2261,6 +2261,54 @@ digest modes, quiet hours and per-class channels are a modelled domain with thei
 scalar.
 
 Bumps the resolutions range **R1–R68 → R1–R69**.
+
+---
+
+### R70 — Dates render as a six-digit US month/day/year, and times are 24-hour — 2026-09-02
+
+**Context.** S-railfoot-ui added a rail-foot clock; S-capa-width-railfoot-order gave it a date. That
+date rendered `09/02/26` while every register row, timeline and detail surface rendered `2026-09-02`
+through `formatDateInTimeZone`/`useOrgDate`, whose own doc comment gives locale-independence as the
+reason for the ISO ordering. Both are visible in one frame — the rail sits beside every register
+table — so an adversarial review raised the mismatch as an inconsistency in the rail foot. Put to the
+owner, the answer was the reverse: the six-digit US reading is the standard the product converges ON.
+The 24-hour clock had a similar shape. It was already true, via `hour12: false` and
+`hourCycle: "h23"` from R69, but only as an implementation choice — every assertion pinned a time
+that merely happened to be 24-hour, so the requirement was recorded nowhere and a later
+"simplification" of the `Intl` options would have silently produced `1:45 PM`.
+
+**Normative rules.**
+
+1. **A user-facing date renders as `MM/DD/YY`** — the US month/day/year reading, zero-padded on both
+   the month and the day so the field is six digits on every date of the year. Zero padding is not
+   cosmetic: an unpadded `1/5/26` is four digits and changes the width of the row it sits in as the
+   year progresses.
+2. **A user-facing time renders 24-hour**, with midnight as `00:00` and no meridiem in any field.
+3. **Both are resolved in the ORGANIZATION timezone**, per R69 rule 3. For a date this is sharper
+   than for a time: at 23:00 in a UTC-5 zone the UTC date is already tomorrow, so a browser-local
+   date under an organization label names the wrong DAY rather than the wrong hour.
+4. **The convergence runs TOWARD this format, not away from it.** Where a surface still renders
+   `YYYY-MM-DD`, that surface is the one to change. This is stated normatively because the natural
+   reading of the mismatch is the opposite — the rail foot is the newer and smaller surface, so a
+   reviewer meeting the inconsistency will propose reverting it, which is backwards.
+
+**Scope.** This entry settles the standard. Only the rail-foot clock renders it today; moving the
+product's other date surfaces is separate work, tracked as `RES-DATE-FORMAT-CONVERGENCE` in
+`open-residuals.md`. It governs user-facing display only — it is not a wire format, not a filename,
+and not an identifier. Machine-readable timestamps stay ISO-8601 in the API, the contract and the
+audit trail, where ordering and unambiguous parsing are the point.
+
+⚠ **The hazard in the convergence is ordering, not formatting.** `YYYY-MM-DD` sorts lexically and
+`MM/DD/YY` does not. Any consumer that sorts, compares or parses a RENDERED date string rather than
+the timestamp behind it breaks silently under this change — no type error, no failing render, just a
+register in the wrong order. Enumerating every `useOrgDate` consumer and proving none does that is a
+precondition of the convergence work, not a review comment on it.
+
+**Back-propagation:** `11-ui-ux-design-system.md` when its §3 rewrite lands (that document is
+separately known to be drifted — `RES-DOC11-TOKEN-DRIFT`), and every surface named by
+`RES-DATE-FORMAT-CONVERGENCE`. `lib/time.ts` carries the rule at the source in both formatters.
+
+Bumps the resolutions range **R1–R69 → R1–R70**.
 
 ---
 

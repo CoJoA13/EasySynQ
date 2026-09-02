@@ -7,7 +7,7 @@ migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2003
 web_test_files: 281
-web_tests: 2351
+web_tests: 2352
 contract_tests: 285
 integration_passed: 1231
 integration_skipped: 2
@@ -131,7 +131,7 @@ already tomorrow, so a browser-local date under that label would name the wrong 
 fit is MEASURED in a browser rather than computed, and `src/lib/tabSectionWidthContract.test.ts`
 guards the width invariant across all three tabbed sections rather than only the one that broke.
 
-Evidence: ESLint, both strict `tsc` projects, the production build, Vitest at **281 files and 2,351
+Evidence: ESLint, both strict `tsc` projects, the production build, Vitest at **281 files and 2,352
 tests** and the Playwright Chromium suite at **80** were run locally and passed. No Python changed,
 so the API, migration, integration and response-contract figures above stand from the run that
 produced them.
