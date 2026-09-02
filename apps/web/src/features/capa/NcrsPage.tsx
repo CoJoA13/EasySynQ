@@ -37,7 +37,7 @@ export function NcrsPage() {
 
   if (forbidden) {
     return (
-      <Container size="lg" py="md">
+      <Container size="xl" py="md">
         <RegisterPageHeader title="Nonconforming Output (NCR)" size="h3" />
         <NoAccessState
           message={
@@ -52,14 +52,14 @@ export function NcrsPage() {
   }
   if (isLoading) {
     return (
-      <Container size="lg" py="md">
+      <Container size="xl" py="md">
         <LoadingState label="Loading NCRs" />
       </Container>
     );
   }
   if (isError) {
     return (
-      <Container size="lg" py="md">
+      <Container size="xl" py="md">
         <RegisterPageHeader title="Nonconforming Output (NCR)" size="h3" />
         <ErrorState title="Couldn't load NCRs" onRetry={() => refetch()} />
       </Container>
@@ -68,7 +68,7 @@ export function NcrsPage() {
 
   const rows = data ?? [];
   return (
-    <Container size="lg" py="md">
+    <Container size="xl" py="md">
       <RegisterPageHeader
         title="Nonconforming Output (NCR)"
         size="h3"

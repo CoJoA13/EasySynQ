@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatDateInTimeZone,
-  formatOrgClock,
-  formatRelativeTime,
-  formatTimestamp,
-} from "./time";
+import { formatDateInTimeZone, formatOrgClock, formatRelativeTime, formatTimestamp } from "./time";
 
 describe("formatDateInTimeZone", () => {
   it("renders a UTC instant on the organization calendar date", () => {
@@ -96,6 +91,34 @@ describe("formatOrgClock", () => {
 
   it("labels the zone so the reading cannot be mistaken for local time", () => {
     expect(formatOrgClock(Date.parse("2026-06-28T15:00:00Z"), "UTC")?.zone).toBe("UTC");
+  });
+
+  // The date is the sharper half of "org time, not browser time". A wrong HOUR is a small error; a
+  // wrong DAY under an "Organization date" label misstates which working day a reader is looking at,
+  // and the two disagree for five hours of every day in a UTC-5 zone.
+  it("resolves the DATE in the org zone, not UTC", () => {
+    // 03:00Z on 2 September is still 22:00 on 1 September in Chicago, and already 12:00 on the 2nd
+    // in Tokyo — one instant, three different calendar days.
+    const instant = Date.parse("2026-09-02T03:00:00Z");
+    expect(formatOrgClock(instant, "UTC")?.date).toBe("09/02/26");
+    expect(formatOrgClock(instant, "America/Chicago")?.date).toBe("09/01/26");
+    expect(formatOrgClock(instant, "Asia/Tokyo")?.date).toBe("09/02/26");
+  });
+
+  it("renders the date as a zero-padded six-digit MM/DD/YY", () => {
+    // Zero padding on both the month and the day is what makes it six digits at every date; an
+    // unpadded 1/5/26 would be four and the rail-foot row would change width through the year.
+    expect(formatOrgClock(Date.parse("2026-01-05T12:00:00Z"), "UTC")?.date).toBe("01/05/26");
+    expect(formatOrgClock(Date.parse("2026-12-31T12:00:00Z"), "UTC")?.date).toBe("12/31/26");
+    const digits = formatOrgClock(Date.parse("2026-01-05T12:00:00Z"), "UTC")?.date ?? "";
+    expect(digits.replace(/\D/g, "")).toHaveLength(6);
+  });
+
+  it("crosses midnight in the org zone with the date and the time together", () => {
+    const beforeMidnight = formatOrgClock(Date.parse("2026-07-16T04:59:00Z"), "America/Chicago");
+    const afterMidnight = formatOrgClock(Date.parse("2026-07-16T05:01:00Z"), "America/Chicago");
+    expect(beforeMidnight).toMatchObject({ date: "07/15/26", time: "23:59" });
+    expect(afterMidnight).toMatchObject({ date: "07/16/26", time: "00:01" });
     expect(formatOrgClock(Date.parse("2026-07-15T18:00:00Z"), "America/Chicago")?.zone).toBe("CDT");
   });
 

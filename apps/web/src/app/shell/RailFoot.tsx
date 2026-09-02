@@ -37,6 +37,24 @@ export function RailFoot() {
 
   return (
     <Stack gap="xs" p="sm">
+      {/* The clock sits ABOVE the theme control: it is the thing a reader glances at, while the
+          control is acted on rarely, so the frequently-read value takes the position nearer the
+          nav it belongs beside. Both stay outside the nav's scroll area. */}
+      {clock ? (
+        <Tooltip label={`Organization date and time (${clock.zone})`} position="top" withArrow>
+          <Group gap={6} justify="center" wrap="nowrap">
+            <Text size="xs" c="dimmed" aria-label="Organization date">
+              {clock.date}
+            </Text>
+            <Text size="xs" c="dimmed" fw={500} aria-label="Organization time">
+              {clock.time}
+            </Text>
+            <Text size="xs" c="dimmed">
+              {clock.zone}
+            </Text>
+          </Group>
+        </Tooltip>
+      ) : null}
       <SegmentedControl
         size="xs"
         fullWidth
@@ -53,18 +71,6 @@ export function RailFoot() {
         data={SCHEME_OPTIONS}
         aria-label="Interface theme"
       />
-      {clock ? (
-        <Tooltip label={`Organization time (${clock.zone})`} position="top" withArrow>
-          <Group gap={6} justify="center" wrap="nowrap">
-            <Text size="xs" c="dimmed" fw={500} aria-label="Organization time">
-              {clock.time}
-            </Text>
-            <Text size="xs" c="dimmed">
-              {clock.zone}
-            </Text>
-          </Group>
-        </Tooltip>
-      ) : null}
     </Stack>
   );
 }

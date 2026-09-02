@@ -22,7 +22,7 @@ export function CapaLayout() {
   const tab = activeTab(pathname);
   return (
     <>
-      <Container size={tab === "board" ? "xl" : "lg"} pt="md" pb={0}>
+      <Container size="xl" pt="md" pb={0}>
         <Tabs
           value={tab}
           onChange={(v) => {

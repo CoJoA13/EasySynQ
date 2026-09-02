@@ -82,6 +82,40 @@ it("renders the clock on ORGANIZATION time, not the browser's", async () => {
   }
 });
 
+// The date and the ORDER are both pure-DOM facts with no behaviour attached, so nothing in the
+// suite above can see either. Reverting the reorder, or dropping the date, leaves every other
+// assertion in this file green — which is exactly why these two exist.
+it("renders the six-digit organization date beside the time", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  // 15:00Z on 28 June is already the 29th in Tokyo, so a browser-local or UTC date would read
+  // 06/28/26 and only an org-zone date reads 06/29/26.
+  vi.setSystemTime(new Date("2026-06-28T15:00:00Z"));
+  try {
+    meWith({ org_timezone: "Asia/Tokyo" });
+    renderWithProviders(<RailFoot />);
+    expect(await screen.findByLabelText("Organization date")).toHaveTextContent("06/29/26");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("places the clock ABOVE the theme control", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date("2026-06-28T15:00:00Z"));
+  try {
+    meWith({ org_timezone: "Asia/Tokyo" });
+    renderWithProviders(<RailFoot />);
+    const clock = await screen.findByLabelText("Organization time");
+    const control = screen.getByRole("radiogroup", { name: "Interface theme" });
+    // DOCUMENT_POSITION_FOLLOWING means the control comes after the clock in document order, which
+    // is the reading order a screen reader and a sighted user both get. Asserting the relationship
+    // rather than an index keeps it true however the surrounding markup is nested.
+    expect(clock.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("renders no clock at all when the organization timezone is unusable", async () => {
   // Showing the browser's time under an "Organization time" label would look authoritative and be
   // wrong, so the absence is the contract. The theme control must still render.
