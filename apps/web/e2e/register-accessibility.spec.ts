@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { installRegisterApi } from "./support/api";
+import { expectSoundHeadingOutline } from "./support/a11y";
 import { resolve } from "node:path";
 import {
   assertRegisterTableStructure,
@@ -159,6 +160,7 @@ test("has no serious or critical axe violations on the Records register", async 
 
   await expect(page.getByRole("link", { name: "Open record REC-000041" })).toBeVisible();
   await expectNoSeriousOrCriticalViolations(page);
+  await expectSoundHeadingOutline(page);
 });
 
 test("has no serious or critical axe violations on populated record detail", async ({ page }) => {
@@ -170,6 +172,7 @@ test("has no serious or critical axe violations on populated record detail", asy
   ).toBeVisible();
   await expect(page.getByRole("region", { name: "Evidence files" })).toBeVisible();
   await expectNoSeriousOrCriticalViolations(page);
+  await expectSoundHeadingOutline(page);
 });
 
 test("preserves native Task links, row navigation, and table semantics", async ({ page }) => {

@@ -50,7 +50,7 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
             <Text size="xs" c="dimmed">
               {capa.identifier ?? "CAPA"}
             </Text>
-            <Title order={4}>{capa.title ?? "(untitled)"}</Title>
+            <Title order={3} size="h4">{capa.title ?? "(untitled)"}</Title>
           </Stack>
         ) : (
           "CAPA"
@@ -81,7 +81,7 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
           </Group>
 
           <div>
-            <Title order={5} mb="sm">
+            <Title order={4} size="h5" mb="sm">
               Closed-loop thread
             </Title>
             <CapaTimeline
@@ -94,7 +94,7 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
           </div>
 
           <div>
-            <Title order={5} mb="sm">
+            <Title order={4} size="h5" mb="sm">
               Close gate
             </Title>
             <CloseGateStepper stages={capa.stages ?? []} cycleMarker={capa.cycle_marker} />
@@ -102,7 +102,7 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
 
           {/* S-capa-overdue: target completion date + overdue badge + inline edit (capa.update) */}
           <div>
-            <Title order={5} mb="sm">
+            <Title order={4} size="h5" mb="sm">
               Target completion
             </Title>
             <Group gap="xs" mb={can("capa.update") ? "xs" : undefined}>
@@ -147,7 +147,7 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
           </div>
 
           <div>
-            <Title order={5} mb="sm">
+            <Title order={4} size="h5" mb="sm">
               Next step
             </Title>
             <AdvancePanel capa={capa} />

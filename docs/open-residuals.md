@@ -422,3 +422,33 @@ Reason: The documented async audit CSV/JSON export shape is deferred and not mou
 Closure contract: Ship the D-9 async-job implementation with authorization, privacy-bounded output,
 durable job state, OpenAPI response behavior, and affected audit/evidence-pack proofs.
 Last reviewed: 2026-08-08
+
+## RES-REST-STATE-PAGE-HEADING
+
+Status: OPEN
+Owner: Repository owner
+Source: S-ui-a11y-outline, 2026-09-02
+Reason: Every routed page now renders exactly one `h1` in its LOADED state, but the detail routes
+render no heading at all in their other rest states. `DocumentDetailPage`, `AuditDetailPage`,
+`ObjectiveDetailPage`, `ManagementReviewDetailPage`, `RecordDetailPage`, `DcrDiffPage` and
+`IngestionRunPage` each guard with two to six early returns and carry their title in only one of
+them, so a reader who is denied the resource, or who hits a load error, meets a document with no
+heading. The `403` case is the one that matters: it is a permanent state for an ungranted reader,
+not a flicker. The eleven registers do not have this shape — `RegisterPageHeader` is rendered in the
+forbidden and error branches too — but they do drop the title in their LOADING branch, which is the
+same defect and is already named inside [`RES-REGISTER-PAGE-FRAME`](open-residuals.md). This record
+exists because that one is scoped to the register scaffold and names no detail route.
+This was deliberately excluded from S-ui-a11y-outline: that slice changed which heading level each
+existing title renders at and added no title anywhere, so folding in seven pages of new
+branch-rendering would have mixed a second defect into a diff whose whole claim is that nothing
+moved. Note the interaction with the gate the same slice added — `expectSoundHeadingOutline`
+asserts exactly one `h1`, so it cannot be pointed at a forbidden or loading branch until this is
+closed, and that is the honest limit of the slice's coverage rather than an oversight.
+Closure contract: Give every routed page a title in each of its rest states, or record that a
+denied/erroring detail route is exempt and say what a screen-reader user is expected to land on
+instead. Prove it by extending `expectSoundHeadingOutline` to at least one forbidden branch and one
+error branch per affected page, and confirm the assertion fails before the change. Sequence this
+against [`RES-REGISTER-PAGE-FRAME`](open-residuals.md), whose closure contract already has to decide
+whether a shared frame renders the title during loading; the two records should be answered together
+rather than one silently constraining the other.
+Last reviewed: 2026-09-02

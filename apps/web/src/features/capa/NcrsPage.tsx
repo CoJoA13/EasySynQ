@@ -38,7 +38,7 @@ export function NcrsPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Nonconforming Output (NCR)" order={3} />
+        <RegisterPageHeader title="Nonconforming Output (NCR)" size="h3" />
         <NoAccessState
           message={
             <>
@@ -60,7 +60,7 @@ export function NcrsPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Nonconforming Output (NCR)" order={3} />
+        <RegisterPageHeader title="Nonconforming Output (NCR)" size="h3" />
         <ErrorState title="Couldn't load NCRs" onRetry={() => refetch()} />
       </Container>
     );
@@ -71,7 +71,7 @@ export function NcrsPage() {
     <Container size="lg" py="md">
       <RegisterPageHeader
         title="Nonconforming Output (NCR)"
-        order={3}
+        size="h3"
         actions={can("ncr.create") && <Button onClick={() => setFormOpen(true)}>Raise NCR</Button>}
         updatedAt={dataUpdatedAt}
       />

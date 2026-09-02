@@ -139,7 +139,7 @@ export function ReviewInputsSection({ inputs }: { inputs: ReviewInput[] }) {
   const ordered = [...inputs].sort((a, b) => a.position - b.position);
   return (
     <Stack gap="sm">
-      <Title order={3}>Review inputs (9.3.2)</Title>
+      <Title order={2} size="h3">Review inputs (9.3.2)</Title>
       {ordered.map((i) => (
         <InputCard key={i.id} input={i} />
       ))}

@@ -101,7 +101,7 @@ export function DriftStatusPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
+        <Title order={1} size="h2" mb="md">
           Drift status
         </Title>
         <NoAccessState
@@ -125,7 +125,7 @@ export function DriftStatusPage() {
   if (isError || !data) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
+        <Title order={1} size="h2" mb="md">
           Drift status
         </Title>
         <ErrorState title="Couldn't load the drift status" onRetry={() => refetch()} />
@@ -139,7 +139,7 @@ export function DriftStatusPage() {
     <Container size="lg" py="md">
       <Stack gap="lg">
         <div>
-          <Title order={2}>Drift status</Title>
+          <Title order={1} size="h2">Drift status</Title>
           <Text c="dimmed" size="sm">
             The vault&rsquo;s integrity detection legs: blob re-hash, mirror tamper/staleness, and
             outstanding superseded copies. The vault is the source of truth — these are detection

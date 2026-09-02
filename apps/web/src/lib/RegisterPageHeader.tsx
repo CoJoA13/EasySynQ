@@ -15,25 +15,30 @@ import { AsOf } from "./AsOf";
 // invisible. Rendering the child as given keeps the denied case byte-identical to the hand-rolled
 // headers this replaces.
 //
-// `order` stays a prop rather than being normalised. The eleven adopters run at 2 and 3, and
-// AuditsListPage.test.tsx pins `{ level: 2, name: "Internal audit" }` AND uses it as its load gate,
-// so levelling them is an accessibility change with its own test surface — recorded as
-// RES-REGISTER-HEADING-LEVELS for the program's a11y pass, not smuggled into a retheme slice.
-// The union is `2 | 3` because that is what the adopters use; the `order={1}` registers (Library,
-// Reports, Ingestion) and ProgramPage's `order={4}` sub-heading each widen it by one line.
+// The heading level is NOT a prop. A register page is the top of its own document — `AppShell`
+// renders no heading above it, and neither do the CapaLayout / AuditsLayout / DriftLayout tab
+// strips — so the title here is always the page's one `h1`. Making that structural rather than a
+// caller's choice is the point: while `order` was a prop, nine adopters took a default of 2 and two
+// passed 3, so every register presented an outline with no `h1` at all and the level a page used
+// carried no meaning beyond how it was written.
+//
+// What callers still choose is `size`, which is appearance only. Mantine's `Title` takes `order`
+// (which tag) and `size` (which font size) independently, so `order={1} size="h2"` renders an
+// `<h1>` that looks exactly like the `<h2>` this replaced. That is what keeps the fix an
+// accessibility change and not a retheme: no register moved a pixel.
 //
 // `updatedAt` is optional because the forbidden and error branches have no loaded query to stamp:
 // they pass nothing, and AsOf renders nothing for a null/undefined/0 stamp, so the absent case
 // needs no branch here. (features/audits/ProgramPage.tsx is the one hand-rolled register header
-// left in the tree — it needs `order={3}` and no stamp, which this API already supports.)
+// left in the tree — it needs `size="h3"` and no stamp, which this API already supports.)
 export function RegisterPageHeader({
   title,
-  order = 2,
+  size = "h2",
   actions,
   updatedAt,
 }: {
   title: ReactNode;
-  order?: 2 | 3;
+  size?: "h2" | "h3";
   actions?: ReactNode;
   updatedAt?: number | null;
 }) {
@@ -44,7 +49,9 @@ export function RegisterPageHeader({
   return (
     <Box mb="md">
       <Group justify="space-between">
-        <Title order={order}>{title}</Title>
+        <Title order={1} size={size}>
+          {title}
+        </Title>
         {actions}
       </Group>
       <AsOf at={updatedAt} />

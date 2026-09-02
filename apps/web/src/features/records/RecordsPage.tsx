@@ -38,7 +38,7 @@ export function RecordsPage() {
     records.error.problem?.title === "Invalid records cursor";
   return (
     <Container size="xl" py="md">
-      <Title order={2} mb="md">
+      <Title order={1} size="h2" mb="md">
         Records
       </Title>
       <RecordFilters value={state} onChange={setCriteria} onClear={clearAll} />

@@ -19,7 +19,7 @@ export function SupersededCopiesPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
+        <Title order={1} size="h2" mb="md">
           Superseded copies
         </Title>
         <NoAccessState
@@ -43,7 +43,7 @@ export function SupersededCopiesPage() {
   if (isError || !data) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">
+        <Title order={1} size="h2" mb="md">
           Superseded copies
         </Title>
         <ErrorState title="Couldn't load the report" onRetry={() => refetch()} />
@@ -56,7 +56,7 @@ export function SupersededCopiesPage() {
     <Container size="lg" py="md">
       <Stack gap="md">
         <div>
-          <Title order={2}>Superseded copies</Title>
+          <Title order={1} size="h2">Superseded copies</Title>
           <Text c="dimmed" size="sm">
             Exported/printed copies of versions that have since been superseded or obsoleted —{" "}
             {data.total.versions} versions · {data.total.copies} copies outstanding. Use this as the

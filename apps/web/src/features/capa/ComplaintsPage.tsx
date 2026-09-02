@@ -25,7 +25,7 @@ export function ComplaintsPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Complaints" order={3} />
+        <RegisterPageHeader title="Complaints" size="h3" />
         <NoAccessState
           message={
             <>
@@ -47,7 +47,7 @@ export function ComplaintsPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Complaints" order={3} />
+        <RegisterPageHeader title="Complaints" size="h3" />
         <ErrorState title="Couldn't load complaints" onRetry={() => refetch()} />
       </Container>
     );
@@ -58,7 +58,7 @@ export function ComplaintsPage() {
     <Container size="lg" py="md">
       <RegisterPageHeader
         title="Complaints"
-        order={3}
+        size="h3"
         actions={can("record.create") && <Button onClick={() => setFormOpen(true)}>Log complaint</Button>}
         updatedAt={dataUpdatedAt}
       />

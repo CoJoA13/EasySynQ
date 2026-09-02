@@ -80,7 +80,7 @@ function RecordDetailRoute({ recordId }: { recordId: string | null }) {
             {record.identifier ?? "Record"}
           </Text>
           <Title
-            order={2}
+            order={1} size="h2"
             ref={headingRef}
             tabIndex={-1}
             miw={0}

@@ -39,7 +39,7 @@ export function IngestionRunPage() {
     const forbidden = error instanceof ApiError && error.status === 403;
     return (
       <Container size="md" py="md">
-        <Title order={2} mb="md">
+        <Title order={1} size="h2" mb="md">
           Import review
         </Title>
         {forbidden ? (

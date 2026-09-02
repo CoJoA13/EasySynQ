@@ -140,7 +140,7 @@ export function ManagementReviewDetailPage() {
               </Text>
               <StateBadge state={mr.current_state} />
             </Group>
-            <Title order={2}>{mr.title}</Title>
+            <Title order={1} size="h2">{mr.title}</Title>
             <Text size="sm" c="dimmed">
               {mr.period_label ?? "—"}
               {mr.review_date ? ` · ${mr.review_date}` : ""}

@@ -56,7 +56,7 @@ export function InitiativeDrawer({
             <Text size="xs" c="dimmed">
               {initiative.identifier}
             </Text>
-            <Title order={4}>{initiative.title}</Title>
+            <Title order={3} size="h4">{initiative.title}</Title>
           </Stack>
         ) : (
           "Improvement initiative"
@@ -113,7 +113,7 @@ export function InitiativeDrawer({
           </Field>
 
           <div>
-            <Title order={5} mb="xs">
+            <Title order={4} size="h5" mb="xs">
               History
             </Title>
             <InitiativeStageTimeline events={events ?? []} directory={directory} />
