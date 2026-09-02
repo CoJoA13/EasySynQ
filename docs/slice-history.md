@@ -1001,6 +1001,114 @@ Test deltas, measured on the branch, whose tree the squash preserved byte-for-by
 both strict `tsc` projects and the production build were clean. The API, migration, integration and
 response-contract suites were NOT run and are not restated: this slice changes no Python.
 
+### S-ui-a11y-outline — every route gets an h1, and a gate that can fail
+
+Recorded 2026-09-02 after merging [`#PR`](https://github.com/CoJoA13/EasySynQ/pull/PR) as `SHA`.
+Closes `RES-REGISTER-HEADING-LEVELS`, the accessibility record S-ui-4 opened and deliberately did not
+act on. Web-only — no Python, no migration, no contract, no permission key.
+
+**The defect, measured rather than described.** Twenty-six of the thirty-three routed leaf pages
+rendered no `h1` at all, so a screen-reader user landing on them met a document with no title.
+`/admin/users` and `/admin/processes` jumped straight from an `h1` to an `h4`. `/documents/:id` — the
+highest-traffic route in a document-control product — topped out at `h3`, and its own suite carried
+three passing axe assertions while it did so.
+
+**The whole change is semantic, and that is what made it affordable.** Mantine's `Title` takes
+`order` (which tag) and `size` (which font size) independently: `getTitleSize` returns `fontSize`,
+`fontWeight` AND `lineHeight` from `--mantine-${size}-*` whenever `size` is one of `h1`–`h6`,
+entirely ignoring `order`. So every promoted heading carries a `size` equal to its previous `order`
+and renders identically on all three axes. Seventy-eight of seventy-eight Playwright tests passed
+unchanged, including every geometry, rhythm and legibility spec — which measure pixels, so that is
+evidence rather than assertion. The idiom was already in the tree: `AuthStartupScreen`,
+`SetupStartupScreen`, `NotFoundPage` and `ShowOncePassword` all shipped `order={n} size="hN"` before
+this slice. ⚠ The safety depends on `size` being a heading token: for a `size` like `"lg"` Mantine
+falls into a different branch where `fontWeight` and `lineHeight` still follow `order`.
+
+**`RegisterPageHeader` no longer takes a level at all.** `order` became `size`, and the component
+always emits an `h1`. While the level was a caller's choice, nine adopters took a default of `2` and
+two passed `3` — so every register presented a document with no `h1`, and the level a given page used
+carried no meaning beyond how it was written. `registerHeaderAdoption.test.ts` needed no change: it
+pins the import, a three-occurrence count and the absence of `<Title>`, none of which move.
+
+**Two findings changed the design after measurement, and both would have produced a wrong fix.**
+Mantine's `Drawer`/`Modal` `title` prop renders its own `h2` — `ModalBaseTitle` is hard-coded
+`component: "h2"` — so a drawer body starts at `h3`, not `h2`. That is why the four register drawers
+and the two admin drawer bodies land at `h3`/`h4`. The admin sections were first set to `h2` and
+corrected: `ManageUser` and `ManageOwners` render *inside* a `Drawer`, so the skip there was
+`h2 → h4`, not the `h1 → h4` the original record described. And `ArtifactHeader` is the one genuine
+shared-component conflict in the SPA — it is the whole document on `/documents/:id` but sits under
+two headings in the library drawer, so it takes an `order` prop: `1` from the page, a default of `3`
+that leaves the drawer untouched. Hard-coding either value breaks the other route.
+
+**The gate is new because neither existing one could see any of this, on two independent grounds.**
+Measured against axe-core 4.12.1, not inferred: `page-has-heading-one` carries the selector
+`html:not(html *)`, so it matches only `<html>` and is reported INAPPLICABLE for every
+container-scoped run — which is every `axe(container)` call in the suite and the container-scoped
+`axe.run` in `register-accessibility.spec.ts`; and `heading-order` fires at impact `moderate`, which
+that spec's `serious`/`critical` filter drops. Fixing either alone leaves the gate inert. ⚠ The
+closed record's own closure contract asked for exactly the assertion that cannot fire: an axe check
+for a single `h1` added to that spec would have passed on a page with no headings at all.
+
+Three layers replace it, each shown capable of failing. `src/test/headingOutline.ts` walks the DOM
+directly, so no rule tag, impact filter or context scope can defeat it, and it names the offending
+outline in the failure — which is what makes a thirty-file re-levelling reviewable. `e2e/support/a11y.ts`
+runs the two rules unscoped and unfiltered; it failed on the *pre-fix* tree (`document outline was:
+h2 Records`) and passes after, which is production evidence rather than a synthetic mutation.
+`src/lib/routeHeadingContract.test.ts` is a source-text cohort contract in the idiom of
+`registerHeaderAdoption`, checking its own cohort against `App.tsx`'s route table so a new route
+cannot silently skip it.
+
+**The gate earned itself immediately.** It found that `/imports/:runId` renders no heading on five of
+its six faces — including `ReviewCockpit`, the primary human-paced surface of the whole ingestion
+flow. That is a *missing* title rather than a wrong level, and `ReviewCockpit` holds no visible page
+label to promote, so closing it means adding a heading where the design has none. It is recorded as
+the sharpest paragraph in the new `RES-REST-STATE-PAGE-HEADING` rather than folded in.
+
+**What the adversarial mutation hunt corrected, all folded here.** Two of its findings were the kind
+that makes a gate decorative. A raw `<h2>` added to `AppShell` — rendering above every page's `h1` on
+every route — passed the contract, all 217 shell tests and the whole browser suite, because the
+scanner matched only Mantine's `<Title>`. And flipping `ArtifactHeader`'s default from `3` to `1`
+gives the library drawer a second `h1` while all 2,328 tests across 280 files stay green; it is the
+one component still taking a level as a prop and was the only one without a guard. Three more:
+the route cross-check matched `element={<X`, so it missed `App.tsx`'s own guarded idiom
+`element={operational ? <Page /> : <Navigate />}` — and worse, `AdminShell`, `AppShell` and
+`SetupWizard` were never in the mounted set at all, making their `accountedFor` entries inert padding
+that concealed the gap; three `<Title>` shapes were silently read as `h1` while rendering something
+else, including `component="h2"`, which is polymorphic and genuinely overrides `order`; and admin tab
+bodies were pinned against a second `h1` but not against a skip, so an `h1 → h5` jump passed. ⚠ The
+self-test named for the skip BOUNDARY used an `h1 → h4` fixture, so loosening the rule from "descend
+by at most one" to "at most two" left it green — the assertion named for a boundary has to *be* the
+boundary. Every one of these was re-mutated after the fix and now reddens.
+
+⚠ **A renumbering collision the count assertions caught.** The first bulk transform ran per-order
+passes, and the `h5 → h4` pass minted new `order={4}` sites that the `h4 → h3` pass then ate. Five
+files were half-applied. Ordering the passes does not fix it; the rewrite is now simultaneous, one
+brace-aware pass per file. ⚠ And the first static analyzer matched `<Title>` written inside
+*comments* — two files say exactly that in prose — which made `lib/states.tsx` and `CapaLayout.tsx`
+look like they each rendered an un-ordered `<Title>`. A bare `<Title>` is an `h1` in Mantine, so
+trusting it would have "fixed" every calm-state panel in the SPA.
+
+**Deliberately not done.** Detail routes carry their title in only one of their two-to-six
+early-return branches, so a denied or erroring reader still meets a document with no heading; that is
+a missing title rather than a wrong level and is now `RES-REST-STATE-PAGE-HEADING`, sequenced against
+`RES-REGISTER-PAGE-FRAME`. The honest limit of the runtime gate follows from it: `expectSoundHeadingOutline`
+asserts exactly one `h1`, so it cannot be pointed at a forbidden or loading branch until that record
+closes. Nineteen of the thirty-three leaf pages are covered by the source-text contract only.
+
+Test deltas, measured on the branch. Vitest moved from 278 files and 2,273 tests to **280 and
+2,339** — two new files and sixty-six new tests, every one of them a gate assertion; no existing test
+count moved, because the heading changes are invisible to the 119 heading queries that match on name
+alone. The Playwright Chromium suite is unchanged at **78**: this slice added assertions to existing
+browser tests rather than new ones. ESLint over `src` and `e2e`, both strict `tsc` projects and the
+production build were clean. The API, migration, integration and response-contract suites were NOT
+run and are not restated: this slice changes no Python.
+
+Five files this branch touches are left un-prettiered on purpose — they are already dirty on `main`,
+and the ~127 lines of pre-existing drift do not belong in this diff. Thirty-two others WERE
+reformatted, because the edits were made through the shell and so bypassed the repository's
+format-on-edit hook; CI runs no prettier step, so nothing would have caught that until the next
+person to touch one of those files inherited an unrelated reformat.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration

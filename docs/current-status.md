@@ -1,13 +1,13 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-01"
+as_of: "2026-09-02"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-railfoot-ui"
+last_shipped_slice: "S-ui-a11y-outline"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2003
-web_test_files: 278
-web_tests: 2273
+web_test_files: 280
+web_tests: 2339
 contract_tests: 285
 integration_passed: 1224
 integration_skipped: 2
