@@ -1003,7 +1003,7 @@ response-contract suites were NOT run and are not restated: this slice changes n
 
 ### S-ui-a11y-outline — every route gets an h1, and a gate that can fail
 
-Recorded 2026-09-02 after merging [`#PR`](https://github.com/CoJoA13/EasySynQ/pull/PR) as `SHA`.
+Recorded 2026-09-02 after merging [`#529`](https://github.com/CoJoA13/EasySynQ/pull/529) as `SHA`.
 Closes `RES-REGISTER-HEADING-LEVELS`, the accessibility record S-ui-4 opened and deliberately did not
 act on. Web-only — no Python, no migration, no contract, no permission key.
 
