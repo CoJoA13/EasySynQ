@@ -64,6 +64,23 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # The API interpreter is pinned to 3.12 by `requires-python = ">=3.12,<3.13"`
+      # (apps/api/pyproject.toml) and .python-version; moving it is a deliberate slice, not an
+      # auto-bump. ⚠ A newer base does NOT fail the build — it fails at RUNTIME, and no CI job that
+      # can block a merge starts the image (closed PR #448, python 3.12 -> 3.14, CLEAN on all
+      # sixteen checks). With a 3.14 base,
+      # `uv sync --locked` cannot satisfy requires-python from /usr/local/bin, so it downloads a
+      # managed CPython 3.12 into /root/.local/share/uv/python/ and points the venv's `home` there.
+      # /root is 0700, the image runs as USER easysynq (uid 10001), and the CMD `uv run gunicorn`
+      # then dies with "Failed to query Python interpreter ... Permission denied". The `security`
+      # job BUILDS this image but only Trivy-scans it, and the one test that WOULD catch this
+      # (test_the_built_api_image_is_unprivileged_and_starts_offline) is skipif-gated on
+      # EASYSYNQ_IMAGE_PROOF, which nothing sets — see RES-IMAGE-PROOF-NEVER-ENABLED. The static
+      # base/requires-python coupling is blocking in the required `api` job
+      # (test_api_image_python_major_matches_requires_python); this ceiling stops the weekly PR.
+      - dependency-name: "python"
+        versions: [">=3.13"]
   - package-ecosystem: "docker"
     directory: "/apps/web"
     schedule:
