@@ -1311,7 +1311,12 @@ is clean. The web suites were NOT run and are not restated: no TypeScript change
 
 ### S-node-26 — the tracked Node major moves 22 to 26
 
-Recorded 2026-09-03 after merging [`#534`](https://github.com/CoJoA13/EasySynQ/pull/534) as `SHA`.
+Recorded 2026-09-03 after merging [`#534`](https://github.com/CoJoA13/EasySynQ/pull/534) as
+`f2509c9`. ⚠ As with [`#532`](https://github.com/CoJoA13/EasySynQ/pull/532), this squash did **not**
+preserve the branch tree byte-for-byte, so this entry does not claim it did:
+`git diff fa3bd64 f2509c9` is five lines in this file — exactly the
+[`#533`](https://github.com/CoJoA13/EasySynQ/pull/533) back-fill that merged in between and that the
+squash correctly incorporated. Verified by `git diff` against the PR head ref, not asserted.
 Moves `.node-version` from 22 to 26 and widens the npm advisory gate to npm 11. Depends on
 S-retire-fedora-dev, which had to land first. No application code, no migration, no contract, no
 permission key, and **no lockfile churn**.
@@ -1353,7 +1358,9 @@ production build and all ten shell contracts are clean.
 
 ### S-postgres-18 — the database server moves 16 to 18
 
-Recorded 2026-09-03 after merging [`#535`](https://github.com/CoJoA13/EasySynQ/pull/535) as `SHA`.
+Recorded 2026-09-03 after merging [`#535`](https://github.com/CoJoA13/EasySynQ/pull/535) as
+`eba516a`, whose tree the squash preserved byte-for-byte (verified by `git diff` against the
+branch tip `d39c092`, not asserted).
 Moves the PostgreSQL server from 16 to 18 across Compose, the pinned image lock, both testcontainers
 and CI's service container, and moves the `pg_dump`/`pg_restore` client with it. No application code,
 no migration, no contract, no permission key — the schema is unchanged and `alembic check` is clean.
