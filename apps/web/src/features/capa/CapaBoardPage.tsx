@@ -108,7 +108,7 @@ export function CapaBoardPage() {
 
   if (forbidden) {
     return (
-      <Container size="md" py="md">
+      <Container size="xl" py="md">
         <RegisterPageHeader title="Nonconformity and CAPA" />
         <NoAccessState
           message={
@@ -123,14 +123,14 @@ export function CapaBoardPage() {
   }
   if (isLoading) {
     return (
-      <Container size="md" py="md">
+      <Container size="xl" py="md">
         <LoadingState label="Loading CAPAs" />
       </Container>
     );
   }
   if (isError) {
     return (
-      <Container size="md" py="md">
+      <Container size="xl" py="md">
         <RegisterPageHeader title="Nonconformity and CAPA" />
         <ErrorState title="Couldn't load CAPAs" onRetry={() => refetch()} />
       </Container>

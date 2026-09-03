@@ -68,16 +68,26 @@ narrowing on the five pages that currently guard with a narrowing early return, 
 need a generic render-prop body rather than `children`. Rendering the page title during loading —
 which the frame would do, and which is the better behaviour — breaks two suites that identify the
 loaded state by its heading alone (`AuditsListPage.test.tsx` and `DcrsRegisterPage.test.tsx`'s
-equal-width contract). And `CapaBoardPage` is the one page whose branches disagree on container
-size, `md` in three branches against `xl` in the loaded page, so adopting a frame there is a
-deliberate visual change rather than a mechanical one.
-Closure contract: Either build the frame with a render-prop body, re-anchor the two heading-gated
-suites on a load-only sentinel, and record the CapaBoardPage container unification as an intended
-change; or record that the scaffold stays per-page and remove this record. A shared table wrapper
-is separately blocked and must not be attempted: `apps/web/src/lib/responsiveRegisterContract.test.ts`
-is a source-text contract requiring each of nine page files to contain its own literal
-`<Table.ScrollContainer minWidth={N}>`.
-Last reviewed: 2026-08-29
+equal-width contract). The third blocker is CLOSED: `CapaBoardPage` was the one page whose
+branches disagreed on container size, `md` in three branches against `xl` in the loaded page.
+S-capa-width-railfoot-order unified every `/capa` container at `xl` while fixing a separate defect
+(the tab strip shifting between faces), so that unification has already happened and IS the intended
+visual change this record's closure contract asked a frame slice to record: the board's forbidden,
+loading and error branches widened from 960 to 1320 pixels. Two blockers remain — the narrowing
+early return and the two heading-gated suites.
+Closure contract: Either build the frame with a render-prop body and re-anchor the two heading-gated
+suites on a load-only sentinel; or record that the scaffold stays per-page and remove this record. A
+shared table wrapper is separately blocked and must not be attempted:
+`apps/web/src/lib/responsiveRegisterContract.test.ts` is a source-text contract requiring each of
+nine page files to contain its own literal `<Table.ScrollContainer minWidth={N}>`.
+⚠ A SECOND source-text contract now constrains the frame the same way, and it was added by the same
+slice that closed the third blocker, so it is recorded here rather than discovered mid-implementation:
+`apps/web/src/lib/tabSectionWidthContract.test.ts` requires each tabbed section's layout AND every
+face to carry its own literal `<Container size="…">`. A frame that owns the Container leaves one
+width where the contract expects one per face, and its per-section assertion fails. Relaxing that
+contract for a section whose faces delegate to a frame is part of this record's work, not a surprise
+against it.
+Last reviewed: 2026-09-02 (third blocker closed by S-capa-width-railfoot-order)
 
 ## RES-DOC11-TOKEN-DRIFT
 
@@ -433,3 +443,49 @@ against [`RES-REGISTER-PAGE-FRAME`](open-residuals.md), whose closure contract a
 whether a shared frame renders the title during loading; the two records should be answered together
 rather than one silently constraining the other.
 Last reviewed: 2026-09-02 (narrowed the same day: `/imports/:runId` closed)
+
+## RES-DATE-TIME-DISPLAY-CONVERGENCE
+
+Status: OPEN
+Owner: Repository owner
+Source: S-capa-width-railfoot-order, 2026-09-02
+Reason: **R70** locks three things for user-facing display — a six-digit `MM/DD/YY` date, 24-hour
+time, and both resolved in the organization timezone — and exactly one surface conforms: the
+rail-foot clock, via `formatOrgClock`. Everything else violates at least one rule today. This record
+tracks the conformance work; the standard itself is decided in
+[`decisions-register.md`](decisions-register.md) and is not re-opened here.
+
+The measured gap, which is wider than the date format that prompted the decision:
+
+- `apps/web/src/lib/time.ts::formatTimestamp` calls `Intl.DateTimeFormat(undefined, …)` with **no
+  `timeZone`** and no `hour12`/`hourCycle`. Executed, it renders `Sep 2, 2026, 01:45 PM CDT` under
+  `en-US` and `2 Sept 2026, 13:45 GMT-5` under `en-GB` — so it breaks rule 2 (12-hour with a
+  meridiem), breaks rule 3 (the viewer's browser zone, not the organization's), emits a THIRD date
+  format, and renders differently per viewer locale. It reaches `lib/AsOf.tsx`, which
+  `RegisterPageHeader` places on every register page, plus `RecordsTable`, `RecordDetailSections`,
+  `DriftStatusPage`, `SupersededCopiesPage`, `NotificationItem`, `ReviewInputsSection` and
+  `NotificationHealthPanel`. `formatRelativeTime` falls through to it beyond a week and inherits all
+  of it.
+- `formatDateInTimeZone` is org-zone-correct but emits `YYYY-MM-DD`, so it breaks rule 1 only. It is
+  the `useOrgDate` path behind every register and timeline date.
+
+⚠ The hazard is ORDERING, not formatting. `YYYY-MM-DD` sorts lexically and `MM/DD/YY` does not, so
+any consumer that sorts, compares or parses a RENDERED date rather than the timestamp behind it
+breaks with no type error and no failing render — just a register in the wrong order.
+
+⚠ `formatTimestamp`'s browser-zone behaviour is a correctness defect independent of R70, not merely
+a style mismatch: a record captured at 23:30 organization time is stamped with the *next day* for a
+viewer east of the organization, beside a `useOrgDate` column that shows the correct day. The two
+already disagree in the same table today.
+
+This was not folded into the slice that created the divergence. Changing every date and time display
+in the product is far larger and more visible than a rail-foot clock, and belongs in a diff a
+reviewer can read as being about exactly that.
+Closure contract: Bring every user-facing date and time onto R70 — six-digit `MM/DD/YY`, 24-hour,
+organization timezone — or record which surfaces are exempt and why. Before changing either
+formatter, enumerate every caller and prove none sorts, compares or parses its OUTPUT rather than the
+timestamp behind it; a rendered value reaching a sort comparator is the failure this record exists to
+prevent. Prove the result with an executable assertion per changed surface, and confirm each fails
+against the current output. `formatTimestamp`'s missing `timeZone` should be fixed first and can be
+proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
+Last reviewed: 2026-09-02

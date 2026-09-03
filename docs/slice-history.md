@@ -1003,7 +1003,9 @@ response-contract suites were NOT run and are not restated: this slice changes n
 
 ### S-ui-a11y-outline — every route gets an h1, and a gate that can fail
 
-Recorded 2026-09-02 after merging [`#529`](https://github.com/CoJoA13/EasySynQ/pull/529) as `SHA`.
+Recorded 2026-09-02 after merging [`#529`](https://github.com/CoJoA13/EasySynQ/pull/529) as
+`14d398c`, whose tree the squash preserved byte-for-byte (verified by `git diff` against the
+branch tip `fece4b7`, not asserted).
 Closes `RES-REGISTER-HEADING-LEVELS`, the accessibility record S-ui-4 opened and deliberately did not
 act on. Web-only — no Python, no migration, no contract, no permission key.
 
@@ -1119,6 +1121,132 @@ and the ~127 lines of pre-existing drift do not belong in this diff. Thirty-two 
 reformatted, because the edits were made through the shell and so bypassed the repository's
 format-on-edit hook; CI runs no prettier step, so nothing would have caught that until the next
 person to touch one of those files inherited an unrelated reformat.
+
+### S-capa-width-railfoot-order — the CAPA tab strip stops moving, and the clock moves up
+
+Recorded 2026-09-02 after merging [`#530`](https://github.com/CoJoA13/EasySynQ/pull/530) as `SHA`.
+Two defects the owner found by walking the running application, neither of them from the slice that
+had just shipped. Web-only — no Python, no migration, no contract, no permission key.
+
+**The tab strip moved 90 pixels between faces, and the arithmetic is exact.** `CapaLayout` sized its
+strip `tab === "board" ? "xl" : "lg"`. A Mantine `Container` is centred and its `lg` and `xl` scales
+are 71.25rem and 82.5rem, so a 180-pixel width difference displaces the strip by half that whenever
+the user changes tab — which is the 285 → 375 shift the owner photographed. `/capa` was the only one
+of the three tabbed sections doing this: `AuditsLayout` pins `xl` with both children `xl` across all
+four branches, `DriftLayout` pins `lg` likewise. Every CAPA face is now `xl`, matching the closer
+precedent — `AuditsLayout` is also a tab layout over a register table — which additionally closes the
+`CapaBoardPage` `md`-in-three-branches against `xl`-when-loaded discrepancy that
+`RES-REGISTER-PAGE-FRAME` names as one of its three blockers.
+
+⚠ **The old behaviour was tested, not accidental.** `CapaLayout.test.tsx` asserted the strip was `xl`
+on the board and `lg` on the two list faces. It carried no rationale comment, and the intent it
+encodes — keep the strip aligned with its own face's content — is satisfied by unifying the widths
+as well, without the jump. So the assertions were rewritten rather than deleted, and a fourth test
+walks all three faces and compares, because a per-face assertion structurally cannot observe movement
+BETWEEN faces: three green tests coexisted with the defect for as long as it existed. Restoring the
+original expression reddens three of the four.
+
+**The clock now sits above the theme control and carries a six-digit date.** The date is resolved in
+the organization zone for a sharper reason than the time is: at 23:00 in a UTC-5 zone the UTC date is
+already tomorrow, so a browser-local date under an "Organization date" label names the wrong DAY, not
+merely the wrong hour. Three unit cases cover that, the zero padding that keeps the field six digits
+year-round, and a midnight crossing where date and time move together.
+
+⚠ **Both the reorder and the date are pure DOM facts with no behaviour attached**, so all ten existing
+`RailFoot` tests stayed green against either being reverted. Two new ones pin them — the date's text,
+and the clock preceding the control by document POSITION rather than by index, so the assertion
+survives a change in how the row is nested.
+
+⚠ **A width computed by hand is not evidence, and this slice caught itself doing it.** The date makes
+the clock row three fields plus two gaps inside a rail fixed at 244 pixels, with `wrap="nowrap"`. It
+was sized on paper and declared to fit — exactly what the repository's own rule forbids for anything
+about size or clipping, because jsdom resolves no layout and every Vitest assertion about the date
+passes whether the row fits, wraps, or overflows the rail entirely. `e2e/rail-foot.spec.ts` now
+MEASURES it, asserting two things because they fail differently: the date and time sharing a top edge
+catches a wrap, and the row not overflowing itself catches what `nowrap` does instead of wrapping.
+Shrinking `--es-sidebar-w` to 8rem overflows the row by 9 pixels and reddens it.
+
+**A guard for the class, not the instance.** `src/lib/tabSectionWidthContract.test.ts` forbids a
+`<Container>` this contract cannot read — a `size` given as an expression, or absent entirely — and
+requires each section's layout and every face it can show to agree on one width, counting every
+branch rather than the loaded one. Introducing the same expression into `DriftLayout`, a section this
+slice never touched, reddens it.
+
+**What the adversarial review corrected, all folded here, with nothing refuted across three lenses.**
+Five findings survived verification and four of them were real defects.
+
+⚠ **The headline claim had no browser evidence, and could not have got any.** Every viewport in the
+Playwright suite is 1280 or narrower, and at 1280 the content box is 1280 − 244 − 32 = 1004 pixels,
+which clamps BOTH `lg` and `xl` to the same width: the displacement there is zero. The jump first
+appears above ~1416 pixels. So the four rewritten Vitest assertions and the source contract all read
+an authored prop STRING, and nothing measured the position the owner actually reported — in a slice
+that had just applied the opposite doctrine to the clock row. `e2e/capa-board.spec.ts` now measures
+the strip at 1700 pixels across a real tab change, asserting first that the container is unclamped
+at that width so the arrangement under test genuinely occurs. Against the original expression it
+reports a displacement of **90 pixels** — the figure derived from the container scales, now
+measured rather than computed. Reaching the second face needed the harness to answer
+`/api/v1/complaints` and `/api/v1/ncrs`, whose fixtures come from the Vitest handlers rather than
+being invented for the browser.
+
+⚠ **The contract did not guard the class it claimed.** Its computed-shape check ran only against the
+layout, so reintroducing the exact defect expression on a FACE passed — which matters precisely
+because the discrepancy this slice closed was on a face. And a `<Container>` with no `size` at all
+silently takes Mantine's `md` default, 360 pixels below its siblings, while contributing nothing to
+compare. Both mutations were run against the first version and both were green. The tag scan is now
+brace-aware, runs over the faces as well, and treats an unreadable container as an offender.
+
+⚠ **A comment in one of this slice's own new tests asserted something impossible.** It claimed one
+instant on UTC, Chicago and Tokyo lands on "three different calendar days"; those three span
+fourteen hours and can show at most two, and at the instant chosen Tokyo returned the same date as
+UTC, so one of its three assertions could not discriminate at all. Only zones spanning more than
+twenty-four hours can produce three dates, so the case now uses Midway (UTC−11) and Kiritimati
+(UTC+14) — a twenty-five hour spread — and asserts the set size rather than implying it.
+
+**`RES-REGISTER-PAGE-FRAME` is reconciled rather than left contradicting this entry.** Its third
+blocker — the `CapaBoardPage` branch disagreement — is closed by this slice, and its closure contract
+had asked a frame slice to record that unification as an intended visual change, so the record now
+carries it: the board's forbidden, loading and error branches widened from 960 to 1320 pixels. The
+record also gains the constraint this slice imposed on it, rather than leaving it to be discovered
+mid-implementation: a frame that owns the `Container` leaves one width where the new contract expects
+one per face.
+
+**One divergence is recorded rather than fixed, and its DIRECTION is now settled.** `formatOrgClock`
+emits `MM/DD/YY` while `formatDateInTimeZone` — every register row and timeline, through
+`useOrgDate` — deliberately emits a locale-independent `YYYY-MM-DD`, and the two are on screen
+together. The adversarial review raised it as an inconsistency; put to the owner, the answer was that
+the six-digit US month/day/year reading is the product STANDARD and the other surfaces converge on it
+in a follow-up. That is now **R70** in the decisions register, alongside the 24-hour rule below —
+the Codex stop-time gate caught that both had been written into a residual, this entry and a source
+comment while the authoritative home had no record of either. So the rail foot is the correct one and must not be reverted to resolve the mismatch,
+which is the reading a later contributor would otherwise reach. Tracked as
+`RES-DATE-TIME-DISPLAY-CONVERGENCE`, whose closure contract names the real hazard: `YYYY-MM-DD` sorts
+lexically and `MM/DD/YY` does not, so any consumer that sorts or compares a RENDERED date rather than
+the timestamp behind it breaks silently. That is a product-wide change and does not belong in the
+diff that created the divergence.
+
+⚠ **The gap turned out to be wider than the date, and a second Codex pass is what found it.** R70's
+rules 2 and 3 — 24-hour, organization timezone — are product-wide obligations, and the first draft of
+the record tracked only the date FORMAT, leaving them untracked. Measured: `formatTimestamp` passes
+`undefined` as the locale and supplies no `timeZone`, so it renders `Sep 2, 2026, 01:45 PM CDT` under
+`en-US` — 12-hour with a meridiem, in the viewer's browser zone, in a third date format, and
+differently per viewer locale. It is reached from `lib/AsOf.tsx`, which `RegisterPageHeader` places on
+every register page, plus seven other surfaces. Its browser-zone half is a correctness defect
+independent of R70: a record captured at 23:30 organization time is stamped with the NEXT DAY for a
+viewer east of the organization, in the same table as a `useOrgDate` column showing the correct day.
+The record and R70's own conformance paragraph now carry all of it.
+
+**24-hour time is now a stated requirement rather than an incidental.** The clock already rendered
+`00:00`, `13:45` and `23:59` — `hour12: false` and `hourCycle: "h23"` were there from R69 — but every
+assertion pinned a specific time that merely happened to be 24-hour, so the intent lived nowhere. The
+owner made it explicit on 2026-09-02 and a named test now asserts the property, including that no
+field carries a meridiem. Removing both options reddens six tests where it previously reddened four.
+
+Test deltas, measured on the branch. Vitest moved from 280 files and 2,339 tests to **281 and
+2,352**: one new file and thirteen new tests, six of them the width contract and one the 24-hour
+requirement the owner stated after the review. The Playwright Chromium
+suite moved **78 → 80**. ESLint over `src` and `e2e`, both strict `tsc` projects and the production
+build were clean. The API, migration, integration and response-contract suites were not run and are
+not restated: this slice changes no Python.
 
 ## IDENTITY ONBOARDING
 

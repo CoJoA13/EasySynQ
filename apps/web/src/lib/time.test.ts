@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatDateInTimeZone,
-  formatOrgClock,
-  formatRelativeTime,
-  formatTimestamp,
-} from "./time";
+import { formatDateInTimeZone, formatOrgClock, formatRelativeTime, formatTimestamp } from "./time";
 
 describe("formatDateInTimeZone", () => {
   it("renders a UTC instant on the organization calendar date", () => {
@@ -96,6 +91,57 @@ describe("formatOrgClock", () => {
 
   it("labels the zone so the reading cannot be mistaken for local time", () => {
     expect(formatOrgClock(Date.parse("2026-06-28T15:00:00Z"), "UTC")?.zone).toBe("UTC");
+  });
+
+  // The date is the sharper half of "org time, not browser time". A wrong HOUR is a small error; a
+  // wrong DAY under an "Organization date" label misstates which working day a reader is looking at,
+  // and the two disagree for five hours of every day in a UTC-5 zone.
+  it("resolves the DATE in the org zone, not UTC", () => {
+    // ⚠ The zones are extreme ON PURPOSE. An earlier version of this test used UTC / Chicago /
+    // Tokyo and its comment claimed "three different calendar days" — impossible, because those
+    // three span 14 hours and can show at most two dates, and at the instant chosen Tokyo returned
+    // the same date as UTC. That made one of its three assertions unable to discriminate at all.
+    // Midway (UTC-11) to Kiritimati (UTC+14) spans 25 hours, which is the only way one instant
+    // genuinely lands on three calendar days, so every assertion below can fail on its own.
+    const instant = Date.parse("2026-09-02T10:30:00Z");
+    expect(formatOrgClock(instant, "Pacific/Midway")?.date).toBe("09/01/26"); // 23:30, day before
+    expect(formatOrgClock(instant, "UTC")?.date).toBe("09/02/26"); // 10:30
+    expect(formatOrgClock(instant, "Pacific/Kiritimati")?.date).toBe("09/03/26"); // 00:30, day after
+    // Stated as a set so the property — one instant, three days — is asserted rather than implied.
+    const dates = ["Pacific/Midway", "UTC", "Pacific/Kiritimati"].map(
+      (zone) => formatOrgClock(instant, zone)?.date,
+    );
+    expect(new Set(dates).size).toBe(3);
+  });
+
+  // 24-hour is an OWNER REQUIREMENT as of 2026-09-02, not merely how this happens to be written.
+  // Every other clock assertion in this file pins a specific time that is incidentally 24-hour;
+  // this one names the property, so the intent survives someone "simplifying" the Intl options.
+  it("renders 24-hour time, never 12-hour with a meridiem", () => {
+    const chicago = (iso: string) => formatOrgClock(Date.parse(iso), "America/Chicago")?.time;
+    expect(chicago("2026-09-02T05:00:00Z")).toBe("00:00"); // midnight, not 12:00
+    expect(chicago("2026-09-02T17:00:00Z")).toBe("12:00"); // noon stays 12, not 00
+    expect(chicago("2026-09-02T18:45:00Z")).toBe("13:45"); // afternoon, not 1:45
+    expect(chicago("2026-09-03T04:59:00Z")).toBe("23:59"); // not 11:59
+    // No meridiem anywhere in the rendered clock, in any field.
+    const clock = formatOrgClock(Date.parse("2026-09-02T18:45:00Z"), "America/Chicago");
+    expect(`${clock?.date} ${clock?.time} ${clock?.zone}`).not.toMatch(/\b[AP]\.?M\.?\b/i);
+  });
+
+  it("renders the date as a zero-padded six-digit MM/DD/YY", () => {
+    // Zero padding on both the month and the day is what makes it six digits at every date; an
+    // unpadded 1/5/26 would be four and the rail-foot row would change width through the year.
+    expect(formatOrgClock(Date.parse("2026-01-05T12:00:00Z"), "UTC")?.date).toBe("01/05/26");
+    expect(formatOrgClock(Date.parse("2026-12-31T12:00:00Z"), "UTC")?.date).toBe("12/31/26");
+    const digits = formatOrgClock(Date.parse("2026-01-05T12:00:00Z"), "UTC")?.date ?? "";
+    expect(digits.replace(/\D/g, "")).toHaveLength(6);
+  });
+
+  it("crosses midnight in the org zone with the date and the time together", () => {
+    const beforeMidnight = formatOrgClock(Date.parse("2026-07-16T04:59:00Z"), "America/Chicago");
+    const afterMidnight = formatOrgClock(Date.parse("2026-07-16T05:01:00Z"), "America/Chicago");
+    expect(beforeMidnight).toMatchObject({ date: "07/15/26", time: "23:59" });
+    expect(afterMidnight).toMatchObject({ date: "07/16/26", time: "00:01" });
     expect(formatOrgClock(Date.parse("2026-07-15T18:00:00Z"), "America/Chicago")?.zone).toBe("CDT");
   });
 

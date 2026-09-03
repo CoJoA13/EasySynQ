@@ -24,7 +24,7 @@ export function ComplaintsPage() {
 
   if (forbidden) {
     return (
-      <Container size="lg" py="md">
+      <Container size="xl" py="md">
         <RegisterPageHeader title="Complaints" size="h3" />
         <NoAccessState
           message={
@@ -39,14 +39,14 @@ export function ComplaintsPage() {
   }
   if (isLoading) {
     return (
-      <Container size="lg" py="md">
+      <Container size="xl" py="md">
         <LoadingState label="Loading complaints" />
       </Container>
     );
   }
   if (isError) {
     return (
-      <Container size="lg" py="md">
+      <Container size="xl" py="md">
         <RegisterPageHeader title="Complaints" size="h3" />
         <ErrorState title="Couldn't load complaints" onRetry={() => refetch()} />
       </Container>
@@ -55,7 +55,7 @@ export function ComplaintsPage() {
 
   const rows = data ?? [];
   return (
-    <Container size="lg" py="md">
+    <Container size="xl" py="md">
       <RegisterPageHeader
         title="Complaints"
         size="h3"

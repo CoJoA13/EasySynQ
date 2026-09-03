@@ -76,8 +76,18 @@ export function formatRelativeTime(input: string | number, now: number = Date.no
   return formatTimestamp(then);
 }
 
-// The wall-clock time observed in the canonical ORGANIZATION timezone, as a stable HH:MM plus the
-// zone's own short name (R69's rail-foot clock). Deliberately NOT browser-local: records and audit
+// The wall-clock date and time observed in the canonical ORGANIZATION timezone, as a stable
+// MM/DD/YY plus HH:MM plus the zone's own short name (R69's rail-foot clock).
+//
+// ⚠ This is the format the whole product is moving TO, and it currently disagrees with the rest of
+// the interface. `formatDateInTimeZone` above — every register row and timeline, through
+// `useOrgDate` — still emits a locale-independent YYYY-MM-DD, so a reader sees `09/02/26` in the
+// rail beside `2026-09-02` in a table. R70 settles it: the US month/day/year reading in six-digit
+// form is the standard, and the OTHER surfaces change to match — tracked as
+// RES-DATE-TIME-DISPLAY-CONVERGENCE. So do NOT "fix" this one back to YYYY-MM-DD to resolve the
+// mismatch; R70 rule 4 exists because that is the natural but backwards reading. The 24-hour time
+// beside it is R70 rule 2, which `hour12`/`hourCycle` below pin and a named test asserts as a
+// requirement rather than as an incidental. Deliberately NOT browser-local: records and audit
 // events are stamped in org time, and `useOrgDate` already renders every register date that way, so
 // a browser-local clock in the same frame would disagree with the timeline directly above it.
 //
@@ -91,12 +101,18 @@ export function formatRelativeTime(input: string | number, now: number = Date.no
 export function formatOrgClock(
   now: number | Date,
   timeZone: string | null | undefined,
-): { time: string; zone: string } | null {
+): { date: string; time: string; zone: string } | null {
   const instant = now instanceof Date ? now : new Date(now);
   if (!timeZone || Number.isNaN(instant.getTime())) return null;
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone,
+      // The date is resolved in the ORG zone for the same reason the time is, and the boundary is
+      // sharper: at 23:00 in a UTC-5 zone the UTC date is already tomorrow, so a browser-local date
+      // under an "Organization time" label would name the wrong DAY, not merely the wrong hour.
+      year: "2-digit",
+      month: "2-digit",
+      day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
@@ -108,8 +124,11 @@ export function formatOrgClock(
     const hour = value("hour");
     const minute = value("minute");
     const zone = value("timeZoneName");
-    if (!hour || !minute || !zone) return null;
-    return { time: `${hour}:${minute}`, zone };
+    const year = value("year");
+    const month = value("month");
+    const day = value("day");
+    if (!hour || !minute || !zone || !year || !month || !day) return null;
+    return { date: `${month}/${day}/${year}`, time: `${hour}:${minute}`, zone };
   } catch {
     // An invalid IANA name throws a RangeError. A clock that cannot be trusted must not be shown at
     // all — rendering the browser's time under an org-time label would be worse than rendering

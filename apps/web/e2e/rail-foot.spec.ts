@@ -47,6 +47,53 @@ test.describe("Rail foot", () => {
     expect((after?.y ?? 0) + (after?.height ?? 0)).toBeLessThanOrEqual((viewport?.height ?? 0) + 1);
   });
 
+  // The clock gained a six-digit date, and its row is `wrap="nowrap"` inside a rail fixed at 244px.
+  // That combination fails in a browser and nowhere else: jsdom resolves no layout, so every vitest
+  // assertion about the date passes whether it fits on the line, wraps, or overflows the rail
+  // entirely. The width was first computed by hand — three fields plus two 6px gaps at 13px against
+  // 244px minus padding — and a computation is exactly what this repository's own rule says is not
+  // evidence for anything about size or clipping.
+  test("the clock's date, time and zone sit on one line inside the rail", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await installRegisterApi(page, { route: "tasks" });
+    await page.goto("/tasks");
+
+    const date = page.getByLabel("Organization date");
+    const time = page.getByLabel("Organization time");
+    // PRECONDITION: the date must actually render, or every assertion below is vacuously true —
+    // the clock returns null for an unusable zone and the component then renders nothing at all.
+    await expect(date).toBeVisible();
+    await expect(time).toBeVisible();
+
+    const boxes = await page.evaluate(() => {
+      const dateEl = document.querySelector('[aria-label="Organization date"]');
+      const timeEl = document.querySelector('[aria-label="Organization time"]');
+      const row = dateEl?.parentElement;
+      // Guard the positional step: a parentElement is non-null for almost any node, so confirm the
+      // element reached is really the row holding BOTH fields before measuring it.
+      if (!dateEl || !timeEl || !row || !row.contains(timeEl)) return null;
+      const r = (el: Element) => {
+        const b = el.getBoundingClientRect();
+        return { top: Math.round(b.top), right: b.right };
+      };
+      return {
+        date: r(dateEl),
+        time: r(timeEl),
+        rowOverflow: row.scrollWidth - row.clientWidth,
+        rowRight: row.getBoundingClientRect().right,
+        railRight: (row.closest("nav") ?? document.body).getBoundingClientRect().right,
+      };
+    });
+
+    expect(boxes, "expected one row holding both the date and the time").not.toBeNull();
+    // One line: the two fields share a top edge. If the row wrapped, the date would sit above.
+    expect(boxes?.date.top).toBe(boxes?.time.top);
+    // And the row does not overflow itself — `nowrap` turns a too-narrow row into overflow, not a
+    // second line, so the wrap check above cannot catch that on its own.
+    expect(boxes?.rowOverflow ?? 999).toBeLessThanOrEqual(0);
+    expect(boxes?.rowRight ?? 0).toBeLessThanOrEqual((boxes?.railRight ?? 0) + 1);
+  });
+
   test("the theme control is operable and reports the chosen scheme to the document", async ({
     page,
   }) => {

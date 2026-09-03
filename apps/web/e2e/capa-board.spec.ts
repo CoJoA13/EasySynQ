@@ -209,7 +209,9 @@ test("the four capa summary tiles caption on one line", async ({ page }) => {
 // theme's `md` at every width, uniform with every other gap on the page, and the owner redirected
 // the fix to filling the row instead. This pins the gutter as DELIBERATELY unchanged, so a later
 // slice that alters it does so on purpose rather than by drift.
-test("the capa summary gutter is the theme's md, unchanged by the four-up row", async ({ page }) => {
+test("the capa summary gutter is the theme's md, unchanged by the four-up row", async ({
+  page,
+}) => {
   await openBoard(page, 1280);
   const m = await read(page);
   expect(m.tileGaps.length).toBe(3);
@@ -230,4 +232,48 @@ test("the capa filter row never overflows the document at 320px", async ({ page 
     return { scrollWidth: root.scrollWidth, clientWidth: root.clientWidth };
   });
   expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+});
+
+// The width at which the defect this section was fixed for actually EXISTS.
+//
+// ⚠ Every other viewport in this suite is 1280 or narrower, and at 1280 the content box is
+// 1280 - 244 (navbar) - 32 (shell padding) = 1004px, which clamps BOTH `lg` (1140) and `xl` (1320)
+// to the same width. The strip's displacement there is 0px, so a spec at any existing viewport
+// could not fail no matter how the width was computed. The jump first appears above ~1416px and
+// reaches its full 90px at ~1596px. That is why this one test sets 1700: the four vitest
+// assertions and the source contract both read an authored prop string, and nothing in the
+// repository measured the position the owner actually reported.
+test("the tab strip holds its position between faces at a width where lg and xl differ", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1700, height: 900 });
+  await installRegisterApi(page, { route: "capa" });
+  await page.goto("/capa");
+
+  const stripBox = () =>
+    page.evaluate(() => {
+      const el = document.querySelector('[role="tablist"]')?.closest(".mantine-Container-root");
+      if (!el) return null;
+      const b = el.getBoundingClientRect();
+      return { x: Math.round(b.x), width: Math.round(b.width) };
+    });
+
+  await expect(page.getByRole("tab", { name: "Board" })).toBeVisible();
+  const onBoard = await stripBox();
+  expect(onBoard, "expected the tab strip to sit inside a Mantine Container").not.toBeNull();
+
+  // PRECONDITION: the container is NOT clamped by the viewport here, so `lg` and `xl` would
+  // genuinely render at different widths. Without this the test would pass at 1280 for the trivial
+  // reason that every size collapses to the same clamped box.
+  expect(
+    onBoard?.width ?? 0,
+    "viewport must be wide enough that xl is unclamped, or this proves nothing",
+  ).toBeGreaterThan(1140);
+
+  await page.getByRole("tab", { name: "Complaints" }).click();
+  await expect(page.getByRole("heading", { name: "Complaints", level: 1 })).toBeVisible();
+  const onComplaints = await stripBox();
+
+  expect(Math.abs((onComplaints?.x ?? 0) - (onBoard?.x ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((onComplaints?.width ?? 0) - (onBoard?.width ?? 0))).toBeLessThanOrEqual(1);
 });
