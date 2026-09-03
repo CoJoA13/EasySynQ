@@ -225,8 +225,15 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client-18
-          # Fail loudly here rather than 19 tests later with a message naming a version mismatch.
-          pg_dump --version | grep -qE '\) 18\.' || { pg_dump --version; exit 1; }
+          # Installing 18 is NOT enough: the runner also ships postgresql-client-16, and pg_wrapper
+          # keeps resolving a bare `pg_dump` to 16. Pin the versioned bin dir ahead of it.
+          echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version | grep -qE '\) 18\.' \
+            || { /usr/lib/postgresql/18/bin/pg_dump --version; exit 1; }
+      # $GITHUB_PATH applies to LATER steps, so the resolution itself is asserted in its own step.
+      # Failing here beats 19 backup/restore failures naming a server version mismatch.
+      - name: confirm pg_dump 18 wins PATH
+        run: pg_dump --version | grep -qE '\) 18\.' || { pg_dump --version; exit 1; }
       - name: integration tests (shard ${{ matrix.group }}/4, testcontainers spin their own Postgres)
         working-directory: apps/api
         run: >-

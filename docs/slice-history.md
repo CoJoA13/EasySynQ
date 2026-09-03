@@ -1401,9 +1401,14 @@ claim CI carries 18 — a claim that was, for one push, a promise rather than a 
 attempt at that fix ran a bare `apt-get install postgresql-client-18` and made things **worse**,
 reddening all four shards instead of two with `Unable to locate package`: the runner's preinstalled
 client carries a `pgdg24.04` version suffix, which says only that it came from PGDG at image-build
-time, **not** that the PGDG apt source is still configured. The step now adds the repository first
-and asserts `pg_dump --version` reports 18 before any test runs, so a future runner-image change
-fails on that line rather than 19 tests later.
+time, **not** that the PGDG apt source is still configured. The step now adds the repository first.
+⚠ A **second** attempt then failed too, and its guard is what proved why: installing
+`postgresql-client-18` is not sufficient, because the runner also ships 16 and `pg_wrapper` keeps
+resolving a bare `pg_dump` to it — the same selection trap the runbook documents for a developer
+host, reproduced on CI. The step now prepends `/usr/lib/postgresql/18/bin` to `$GITHUB_PATH`. Because
+that applies only to LATER steps, the resolution is asserted in its **own** step; the install step
+asserts the absolute binary. Both guards fail on the line that is wrong rather than 19 tests later,
+which is exactly how the second failure was diagnosed in one read.
 
 **`infra/images.lock` was re-pinned to a real digest**, resolved with the same
 `docker buildx imagetools inspect --format '{{.Manifest.Digest}}'` call `scripts/images-update.sh`
