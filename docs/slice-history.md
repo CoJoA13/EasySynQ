@@ -1124,7 +1124,9 @@ person to touch one of those files inherited an unrelated reformat.
 
 ### S-capa-width-railfoot-order — the CAPA tab strip stops moving, and the clock moves up
 
-Recorded 2026-09-02 after merging [`#530`](https://github.com/CoJoA13/EasySynQ/pull/530) as `SHA`.
+Recorded 2026-09-03 after merging [`#530`](https://github.com/CoJoA13/EasySynQ/pull/530) as
+`18fe903`, whose tree the squash preserved byte-for-byte (verified by `git diff` against the
+branch tip `c8a8b87`, not asserted).
 Two defects the owner found by walking the running application, neither of them from the slice that
 had just shipped. Web-only — no Python, no migration, no contract, no permission key.
 
