@@ -61,7 +61,7 @@ function fakeRun({
   report = cleanFixture,
   lockfile = lockFixture,
   exceptions = productionExceptionPolicy,
-  npmVersion = '10.9.8',
+  npmVersion = '11.19.0',
   auditStatus,
   auditStderr = '',
   now = beforeExpiry,
@@ -273,13 +273,13 @@ moduleApi.syncBuiltinESMExports();
   }
 });
 
-test('validates npm 10.9.x before starting audit', () => {
+test('validates npm 11.x before starting audit', () => {
   const calls = [];
   const result = fakeRun({
-    npmVersion: '11.0.0',
+    npmVersion: '10.9.8',
     spawnSyncImpl(command, args, options) {
       calls.push({ command, args, options });
-      return { status: 0, signal: null, stdout: '11.0.0\n', stderr: '' };
+      return { status: 0, signal: null, stdout: '10.9.8\n', stderr: '' };
     },
   });
 
@@ -732,7 +732,7 @@ global.Date = class ControlledDate extends RealDate {
 const report = ${JSON.stringify(JSON.stringify(routerFixture))};
 childProcess.spawnSync = function(_command, args) {
   if (args.length === 2 && args[1] === '--version') {
-    return { status: 0, signal: null, stdout: '10.9.8\\n', stderr: '' };
+    return { status: 0, signal: null, stdout: '11.19.0\\n', stderr: '' };
   }
   if (JSON.stringify(args.slice(1)) === JSON.stringify([
     'audit', '--package-lock-only', '--audit-level=high', '--json'

@@ -113,7 +113,7 @@ assert_text_contains \
   '      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json'
 assert_text_contains \
@@ -285,7 +285,7 @@ assert_text_contains \
   "$CONTRACTS_BLOCK" \
   '      - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
           cache-dependency-path: packages/contracts/package-lock.json'
 assert_text_contains \
@@ -390,7 +390,7 @@ assert_text_contains \
   "$SECURITY_BLOCK" \
   '      - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json'
 assert_text_contains \

@@ -16,7 +16,7 @@ executable truth.
 > `.claude/rules/windows-dev.md`. Linux examples below are conditional on that host's installed
 > tools and group membership.
 
-Use `uv` with managed **Python 3.12**, Node 22 + npm, and a current supported Docker/Compose. Do not
+Use `uv` with managed **Python 3.12**, Node 26 + npm, and a current supported Docker/Compose. Do not
 depend on the system Python. Locks are committed at `apps/api/uv.lock`, `apps/web/package-lock.json`,
 and `packages/contracts/package-lock.json`; CI uses `uv sync --frozen` / `npm ci`, and `just setup`
 hydrates both frozen npm trees before generating contracts.

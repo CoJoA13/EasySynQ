@@ -2,7 +2,7 @@
 easysynq_status_schema: 1
 as_of: "2026-09-03"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-retire-fedora-dev"
+last_shipped_slice: "S-node-26"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2003
@@ -147,6 +147,15 @@ host-acceptance gate: `./scripts/doctor.sh` is the host contract and CI is the a
 Fedora warns rather than fails in the doctor, so a contributor mid-migration still gets a usable
 report. API unit held at **2,003**; all ten shell contracts, `AUTHORITY_OK` and the site-data
 backstop pass. No application code, migration, contract or permission key changed.
+
+S-node-26 then moved the tracked Node major from **22 to 26**, which S-retire-fedora-dev had
+unblocked. The pin itself was mechanical; the load-bearing change is
+`scripts/lib/npm-audit-policy.mjs`, whose `SUPPORTED_NPM_VERSION` accepted only npm `10.9.x` — and
+Node 22 is the last major shipping npm 10.9, so the `security` job would have failed immediately.
+Widening it to npm 11 was safe because three assumptions were measured first: npm 11.19.0 reproduces
+both `package-lock.json` files byte-for-byte, `lockfileVersion` stays 3, and `auditReportVersion`
+stays 2. **No lockfile churn.** API unit stayed at **2,003** and web at **281 files / 2,352 tests** —
+unmoved by design, since this changes the runtime rather than behaviour.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather

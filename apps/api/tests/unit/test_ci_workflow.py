@@ -64,7 +64,7 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
             {
                 "uses": "actions/setup-node@v7",
                 "with": {
-                    "node-version": "22",
+                    "node-version": "26",
                     "cache": "npm",
                     "cache-dependency-path": "apps/web/package-lock.json",
                 },
@@ -195,7 +195,7 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
         {
             "uses": "actions/setup-node@v7",
             "with": {
-                "node-version": "22",
+                "node-version": "26",
                 "cache": "npm",
                 "cache-dependency-path": "packages/contracts/package-lock.json",
             },
@@ -272,7 +272,7 @@ def test_security_job_gates_npm_and_keeps_trivy_findings_report_only() -> None:
     assert setup == {
         "uses": "actions/setup-node@v7",
         "with": {
-            "node-version": "22",
+            "node-version": "26",
             "cache": "npm",
             "cache-dependency-path": "apps/web/package-lock.json",
         },

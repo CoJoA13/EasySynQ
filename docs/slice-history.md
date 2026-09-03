@@ -1305,6 +1305,48 @@ ten `scripts/tests/*.sh` shell contracts pass, including the 63 doctor fixture c
 CI-hardening assertions. `check-repo-authority.sh` reports `AUTHORITY_OK` and `check-no-site-data.sh`
 is clean. The web suites were NOT run and are not restated: no TypeScript changed.
 
+### S-node-26 — the tracked Node major moves 22 to 26
+
+Recorded 2026-09-03 after merging [`#PRNUM`](https://github.com/CoJoA13/EasySynQ/pull/PRNUM) as `SHA`.
+Moves `.node-version` from 22 to 26 and widens the npm advisory gate to npm 11. Depends on
+S-retire-fedora-dev, which had to land first. No application code, no migration, no contract, no
+permission key, and **no lockfile churn**.
+
+**The pin was never the hard part; the security gate was.** `scripts/lib/npm-audit-policy.mjs`
+opened with `const SUPPORTED_NPM_VERSION = /^10\.9\.\d+$/`, and Node 22 is the last major shipping
+npm 10.9 — 24, 25 and 26 all ship npm 11. The rejection was deliberate, with
+`test-check-npm-audit.mjs` feeding it `11.0.0` and asserting `E_NPM_VERSION`, so the `security` CI
+job would have failed on the first push. **There was no conservative target that avoided this:** the
+same wall stands at 24 and 25.
+
+**Three assumptions the policy makes about npm were measured before being widened, not assumed.**
+Regenerating `apps/web/package-lock.json` under npm 11.19.0 reproduced the npm 10.9.8 lock
+**byte-for-byte**, so `lockfileVersion: 3` still holds (asserted at `npm-audit-policy.mjs:260`) and
+no lock churn enters the diff; and `npm audit --json` still emits `auditReportVersion: 2` (asserted
+at `:209`) under both majors. Had either moved, this would have been a schema migration rather than
+a regex change.
+
+⚠ **A hardcoded npm version hid inside a generated preload script.** `test-check-npm-audit.mjs`
+writes a `--require` preload that stubs `spawnSync` to answer `--version` with a literal `10.9.8`,
+then runs the real CLI end-to-end. Widening the policy made the CLI correctly reject it, so that test
+failed with `exitCode 2` where it expected `1` — a failure whose message named the assertion, not the
+cause. The other two `10.9.8` occurrences in that same file are the intentional rejection case and
+were deliberately left, so a blanket replace would have destroyed the test that proves an old npm is
+refused.
+
+**Where the major was pinned.** `.node-version`, four `node-version: "22"` keys in `ci.yml`,
+`apps/web/Dockerfile` (`FROM node:22-slim` plus a comment naming the image), three mirrored pins in
+`scripts/tests/test-ci-hardening.sh`, **three** in `apps/api/tests/unit/test_ci_workflow.py` — not
+one, which stopped a scripted edit mid-run — and `docs/dev-workflow.md`. `scripts/doctor.sh` needed
+nothing: it reads `.node-version` generically, and S-retire-fedora-dev had already replaced its one
+hardcoded "Node.js 22" string with the interpolated major.
+
+Test deltas, measured on the branch under Node 26.8.1 / npm 11.19.0. API unit held at **2,003**
+passed with the same two skips, and web at **281 files and 2,352 tests** — both unmoved, which is the
+point: this slice changes the runtime, not behaviour. The 274 npm-security assertions pass, the live
+`check-npm-audit.mjs` run exits 0, `npm ci` reproduces both locks with no diff, and ESLint, the
+production build and all ten shell contracts are clean.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration
