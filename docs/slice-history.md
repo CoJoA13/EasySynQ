@@ -1353,7 +1353,7 @@ production build and all ten shell contracts are clean.
 
 ### S-postgres-18 — the database server moves 16 to 18
 
-Recorded 2026-09-03 after merging [`#PRNUM`](https://github.com/CoJoA13/EasySynQ/pull/PRNUM) as `SHA`.
+Recorded 2026-09-03 after merging [`#535`](https://github.com/CoJoA13/EasySynQ/pull/535) as `SHA`.
 Moves the PostgreSQL server from 16 to 18 across Compose, the pinned image lock, both testcontainers
 and CI's service container, and moves the `pg_dump`/`pg_restore` client with it. No application code,
 no migration, no contract, no permission key — the schema is unchanged and `alembic check` is clean.
