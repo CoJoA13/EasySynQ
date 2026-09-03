@@ -1380,8 +1380,14 @@ the lock, CI and both testcontainers — never reaches it. Left at 16 it would h
 with the runner's own client and never exercises the image. The rebuilt image was verified to carry
 `pg_dump (PostgreSQL) 18.6` rather than assumed to.
 
-**A second pin the same search missed:** CI's `migrations` job uses a GitHub Actions **service**
-container (`ci.yml:158`), not a testcontainer, so it needed its own edit.
+**Two more pins the same search missed.** CI's `migrations` job uses a GitHub Actions **service**
+container (`ci.yml:158`), not a testcontainer. And the `integration-shards` job installed **no**
+client at all — it inherited the runner image's preinstalled `postgresql-client-16`, which is
+invisible in this repository entirely. That one was found the honest way: the first CI run reddened
+shards 1 and 4 with the identical `server version mismatch` seen locally, reported as
+`pg_dump version: 16.15 (Ubuntu 16.15-1.pgdg24.04+2)`. The job now installs `postgresql-client-18`
+explicitly, which also makes true a `test_restore.py` docstring that this slice had already edited to
+claim CI carries 18 — a claim that was, for one push, a promise rather than a fact.
 
 **`infra/images.lock` was re-pinned to a real digest**, resolved with the same
 `docker buildx imagetools inspect --format '{{.Manifest.Digest}}'` call `scripts/images-update.sh`
