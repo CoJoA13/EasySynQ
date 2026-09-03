@@ -88,20 +88,20 @@ React + TypeScript + Mantine + Tailwind (SPA) · FastAPI / Python 3.12 · Postgr
 
 ## Quick start (developer)
 
-The primary developer host is standard Fedora Workstation 44 on x86_64. From a fresh clone, inspect
-the host first; the default is read-only:
+The supported developer host is Ubuntu 26.04 on x86_64. From a fresh clone, inspect the host first;
+the doctor never mutates anything:
 
 ```bash
-./scripts/bootstrap-fedora-dev.sh          # same as --check; never mutates
-./scripts/bootstrap-fedora-dev.sh --apply  # previews everything and requires literal `yes`
+./scripts/doctor.sh contributor            # read-only; names each missing tool and its install command
 ```
 
-The bootstrap installs missing host RPMs only after that approval, uses Docker's official Fedora
-repository, installs the tracked Node 22 and Python 3.12 runtimes, and ends at the contributor doctor.
-It never starts/enables Docker or changes groups, firewalld, or SELinux; those operator actions and
-the required new login session are explained in the
-[fresh Linux developer setup](docs/runbooks/fresh-linux-setup.md). Fedora Atomic variants are a
-separate advanced/unsupported path. Ubuntu production deployment remains documented in the
+Every `FAIL` line carries the exact command that resolves it. Install the tracked Node and Python 3.12
+runtimes plus `just`, `pre-commit` and the PostgreSQL 16 client, then re-run the doctor until it
+reports `PROFILE_READY`.
+The doctor never starts/enables Docker or changes groups, firewall, or SELinux; those operator
+actions and the required new login session are explained in the
+[fresh Linux developer setup](docs/runbooks/fresh-linux-setup.md). Ubuntu production deployment
+remains documented in the
 [online](docs/runbooks/install-online.md) and [air-gapped](docs/runbooks/install-airgapped.md) runbooks
 and continues to use `scripts/bootstrap-ubuntu.sh` unchanged.
 

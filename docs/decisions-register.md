@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R70) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, and R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R71) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R70
+## Part 3 — Resolutions R1–R71
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2327,6 +2327,52 @@ separately known to be drifted — `RES-DOC11-TOKEN-DRIFT`), and every surface n
 `RES-DATE-TIME-DISPLAY-CONVERGENCE`. `lib/time.ts` carries the rule at the source in both formatters.
 
 Bumps the resolutions range **R1–R69 → R1–R70**.
+
+---
+
+### R71 — Ubuntu 26.04 is the supported developer host; the Fedora developer path is retired — 2026-09-03
+
+**Context.** The repository tracked Fedora Workstation 44 as its primary developer host, provisioned
+by `scripts/bootstrap-fedora-dev.sh` and gated by a disposable two-media libvirt acceptance proof
+(`docs/runbooks/fedora-proof.md`). Moving the tracked Node major off 22 forced the question, because
+Fedora 44 has no Node 26 packages: `nodejs22-bin` and `nodejs24-bin` are present in its repositories
+and `nodejs26-bin` is absent, so the bootstrap's own package set could not satisfy the pin the
+repository would carry. The owner's development and deployment hosts are both Ubuntu, and
+`scripts/doctor.sh` already passed a full contributor profile there, so the Fedora path was carrying
+cost — roughly 202 KB of bootstrap, proof and contract-test tooling plus two CI steps — for a host
+nobody uses and which could not follow the runtime forward.
+
+**Normative rules.**
+
+1. **The supported developer host is Ubuntu 26.04 on x86_64.** `scripts/doctor.sh` is the host
+   contract; a `PASS PROFILE_READY contributor` is contributor readiness.
+2. **There is no developer bootstrap script, and none is owed.** The doctor names each missing tool
+   and the exact command that installs it, which is the whole of what the retired bootstrap added
+   beyond `dnf install`. A future bootstrap is an optional convenience, not a prerequisite.
+3. **There is no manual host-acceptance gate.** The disposable Fedora Workstation proof is retired
+   rather than replaced. CI is the acceptance evidence. No PR or release may be blocked on, or
+   claimed to have passed, a host proof that no longer exists.
+4. **Fedora is unsupported, not forbidden.** The doctor warns rather than fails there, so a
+   contributor mid-migration still gets a usable report. Nothing in the repository is obliged to keep
+   working on Fedora, and no fix is owed to it.
+5. **Retiring the proof discards no evidence.** It was recorded `PENDING` from 2026-08-09 and was
+   never executed — no media checksum, evidence commit or `PASS` was ever produced. Had a PASS
+   existed, this decision would have had to preserve it as dated history rather than delete it.
+
+⚠ **The production Ubuntu path is untouched and must not be conflated with this.**
+`scripts/bootstrap-ubuntu.sh` provisions a PRODUCTION host — sudo, firewall, CIFS mounts — and is not
+a developer setup path. This decision changes only which host contributors develop on.
+
+**What this deliberately does NOT do.** It does not delete the dated historical plans and specs under
+`docs/superpowers/` that describe the Fedora work; those remain preserved historical evidence per the
+contributor guide, and rewriting them to match current authority is exactly the edit those homes
+forbid.
+
+**Back-propagation:** `AGENTS.md`, `README.md`, `docs/dev-workflow.md`,
+`docs/runbooks/fresh-linux-setup.md` and `docs/current-status.md` carry the rule; `scripts/doctor.sh`
+carries it at the source in `check_platform`.
+
+Bumps the resolutions range **R1–R70 → R1–R71**.
 
 ---
 

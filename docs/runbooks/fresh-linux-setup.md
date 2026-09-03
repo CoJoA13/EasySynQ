@@ -1,42 +1,57 @@
 # Fresh Linux dev-box setup (developer dev-stack)
 
-> **Developer-facing**, not an operator/production runbook. The supported primary developer host is
-> standard **Fedora Workstation 44 on x86_64**. For production Ubuntu hosts, keep using
+> **Developer-facing**, not an operator/production runbook. The supported developer host is
+> **Ubuntu 26.04 on x86_64** (R71). For production Ubuntu hosts, keep using
 > [install-online.md](install-online.md) / [install-airgapped.md](install-airgapped.md) and the linked
-> `scripts/bootstrap-ubuntu.sh` flow; the Fedora developer bootstrap does not replace or call it.
+> `scripts/bootstrap-ubuntu.sh` flow; that script provisions a PRODUCTION host and is not a developer
+> setup path — do not run it on a dev box.
 > These steps create a fresh DB / MinIO / Keycloak state. Only the gitignored `.env` and Docker
 > volumes remain local after the repository is restored by `git clone`.
 
-## 1. Clone + Fedora Workstation toolchain
+## 1. Clone + toolchain
 
 ```bash
 git clone https://github.com/CoJoA13/EasySynQ.git ~/Documents/EasySynQ
 cd ~/Documents/EasySynQ
 
-# Read-only inventory first (the default is identical to --check).
-./scripts/bootstrap-fedora-dev.sh
-
-# Optional: preview every missing-package/repository transaction, then type literal `yes`.
-# Do not sudo the script itself. It asks before invoking sudo for the displayed commands.
-./scripts/bootstrap-fedora-dev.sh --apply
+# Read-only inventory. Names every missing tool and the exact command that installs it.
+./scripts/doctor.sh contributor
 ```
 
-Both the default and `--check` are non-mutating and require `VARIANT_ID=workstation` exactly.
-`--apply` installs the exact Fedora package set, adds Docker's official Fedora repository only when
-absent, installs Docker Engine from that repository, runs `uv python install 3.12` as your
-unprivileged account, and finishes with
-`./scripts/doctor.sh contributor`. It does not install repository dependencies, start or enable a
-service, change group membership, change firewalld or SELinux, or edit `/etc` directly. When approved,
-DNF's `config-manager` writes the official repository definition to
-`/etc/yum.repos.d/docker-ce.repo`; the preview discloses that write before sudo.
+There is no developer bootstrap script. R71 retired the Fedora one along with the Fedora developer
+path, because Fedora ships no package for the tracked Node major. `./scripts/doctor.sh` is the host
+contract: work its `FAIL` lines until it prints `PASS PROFILE_READY contributor`.
 
-The Fedora Node packages `nodejs22-bin` and `nodejs22-npm-bin` provide the ordinary `node` and `npm`
-commands. The tracked `.node-version` is `22`. If a shell manager puts an older Node before
-`/usr/bin/node`, the bootstrap reports `PATH_SHADOWED`; use `PATH=/usr/bin:$PATH` for that session or
-fix the shell-manager selection instead of reinstalling the already-present RPMs.
+The tools it requires, and the way each is installed on Ubuntu 26.04 without needing a bootstrap:
 
-Docker host policy remains an explicit operator decision. Review the printed commands, then run them
-separately if appropriate:
+| Tool | Install |
+|---|---|
+| `git`, `curl`, `openssl` | `sudo apt-get install git curl openssl` |
+| Node (major per the tracked `.node-version`) | Any version manager, or NodeSource. `nvm install <major> && nvm alias default <major>` keeps it off the system path. |
+| `uv` (manages Python 3.12) | Astral's installer, then `uv python install 3.12` |
+| `just` | `sudo apt-get install just`, or `uv tool install rust-just` when sudo is unavailable |
+| `pre-commit` | `sudo apt-get install pre-commit`, or `uv tool install pre-commit` |
+| `pg_dump` **major 16** | See below — Ubuntu 26.04 ships 18 only |
+| Docker Engine + Compose v2 | Distribution packages or Docker's official apt repository |
+
+⚠ **`pg_dump` must be major 16**, matching the PG16 testcontainer. Ubuntu 26.04 ships 18 only, and a
+newer client makes `pg_restore` fail with `unrecognized configuration parameter
+"transaction_timeout"`, so `test_backup`/`test_restore` report `FAIL`. Add PGDG, which publishes a
+`resolute` dist:
+
+```bash
+sudo install -d /usr/share/postgresql-common/pgdg
+sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+sudo apt update && sudo apt install -y postgresql-client-16
+```
+
+Install **only** `postgresql-client-16`, never the unversioned metapackage, or `pg_wrapper` selects
+the newer client and a bare `pg_dump` resolves to 18 again. The containerized stack is unaffected:
+the api/worker images carry pg_dump 16, so the wizard's restore drill always uses a matching version.
+
+Docker host policy stays an explicit operator decision. Review these, then run them separately if
+appropriate:
 
 ```bash
 sudo systemctl enable --now docker
@@ -45,10 +60,15 @@ sudo usermod -aG docker "$USER"
 
 Membership in the `docker` group is root-equivalent. A full logout and login (or a reboot) is the
 reliable way to activate the new group in every process; `newgrp docker` only starts a transitional
-subshell. Docker also manages forwarding rules and firewalld integration for published container
-ports. Review the Compose host bindings and the resulting firewalld `docker` zone/policy rather than
-assuming a workstation zone alone blocks a published port. The bootstrap deliberately makes no
-firewall change.
+subshell. To use Docker **before** re-login, wrap commands: `sg docker -c 'just up s'`. Docker also
+manages forwarding rules for published container ports — review the Compose host bindings rather than
+assuming the host firewall alone blocks a published port.
+
+⚠ **A version manager can shadow the tracked Node major.** If `node --version` disagrees with
+`.node-version`, the doctor reports `NODE_UNSUPPORTED_VERSION` or `NODE_PATH_SHADOWED`. Fix the
+manager's selection rather than installing a second runtime. Note that a long-running editor or agent
+session inherits the PATH of the terminal that launched it, so it can keep reporting a stale Node
+after you switch — check in a NEW terminal before concluding the switch failed.
 
 After starting Docker and entering a fresh group-aware login session, confirm the broader test-host
 profile:
@@ -58,35 +78,14 @@ profile:
 ```
 
 If a reason fails, use the reason-to-command table in
-[`docs/dev-workflow.md`](../dev-workflow.md#toolchain-linux-ci--a-linux-dev-host); do not guess at socket,
-SELinux, runtime, or package changes. A passing local doctor and fast structural tests are contributor
-readiness only. The PR/release acceptance artifact is the separate two-media
-[`Fedora Workstation proof`](fedora-proof.md), which must be executed on a suitable libvirt host.
+[`docs/dev-workflow.md`](../dev-workflow.md#toolchain-linux-ci--a-linux-dev-host); do not guess at
+socket, runtime, or package changes. A passing local doctor plus the fast structural tests is
+contributor readiness; CI is the acceptance evidence.
 
-### 1a. Fedora Atomic variants (advanced and unsupported)
-
-Silverblue, Kinoite, and other rpm-ostree/Atomic variants are not the standard Fedora Workstation
-target and are not covered by `bootstrap-fedora-dev.sh`; it intentionally exits instead of layering
-host packages onto an unreviewed image. Treat an Atomic setup as an advanced, unsupported adaptation:
-keep development tools in a documented toolbox/container and manage the host Docker socket with the
-distribution's own guidance. The checks in §8 still describe the required outcomes. Two common
-gotchas remain:
-
-- **Some images ship Docker without a usable group.** If `docker-ce` exists but the `docker` group
-  does not, adding the user alone cannot work and `systemctl enable docker.socket` can fail (the unit's
-  `SocketGroup=docker` can't resolve → socket stays `root:root`/failed). Create the group yourself:
-  ```bash
-  sudo groupadd -f docker && sudo usermod -aG docker "$USER"
-  sudo systemctl enable --now docker.socket docker.service
-  ```
-  `sudo` is password-prompted (no passwordless), so run these interactively. Then log out/in (or reboot)
-  so your shell joins the group. To use Docker **before** re-login (same session) — `sg` reads
-  `/etc/group` live, so wrap commands: `sg docker -c 'just up s'`, `sg docker -c 'docker ps'`, etc. This
-  wrapper is needed for every `docker`/`just up`/testcontainer command until you re-login.
-- **Clean up throwaway containers by explicit `--name` only** — never
-  `docker rm -f $(docker ps -aq --filter ancestor=postgres:16)`: that filter also matches the **live
-  `easysynq-postgres-1`** and any running **testcontainers**. (The `pgdata` is a named volume, so an
-  accidental container kill is recoverable with `just up s`, but avoid the scare.)
+⚠ Clean up throwaway containers by explicit `--name` only — never
+`docker rm -f $(docker ps -aq --filter ancestor=postgres:16)`: that filter also matches the live
+`easysynq-postgres-1` and any running testcontainers. (`pgdata` is a named volume, so an accidental
+container kill is recoverable with `just up s`, but avoid the scare.)
 
 ## 2. Build project dependencies
 
