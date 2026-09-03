@@ -1307,7 +1307,7 @@ is clean. The web suites were NOT run and are not restated: no TypeScript change
 
 ### S-node-26 — the tracked Node major moves 22 to 26
 
-Recorded 2026-09-03 after merging [`#PRNUM`](https://github.com/CoJoA13/EasySynQ/pull/PRNUM) as `SHA`.
+Recorded 2026-09-03 after merging [`#534`](https://github.com/CoJoA13/EasySynQ/pull/534) as `SHA`.
 Moves `.node-version` from 22 to 26 and widens the npm advisory gate to npm 11. Depends on
 S-retire-fedora-dev, which had to land first. No application code, no migration, no contract, no
 permission key, and **no lockfile churn**.
