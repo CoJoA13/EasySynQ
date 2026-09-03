@@ -1380,6 +1380,16 @@ the lock, CI and both testcontainers — never reaches it. Left at 16 it would h
 with the runner's own client and never exercises the image. The rebuilt image was verified to carry
 `pg_dump (PostgreSQL) 18.6` rather than assumed to.
 
+⚠ **The image also moved `PGDATA`, and no test in this repository could have caught it.**
+`postgres:18` sets `PGDATA=/var/lib/postgresql/18/docker` and declares the **parent**
+`/var/lib/postgresql` as its `VOLUME`, where `postgres:16` used `/var/lib/postgresql/data` for both.
+Compose mounted `pgdata:` at the old child path, which under 18 receives nothing: the cluster
+initializes into an **anonymous** volume, so `just down` followed by `just up s` returns an empty
+database. Testcontainers never read Compose's volume configuration, so all 1,231 integration tests
+passed against a defect that would have lost the dev database on first restart. Found by the
+adversarial PR reviewer, then **confirmed by experiment** rather than by reading: recreating a
+container on the child mount loses the row, and on the parent mount returns it.
+
 **Two more pins the same search missed.** CI's `migrations` job uses a GitHub Actions **service**
 container (`ci.yml:158`), not a testcontainer. And the `integration-shards` job installed **no**
 client at all — it inherited the runner image's preinstalled `postgresql-client-16`, which is
@@ -1387,7 +1397,13 @@ invisible in this repository entirely. That one was found the honest way: the fi
 shards 1 and 4 with the identical `server version mismatch` seen locally, reported as
 `pg_dump version: 16.15 (Ubuntu 16.15-1.pgdg24.04+2)`. The job now installs `postgresql-client-18`
 explicitly, which also makes true a `test_restore.py` docstring that this slice had already edited to
-claim CI carries 18 — a claim that was, for one push, a promise rather than a fact.
+claim CI carries 18 — a claim that was, for one push, a promise rather than a fact. ⚠ The first
+attempt at that fix ran a bare `apt-get install postgresql-client-18` and made things **worse**,
+reddening all four shards instead of two with `Unable to locate package`: the runner's preinstalled
+client carries a `pgdg24.04` version suffix, which says only that it came from PGDG at image-build
+time, **not** that the PGDG apt source is still configured. The step now adds the repository first
+and asserts `pg_dump --version` reports 18 before any test runs, so a future runner-image change
+fails on that line rather than 19 tests later.
 
 **`infra/images.lock` was re-pinned to a real digest**, resolved with the same
 `docker buildx imagetools inspect --format '{{.Manifest.Digest}}'` call `scripts/images-update.sh`

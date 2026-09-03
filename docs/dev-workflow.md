@@ -86,7 +86,7 @@ locked, audit-clean connector and a separately proven least-privilege developmen
   and then the live high/critical gate against the committed web lock. npm high/critical findings are
   gated; pip-audit and Trivy findings are report-only.
 - **Docker-backed checks:** when `docker info` succeeds, run integration tests via testcontainers and
-  migrations against a disposable PostgreSQL 16 instance. Backup/restore tests also require a
+  migrations against a disposable PostgreSQL 18 instance. Backup/restore tests also require a
   version-matched PostgreSQL client (`pg_dump`/`pg_restore`). If group membership requires it, wrap
   the command with `sg docker -c "cd apps/api && uv run pytest tests/integration -m integration …"`.
 - **Integration isolation:** the suite shares a database within each process, and shard composition

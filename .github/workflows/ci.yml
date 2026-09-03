@@ -216,9 +216,17 @@ jobs:
       # configured on the runner, so this is an install, not a repository add.
       - name: install the postgres client matching the testcontainer major
         run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+          https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client-18
-          pg_dump --version
+          # Fail loudly here rather than 19 tests later with a message naming a version mismatch.
+          pg_dump --version | grep -qE '\) 18\.' || { pg_dump --version; exit 1; }
       - name: integration tests (shard ${{ matrix.group }}/4, testcontainers spin their own Postgres)
         working-directory: apps/api
         run: >-

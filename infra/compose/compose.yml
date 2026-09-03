@@ -34,7 +34,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-easysynq}
       POSTGRES_DB: ${POSTGRES_DB:-easysynq}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 moved PGDATA to /var/lib/postgresql/18/docker and declares the PARENT
+      # /var/lib/postgresql as its VOLUME. Mounting the old :16 child path (…/data) silently
+      # sends the cluster to an ANONYMOUS volume instead: `just down` then `just up s` comes
+      # back with an empty database. Verified by recreating a container both ways.
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-easysynq} -d ${POSTGRES_DB:-easysynq}"]
       interval: 5s
