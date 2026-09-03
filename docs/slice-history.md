@@ -1248,6 +1248,61 @@ suite moved **78 → 80**. ESLint over `src` and `e2e`, both strict `tsc` projec
 build were clean. The API, migration, integration and response-contract suites were not run and are
 not restated: this slice changes no Python.
 
+### S-retire-fedora-dev — Ubuntu becomes the supported developer host
+
+Recorded 2026-09-03 after merging [`#SHA_PR`](https://github.com/CoJoA13/EasySynQ/pull/SHA_PR) as `SHA`.
+Retires the Fedora developer path and its disposable two-media Workstation acceptance proof, and
+records the replacement as **R71**. Docs, scripts and CI wiring only — no application code, no
+migration, no contract, no permission key.
+
+**Why now, and why it was forced rather than chosen.** The owner moved development and deployment to
+Ubuntu and asked to move the tracked Node major off 22. Fedora 44 cannot follow: querying its
+repositories shows `nodejs22-bin` and `nodejs24-bin` present and `nodejs26-bin` absent, so
+`bootstrap-fedora-dev.sh` — whose package set is a literal `nodejs22 nodejs22-bin nodejs22-npm
+nodejs22-npm-bin` — could not satisfy the pin the repository was about to carry. The script also
+hard-gated `.node-version` with `if [[ $node_major != 22 ]]; then exit 2`, and
+`test-bootstrap-fedora-dev.sh` asserted that pin, so the Node bump could not land while the Fedora
+path existed. **The sequencing is therefore inverted from the obvious order: the retirement lands
+first, and the Node bump follows as its own slice.**
+
+**What was removed.** 202 KB across six files — `scripts/bootstrap-fedora-dev.sh`,
+`scripts/run-fedora-proof.sh`, `scripts/inside-fedora-proof.sh`,
+`scripts/tests/test-bootstrap-fedora-dev.sh`, `scripts/tests/test-fedora-proof-contract.sh` and
+`docs/runbooks/fedora-proof.md` — plus `infra/dev/fedora-proof/ks.cfg`, the Kickstart the proof
+injected, which a filename-based search for "fedora-proof" scripts would have missed.
+
+⚠ **Retiring the proof discards no evidence, and that was checked rather than assumed.** It was
+recorded `PENDING` in `current-status.md` from 2026-08-09 and never executed: no media checksum, no
+evidence commit, no `PASS`. Had a PASS existed, it would have had to be preserved as dated history
+instead.
+
+**What the doctor does now.** `check_platform` makes Ubuntu the supported host and demotes Fedora to
+a **WARN with blocker `none`**, not a FAIL — every tool check below it still works there, so a
+contributor mid-migration gets a usable report rather than a dead end. The `NODE_PATH_SHADOWED`
+message no longer hardcodes "Fedora Node.js 22"; it interpolates the tracked major, so the Node bump
+will not need to touch it. ⚠ The Ubuntu PASS string was deliberately left byte-identical: a fixture
+in `test-doctor.sh` pins it, and its host is Ubuntu **24.04**, where "is the supported developer
+host" would have been a false statement. `test-doctor.sh` keeps its Fedora default fixture on
+purpose — the SELinux branches it exercises still exist in the code.
+
+**Four separate places pinned the CI step that was merged**, and only two were reachable by searching
+for the deleted filenames: `ci.yml` itself, `scripts/tests/test-ci-hardening.sh` (an exact-text
+assertion plus two ordering assertions naming the old step), and `apps/api/tests/unit/
+test_ci_workflow.py`, which pins the step dict inside the Python unit suite. The two ordering
+guarantees were retargeted rather than deleted: the doctor contracts must still run after the R61
+site-data backstop and before contract-tool hydration.
+
+**Deliberately untouched.** The dated plans and specs under `docs/superpowers/` that describe the
+Fedora work are preserved as historical evidence; rewriting them to match current authority is the
+edit those homes forbid. `scripts/bootstrap-ubuntu.sh` is also untouched — it provisions a
+PRODUCTION host and was never a developer path, a distinction R71 records explicitly because the two
+are easy to conflate.
+
+Test deltas. API unit stayed at **2,003** passed with the same two release-ceremony skips, and all
+ten `scripts/tests/*.sh` shell contracts pass, including the 63 doctor fixture checks and the 85
+CI-hardening assertions. `check-repo-authority.sh` reports `AUTHORITY_OK` and `check-no-site-data.sh`
+is clean. The web suites were NOT run and are not restated: no TypeScript changed.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration

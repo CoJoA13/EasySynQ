@@ -192,13 +192,15 @@ load_runtime_contracts() {
 check_platform() {
   local selinux_blocker=none
   if ! read_os_release; then
-    emit FAIL OS_UNSUPPORTED contributor 'Cannot read /etc/os-release. Use Fedora Workstation 44 or a supported Ubuntu host.'
-  elif [[ $os_id == fedora && $os_version == 44 ]]; then
-    emit PASS OS_SUPPORTED none 'Fedora Workstation 44 is supported.'
+    emit FAIL OS_UNSUPPORTED contributor 'Cannot read /etc/os-release. Use an Ubuntu 26.04 x86_64 developer host.'
   elif [[ $os_id == ubuntu ]]; then
     emit PASS OS_SUPPORTED none "Ubuntu $os_version remains supported."
+  elif [[ $os_id == fedora ]]; then
+    # R71 retired the Fedora developer path. Every tool check below still works there, so this warns
+    # rather than blocks: a contributor mid-migration gets a usable report, not a dead end.
+    emit WARN OS_UNSUPPORTED_ADVISORY none 'Fedora is no longer the supported developer host (R71); Ubuntu 26.04 is.'
   else
-    emit FAIL OS_UNSUPPORTED contributor 'Use Fedora Workstation 44 or the documented Ubuntu workflow.'
+    emit FAIL OS_UNSUPPORTED contributor 'Use an Ubuntu 26.04 x86_64 developer host (R71).'
   fi
   [[ $os_id == fedora ]] && selinux_blocker=stack
 
@@ -267,7 +269,7 @@ check_node() {
     [[ $system_version =~ ^v?([0-9]+)\. ]] && system_major=${BASH_REMATCH[1]}
   fi
   if [[ $system_major == "$expected_major" ]]; then
-    emit FAIL NODE_PATH_SHADOWED contributor 'Fedora Node.js 22 exists but another node wins PATH. Run for this session: PATH=/usr/bin:$PATH'
+    emit FAIL NODE_PATH_SHADOWED contributor "A system Node.js major $expected_major exists but another node wins PATH. Run for this session: PATH=/usr/bin:\$PATH"
   else
     emit FAIL NODE_UNSUPPORTED_VERSION contributor "Install and select Node.js major $expected_major, then run: node --version"
   fi

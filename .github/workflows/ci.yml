@@ -32,11 +32,8 @@ jobs:
         run: bash scripts/tests/test-check-no-site-data.sh
       - name: R61 site-data backstop (check-no-site-data)
         run: ./scripts/check-no-site-data.sh
-      - name: Fedora/bootstrap/doctor shell contracts
-        run: |
-          bash scripts/tests/test-bootstrap-fedora-dev.sh
-          bash scripts/tests/test-doctor.sh
-          bash scripts/tests/test-fedora-proof-contract.sh
+      - name: doctor shell contracts
+        run: bash scripts/tests/test-doctor.sh
       - uses: actions/setup-node@v7
         with:
           node-version: "22"

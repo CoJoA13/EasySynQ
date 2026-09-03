@@ -189,12 +189,8 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
             "run": "./scripts/check-no-site-data.sh",
         },
         {
-            "name": "Fedora/bootstrap/doctor shell contracts",
-            "run": (
-                "bash scripts/tests/test-bootstrap-fedora-dev.sh\n"
-                "bash scripts/tests/test-doctor.sh\n"
-                "bash scripts/tests/test-fedora-proof-contract.sh\n"
-            ),
+            "name": "doctor shell contracts",
+            "run": "bash scripts/tests/test-doctor.sh",
         },
         {
             "uses": "actions/setup-node@v7",

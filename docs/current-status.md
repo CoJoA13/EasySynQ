@@ -1,8 +1,8 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-02"
+as_of: "2026-09-03"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-capa-width-railfoot-order"
+last_shipped_slice: "S-retire-fedora-dev"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2003
@@ -135,6 +135,18 @@ Evidence: ESLint, both strict `tsc` projects, the production build, Vitest at **
 tests** and the Playwright Chromium suite at **80** were run locally and passed. No Python changed,
 so the API, migration, integration and response-contract figures above stand from the run that
 produced them.
+
+S-retire-fedora-dev then made **Ubuntu 26.04 the supported developer host** and retired the Fedora
+developer path, recorded as **R71**. This was forced rather than chosen: Fedora 44 publishes no Node
+26 package — `nodejs22-bin` and `nodejs24-bin` are present, `nodejs26-bin` is not — so the Fedora
+bootstrap could not follow the tracked Node major forward, and its hard `.node-version != 22` gate
+blocked the bump outright. The retirement therefore had to land BEFORE the Node bump, not after.
+Removed: the Fedora bootstrap, the disposable two-media Workstation proof, their two contract test
+suites, the injected Kickstart, and the runbook — 202 KB and two CI steps. There is now no manual
+host-acceptance gate: `./scripts/doctor.sh` is the host contract and CI is the acceptance evidence.
+Fedora warns rather than fails in the doctor, so a contributor mid-migration still gets a usable
+report. API unit held at **2,003**; all ten shell contracts, `AUTHORITY_OK` and the site-data
+backstop pass. No application code, migration, contract or permission key changed.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
@@ -600,10 +612,10 @@ jobs because `integration-shards` fans out four ways and `web-shards` two.
 - PostgreSQL MCP: **disabled** after the reviewed package failed the high-severity advisory gate. No
   connector, launcher, package lock, owner-database port overlay, or orphan database role ships. The sole
   re-enablement contract is [`RES-POSTGRES-MCP-REPLACEMENT`](open-residuals.md#res-postgres-mcp-replacement).
-- Disposable Fedora Workstation proof: **PENDING — not run on this checkout as of 2026-08-09**. No Fedora
-  media checksum, evidence commit, or PASS result is recorded because the required Fedora 44 Everything
-  netinstall and Workstation Live media plus a usable `qemu:///system` proof host were not available.
-  Completion requires the manual PR/release gate in [`runbooks/fedora-proof.md`](runbooks/fedora-proof.md).
+- Disposable Fedora Workstation proof: **RETIRED, never run**. It was `PENDING` from 2026-08-09 to its
+  retirement and no media checksum, evidence commit, or PASS was ever recorded, so retiring it discards
+  no evidence. R71 removed the Fedora developer path it existed to gate; `./scripts/doctor.sh` is now
+  the host contract and CI is the acceptance evidence.
 - Local focused Python acceptance: **PASS on 2026-08-08 with CPython 3.12.13**. The Program 0
   dependency-tooling, deployment-configuration, and CI-workflow matrix completed 80 tests. This does not
   replace the full repository suites or the pending Fedora VM proof.

@@ -267,13 +267,10 @@ assert_text_contains \
           bash scripts/tests/test-claude-hooks.sh
           ./scripts/check-repo-authority.sh'
 assert_text_contains \
-  "contracts job runs Fedora bootstrap, doctor, and proof contracts" \
+  "contracts job runs the doctor shell contracts" \
   "$CONTRACTS_BLOCK" \
-  '      - name: Fedora/bootstrap/doctor shell contracts
-        run: |
-          bash scripts/tests/test-bootstrap-fedora-dev.sh
-          bash scripts/tests/test-doctor.sh
-          bash scripts/tests/test-fedora-proof-contract.sh'
+  '      - name: doctor shell contracts
+        run: bash scripts/tests/test-doctor.sh'
 assert_text_contains \
   "contracts job proves the PostgreSQL MCP path stays disabled" \
   "$CONTRACTS_BLOCK" \
@@ -325,9 +322,9 @@ assert_before \
   "      - name: R61 backstop regression harness" \
   "      - uses: actions/setup-node@v7"
 assert_before \
-  "Fedora shell contracts run before contract tool hydration" \
+  "doctor shell contracts run before contract tool hydration" \
   "$CONTRACTS_BLOCK" \
-  "      - name: Fedora/bootstrap/doctor shell contracts" \
+  "      - name: doctor shell contracts" \
   "      - uses: actions/setup-node@v7"
 assert_before \
   "Node 22 is selected before the disabled PostgreSQL MCP contract" \
@@ -340,10 +337,10 @@ assert_before \
   "      - name: PostgreSQL MCP disabled contract" \
   "      - name: install locked contract tools"
 assert_before \
-  "site-data backstop stays ahead of new Fedora contracts" \
+  "site-data backstop stays ahead of the doctor contracts" \
   "$CONTRACTS_BLOCK" \
   "      - name: R61 site-data backstop (check-no-site-data)" \
-  "      - name: Fedora/bootstrap/doctor shell contracts"
+  "      - name: doctor shell contracts"
 assert_before \
   "workflow regression runs before contract tool hydration" \
   "$CONTRACTS_BLOCK" \
