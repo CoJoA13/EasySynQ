@@ -78,7 +78,7 @@ function advisoryRecord(name, severity) {
 
 function assess(report, overrides = {}) {
   return assessNpmAudit({
-    npmVersion: '10.9.4',
+    npmVersion: '11.19.0',
     exitCode: 0,
     stdout: typeof report === 'string' ? report : JSON.stringify(report),
     lockfile: clone(lockFixture),
@@ -117,10 +117,13 @@ function acceptedRouterRecords() {
   ];
 }
 
-test('supported npm versions are limited to npm 10.9 patch releases', () => {
-  assert.doesNotThrow(() => assertSupportedNpmVersion('10.9.0'));
-  assert.doesNotThrow(() => assertSupportedNpmVersion('10.9.999'));
-  for (const version of ['10.8.9', '10.10.0', '10.9', 'v10.9.4', '', null, 10.9]) {
+test('supported npm versions are limited to npm 11 releases', () => {
+  assert.doesNotThrow(() => assertSupportedNpmVersion('11.0.0'));
+  assert.doesNotThrow(() => assertSupportedNpmVersion('11.19.0'));
+  assert.doesNotThrow(() => assertSupportedNpmVersion('11.999.999'));
+  // 10.9.8 is the npm Node 22 shipped: the version this gate accepted before the Node 26 pin, and
+  // the one a stale local toolchain would still present. It must now be REFUSED, not tolerated.
+  for (const version of ['10.9.8', '10.9.0', '12.0.0', '11.0', 'v11.0.0', '', null, 11]) {
     assertPolicyError('E_NPM_VERSION', () => assertSupportedNpmVersion(version));
   }
 });

@@ -1,4 +1,4 @@
-const SUPPORTED_NPM_VERSION = /^10\.9\.\d+$/;
+const SUPPORTED_NPM_VERSION = /^11\.\d+\.\d+$/;
 const GHSA_ID = /^GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}$/;
 const RFC3339_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const SEVERITIES = ['info', 'low', 'moderate', 'high', 'critical'];
@@ -63,7 +63,7 @@ function assertUniqueStringArray(value, code, path, { allowEmpty = true } = {}) 
 
 export function assertSupportedNpmVersion(npmVersion) {
   if (typeof npmVersion !== 'string' || !SUPPORTED_NPM_VERSION.test(npmVersion)) {
-    fail('E_NPM_VERSION', 'npm version must match 10.9.x');
+    fail('E_NPM_VERSION', 'npm version must match 11.x');
   }
 }
 

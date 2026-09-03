@@ -1,8 +1,8 @@
 # EasySynQ web SPA — build the static assets, serve them with `vite preview`.
 # Caddy reverse-proxies `/` here and `/api`,`/healthz`,`/readyz` to the api service.
-FROM node:22-slim AS build
+FROM node:26-slim AS build
 # --- non-root (audit U33) ---
-# node:22-slim ships an unprivileged `node` user (uid 1000). USER is set BEFORE the install so the
+# node:26-slim ships an unprivileged `node` user (uid 1000). USER is set BEFORE the install so the
 # tree is created owned correctly; a `chown -R` afterwards would duplicate the whole 300 MB
 # node_modules into a second layer, and these images ship in the air-gap bundle.
 # `vite preview` genuinely needs write access (it uses /app/node_modules/.vite-temp), so running

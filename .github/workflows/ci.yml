@@ -36,7 +36,7 @@ jobs:
         run: bash scripts/tests/test-doctor.sh
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
           cache-dependency-path: packages/contracts/package-lock.json
       - name: PostgreSQL MCP disabled contract
@@ -256,7 +256,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - working-directory: apps/web
@@ -276,7 +276,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - working-directory: apps/web
@@ -338,7 +338,7 @@ jobs:
         run: bash scripts/run-pip-audit.sh
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - name: install frozen web dependencies for npm policy
