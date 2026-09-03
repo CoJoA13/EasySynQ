@@ -1,7 +1,7 @@
 """S11 integration proofs — the operator-grade WORM-aware restore-to-verified-target (R37) + the
 encrypted durable archive + the pre-backup/health-gated upgrade.
 
-These exercise the real pg_dump/pg_restore + MinIO round-trip (CI has postgresql-client-16; a host
+These exercise the real pg_dump/pg_restore + MinIO round-trip (CI has postgresql-client-18; a host
 without it makes the restore an honest FAIL, not a 500). The pure checkpoint-not-ahead verdict + the
 crypto envelope are unit-proven in ``tests/unit/test_backup_crypto.py``; here we prove the full
 orchestration: a verified target stands up + audits RESTORE_VERIFIED, a checkpoint-ahead is FLAGGED

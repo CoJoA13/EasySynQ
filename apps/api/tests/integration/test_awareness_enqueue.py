@@ -1,6 +1,6 @@
 """enqueue_awareness_one — in-app row created; version-discriminated dedup; re-release re-notifies.
 
-Tests run against a real migrated PG16 via testcontainers. The migration (0066) seeds the
+Tests run against a real migrated PG18 via testcontainers. The migration (0066) seeds the
 ``doc.released`` template, so no manual template row is needed.
 
 Three cases:

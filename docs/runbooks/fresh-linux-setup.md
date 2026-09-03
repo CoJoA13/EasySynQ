@@ -31,24 +31,24 @@ The tools it requires, and the way each is installed on Ubuntu 26.04 without nee
 | `uv` (manages Python 3.12) | Astral's installer, then `uv python install 3.12` |
 | `just` | `sudo apt-get install just`, or `uv tool install rust-just` when sudo is unavailable |
 | `pre-commit` | `sudo apt-get install pre-commit`, or `uv tool install pre-commit` |
-| `pg_dump` **major 16** | See below — Ubuntu 26.04 ships 18 only |
+| `pg_dump` **major 18** | `sudo apt-get install postgresql-client-18` — Ubuntu 26.04 ships 18 |
 | Docker Engine + Compose v2 | Distribution packages or Docker's official apt repository |
 
-⚠ **`pg_dump` must be major 16**, matching the PG16 testcontainer. Ubuntu 26.04 ships 18 only, and a
-newer client makes `pg_restore` fail with `unrecognized configuration parameter
-"transaction_timeout"`, so `test_backup`/`test_restore` report `FAIL`. Add PGDG, which publishes a
-`resolute` dist:
+⚠ **`pg_dump` must be major 18**, matching the PostgreSQL server in `infra/images.lock`.
+`test_backup`/`test_restore` shell out to `pg_dump`/`pg_restore`, and **pg_dump refuses a newer server
+outright** — a 16 client against the 18 testcontainer aborts with `server version mismatch` and 19
+tests fail with a message that reads like a database problem rather than a client-version one. Ubuntu
+26.04 ships 18 as its default, so no third-party repository is needed:
 
 ```bash
-sudo install -d /usr/share/postgresql-common/pgdg
-sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
-echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
-sudo apt update && sudo apt install -y postgresql-client-16
+sudo apt-get install postgresql-client-18
 ```
 
-Install **only** `postgresql-client-16`, never the unversioned metapackage, or `pg_wrapper` selects
-the newer client and a bare `pg_dump` resolves to 18 again. The containerized stack is unaffected:
-the api/worker images carry pg_dump 16, so the wizard's restore drill always uses a matching version.
+⚠ If an **older** versioned client is also installed (`postgresql-client-16`, say, left over from
+before this upgrade), `pg_wrapper` can select it and a bare `pg_dump` resolves to 16 again. Check with
+`pg_dump --version`; if it reports the wrong major, remove the stale versioned package or put
+`/usr/lib/postgresql/18/bin` first on `PATH`. The containerized stack is unaffected either way — the
+api/worker images carry their own matching client, so the wizard's restore drill is never at risk.
 
 Docker host policy stays an explicit operator decision. Review these, then run them separately if
 appropriate:
@@ -83,7 +83,7 @@ socket, runtime, or package changes. A passing local doctor plus the fast struct
 contributor readiness; CI is the acceptance evidence.
 
 ⚠ Clean up throwaway containers by explicit `--name` only — never
-`docker rm -f $(docker ps -aq --filter ancestor=postgres:16)`: that filter also matches the live
+`docker rm -f $(docker ps -aq --filter ancestor=postgres:18)`: that filter also matches the live
 `easysynq-postgres-1` and any running testcontainers. (`pgdata` is a named volume, so an accidental
 container kill is recoverable with `just up s`, but avoid the scare.)
 
@@ -213,7 +213,7 @@ With a native Docker engine, the integration suite can run locally.
 | Gate | Command |
 |---|---|
 | API unit | `cd apps/api && uv run pytest tests/unit -m unit -q` (or the `/check-api` skill: ruff + format + mypy-strict + unit) |
-| Migrations | `/check-migrations` (alembic up↔down↔check on a throwaway PG16) |
+| Migrations | `/check-migrations` (alembic up↔down↔check on a throwaway PG18) |
 | Web | `(set -e; cd apps/web; for shard in 1 2; do npm test -- --shard="$shard/2"; done; npm run lint; npm run build)` (`build` owns the one `tsc --noEmit` pass) |
 | Integration | Run **CI-sharded** (a single full process pollutes — see ⚠): `(set -e; cd apps/api; for g in 1 2 3 4; do uv run pytest tests/integration -m integration --splits 4 --group "$g" --durations-path .test_durations; done)` (needs Docker **and a version-matched `pg_dump`** — see ⚠) |
 
@@ -268,24 +268,22 @@ any comment you add must not contain an equals sign or it is silently read as a 
   `test_restore` — shared `setup_state`, `mirror_build` rows, restore-scratch). The very same files pass
   **in isolation** and **sharded**. Use the sharded command in the table; the single-process number is
   not a clean gate (CI is authoritative). Needs `pytest-split` (a dev dep — included by `uv sync`).
-- **`pg_dump` must match the PG16 testcontainer major version.** `test_backup` / `test_restore` shell out
-  to `pg_dump`/`pg_restore`; a **newer** client (pg_dump 18 from a recent `postgresql-client` or brew
-  `libpq`) makes `pg_restore` fail with `ERROR: unrecognized configuration parameter "transaction_timeout"`
-  (a PG17+ GUC the PG16 server rejects → the drill reports `FAIL`). Install **pg_dump 16** and put it
-  first on `PATH` — brew: `brew install postgresql@16` then prepend `$(brew --prefix postgresql@16)/bin`.
-  On Debian/Ubuntu `apt install postgresql-client-16` only works if that version is still in your
-  release's repos — **Ubuntu 26.04 ships 18 only**, so add PGDG first (it does publish a `resolute`
-  dist):
+- **`pg_dump` must match the PG18 testcontainer major version.** `test_backup` / `test_restore` shell
+  out to `pg_dump`/`pg_restore`. **pg_dump refuses a NEWER server outright**, so a leftover 16 client
+  against the 18 testcontainer aborts every one of them with
+  `pg_dump: error: aborting because of server version mismatch` — 19 failures across
+  `test_backup.py`, `test_restore.py` and `test_setup.py::test_setup_finalize_requires_restore_pass`,
+  none of which names the real cause. Ubuntu 26.04 ships 18 as its default:
   ```bash
-  sudo install -d /usr/share/postgresql-common/pgdg
-  sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
-  echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
-  sudo apt update && sudo apt install -y postgresql-client-16
+  sudo apt-get install postgresql-client-18
   ```
-  Installing **only** `postgresql-client-16` (not the unversioned metapackage) keeps `pg_wrapper` from
-  picking a newer client, so a bare `pg_dump` resolves to 16. The **containerized stack is unaffected** (the api/worker images
-  carry pg_dump 16.14, so the wizard restore-drill always uses the matching version). With **no** `pg_dump`
-  at all, the suite errors `pg_dump not found`.
+  ⚠ Installing an **older** versioned client alongside it (`postgresql-client-16`) lets `pg_wrapper`
+  select that one, and a bare `pg_dump` silently resolves to 16 again. Verify with `pg_dump --version`
+  rather than assuming; the fix is to remove the stale versioned package, or to put
+  `/usr/lib/postgresql/18/bin` first on `PATH` when another project needs the older client. The
+  **containerized stack is unaffected** — the api/worker images carry their own matching client, so
+  the wizard restore-drill is never at risk. With **no** `pg_dump` at all, the suite errors
+  `pg_dump not found`.
 - `test_notification_settings.py::test_smtp_defaults_are_safe` asserts an empty `smtp_host` default, but a
   dev `.env` with `SMTP_HOST=mailpit` makes it fail locally (it passes in CI's clean env). Settings tests
   read the ambient `.env` — pin or unset `SMTP_HOST` to reproduce CI. (Running `uv run pytest` without

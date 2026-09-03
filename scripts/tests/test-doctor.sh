@@ -69,7 +69,7 @@ make_dispatcher() {
     "      printf '/fixture/python3.12\\n'" \
     "    else printf 'uv 0.8.4\\n'; fi" \
     '    ;;' \
-    "  pg_dump) printf 'pg_dump (PostgreSQL) %s\\n' \"\$(read_state pg_dump_version 16.9)\" ;;" \
+    "  pg_dump) printf 'pg_dump (PostgreSQL) %s\\n' \"\$(read_state pg_dump_version 18.6)\" ;;" \
     '  docker)' \
     '    if [[ ${1-} == compose && ${2-} == version ]]; then' \
     '      case "$(read_state compose_state ok)" in' \

@@ -75,7 +75,7 @@ def postgres_admin_url() -> Iterator[str]:
         yield configured
         return
     with PostgresContainer(
-        "postgres:16",
+        "postgres:18",
         username="test",
         password="test",
         dbname="test",

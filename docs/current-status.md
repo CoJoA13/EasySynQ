@@ -2,7 +2,7 @@
 easysynq_status_schema: 1
 as_of: "2026-09-03"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-node-26"
+last_shipped_slice: "S-postgres-18"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2003
@@ -156,6 +156,17 @@ Widening it to npm 11 was safe because three assumptions were measured first: np
 both `package-lock.json` files byte-for-byte, `lockfileVersion` stays 3, and `auditReportVersion`
 stays 2. **No lockfile churn.** API unit stayed at **2,003** and web at **281 files / 2,352 tests** —
 unmoved by design, since this changes the runtime rather than behaviour.
+
+S-postgres-18 then moved the **database server from 16 to 18** across Compose, the digest-pinned
+`infra/images.lock`, both testcontainers and CI's `migrations` service container, with the
+`pg_dump`/`pg_restore` client moved to match. No schema change, no migration, no contract. No data
+migration was required because there is no live deployment — the only PostgreSQL data is a
+rebuildable dev volume. The load-bearing coupling is the CLIENT: `pg_dump` refuses a newer server, so
+a 16 client against an 18 server fails 19 backup/restore tests with a message naming a version
+mismatch rather than its cause. `apps/api/Dockerfile` installs the client **by package name**, so it
+is invisible to a `postgres:1[0-9]` search and would have broken the worker's in-container drill
+while CI stayed green; the rebuilt image was verified to carry pg_dump 18.6. Integration is
+**1,231 passed / 2 skipped** — identical to the PG16 baseline, which is the point.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather

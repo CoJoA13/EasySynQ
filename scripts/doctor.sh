@@ -288,7 +288,7 @@ check_python() {
 check_pg_dump() {
   local raw major
   if ! command_exists pg_dump; then
-    emit FAIL PG_DUMP_MISSING contributor 'Install the PostgreSQL 16 client, then run: pg_dump --version'
+    emit FAIL PG_DUMP_MISSING contributor 'Install the PostgreSQL 18 client, then run: pg_dump --version'
     return
   fi
   raw=$(pg_dump --version 2>/dev/null || true)
@@ -297,10 +297,12 @@ check_pg_dump() {
   else
     major=unknown
   fi
-  if [[ $major == 16 ]]; then
-    emit PASS PG_DUMP_SUPPORTED_VERSION none 'pg_dump major 16 is available.'
+  # Must match the postgres server major in infra/images.lock: pg_dump refuses a NEWER server
+  # outright, which surfaces as 19 backup/restore failures naming a version mismatch.
+  if [[ $major == 18 ]]; then
+    emit PASS PG_DUMP_SUPPORTED_VERSION none 'pg_dump major 18 is available.'
   else
-    emit FAIL PG_DUMP_UNSUPPORTED_VERSION contributor 'Install PostgreSQL client major 16, then run: pg_dump --version'
+    emit FAIL PG_DUMP_UNSUPPORTED_VERSION contributor 'Install PostgreSQL client major 18, then run: pg_dump --version'
   fi
 }
 

@@ -1,6 +1,6 @@
 """S-notify-4: timer_sweep Beat — reminder / overdue / escalate-to-manager orchestrator.
 
-Integration tests against a real migrated PG16 via testcontainers.
+Integration tests against a real migrated PG18 via testcontainers.
 
 Design note: ``sla_policy`` is SELECT-only for the app role (migration 0065 REVOKE). Tests rely
 on the seeded policy for the default org: remind_1_before=3d, remind_2_before=1d (S-remind2 /

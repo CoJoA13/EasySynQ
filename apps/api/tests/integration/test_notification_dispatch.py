@@ -1,6 +1,6 @@
 """dispatch.enqueue_task_notifications — gates + the SAVEPOINT non-poisoning property (spec §4).
 
-Tests run against a real migrated PG16 via testcontainers. The migration seeds the
+Tests run against a real migrated PG18 via testcontainers. The migration seeds the
 ``task.assigned`` template, so no manual template row is needed.
 
 Three tests:
