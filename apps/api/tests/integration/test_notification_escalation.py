@@ -1,6 +1,6 @@
 """S-notify-4: escalation recipient resolver + non-swallowing emit helper.
 
-Tests run against a real migrated PG16 via testcontainers. Mirrors the fixture
+Tests run against a real migrated PG18 via testcontainers. Mirrors the fixture
 pattern from test_notification_dispatch.py.
 
 Three tests:

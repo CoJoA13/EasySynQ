@@ -157,7 +157,7 @@ so OpenSearch is a clean v1 drop-in and `/readyz` does not check it.
 | `worker` (Celery) | built | render, index, mirror-sync, chain-linker, checkpoint, backup | 1 | 2 |
 | `beat` (Celery Beat) | built | scheduler — **exactly 1** (two would double-fire) | 1 | 1 |
 | `keycloak` | keycloak:26 | local + LDAP/AD + OIDC/SAML broker; realm import; admin MFA | 1 | 1 |
-| `postgres` | postgres:16 | vault metadata/lifecycle/audit; `ltree` extension | 1 | 1 |
+| `postgres` | postgres:18 | vault metadata/lifecycle/audit; `ltree` extension | 1 | 1 |
 | `minio` | minio (recent RELEASE) | content-addressed WORM blobs; object-lock + SSE | 1 | 1 |
 | `redis` | redis:7 | broker, cache, check-out locks, rate-limit buckets, permissions-epoch | 1 | 1 |
 | `renderer` (Gotenberg) | gotenberg:8 | Office→PDF + thumbnails (wraps LibreOffice/Chromium) | 1 | 2 |
@@ -346,7 +346,7 @@ S0 walking skeleton ─┬─ S1 AuthN ── S2 AuthZ[AC#3,4] ── S3 Vault �
 
 ## 8. Testing, CI & the six invariant proofs
 
-- **Pyramid.** Unit (PDP, FSM, supersession, `canonical_serialize` golden-vector) → integration (testcontainers PG16+MinIO+Redis) → **contract** (schemathesis vs `openapi.yaml`) → **e2e** (Playwright acceptance #1–#6) → **a11y** (axe-core gate).
+- **Pyramid.** Unit (PDP, FSM, supersession, `canonical_serialize` golden-vector) → integration (testcontainers PG18+MinIO+Redis) → **contract** (schemathesis vs `openapi.yaml`) → **e2e** (Playwright acceptance #1–#6) → **a11y** (axe-core gate).
 - **The six proofs** are MVP acceptance gates (table §7.1). The two highest-risk run under *real* concurrency/role connections, not mocks: `test_two_effective_impossible` and `test_per_user_deny_beats_role_allow`.
 - **Extra gates:** append-only proven on **both** `audit_event` and `signature_event`; hash-chain tamper-detection (break a row → verify reports the first broken link); WORM-verify gate; migration up/down + `alembic check` drift; contract checksum drift; seed-data correctness; rate-limit smoke (429); NFR P95 smoke; security-header scan.
 - **CI stages:** `contracts` → `api` (ruff/mypy/pytest) → `api-contract` (schemathesis) → `web` (eslint/tsc/vitest) → `migrations` (up from empty + autogen-diff) → `e2e+axe`. CI also builds and smoke-tests the Compose bundle (self-hosted product).

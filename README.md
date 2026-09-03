@@ -84,7 +84,7 @@ A small, role-segmented quality team inside one organization. EasySynQ is built 
 
 ## Tech stack
 
-React + TypeScript + Mantine + Tailwind (SPA) · FastAPI / Python 3.12 · PostgreSQL 16 · MinIO (WORM object storage) · Redis · Celery workers · Keycloak (auth) · Gotenberg / LibreOffice (rendering) · Caddy (TLS) · Docker Compose. OpenAPI-first, deny-by-default, and air-gap-safe (system fonts only, no external calls).
+React + TypeScript + Mantine + Tailwind (SPA) · FastAPI / Python 3.12 · PostgreSQL 18 · MinIO (WORM object storage) · Redis · Celery workers · Keycloak (auth) · Gotenberg / LibreOffice (rendering) · Caddy (TLS) · Docker Compose. OpenAPI-first, deny-by-default, and air-gap-safe (system fonts only, no external calls).
 
 ## Quick start (developer)
 
@@ -96,7 +96,7 @@ the doctor never mutates anything:
 ```
 
 Every `FAIL` line carries the exact command that resolves it. Install the tracked Node and Python 3.12
-runtimes plus `just`, `pre-commit` and the PostgreSQL 16 client, then re-run the doctor until it
+runtimes plus `just`, `pre-commit` and the PostgreSQL 18 client, then re-run the doctor until it
 reports `PROFILE_READY`.
 The doctor never starts/enables Docker or changes groups, firewall, or SELinux; those operator
 actions and the required new login session are explained in the

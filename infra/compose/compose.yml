@@ -27,14 +27,18 @@ x-api-env: &api-env
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-easysynq}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-easysynq}
       POSTGRES_DB: ${POSTGRES_DB:-easysynq}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 moved PGDATA to /var/lib/postgresql/18/docker and declares the PARENT
+      # /var/lib/postgresql as its VOLUME. Mounting the old :16 child path (…/data) silently
+      # sends the cluster to an ANONYMOUS volume instead: `just down` then `just up s` comes
+      # back with an empty database. Verified by recreating a container both ways.
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-easysynq} -d ${POSTGRES_DB:-easysynq}"]
       interval: 5s
@@ -96,7 +100,7 @@ services:
   # service, and seed the import volume only while it is empty. A legacy-H2 migration writes a full
   # realm export (including users/credential hashes) into the same volume before this runs.
   keycloak-init:
-    image: postgres:16
+    image: postgres:18
     depends_on:
       postgres:
         condition: service_healthy

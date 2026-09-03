@@ -15,7 +15,7 @@
 # because `docker pull name:tag@sha256:…` lands the image UNTAGGED and Compose asks for the tag.
 #
 # service   image:tag                                   # @sha256:... (pin before release)
-postgres    postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+postgres    postgres:18@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
 minio    minio/minio:RELEASE.2024-09-13T20-26-02Z@sha256:cd04ea408e185cb50076ea1c3988d444119b19aaae15aab45387ccf14b2a2f86
 # mc: minio-init one-shot (was :latest)
 mc    minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727

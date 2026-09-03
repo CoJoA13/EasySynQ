@@ -307,11 +307,11 @@ def test_bundle_run_builds_saves_and_manifests_the_application_images(tmp_path: 
     saved = next(c for c in calls if c.startswith("save "))
     for image in (f"easysynq/{n}:{tag}" for n in ("api", "web", "keycloak")):
         assert image in saved, f"{image} was not saved into the bundle"
-    assert "postgres:16" in saved, "the pulled set must be saved alongside the built images"
+    assert "postgres:18" in saved, "the pulled set must be saved alongside the built images"
 
     manifest = out.with_suffix(".tar.manifest.txt").read_text()
     assert f"easysynq/api:{tag}" in manifest
-    assert "postgres:16" in manifest
+    assert "postgres:18" in manifest
 
 
 def _install_tree(tmp_path: Path) -> Path:

@@ -1,6 +1,6 @@
 """S-notify-5a: resolve_document_readers — read-scope audience resolver integration tests.
 
-Tests run against a real migrated PG16 via testcontainers (testcontainers are session-scoped;
+Tests run against a real migrated PG18 via testcontainers (testcontainers are session-scoped;
 the shared DB persists across tests). Covers the four cases from the brief:
 
 1. A SYSTEM document.read role-grant holder IS in the audience.

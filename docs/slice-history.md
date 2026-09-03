@@ -1351,6 +1351,86 @@ point: this slice changes the runtime, not behaviour. The 274 npm-security asser
 `check-npm-audit.mjs` run exits 0, `npm ci` reproduces both locks with no diff, and ESLint, the
 production build and all ten shell contracts are clean.
 
+### S-postgres-18 — the database server moves 16 to 18
+
+Recorded 2026-09-03 after merging [`#535`](https://github.com/CoJoA13/EasySynQ/pull/535) as `SHA`.
+Moves the PostgreSQL server from 16 to 18 across Compose, the pinned image lock, both testcontainers
+and CI's service container, and moves the `pg_dump`/`pg_restore` client with it. No application code,
+no migration, no contract, no permission key — the schema is unchanged and `alembic check` is clean.
+
+**No data migration was needed, and that was the owner's call rather than an accident.** There is no
+live deployment: the only PostgreSQL data anywhere is a local dev volume rebuildable with
+`just down -v` plus the first-run wizard. So `pg_upgrade` versus dump/restore, PG18's
+data-checksums-by-default, and reversibility — the whole cluster-migration problem — simply does not
+arise here, and pretending otherwise would have been ceremony.
+
+**The load-bearing coupling is the CLIENT, not the server.** `pg_dump` **refuses a newer server
+outright**. Running the integration suite against PG18 with a 16 client on `PATH` produced **19
+failures** across `test_backup.py`, `test_restore.py` and
+`test_setup.py::test_setup_finalize_requires_restore_pass`, every one reporting
+`aborting because of server version mismatch` — a message that reads like a database problem three
+layers from its real cause. Re-running the same tests, against the same PG18 server, with only the
+client changed gave **39 passed**. So the app is 18-clean and `doctor.sh`'s `pg_dump` major is not
+incidental to this upgrade; it is part of it.
+
+⚠ **The most important edit was invisible to the obvious search.** `apps/api/Dockerfile` installs
+`postgresql-client-16` **by package name**, so a grep for `postgres:1[0-9]` — which finds Compose,
+the lock, CI and both testcontainers — never reaches it. Left at 16 it would have broken the
+**worker's** backup drill inside the container while CI stayed green, because CI runs from source
+with the runner's own client and never exercises the image. The rebuilt image was verified to carry
+`pg_dump (PostgreSQL) 18.6` rather than assumed to.
+
+⚠ **The image also moved `PGDATA`, and no test in this repository could have caught it.**
+`postgres:18` sets `PGDATA=/var/lib/postgresql/18/docker` and declares the **parent**
+`/var/lib/postgresql` as its `VOLUME`, where `postgres:16` used `/var/lib/postgresql/data` for both.
+Compose mounted `pgdata:` at the old child path, which under 18 receives nothing: the cluster
+initializes into an **anonymous** volume, so `just down` followed by `just up s` returns an empty
+database. Testcontainers never read Compose's volume configuration, so all 1,231 integration tests
+passed against a defect that would have lost the dev database on first restart. Found by the
+adversarial PR reviewer, then **confirmed by experiment** rather than by reading: recreating a
+container on the child mount loses the row, and on the parent mount returns it.
+
+**Two more pins the same search missed.** CI's `migrations` job uses a GitHub Actions **service**
+container (`ci.yml:158`), not a testcontainer. And the `integration-shards` job installed **no**
+client at all — it inherited the runner image's preinstalled `postgresql-client-16`, which is
+invisible in this repository entirely. That one was found the honest way: the first CI run reddened
+shards 1 and 4 with the identical `server version mismatch` seen locally, reported as
+`pg_dump version: 16.15 (Ubuntu 16.15-1.pgdg24.04+2)`. The job now installs `postgresql-client-18`
+explicitly, which also makes true a `test_restore.py` docstring that this slice had already edited to
+claim CI carries 18 — a claim that was, for one push, a promise rather than a fact. ⚠ The first
+attempt at that fix ran a bare `apt-get install postgresql-client-18` and made things **worse**,
+reddening all four shards instead of two with `Unable to locate package`: the runner's preinstalled
+client carries a `pgdg24.04` version suffix, which says only that it came from PGDG at image-build
+time, **not** that the PGDG apt source is still configured. The step now adds the repository first.
+⚠ A **second** attempt then failed too, and its guard is what proved why: installing
+`postgresql-client-18` is not sufficient, because the runner also ships 16 and `pg_wrapper` keeps
+resolving a bare `pg_dump` to it — the same selection trap the runbook documents for a developer
+host, reproduced on CI. The step now prepends `/usr/lib/postgresql/18/bin` to `$GITHUB_PATH`. Because
+that applies only to LATER steps, the resolution is asserted in its **own** step; the install step
+asserts the absolute binary. Both guards fail on the line that is wrong rather than 19 tests later,
+which is exactly how the second failure was diagnosed in one read.
+
+**`infra/images.lock` was re-pinned to a real digest**, resolved with the same
+`docker buildx imagetools inspect --format '{{.Manifest.Digest}}'` call `scripts/images-update.sh`
+uses, and cross-checked against the registry rather than taken from a nine-day-old local image whose
+tag may have moved. `test_airgap_packaging.py` asserts `postgres:NN` against the **real** lock — its
+`_run_bundle()` reads `infra/images.lock` whenever no override is passed — so two of its assertions
+moved with it; the other `postgres:16` strings in that file write their own synthetic fixture locks,
+are version-agnostic, and were deliberately left alone.
+
+**Dated PG16 claims were preserved, not swept.** `docs/review-2026-07-22-remediation-plan.md` and
+`tests/unit/test_audit_scope_ref_bound.py` record measurements *taken on PG16* — a btree
+`index row size` limit and an incompressible-value probe. Those are historical facts about an
+experiment, and rewriting them to say 18 would have falsified evidence nobody re-ran. Live docstrings
+describing what a suite runs against today did move.
+
+Test deltas. Integration, run CI-sharded, is **1,231 passed and 2 skipped** (shards of 274, 213, 387
+and 357) — identical to the PG16 baseline, which is the result that matters: the server moved and
+nothing observable did. API unit held at **2,003** passed with the same two skips, the migration
+round-trip passes against PG18, `check-compose-images-lock.sh` is OK, all ten shell contracts pass,
+and `doctor.sh` reports `PROFILE_READY` with `pg_dump major 18`. The web suites were NOT run and are
+not restated: no TypeScript changed.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration

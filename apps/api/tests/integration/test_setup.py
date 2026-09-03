@@ -3282,7 +3282,7 @@ async def test_verify_storage_rerun_updates_in_place(
 # --- S8b2: G-C backup/restore drill (AC#5) ------------------------------------------------
 #
 # These exercise the REAL drill (pg_dump/pg_restore against the testcontainer PG + a MinIO scratch
-# bucket). The CI `integration` job's runner carries postgresql-client-16; a runner/host without it
+# bucket). The CI `integration` job's runner carries postgresql-client-18; a runner/host without it
 # makes the drill an honest FAIL (a missing binary is caught + reported, never a 500).
 
 

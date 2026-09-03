@@ -53,7 +53,7 @@ def token_factory() -> Callable[..., str]:
 @pytest.fixture(scope="session")
 def _pg() -> Iterator[str]:
     with PostgresContainer(
-        "postgres:16", username="test", password="test", dbname="test", driver="psycopg"
+        "postgres:18", username="test", password="test", dbname="test", driver="psycopg"
     ) as pg:
         yield pg.get_connection_url()
 

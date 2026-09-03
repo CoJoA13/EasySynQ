@@ -155,7 +155,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_USER: easysynq
           POSTGRES_PASSWORD: easysynq
@@ -181,7 +181,7 @@ jobs:
       - name: populated migration coherence regressions
         working-directory: apps/api
         env:
-          # The test creates and drops its own scratch DB on this disposable CI-only PG16 service.
+          # The test creates and drops its own scratch DB on this disposable CI-only PG18 service.
           MIGRATION_TEST_DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
         run: uv run pytest tests/migration/test_migration_coherence.py
       - name: autogenerate drift check (models == migrations)
@@ -210,6 +210,30 @@ jobs:
           cache-dependency-glob: "apps/api/uv.lock"
       - working-directory: apps/api
         run: uv sync --frozen
+      # The runner image preinstalls postgresql-client-16. pg_dump REFUSES a newer server, so a 16
+      # client against the postgres:18 testcontainer aborts every backup/restore test with
+      # `server version mismatch` -- 19 failures naming a version, not a cause. PGDG is already
+      # configured on the runner, so this is an install, not a repository add.
+      - name: install the postgres client matching the testcontainer major
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+          https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-18
+          # Installing 18 is NOT enough: the runner also ships postgresql-client-16, and pg_wrapper
+          # keeps resolving a bare `pg_dump` to 16. Pin the versioned bin dir ahead of it.
+          echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/pg_dump --version | grep -qE '\) 18\.' \
+            || { /usr/lib/postgresql/18/bin/pg_dump --version; exit 1; }
+      # $GITHUB_PATH applies to LATER steps, so the resolution itself is asserted in its own step.
+      # Failing here beats 19 backup/restore failures naming a server version mismatch.
+      - name: confirm pg_dump 18 wins PATH
+        run: pg_dump --version | grep -qE '\) 18\.' || { pg_dump --version; exit 1; }
       - name: integration tests (shard ${{ matrix.group }}/4, testcontainers spin their own Postgres)
         working-directory: apps/api
         run: >-
