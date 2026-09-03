@@ -1250,7 +1250,7 @@ not restated: this slice changes no Python.
 
 ### S-retire-fedora-dev — Ubuntu becomes the supported developer host
 
-Recorded 2026-09-03 after merging [`#SHA_PR`](https://github.com/CoJoA13/EasySynQ/pull/SHA_PR) as `SHA`.
+Recorded 2026-09-03 after merging [`#532`](https://github.com/CoJoA13/EasySynQ/pull/532) as `SHA`.
 Retires the Fedora developer path and its disposable two-media Workstation acceptance proof, and
 records the replacement as **R71**. Docs, scripts and CI wiring only — no application code, no
 migration, no contract, no permission key.
