@@ -2376,7 +2376,7 @@ Bumps the resolutions range **R1–R70 → R1–R71**.
 
 ---
 
-### R72 — The web security-lock pins are a review trigger, not a freeze — 2026-09-04
+### R72 — The web security-lock pins are a review trigger, not a freeze — 2026-09-03
 
 **Context.** `scripts/tests/test-web-security-lock.mjs` pins the exact resolved versions of four web
 dependencies — `brace-expansion`, `undici`, `nanoid` and the React Router pair — which the
