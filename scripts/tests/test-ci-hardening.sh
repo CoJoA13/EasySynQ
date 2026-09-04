@@ -158,7 +158,7 @@ assert_text_contains \
   "$WEB_BROWSER_BLOCK" \
   '      - name: upload browser diagnostics
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |
