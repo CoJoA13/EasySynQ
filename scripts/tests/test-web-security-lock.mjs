@@ -16,12 +16,12 @@ test('web lock selects approved patched dependency versions', () => {
       .map(([, packageInfo]) => packageInfo.version),
   );
 
-  assert.equal(manifest.dependencies['react-router-dom'], '^7.18.2');
+  assert.equal(manifest.dependencies['react-router-dom'], '^7.18.3');
   assert.deepEqual(versions('brace-expansion'), new Set(['1.1.18', '5.0.9']));
   assert.deepEqual(versions('undici'), new Set(['7.29.0']));
   assert.deepEqual(versions('nanoid'), new Set(['3.3.18']));
-  assert.deepEqual(versions('react-router'), new Set(['7.18.2']));
-  assert.deepEqual(versions('react-router-dom'), new Set(['7.18.2']));
+  assert.deepEqual(versions('react-router'), new Set(['7.18.3']));
+  assert.deepEqual(versions('react-router-dom'), new Set(['7.18.3']));
   assert.equal(manifest.dependencies.nanoid, undefined);
   assert.equal(manifest.devDependencies.nanoid, undefined);
   assert.equal(manifest.optionalDependencies?.nanoid, undefined);
