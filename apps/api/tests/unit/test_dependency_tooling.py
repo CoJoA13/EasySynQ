@@ -105,6 +105,63 @@ def test_dependabot_tracks_only_version_updates_for_the_locked_contract_toolchai
     )
 
 
+def test_api_image_python_major_matches_requires_python() -> None:
+    """The API image's base interpreter must satisfy `requires-python`.
+
+    A mismatched base does NOT fail the build, which is why this guard is static and blocking. With
+    a newer base, `uv sync --locked` cannot satisfy `requires-python` from `/usr/local/bin`, so it
+    downloads a managed CPython into root-owned `/root/.local/share/uv/python/` and writes that path
+    as the venv's `home`. The image runs as `USER easysynq` (uid 10001), so the CMD `uv run
+    gunicorn ...` dies with `Failed to query Python interpreter ... Permission denied`. The
+    `security` job BUILDS the image but only Trivy-scans it, and the runtime proof that would catch
+    it (`test_the_built_api_image_is_unprivileged_and_starts_offline`) is skipif-gated on
+    `EASYSYNQ_IMAGE_PROOF`, which nothing sets -- so the break ships green, as Dependabot #448
+    (python 3.12 -> 3.14) did on all sixteen checks. This test runs in the required `api` job and
+    needs no Docker, covering the likeliest case cheaply; the general gap stays open as
+    RES-IMAGE-PROOF-NEVER-ENABLED.
+    """
+    requires_python = _read_toml(_ROOT / "apps" / "api" / "pyproject.toml")["project"][
+        "requires-python"
+    ]
+    floor = re.search(r">=(\d+)\.(\d+)", requires_python)
+    ceiling = re.search(r"<(\d+)\.(\d+)", requires_python)
+    assert floor is not None and ceiling is not None, requires_python
+    low = (int(floor.group(1)), int(floor.group(2)))
+    high = (int(ceiling.group(1)), int(ceiling.group(2)))
+
+    dockerfile = (_ROOT / "apps" / "api" / "Dockerfile").read_text(encoding="utf-8")
+    bases = re.findall(r"(?m)^FROM python:(\d+)\.(\d+)[.-]", dockerfile)
+    assert bases, "no `FROM python:<major>.<minor>` line in apps/api/Dockerfile"
+    for major, minor in bases:
+        assert low <= (int(major), int(minor)) < high, (
+            f"apps/api/Dockerfile pins python:{major}.{minor} but requires-python is "
+            f"{requires_python}; uv would build the venv on a downloaded interpreter under "
+            "root-owned /root and the image would fail to start as uid 10001"
+        )
+
+    # Belt-and-braces, not evidence: under `uv run` (what CI uses) uv refuses first with "resolved
+    # to Python X, which is incompatible with the project's Python requirement", so this leg can
+    # only be mutation-proven by invoking pytest through the venv interpreter directly. Kept because
+    # it states the three-way coupling in one place; the load-bearing legs are the Dockerfile base
+    # and the Dependabot ceiling above, both of which redden under the ordinary harness.
+    tracked = (_ROOT / "apps" / "api" / ".python-version").read_text(encoding="utf-8").strip()
+    tracked_parts = tuple(int(part) for part in tracked.split(".")[:2])
+    assert low <= tracked_parts < high, f".python-version {tracked} is outside {requires_python}"
+
+    # Keep Dependabot from re-proposing the bump every week. Unlike the reportlab/Mantine majors,
+    # this ceiling has a proven RUNTIME consequence, so the refusal is pinned here as well as
+    # commented in the config.
+    dependabot = yaml.safe_load((_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    api_docker = next(
+        entry
+        for entry in dependabot["updates"]
+        if entry["package-ecosystem"] == "docker" and entry["directory"] == "/apps/api"
+    )
+    assert {"dependency-name": "python", "versions": [f">={high[0]}.{high[1]}"]} in api_docker[
+        "ignore"
+    ]
+
+
 def test_vulnerable_postgres_mcp_connector_is_disabled() -> None:
     mcp_config = _read_json(_ROOT / ".mcp.json")
     dependabot = yaml.safe_load((_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
