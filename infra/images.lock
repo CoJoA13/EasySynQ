@@ -28,5 +28,5 @@ tika    apache/tika:3.3.1.0-full@sha256:d8e6ed96260ad89307a93195a1b856102987a818
 # NOT digest-pinned: this dev-profile-only image is excluded from the release guard,
 # and its digest could not be independently verified (it is never pulled locally, and
 # Docker Hub was rate-limiting). Pin it during a ceremony that can verify it.
-mailpit     axllent/mailpit:v1.30.5
+mailpit     axllent/mailpit:v1.31.0
 # opensearch — intentionally OMITTED in MVP (R34); v1 drop-in via the Indexer interface.
