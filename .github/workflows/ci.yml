@@ -66,7 +66,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
@@ -128,7 +128,7 @@ jobs:
           done < <(bash scripts/app-images.sh)
       - name: install uv
         # exact pin — setup-uv stopped publishing floating major tags at v8
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
@@ -169,7 +169,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
@@ -204,7 +204,7 @@ jobs:
         group: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
@@ -352,7 +352,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
@@ -429,7 +429,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
