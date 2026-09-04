@@ -117,8 +117,8 @@ def test_api_image_python_major_matches_requires_python() -> None:
     it (`test_the_built_api_image_is_unprivileged_and_starts_offline`) is skipif-gated on
     `EASYSYNQ_IMAGE_PROOF`, which nothing sets -- so the break ships green, as Dependabot #448
     (python 3.12 -> 3.14) did on all sixteen checks. This test runs in the required `api` job and
-    needs no Docker, covering the likeliest case cheaply; the general gap stays open as
-    RES-IMAGE-PROOF-NEVER-ENABLED.
+    needs no Docker, covering the likeliest case cheaply; the general case is the built image's
+    own runtime proof, enabled in that same job by S-image-proof-enabled.
     """
     requires_python = _read_toml(_ROOT / "apps" / "api" / "pyproject.toml")["project"][
         "requires-python"

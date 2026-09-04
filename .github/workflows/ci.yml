@@ -150,6 +150,14 @@ jobs:
       - name: unit tests
         working-directory: apps/api
         run: uv run pytest tests/unit -m unit
+        # Un-skips test_the_built_api_image_is_unprivileged_and_starts_offline, which BUILDS the
+        # API image and runs it: uid 10001, and `uv run` working with NO network. Every other gate
+        # here reads source; this is the only one that starts the artifact. It lives in `api`
+        # rather than `security` because `security` is deliberately non-required, and a guard that
+        # cannot redden a PR is the gap it was meant to close (S-image-proof-enabled, and the
+        # EASYSYNQ_RELEASE precedent at the release-gate job below).
+        env:
+          EASYSYNQ_IMAGE_PROOF: "1"
 
   migrations:
     runs-on: ubuntu-latest

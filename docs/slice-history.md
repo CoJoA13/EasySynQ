@@ -11,6 +11,13 @@ Current residuals were migrated without reclassification to
 [`docs/open-residuals.md`](open-residuals.md). The closed records immediately below remain here as dated
 evidence; older `Named residuals` text inside shipped entries is likewise a historical snapshot.
 
+- ~~**`RES-IMAGE-PROOF-NEVER-ENABLED`** (Dependabot triage, 2026-09-03).~~ **CLOSED in
+  S-image-proof-enabled**. The runtime proof that catches an unstartable API image existed, was
+  correct, and had never executed, because `EASYSYNQ_IMAGE_PROOF` was set nowhere. It is now set on
+  the `api` job's unit-test step — deliberately not `security`, which already builds the image but
+  is non-required, so a guard there could not redden a PR. The flag's presence AND its location are
+  pinned by `test_the_image_runtime_proof_is_enabled_in_a_job_that_can_fail_a_merge`, because an
+  opt-in proof nothing opts into is indistinguishable from no proof.
 - ~~**The advisory response-contract baseline has eight pre-existing violations** (Batch 12.5,
   [PR #371](https://github.com/CoJoA13/EasySynQ/pull/371)).~~ **CLOSED in CR1**
   ([PR #404](https://github.com/CoJoA13/EasySynQ/pull/404)). Request schemas now stop invalid SHA,
@@ -1555,6 +1562,52 @@ Test deltas. API unit **2,004 to 2,006** passed with the same two skips — one 
 two cases — with `ruff check`, `ruff format --check` and `mypy` strict clean across 449 source
 files. The web, contract and integration suites were NOT run and are not restated: no TypeScript,
 no OpenAPI, no migration.
+### S-image-proof-enabled — the image runtime proof actually runs
+
+Recorded 2026-09-03 after merging [`#540`](https://github.com/CoJoA13/EasySynQ/pull/540) as `SHA`.
+Sets `EASYSYNQ_IMAGE_PROOF: "1"` on the `api` job's unit-test step, closing
+`RES-IMAGE-PROOF-NEVER-ENABLED`. One CI line, one new test. No migration, no contract, no
+permission key, no application code.
+
+**The guard was already written and had never once run.**
+`test_the_built_api_image_is_unprivileged_and_starts_offline`
+(`apps/api/tests/unit/test_infra_hardening.py`) builds the real image, asserts uid 10001, and runs
+`uv run alembic --version` under `--network none`. It is `skipif`-gated on `EASYSYNQ_IMAGE_PROOF`,
+and that variable appeared nowhere in the repository — so the one proof that starts the artifact had
+been inert since it was written. This is the same defect class the audit fixed once for
+`EASYSYNQ_RELEASE`, whose inertness `.github/workflows/ci.yml` describes in its own comment and
+whose fix is the `EASYSYNQ_RELEASE: "1"` on the release-gate job; the identical shape survived one
+proof over.
+
+**The cost was measured, not argued.** Dependabot `#448` (python `3.12-slim-bookworm` to
+`3.14-slim-bookworm`, one line) was CLEAN on all sixteen checks while shipping an image whose CMD
+dies on start, and enabling this test was verified to catch exactly that: green on `main` in 2.9s
+warm, red on #448's Dockerfile at its `assert offline.returncode == 0`.
+
+⚠ **Placement is the whole decision, and `security` is the wrong home.** That job already builds the
+image, which makes it the tempting place, but it is deliberately non-required — a guard there cannot
+redden a PR, so moving the flag would satisfy the letter of the fix and none of its purpose. The
+`api` job is where a failure stops a merge. The cost is a cold image build added to that job; the
+owner chose it knowing that.
+
+**The flag is pinned, in both directions.**
+`test_the_image_runtime_proof_is_enabled_in_a_job_that_can_fail_a_merge` asserts the api job sets it
+AND that no other job does. Both legs were broken separately: deleting the `env:` block reddens, and
+relocating the flag to `security` reddens with the reason named. Pinning only presence would have
+allowed the flag to drift to a job that cannot fail a merge, which is the original defect wearing a
+different hat.
+
+**What this deliberately does NOT do.** It does not add a live Tika, Gotenberg or Keycloak sidecar
+test; only the API image is exercised, and only for the two properties that make it startable at all
+(unprivileged, and `uv run` working offline). The S-tika4-content-key finding — a real sidecar
+contract nothing in CI speaks to — remains covered by its own dual-key pin rather than by a
+container this slice starts.
+
+Test deltas. API unit **2,006 to 2,008** passed with the skips falling **2 to 1**: one added CI pin,
+and the image proof itself un-skipping and passing. `ruff check`, `ruff format --check` and `mypy`
+strict clean across 449 source files; the CI-workflow shell contract is 85 passed / 0 failed. The
+web, contract and integration suites were NOT run and are not restated: no TypeScript, no OpenAPI,
+no migration.
 
 ## IDENTITY ONBOARDING
 
