@@ -49,7 +49,7 @@ describe("RegisterToolbar", () => {
     const search = screen.getByRole("textbox", { name: "Search" });
     const searchRoot = search.closest<HTMLElement>(".mantine-TextInput-root");
     expect(searchRoot).not.toBeNull();
-    expect(searchRoot).toHaveStyle({ minWidth: "0rem" });
+    expect(searchRoot).toHaveStyle({ minWidth: "0px" });
     const responsiveClass = [...searchRoot!.classList].find((name) => name.startsWith("__m__"));
     expect(responsiveClass).toBeDefined();
     const inlineRules = [...document.querySelectorAll('style[data-mantine-styles="inline"]')]
@@ -64,7 +64,7 @@ describe("RegisterToolbar", () => {
     expect(filterLane).not.toBeNull();
     expect(filterLane).toHaveStyle({
       overflowX: "auto",
-      minWidth: "0rem",
+      minWidth: "0px",
       maxWidth: "100%",
     });
     expect(search.compareDocumentPosition(filter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
