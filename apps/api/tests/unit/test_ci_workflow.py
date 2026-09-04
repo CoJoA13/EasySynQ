@@ -254,6 +254,35 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
     assert "isolate: false" not in vitest_config
 
 
+def test_the_image_runtime_proof_is_enabled_in_a_job_that_can_fail_a_merge() -> None:
+    """The api job must set ``EASYSYNQ_IMAGE_PROOF``, and it must be the api job.
+
+    ``test_the_built_api_image_is_unprivileged_and_starts_offline`` is ``skipif``-gated on this
+    variable. It was written, was correct, and had NEVER run, because nothing set it anywhere in
+    the repository — the same inertness the audit had already fixed once for ``EASYSYNQ_RELEASE``.
+    Dependabot #448 was CLEAN on all sixteen checks while shipping an image whose CMD dies on
+    start, which is what that unrun proof would have caught.
+
+    So this pins the fix rather than trusting it to stay: an opt-in proof nothing opts into is
+    indistinguishable from no proof, and deleting one line would silently restore that state.
+    ⚠ It also pins the LOCATION. The `security` job already builds the image, which makes it the
+    tempting home, but it is deliberately non-required — a guard there could not redden a PR, so
+    moving the flag would satisfy the letter of the fix and none of its point.
+    """
+    workflow = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    _, unit_step = _step(workflow["jobs"]["api"], "unit tests")
+    assert unit_step.get("env", {}).get("EASYSYNQ_IMAGE_PROOF") == "1"
+
+    for job_name, job in workflow["jobs"].items():
+        if job_name == "api":
+            continue
+        for step in job["steps"]:
+            assert "EASYSYNQ_IMAGE_PROOF" not in (step.get("env") or {}), (
+                f"the image runtime proof moved to {job_name!r}; it belongs in `api`, which can "
+                "fail a merge"
+            )
+
+
 def test_security_job_gates_npm_and_keeps_trivy_findings_report_only() -> None:
     workflow = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
     security = workflow["jobs"]["security"]

@@ -4,44 +4,6 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
-## RES-IMAGE-PROOF-NEVER-ENABLED
-
-Status: OPEN
-Owner: Repository owner
-Source: Dependabot triage, 2026-09-03 (found while refusing
-[`#448`](https://github.com/CoJoA13/EasySynQ/pull/448))
-Reason: The runtime guard that catches an unstartable API image already exists, is correct, and has
-never once run. `test_the_built_api_image_is_unprivileged_and_starts_offline`
-(`apps/api/tests/unit/test_infra_hardening.py`) builds the real image, asserts uid 10001, and runs
-`uv run alembic --version` with `--network none` -- but it is `skipif`-gated on
-`EASYSYNQ_IMAGE_PROOF=1`, and that variable is set NOWHERE in the repository. This is the same
-defect class the audit already fixed once for `EASYSYNQ_RELEASE`, whose inertness is described in
-`.github/workflows/ci.yml:423` and whose fix is the `EASYSYNQ_RELEASE: "1"` at `ci.yml:442`; the
-identical shape survived in the neighbouring proof. The cost of the gap was measured, not guessed:
-Dependabot #448 (python `3.12-slim-bookworm` -> `3.14-slim-bookworm`, one line) was **CLEAN on all
-sixteen checks** and ships an API image that cannot start. With a newer base, `uv sync --locked`
-cannot satisfy `requires-python = ">=3.12,<3.13"` from `/usr/local/bin`, so uv downloads a managed
-CPython 3.12 into `/root/.local/share/uv/python/` and writes that path as the venv's `home`;
-`/root` is `0700` and the image runs as `USER easysynq`, so the CMD `uv run gunicorn ...` dies with
-`Failed to query Python interpreter ... Permission denied (os error 13)`. Enabling the existing test
-was verified to catch exactly this: with `EASYSYNQ_IMAGE_PROOF=1` it passes on `main` (2.9s, warm
-cache) and fails on #448's Dockerfile at its `assert offline.returncode == 0`. The `security` job
-does build the image, but only as a Trivy target with `exit-code: "0"`, and it is deliberately
-non-required -- so nothing that can block a merge ever starts the artifact.
-Closure contract: Set `EASYSYNQ_IMAGE_PROOF: "1"` on a job that can actually fail the merge, mirroring
-the `EASYSYNQ_RELEASE` wiring at `ci.yml:442`; the `security` job is the wrong home despite already
-building the image, because it is non-required and a guard that cannot redden a PR restates this
-record rather than closing it. Placement is a real cost decision -- it adds a cold image build to
-whichever job takes it, and `ci_jobs`/`ci_checks` in `current-status.md` move if it becomes its own
-job -- so the owner picks the home. Prove the wiring the same way it was proven here: confirm the job
-goes RED against a Dockerfile carrying #448's one-line change and GREEN on `main`, because an opt-in
-proof that is merely switched on is exactly the thing this record is about. The narrower static
-coupling between the Dockerfile base, `.python-version` and `requires-python` is already blocking in
-the required `api` job (`test_api_image_python_major_matches_requires_python`), so this record covers
-only the general case: any change that keeps the image buildable while making it unstartable -- an
-entrypoint edit, a permissions change, a base whose user model differs.
-Last reviewed: 2026-09-03
-
 ## RES-IP-REGISTER-COLUMN-JUMP
 
 Status: OPEN

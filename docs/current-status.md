@@ -2,10 +2,10 @@
 easysynq_status_schema: 1
 as_of: "2026-09-03"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-tika4-content-key"
+last_shipped_slice: "S-image-proof-enabled"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 2006
+api_unit_tests: 2008
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
@@ -178,8 +178,8 @@ permission error. The refusal is a `versions: [">=3.13"]` Dependabot ceiling —
 `test_api_image_python_major_matches_requires_python` in the required `api` job. ⚠ The runtime proof
 that would have caught it already existed and had never run: it is `skipif`-gated on
 `EASYSYNQ_IMAGE_PROOF`, set nowhere in the repository, which is the `EASYSYNQ_RELEASE` inertness
-recurring one proof over. That gap is `RES-IMAGE-PROOF-NEVER-ENABLED`, and its closure contract is to
-wire the existing test up rather than write another.
+recurring one proof over. S-image-proof-enabled closed that gap by wiring the existing test up in
+the `api` job rather than writing another.
 
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
@@ -272,12 +272,24 @@ compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d4465941
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
 
+Fresh 2026-09-03 evidence for S-image-proof-enabled. It moves `api_unit_tests` 2,006 → **2,008**
+and the api unit skips 2 → **1**: one added CI pin, plus the built-image runtime proof itself
+un-skipping and passing now that `EASYSYNQ_IMAGE_PROOF` is set on the `api` job. The remaining skip
+is the release-ceremony digest check, which still needs `EASYSYNQ_RELEASE=1`. It touches no
+TypeScript, no OpenAPI and no migration, so the web, contract and integration figures are carried
+unchanged and are NOT restated as freshly verified. `ruff check`, `ruff format --check` and `mypy`
+strict clean across 449 source files; the CI-workflow shell contract 85 passed / 0 failed;
+`AUTHORITY_OK`; `check-no-site-data` clean.
+
+⚠ The `api` job now builds the API image, so it costs a cold docker build it did not before. That
+was the deliberate trade: `security` already builds the image but is non-required, and a guard that
+cannot fail a merge is the gap this closed.
+
 Fresh 2026-09-03 evidence for S-tika4-content-key. It moves `api_unit_tests` 2,004 → **2,006**
 (one parametrized test, two cases) and nothing else. It touches no TypeScript, no OpenAPI and no
 migration, so the web, contract and integration figures are carried unchanged and are NOT restated
 as freshly verified. `ruff check`, `ruff format --check` and `mypy` strict are clean across 449
 source files; `AUTHORITY_OK`; `check-no-site-data` clean.
-
 Fresh 2026-09-03 evidence for S-python-312-ceiling. It moves `api_unit_tests` 2,003 → **2,004**
 (one added test) and nothing else. It touches no TypeScript, no OpenAPI and no migration, so
 `web_test_files`, `web_tests`, `contract_tests`, `migration_head`, `next_migration` and the
