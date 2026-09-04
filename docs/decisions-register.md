@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R71) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R72) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R71
+## Part 3 — Resolutions R1–R72
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2373,6 +2373,61 @@ forbid.
 carries it at the source in `check_platform`.
 
 Bumps the resolutions range **R1–R70 → R1–R71**.
+
+---
+
+### R72 — The web security-lock pins are a review trigger, not a freeze — 2026-09-04
+
+**Context.** `scripts/tests/test-web-security-lock.mjs` pins the exact resolved versions of four web
+dependencies — `brace-expansion`, `undici`, `nanoid` and the React Router pair — which the
+2026-08-07 dependency-security-hardening work selected as the *patched* versions that remediated
+then-live advisories without a major upgrade. That plan's Global Constraints explicitly excluded
+"a jsdom major upgrade" as a remediation route, and `undici` at `7.29.0` was the compatible
+alternative chosen instead.
+
+Dependabot [`#440`](https://github.com/CoJoA13/EasySynQ/pull/440) moves `jsdom` 29 to 30, and
+jsdom 30 requires `undici ^8.9.0`. So the bump is not a dev-dependency change in isolation: it
+forces `undici` `7.29.0 → 8.10.1`, a major move of a security-remediated package, and the guard
+reddened — which is the guard working, not failing. The question the guard raised is whether its
+pins are a permanent floor or a checkpoint, and nothing had answered it.
+
+**Normative rules.**
+
+1. **The pins are a review trigger.** They exist so that a version change to a
+   security-remediated web dependency cannot land unnoticed inside an unrelated bump. They are not
+   a freeze, and moving one is permitted.
+2. **A pin may only move on live audit evidence.** `node scripts/check-npm-audit.mjs` must return
+   `blocked: 0` at exit 0 against the *resulting* lock, and that result must be recorded in the
+   change that moves the pin. A green CI `security` job is not a substitute when its audit step did
+   not actually execute — an `E_NPM_TIMEOUT` or a registry `503` is an unrun check, not a pass.
+3. **A pin may not move downward.** A remediated version is a floor within its own major; moving
+   *forward* across a major is permitted under rule 2, moving back to an earlier patched version is
+   not, because the advisory that motivated the original selection stays motivating.
+4. **`undici`'s approved version is `8.10.1`**, superseding `7.29.0`. A jsdom major upgrade is
+   permitted; the 2026-08-07 constraint against one was scoped to that slice's goal of remediating
+   without a major, and is historical rather than binding.
+
+⚠ **The other three pins are untouched.** `brace-expansion` (`1.1.18`, `5.0.9`), `nanoid`
+(`3.3.18`, whose patched 3.x range begins at `3.3.17`) and the Router pair (`7.18.3`) keep their
+recorded selections. This decision moves exactly the one pin a required upgrade forced, and grants
+no general licence to refresh the others.
+
+**Why the superseded plan does not bind.** It is a dated implementation plan under
+`docs/superpowers/`, not a register entry, and the contributor guide treats those as preserved
+historical evidence rather than current authority. Its sibling constraints are already superseded in
+fact: it specifies "npm 10.9.x on Node 22", while the repository tracks Node 26 and
+`SUPPORTED_NPM_VERSION` is `/^11\.\d+\.\d+$/` after S-node-26. The register carried no jsdom or
+undici entry at all, which is why this ambiguity survived to be rediscovered from a document that no
+longer describes the repository.
+
+**What this deliberately does NOT do.** It does not weaken the guard, widen it to cover more
+packages, or permit `npm audit fix --force`, broad overrides, or a Router downgrade — the remaining
+constraints of the original hardening work stand on their own merits. It also does not license
+moving a pin because CI happened to go green; rule 2 requires the audit to have run.
+
+**Back-propagation:** `scripts/tests/test-web-security-lock.mjs` carries the pins at the source.
+
+Bumps the resolutions range **R1–R71 → R1–R72**.
 
 ---
 
