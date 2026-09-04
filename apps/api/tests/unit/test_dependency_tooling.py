@@ -39,13 +39,13 @@ def test_locked_contract_toolchain_manifest_and_resolution_are_exact() -> None:
         "private": True,
         "overrides": {"@redocly/openapi-core": {"js-yaml": "4.3.1"}},
         "devDependencies": {
-            "@redocly/cli": "2.46.0",
+            "@redocly/cli": "2.49.0",
             "openapi-typescript": "7.13.0",
         },
     }
     assert lock["lockfileVersion"] == 3
     assert lock["packages"][""]["devDependencies"] == manifest["devDependencies"]
-    assert lock["packages"]["node_modules/@redocly/cli"]["version"] == "2.46.0"
+    assert lock["packages"]["node_modules/@redocly/cli"]["version"] == "2.49.0"
     assert lock["packages"]["node_modules/openapi-typescript"]["version"] == "7.13.0"
     assert lock["packages"]["node_modules/js-yaml"]["version"] == "4.3.1"
     assert all(

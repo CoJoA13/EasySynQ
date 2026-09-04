@@ -20,16 +20,16 @@ test('contract toolchain manifest, lock, and installed versions are exact', () =
 
   assert.equal(manifest.private, true);
   assert.deepEqual(manifest.devDependencies, {
-    '@redocly/cli': '2.46.0',
+    '@redocly/cli': '2.49.0',
     'openapi-typescript': '7.13.0',
   });
   assert.deepEqual(manifest.overrides, {
     '@redocly/openapi-core': { 'js-yaml': '4.3.1' },
   });
   assert.deepEqual(lock.packages[''].devDependencies, manifest.devDependencies);
-  assert.equal(lock.packages['node_modules/@redocly/cli'].version, '2.46.0');
+  assert.equal(lock.packages['node_modules/@redocly/cli'].version, '2.49.0');
   assert.equal(lock.packages['node_modules/openapi-typescript'].version, '7.13.0');
-  assert.equal(installedRedocly.version, '2.46.0');
+  assert.equal(installedRedocly.version, '2.49.0');
   assert.equal(installedOpenapiTypescript.version, '7.13.0');
 
   const lockedJsYaml = Object.entries(lock.packages).filter(([name]) => name.endsWith('/js-yaml'));
