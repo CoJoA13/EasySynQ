@@ -83,7 +83,7 @@ def test_ci_workflow_preserves_complete_hard_fail_gates() -> None:
             {
                 "name": "upload browser diagnostics",
                 "if": "${{ failure() }}",
-                "uses": "actions/upload-artifact@v6",
+                "uses": "actions/upload-artifact@v7",
                 "with": {
                     "name": "playwright-report",
                     "path": "apps/web/playwright-report\napps/web/test-results\n",
