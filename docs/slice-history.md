@@ -1510,6 +1510,52 @@ verified fresh, with `ruff check` and `ruff format --check` clean and `mypy` str
 source files. `AUTHORITY_OK` and `check-no-site-data` clean. The web, contract and integration
 suites were NOT run and are not restated: no TypeScript, no OpenAPI and no migration changed.
 
+### S-tika4-content-key — the extractor reads text under either Tika namespace
+
+Recorded 2026-09-03 after merging [`#539`](https://github.com/CoJoA13/EasySynQ/pull/539) as `SHA`.
+Makes `TikaExtractorProvider` accept both `tk:content` and `X-TIKA:content`, found while assessing
+Dependabot [`#478`](https://github.com/CoJoA13/EasySynQ/pull/478) (apache/tika 3.3.1.0 to 4.0.0).
+No migration, no contract, no permission key, no endpoint.
+
+**Tika 4.0 renamed the whole `X-TIKA:` metadata namespace to `tk:`**, so the extracted text moved
+from `X-TIKA:content` to `tk:content`. Established by experiment rather than release notes: both
+sidecars were run side by side (`apache/tika:3.3.1.0-full` on one port, `apache/tika:4.0.0-1-full`
+on another) and the same two-page PDF was PUT to `/rmeta/text` with the client's exact headers.
+Every other key this client reads is UNCHANGED — `dc:creator`, `dc:title`, `dcterms:created`,
+`dcterms:modified`, `Content-Type` and `xmpTPg:NPages` all resolve identically — and an image OCR
+round-trip returned the same text under the same `X-Tika-OCRLanguage` header on both. The content
+key is the entire delta.
+
+⚠ **Reading only the old key against a 4.x sidecar does not raise; it extracts EMPTY.** The lookup
+simply misses, so `full_text` is `None` and `char_count` is `0` while `failed` stays `False` and
+`error` stays `None` — the provider reports success. The `except Exception` that guards this path
+never fires, because nothing threw. Every ingested document would classify on empty text, and the
+first sign would be silently useless extraction rather than a failure anyone could see.
+
+⚠ **No gate in this repository could have caught it.** The unit suite mocks the HTTP transport
+(`httpx.MockTransport`, and its own docstring says "no real Tika in CI") and the integration suite
+substitutes `_FakeTika` for the whole provider, so neither ever speaks to a real sidecar. CI
+verifies the image TAG and the lock, not the contract behind it. This is the same shape as the
+`#448` base-image refusal recorded in S-python-312-ceiling and as
+`RES-IMAGE-PROOF-NEVER-ENABLED` — a green pipeline over an artifact nobody runs — reached from a
+third direction in one session.
+
+**The fix is the client, not the pin.** `_CONTENT_KEYS = ("tk:content", "X-TIKA:content")` read
+through the existing `_first` helper, so one build works against either sidecar and the bump
+carries no flag day. A parametrized test pins both namespaces; reverting the constant to the 3.x
+key alone turns the `tk:content` case RED with `full_text=None`, which is the silent shape itself
+made visible. That mutation is the evidence, not the passing run.
+
+**What this deliberately does NOT do.** It does not take Tika 4: `#478` still needs the
+`infra/images.lock` refresh every docker-compose bump needs, and the owner's call on a major.
+It also does not add a live-sidecar test — that is the general gap the image-proof residual already
+tracks, and wiring one belongs with that decision rather than inside a compatibility fix.
+
+Test deltas. API unit **2,004 to 2,006** passed with the same two skips — one parametrized test,
+two cases — with `ruff check`, `ruff format --check` and `mypy` strict clean across 449 source
+files. The web, contract and integration suites were NOT run and are not restated: no TypeScript,
+no OpenAPI, no migration.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration
