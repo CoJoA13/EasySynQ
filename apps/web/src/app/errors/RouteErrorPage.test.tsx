@@ -59,7 +59,7 @@ test("has bounded geometry and no axe violations", async () => {
     { wrapper: Tree },
   );
   expect(screen.getByRole("region")).toHaveStyle({
-    minWidth: "0rem",
+    minWidth: "0px",
     width: "100%",
   });
   expect(await axe(container)).toHaveNoViolations();

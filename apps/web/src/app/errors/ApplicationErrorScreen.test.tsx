@@ -57,5 +57,5 @@ test("uses bounded narrow-screen geometry", () => {
   expect(main.parentElement).toHaveStyle({
     paddingInline: "var(--mantine-spacing-lg)",
   });
-  expect(main).toHaveStyle({ minWidth: "0rem", width: "100%" });
+  expect(main).toHaveStyle({ minWidth: "0px", width: "100%" });
 });

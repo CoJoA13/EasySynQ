@@ -180,7 +180,7 @@ test("constrains the startup panel width while allowing it to shrink", () => {
   const panel = screen.getByRole("main");
   expect(panel).toHaveStyle({
     maxWidth: "calc(27.5rem * var(--mantine-scale))",
-    minWidth: "0rem",
+    minWidth: "0px",
   });
 });
 

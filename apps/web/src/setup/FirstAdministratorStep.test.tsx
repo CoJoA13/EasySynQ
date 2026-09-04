@@ -1166,7 +1166,7 @@ test("uses one shrinkable DOM at 320px with 44px action targets and forced-color
     expect(button).toHaveStyle({ minHeight: "44px" });
   }
   const panel = screen.getByTestId("first-administrator-step");
-  expect(panel).toHaveStyle({ minWidth: "0rem", width: "100%" });
+  expect(panel).toHaveStyle({ minWidth: "0px", width: "100%" });
   const copy = screen.getByRole("button", { name: "Copy temporary password" });
   copy.focus();
   expect(copy).toHaveFocus();
