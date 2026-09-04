@@ -22,6 +22,27 @@ const routerExceptionFixture = readJson(
   path.join(fixtureDirectory, 'exceptions-router-7.18.2.json'),
 );
 
+// The CLI always resolves versions from the REAL apps/web lock (check-npm-audit.mjs pins
+// LOCKFILE_PATH to it), so any test that runs the CLI against this synthetic exception must align
+// the record version with whatever the lock currently carries. Hardcoding it made a react-router
+// bump flip the outcome from `exception-expired` to `exception-record-mismatch`, which would still
+// be a passing-looking assertion while no longer exercising the clock this test exists to check.
+const lockedRouterVersion = (() => {
+  const webLock = readJson(path.join(root, 'apps/web/package-lock.json'));
+  const found = new Set(
+    Object.entries(webLock.packages)
+      .filter(([entry]) => entry.split('node_modules/').at(-1) === 'react-router')
+      .map(([, info]) => info.version),
+  );
+  assert.equal(found.size, 1, `expected one locked react-router version, got ${[...found]}`);
+  return [...found][0];
+})();
+const lockAlignedRouterExceptions = (() => {
+  const policy = structuredClone(routerExceptionFixture);
+  for (const record of policy.exceptions[0].records) record.version = lockedRouterVersion;
+  return policy;
+})();
+
 const beforeExpiry = new Date('2026-08-21T23:59:59.999Z');
 const atExpiry = new Date('2026-08-22T00:00:00.000Z');
 const clone = (value) => structuredClone(value);
@@ -717,7 +738,7 @@ const childProcess = require('node:child_process');
 const moduleApi = require('node:module');
 const originalRead = fs.readFileSync;
 const policyPath = ${JSON.stringify(path.join(root, '.github/security/npm-audit-exceptions.json'))};
-const exceptionPolicy = ${JSON.stringify(JSON.stringify(routerExceptionFixture))};
+const exceptionPolicy = ${JSON.stringify(JSON.stringify(lockAlignedRouterExceptions))};
 fs.readFileSync = function(file, ...args) {
   if (String(file) === policyPath) return exceptionPolicy;
   return originalRead.call(this, file, ...args);
@@ -761,14 +782,14 @@ moduleApi.syncBuiltinESMExports();
     assert.equal(result.stdout, [
       `BLOCKED ${JSON.stringify({
         package: 'react-router',
-        version: '7.18.2',
+        version: lockedRouterVersion,
         severity: 'high',
         advisoryIds: ['GHSA-qwww-vcr4-c8h2'],
         reason: 'exception-expired',
       })}`,
       `BLOCKED ${JSON.stringify({
         package: 'react-router-dom',
-        version: '7.18.2',
+        version: lockedRouterVersion,
         severity: 'high',
         advisoryIds: ['GHSA-qwww-vcr4-c8h2'],
         reason: 'exception-expired',
