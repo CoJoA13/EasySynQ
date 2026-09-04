@@ -2,10 +2,10 @@
 easysynq_status_schema: 1
 as_of: "2026-09-03"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-postgres-18"
+last_shipped_slice: "S-python-312-ceiling"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 2003
+api_unit_tests: 2004
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
@@ -168,6 +168,19 @@ is invisible to a `postgres:1[0-9]` search and would have broken the worker's in
 while CI stayed green; the rebuilt image was verified to carry pg_dump 18.6. Integration is
 **1,231 passed / 2 skipped** — identical to the PG16 baseline, which is the point.
 
+S-python-312-ceiling then refused a Dependabot base-image bump that every check had passed.
+[`#448`](https://github.com/CoJoA13/EasySynQ/pull/448) moved `apps/api/Dockerfile` to
+`python:3.14-slim-bookworm` and was CLEAN on all sixteen checks, yet ships an image that cannot
+start: `uv sync --locked` cannot satisfy `requires-python` from `/usr/local/bin`, so it builds the
+venv on a CPython 3.12 downloaded into root-owned `/root/`, and the CMD dies as uid 10001 with a
+permission error. The refusal is a `versions: [">=3.13"]` Dependabot ceiling — **not** a
+`semver-major` rule, which would not have matched a bump whose tag major is unchanged — plus
+`test_api_image_python_major_matches_requires_python` in the required `api` job. ⚠ The runtime proof
+that would have caught it already existed and had never run: it is `skipif`-gated on
+`EASYSYNQ_IMAGE_PROOF`, set nowhere in the repository, which is the `EASYSYNQ_RELEASE` inertness
+recurring one proof over. That gap is `RES-IMAGE-PROOF-NEVER-ENABLED`, and its closure contract is to
+wire the existing test up rather than write another.
+
 The design tokens are now authoritative. The Mantine theme reads the `--es-*` typography, spacing, radius
 and elevation scales instead of its own defaults, and `AppShell` separately reads the layout tokens rather
 than hardcoding its dimensions. Before this the theme already took its font families and its status colour
@@ -258,6 +271,16 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
+
+Fresh 2026-09-03 evidence for S-python-312-ceiling. It moves `api_unit_tests` 2,003 → **2,004**
+(one added test) and nothing else. It touches no TypeScript, no OpenAPI and no migration, so
+`web_test_files`, `web_tests`, `contract_tests`, `migration_head`, `next_migration` and the
+integration figures are carried unchanged and are NOT restated as freshly verified. Measured on the
+branch with `ruff check` and `ruff format --check` clean, `mypy` strict clean across 449 source
+files, `AUTHORITY_OK` and `check-no-site-data` clean. ⚠ The squash `6f5ca65` did **not** preserve the
+branch tree byte-for-byte and this entry does not claim it did: `git diff 038ee31 6f5ca65` is the
+[`#536`](https://github.com/CoJoA13/EasySynQ/pull/536) back-fill that merged in between, verified by
+`git diff`.
 
 Fresh 2026-09-01 evidence for S-railfoot-ui, which completes the rail-foot feature. Web-only: it
 moves `web_test_files` 277 → **278** (one new file) and `web_tests` 2,257 → **2,273**, and the

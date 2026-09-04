@@ -1438,6 +1438,78 @@ round-trip passes against PG18, `check-compose-images-lock.sh` is OK, all ten sh
 and `doctor.sh` reports `PROFILE_READY` with `pg_dump major 18`. The web suites were NOT run and are
 not restated: no TypeScript changed.
 
+### S-python-312-ceiling — the API interpreter ceiling becomes enforced
+
+Recorded 2026-09-03 after merging [`#537`](https://github.com/CoJoA13/EasySynQ/pull/537) as
+`6f5ca65`. ⚠ Like [`#534`](https://github.com/CoJoA13/EasySynQ/pull/534), this squash did **not**
+preserve the branch tree byte-for-byte, so this entry does not claim it did:
+`git diff 038ee31 6f5ca65` is nine lines in this file — exactly the
+[`#536`](https://github.com/CoJoA13/EasySynQ/pull/536) back-fill that merged in between and that the
+squash correctly incorporated. Verified by `git diff`, not asserted. Refuses a Dependabot base-image
+bump durably and records why nothing would have caught it. No application code, no migration, no
+contract, no permission key.
+
+**The bump was green and would have shipped an API image that cannot start.** Dependabot
+[`#448`](https://github.com/CoJoA13/EasySynQ/pull/448) moved `apps/api/Dockerfile` from
+`python:3.12-slim-bookworm` to `python:3.14-slim-bookworm` — one line — and was **CLEAN on all
+sixteen checks**. The API interpreter is pinned to 3.12 by `requires-python = ">=3.12,<3.13"`, so
+with a 3.14 base `uv sync --locked` cannot satisfy that from `/usr/local/bin`; it downloads a
+managed CPython 3.12 into `/root/.local/share/uv/python/` and writes that path as the venv's `home`.
+`/root` is `0700` and the image runs as `USER easysynq` (uid 10001), so the CMD `uv run gunicorn ...`
+dies with `Failed to query Python interpreter ... Permission denied (os error 13)`. Established by
+building both Dockerfiles and running them, not by reading: the control built from `main` writes
+`home = /usr/local/bin` and runs `3.12.14` as that same user.
+
+⚠ **A `semver-major` ignore rule would not have matched it.** The tag major is `3` on both sides, so
+`3.12` to `3.14` is a semver **minor** update. Modelling the new entry on the neighbouring
+reportlab and Mantine rules — both `update-types: ["version-update:semver-major"]` — would have
+produced a rule that reads as a refusal and silently permits the exact bump it was written for. The
+ceiling is `versions: [">=3.13"]` instead, which states the constraint the way `requires-python`
+states it.
+
+⚠ **The runtime guard that catches this already existed, and had never run once.**
+`test_the_built_api_image_is_unprivileged_and_starts_offline`
+(`apps/api/tests/unit/test_infra_hardening.py`) builds the real image, asserts uid 10001, and runs
+`uv run alembic --version` under `--network none`. It is `skipif`-gated on `EASYSYNQ_IMAGE_PROOF`,
+and that variable is set **nowhere in the repository** — so the one proof that would have reddened
+#448 has been inert since it was written. This is the same defect class the audit already fixed once
+for `EASYSYNQ_RELEASE`, whose inertness `.github/workflows/ci.yml:423` describes and whose fix is the
+`EASYSYNQ_RELEASE: "1"` at `ci.yml:442`; the identical shape survived in the neighbouring proof. The
+finding is recorded as `RES-IMAGE-PROOF-NEVER-ENABLED`, and its closure contract is to **wire the
+existing test up**, not to write a new one — enabling it was verified to catch exactly this bump
+(green on `main` in 2.9s warm, red on #448's Dockerfile at its `assert offline.returncode == 0`).
+Placement was left to the owner deliberately: it adds a cold image build to whichever job takes it,
+and the `security` job is the wrong home despite already building the image, because it is
+non-required and a guard that cannot redden a PR would restate the record rather than close it.
+
+**What ships as enforcement is the cheap static half.**
+`test_api_image_python_major_matches_requires_python` couples the Dockerfile base, `.python-version`
+and `requires-python` in the **required** `api` job with no Docker needed. It is deliberately the
+narrow guard: it catches the likeliest recurrence at zero CI cost and makes no claim about the
+general case, which stays open as the residual.
+
+**Mutation evidence, per leg.** One mutation does not license a three-part claim, so each leg was
+broken separately. The Dockerfile base set to 3.14 — #448's exact change, confirmed applied once —
+reddens with `pins python:3.14 but requires-python is >=3.12,<3.13`. Deleting the Dependabot ceiling
+reddens. ⚠ The third leg is **inert under the harness CI uses**: mutating `.python-version` to 3.13
+makes **uv itself** refuse to start pytest (`resolved to Python 3.13.15, which is incompatible with
+the project's Python requirement`), so the assertion never executes; it reddens correctly only when
+pytest is invoked through the venv interpreter directly. It is labelled belt-and-braces in the test
+rather than counted as evidence, which is the honest reading of a leg whose guard fires before it.
+
+**The other eleven Dependabot PRs were found stale, and that mattered more than their colours.**
+Their branches predate the Node 26 and PostgreSQL 18 merges — `git merge-base --is-ancestor` fails
+for every one, and their trees still carry `.node-version: 22` — so their CI ran against a tree that
+no longer exists. Both their greens and their reds were therefore untrustworthy as evidence about
+`main`, and each was rebased rather than judged. Three of them (`gotenberg`, `mailpit`, `tika`) will
+still fail `compose-images-lock` after any rebase: Dependabot updates the Compose `image:` ref but
+never `infra/images.lock`, which is a structural coupling only `scripts/images-update.sh` closes.
+
+Test deltas. API unit **2,003 to 2,004** passed with the same two skips — the one added test —
+verified fresh, with `ruff check` and `ruff format --check` clean and `mypy` strict clean across 449
+source files. `AUTHORITY_OK` and `check-no-site-data` clean. The web, contract and integration
+suites were NOT run and are not restated: no TypeScript, no OpenAPI and no migration changed.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration
