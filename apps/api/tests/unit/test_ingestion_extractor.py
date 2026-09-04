@@ -57,6 +57,46 @@ async def test_office_native_single_pass(monkeypatch: pytest.MonkeyPatch) -> Non
     assert r.embedded_props["author"] == "Alice" and r.char_count > 0 and not r.failed
 
 
+@pytest.mark.parametrize(
+    ("content_key", "tika_major"),
+    [("X-TIKA:content", "3.x"), ("tk:content", "4.x")],
+)
+async def test_content_is_read_under_either_tika_namespace(
+    monkeypatch: pytest.MonkeyPatch, content_key: str, tika_major: str
+) -> None:
+    """Tika 4.0 renamed ``X-TIKA:content`` to ``tk:content``; both must extract.
+
+    Verified against real 3.3.1 and 4.0.0 sidecars: the content key is the ONLY part of this
+    client's contract the major changed. ⚠ Missing it does not raise — the lookup misses, the
+    document extracts as EMPTY, and nothing in CI can see it, because this suite mocks the HTTP
+    transport and the integration suite substitutes a fake extractor. That is why the key is
+    pinned here rather than left to a live sidecar nothing runs.
+    """
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    content_key: "Body text under the " + tika_major + " namespace",
+                    "xmpTPg:NPages": "3",
+                    "dc:title": "Controlled Procedure",
+                }
+            ],
+        )
+
+    _mock_tika(monkeypatch, handler)
+    r = await TikaExtractorProvider().extract(
+        b"x",
+        _meta("a.docx", "docx", "application/vnd.oasis.opendocument.text"),
+        ocr_enabled=True,
+        ocr_language="eng",
+    )
+    assert r.full_text == "Body text under the " + tika_major + " namespace"
+    assert r.char_count > 0 and not r.failed
+    assert r.page_count == 3 and r.embedded_props["title"] == "Controlled Procedure"
+
+
 async def test_pdf_two_pass_ocr_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
 

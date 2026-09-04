@@ -32,7 +32,16 @@ logger = logging.getLogger("easysynq.ingestion.extract")
 
 _EXTRACTOR_VERSION = "tika-rmeta-1"
 _HEADER_BLOCK_CHARS = 1500  # the §5.1 high-signal header slice fed to the classifier
-_TIKA_CONTENT_KEY = "X-TIKA:content"
+# Tika 4.0 renamed the whole ``X-TIKA:`` metadata namespace to ``tk:`` (and underscores to
+# hyphens elsewhere), so the text moved from ``X-TIKA:content`` to ``tk:content``. Both are
+# accepted because the key is the ONLY part of this client's contract the major changed --
+# verified against real 3.3.1 and 4.0.0 sidecars: dc:creator, dc:title, dcterms:created,
+# dcterms:modified, Content-Type, xmpTPg:NPages and the X-Tika-OCRLanguage request header all
+# behave identically. ⚠ Reading only the old key against a 4.x sidecar does NOT raise: the
+# lookup simply misses, every document extracts as EMPTY text, and the ``except Exception``
+# below never fires. No test can see it either -- the unit suite mocks the HTTP transport and
+# the integration suite substitutes a fake extractor, so neither runs a real Tika.
+_CONTENT_KEYS = ("tk:content", "X-TIKA:content")
 _IMAGE_EXTS = frozenset({"png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp"})
 _PAGE_COUNT_KEYS = ("xmpTPg:NPages", "Page-Count", "meta:page-count", "pdf:pages", "pdf:Page-Count")
 _AUTHOR_KEYS = ("dc:creator", "meta:author", "Author", "creator")
@@ -131,7 +140,7 @@ class TikaExtractorProvider:
             if isinstance(payload, list) and payload
             else (payload if isinstance(payload, dict) else {})
         )
-        text = str(meta0.get(_TIKA_CONTENT_KEY) or "").strip()
+        text = (_first(meta0, _CONTENT_KEYS) or "").strip()
         props: dict[str, Any] = {}
         for key, keys in (
             ("author", _AUTHOR_KEYS),
