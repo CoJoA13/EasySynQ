@@ -531,7 +531,6 @@ run_neutral_document_contract() {
     RES-R10-RECONSTRUCTION \
     RES-CAPA-REJECT \
     RES-AUDIT-CHECKPOINT-LINEAGE \
-    RES-AUDIT-VERIFY-ORCHESTRATOR \
     RES-AUDIT-LONG-SCOPE-REF \
     RES-UPGRADE-LOCK-TIMEOUT \
     RES-AUDIT-KEY-ROTATION \
@@ -540,6 +539,10 @@ run_neutral_document_contract() {
     require_live_text docs/open-residuals.md "^## ${residual_id}$" \
       "open residuals registers ${residual_id}"
   done
+  reject_live_text docs/open-residuals.md '^## RES-AUDIT-VERIFY-ORCHESTRATOR$' \
+    'closed audit orchestrator is absent from the open ledger'
+  require_live_text docs/slice-history.md 'RES-AUDIT-VERIFY-ORCHESTRATOR is CLOSED' \
+    'slice history preserves audit orchestrator closure evidence'
   reject_live_text docs/open-residuals.md '^## RES-RESTORE-SCRATCH-WORM-GUARD$' \
     'closed scratch guard is absent from the open ledger'
   require_live_text docs/slice-history.md 'RES-RESTORE-SCRATCH-WORM-GUARD is CLOSED' \

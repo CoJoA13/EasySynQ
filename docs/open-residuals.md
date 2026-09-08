@@ -58,8 +58,9 @@ disposition. With source-store reads denied, restore and boot the closed recover
 record, sealed-pack, and rendition reads before access reopens. Link the exact evidence before evaluating
 production recovery or upgrade eligibility. The scratch-target guard is closed with
 [dated evidence](slice-history.md#s-restore-scratch-worm-guard--protected-target-rejection-before-copy).
+Audit task coverage is also closed with
+[dated evidence](slice-history.md#s-audit-verify-orchestrator--durable-alarms-and-engine-lifecycle).
 The narrower
-[RES-AUDIT-VERIFY-ORCHESTRATOR](#res-audit-verify-orchestrator),
 [RES-AUDIT-CHECKPOINT-LINEAGE](#res-audit-checkpoint-lineage),
 [RES-AUDIT-KEY-ROTATION](#res-audit-key-rotation), and
 [RES-UPGRADE-LOCK-TIMEOUT](#res-upgrade-lock-timeout) records keep their separate ownership and closure
@@ -353,34 +354,6 @@ A DB owner who rewrites the chain and lets the 15-minute beat re-anchor over the
 verification, while the older immutable objects that would expose it are never read. **Closing it needs**
 a Merkle-chained anchor lineage (each checkpoint commits to the prior anchor's hash) — a checkpoint
 payload/format change + a register entry.
-
-## RES-AUDIT-VERIFY-ORCHESTRATOR
-
-Status: OPEN
-Owner: Repository owner
-Source: Batch 11, PR [#368](https://github.com/CoJoA13/EasySynQ/pull/368)
-Reason: `_run_verify_chain` has no orchestrator-level test coverage.
-Closure contract: Add an orchestrator harness that can inject the sessionmaker or a task-honored settings
-override, then cover the dirty commit, missing-key alarm, and engine/disposal branches end to end.
-Last reviewed: 2026-08-08
-
-The nightly chain-verify task has had **zero** tests since S6 — this is pre-existing, not introduced by
-Batch 11 — but Batch 11 added real logic to it that is therefore unverified at the orchestrator level:
-(a) the `emitted` → **`dirty`** commit decision (the commit must now also fire for `integrity.alarm` rows,
-which write no audit row by design — keying it on the audit rows alone would silently discard the
-missing-verify-key notifications); (b) the **missing-verify-key alarm** itself (an `integrity.alarm` per
-org + the out-of-band channel, deliberately writing NO `CHAIN_VERIFY_FAIL` row); (c) the
-**engine-inside-`try`** move with its conditional `dispose()` (Codex P2 — a malformed DSN otherwise exits
-without the promised "could not run" alarm).
-
-The individual pieces *are* covered: `_should_alarm_offhost` has a unit decision table including the new
-`witness_required` / `unanchored_overdue` cases, `unanchored_is_overdue` has a mutation-verified boundary
-test, and `emit_integrity_alarm` has integration cover. It is only the orchestration that is untested.
-**Why it is not just an oversight:** `_run_verify_chain` builds its own engine from
-`settings.database_url`, while the integration harness (`app_under_test`) only repoints
-`get_sessionmaker()` — so no existing fixture can reach it. **Closing it needs** an orchestrator harness
-(inject the sessionmaker, or a settings override the task honours) — a slice, not a remediation fix.
-Raised and named by Codex + this batch's own review on #368.
 
 ## RES-AUDIT-LONG-SCOPE-REF
 
