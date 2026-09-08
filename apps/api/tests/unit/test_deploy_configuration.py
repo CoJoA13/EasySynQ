@@ -594,13 +594,29 @@ def test_first_admin_live_harness_owns_only_its_validated_stack_and_env() -> Non
     assert "infra/compose/compose.yml" in compose_definition
     assert "infra/compose/compose.s.yml" in compose_definition
     assert "infra/compose/compose.dev.yml" in compose_definition
+    assert "infra/compose/compose.first-admin-live.yml" in compose_definition
+    assert "compose.production.yml" not in compose_definition
     assert harness.count("docker compose") == 1, (
         "every Compose operation must use the one project-scoped argv"
     )
 
     trap_offset = harness.index("trap cleanup EXIT INT TERM")
+    assert 'set_env_value EASYSYNQ_IMAGE_TAG "$PROJECT"' in harness
+    image_tag_offset = harness.index('set_env_value EASYSYNQ_IMAGE_TAG "$PROJECT"')
+    assert '"${COMPOSE[@]}" up -d postgres' in harness
+    postgres_startup_offset = harness.index('"${COMPOSE[@]}" up -d postgres')
+    assert 'docker network inspect --format "{{json .}}" "${PROJECT}_internal"' in harness
+    network_inspect_offset = harness.index("docker network inspect")
+    assert 'set_env_value TRUSTED_PROXY_CIDRS "127.0.0.1/32,::1/128,${NETWORK_SUBNET}"' in harness
+    trusted_proxy_offset = harness.index(
+        'set_env_value TRUSTED_PROXY_CIDRS "127.0.0.1/32,::1/128,${NETWORK_SUBNET}"'
+    )
     startup_offset = harness.index('"${COMPOSE[@]}" up -d --build')
-    assert trap_offset < startup_offset
+    assert trap_offset < postgres_startup_offset < network_inspect_offset < trusted_proxy_offset
+    assert trusted_proxy_offset < startup_offset
+    assert (
+        harness.index('if ! validate_project "$PROJECT"; then') < image_tag_offset < startup_offset
+    )
     cleanup = harness[harness.index("cleanup() {") : trap_offset]
     assert 'validate_project "$PROJECT"' in cleanup
     assert '[ "$stack_started" -eq 1 ]' in cleanup
@@ -615,7 +631,22 @@ def test_first_admin_live_harness_owns_only_its_validated_stack_and_env() -> Non
     assert 'elif [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; then' in cleanup
 
     assert 'EASYSYNQ_ENV_ONLY=1 "$ROOT/scripts/install.sh" s' in harness
-    assert 'stack_started=1\n"${COMPOSE[@]}" up -d --build' in harness
+    assert 'HTTPS_PORT="$(choose_loopback_port)"' in harness
+    assert re.search(
+        r'while \[ "\$HTTPS_PORT" = "\$APP_PORT" \] \|\| '
+        r'\[ "\$HTTPS_PORT" = "\$S3_PORT" \]; do',
+        harness,
+    )
+    assert 'set_env_value HTTP_PORT "127.0.0.1:${APP_PORT}"' in harness
+    assert 'set_env_value HTTPS_PORT "127.0.0.1:${HTTPS_PORT}"' in harness
+    assert harness.index('set_env_value HTTP_PORT "127.0.0.1:${APP_PORT}"') < startup_offset
+    assert harness.index('set_env_value HTTPS_PORT "127.0.0.1:${HTTPS_PORT}"') < startup_offset
+    assert 'stack_started=1\n"${COMPOSE[@]}" up -d postgres' in harness
+    assert "com.docker.compose.project" in harness
+    assert harness.count("docker network inspect") == 1
+    assert "docker network ls" not in harness
+    assert "docker network create" not in harness
+    assert "docker network rm" not in harness
     assert 'curl -fsS "$APP_ORIGIN/readyz"' in harness
     assert "easysynq_api.cli.keycloak_redirect" in harness
     assert "easysynq_api.cli.setup import mint_bootstrap" in harness
@@ -625,6 +656,7 @@ def test_first_admin_live_harness_owns_only_its_validated_stack_and_env() -> Non
         "EASYSYNQ_LIVE_SETUP_SECRET",
         "EASYSYNQ_LIVE_USERNAME",
         "EASYSYNQ_LIVE_NEW_PASSWORD",
+        "EASYSYNQ_LIVE_COMPOSE_PROJECT",
     ):
         assert f'{variable}="${{' in harness
 
@@ -634,6 +666,53 @@ def test_first_admin_live_harness_owns_only_its_validated_stack_and_env() -> Non
     assert not re.search(r"\b(?:rm|unlink)\b[^\n]*[?*\[]", harness)
     assert "nohup" not in harness
     assert "set -x" not in harness
+
+
+def test_first_admin_live_network_validator_accepts_only_its_owned_private_ipv4_subnet() -> None:
+    harness = _read("scripts/test-first-admin-keycloak.sh")
+    network_subnet_start = harness.index('NETWORK_SUBNET="$(\n')
+    python_marker = "    python3 - <<'PY'\n"
+    validator_start = harness.index(python_marker, network_subnet_start) + len(python_marker)
+    validator_end = harness.index('\nPY\n)"', validator_start)
+    validator = harness[validator_start:validator_end]
+    python = shutil.which("python3")
+    assert python is not None
+    project = "easysynq-first-admin-contract"
+
+    def metadata(subnets: list[str], *, owner: str = project) -> dict[str, object]:
+        return {
+            "Labels": {"com.docker.compose.project": owner},
+            "IPAM": {"Config": [{"Subnet": subnet} for subnet in subnets]},
+        }
+
+    def validate(candidate: dict[str, object]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603 - fixed extracted Python with synthetic JSON only
+            [python, "-c", validator],
+            env={
+                **os.environ,
+                "EASYSYNQ_LIVE_NETWORK_METADATA": json.dumps(candidate),
+                "EASYSYNQ_LIVE_COMPOSE_PROJECT": project,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    accepted = validate(metadata(["10.0.0.0/24"]))
+    assert accepted.returncode == 0, accepted.stderr
+    assert accepted.stdout == "10.0.0.0/24\n"
+
+    refused = {
+        "wrong project label": metadata(["10.0.0.0/24"], owner="easysynq-first-admin-someone-else"),
+        "public IPv4 subnet": metadata(["8.8.8.8/32"]),
+        "malformed subnet": metadata(["not-a-subnet"]),
+        "IPv6 subnet": metadata(["2001:db8::/64"]),
+        "multiple subnets": metadata(["10.0.0.0/24", "192.0.2.0/24"]),
+    }
+    for case, candidate in refused.items():
+        result = validate(candidate)
+        assert result.returncode != 0, f"network validator accepted {case}"
+        assert result.stdout == "", f"network validator emitted a subnet for {case}"
 
 
 def test_first_admin_live_playwright_is_secret_safe_and_single_worker() -> None:
@@ -665,9 +744,55 @@ def test_first_admin_live_playwright_is_secret_safe_and_single_worker() -> None:
         "EASYSYNQ_LIVE_SETUP_SECRET",
         "EASYSYNQ_LIVE_USERNAME",
         "EASYSYNQ_LIVE_NEW_PASSWORD",
+        "EASYSYNQ_LIVE_COMPOSE_PROJECT",
     ):
         assert f'requiredEnvironment("{variable}")' in spec
-    assert "browser.newContext()" in spec
+    assert 'import { execFile } from "node:child_process"' in spec
+    assert 'import { fileURLToPath } from "node:url"' in spec
+    assert "fileURLToPath(import.meta.url)" in spec
+    assert "^easysynq-first-admin-[a-z0-9]+$" in spec
+    project_validation = spec.index("^easysynq-first-admin-[a-z0-9]+$")
+    docker_actions = list(re.finditer(r'execFile\(\s*"docker"', spec))
+    assert len(docker_actions) == 1
+    docker_action = docker_actions[0].start()
+    assert project_validation < docker_action
+    assert '"compose"' in spec
+    assert '"--env-file"' in spec
+    assert '".env"' in spec
+    assert '"-p"' in spec
+    assert '"infra/compose/compose.yml"' in spec
+    assert '"infra/compose/compose.s.yml"' in spec
+    assert '"infra/compose/compose.dev.yml"' in spec
+    assert '"infra/compose/compose.first-admin-live.yml"' in spec
+    assert "compose.production.yml" not in spec
+    assert '"up", "-d", "--no-deps", "--force-recreate", "keycloak"' in re.sub(r"\s+", " ", spec)
+    assert "timeout: 60_000" in spec
+    assert "shell:" not in spec
+    assert "process.env.EASYSYNQ_LIVE_DOCKER" not in spec
+    assert "process.env.EASYSYNQ_LIVE_COMPOSE" not in spec
+    for forbidden_argument in (
+        '"down"',
+        '"postgres"',
+        '"--build"',
+        '"--remove-orphans"',
+        '"--project-directory"',
+    ):
+        assert forbidden_argument not in spec
+    assert ".stdout" not in spec
+    assert ".stderr" not in spec
+    assert "error.message" not in spec
+    assert "${error" not in spec
+    assert "test.setTimeout(300_000)" in spec
+    assert "90_000" in spec
+    assert 'url.pathname === "/realms/easysynq/protocol/openid-connect/token"' in spec
+    assert "/realms/easysynq/.well-known/openid-configuration" in spec
+    assert re.search(r"\b[A-Za-z_]\w*\.ok\(\)", spec)
+    assert "id_token" in spec
+    assert 'throw new Error("authenticated identity changed during live acceptance")' in spec
+    assert "expect(subject" not in spec
+    assert spec.count("browser.newContext()") == 2
+    assert spec.count("Context.close()") == 2
+    assert spec.count("} finally {") == 2
     assert "getByLabel(/^Setup secret/)" in spec
     assert 'getByRole("heading"' in spec
     assert 'name: "Temporary password — shown once"' in spec
@@ -675,14 +800,14 @@ def test_first_admin_live_playwright_is_secret_safe_and_single_worker() -> None:
     assert "const credentialReceipt = provisioned.credential_receipt" in spec
     assert "credential_receipt: credentialReceipt" in spec
     assert "async function installLiveOriginGuard" in spec
-    assert spec.count("await installLiveOriginGuard(") == 2
+    assert spec.count("await installLiveOriginGuard(") == 3
     assert "url.origin !== liveOrigin" in spec
     assert "live acceptance blocked unexpected external request" in spec
     assert "const sensitiveValues = [" in spec
-    assert spec.count("await expectSensitiveValuesNotRetained(") == 3
+    assert spec.count("await expectSensitiveValuesNotRetained(") == 5
     assert 'input[name="username"]' in spec
     assert 'input[name="password-new"]' in spec
-    assert spec.count('getByRole("button", { name: "Sign In", exact: true })') == 2
+    assert spec.count('getByRole("button", { name: "Sign In", exact: true })') == 3
     assert spec.count('getByRole("button", { name: "Submit", exact: true })') == 1
     assert 'input[type="submit"]' not in spec
     assert 'getByLabel("Legal name", { exact: true })' in spec

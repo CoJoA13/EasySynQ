@@ -1,0 +1,5 @@
+# Live first-administrator acceptance only. Let Docker allocate a free project-owned subnet; the
+# harness inspects that exact network and supplies its subnet to TRUSTED_PROXY_CIDRS before startup.
+networks:
+  internal:
+    ipam: !reset {}

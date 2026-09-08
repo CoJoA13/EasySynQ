@@ -1,3 +1,7 @@
+import { execFile } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { expect, test } from "@playwright/test";
 import type { BrowserContext, Page } from "@playwright/test";
 
@@ -13,6 +17,131 @@ const setupSecret = requiredEnvironment("EASYSYNQ_LIVE_SETUP_SECRET");
 const username = requiredEnvironment("EASYSYNQ_LIVE_USERNAME");
 const canonicalUsername = username.trim().toLowerCase();
 const newPassword = requiredEnvironment("EASYSYNQ_LIVE_NEW_PASSWORD");
+const composeProject = requiredEnvironment("EASYSYNQ_LIVE_COMPOSE_PROJECT");
+if (!/^easysynq-first-admin-[a-z0-9]+$/.test(composeProject)) {
+  throw new Error("EASYSYNQ_LIVE_COMPOSE_PROJECT is invalid");
+}
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const composeEnvironment = join(repositoryRoot, ".env");
+
+async function recreateKeycloakCandidate(): Promise<void> {
+  const composeArguments = [
+    "compose",
+    "--env-file",
+    composeEnvironment,
+    "-p",
+    composeProject,
+    "-f",
+    "infra/compose/compose.yml",
+    "-f",
+    "infra/compose/compose.s.yml",
+    "-f",
+    "infra/compose/compose.dev.yml",
+    "-f",
+    "infra/compose/compose.first-admin-live.yml",
+    "up",
+    "-d",
+    "--no-deps",
+    "--force-recreate",
+    "keycloak",
+  ];
+  await new Promise<void>((resolveRecreation, rejectRecreation) => {
+    execFile(
+      "docker",
+      composeArguments,
+      {
+        cwd: repositoryRoot,
+        timeout: 60_000,
+        maxBuffer: 1024 * 1024,
+        windowsHide: true,
+      },
+      (error) => {
+        if (error) {
+          rejectRecreation(new Error("live acceptance could not recreate Keycloak"));
+          return;
+        }
+        resolveRecreation();
+      },
+    );
+  });
+}
+
+async function waitForOidcDiscovery(page: Page): Promise<void> {
+  const discoveryURL = `${liveOrigin}/realms/easysynq/.well-known/openid-configuration`;
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async (url) => {
+          try {
+            const response = await fetch(url, { cache: "no-store" });
+            return response.ok;
+          } catch {
+            return false;
+          }
+        }, discoveryURL),
+      {
+        timeout: 90_000,
+        intervals: [500, 1_000, 2_000],
+        message: "OIDC discovery did not recover after Keycloak recreation",
+      },
+    )
+    .toBe(true);
+}
+
+async function captureOidcTokenSubject(page: Page): Promise<string> {
+  const response = await page.waitForResponse(
+    (candidate) => {
+      const url = new URL(candidate.url());
+      return (
+        candidate.request().method() === "POST" &&
+        candidate.ok() &&
+        url.origin === liveOrigin &&
+        url.pathname === "/realms/easysynq/protocol/openid-connect/token"
+      );
+    },
+    { timeout: 60_000 },
+  );
+  let tokenResponse: unknown;
+  try {
+    tokenResponse = await response.json();
+  } catch {
+    throw new Error("live token response was malformed");
+  }
+  if (
+    typeof tokenResponse !== "object" ||
+    tokenResponse === null ||
+    !("id_token" in tokenResponse) ||
+    typeof tokenResponse.id_token !== "string"
+  ) {
+    throw new Error("live token response did not contain an identity token");
+  }
+
+  const encodedPayload = tokenResponse.id_token.split(".")[1];
+  if (!encodedPayload) throw new Error("live identity token was malformed");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("live identity token was malformed");
+  }
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    !("sub" in payload) ||
+    typeof payload.sub !== "string" ||
+    !payload.sub
+  ) {
+    throw new Error("live identity token did not contain a subject");
+  }
+  return payload.sub;
+}
+
+function assertSameSubject(expected: string, candidate: string): void {
+  if (candidate !== expected) {
+    throw new Error("authenticated identity changed during live acceptance");
+  }
+}
 
 async function installLiveOriginGuard(context: BrowserContext): Promise<void> {
   await context.route("**/*", async (route) => {
@@ -50,6 +179,7 @@ test("first administrator completes the required Keycloak password update", asyn
   browser,
   page,
 }) => {
+  test.setTimeout(300_000);
   await installLiveOriginGuard(page.context());
   await page.goto("/setup");
 
@@ -122,7 +252,9 @@ test("first administrator completes the required Keycloak password update", asyn
   await expect(replacement).toBeVisible();
   await replacement.fill(newPassword);
   await page.locator('input[name="password-confirm"]').fill(newPassword);
+  const subjectBeforeRecreationPromise = captureOidcTokenSubject(page);
   await page.getByRole("button", { name: "Submit", exact: true }).click();
+  const subjectBeforeRecreation = await subjectBeforeRecreationPromise;
 
   await page.waitForURL((url) => url.origin === liveOrigin && url.pathname === "/setup");
   await expect(page.getByLabel("Legal name", { exact: true })).toBeVisible();
@@ -130,6 +262,39 @@ test("first administrator completes the required Keycloak password update", asyn
     0,
   );
   await expectSensitiveValuesNotRetained(page, sensitiveValues);
+
+  await recreateKeycloakCandidate();
+  await waitForOidcDiscovery(page);
+  const subjectAfterRecreationPromise = captureOidcTokenSubject(page);
+  await page.reload();
+  const subjectAfterRecreation = await subjectAfterRecreationPromise;
+  assertSameSubject(subjectBeforeRecreation, subjectAfterRecreation);
+  await page.waitForURL((url) => url.origin === liveOrigin && url.pathname === "/setup");
+  await expect(page.getByLabel("Legal name", { exact: true })).toBeVisible();
+  await expect(page.locator('input[name="username"]')).toHaveCount(0);
+  await expectSensitiveValuesNotRetained(page, sensitiveValues);
+
+  const freshCredentialContext = await browser.newContext();
+  try {
+    await installLiveOriginGuard(freshCredentialContext);
+    const freshCredentialPage = await freshCredentialContext.newPage();
+    await freshCredentialPage.goto(`${baseURL}/setup`);
+    const freshUsername = freshCredentialPage.locator('input[name="username"]');
+    await expect(freshUsername).toBeVisible();
+    await freshUsername.fill(canonicalUsername);
+    await freshCredentialPage.locator('input[name="password"]').fill(newPassword);
+    const subjectFromFreshLoginPromise = captureOidcTokenSubject(freshCredentialPage);
+    await freshCredentialPage.getByRole("button", { name: "Sign In", exact: true }).click();
+    const subjectFromFreshLogin = await subjectFromFreshLoginPromise;
+    assertSameSubject(subjectBeforeRecreation, subjectFromFreshLogin);
+    await freshCredentialPage.waitForURL(
+      (url) => url.origin === liveOrigin && url.pathname === "/setup",
+    );
+    await expect(freshCredentialPage.getByLabel("Legal name", { exact: true })).toBeVisible();
+    await expectSensitiveValuesNotRetained(freshCredentialPage, sensitiveValues);
+  } finally {
+    await freshCredentialContext.close();
+  }
 
   const rejectedCredentialContext = await browser.newContext();
   try {
