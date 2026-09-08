@@ -294,7 +294,24 @@ PR links and local security policy files remain evidence/data. The protected dry
 longer extracted). GitHub/tool lookup failures were absent. It processed existing update branches;
 TypeScript 7 still produced a real npm peer conflict with typescript-eslint's `<6.1.0` ceiling.
 The optional RE2 native addon falls back to JavaScript RegExp because npm lifecycle scripts are
-disabled. The main-schedule write/lockfile proof remains tracked in `RES-RENOVATE-GITHUB-METADATA`.
+disabled. Subsequent protected-main evidence passed 14/14 jobs in pipeline **2829943288** and
+15/15 in scheduled pipeline **2829947451**, with no GitHub lookup/authentication errors. Mailpit
+!5 merged with its Compose and image-lock references synchronized. Scheduled Renovate job
+**16372131561** then wrote the contract-tools npm lock: Redocly **2.51.2** and js-yaml **4.3.2**.
+Clean install/live audit (zero vulnerabilities), full contract regeneration without tracked drift,
+and the updated independent exact-version guards passed. Reviewed head
+`6a3555527755552b8c2db66af425b7a36dfe8534` passed all **14** required jobs in pipeline
+**2830246394**, and !6 merged as `d07570448ce53ff0e9fb82e71a996947394dda9b`.
+
+Actual npm write proof is complete. Real uv lock refresh remains unverified until a suitable Python
+update exists; the residual remains open in
+[`RES-RENOVATE-GITHUB-METADATA`](open-residuals.md#res-renovate-github-metadata). Four existing
+OpenAPI composition warnings and the unchanged Python generator's formatter FutureWarning remain;
+this is not a warning-free toolchain claim. Major MRs !7–!9 remain Draft for their separate
+compatibility/teardown gates. The planned rotation date is **2026-09-30**, ahead of the current
+token's **2026-10-07** expiry: replace the masked/protected project variable using the existing
+least-privilege role/scopes, verify a protected scheduled run, then retire the old credential.
+Rotation has not occurred; [issue #2](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/2) tracks it.
 Local contributor verification: doctor **75/0**, timing-artifact fixtures **9 passed**, hosting
 and distribution guards passed, `AUTHORITY_OK`, and a clean site-data scan.
 
