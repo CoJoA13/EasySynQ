@@ -18,10 +18,24 @@ squash-merge. Release tags matching `v*` may be created only by Maintainers. See
 > `.claude/rules/windows-dev.md`. Linux examples below are conditional on that host's installed
 > tools and group membership.
 
-Use `uv` with managed **Python 3.12**, Node 26 + npm, and a current supported Docker/Compose. Do not
+Use `uv` with managed **CPython 3.12**, Node 26 + npm, and a current supported Docker/Compose. Do not
 depend on the system Python. Locks are committed at `apps/api/uv.lock`, `apps/web/package-lock.json`,
 and `packages/contracts/package-lock.json`; CI uses `uv sync --frozen` / `npm ci`, and `just setup`
 hydrates both frozen npm trees before generating contracts.
+
+Install the contributor tools through the pinned PyPI and official package paths in
+[`fresh-linux-setup.md`](runbooks/fresh-linux-setup.md). Keep
+`UV_ASTRAL_MIRROR_URL=https://releases.astral.sh` exported in terminal and editor sessions with uv
+0.11.14 or newer; this explicitly prevents upstream-host fallback for managed CPython downloads.
+Alternatively, use `UV_PYTHON_DOWNLOADS=never` with CPython 3.12 already installed. Pre-commit uses
+project-locked Ruff, pinned PyPI text/YAML hooks, and native Gitleaks 8.x (minimum 8.18.4). Missing Gitleaks fails
+the staged secret check; installing hooks no longer clones remote hook repositories.
+
+Optional hosting commands use authenticated `glab` against the GitLab repository remote. To refresh
+integration timing data, run `bash scripts/refresh-test-durations.sh [pipeline-id]`. It selects one
+successful `main` pipeline (latest by default), requires its four successful integration shards,
+downloads their timing artifacts, and rejects overlap or incomplete data before replacing the local
+file. Artifacts expire after seven days. Review the timing diff before committing it.
 
 Run the dependency-light, read-only doctor directly before setup so it can diagnose a missing `just`:
 
@@ -37,14 +51,24 @@ SELinux bind labels. Each line includes a stable reason ID and the exact next co
 starts services, changes permissions, or prints configuration values. Once `just` is available,
 `just doctor` and `just doctor stack` are equivalent conveniences.
 
-Common Fedora doctor remediations are intentionally explicit. Run only the row matching the emitted
+Common doctor remediations are intentionally explicit. Run only the row matching the emitted
 reason, then re-run the same doctor profile:
+
+For `UV_MIRROR_REQUIRED`, export `UV_ASTRAL_MIRROR_URL=https://releases.astral.sh`; for
+`UV_MIRROR_OVERRIDE`, unset `UV_PYTHON_INSTALL_MIRROR` and `UV_PYTHON_DOWNLOADS_JSON_URL`.
+`UV_MIRROR_UNSUPPORTED` or `UV_DOWNLOAD_POLICY_UNSUPPORTED` requires the pinned uv upgrade command
+printed by the doctor. The offline alternative requires uv 0.3.2 or newer to recognize
+`UV_PYTHON_DOWNLOADS=never`.
+
+For `GITLEAKS_MISSING` or `GITLEAKS_UNSUPPORTED_VERSION`, follow the pinned native Go-proxy install
+in the fresh Linux runbook, then run `gitleaks version`. Contributor readiness requires Gitleaks
+8.x at least 8.18.4 and remains independent of Docker daemon access.
 
 | Reason ID                                                                                                                                                                                                                                                                                              | Exact next action                                                                                                                                                 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TOOL_MISSING_GIT`, `TOOL_MISSING_CURL`, `TOOL_MISSING_OPENSSL`, `JUST_MISSING`, `PRECOMMIT_MISSING`, `NODE_MISSING`, `NODE_UNSUPPORTED_VERSION`, `UV_MISSING`, `PG_DUMP_MISSING`, `PG_DUMP_UNSUPPORTED_VERSION`, `DOCKER_CLI_MISSING`, `DOCKER_COMPOSE_MISSING`, `DOCKER_COMPOSE_UNSUPPORTED_VERSION` | Install the named tool with your distribution's package manager (the doctor prints the exact command per tool), then re-run `./scripts/doctor.sh contributor` or `./scripts/doctor.sh test`.     |
 | `NODE_PATH_SHADOWED`                                                                                                                                                                                                                                                                                   | Run `PATH=/usr/bin:$PATH ./scripts/doctor.sh contributor`; then fix the shell-manager selection permanently.                                                      |
-| `PYTHON_312_MISSING`                                                                                                                                                                                                                                                                                   | Run `uv python install 3.12`, then `./scripts/doctor.sh contributor`.                                                                                             |
+| `PYTHON_312_MISSING`                                                                                                                                                                                                                                                                                   | With the configured Astral mirror, run `uv python install cpython@3.12`, then `./scripts/doctor.sh contributor`.                                                                                             |
 | `DOCKER_SOCKET_MISSING`, `DOCKER_DAEMON_STOPPED`                                                                                                                                                                                                                                                       | Run `sudo systemctl enable --now docker`, then `docker info`.                                                                                                     |
 | `DOCKER_GROUP_SESSION_INACTIVE`                                                                                                                                                                                                                                                                        | Log out and back in, then run `docker info`; do not loosen the socket mode.                                                                                       |
 | `DOCKER_SOCKET_PERMISSION`, `DOCKER_DAEMON_UNREACHABLE`                                                                                                                                                                                                                                                | Run `stat -c "%a %U %G" /var/run/docker.sock` and `docker info`, correct the reviewed Docker service/group configuration, then re-run `./scripts/doctor.sh test`. |

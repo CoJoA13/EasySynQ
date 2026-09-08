@@ -147,7 +147,7 @@ subnet or firewall zone than the workstations.
 Install **Ubuntu 26.04 LTS**, then clone the repository at a reviewed release tag:
 
 ```bash
-git clone https://github.com/CoJoA13/EasySynQ.git
+git clone https://gitlab.com/synqsuite-group/EasySynQ.git
 cd EasySynQ
 git checkout <release-tag-or-approved-commit>
 ```

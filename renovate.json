@@ -82,6 +82,89 @@
         "python"
       ],
       "allowedVersions": "<3.13"
+    },
+    {
+      "description": "Python 3.12 is a deliberate interpreter contract; this datasource queries GitHub prebuild metadata. Docker base patch updates remain enabled.",
+      "matchDatasources": [
+        "python-version"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The updater runtime/toolchain stays on Node 24; runtime-major changes need a coordinated setup change.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchPackageNames": [
+        "node"
+      ],
+      "matchCurrentValue": "/^24\\./",
+      "allowedVersions": "<25"
+    },
+    {
+      "description": "The updater runtime/toolchain stays on Node 26; runtime-major changes need a coordinated setup change.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchPackageNames": [
+        "node"
+      ],
+      "matchCurrentValue": "/^26\\./",
+      "allowedVersions": "<27"
+    }
+  ],
+  "fetchChangeLogs": "off",
+  "github-actions": {
+    "enabled": false
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^infra/images\\.lock$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\n)[a-z][a-z0-9_-]*[ \\t]+(?<depName>[^ \\t\\r\\n]+?):(?<currentValue>[^@ \\t\\r\\n]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.gitlab-ci\\.yml$/",
+        "/^apps/api/Dockerfile$/",
+        "/^scripts/run-renovate\\.sh$/"
+      ],
+      "matchStrings": [
+        "uv==(?<currentValue>[0-9.]+)"
+      ],
+      "depNameTemplate": "uv",
+      "datasourceTemplate": "pypi",
+      "versioningTemplate": "pep440"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^scripts/run-renovate\\.sh$/"
+      ],
+      "matchStrings": [
+        "renovate@(?<currentValue>[0-9.]+)"
+      ],
+      "depNameTemplate": "renovate",
+      "datasourceTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^scripts/run-renovate\\.sh$/"
+      ],
+      "matchStrings": [
+        "install_node (?<currentValue>[0-9.]+)"
+      ],
+      "depNameTemplate": "node",
+      "datasourceTemplate": "node-version",
+      "versioningTemplate": "node"
     }
   ]
 }

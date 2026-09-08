@@ -1,22 +1,22 @@
 ---
-description: Triage automated PR review findings — verify each in code, fix or file, reply on every thread, resolve only what you addressed
+description: Triage GitLab merge-request review findings — verify each in code, fix or file, reply on every discussion, resolve only what you addressed
 disable-model-invocation: true
 ---
 
-Triage the review findings on an open PR (Codex, or any automated reviewer). The goal is an honest
+Triage the review findings on an open GitLab merge request (Codex, or any automated reviewer). The goal is an honest
 record: every finding assessed, every thread answered, and the thread state matching reality.
 
 ## 1. Fetch everything, including what arrived while you worked
 
 ```bash
-gh api graphql -f query='
-{ repository(owner:"<owner>",name:"<repo>"){ pullRequest(number:<N>){ reviewThreads(first:80){
-  nodes { id isResolved comments(first:1){ nodes { databaseId path line body } } } } } } }' \
-  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | "=== \(.comments.nodes[0].databaseId) | \(.comments.nodes[0].path):\(.comments.nodes[0].line) | thread=\(.id) ===\n\(.comments.nodes[0].body)\n"'
+glab api 'projects/:id/merge_requests/<iid>/discussions?per_page=100' --paginate \
+  | jq '.[] | select(any(.notes[]; .resolvable == true and .resolved == false))
+        | {id, notes: [.notes[] | {id, body, position, resolvable, resolved}]}'
 ```
 
-The REST endpoint 404s on some comment ids; GraphQL is reliable. Note that a reviewer may post a **new
-round while you are working** — re-fetch before resolving anything.
+The repository remote selects the GitLab project; `:id` is expanded by `glab`. Keep each discussion ID
+and its note IDs distinct. A reviewer may post a **new round while you are working** — re-fetch before
+resolving anything. Authenticate with `glab auth login`; never put a token in a command argument.
 
 ## 2. Verify each finding in the code
 
@@ -29,7 +29,7 @@ genuine account-takeover path, a stale-comment-driven false claim, and two contr
 could see.
 
 For each, decide:
-- **Introduced by this PR** → fix it.
+- **Introduced by this merge request** → fix it.
 - **Pre-existing** (the same defect exists on `main`) → file it, and say so on the thread with evidence.
   Check with `git show main:<file>` rather than asserting it.
 - **Not valid** → say why, concretely.
@@ -38,7 +38,7 @@ For each, decide:
 
 Fixing: one subagent per coherent group, not per finding. Mutation-verify every fix (`/mutation-verify`).
 
-Filing: a GitHub issue per coherent change, grouped where several findings are genuinely **one** fix
+Filing: a GitLab issue per coherent change, grouped where several findings are genuinely **one** fix
 (three surfaces describing the same stale rule = one issue). Each issue needs the failure scenario, the
 affected paths, a suggested fix, and a link back to the thread. Run the R61 check over issue bodies
 before publishing — they are public prose.
@@ -50,7 +50,9 @@ information.
 ## 4. Reply on every thread
 
 ```bash
-gh api -X POST "repos/<owner>/<repo>/pulls/<N>/comments/<comment_id>/replies" -f body="…"
+# Write the exact reply to this local text file first, preserving newlines.
+glab api -X POST 'projects/:id/merge_requests/<iid>/discussions/<discussion_id>/notes' \
+  -F body=@/tmp/review-reply.txt
 ```
 
 State what changed and where (commit SHA), or why it was not changed. End each with the automation
@@ -60,7 +62,8 @@ reader — name the mechanism.
 ## 5. Resolve ONLY what you addressed
 
 ```bash
-gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:"<id>"}){thread{isResolved}} }'
+glab api -X PUT 'projects/:id/merge_requests/<iid>/discussions/<discussion_id>' \
+  -F resolved=true
 ```
 
 ⚠ **The trap, hit in this repo:** a loop written over an earlier thread list swept up five threads from a
@@ -70,7 +73,8 @@ that a human can rely on.
 - Re-fetch the unresolved list immediately before resolving.
 - Resolve by **explicit id list** of what you triaged — never "everything currently unresolved".
 - Leave open anything you deferred to the owner, and say on the thread that you left it open.
-- If you resolve something in error, `unresolveReviewThread` it and correct the record out loud.
+- If you resolve something in error, repeat the same GitLab update with `-F resolved=false` and
+  correct the record out loud.
 
 ## 6. Report
 

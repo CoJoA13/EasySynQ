@@ -27,12 +27,56 @@ The tools it requires, and the way each is installed on Ubuntu 26.04 without nee
 | Tool | Install |
 |---|---|
 | `git`, `curl`, `openssl` | `sudo apt-get install git curl openssl` |
-| Node (major per the tracked `.node-version`) | Any version manager, or NodeSource. `nvm install <major> && nvm alias default <major>` keeps it off the system path. |
-| `uv` (manages Python 3.12) | Astral's installer, then `uv python install 3.12` |
-| `just` | `sudo apt-get install just`, or `uv tool install rust-just` when sudo is unavailable |
-| `pre-commit` | `sudo apt-get install pre-commit`, or `uv tool install pre-commit` |
+| Node (major per the tracked `.node-version`) | NodeSource's apt repository, or the official archive from `nodejs.org/dist/`; select the tracked major. |
+| `uv` (manages CPython 3.12) | `sudo apt-get install pipx`, then `pipx install --index-url https://pypi.org/simple uv==0.12.10` |
+| `just` | `sudo apt-get install just` |
+| `pre-commit` | `pipx install --index-url https://pypi.org/simple pre-commit==4.2.0` |
+| Gitleaks | Native version 8.18.4, installed through the Go module proxy as shown below |
 | `pg_dump` **major 18** | `sudo apt-get install postgresql-client-18` — Ubuntu 26.04 ships 18 |
 | Docker Engine + Compose v2 | Distribution packages or Docker's official apt repository |
+
+Persist the following environment setting in the shell configuration used by your terminal and editor,
+and export it in the current session before installing Python or running `just setup`:
+
+```bash
+export UV_ASTRAL_MIRROR_URL=https://releases.astral.sh
+uv python install cpython@3.12
+```
+
+Astral documents that an explicitly configured mirror disables fallback to GitHub and raw GitHub
+downloads; this requires uv **0.11.14 or newer**. Use the `cpython@3.12` selector so a different
+Python implementation is not selected. Remove custom Python download-source overrides from uv
+configuration and the environment. If CPython 3.12 is already installed and no downloads are wanted,
+`export UV_PYTHON_DOWNLOADS=never` is also supported. The doctor checks these environment choices
+and still requires a resolvable CPython 3.12. See the
+[Astral mirror reference](https://docs.astral.sh/uv/reference/environment/#uv_astral_mirror_url).
+
+Install the existing Gitleaks version without cloning its upstream repository. Ubuntu's currently
+available package is older than the pinned scanner, so use the official Go module proxy with direct
+fallback disabled:
+
+```bash
+sudo apt-get install golang-go
+GOPROXY=https://proxy.golang.org GONOPROXY=none GONOSUMDB=none \
+  GOSUMDB=sum.golang.org GOTOOLCHAIN=local \
+  go install -ldflags='-s -w -X=github.com/zricethezav/gitleaks/v8/cmd.Version=8.18.4' \
+  github.com/zricethezav/gitleaks/v8@v8.18.4
+export PATH="$(go env GOPATH)/bin:$PATH"
+gitleaks version
+```
+
+Persist the Go binary directory on `PATH` for the editor too. The module identifier contains its
+upstream namespace; the configured proxy serves the package and dependencies without a direct
+request to that upstream host. The linker flag sets the version string used by the doctor; unlabelled
+source builds cannot prove the scanner version. Provisioning is pinned at 8.18.4; an existing native
+8.x version at least 8.18.4 also passes the doctor. Other major versions require review. The local
+pre-commit hook runs the same staged, redacted secret scan and fails if the native tool is missing.
+Ruff uses the project lock; the standard text/YAML hooks
+install `pre-commit-hooks==5.0.0` from PyPI. Commits do not require a Docker daemon.
+
+For optional GitLab merge-request and artifact commands, install `glab` from Ubuntu's package
+repository (`sudo apt-get install glab`) and run `glab auth login`. Do not put tokens in command
+arguments or tracked files.
 
 ⚠ **`pg_dump` must be major 18**, matching the PostgreSQL server in `infra/images.lock`.
 `test_backup`/`test_restore` shell out to `pg_dump`/`pg_restore`, and **pg_dump refuses a newer server

@@ -157,7 +157,7 @@ assert_file_not_contains "the CI user gets no personal home path (R61)" "HOME=/h
 
 # a per-user plugin install is invisible to that unprivileged user.
 assert_file_contains "the compose plugin installs system-wide, not into a user home" \
-  "/usr/local/lib/docker/cli-plugins"
+  "docker-compose-plugin=5.5.1"
 assert_file_not_contains "the compose plugin is not installed into root's home" \
   "/root/.docker/cli-plugins"
 
@@ -185,7 +185,7 @@ assert_text_contains "security installs the jq its report parser needs" "$SECURI
 # ---- the dependency updater (Dependabot's replacement) -------------------------------------------
 RENOVATE_CONFIG_BLOCK="$(job_block renovate-config)"
 assert_text_contains "renovate config is validated strictly before dependency automation can go green" \
-  "$RENOVATE_CONFIG_BLOCK" 'renovate-config-validator --strict'
+  "$RENOVATE_CONFIG_BLOCK" 'bash scripts/run-renovate.sh validate'
 assert_text_contains "renovate config validation requires the repository config to exist" \
   "$RENOVATE_CONFIG_BLOCK" 'test -f renovate.json'
 assert_text_not_contains "renovate config validation is not restricted to scheduled pipelines" \

@@ -14,11 +14,14 @@ reported missing GitHub authentication, failed Python-version and Node-tool look
 artifact errors in generated update MRs. The job still exited successfully. No GitHub credential
 was configured in the project, its group or the available task environment. GitLab authentication
 and strict configuration validation do not cover this external metadata dependency.
-Closure contract: Add a dedicated public-read GitHub token as masked, protected
-`RENOVATE_GITHUB_COM_TOKEN` with expansion disabled and environment scope `*`. Run the main
-schedule again, investigate any remaining tool/version lookup failures, verify affected npm/uv
-lockfiles are refreshed and their update pipelines pass, and link that evidence before closing.
-Do not merge updates with artifact errors or suppress the warnings to claim completion.
+Closure contract: The owner declined GitHub services and hosting on 2026-09-08. Replace GitHub
+metadata/tool dependencies with registry lookups and preinstalled tools, explicitly disable GitHub
+requests and changelog fetching, and preserve the GitLab-only credential setup. Run the protected
+main schedule, verify actual npm/uv lockfile refreshes and coordinated image-manifest updates, and
+inspect remaining lookup/artifact errors. Successful dependency pipelines remain necessary before
+merging individual updates; deliberate version-review assertions may still require scoped work.
+The earlier token-based closure proposal is superseded by this owner decision. Do not merely
+suppress warnings or treat a green updater exit as proof that lockfiles were refreshed.
 Last reviewed: 2026-09-08
 
 ## RES-CONTAINER-SECURITY-TRIAGE

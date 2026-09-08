@@ -36,12 +36,14 @@ variables:
   variables: {}
 
 .uv:
-  image: ghcr.io/astral-sh/uv:python3.12-bookworm
+  image: python:3.12-bookworm
+  variables:
+    UV_PYTHON_DOWNLOADS: "never"
+  before_script: &uv-setup
+    - 'python -m pip install --no-cache-dir --only-binary=:all: uv==0.12.10'
 
 .renovate:
-  image:
-    name: renovate/renovate:39
-    entrypoint: [""]
+  image: python:3.12-bookworm
 
 .dind:
   services:
@@ -57,16 +59,17 @@ variables:
 # PLUGIN, so without the second download `docker compose config` exits 125 with the usage help --
 # which reads like a syntax error in the compose files rather than a missing subcommand.
 .docker-cli: &docker-cli
+  - *uv-setup
   - curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz
       | tar -xz -C /tmp
   - install -m 0755 /tmp/docker/docker /usr/local/bin/docker
   # ⚠ SYSTEM path, not /root/.docker: the suites drop to the unprivileged `ci` user, which cannot
   # read root's home. A per-user install makes `docker compose` vanish for exactly the tests that
   # need it, and the symptom is the usage help plus exit 125 — indistinguishable from a bad flag.
-  - mkdir -p /usr/local/lib/docker/cli-plugins
-  - curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose
-      https://github.com/docker/compose/releases/download/v5.5.1/docker-compose-linux-x86_64
-  - chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose
+  - install -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update -qq && apt-get install -y -qq docker-compose-plugin=5.5.1-1~debian.12~bookworm >/dev/null
   - docker version
   - docker compose version
 
@@ -99,6 +102,7 @@ contracts:
     - node --test scripts/tests/test-postgres-mcp-disabled.mjs
     - bash scripts/tests/test-ci-hardening.sh
     - bash scripts/tests/test-gitlab-ci-hardening.sh
+    - bash scripts/tests/test-gitlab-distribution.sh
     - bash scripts/tests/test-check-compose-images-lock.sh
     - npm ci --prefix packages/contracts --ignore-scripts
     - bash scripts/tests/test-run-contract-tool.sh
@@ -122,6 +126,8 @@ api:
   extends: [.uv, .dind]
   before_script: *docker-cli
   script:
+    - bash scripts/tests/test-contributor-hosting.sh
+    - python3 scripts/tests/test-refresh-test-durations.py
     - |
       # ⚠ Wrapped in a SUBSHELL: GitLab shares one shell across every script line, so these
       # exports otherwise survive into pytest — test_smtp_defaults_are_safe caught
@@ -259,7 +265,16 @@ security:
     - apt-get update -qq && apt-get install -y -qq curl ca-certificates git jq >/dev/null
     - curl -fsSL https://deb.nodesource.com/setup_26.x | bash - >/dev/null
     - apt-get install -y -qq nodejs >/dev/null
-    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.74.0
+    - |
+      trivy_container=$(docker create aquasec/trivy:0.74.0)
+      trap 'docker rm "$trivy_container" >/dev/null' EXIT
+      docker cp "$trivy_container:/usr/local/bin/trivy" /usr/local/bin/trivy
+      docker rm "$trivy_container" >/dev/null
+      trap - EXIT
+    - export TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2
+    - export TRIVY_JAVA_DB_REPOSITORY=docker.io/aquasec/trivy-java-db:1
+    - export TRIVY_CHECKS_BUNDLE_REPOSITORY=docker.io/aquasec/trivy-checks:1
+    - export TRIVY_SKIP_VERSION_CHECK=true
   script:
     - bash scripts/tests/test-pip-audit-runner.sh
     - bash scripts/run-pip-audit.sh
@@ -288,14 +303,13 @@ compose-images-lock:
     - bash scripts/check-compose-images-lock.sh
 
 # Renovate can log repository config errors and still exit successfully. Validate its config
-# independently on every branch, using the same image as the scheduled updater. With this version,
-# no filename argument selects repository validation (an explicit filename selects global config).
+# independently on every branch, using the same pinned npm release as the scheduled updater.
 renovate-config:
   stage: check
   extends: .renovate
   script:
     - test -f renovate.json
-    - renovate-config-validator --strict
+    - bash scripts/run-renovate.sh validate
 
 # Dependency updates, replacing Dependabot (which does not run on GitLab). SCHEDULE-ONLY: a
 # pipeline schedule drives it, so an ordinary push never raises MRs. Needs a masked CI/CD variable
@@ -328,7 +342,7 @@ renovate:
         exit 1
       fi
   script:
-    - renovate
+    - bash scripts/run-renovate.sh run
 
 release-gate:
   stage: check
