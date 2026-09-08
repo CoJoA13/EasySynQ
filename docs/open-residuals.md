@@ -9,11 +9,11 @@ stays open until its closure contract ships with linked evidence. Dated `Named r
 Status: OPEN
 Owner: Repository owner
 Source: Post-merge setup verification, 2026-09-08, scheduled job 16358301239
-Reason: Renovate now authenticates to GitLab and extracts dependencies, but its first real run
-reported missing GitHub authentication, failed Python-version and Node-tool lookups, and lockfile
-artifact errors in generated update MRs. The job still exited successfully. No GitHub credential
-was configured in the project, its group or the available task environment. GitLab authentication
-and strict configuration validation do not cover this external metadata dependency.
+Reason: The initial authenticated run reported GitHub metadata/tool failures and generated npm
+updates without refreshed lockfiles despite a successful updater exit. The owner-approved GitLab-only
+setup has since removed those dependencies, and actual npm lock generation and coordinated Mailpit
+image updates are verified. Real uv lock refresh remains unverified because no suitable Python update
+has been selected. This record remains open until that part of the existing closure contract is proved.
 Closure contract: The owner declined GitHub services and hosting on 2026-09-08. Replace GitHub
 metadata/tool dependencies with registry lookups and preinstalled tools, explicitly disable GitHub
 requests and changelog fetching, and preserve the GitLab-only credential setup. Run the protected
@@ -22,6 +22,15 @@ inspect remaining lookup/artifact errors. Successful dependency pipelines remain
 merging individual updates; deliberate version-review assertions may still require scoped work.
 The earlier token-based closure proposal is superseded by this owner decision. Do not merely
 suppress warnings or treat a green updater exit as proof that lockfiles were refreshed.
+Progress, 2026-09-08: Setup !11 merged; its [main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2829943288)
+passed 14/14 and the [protected schedule](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2829947451)
+passed 15/15 without GitHub lookup/authentication errors. [Mailpit !5](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/5)
+merged with Compose and images.lock synchronized. The later scheduled Renovate job 16372131561
+produced the real npm lock update in [contract-tools !6](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/6);
+clean installation, live audit, full generation without drift and reviewed exact-version guards passed,
+then its [14 required jobs](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2830246394) passed before merge.
+No Python update is manufactured to close the remaining uv evidence gap. Current execution and token
+rotation are tracked in [issue #2](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/2).
 Last reviewed: 2026-09-08
 
 ## RES-SOURCE-INDEPENDENT-RECOVERY

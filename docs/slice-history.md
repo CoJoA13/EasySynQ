@@ -4834,3 +4834,35 @@ recur. TypeScript 7's remaining artifact error names its incompatible typescript
 no `--force` or peer-dependency bypass was added. The dry run made no branch/MR writes. Optional
 RE2 uses Renovate's JavaScript fallback because lifecycle downloads are disabled. Contributor
 fixtures passed 75 doctor checks and nine artifact cases.
+
+
+## GitLab dependency verification: real npm lock update — 2026-09-08
+
+Setup !11 merged as `6077e8a45b5942daf803220765b326f82ddd4417`. Its post-merge main pipeline
+2829943288 passed 14/14 jobs; protected scheduled pipeline 2829947451 passed 15/15 and extracted
+106 dependencies from 22 manager/file entries without GitHub lookup/authentication failures.
+Mailpit !5 then merged as `406efd22022d2ac3e1587f9b6926d7d248eb1d2a` after independent review and
+14/14 required jobs in pipeline 2830027364. Its Compose and image-lock references changed together.
+
+The existing schedule was requested once on that main commit. Renovate job 16372131561 in pipeline
+2830144433 regenerated !6's npm lock in `63b28d547f2668596bcfbb7c0054317cec4bfbbe`, resolving
+Redocly 2.51.2 and the scoped js-yaml 4.3.2 override while preserving openapi-typescript 7.13.0.
+A clean install/live audit reported zero vulnerabilities. Full server/client contract generation
+preserved the bundle hash and produced no tracked drift. The old exact-version guards failed for
+the expected old pins before ten expected literals were updated in the two existing tests.
+The resulting Node lock test passed 1/1 and Python dependency-tooling tests passed 9/9; Ruff
+lint/format, site-data and whitespace checks passed. Four existing OpenAPI composition warnings
+and a formatter FutureWarning from the unchanged Python generator remained disclosed.
+
+Independent complete-MR review found no material findings. Reviewed head
+`6a3555527755552b8c2db66af425b7a36dfe8534` passed all 14 required jobs in
+[pipeline 2830246394](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2830246394), and
+[!6](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/6) merged at 16:06:43 UTC as
+`d07570448ce53ff0e9fb82e71a996947394dda9b`. This establishes actual npm lock writes by the
+GitLab-only updater; it does not establish uv lock refresh. The current residual stays open for
+that real Python-update proof. Unsupported major updates remain separately held, and no peer
+constraint, exact-version guard, pipeline requirement or GitHub-service refusal was bypassed.
+
+This evidence update changes no production behavior, migration, contract, dependency version or
+suite count. The token rotation target is September 30 ahead of October 7 expiry, with protected
+schedule verification before retiring the old credential; rotation itself remains unperformed.
