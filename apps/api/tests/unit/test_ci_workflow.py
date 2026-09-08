@@ -10,6 +10,7 @@ import yaml
 
 _ROOT = Path(__file__).resolve().parents[4]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "ci.yml"
+_PIPELINE = _ROOT / ".gitlab-ci.yml"
 
 
 def _step(job: dict[str, Any], name: str) -> tuple[int, dict[str, Any]]:
@@ -281,6 +282,78 @@ def test_the_image_runtime_proof_is_enabled_in_a_job_that_can_fail_a_merge() -> 
                 f"the image runtime proof moved to {job_name!r}; it belongs in `api`, which can "
                 "fail a merge"
             )
+
+
+def _flatten_script(value: Any) -> str:
+    """GitLab ``script:`` may nest a list when a YAML anchor is spliced in.
+
+    Flatten before matching, or a spliced anchor makes the whole block unsearchable.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(_flatten_script(item) for item in value)
+    return ""
+
+
+def _gitlab_jobs() -> dict[str, Any]:
+    """Top-level GitLab jobs, excluding the dot-prefixed YAML fragments and global keys."""
+    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
+    return {
+        name: body
+        for name, body in pipeline.items()
+        if isinstance(body, dict) and not name.startswith(".") and name not in {"variables"}
+    }
+
+
+def test_gitlab_pipeline_preserves_complete_hard_fail_gates() -> None:
+    """No GitLab job may be allowed to fail.
+
+    GitLab's `allow_failure: true` is the direct counterpart of GitHub's `continue-on-error`,
+    and it is worse in one respect: an allowed-to-fail job still renders a green pipeline, so
+    the gate reads exactly as it does when the job passed.
+    """
+    for name, job in _gitlab_jobs().items():
+        assert job.get("allow_failure") is not True, f"{name} is allowed to fail"
+
+
+def test_the_gitlab_image_runtime_proof_runs_in_the_job_that_can_fail_a_merge() -> None:
+    """`EASYSYNQ_IMAGE_PROOF` must be set in the api job, and only there.
+
+    Identical reasoning to the GitHub pin: the proof is skipif-gated, so an unset variable
+    leaves it inert while the job still reports success. GitLab has no non-required jobs, but
+    the placement still matters — the proof belongs with the suite that builds and starts the
+    image, not scattered into a job that never runs it.
+    """
+    jobs = _gitlab_jobs()
+    api_script = _flatten_script(jobs["api"]["script"])
+    assert "EASYSYNQ_IMAGE_PROOF=1" in api_script
+
+    for name, job in jobs.items():
+        if name == "api":
+            continue
+        body = _flatten_script(job.get("script", [])) + _flatten_script(
+            job.get("before_script", [])
+        )
+        assert "EASYSYNQ_IMAGE_PROOF" not in body, (
+            f"the image runtime proof moved to {name!r}; it belongs with the api suite"
+        )
+
+
+def test_gitlab_pipeline_collects_only_the_authoritative_test_trees() -> None:
+    """The GitLab counterpart of the GitHub per-job command pins."""
+    jobs = _gitlab_jobs()
+    expected = {
+        "api": "pytest tests/unit -m unit",
+        "integration-shards": "pytest tests/integration -m integration",
+        "contract-responses": (
+            "pytest tests/integration/test_contract_response_schemas.py -m contract"
+        ),
+        "release-gate": "pytest tests/unit/test_images_lock_pinned.py -q",
+    }
+    for job_name, command in expected.items():
+        script = _flatten_script(jobs[job_name]["script"])
+        assert command in script, f"{job_name} no longer runs {command!r}"
 
 
 def test_security_job_gates_npm_and_keeps_trivy_findings_report_only() -> None:

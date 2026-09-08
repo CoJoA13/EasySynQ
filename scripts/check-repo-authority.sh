@@ -203,7 +203,7 @@ if [ -f "$ROOT/CLAUDE.md" ] && grep -Eqi '^#{1,6}[[:space:]].*(current[[:space:]
   reason AUTHORITY_CLAUDE_CURRENT_OWNER
 fi
 
-if [ -f "$ROOT/CLAUDE.md" ] && grep -Eqi '(migration[[:space:]]+(head|snapshot)|next[[:space:]]+migration|baseline[[:space:]]+commit|last[[:space:]]+shipped[[:space:]]+slice|current[[:space:]]+slice|api[[:space:]]+unit[[:space:]]+tests|web[[:space:]]+(test[[:space:]]+files|tests)|contract[[:space:]]+tests|integration[[:space:]]+(passed|skipped)|ci[[:space:]]+(jobs|checks)|RES-[A-Z][A-Z0-9-]*|decision[[:space:]]+range|R[1-9][0-9]*[–-]R[1-9][0-9]*|permission[[:space:]]+(catalog|count|keys))' "$ROOT/CLAUDE.md"; then
+if [ -f "$ROOT/CLAUDE.md" ] && grep -Eqi '(migration[[:space:]]+(head|snapshot)|next[[:space:]]+migration|baseline[[:space:]]+commit|last[[:space:]]+shipped[[:space:]]+slice|current[[:space:]]+slice|api[[:space:]]+unit[[:space:]]+tests|web[[:space:]]+(test[[:space:]]+files|tests)|contract[[:space:]]+tests|integration[[:space:]]+(passed|skipped)|ci[[:space:]]+(jobs|checks)|RES-[A-Z][A-Z0-9-]*|decision[[:space:]]+range|R[1-9][0-9]*(–|-)R[1-9][0-9]*|permission[[:space:]]+(catalog|count|keys))' "$ROOT/CLAUDE.md"; then
   reason AUTHORITY_CLAUDE_MUTABLE_FACTS
 fi
 
@@ -355,7 +355,7 @@ if [ "${#LIVE_TEXT_FILES[@]}" -gt 0 ]; then
     DECISION_RANGE_MIRROR_FILES+=("$absolute_path")
   done
   if [ "${#DECISION_RANGE_MIRROR_FILES[@]}" -gt 0 ] && \
-      grep -I -Eq 'R[1-9][0-9]*[–-]R[1-9][0-9]*' "${DECISION_RANGE_MIRROR_FILES[@]}"; then
+      grep -I -Eq 'R[1-9][0-9]*(–|-)R[1-9][0-9]*' "${DECISION_RANGE_MIRROR_FILES[@]}"; then
     reason AUTHORITY_DECISION_RANGE_MIRROR
   fi
 fi

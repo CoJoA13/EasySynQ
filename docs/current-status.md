@@ -1,18 +1,18 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-03"
+as_of: "2026-09-07"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-image-proof-enabled"
+last_shipped_slice: "S-gitlab-ci-port"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 2008
+api_unit_tests: 2011
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
 integration_passed: 1231
 integration_skipped: 2
-ci_jobs: 12
-ci_checks: 16
+ci_jobs: 10
+ci_checks: 13
 ---
 
 # Current execution snapshot
@@ -271,6 +271,27 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
+
+Fresh 2026-09-07 evidence for S-gitlab-ci-port. It moves `api_unit_tests` 2,008 -> **2,011** (three
+semantic pins for the new pipeline) and, more consequentially, the CI-topology fields: `ci_jobs`
+12 -> **10** and `ci_checks` 16 -> **13**.
+
+⚠ Those two figures now describe **GitLab**, which is the gate. The drop from 12 jobs is not a
+reduction in coverage: GitHub's `integration` and `web` AGGREGATOR jobs exist only to give branch
+protection one stable required-check name over a matrix, and GitLab gates on the whole pipeline, so
+porting them would assert something already guaranteed. Every suite they aggregated still runs.
+13 is the instance count on a branch push -- 10 defined jobs, with `integration-shards` fanning to
+four and `web-tests` to two, and the tag-only `release-gate` not firing.
+
+`.github/workflows/ci.yml` still exists and is still pinned by its own harness, but it is no longer
+the gate; GitHub is read-only for the transition and its 135 historical PR links must keep
+resolving.
+
+Measured on the branch: api unit **2,011 passed / 1 skipped** with `EASYSYNQ_IMAGE_PROOF=1` as CI
+runs it, `ruff check` and `ruff format --check` clean, `mypy` strict clean across 449 source files,
+gitlab-ci-hardening 49/0, ci-hardening 85/0, `AUTHORITY_OK`, `check-no-site-data` clean. The web,
+contract and integration figures are carried unchanged and are NOT restated: no TypeScript, no
+OpenAPI and no migration changed.
 
 Fresh 2026-09-03 evidence for S-image-proof-enabled. It moves `api_unit_tests` 2,006 → **2,008**
 and the api unit skips 2 → **1**: one added CI pin, plus the built-image runtime proof itself

@@ -406,6 +406,26 @@ run_bad_current_decision_range() {
   fi
 }
 
+# The decision-range mirror guard matches an EN DASH. Written as a bracket range (`[–-]`) it is
+# silently INERT outside a UTF-8 locale: POSIX reads the dash as its three raw bytes, so the class
+# becomes those bytes plus `-` and the multi-byte dash can never match. The guard then returns
+# AUTHORITY_OK for a file it is supposed to reject. This pins the locale-independent form — the
+# same fixture as run_bad_current_decision_range, forced through LC_ALL=C.
+run_bad_current_decision_range_posix_locale() {
+  local fixture output status
+  fixture="$(fixture_root)"
+  printf 'Current decision range is R1–R60.\n' >"$fixture/docs/current-decision-mirror.md"
+  git -C "$fixture" add --all
+  output="$(LC_ALL=C LANG=C AUTHORITY_ROOT="$fixture" "$GUARD" 2>&1)"
+  status=$?
+  rm -rf "$fixture"
+  if [ "$status" -eq 1 ] && [ "$output" = 'AUTHORITY_DECISION_RANGE_MIRROR' ]; then
+    ok 'current decision range is rejected under a POSIX locale too'
+  else
+    bad "current decision range is rejected under a POSIX locale too (status=$status output=$output)"
+  fi
+}
+
 run_good_guard_implementation() {
   local fixture output status
   fixture="$(fixture_root)"
@@ -594,6 +614,7 @@ run_good_untracked_payload
 run_good_register_range
 run_good_historical_decision_range
 run_bad_current_decision_range
+run_bad_current_decision_range_posix_locale
 run_good_guard_implementation
 run_good neutral_authority_split
 
