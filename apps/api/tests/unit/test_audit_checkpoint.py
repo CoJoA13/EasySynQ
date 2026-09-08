@@ -7,10 +7,14 @@ cannot forge and cannot re-sign over the rewritten latest_row_hash — surfaces 
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import datetime
+import json
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
@@ -20,6 +24,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from easysynq_api.services.audit import checkpoint as cp
+from easysynq_api.services.audit import sink as sink_service
 
 _ORG = "11111111-1111-1111-1111-111111111111"
 _HASH = b"\xaa" * 32
@@ -237,3 +242,516 @@ def test_load_signing_key_exports_the_public_half(tmp_path: Any, monkeypatch: An
         )
         is True
     )
+
+
+def _signed_legacy_doc(
+    key: Ed25519PrivateKey,
+    org_id: str,
+    latest_id: int,
+    row_hash: bytes,
+    timestamp: datetime.datetime,
+) -> dict[str, Any]:
+    payload = cp._payload(org_id, latest_id, row_hash, timestamp)
+    return {
+        "checkpoint": json.loads(payload),
+        "signature": base64.b64encode(key.sign(payload)).decode(),
+    }
+
+
+class _ScalarResult:
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def scalar_one_or_none(self) -> Any:
+        return self.value
+
+
+class _SinkScalars:
+    def __init__(self, sinks: list[Any]) -> None:
+        self.sinks = sinks
+
+    def all(self) -> list[Any]:
+        return self.sinks
+
+
+class _SinkResult:
+    def __init__(self, sinks: list[Any]) -> None:
+        self.sinks = sinks
+
+    def scalars(self) -> _SinkScalars:
+        return _SinkScalars(self.sinks)
+
+
+class _HistorySession:
+    def __init__(self, sink: Any | list[Any], stored: dict[int, bytes]) -> None:
+        self.sinks = sink if isinstance(sink, list) else [sink]
+        self.stored = stored
+        self.calls = 0
+
+    async def execute(self, statement: Any) -> Any:
+        self.calls += 1
+        if self.calls == 1:
+            return _SinkResult(self.sinks)
+        values = statement.compile().params.values()
+        latest_id = next(value for value in values if type(value) is int)
+        return _ScalarResult(self.stored.get(latest_id))
+
+
+async def _run_history(
+    monkeypatch: pytest.MonkeyPatch,
+    documents: list[dict[str, Any]],
+    *,
+    stored: dict[int, bytes],
+    now: datetime.datetime = _TS,
+    pages: list[sink_service.CheckpointVersionsPage] | None = None,
+    last_anchored_at: datetime.datetime | None = None,
+    enabled_at: datetime.datetime | None = None,
+    read_failure_at: int | None = None,
+    kind: str = "worm_bucket",
+) -> cp.OffHostCheckpointResult:
+    refs = [
+        sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/{index + 1}-a.json", f"v{index}")
+        for index in range(len(documents))
+    ]
+    supplied_pages = pages or [
+        sink_service.CheckpointVersionsPage(tuple(refs), (), False, None, None)
+    ]
+    page_index = 0
+    read_index = 0
+
+    def list_page(
+        supplied_kind: str, *_args: Any, **_kwargs: Any
+    ) -> sink_service.CheckpointVersionsPage:
+        nonlocal page_index
+        if supplied_kind != "worm_bucket":
+            raise sink_service.SinkReadError(
+                f"off-host version listing is not implemented for sink kind '{supplied_kind}'"
+            )
+        page = supplied_pages[page_index]
+        page_index += 1
+        return page
+
+    def read_version(
+        _kind: str,
+        _connection: dict[str, Any] | None,
+        _ref: sink_service.CheckpointVersionRef,
+    ) -> dict[str, Any]:
+        nonlocal read_index
+        if read_failure_at == read_index:
+            raise sink_service.SinkReadError("synthetic explicit-version read failure")
+        document = documents[read_index]
+        read_index += 1
+        return document
+
+    monkeypatch.setattr(cp, "list_offhost_checkpoint_versions_page", list_page)
+    monkeypatch.setattr(cp, "read_offhost_checkpoint_version", read_version)
+    monkeypatch.setattr(
+        cp,
+        "get_settings",
+        lambda: SimpleNamespace(audit_witness_grace_hours=24),
+    )
+    configured = SimpleNamespace(
+        id="synthetic-sink",
+        kind=SimpleNamespace(value=kind),
+        connection={"off_host": True, "bucket": "synthetic"},
+        last_anchored_at=last_anchored_at,
+        enabled_at=enabled_at or now,
+    )
+    session = _HistorySession(configured, stored)
+    return await cp.verify_offhost_checkpoint(
+        session, _ORG, verify_key=_TEST_KEY.public_key(), now=now
+    )
+
+
+_TEST_KEY = Ed25519PrivateKey.generate()
+
+
+async def test_history_accepts_old_consistent_and_fresh_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS - datetime.timedelta(days=10))
+    fresh = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    result = await _run_history(monkeypatch, [fresh, old], stored={7: _HASH})
+    assert result.verified
+    assert result.sinks_read == 1
+    assert result.attest_failures == 0
+
+
+async def test_fresh_checkpoint_cannot_mask_bad_historical_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS - datetime.timedelta(days=10))
+    old["signature"] = base64.b64encode(b"x" * 64).decode()
+    fresh = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    result = await _run_history(monkeypatch, [old, fresh], stored={7: _HASH})
+    assert not result.verified
+    assert result.attest_failures == 1
+    assert any("signature" in reason for reason in result.reasons)
+
+
+async def test_signed_timestamp_selects_heartbeat_not_filename_or_listing_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old = _signed_legacy_doc(_TEST_KEY, _ORG, 9, _HASH, _TS - datetime.timedelta(days=10))
+    fresh = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    refs = (
+        sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/999999-future.json", "old"),
+        sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/1-past.json", "fresh"),
+    )
+    pages = [sink_service.CheckpointVersionsPage(refs, (), False, None, None)]
+    result = await _run_history(monkeypatch, [old, fresh], stored={7: _HASH, 9: _HASH}, pages=pages)
+    assert result.verified
+
+
+async def test_latest_authenticated_heartbeat_is_checked_for_staleness_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS - datetime.timedelta(seconds=2701))
+    result = await _run_history(monkeypatch, [stale], stored={7: _HASH})
+    assert not result.verified
+    assert result.attest_failures == 1
+    assert sum("stale" in reason for reason in result.reasons) == 1
+
+
+async def test_existing_future_timestamp_behavior_remains_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    future = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS + datetime.timedelta(days=1))
+    result = await _run_history(monkeypatch, [future], stored={7: _HASH})
+    assert result.verified
+    assert result.attest_failures == 0
+
+
+@pytest.mark.parametrize("failure", ["org", "hash", "missing"])
+async def test_every_authenticated_history_head_must_match_the_chain(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    org_id = "22222222-2222-2222-2222-222222222222" if failure == "org" else _ORG
+    row_hash = b"\xbb" * 32 if failure == "hash" else _HASH
+    document = _signed_legacy_doc(_TEST_KEY, org_id, 7, row_hash, _TS)
+    stored = {} if failure == "missing" else {7: _HASH}
+    result = await _run_history(monkeypatch, [document], stored=stored)
+    assert not result.verified
+    assert result.attest_failures == 1
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda doc: doc["checkpoint"].__setitem__("latest_id", True),
+        lambda doc: doc["checkpoint"].__setitem__("latest_id", 0),
+        lambda doc: doc["checkpoint"].__setitem__("latest_id", 1.5),
+        lambda doc: doc["checkpoint"].__setitem__("latest_id", 10**100),
+        lambda doc: doc["checkpoint"].__setitem__("latest_row_hash", "aa"),
+        lambda doc: doc["checkpoint"].__setitem__("timestamp", 1),
+        lambda doc: doc.__setitem__("signature", "not-base64!"),
+        lambda doc: doc.pop("signature"),
+        lambda doc: doc.__setitem__("format_version", 2),
+    ],
+)
+def test_authentication_rejects_strict_legacy_shape_and_value_boundaries(
+    mutate: Any,
+) -> None:
+    document = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    mutate(document)
+    authenticated, reason = cp._authenticate_offhost_doc(_ORG, _TEST_KEY.public_key(), document)
+    assert authenticated is None
+    assert reason is not None
+
+
+def test_authentication_handles_timestamp_normalization_overflow_as_malformed() -> None:
+    document = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    document["checkpoint"]["timestamp"] = "0001-01-01T00:00:00+23:59"
+    authenticated, reason = cp._authenticate_offhost_doc(_ORG, _TEST_KEY.public_key(), document)
+    assert authenticated is None
+    assert "malformed" in str(reason)
+
+
+def test_authentication_preserves_legacy_offset_normalization() -> None:
+    offset = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    timestamp = _TS.astimezone(offset)
+    document = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    document["checkpoint"]["timestamp"] = timestamp.isoformat()
+    authenticated, reason = cp._authenticate_offhost_doc(_ORG, _TEST_KEY.public_key(), document)
+    assert reason is None
+    assert authenticated is not None
+    assert authenticated.timestamp == _TS
+
+
+async def test_equal_authenticated_heartbeat_tuples_are_all_compared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    second = _signed_legacy_doc(_TEST_KEY, _ORG, 7, b"\xbb" * 32, _TS)
+    result = await _run_history(monkeypatch, [first, second], stored={7: _HASH})
+    assert not result.verified
+    assert result.sinks_read == 1
+    assert result.attest_failures == 1
+    assert any("mismatch" in reason for reason in result.reasons)
+
+
+@pytest.mark.parametrize("failed_first", [False, True], ids=["healthy-first", "failed-first"])
+@pytest.mark.parametrize("failure", ["attestation", "read"])
+async def test_multi_sink_failures_remain_sticky_across_sink_order(
+    monkeypatch: pytest.MonkeyPatch,
+    failed_first: bool,
+    failure: str,
+) -> None:
+    healthy_ref = sink_service.CheckpointVersionRef(
+        f"checkpoints/{_ORG}/7-healthy.json", "healthy-version"
+    )
+    failed_ref = sink_service.CheckpointVersionRef(
+        f"checkpoints/{_ORG}/7-failed.json", "failed-version"
+    )
+    marker = sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/deleted", "delete-marker")
+    healthy_doc = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+
+    def list_page(
+        _kind: str,
+        connection: dict[str, Any],
+        _org_id: str,
+        **_markers: Any,
+    ) -> sink_service.CheckpointVersionsPage:
+        if connection["name"] == "failed":
+            if failure == "read":
+                raise sink_service.SinkReadError("synthetic sibling listing failure")
+            return sink_service.CheckpointVersionsPage((failed_ref,), (marker,), False, None, None)
+        return sink_service.CheckpointVersionsPage((healthy_ref,), (), False, None, None)
+
+    def read_version(
+        _kind: str,
+        _connection: dict[str, Any],
+        _ref: sink_service.CheckpointVersionRef,
+    ) -> dict[str, Any]:
+        return healthy_doc
+
+    monkeypatch.setattr(cp, "list_offhost_checkpoint_versions_page", list_page)
+    monkeypatch.setattr(cp, "read_offhost_checkpoint_version", read_version)
+    monkeypatch.setattr(cp, "get_settings", lambda: SimpleNamespace(audit_witness_grace_hours=24))
+    sinks = [
+        SimpleNamespace(
+            id=name,
+            kind=SimpleNamespace(value="worm_bucket"),
+            connection={"off_host": True, "name": name},
+            last_anchored_at=_TS,
+            enabled_at=_TS,
+        )
+        for name in (["failed", "healthy"] if failed_first else ["healthy", "failed"])
+    ]
+
+    result = await cp.verify_offhost_checkpoint(
+        _HistorySession(sinks, {7: _HASH}),
+        _ORG,
+        verify_key=_TEST_KEY.public_key(),
+        now=_TS,
+    )
+
+    assert result.verified is False
+    if failure == "attestation":
+        assert result.sinks_read == 2
+        assert result.attest_failures == 1
+        assert result.read_failed is False
+        assert any("delete marker" in reason for reason in result.reasons)
+    else:
+        assert result.sinks_read == 1
+        assert result.attest_failures == 0
+        assert result.read_failed is True
+        assert any("listing failure" in reason for reason in result.reasons)
+
+
+async def test_marker_failure_does_not_skip_valid_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fresh = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    ref = sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/7-a.json", "v")
+    marker = sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/removed", "m")
+    pages = [sink_service.CheckpointVersionsPage((ref,), (marker,), False, None, None)]
+    result = await _run_history(monkeypatch, [fresh], stored={7: _HASH}, pages=pages)
+    assert result.sinks_read == 1
+    assert result.attest_failures == 1
+    assert any("delete marker" in reason for reason in result.reasons)
+
+
+async def test_marker_only_prefix_is_an_attestation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/unrelated", "m")
+    pages = [sink_service.CheckpointVersionsPage((), (marker,), False, None, None)]
+    result = await _run_history(monkeypatch, [], stored={}, pages=pages)
+    assert result.sinks_read == 0
+    assert result.attest_failures == 1
+    assert not result.verified
+
+
+async def test_partial_read_failure_after_good_body_never_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fresh = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    result = await _run_history(
+        monkeypatch,
+        [fresh, fresh],
+        stored={7: _HASH},
+        read_failure_at=1,
+    )
+    assert result.sinks_read == 1
+    assert result.read_failed
+    assert not result.verified
+
+
+async def test_unknown_sink_kind_is_a_public_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = await _run_history(
+        monkeypatch,
+        [],
+        stored={},
+        kind="external_object_store",
+    )
+    assert result.read_failed
+    assert not result.verified
+    assert any("not implemented" in reason for reason in result.reasons)
+
+
+async def test_ineligible_versions_count_toward_entry_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cp, "_HISTORY_MAX_ENTRIES", 2)
+    refs = (
+        sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/notes", "v1"),
+        sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/other", "v2"),
+    )
+    pages = [sink_service.CheckpointVersionsPage(refs, (), False, None, None)]
+    result = await _run_history(monkeypatch, [], stored={}, pages=pages)
+    assert result.read_failed and not result.verified
+    assert any("entry limit" in reason for reason in result.reasons)
+
+
+async def test_cap_minus_one_entries_can_complete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cp, "_HISTORY_MAX_ENTRIES", 2)
+    ref = sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/notes", "v1")
+    pages = [sink_service.CheckpointVersionsPage((ref,), (), False, None, None)]
+    result = await _run_history(monkeypatch, [], stored={}, pages=pages)
+    assert not result.read_failed
+    assert any("no off-host checkpoint" in reason for reason in result.reasons)
+
+
+async def test_exact_page_cap_and_repeated_cursor_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cp, "_HISTORY_MAX_PAGES", 2)
+    cursor = ("opaque-key", "null")
+    pages = [
+        sink_service.CheckpointVersionsPage((), (), True, *cursor),
+        sink_service.CheckpointVersionsPage((), (), False, None, None),
+    ]
+    capped = await _run_history(monkeypatch, [], stored={}, pages=pages)
+    assert capped.read_failed
+    assert any("page limit" in reason for reason in capped.reasons)
+
+    monkeypatch.setattr(cp, "_HISTORY_MAX_PAGES", 10)
+    repeated_pages = [
+        sink_service.CheckpointVersionsPage((), (), True, *cursor),
+        sink_service.CheckpointVersionsPage((), (), True, *cursor),
+    ]
+    repeated = await _run_history(monkeypatch, [], stored={}, pages=repeated_pages)
+    assert repeated.read_failed
+    assert any("cursor repeated" in reason for reason in repeated.reasons)
+
+
+async def test_deadline_after_page_never_accepts_partial_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    times = iter([0.0, 0.0, 301.0])
+    monkeypatch.setattr(cp, "monotonic", lambda: next(times))
+    result = await _run_history(monkeypatch, [], stored={})
+    assert result.read_failed and not result.verified
+    assert any("deadline" in reason for reason in result.reasons)
+
+
+@pytest.mark.parametrize(
+    "expiry_call",
+    [1, 2, 3, 4, 5, 6, 7],
+    ids=[
+        "before-page",
+        "after-page",
+        "before-body",
+        "after-body",
+        "before-db-compare",
+        "after-db-compare",
+        "after-page-work",
+    ],
+)
+async def test_deadline_boundaries_never_accept_a_partial_scan(
+    monkeypatch: pytest.MonkeyPatch, expiry_call: int
+) -> None:
+    calls = 0
+
+    def monotonic() -> float:
+        nonlocal calls
+        value = 301.0 if calls == expiry_call else 0.0
+        calls += 1
+        return value
+
+    monkeypatch.setattr(cp, "monotonic", monotonic)
+    document = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    result = await _run_history(monkeypatch, [document], stored={7: _HASH})
+    assert result.read_failed
+    assert not result.verified
+    assert any("deadline" in reason for reason in result.reasons)
+
+
+async def test_reason_details_are_bounded_per_sink(monkeypatch: pytest.MonkeyPatch) -> None:
+    documents = [{"checkpoint": {}, "signature": "invalid", "extra": index} for index in range(22)]
+    result = await _run_history(monkeypatch, documents, stored={})
+    assert result.attest_failures == 1
+    assert len(result.reasons) == 21
+    assert "2 additional failure reasons omitted" in result.reasons[-1]
+
+
+async def test_external_cancellation_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    def cancelled(*_args: Any, **_kwargs: Any) -> sink_service.CheckpointVersionsPage:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(cp, "list_offhost_checkpoint_versions_page", cancelled)
+    monkeypatch.setattr(cp, "get_settings", lambda: SimpleNamespace(audit_witness_grace_hours=24))
+    configured = SimpleNamespace(
+        id="synthetic-sink",
+        kind=SimpleNamespace(value="worm_bucket"),
+        connection={"off_host": True},
+        last_anchored_at=None,
+        enabled_at=_TS,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await cp.verify_offhost_checkpoint(
+            _HistorySession(configured, {}),
+            _ORG,
+            verify_key=_TEST_KEY.public_key(),
+            now=_TS,
+        )
+
+
+@pytest.mark.parametrize(
+    ("last_anchored", "enabled_at", "expected_attest", "expected_overdue"),
+    [
+        (_TS, _TS, 1, 0),
+        (None, _TS, 0, 0),
+        (None, _TS - datetime.timedelta(hours=25), 0, 1),
+    ],
+)
+async def test_empty_history_preserves_existing_grace_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+    last_anchored: datetime.datetime | None,
+    enabled_at: datetime.datetime,
+    expected_attest: int,
+    expected_overdue: int,
+) -> None:
+    result = await _run_history(
+        monkeypatch,
+        [],
+        stored={},
+        last_anchored_at=last_anchored,
+        enabled_at=enabled_at,
+    )
+    assert result.attest_failures == expected_attest
+    assert result.unanchored_overdue == expected_overdue
+    assert not result.verified

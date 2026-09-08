@@ -8,9 +8,10 @@ the same custody as the host disk-encryption key.
 |---|---|---|
 | **App master KEK** | `APP_MASTER_KEK` (0600 .env) | Re-wrap the column DEKs with the new KEK (envelope: no bulk re-encryption of data). MVP has no plaintext DB secret columns (federation lives in Keycloak), so this is a forward-seam — rotate by updating the value and restarting. |
 | **Backup key** | `BACKUP_ENCRYPTION_KEY` (0600 .env) | **Separate custody from the KEK.** New `…tar.enc` archives use the new key. **Keep the OLD key as long as any archive sealed with it must remain decryptable/verifiable** (the manifest records `encryption_key_ref`). Losing it makes those archives unusable; key custody does not make a non-self-contained archive a recovery set. |
-| **Audit-checkpoint signing key** | `AUDIT_CHECKPOINT_SIGNING_KEY_PATH` (Ed25519, beat-only) | New checkpoints sign with the new key. Keep the old public key to verify pre-rotation checkpoints. |
+| **Audit-checkpoint signing key** | `AUDIT_CHECKPOINT_SIGNING_KEY_PATH` (Ed25519, beat-only) | Current verification loads one trusted key. Retain the old public key as evidence, but do not assume that makes automatic historical selection work: rotating while old retained anchors remain causes their signatures to fail until reviewed key-history support ships (`RES-AUDIT-KEY-ROTATION`). |
 | **Verify-token signing key** | `VERIFY_TOKEN_SIGNING_KEY_PATH` (Ed25519, shared api↔worker via the `secrets` volume) | After rotating, force a full mirror re-render so renditions carry a footer token signed with the new key: `./scripts/easysynq mirror rebuild`. |
 | **Off-host sink credential** | `AUDIT_SINK_ACCESS_KEY` / `AUDIT_SINK_SECRET_KEY` | Held in **separate custody** from the KEK/backup key (D-8); rotate at the sink + in `.env`. |
+| **Off-host witness reader credential** | `AUDIT_SINK_READ_ACCESS_KEY` / `AUDIT_SINK_READ_SECRET_KEY` | Read-only principal used by independent verification. It needs current-object read/location/list plus `s3:ListBucketVersions` and `s3:GetObjectVersion`; it must not receive write, delete, retention, or governance-bypass rights. Rotate at the sink + in `.env`. |
 | **Keycloak admin / client secret** | `KEYCLOAK_ADMIN_PASSWORD`, client secrets | Rotate in Keycloak; update `.env` so the worker's realm-export admin login keeps working. JWKS key rotation is automatic (the API re-fetches on `kid` change). |
 | **DB / MinIO root** | `*_PASSWORD`, `S3_*` | Rotate at the service + in `.env`; restart the stack. |
 
@@ -49,3 +50,29 @@ docker compose --env-file .env -f infra/compose/compose.yml run --rm worker \
 ⚠ `audit_checkpoint_sink.enabled_at` — the grace-window anchor — is set at **row creation**. v1 has
 no in-app create/enable surface (provisioning is a direct operator INSERT), so if you later toggle a
 sink `enabled` false→true, bump `enabled_at` too or the window is measured from creation.
+
+### Version-read rollout and operational limits
+
+Before deploying a verifier that scans retained history, update the actual independently administered
+witness reader with `s3:ListBucketVersions` on the checkpoint bucket and `s3:GetObjectVersion` on its
+checkpoint objects. These explicit version permissions are the portable policy contract. A merged
+Compose policy file does not update an existing external principal. Apply the permissions narrowly
+through that provider's normal IAM procedure, rotate/update the reader credential if required, then run
+`verify-offhost` above and confirm explicit retained-version listing and reads. Do not run the
+development MinIO bootstrap against a live witness as a policy-update shortcut.
+
+Validate effective access against the deployed provider rather than inferring it from omitted policy
+actions. The pinned MinIO release permits version listing through `s3:ListBucket` and version reads
+through `s3:GetObject`; it also permits version listing when `s3:ListBucketVersions` is explicitly denied
+but `s3:ListBucket` remains allowed. An old policy can therefore continue to verify on this provider and
+does not necessarily raise an alarm. Keep both explicit version allows for portable behavior and track
+the list-deny exception under
+[`RES-MINIO-VERSION-LIST-DENY`](../open-residuals.md#res-minio-version-list-deny).
+
+An actually denied version operation, unsupported provider, disappearing listed version, malformed
+page, or incomplete traversal raises an integrity-verification availability alarm. The verifier never
+falls back to current-object reads. Each sink scan permits fewer than 1,024 pages and fewer than 524,288
+returned versions/delete markers, bodies up to 65,536 bytes, and a cooperative 300-second budget.
+Reaching a cap, including on an otherwise terminal page, is an alarm condition and does not authorize
+pruning WORM evidence. Investigate provider availability, effective permissions, pagination behavior,
+retained-history volume, and latency before changing reviewed limits.

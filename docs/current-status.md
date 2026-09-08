@@ -2,7 +2,7 @@
 easysynq_status_schema: 1
 as_of: "2026-09-08"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-audit-verify-orchestrator"
+last_shipped_slice: "S-audit-historical-witnesses"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2011
@@ -36,6 +36,16 @@ retain separate closure contracts. S-restore-scratch-worm-guard closes the scrat
 S-audit-verify-orchestrator closes the task-coverage record. Checkpoint lineage, key rotation
 and upgrade-lock coverage remain open.
 Production recovery and upgrade safety are unproven.
+
+S-audit-historical-witnesses now checks every retained eligible legacy checkpoint object version at
+each currently configured off-host witness. An older conflicting signed checkpoint remains a failure
+after a genuine producer writes a newer consistent anchor. Delete markers and incomplete or denied
+scans fail closed. External readers need the portable version permissions documented in the
+[key-rotation runbook](runbooks/key-rotation.md); merging the Compose policy does not update live IAM.
+The pinned provider's version-list denial limitation is OPEN as
+[`RES-MINIO-VERSION-LIST-DENY`](open-residuals.md#res-minio-version-list-deny). Checkpoint lineage,
+key-history selection and source-independent recovery remain open, and the database/store observations
+are not one snapshot.
 
 ## Shipped boundary
 
@@ -279,6 +289,22 @@ enforced by the executable catalog assertion in `apps/api/tests/unit/test_authz.
 set is defined by the headings and self-range declarations in [`decisions-register.md`](decisions-register.md).
 
 ## Verification baseline
+
+S-audit-historical-witnesses was checked on 2026-09-08 against source base
+`02587988766e4ea7e0acdc76c665428261c33971`. Final local API units passed **2,172 tests with two
+expected opt-in skips** in **35.83 seconds**. Ruff, formatting over **775 files**, mypy over **449
+source files**, authority, site-data and whitespace checks passed. The two genuine producer
+re-anchor regressions first failed on the old reader and then passed. The initial 59-case integration
+run passed 58 cases, including durable historical alarms and existing audit/backup/restore behavior;
+its remaining storage test needed provider-specific assertion corrections. That corrected test then
+passed separately in **16.43 seconds**, completing all nine effective-permission identities and WORM
+controls. Production and the other integration files were unchanged between those runs; these are
+attributed runs, not a claim of one clean 59-case rerun. Source/log identities and zero owned fixture
+containers were verified. Three pre-existing Testcontainers namespace warnings remain. The local
+skips are the release digest-pin check and the opt-in built API image check; required GitLab CI runs
+the image proof. See the [dated slice evidence](slice-history.md#s-audit-historical-witnesses--retained-checkpoint-version-verification).
+Frontmatter figures retain their recorded baseline attribution; this paragraph records the new
+affected-suite evidence without claiming a new full application baseline.
 
 S-audit-verify-orchestrator adds coverage of the existing nightly task without changing production
 behavior. Six unit cases cover missing-key fanout, accumulated notification dirtiness, no-commit,

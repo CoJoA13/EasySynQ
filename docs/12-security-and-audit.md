@@ -387,7 +387,34 @@ flowchart LR
 - The audit partition has **no UPDATE and no DELETE grant** for the application role; only INSERT and SELECT. A separate, rarely-used `audit_retention` role (operated only via the documented retention job under dual control, §8) may purge whole *expired, sealed* partitions — never individual rows.
 - Partitioned by month (`occurred_at`) for performance and for whole-partition lifecycle; indexed by `object_id`, `actor_id`, `event_type`, `occurred_at`.
 - Mirrored into OpenSearch for fast investigative search (derived, rebuildable; PG remains authoritative).
-- A `beat` **chain-verify** job (default nightly + on-demand) re-walks the chain over rows where `chained_at IS NOT NULL` and compares against the latest signed checkpoint **and the latest checkpoint persisted to the off-host `audit_checkpoint_sink`**; a mismatch raises a high-severity audit alarm and an admin alert. The ordered rows are consumed through a server-side cursor in bounded batches rather than materializing the organization's full ORM row set; the cryptographic walk remains complete and in `id` order. Rows in the written-but-not-yet-chained window (`chained_at IS NULL`) at the chain tail are reported as *pending*, not as a break; a persistent or growing unchained tail (chain-linker stalled) is itself alarmed.
+- A `beat` **chain-verify** job (default nightly + on-demand) re-walks the chain over rows where `chained_at IS NOT NULL` and compares every retained eligible legacy checkpoint object version at each currently configured off-host `audit_checkpoint_sink` against its signed chain row. A mismatch in an older retained version still raises a high-severity audit alarm after a genuine producer has written a newer consistent checkpoint. The ordered database rows are consumed through a server-side cursor in bounded batches rather than materializing the organization's full ORM row set; the cryptographic walk remains complete and in `id` order. Rows in the written-but-not-yet-chained window (`chained_at IS NULL`) at the chain tail are reported as *pending*, not as a break; a persistent or growing unchained tail (chain-linker stalled) is itself alarmed.
+
+  The witness scan uses S3 `ListObjectVersions` with both provider pagination markers forwarded
+  unchanged and explicit-version `GetObject` reads. Any delete marker under the organization's
+  dedicated checkpoint prefix, an actually denied or unavailable version listing/read operation,
+  malformed response, incomplete traversal, or resource-limit breach fails closed and can raise
+  `integrity.alarm`; there is no fallback to checking only current objects. The newest successfully
+  authenticated signed timestamp supplies the existing 2,700-second liveness check. Older consistent
+  checkpoints are not stale failures, while an older signature or chain-hash mismatch remains a failure.
+
+  One sink scan accepts fewer than 1,024 pages and fewer than 524,288 returned version/delete-marker
+  entries, reads bodies of at most 65,536 bytes, records at most 20 detailed reasons plus an omitted
+  count, and has a cooperative 300-second budget. Reaching a cap fails even on an otherwise terminal
+  page; it is an integrity-verification availability failure and does not permit sampling or pruning retained
+  evidence. A synchronous provider request can finish cleanup after the cooperative budget expires.
+  Configuration and organization selection remain mutable, the trusted checkpoint key remains a
+  single key, and the database walk, witness traversal, and callers remain separate READ COMMITTED
+  observations rather than one transactional database/object-store snapshot. A concurrent anchor can
+  fall outside one traversal and is checked by the next full scan. Retention expiry before observation
+  remains unrecoverable evidence loss, and the existing future-timestamp behavior is unchanged.
+
+  The portable reader policy explicitly grants `s3:ListBucketVersions` and `s3:GetObjectVersion`.
+  Provider policy names alone are not proof of effective enforcement: the pinned MinIO release also
+  authorizes these version operations through the corresponding ordinary list/get actions, and an
+  explicit `s3:ListBucketVersions` deny does not block version listing while `s3:ListBucket` remains
+  allowed. The verifier still fails closed when the provider actually denies either operation. This
+  pinned-provider limitation is tracked as
+  [`RES-MINIO-VERSION-LIST-DENY`](open-residuals.md#res-minio-version-list-deny).
 
 ### 4.5 Audit access & retention
 
@@ -404,6 +431,7 @@ To honor the mandatory off-host anchor (§4.3), EasySynQ models a configuration 
 | **Entity** | `audit_checkpoint_sink` config entity (one or more configured sinks). |
 | **Sink kinds** | A separate **WORM bucket** (object-lock, distinct credentials/custody), an **external object store**, or an **append-only syslog** target. At least one off-host/append-only sink is **MANDATORY** for any install claiming tamper-evidence / Part-11 readiness. |
 | **What is written** | Each signed checkpoint `(latest_id, latest_row_hash, timestamp, signature)` is appended (write-once / append-only) as the chain advances. |
+| **Independent verification** | The reader enumerates every retained version and delete marker under `checkpoints/{org_id}/`, explicitly reads every eligible legacy version, authenticates it, and compares its signed head to the corresponding chained database row. Its portable IAM contract explicitly grants `s3:ListBucketVersions` and `s3:GetObjectVersion` in addition to current-object read/location/list permissions. Effective enforcement must be checked against the provider; the pinned MinIO qualification is recorded in §4.4 and `RES-MINIO-VERSION-LIST-DENY`. The reader receives no write, delete, retention, or governance-bypass right. |
 | **Setup posture** | Configured during setup as a **soft gate** (setup not blocked); if absent, a **clear, persistent UI warning** states tamper-evidence cannot be honestly claimed. |
 | **Custody** | Sink credentials are held separately from the app master key and the backup key, so the same operator cannot trivially control the live chain, the backups, *and* the off-host anchor. |
 

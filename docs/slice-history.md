@@ -77,6 +77,60 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-historical-witnesses — retained checkpoint version verification
+
+Recorded 2026-09-08 against source base `02587988766e4ea7e0acdc76c665428261c33971`.
+The previous newest-object reader accepted an internally consistent audit rewrite after the genuine
+producer re-anchored it. Two PostgreSQL/MinIO tests reproduced that omission for same and advancing
+heads, then passed after verification began checking every retained eligible legacy checkpoint
+version. Explicit version reads include evidence hidden by newer objects at the same key. Every
+retained delete marker in the checkpoint namespace is failure evidence. A fresh sibling or newer
+valid signature cannot clear an older contradiction. The real nightly task persists the historical
+mismatch event and administrator notification; its out-of-band alert is captured at the sender
+boundary.
+
+Stateless list/body operations preserve opaque provider cursor pairs, bound reads and own their
+clients and streams. The pinned provider's empty next-version marker is accepted only on explicitly
+terminal pages. Freshness is applied once to the latest authenticated signed timestamp/head, while
+every eligible body is authenticated and compared. The scan requires fewer than **1,024 pages** and
+**524,288 entries**, permits **65,536 bytes** per body, and reports **20 details** plus an omitted
+count. A cooperative **300-second** per-sink budget fails closed; in-flight synchronous requests
+finish their own cleanup. These limits are exhaustion failures, not sampling or throughput claims.
+
+The shipped reader policy adds only `s3:ListBucketVersions` and `s3:GetObjectVersion`; writer rights
+and retention duration are unchanged. The real storage proof separates administrator Object Lock
+rejection (`InvalidRequest`/400) from restricted-principal IAM denial (`AccessDenied`/403). Retention
+requests reuse the existing application Content-MD5 hook and include a successful administrator
+extension control before restricted operations. Nine synthetic principals exercise actual effective
+permissions, retained version reads, delete markers, and write/delete/retention/bypass denials.
+The pinned MinIO release also permits version operations through ordinary list/read allows. In
+particular, explicit version-list denial does not block listing when ordinary listing is allowed,
+whereas explicit version-read denial blocks the read. This measured provider limitation remains
+OPEN as [`RES-MINIO-VERSION-LIST-DENY`](open-residuals.md#res-minio-version-list-deny), with a provider
+fix and deny/allow regression closure contract. No security exception, deployment risk acceptance,
+provider upgrade or live IAM change was performed.
+
+Final local validation passed **2,172 API unit tests with two expected opt-in skips in 35.83
+seconds**, Ruff, formatting over **775 files**, mypy over **449 source files**, authority, site-data
+and whitespace checks. The initial integration run passed **58 of 59 cases in 70.73 seconds**,
+including the genuine re-anchor and durable-alarm cases and existing audit/orchestrator/backup/restore
+tests; its remaining storage assertion was corrected using measured provider responses. The final
+isolated storage test passed **one case in 16.43 seconds**, with zero errors or skips. All production,
+policy and other integration-file hashes remained identical across those integration runs. The
+amended units also passed a focused 93-case run before the full unit gate. Source and log hashes
+were verified; every owned fixture session was cleaned with zero containers remaining. Three
+pre-existing Testcontainers namespace deprecations remain. The local unit skips are the release
+digest-pin ceremony and opt-in built API image proof, not evidence of either check passing.
+Private proof logs and provider inventories remain outside Git.
+
+Legacy signature bytes, the single current verification key, public results, grace rules, schema and
+restore behavior are preserved. Mutable organization/sink selection, single-key history,
+nontransactional database/store observations, concurrent anchors and expired evidence remain limits.
+Checkpoint lineage, key rotation and source-independent recovery retain their separate OPEN records
+in the [current ledger](open-residuals.md). Existing external readers require a separate narrow IAM
+update before deployment; removing only the version-specific allows does not reliably deny access on
+this pinned provider. No live witness or retained production object was changed by this work.
+
 ### S-audit-verify-orchestrator — durable alarms and engine lifecycle
 
 Recorded 2026-09-08 against source base `17e35815de1c47cb8818faa41d09bae1935dc007`.

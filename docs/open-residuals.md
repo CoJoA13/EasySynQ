@@ -345,15 +345,41 @@ plus the missing tests.
 Status: OPEN
 Owner: Repository owner
 Source: Batch 7, PR [#364](https://github.com/CoJoA13/EasySynQ/pull/364)
-Reason: Only the newest off-host audit checkpoint is verified.
+Reason: Retained legacy versions are now verified, but checkpoints do not commit to a trusted predecessor
+and the mutable database sink inventory does not prove which witnesses must exist.
 Closure contract: Define and ship a Merkle-chained checkpoint format in which each anchor commits to the
 prior anchor hash, with a binding register entry and migration/compatibility proof.
-Last reviewed: 2026-08-08
+Last reviewed: 2026-09-08
 
-A DB owner who rewrites the chain and lets the 15-minute beat re-anchor over the rewritten head passes
-verification, while the older immutable objects that would expose it are never read. **Closing it needs**
-a Merkle-chained anchor lineage (each checkpoint commits to the prior anchor's hash) — a checkpoint
+The live verifier now scans all retained eligible legacy object versions encountered at every currently
+configured off-host witness. This detects a locally consistent database rewrite even after the genuine
+producer re-anchors a newer head, and delete markers or incomplete version reads fail closed. It does
+not cryptographically prove that an expected predecessor or witness is present: a database owner can
+still alter the current sink inventory, retention can expire before observation, and legacy checkpoints
+carry neither a predecessor commitment nor independently enrolled sink/key identity. **Closing it needs**
+a Merkle-chained anchor lineage (each checkpoint commits to the prior anchor's hash), externally trusted
+key and witness enrollment, and the corresponding compatibility/restore proofs — a checkpoint
 payload/format change + a register entry.
+
+## RES-MINIO-VERSION-LIST-DENY
+
+Status: OPEN
+Owner: Repository owner
+Source: Historical witness pinned-provider permission proof, 2026-09-08
+Reason: Pinned MinIO `RELEASE.2024-09-13T20-26-02Z` permits `ListObjectVersions` when
+`s3:ListBucketVersions` is explicitly denied but `s3:ListBucket` remains allowed. It also permits
+version listing or reading when only the corresponding version-specific allow is omitted and the
+ordinary `s3:ListBucket` or `s3:GetObject` allow remains. The shipped witness reader still grants
+both ordinary and explicit version actions for portable behavior and remains denied every tested
+write, delete, retention, and governance-bypass operation. This provider limitation does not block
+the intended read-only history scan, and this record grants no security exception or deployment risk
+acceptance.
+Closure contract: Ship a reviewed provider update or backport and prove against the deployed provider
+that an explicit `s3:ListBucketVersions` deny blocks version listing while separately allowed ordinary
+listing remains usable. Repeat the effective reader/writer permission matrix and WORM retention
+regressions, including public-verifier failure without current-object fallback when version access is
+actually denied.
+Last reviewed: 2026-09-08
 
 ## RES-AUDIT-LONG-SCOPE-REF
 
@@ -418,8 +444,10 @@ rotation and pre-rotation restore proofs.
 Last reviewed: 2026-08-08
 
 v1 is single-key; restoring a pre-rotation backup after a future rotation would verify the historical
-signature against the current key. **Closing it needs** a key-id on the checkpoint + a retained public-key
-history.
+signature against the current key. The retained-version scan also verifies every legacy anchor with that
+one current key, so retaining an old public key by itself does not enable automatic historical key
+selection; a rotation while old anchors remain will fail those signatures. **Closing it needs** a key-id
+on the checkpoint + a retained public-key history.
 
 ## RES-RISK-CLAUSE-PICKER
 
