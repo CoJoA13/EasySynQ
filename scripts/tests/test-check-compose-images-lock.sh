@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Behavioral regressions for scripts/check-compose-images-lock.sh. Each case runs the real gate
-# against fixture compose/lock trees, proving in particular that a DIGEST-PINNED release lock
-# (`name:tag@sha256:…`) still satisfies the tag-form Compose refs — the shape the release ceremony
-# writes (2026-08-27 audit C15).
+# against fixture compose/lock trees. Ordinary Compose refs remain digest-aware, while every
+# Keycloak Dockerfile stage must use the exact digest recorded by the unique Keycloak lock entry.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -43,8 +42,8 @@ services:
     image: minio/minio:RELEASE.2024-09-13T20-26-02Z
 EOF
   cat >"$dir/keycloak/Dockerfile" <<'EOF'
-FROM quay.io/keycloak/keycloak:26.7 AS builder
-FROM quay.io/keycloak/keycloak:26.7
+FROM quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54 AS builder
+FROM quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
 EOF
 }
 
@@ -56,38 +55,38 @@ run_gate() {
 compose_dir="$TEST_ROOT/compose"
 fixture "$compose_dir"
 
-# Case 1: a tag-pinned lock (the pre-release shape) passes.
+# Case 1: tag-form Compose lock entries remain valid when Keycloak is exactly digest-bound.
 cat >"$TEST_ROOT/lock-tags" <<'EOF'
 # service   image:tag
 postgres    postgres:16
 redis       redis:7
 minio       minio/minio:RELEASE.2024-09-13T20-26-02Z   # inline comment survives
-keycloak    quay.io/keycloak/keycloak:26.7
+keycloak    quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
 EOF
 if run_gate "$compose_dir" "$TEST_ROOT/lock-tags"; then
-  ok "tag-pinned lock passes"
+  ok "tag-form Compose refs pass with an exactly digest-bound Keycloak base"
 else
-  bad "tag-pinned lock passes"
+  bad "tag-form Compose refs pass with an exactly digest-bound Keycloak base"
 fi
 
-# Case 2: a DIGEST-pinned lock (the release-ceremony shape) still satisfies tag-form refs.
+# Case 2: digest-pinned ordinary Compose lock entries still satisfy tag-form Compose refs.
 cat >"$TEST_ROOT/lock-digests" <<'EOF'
 postgres    postgres:16@sha256:1111111111111111111111111111111111111111111111111111111111111111
 redis       redis:7@sha256:2222222222222222222222222222222222222222222222222222222222222222
 minio       minio/minio:RELEASE.2024-09-13T20-26-02Z@sha256:3333333333333333333333333333333333333333333333333333333333333333
-keycloak    quay.io/keycloak/keycloak:26.7@sha256:4444444444444444444444444444444444444444444444444444444444444444
+keycloak    quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
 EOF
 if run_gate "$compose_dir" "$TEST_ROOT/lock-digests"; then
-  ok "digest-pinned release lock passes (C15: ceremony and gate no longer mutually exclusive)"
+  ok "digest-pinned ordinary Compose refs pass with an exact Keycloak digest"
 else
-  bad "digest-pinned release lock passes (C15: ceremony and gate no longer mutually exclusive)"
+  bad "digest-pinned ordinary Compose refs pass with an exact Keycloak digest"
 fi
 
 # Case 3: a missing ref still fails — digest-awareness must not weaken the gate.
 cat >"$TEST_ROOT/lock-missing" <<'EOF'
 postgres    postgres:16
 redis       redis:7
-keycloak    quay.io/keycloak/keycloak:26.7
+keycloak    quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
 EOF
 if run_gate "$compose_dir" "$TEST_ROOT/lock-missing"; then
   bad "missing minio ref fails"
@@ -100,7 +99,7 @@ cat >"$TEST_ROOT/lock-wrong-tag" <<'EOF'
 postgres    postgres:15@sha256:1111111111111111111111111111111111111111111111111111111111111111
 redis       redis:7
 minio       minio/minio:RELEASE.2024-09-13T20-26-02Z
-keycloak    quay.io/keycloak/keycloak:26.7
+keycloak    quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
 EOF
 if run_gate "$compose_dir" "$TEST_ROOT/lock-wrong-tag"; then
   bad "digest-pinned WRONG tag still fails"
@@ -139,6 +138,119 @@ if run_gate "$foreign_dir" "$TEST_ROOT/lock-tags"; then
   bad "an unrecognised easysynq/* ref still requires a lock entry"
 else
   ok "an unrecognised easysynq/* ref still requires a lock entry"
+fi
+
+# Case 7: floating Keycloak stages must not be accepted merely because their tag matches the
+# digest-pinned lock entry.
+floating_stages_dir="$TEST_ROOT/compose-keycloak-floating"
+fixture "$floating_stages_dir"
+cat >"$floating_stages_dir/keycloak/Dockerfile" <<'EOF'
+FROM quay.io/keycloak/keycloak:26.7 AS builder
+FROM quay.io/keycloak/keycloak:26.7
+EOF
+if run_gate "$floating_stages_dir" "$TEST_ROOT/lock-tags"; then
+  bad "floating Keycloak stages fail against a digest-pinned lock entry"
+else
+  ok "floating Keycloak stages fail against a digest-pinned lock entry"
+fi
+
+# Case 8: a matching Keycloak tag with the wrong digest must fail exact-reference comparison.
+wrong_digest_dir="$TEST_ROOT/compose-keycloak-wrong-digest"
+fixture "$wrong_digest_dir"
+cat >"$wrong_digest_dir/keycloak/Dockerfile" <<'EOF'
+FROM quay.io/keycloak/keycloak:26.7@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa AS builder
+FROM quay.io/keycloak/keycloak:26.7@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+EOF
+if run_gate "$wrong_digest_dir" "$TEST_ROOT/lock-tags"; then
+  bad "matching Keycloak tags with the wrong digest fail"
+else
+  ok "matching Keycloak tags with the wrong digest fail"
+fi
+
+# Case 9: stripping digests must not hide a floating stage beside an exactly pinned stage.
+mixed_floating_dir="$TEST_ROOT/compose-keycloak-mixed-floating"
+fixture "$mixed_floating_dir"
+cat >"$mixed_floating_dir/keycloak/Dockerfile" <<'EOF'
+FROM quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54 AS builder
+FROM quay.io/keycloak/keycloak:26.7
+EOF
+if run_gate "$mixed_floating_dir" "$TEST_ROOT/lock-tags"; then
+  bad "one matching and one floating Keycloak stage fails"
+else
+  ok "one matching and one floating Keycloak stage fails"
+fi
+
+# Case 10: a floating Keycloak lock entry cannot bind digest-pinned Dockerfile stages.
+cat >"$TEST_ROOT/lock-keycloak-floating" <<'EOF'
+postgres    postgres:16
+redis       redis:7
+minio       minio/minio:RELEASE.2024-09-13T20-26-02Z
+keycloak    quay.io/keycloak/keycloak:26.7
+EOF
+if run_gate "$compose_dir" "$TEST_ROOT/lock-keycloak-floating"; then
+  bad "a floating Keycloak lock entry fails"
+else
+  ok "a floating Keycloak lock entry fails"
+fi
+
+# Case 11: the named Keycloak lock authority must be unique even when duplicate rows agree.
+cat >"$TEST_ROOT/lock-keycloak-duplicate" <<'EOF'
+postgres    postgres:16
+redis       redis:7
+minio       minio/minio:RELEASE.2024-09-13T20-26-02Z
+keycloak    quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
+keycloak    quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
+EOF
+if run_gate "$compose_dir" "$TEST_ROOT/lock-keycloak-duplicate"; then
+  bad "duplicate Keycloak lock entries fail"
+else
+  ok "duplicate Keycloak lock entries fail"
+fi
+
+# Case 12: a sha256 marker without a complete lowercase digest is not an immutable lock.
+cat >"$TEST_ROOT/lock-keycloak-malformed" <<'EOF'
+postgres    postgres:16
+redis       redis:7
+minio       minio/minio:RELEASE.2024-09-13T20-26-02Z
+keycloak    quay.io/keycloak/keycloak:26.7@sha256:abc123
+EOF
+if run_gate "$compose_dir" "$TEST_ROOT/lock-keycloak-malformed"; then
+  bad "a malformed Keycloak digest lock entry fails"
+else
+  ok "a malformed Keycloak digest lock entry fails"
+fi
+
+# Case 13: Dockerfile instructions are case-insensitive, so a lowercase floating FROM must not
+# escape comparison when an uppercase builder stage already matches the lock.
+mixed_case_dir="$TEST_ROOT/compose-keycloak-mixed-case"
+fixture "$mixed_case_dir"
+cat >"$mixed_case_dir/keycloak/Dockerfile" <<'EOF'
+FROM quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54 AS builder
+from quay.io/keycloak/keycloak:26.7
+EOF
+if run_gate "$mixed_case_dir" "$TEST_ROOT/lock-tags"; then
+  bad "a lowercase floating Keycloak FROM beside a matching stage fails"
+else
+  ok "a lowercase floating Keycloak FROM beside a matching stage fails"
+fi
+
+# Case 14: matching full refs still fail when the tag violates Docker's tag grammar.
+invalid_tag_dir="$TEST_ROOT/compose-keycloak-invalid-tag"
+fixture "$invalid_tag_dir"
+cat >"$invalid_tag_dir/keycloak/Dockerfile" <<'EOF'
+FROM quay.io/keycloak/keycloak:26.7/bad@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54 AS builder
+FROM quay.io/keycloak/keycloak:26.7/bad@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
+EOF
+cat >"$TEST_ROOT/lock-keycloak-invalid-tag" <<'EOF'
+postgres    postgres:16
+redis       redis:7
+minio       minio/minio:RELEASE.2024-09-13T20-26-02Z
+keycloak    quay.io/keycloak/keycloak:26.7/bad@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
+EOF
+if run_gate "$invalid_tag_dir" "$TEST_ROOT/lock-keycloak-invalid-tag"; then
+  bad "matching Keycloak refs with an invalid Docker tag fail"
+else
+  ok "matching Keycloak refs with an invalid Docker tag fail"
 fi
 
 printf 'check-compose-images-lock tests: %d ok, %d failed\n' "$PASS" "$FAIL"

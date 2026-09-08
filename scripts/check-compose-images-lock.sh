@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Every deployed Compose `image:` ref plus the optimized Keycloak Dockerfile base must be pinned in
 # infra/images.lock, or the air-gap bundle ships a stale ref while Compose asks for the new one
-# (Codex #153). DIGEST-AWARE: a release-pinned lock line (`name:tag@sha256:…`) satisfies the
-# tag-form ref — previously the exact-string comparison made the digest-pin release ceremony and
-# this gate mutually exclusive (2026-08-27 audit C15): the ceremony rewrites the lock to digest
-# form, every ref stopped string-matching, and the release commit went red.
+# (Codex #153). Ordinary Compose refs are digest-aware: a release-pinned lock line
+# (`name:tag@sha256:…`) satisfies the tag-form ref. Keycloak is also a build input, so every FROM
+# must exactly match the single digest-pinned `keycloak` lock entry.
 #
 # Overridable inputs (for the regression harness): COMPOSE_DIR, IMAGES_LOCK, KEYCLOAK_DOCKERFILE.
 set -euo pipefail
@@ -37,9 +36,7 @@ drop_built() {
 
 compose=$(grep -hE '^[[:space:]]+image:[[:space:]]' "$compose_dir"/compose.yml \
   "$compose_dir"/compose.*.yml 2>/dev/null | awk '{print $2}' | strip_digest | drop_built | sort -u)
-keycloak_base=$(grep -E '^FROM[[:space:]]' "$keycloak_dockerfile" | awk '{print $2}' \
-  | strip_digest | sort -u)
-required=$(printf '%s\n%s\n' "$compose" "$keycloak_base" | sort -u)
+required=$(printf '%s\n' "$compose" | sort -u)
 # Lock column 2 with any digest suffix stripped: a digest pin still pins the tag underneath.
 lock=$(grep -vE '^[[:space:]]*#' "$lock_file" | awk 'NF>=2 {print $2}' | strip_digest | sort -u)
 
@@ -52,4 +49,43 @@ if [ -n "$missing" ]; then
   echo "Add them to infra/images.lock (then \`just images-update\` for digests)."
   exit 1
 fi
-echo "OK — every Compose image ref is pinned in images.lock (digest-aware)."
+
+keycloak_lock_count=$(awk '$1 == "keycloak" {count++} END {print count + 0}' "$lock_file")
+if [ "$keycloak_lock_count" -ne 1 ]; then
+  echo "::error::Expected exactly one keycloak entry in $lock_file; found $keycloak_lock_count."
+  echo "Keep one digest-pinned keycloak lock entry and synchronize every FROM in $keycloak_dockerfile with it."
+  exit 1
+fi
+
+keycloak_lock_ref=$(awk '$1 == "keycloak" {print $2}' "$lock_file")
+if [[ ! "$keycloak_lock_ref" =~ ^quay\.io/keycloak/keycloak:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}@sha256:[0-9a-f]{64}$ ]]; then
+  echo "::error::The keycloak entry in $lock_file is not a valid digest-pinned Keycloak image:"
+  printf '  %s\n' "$keycloak_lock_ref"
+  echo "Record quay.io/keycloak/keycloak:<tag>@sha256:<64 lowercase hex characters>, then synchronize every FROM in $keycloak_dockerfile with it."
+  exit 1
+fi
+
+keycloak_bases=$(awk 'toupper($1) == "FROM" && NF >= 2 {print $2}' "$keycloak_dockerfile")
+if [ -z "$keycloak_bases" ]; then
+  echo "::error::No Keycloak FROM references found in $keycloak_dockerfile."
+  echo "Synchronize every FROM in $keycloak_dockerfile with the exact keycloak entry in $lock_file."
+  exit 1
+fi
+
+keycloak_mismatch=0
+while IFS= read -r keycloak_base; do
+  [ -n "$keycloak_base" ] || continue
+  if [ "$keycloak_base" != "$keycloak_lock_ref" ]; then
+    printf '::error::Keycloak FROM does not match the digest-pinned keycloak entry in %s:\n' "$lock_file"
+    printf '  Dockerfile: %s\n' "$keycloak_base"
+    printf '  images.lock: %s\n' "$keycloak_lock_ref"
+    keycloak_mismatch=1
+  fi
+done <<<"$keycloak_bases"
+
+if [ "$keycloak_mismatch" -ne 0 ]; then
+  echo "Synchronize every FROM in $keycloak_dockerfile with the exact keycloak entry in $lock_file."
+  exit 1
+fi
+
+echo "OK — every Compose image ref is pinned in images.lock (digest-aware), and every Keycloak FROM matches its digest lock."
