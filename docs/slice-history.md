@@ -42,6 +42,29 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
   create/enable surface; provisioning is a direct operator INSERT), so an operator who later toggles a
   sink `enabled` false→true should bump it, or the grace window is measured from creation.
 
+## RECOVERY AND UPGRADE SAFETY
+
+### Recovery reconciliation — current capability inventory and source-independent recovery ownership
+
+Recorded 2026-09-08 against `6077e8a45b5942daf803220765b326f82ddd4417`, with
+[GitLab issue #3](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/3) as current execution tracking.
+Documentation only: no production behavior, schema, migration, contract, permission, or deployment change.
+
+The source and existing-CI inventory confirmed that staged upload digests are verified by the server, the
+API runtime is non-root, and retention extension is monotone. It also confirmed that recovery remains
+partial and source-dependent: exact snapshot object-version binding and service-capability separation are
+incomplete; mandatory complete encrypted generations, role-preserving targets with durable disposition,
+and source-denied recovered-stack boot/read proof are not present. Historical C-01, C-01b, and M-01 remain
+dependency context rather than a current all-open checklist, and their migration reservations are not
+reusable; any future slice must resolve executable migration state at implementation time.
+
+The live ledger now carries
+[`RES-SOURCE-INDEPENDENT-RECOVERY`](open-residuals.md#res-source-independent-recovery) and cross-links the
+narrower records without replacing their closure contracts. No tests were run for the inventory. Existing
+GitLab evidence on the exact source commit included successful push and scheduled pipelines and 1,231
+passing integration tests with two skips; those source-dependent tests do not establish production
+recovery or upgrade safety.
+
 ## INTERFACE
 
 ### S-ui-1 to S-ui-3 — the Option C interface programme

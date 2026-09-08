@@ -22,6 +22,18 @@ authority and it is not runtime discovery: binding decisions live in
 [`decisions-register.md`](decisions-register.md), while current deferred work lives only in
 [`open-residuals.md`](open-residuals.md).
 
+A recovery reconciliation completed on 2026-09-08 against
+`6077e8a45b5942daf803220765b326f82ddd4417`. Server-verified staged upload digests, the non-root API
+runtime, and monotone retention extension are shipped. The current archive and restore verification remain
+source-dependent: exact snapshot object-version binding and service-capability separation are partial, while
+mandatory complete encrypted generations, durable target disposition, and a source-denied recovered-stack
+boot/read proof have not shipped.
+
+[`RES-SOURCE-INDEPENDENT-RECOVERY`](open-residuals.md#res-source-independent-recovery) now owns that
+overall recovery boundary, with current execution tracked in
+[GitLab issue #3](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/3). Its narrower related records
+remain independently open. Production recovery and upgrade safety are unproven.
+
 ## Shipped boundary
 
 The original MVP foundation and the ISO 9001 workflow families are delivered. The routed SPA covers the
