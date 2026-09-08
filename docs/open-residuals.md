@@ -24,6 +24,38 @@ The earlier token-based closure proposal is superseded by this owner decision. D
 suppress warnings or treat a green updater exit as proof that lockfiles were refreshed.
 Last reviewed: 2026-09-08
 
+## RES-SOURCE-INDEPENDENT-RECOVERY
+
+Status: OPEN
+Owner: Repository owner
+Source: Recovery reconciliation, 2026-09-08, against `6077e8a45b5942daf803220765b326f82ddd4417`;
+the [current recovery runbook](runbooks/backup-restore.md), pinned
+[archive](https://gitlab.com/synqsuite-group/EasySynQ/-/blob/6077e8a45b5942daf803220765b326f82ddd4417/apps/api/src/easysynq_api/services/backup/archive.py),
+[backup](https://gitlab.com/synqsuite-group/EasySynQ/-/blob/6077e8a45b5942daf803220765b326f82ddd4417/apps/api/src/easysynq_api/services/backup/drill.py), and
+[restore](https://gitlab.com/synqsuite-group/EasySynQ/-/blob/6077e8a45b5942daf803220765b326f82ddd4417/apps/api/src/easysynq_api/services/backup/restore.py)
+source; historical
+[C-01/C-01b/M-01 contracts](superpowers/plans/2026-08-04-audit-remediation-v2.md#11-integrity-and-recovery).
+Current execution is tracked by [GitLab issue #3](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/3).
+Reason: Current archives contain the database and an object locator/hash manifest, but not the referenced
+object bytes; restore verification reads and copies those bytes from the configured source store. The
+shipped integrity path is therefore useful but source-dependent, and no closed recovered stack has been
+proven from a complete independent generation. Server-verified staged digests, the non-root API runtime,
+and monotone retention extension already ship and are not reopened by this record.
+Closure contract: Produce one sealed, complete, encrypted generation that binds every referenced object to
+its exact version and to matching database, identity/configuration, and audit-checkpoint state. Require
+separately scoped ordinary and recovery/administrative capabilities, a certified worker-owned durable
+destination, and fresh role-preserving restore targets with durable terminal
+disposition. With source-store reads denied, restore and boot the closed recovered stack and prove document,
+record, sealed-pack, and rendition reads before access reopens. Link the exact evidence before evaluating
+production recovery or upgrade eligibility. The narrower
+[RES-RESTORE-SCRATCH-WORM-GUARD](#res-restore-scratch-worm-guard),
+[RES-AUDIT-VERIFY-ORCHESTRATOR](#res-audit-verify-orchestrator),
+[RES-AUDIT-CHECKPOINT-LINEAGE](#res-audit-checkpoint-lineage),
+[RES-AUDIT-KEY-ROTATION](#res-audit-key-rotation), and
+[RES-UPGRADE-LOCK-TIMEOUT](#res-upgrade-lock-timeout) records keep their separate ownership and closure
+contracts.
+Last reviewed: 2026-09-08
+
 ## RES-CONTAINER-SECURITY-TRIAGE
 
 Status: OPEN
