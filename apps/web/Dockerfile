@@ -8,7 +8,11 @@ FROM node:26-slim AS build
 # `vite preview` genuinely needs write access (it uses /app/node_modules/.vite-temp), so running
 # as root and chowning nothing is not an option. This image mounts no volumes, so there is nothing
 # to seed and nothing an existing install has to migrate.
-RUN mkdir -p /app && chown node:node /app
+# Track the base's bundled package manager separately from application dependencies.
+# Only the global tooling update needs root; the application install/build stays unprivileged.
+RUN npm install --global --ignore-scripts npm@11.19.1 \
+    && npm cache clean --force \
+    && mkdir -p /app && chown node:node /app
 USER node
 WORKDIR /app
 COPY --chown=node:node package.json package-lock.json ./

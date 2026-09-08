@@ -527,6 +527,46 @@ def test_web_image_uses_lockfile_and_excludes_host_artifacts() -> None:
     assert {"node_modules", "dist", "coverage", ".vite"}.issubset(dockerignore)
 
 
+def test_web_image_package_manager_is_pinned_and_tracked_within_supported_major() -> None:
+    dockerfile = _read("apps/web/Dockerfile")
+    instructions = "\n".join(
+        line for line in dockerfile.splitlines() if not line.lstrip().startswith("#")
+    )
+    pins = re.findall(
+        r"npm install --global --ignore-scripts npm@([0-9]+\.[0-9]+\.[0-9]+)", instructions
+    )
+    assert len(pins) == 1, "the base image's bundled npm needs an explicit reviewed update"
+    version = tuple(map(int, pins[0].split(".")))
+    assert (11, 19, 1) <= version < (12, 0, 0)
+    assert instructions.index("npm install --global") < instructions.index("USER node")
+    assert instructions.index("USER node") < instructions.index("RUN npm ci")
+
+    renovate = json.loads(_read("renovate.json"))
+    manager = next(
+        (item for item in renovate["customManagers"] if item.get("depNameTemplate") == "npm"),
+        None,
+    )
+    assert manager is not None, "Renovate must discover the image's package-manager pin"
+    assert manager["datasourceTemplate"] == "npm"
+    assert "/^apps/web/Dockerfile$/" in manager["managerFilePatterns"]
+    matches = [
+        match.group("currentValue")
+        for pattern in manager["matchStrings"]
+        for match in re.finditer(
+            pattern.replace("(?<currentValue>", "(?P<currentValue>"), dockerfile
+        )
+    ]
+    assert matches == pins
+    rule = next(
+        (item for item in renovate["packageRules"] if item.get("matchPackageNames") == ["npm"]),
+        None,
+    )
+    assert rule is not None
+    assert rule["matchManagers"] == ["custom.regex"]
+    assert rule["matchFileNames"] == ["apps/web/Dockerfile"]
+    assert rule["allowedVersions"] == "<12"
+
+
 def test_web_image_excludes_browser_harness_and_removes_playwright_from_runtime() -> None:
     dockerfile = _read("apps/web/Dockerfile")
     dockerignore = _read("apps/web/.dockerignore").splitlines()
