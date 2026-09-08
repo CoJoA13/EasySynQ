@@ -135,6 +135,7 @@ def _minio() -> Iterator[dict[str, str]]:
             "endpoint": endpoint,
             "access_key": cfg["access_key"],
             "secret_key": cfg["secret_key"],
+            "container_id": mc.get_wrapped_container().id,
         }
 
 

@@ -252,7 +252,7 @@ cat > /tmp/audit-sink-readonly.json <<'EOF'
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:GetBucketLocation", "s3:ListBucket"],
+      "Action": ["s3:GetObject", "s3:GetObjectVersion", "s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketVersions"],
       "Resource": ["arn:aws:s3:::audit-checkpoints", "arn:aws:s3:::audit-checkpoints/*"]
     }
   ]

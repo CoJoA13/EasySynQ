@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import dataclasses
 import datetime
 import json
 import logging
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import rfc8785
@@ -45,13 +47,22 @@ from ...db.models.audit_checkpoint import AuditCheckpoint
 from ...db.models.audit_checkpoint_sink import AuditCheckpointSink
 from ...db.models.audit_event import AuditEvent
 from ..common.signing import SigningKeyUnavailable, describe_unpersistable
-from .sink import fetch_latest_offhost_checkpoint, push_checkpoint
+from .sink import (
+    SinkReadError,
+    list_offhost_checkpoint_versions_page,
+    push_checkpoint,
+    read_offhost_checkpoint_version,
+)
 
 logger = logging.getLogger("easysynq.audit.checkpoint")
 
 # A sink whose last push is older than this is treated as stale (not attesting). ~3 anchoring
 # cycles at the 15-minute Beat cadence.
 _FRESHNESS_SECONDS = 2700
+_HISTORY_MAX_PAGES = 1024
+_HISTORY_MAX_ENTRIES = 524_288
+_HISTORY_REASON_LIMIT = 20
+_HISTORY_SCAN_SECONDS = 300
 
 
 def _now() -> datetime.datetime:
@@ -150,8 +161,8 @@ def verify_checkpoint_signature(
     Fail-closed: any malformed input returns False rather than raising."""
     if signature is None:
         return False
-    payload = _payload(org_id, latest_id, latest_row_hash, timestamp)
     try:
+        payload = _payload(org_id, latest_id, latest_row_hash, timestamp)
         public_key.verify(bytes(signature), payload)
         return True
     except InvalidSignature:
@@ -328,6 +339,102 @@ class OffHostCheckpointResult:
     unanchored_overdue: int = 0
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class AuthenticatedCheckpoint:
+    latest_id: int
+    row_hash: bytes
+    timestamp: datetime.datetime
+
+
+@dataclasses.dataclass(slots=True)
+class _HistoryFailures:
+    details: list[str] = dataclasses.field(default_factory=list)
+    omitted: int = 0
+    attestation: bool = False
+
+    def record(self, reason: str, *, attestation: bool = False) -> None:
+        self.attestation = self.attestation or attestation
+        if len(self.details) < _HISTORY_REASON_LIMIT:
+            self.details.append(reason)
+        else:
+            self.omitted += 1
+
+
+def _authenticate_offhost_doc(
+    org_id: Any,
+    verify_key: Ed25519PublicKey,
+    doc: dict[str, Any],
+) -> tuple[AuthenticatedCheckpoint | None, str | None]:
+    """Strictly parse and authenticate one legacy checkpoint without applying freshness."""
+    if set(doc) != {"checkpoint", "signature"}:
+        return None, "malformed off-host checkpoint object"
+    ckpt = doc.get("checkpoint")
+    sig_b64 = doc.get("signature")
+    if not isinstance(ckpt, dict) or not isinstance(sig_b64, str):
+        return None, "malformed off-host checkpoint object"
+    if set(ckpt) != {"org_id", "latest_id", "latest_row_hash", "timestamp"}:
+        return None, "malformed off-host checkpoint payload"
+    doc_org = ckpt.get("org_id")
+    latest_id = ckpt.get("latest_id")
+    hash_hex = ckpt.get("latest_row_hash")
+    timestamp_text = ckpt.get("timestamp")
+    if not isinstance(doc_org, str) or not doc_org:
+        return None, "malformed off-host checkpoint payload"
+    if type(latest_id) is not int or latest_id < 1:
+        return None, "malformed off-host checkpoint payload"
+    if not isinstance(hash_hex, str) or len(hash_hex) != 64:
+        return None, "malformed off-host checkpoint payload"
+    if not isinstance(timestamp_text, str):
+        return None, "malformed off-host checkpoint payload"
+    try:
+        row_hash = bytes.fromhex(hash_hex)
+        timestamp = datetime.datetime.fromisoformat(timestamp_text)
+        signature = base64.b64decode(sig_b64, validate=True)
+    except (ValueError, TypeError, binascii.Error):
+        return None, "malformed off-host checkpoint payload"
+    if len(row_hash) != 32 or len(signature) != 64:
+        return None, "malformed off-host checkpoint payload"
+    try:
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=datetime.UTC)
+        timestamp = timestamp.astimezone(datetime.UTC)
+    except (OverflowError, ValueError):
+        return None, "malformed off-host checkpoint payload"
+    if doc_org != str(org_id):
+        return None, "off-host checkpoint org mismatch"
+    if not verify_checkpoint_signature(
+        verify_key,
+        org_id=doc_org,
+        latest_id=latest_id,
+        latest_row_hash=row_hash,
+        timestamp=timestamp,
+        signature=signature,
+    ):
+        return None, "off-host checkpoint signature invalid (forged/corrupt)"
+    return AuthenticatedCheckpoint(latest_id, row_hash, timestamp), None
+
+
+async def _compare_offhost_checkpoint(
+    session: AsyncSession,
+    org_id: Any,
+    checkpoint: AuthenticatedCheckpoint,
+) -> str | None:
+    stored = (
+        await session.execute(
+            select(AuditEvent.row_hash).where(
+                AuditEvent.org_id == org_id,
+                AuditEvent.id == checkpoint.latest_id,
+                AuditEvent.chained_at.is_not(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if stored is None:
+        return "off-host checkpoint references a missing/unchained chain row (deletion)"
+    if bytes(stored) != checkpoint.row_hash:
+        return "off-host checkpoint latest_row_hash mismatch (chain rewritten)"
+    return None
+
+
 async def _attest_offhost_doc(
     session: AsyncSession,
     org_id: Any,
@@ -340,48 +447,34 @@ async def _attest_offhost_doc(
     is FRESH (a witness that stopped advancing cannot attest rows anchored after it), then compare
     its signed ``latest_row_hash`` against the stored hash at ``latest_id``. ``None`` when it
     attests, else a human reason."""
-    ckpt = doc.get("checkpoint")
-    sig_b64 = doc.get("signature")
-    if not isinstance(ckpt, dict) or not isinstance(sig_b64, str):
-        return "malformed off-host checkpoint object"
-    try:
-        doc_org = str(ckpt["org_id"])
-        latest_id = int(ckpt["latest_id"])
-        row_hash = bytes.fromhex(str(ckpt["latest_row_hash"]))
-        ts = datetime.datetime.fromisoformat(str(ckpt["timestamp"]))
-        signature = base64.b64decode(sig_b64)
-    except (KeyError, ValueError, TypeError):
+    checkpoint, reason = _authenticate_offhost_doc(org_id, verify_key, doc)
+    if reason is not None:
+        return reason
+    if checkpoint is None:  # defensive: authentication never returns (None, None)
         return "malformed off-host checkpoint payload"
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=datetime.UTC)
-    if doc_org != str(org_id):
-        return "off-host checkpoint org mismatch"
-    if not verify_checkpoint_signature(
-        verify_key,
-        org_id=doc_org,
-        latest_id=latest_id,
-        latest_row_hash=row_hash,
-        timestamp=ts,
-        signature=signature,
-    ):
-        return "off-host checkpoint signature invalid (forged/corrupt)"
-    age = (now - ts).total_seconds()
+    age = (now - checkpoint.timestamp).total_seconds()
     if age > _FRESHNESS_SECONDS:
         return f"off-host checkpoint is stale ({int(age)}s old) — pushes may have stopped"
-    stored = (
-        await session.execute(
-            select(AuditEvent.row_hash).where(
-                AuditEvent.org_id == org_id,
-                AuditEvent.id == latest_id,
-                AuditEvent.chained_at.is_not(None),
-            )
-        )
-    ).scalar_one_or_none()
-    if stored is None:
-        return "off-host checkpoint references a missing/unchained chain row (deletion)"
-    if bytes(stored) != row_hash:
-        return "off-host checkpoint latest_row_hash mismatch (chain rewritten)"
-    return None
+    return await _compare_offhost_checkpoint(session, org_id, checkpoint)
+
+
+def _eligible_legacy_key(key: str) -> bool:
+    name = key.rsplit("/", 1)[-1]
+    head, separator, _suffix = name.partition("-")
+    return bool(separator and head and all("0" <= char <= "9" for char in head))
+
+
+def _check_history_deadline(deadline: float) -> None:
+    if monotonic() >= deadline:
+        raise TimeoutError("off-host checkpoint history scan deadline exceeded")
+
+
+def _history_read_reason(exc: Exception) -> str:
+    if isinstance(exc, SinkReadError):
+        return str(exc)
+    if isinstance(exc, TimeoutError):
+        return "off-host checkpoint history scan deadline exceeded"
+    return "off-host checkpoint history read failed"
 
 
 async def verify_offhost_checkpoint(
@@ -391,12 +484,7 @@ async def verify_offhost_checkpoint(
     verify_key: Ed25519PublicKey,
     now: datetime.datetime | None = None,
 ) -> OffHostCheckpointResult:
-    """Read every enabled OFF-HOST sink's NEWEST signed checkpoint back with the SEPARATE read
-    creds, verify the Ed25519 signature + freshness, and compare it against the live chain (doc 12
-    §4.4). This is the independent witness the in-DB check cannot be: even a DB owner who rewrites
-    BOTH the chain and the in-DB checkpoint — or deletes the rows — cannot reach the off-host copy.
-    FAIL-CLOSED: only genuinely ``off_host`` sinks count (a same-host bucket is not an independent
-    witness — R13), and 'no off-host sink' is UNAVAILABLE (verified=False), never a vacuous pass."""
+    """Verify every retained eligible legacy version at each enabled off-host witness."""
     now = now or _now()
     sinks = (
         (
@@ -422,34 +510,118 @@ async def verify_offhost_checkpoint(
     unanchored_overdue = 0
     grace = datetime.timedelta(hours=max(0, get_settings().audit_witness_grace_hours))
     for sink in offhost:
+        failures = _HistoryFailures()
+        sink_read_failed = False
+        parsed_any = False
+        scan_complete = False
+        latest: tuple[datetime.datetime, int] | None = None
+
+        deadline = monotonic() + _HISTORY_SCAN_SECONDS
+        page_count = 0
+        entry_count = 0
+        key_marker: str | None = None
+        version_marker: str | None = None
+        seen_cursors: set[tuple[str | None, str | None]] = set()
         try:
-            doc = await asyncio.to_thread(
-                fetch_latest_offhost_checkpoint, sink.kind.value, sink.connection, org_id
-            )
-        except Exception as exc:  # noqa: BLE001 - ANY read failure must alarm, never attest
-            reasons.append(f"sink {sink.id}: off-host read failed ({exc})")
+            async with asyncio.timeout(_HISTORY_SCAN_SECONDS):
+                while True:
+                    _check_history_deadline(deadline)
+                    page = await asyncio.to_thread(
+                        list_offhost_checkpoint_versions_page,
+                        sink.kind.value,
+                        sink.connection,
+                        org_id,
+                        key_marker=key_marker,
+                        version_id_marker=version_marker,
+                    )
+                    _check_history_deadline(deadline)
+                    page_count += 1
+                    if page_count >= _HISTORY_MAX_PAGES:
+                        raise SinkReadError("off-host checkpoint history page limit reached")
+                    entry_count += len(page.versions) + len(page.delete_markers)
+                    if entry_count >= _HISTORY_MAX_ENTRIES:
+                        raise SinkReadError("off-host checkpoint history entry limit reached")
+                    for _marker in page.delete_markers:
+                        failures.record(
+                            "retained delete marker found in checkpoint namespace",
+                            attestation=True,
+                        )
+                    for ref in page.versions:
+                        if not _eligible_legacy_key(ref.key):
+                            continue
+                        _check_history_deadline(deadline)
+                        doc = await asyncio.to_thread(
+                            read_offhost_checkpoint_version,
+                            sink.kind.value,
+                            sink.connection,
+                            ref,
+                        )
+                        _check_history_deadline(deadline)
+                        parsed_any = True
+                        checkpoint, reason = _authenticate_offhost_doc(org_id, verify_key, doc)
+                        if reason is not None:
+                            failures.record(reason, attestation=True)
+                            continue
+                        # Defensive fail-closed guard: authentication never returns (None, None).
+                        if checkpoint is None:
+                            failures.record(
+                                "malformed off-host checkpoint payload",
+                                attestation=True,
+                            )
+                            continue
+                        candidate = (checkpoint.timestamp, checkpoint.latest_id)
+                        latest = candidate if latest is None else max(latest, candidate)
+                        _check_history_deadline(deadline)
+                        mismatch = await _compare_offhost_checkpoint(session, org_id, checkpoint)
+                        _check_history_deadline(deadline)
+                        if mismatch is not None:
+                            failures.record(mismatch, attestation=True)
+                    _check_history_deadline(deadline)
+                    if not page.truncated:
+                        scan_complete = True
+                        break
+                    cursor = (page.next_key_marker, page.next_version_id_marker)
+                    if cursor in seen_cursors:
+                        raise SinkReadError(
+                            "off-host checkpoint history pagination cursor repeated"
+                        )
+                    seen_cursors.add(cursor)
+                    key_marker, version_marker = cursor
+        except Exception as exc:  # noqa: BLE001 - every incomplete scan fails closed
+            sink_read_failed = True
             read_failed = True
-            continue
-        if doc is None:
+            failures.record(_history_read_reason(exc))
+
+        if scan_complete and latest is not None:
+            age = (now - latest[0]).total_seconds()
+            if age > _FRESHNESS_SECONDS:
+                failures.record(
+                    f"off-host checkpoint is stale ({int(age)}s old) — pushes may have stopped",
+                    attestation=True,
+                )
+
+        if parsed_any:
+            read += 1
+        if scan_complete and not parsed_any and not failures.attestation and not sink_read_failed:
             if sink.last_anchored_at is not None:
                 # A sink that HAS anchored before but now returns NO object — its WORM objects were
                 # deleted, the bucket was replaced, or reads point at the wrong bucket. A witness
                 # that was producing has gone dark: an attestation FAILURE, not the benign
                 # not-yet-anchored case. (last_anchored_at is DB state a determined owner could
                 # null; the trusted-lineage closure of that residual is the sink.py:106 thread.)
-                reasons.append(
-                    f"sink {sink.id}: previously-anchored witness now returns no object "
-                    "(WORM objects deleted / bucket replaced?)"
+                failures.record(
+                    "previously-anchored witness now returns no object "
+                    "(WORM objects deleted / bucket replaced?)",
+                    attestation=True,
                 )
-                attest_failures += 1
             elif unanchored_is_overdue(sink.enabled_at, now, grace):
                 # Never anchored, and declared long enough ago that "it hasn't reached its first
                 # 15-minute anchor yet" is no longer a credible explanation. A witness that was
                 # configured and never once produced is an operator failure — it alarms (Batch 11).
                 # Before enabled_at existed this case was benign FOREVER, so a permanently dead
                 # witness was indistinguishable from a freshly added one.
-                reasons.append(
-                    f"sink {sink.id}: enabled at {sink.enabled_at.isoformat()} but has NEVER "
+                failures.record(
+                    f"enabled at {sink.enabled_at.isoformat()} but has NEVER "
                     "anchored a checkpoint (past the configured grace window)"
                 )
                 unanchored_overdue += 1
@@ -458,13 +630,12 @@ async def verify_offhost_checkpoint(
                 # NOT an attestation failure, so it never alarms even read alongside a healthy
                 # sibling. It still lands in ``reasons`` (verified=False) so the CLI reports it
                 # isn't producing.
-                reasons.append(f"sink {sink.id}: no off-host checkpoint object found")
-            continue
-        read += 1
-        reason = await _attest_offhost_doc(session, org_id, verify_key, doc, now=now)
-        if reason is not None:
-            reasons.append(f"sink {sink.id}: {reason}")
+                failures.record("no off-host checkpoint object found")
+        if failures.attestation:
             attest_failures += 1
+        reasons.extend(f"sink {sink.id}: {reason}" for reason in failures.details)
+        if failures.omitted:
+            reasons.append(f"sink {sink.id}: {failures.omitted} additional failure reasons omitted")
     return OffHostCheckpointResult(
         True,
         read,
