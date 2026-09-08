@@ -4,6 +4,23 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
+## RES-RENOVATE-GITHUB-METADATA
+
+Status: OPEN
+Owner: Repository owner
+Source: Post-merge setup verification, 2026-09-08, scheduled job 16358301239
+Reason: Renovate now authenticates to GitLab and extracts dependencies, but its first real run
+reported missing GitHub authentication, failed Python-version and Node-tool lookups, and lockfile
+artifact errors in generated update MRs. The job still exited successfully. No GitHub credential
+was configured in the project, its group or the available task environment. GitLab authentication
+and strict configuration validation do not cover this external metadata dependency.
+Closure contract: Add a dedicated public-read GitHub token as masked, protected
+`RENOVATE_GITHUB_COM_TOKEN` with expansion disabled and environment scope `*`. Run the main
+schedule again, investigate any remaining tool/version lookup failures, verify affected npm/uv
+lockfiles are refreshed and their update pipelines pass, and link that evidence before closing.
+Do not merge updates with artifact errors or suppress the warnings to claim completion.
+Last reviewed: 2026-09-08
+
 ## RES-CONTAINER-SECURITY-TRIAGE
 
 Status: OPEN

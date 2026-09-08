@@ -1805,8 +1805,13 @@ validator takes no filename argument because version 39 treats explicit filename
 
 Fresh local evidence: GitLab hardening **58/0**, legacy hardening **85/0**, authority check and
 site-data guard passed. The new validator assertion failed before implementation. Application suite
-counts were re-read from successful main pipeline `2828169447`; final branch and scheduled main
-verification remain separate acceptance evidence. `RES-CONTAINER-SECURITY-TRIAGE` records the
+counts were re-read from successful main pipeline `2828169447`. Final branch pipeline `2828291882`
+passed all 14 jobs; MR `!4` merged as `2a1d614a` with the same source tree. The real scheduled
+job `16358301239` then extracted 134 dependencies from 17 files and opened five update MRs,
+but its successful exit concealed tool/version lookup and lockfile artifact errors. This exposed
+the separate missing GitHub metadata credential, recorded as `RES-RENOVATE-GITHUB-METADATA`;
+GitLab authentication is repaired, while complete dependency automation remains unverified.
+`RES-CONTAINER-SECURITY-TRIAGE` records the
 remaining advisory-image-scan work; a green security job is not a clean-image assertion.
 
 ## IDENTITY ONBOARDING
