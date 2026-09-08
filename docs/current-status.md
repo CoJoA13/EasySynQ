@@ -2,7 +2,7 @@
 easysynq_status_schema: 1
 as_of: "2026-09-08"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-restore-scratch-worm-guard"
+last_shipped_slice: "S-audit-verify-orchestrator"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2011
@@ -33,7 +33,8 @@ boot/read proof have not shipped.
 overall recovery boundary, with current execution tracked in
 [GitLab issue #3](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/3). Its narrower related records
 retain separate closure contracts. S-restore-scratch-worm-guard closes the scratch-target record;
-audit orchestration, checkpoint lineage, key rotation and upgrade-lock coverage remain open.
+S-audit-verify-orchestrator closes the task-coverage record. Checkpoint lineage, key rotation
+and upgrade-lock coverage remain open.
 Production recovery and upgrade safety are unproven.
 
 ## Shipped boundary
@@ -278,6 +279,18 @@ enforced by the executable catalog assertion in `apps/api/tests/unit/test_authz.
 set is defined by the headings and self-range declarations in [`decisions-register.md`](decisions-register.md).
 
 ## Verification baseline
+
+S-audit-verify-orchestrator adds coverage of the existing nightly task without changing production
+behavior. Six unit cases cover missing-key fanout, accumulated notification dirtiness, no-commit,
+engine-construction/read failures, re-raise and disposal. Three PostgreSQL cases run the real task,
+settings hook, verification services and notification emitter against a private migrated database;
+fresh sessions prove notification-only commits, a clean run and a required missing witness on an
+empty linked chain. They capture out-of-band payloads at the sender boundary, not transport delivery.
+The corrected affected neighborhood passed **19 integration tests**. The initial candidate's unchanged
+unit inputs passed **2,089 tests / 2 expected local opt-in skips**, and five isolated behavior faults
+were detected. The only correction was an integration assertion for the existing absent-checkpoint
+reason. See [dated evidence](slice-history.md#s-audit-verify-orchestrator--durable-alarms-and-engine-lifecycle).
+These bounded results do not replace the historical full integration baseline or close key/recovery work.
 
 S-restore-scratch-worm-guard rejects configured documents, records and checkpoint buckets, all
 manifest source buckets, restored custom checkpoint bucket declarations and any destination with

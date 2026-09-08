@@ -77,6 +77,48 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-verify-orchestrator — durable alarms and engine lifecycle
+
+Recorded 2026-09-08 against source base `17e35815de1c47cb8818faa41d09bae1935dc007`.
+**RES-AUDIT-VERIFY-ORCHESTRATOR is CLOSED** by task-level coverage of the existing implementation.
+The task already honors `get_settings()` and the application fixture already configures its database
+URL; the old residual's claim that no fixture could reach the task had become stale. No production
+injection API, schema, dependency, key format, checkpoint format or alert policy change was needed.
+
+Six unit cases exercise the real coroutine with explicit external-boundary doubles: two-organization
+missing-key fanout, sticky notification dirtiness across a later zero count, no-dirty/no-commit,
+construction failure, read failure, identity-preserving re-raise and disposal after success/failure.
+Three integration cases keep the actual task, engine/sessionmaker, settings, verification services,
+organization enumeration, notification templates and emitter. A module-local PostgreSQL 18 fixture
+uses the existing migrations and non-owner application role, avoiding unrelated shared checkpoints
+signed by other tests' keys. Unique recipients and fresh post-task sessions prove a missing-key
+notification survives the task's commit without adding a CHAIN_VERIFY_FAIL row. Clean verification
+adds no alarm; a required but absent witness on an empty linked chain persists a failure event and
+notification and returns one finding. Only the out-of-band sender is captured.
+
+Initial CPJ proof `job-mtt41uju-46f3548d` passed **2,089 unit tests / 2 expected local opt-in skips**,
+Ruff/format over **772 files**, and mypy over **449 source files**. Five isolated runtime copies of the
+coroutine deliberately removed notification dirtiness, construction-failure alerting, failure-side
+disposal, empty-chain off-host checking or off-host result counting. Each was caught by the intended
+assertion, not a setup or collection error. The final unmodified neighborhood initially exposed one
+wrong new test expectation: an absent checkpoint has reason `no checkpoint anchored yet`, not null.
+Independent review found the same mismatch. Only that late integration assertion was corrected;
+production source, unit inputs and the earlier mutation failure points were unchanged.
+
+The corrected source-bound PostgreSQL neighborhood completed at **20:22:53 UTC** with **19 passed
+in 16.79 seconds**, including existing operator-alarm/audit tests before the isolated new module.
+Corrected Ruff/format, authority, site-data and whitespace checks passed. Original unit and mutation
+results retain their original-candidate attribution; they are not described as a second full run.
+Source and log hashes were verified, and both fixture/reaper metadata and fresh Docker inspection
+found zero owned containers. Three pre-existing testcontainers namespace deprecations remain; the
+private mutation launcher also triggered an assertion-rewrite warning without affecting the checks.
+Independent scoped review resolved the sole test finding; private proof logs remain outside Git.
+
+This covers orchestration and durable notification persistence, not real out-of-band transport,
+real cross-organization authorization, remote witness reads, checkpoint lineage, key history or
+source-independent recovery. Those separate contracts and production upgrade/cutover limits remain
+in the [current ledger](open-residuals.md).
+
 ### S-restore-scratch-worm-guard — protected target rejection before copy
 
 Recorded 2026-09-08 against source base `6491eca92c45cdf1c0c435dafcc688267de024d1`.
