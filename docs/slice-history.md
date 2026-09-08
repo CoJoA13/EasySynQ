@@ -1519,7 +1519,11 @@ suites were NOT run and are not restated: no TypeScript, no OpenAPI and no migra
 
 ### S-tika4-content-key — the extractor reads text under either Tika namespace
 
-Recorded 2026-09-03 after merging [`#539`](https://github.com/CoJoA13/EasySynQ/pull/539) as `SHA`.
+Recorded 2026-09-03 after merging [`#539`](https://github.com/CoJoA13/EasySynQ/pull/539) as
+`30efa9f`. ⚠ This squash did **not** preserve the branch tree byte-for-byte, so this entry does
+not claim it did: `git diff a70eb4a 30efa9f` is twelve files — the four Dependabot merges
+(`#438`, `#470`, `#524`, `#440`) that landed between this branch's last push and its squash,
+which the squash correctly incorporated. Verified by `git diff`, not asserted.
 Makes `TikaExtractorProvider` accept both `tk:content` and `X-TIKA:content`, found while assessing
 Dependabot [`#478`](https://github.com/CoJoA13/EasySynQ/pull/478) (apache/tika 3.3.1.0 to 4.0.0).
 No migration, no contract, no permission key, no endpoint.
@@ -1564,7 +1568,9 @@ files. The web, contract and integration suites were NOT run and are not restate
 no OpenAPI, no migration.
 ### S-image-proof-enabled — the image runtime proof actually runs
 
-Recorded 2026-09-03 after merging [`#540`](https://github.com/CoJoA13/EasySynQ/pull/540) as `SHA`.
+Recorded 2026-09-03 after merging [`#540`](https://github.com/CoJoA13/EasySynQ/pull/540) as
+`7a4162b`, whose tree the squash preserved byte-for-byte (verified by `git diff` against the
+branch tip `e1bd9b6`, not asserted).
 Sets `EASYSYNQ_IMAGE_PROOF: "1"` on the `api` job's unit-test step, closing
 `RES-IMAGE-PROOF-NEVER-ENABLED`. One CI line, one new test. No migration, no contract, no
 permission key, no application code.
@@ -1612,7 +1618,9 @@ no migration.
 ### S-gitlab-ci-port — CI moves to GitLab, and the new pipeline is pinned
 
 Recorded 2026-09-07 after merging [`!1`](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/1)
-as `SHA`. ⚠ This is the first entry whose change was reviewed on **GitLab**, not GitHub;
+as `957f1f2`, whose tree the squash preserved byte-for-byte (verified by `git diff` against the
+branch tip `c0251e5`, not asserted). ⚠ This is the first entry whose change was reviewed on
+**GitLab**, not GitHub;
 `.github/workflows/ci.yml` still exists and is still pinned, but it is no longer the gate.
 No migration, no contract, no permission key, no application code.
 
@@ -1661,6 +1669,17 @@ nothing else in the repository reads this file and each already happened once. E
 mutation-verified against the broken state it names: eight shell mutations and three Python ones
 each redden the matching assertion. ⚠ The harness caught its own omission on first run — the
 contracts job did not yet invoke it.
+
+⚠ **Merging on GitLab discarded the commit bodies, and that breaks half a convention.** The
+squash commit `957f1f2` is TWO lines — the merge-request title alone — where every GitHub
+squash on this repository carries the full rationale (`7a4162b` is 95 lines). GitLab
+defaults the squash message to the MR title unless it is set explicitly at merge time, so
+the three commit messages on this branch, including the locale-bug analysis and every
+mutation result, reached `main` only through this file and the MR description.
+`engineering-patterns.md` states that the deep per-slice rationale lives in the squash-merge
+commits; that is now conditional on someone setting the message, and the note there says so.
+Nothing is lost for this slice — the rationale is here — but the next merge needs the same
+care, and the failure mode is silent.
 
 **What this deliberately does NOT do.** It does not retire `.github/workflows/ci.yml` or its 55
 assertions; that file stays pinned while GitHub remains readable, and its 135 historical PR links
