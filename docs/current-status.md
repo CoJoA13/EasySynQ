@@ -272,6 +272,20 @@ compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d4465941
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
 
+Owner clarification on 2026-09-08: use no GitHub services or hosting. The setup migration replaces
+GitHub-hosted CI tools, configures Renovate to use preinstalled Node/npm and uv/Python, blocks its
+GitHub hosts, and omits GitHub release-note and interpreter-metadata lookups. Contributor hooks,
+artifact retrieval, and active setup instructions move to non-GitHub distribution paths. Historical
+PR links and local security policy files remain evidence/data. The protected dry-run job **16364818159** authenticated with the GitLab token, ran Renovate
+**44.69.8**, Node **26.8.1** / npm **11.19.0**, uv **0.12.10**, and Python **3.12.14**, and extracted
+**106** dependencies across **22** manager/file entries (42 retired Actions dependencies are no
+longer extracted). GitHub/tool lookup failures were absent. It processed existing update branches;
+TypeScript 7 still produced a real npm peer conflict with typescript-eslint's `<6.1.0` ceiling.
+The optional RE2 native addon falls back to JavaScript RegExp because npm lifecycle scripts are
+disabled. The main-schedule write/lockfile proof remains tracked in `RES-RENOVATE-GITHUB-METADATA`.
+Local contributor verification: doctor **75/0**, timing-artifact fixtures **9 passed**, hosting
+and distribution guards passed, `AUTHORITY_OK`, and a clean site-data scan.
+
 Fresh 2026-09-08 repository setup audit. GitLab now protects `main` against direct and force
 pushes, limits merging to Maintainers, requires a successful pipeline and resolved discussions,
 and rejects skipped pipelines as merge evidence. Release tags matching `v*` are protected for

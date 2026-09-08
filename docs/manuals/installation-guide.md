@@ -93,7 +93,7 @@ Choose one TLS mode:
 Use a release tag or reviewed commit, not an arbitrary moving branch:
 
 ```bash
-git clone https://github.com/CoJoA13/EasySynQ.git
+git clone https://gitlab.com/synqsuite-group/EasySynQ.git
 cd EasySynQ
 git checkout <release-tag-or-approved-commit>
 ```

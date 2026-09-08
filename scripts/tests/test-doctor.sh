@@ -64,10 +64,10 @@ make_dispatcher() {
     '    ;;' \
     "  node) read_state node_version v22.17.0; printf '\\n' ;;" \
     '  uv)' \
-    '    if [[ ${1-} == python && ${2-} == find && ${3-} == 3.12 ]]; then' \
+    '    if [[ ${1-} == python && ${2-} == find && ${3-} == cpython@3.12 ]]; then' \
     '      [[ $(read_state python_312 present) == present ]] || exit 1' \
     "      printf '/fixture/python3.12\\n'" \
-    "    else printf 'uv 0.8.4\\n'; fi" \
+    "    else printf 'uv %s\\n' \"\$(read_state uv_version 0.12.10)\"; fi" \
     '    ;;' \
     "  pg_dump) printf 'pg_dump (PostgreSQL) %s\\n' \"\$(read_state pg_dump_version 18.6)\" ;;" \
     '  docker)' \
@@ -97,6 +97,7 @@ make_dispatcher() {
     "  openssl) printf 'OpenSSL 3.2.4\\n' ;;" \
     "  just) printf 'just 1.40.0\\n' ;;" \
     "  pre-commit) printf 'pre-commit 4.2.0\\n' ;;" \
+    "  gitleaks) read_state gitleaks_version 8.18.4; printf '\\n' ;;" \
     '  *) exit 2 ;;' \
     'esac' >"$target"
   chmod +x "$target"
@@ -108,6 +109,9 @@ new_fixture() {
   CASE_REPO="$TEST_ROOT/$name/repo"
   CASE_BIN="$TEST_ROOT/$name/bin"
   CASE_STATE="$TEST_ROOT/$name/state"
+  CASE_UV_MIRROR=https://releases.astral.sh
+  CASE_UV_PYTHON_MIRROR=
+  CASE_UV_DOWNLOADS=automatic
   mkdir -p "$CASE_ROOT/etc" "$CASE_ROOT/var/run" "$CASE_ROOT/usr/bin" \
     "$CASE_ROOT/proc/net" "$CASE_REPO/scripts" "$CASE_REPO/apps/api/.venv" \
     "$CASE_REPO/apps/web/node_modules" "$CASE_REPO/packages/contracts/node_modules" \
@@ -131,7 +135,7 @@ new_fixture() {
 
   make_dispatcher "$CASE_BIN/stub"
   local tool
-  for tool in uname getenforce stat id git curl openssl node uv just pre-commit pg_dump docker; do
+  for tool in uname getenforce stat id git curl openssl node uv just pre-commit gitleaks pg_dump docker; do
     cp "$CASE_BIN/stub" "$CASE_BIN/$tool"
   done
 }
@@ -180,9 +184,29 @@ configure_case() {
     node_pin_multiline) printf '22\n23\n' >"$CASE_REPO/.node-version" ;;
     node_pin_extra_newline) printf '22\n\n' >"$CASE_REPO/.node-version" ;;
     uv_missing) rm "$CASE_BIN/uv" ;;
+    uv_too_old) set_state uv_version 0.11.13 ;;
+    uv_mirror_minimum) set_state uv_version 0.11.14 ;;
+    uv_mirror_missing) CASE_UV_MIRROR= ;;
+    uv_mirror_wrong) CASE_UV_MIRROR=https://invalid.example.test ;;
+    uv_python_mirror_override) CASE_UV_PYTHON_MIRROR=https://invalid.example.test ;;
+    uv_downloads_disabled)
+      CASE_UV_MIRROR=
+      CASE_UV_DOWNLOADS=never
+      set_state uv_version 0.8.4
+      ;;
+    uv_download_policy_unsupported)
+      CASE_UV_MIRROR=
+      CASE_UV_DOWNLOADS=never
+      set_state uv_version 0.3.1
+      ;;
     python_missing) set_state python_312 missing ;;
     just_missing) rm "$CASE_BIN/just" ;;
     precommit_missing) rm "$CASE_BIN/pre-commit" ;;
+    gitleaks_missing) rm "$CASE_BIN/gitleaks" ;;
+    gitleaks_older) set_state gitleaks_version 8.16.0 ;;
+    gitleaks_newer) set_state gitleaks_version 8.29.1 ;;
+    gitleaks_next_major) set_state gitleaks_version 9.0.0 ;;
+    gitleaks_unversioned) set_state gitleaks_version 'version is set by build process' ;;
     pg_dump_missing) rm "$CASE_BIN/pg_dump" ;;
     pg_dump_unsupported) set_state pg_dump_version 15.13 ;;
     docker_cli_missing) rm "$CASE_BIN/docker" ;;
@@ -224,6 +248,8 @@ run_doctor() {
   local profile=$1
   set +e
   STUB_STATE_DIR="$CASE_STATE" DOCTOR_TEST_MODE=1 DOCTOR_ROOT="$CASE_ROOT" \
+    UV_ASTRAL_MIRROR_URL="$CASE_UV_MIRROR" UV_PYTHON_INSTALL_MIRROR="$CASE_UV_PYTHON_MIRROR" \
+    UV_PYTHON_DOWNLOADS="$CASE_UV_DOWNLOADS" \
     DOCTOR_PATH="$CASE_BIN" DOCTOR_PROC_ROOT="$CASE_ROOT/proc" \
     DOCTOR_DOCKER_SOCKET="$CASE_ROOT/var/run/docker.sock" \
     bash "$CASE_REPO/scripts/doctor.sh" "$profile" >"$CASE_REPO/stdout" 2>"$CASE_REPO/stderr"
@@ -286,9 +312,21 @@ assert_case node_pin_nonnumeric contributor 2 'FAIL DOCTOR_CONTRACT_INVALID '
 assert_case node_pin_multiline contributor 2 'FAIL DOCTOR_CONTRACT_INVALID '
 assert_case node_pin_extra_newline contributor 2 'FAIL DOCTOR_CONTRACT_INVALID '
 assert_case uv_missing contributor 1 'FAIL UV_MISSING '
+assert_case uv_too_old contributor 1 'FAIL UV_MIRROR_UNSUPPORTED '
+assert_case uv_mirror_minimum contributor 0 'PASS UV_MIRROR_SUPPORTED '
+assert_case uv_mirror_missing contributor 1 'FAIL UV_MIRROR_REQUIRED '
+assert_case uv_mirror_wrong contributor 1 'FAIL UV_MIRROR_REQUIRED '
+assert_case uv_python_mirror_override contributor 1 'FAIL UV_MIRROR_OVERRIDE '
+assert_case uv_downloads_disabled contributor 0 'PASS UV_PYTHON_DOWNLOADS_DISABLED '
+assert_case uv_download_policy_unsupported contributor 1 'FAIL UV_DOWNLOAD_POLICY_UNSUPPORTED '
 assert_case python_missing contributor 1 'FAIL PYTHON_312_MISSING '
 assert_case just_missing contributor 1 'FAIL JUST_MISSING '
 assert_case precommit_missing contributor 1 'FAIL PRECOMMIT_MISSING '
+assert_case gitleaks_missing contributor 1 'FAIL GITLEAKS_MISSING '
+assert_case gitleaks_older contributor 1 'FAIL GITLEAKS_UNSUPPORTED_VERSION '
+assert_case gitleaks_newer contributor 0 'PASS GITLEAKS_SUPPORTED_VERSION '
+assert_case gitleaks_next_major contributor 1 'FAIL GITLEAKS_UNSUPPORTED_VERSION '
+assert_case gitleaks_unversioned contributor 1 'FAIL GITLEAKS_UNSUPPORTED_VERSION '
 assert_case pg_dump_missing contributor 1 'FAIL PG_DUMP_MISSING '
 assert_case pg_dump_unsupported contributor 1 'FAIL PG_DUMP_UNSUPPORTED_VERSION '
 assert_docker_case docker_cli_missing DOCKER_CLI_MISSING
@@ -385,6 +423,7 @@ fi
 new_fixture default-profile
 set +e
 STUB_STATE_DIR="$CASE_STATE" DOCTOR_TEST_MODE=1 DOCTOR_ROOT="$CASE_ROOT" \
+  UV_ASTRAL_MIRROR_URL="$CASE_UV_MIRROR" \
   DOCTOR_PATH="$CASE_BIN" DOCTOR_PROC_ROOT="$CASE_ROOT/proc" \
   DOCTOR_DOCKER_SOCKET="$CASE_ROOT/var/run/docker.sock" \
   bash "$CASE_REPO/scripts/doctor.sh" >"$CASE_REPO/default.stdout" 2>"$CASE_REPO/default.stderr"

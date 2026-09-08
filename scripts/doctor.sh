@@ -276,12 +276,53 @@ check_node() {
 }
 
 check_python() {
+  local uv_version
   if ! command_exists uv; then
-    emit FAIL UV_MISSING contributor 'Install uv, then run: uv --version'
-  elif uv python find "$python_minor" >/dev/null 2>&1; then
+    emit FAIL UV_MISSING contributor 'Install pipx from Ubuntu, then run: pipx install --index-url https://pypi.org/simple uv==0.12.10'
+    return
+  fi
+  uv_version=$(uv --version 2>/dev/null || true)
+  uv_version=${uv_version#uv }
+
+  # A configured Astral mirror forbids uv's normal fallback to upstream release hosting.
+  # Existing local interpreters can instead be used with all Python downloads disabled.
+  if [[ ${UV_PYTHON_DOWNLOADS:-} == never ]]; then
+    if version_at_least "$uv_version" 0 3 2; then
+      emit PASS UV_PYTHON_DOWNLOADS_DISABLED none 'Python downloads are disabled; a local Python 3.12 must already exist.'
+    else
+      emit FAIL UV_DOWNLOAD_POLICY_UNSUPPORTED contributor 'uv 0.3.2 or newer is required for UV_PYTHON_DOWNLOADS=never. Run: pipx install --force --index-url https://pypi.org/simple uv==0.12.10'
+    fi
+  elif [[ ${UV_ASTRAL_MIRROR_URL:-} != https://releases.astral.sh ]]; then
+    emit FAIL UV_MIRROR_REQUIRED contributor 'Run: export UV_ASTRAL_MIRROR_URL=https://releases.astral.sh; or set UV_PYTHON_DOWNLOADS=never when Python 3.12 is already installed.'
+  elif [[ -n ${UV_PYTHON_INSTALL_MIRROR:-} || -n ${UV_PYTHON_DOWNLOADS_JSON_URL:-} ]]; then
+    emit FAIL UV_MIRROR_OVERRIDE contributor 'Remove Python download-source overrides: unset UV_PYTHON_INSTALL_MIRROR UV_PYTHON_DOWNLOADS_JSON_URL'
+  else
+    if version_at_least "$uv_version" 0 11 14; then
+      emit PASS UV_MIRROR_SUPPORTED none 'uv supports the configured Astral mirror without upstream fallback.'
+    else
+      emit FAIL UV_MIRROR_UNSUPPORTED contributor 'uv 0.11.14 or newer is required for mirror-only downloads. Run: pipx install --force --index-url https://pypi.org/simple uv==0.12.10'
+    fi
+  fi
+
+  if uv python find "cpython@$python_minor" >/dev/null 2>&1; then
     emit PASS PYTHON_312_AVAILABLE none "uv can resolve Python $python_minor."
   else
-    emit FAIL PYTHON_312_MISSING contributor "Run: uv python install $python_minor"
+    emit FAIL PYTHON_312_MISSING contributor "With uv 0.11.14 or newer, run: UV_PYTHON_DOWNLOADS=automatic UV_ASTRAL_MIRROR_URL=https://releases.astral.sh uv python install cpython@$python_minor"
+  fi
+}
+
+check_gitleaks() {
+  local version remedy
+  remedy='Follow docs/runbooks/fresh-linux-setup.md to install native Gitleaks 8.18.4 through the Go module proxy, then run: gitleaks version'
+  if ! command_exists gitleaks; then
+    emit FAIL GITLEAKS_MISSING contributor "$remedy"
+    return
+  fi
+  version=$(gitleaks version 2>/dev/null || true)
+  if [[ $version =~ ^v?8\.[0-9]+\.[0-9]+$ ]] && version_at_least "$version" 8 18 4; then
+    emit PASS GITLEAKS_SUPPORTED_VERSION none 'Native Gitleaks 8.x at least 8.18.4 is available for staged secret scanning.'
+  else
+    emit FAIL GITLEAKS_UNSUPPORTED_VERSION contributor "Gitleaks must be versioned 8.x at least 8.18.4; other majors require review. $remedy"
   fi
 }
 
@@ -562,6 +603,7 @@ check_node
 check_python
 check_simple_tool just JUST_MISSING just just JUST_AVAILABLE
 check_simple_tool pre-commit PRECOMMIT_MISSING pre-commit pre-commit PRECOMMIT_AVAILABLE
+check_gitleaks
 check_pg_dump
 check_docker
 check_dependencies

@@ -27,11 +27,24 @@ The active weekly schedule is `0 5 * * 1`, timezone `America/Chicago`, targeting
 `renovate.json` owns update grouping and version ceilings; automerge is disabled. The GitLab
 schedule is the sole timing control, so avoid a second Renovate schedule that silently skips work.
 
-Also provide `RENOVATE_GITHUB_COM_TOKEN` as a masked, protected variable with expansion disabled
-and environment scope `*`. Use a dedicated GitHub token limited to public read access; private
-repository or write permissions are unnecessary for this purpose. Renovate uses GitHub-hosted
-dependency and tool metadata even when the project itself lives on GitLab. Its GitLab project
-token cannot authenticate those requests. Do not redeclare either secret in YAML.
+The owner-selected setup uses no GitHub services, hosting, credentials, or download fallbacks.
+`RENOVATE_TOKEN` is the only platform credential needed. `scripts/run-renovate.sh` installs the
+pinned bot from npm, uses its supported Node 24 runtime, and supplies Node 26/npm plus uv and
+Python 3.12 for updating this project's locks. Node binaries come from nodejs.org with checksum
+verification; uv comes from PyPI and Python is supplied by the Docker Hub base image. Managed
+Python downloads are disabled in CI.
+
+`renovate-self-hosted.cjs` selects preinstalled tools (`binarySource: global`), blocks GitHub hosts,
+and passes only the named Python settings to child package managers. `renovate.json` disables
+release-note fetching and the retired GitHub Actions manager. Python interpreter-version metadata
+also uses GitHub, so interpreter upgrades remain deliberate; Python Docker base updates within
+3.12 still flow. npm, PyPI, container registries, and Node's distribution service supply updates.
+Passive upstream source links may still appear in MR descriptions; those links do not move the
+repository or create a GitHub integration.
+
+A regex manager tracks `infra/images.lock` alongside Compose references, so container updates can
+preserve the air-gap image manifest. Other regex managers keep the new uv, Renovate, and Node tool
+pins visible to the updater. Every dependency change still requires review and a successful pipeline.
 
 After changing the token or pipeline, run the schedule and inspect the **renovate job itself**.
 A passing branch pipeline cannot validate it because the updater runs only for scheduled pipelines.
@@ -39,7 +52,7 @@ Check for dependency extraction, lookup warnings and lockfile/artifact errors as
 status. The first authenticated run opened merge requests despite failing tool lookups and leaving
 some lockfiles unrefreshed. A successful job or an open update MR alone does not prove automation
 is fully operational. See `RES-RENOVATE-GITHUB-METADATA` in the residual ledger.
-The `renovate-config` job validates repository configuration on ordinary branch pipelines as well
+The `renovate-config` job validates repository and self-hosted configuration on ordinary branch pipelines as well
 as schedules. Keep explanatory prose in this runbook: arbitrary JSON keys such as `_comment` are
 invalid options. Renovate may report a repository config error and still exit successfully, which
 is why the separate strict validator is required.
@@ -64,6 +77,6 @@ web application image. Current follow-up work belongs in
 
 References: [GitLab variable precedence and protection](https://docs.gitlab.com/ci/variables/),
 [protected branches](https://docs.gitlab.com/user/project/repository/branches/protected/), and
-[Renovate GitLab authentication](https://docs.renovatebot.com/modules/platform/gitlab/). The
-[Renovate setup guide](https://docs.renovatebot.com/getting-started/running/#githubcom-token-for-changelogs-and-tools)
-explains the additional GitHub token.
+[Renovate GitLab authentication](https://docs.renovatebot.com/modules/platform/gitlab/).
+[Preinstalled Renovate tools](https://docs.renovatebot.com/self-hosted-configuration/#binarysource)
+and [host rules](https://docs.renovatebot.com/configuration-options/#hostrules) describe the deployment controls.

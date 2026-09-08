@@ -1,61 +1,76 @@
-# Pre-commit hooks for both stacks. `pre-commit install` after `just setup`.
+# Contributor hooks use local commands or pinned PyPI packages; no remote hook clones.
 minimum_pre_commit_version: "3.5.0"
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Pin to the SAME ruff the CI `api` job runs (`uv run ruff` = 0.15.17, uv-pinned). The local
-    # pre-commit ruff-format MUST match CI's, or the two wrap the same code differently and fight —
-    # e.g. v0.6.9 wrapped a long `assert cond, (msg)` as `assert (\n cond\n), msg` while 0.15.17
-    # wraps it as `assert cond, (\n msg\n)`, so a commit looped (pre-commit reformats → abort → uv
-    # re-reformats → CI). Bump this in lockstep with the uv.lock ruff pin (the S-context-2 lesson).
-    rev: v0.15.17
-    hooks:
-      - id: ruff
-        args: [--fix]
-        files: ^apps/api/
-      - id: ruff-format
-        files: ^apps/api/
-
   - repo: local
     hooks:
-      # Run the PROJECT's mypy (uv-pinned + full deps/stubs + the [tool.mypy] overrides),
-      # IDENTICAL to the CI `api` job's `uv run mypy src`. The old mirrors-mypy hook ran an OLDER
-      # mypy in an isolated venv missing the stub packages (types-PyYAML/types-redis) and PEP-695
-      # support — so it errored on UNTOUCHED files (yaml/redis imports, `type`/`def f[T]`) and
-      # blocked every commit. `language: system` reuses the project venv via `uv run`.
+      # Use the project's locked Ruff so local formatting always matches CI.
+      - id: ruff
+        name: ruff (project lock)
+        entry: env UV_ASTRAL_MIRROR_URL=https://releases.astral.sh uv run --frozen --project apps/api ruff check --force-exclude --fix
+        language: system
+        types_or: [python, pyi, jupyter]
+        require_serial: true
+        files: ^apps/api/
+      - id: ruff-format
+        name: ruff format (project lock)
+        entry: env UV_ASTRAL_MIRROR_URL=https://releases.astral.sh uv run --frozen --project apps/api ruff format --force-exclude
+        language: system
+        types_or: [python, pyi, jupyter]
+        require_serial: true
+        files: ^apps/api/
+      # Keep the full project environment and stubs used by CI's strict mypy check.
       - id: mypy
         name: mypy (strict, apps/api/src — uv run, matches CI)
-        entry: bash -c 'cd apps/api && uv run mypy src'
+        entry: env UV_ASTRAL_MIRROR_URL=https://releases.astral.sh bash -c 'cd apps/api && uv run --frozen mypy src'
         language: system
         files: ^apps/api/src/
         pass_filenames: false
         require_serial: true
 
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
-    hooks:
       - id: end-of-file-fixer
+        name: fix end of files
+        entry: end-of-file-fixer
+        language: python
+        additional_dependencies: [pre-commit-hooks==5.0.0]
+        types: [text]
       - id: trailing-whitespace
+        name: trim trailing whitespace
+        entry: trailing-whitespace-fixer
+        language: python
+        additional_dependencies: [pre-commit-hooks==5.0.0]
+        types: [text]
       - id: check-merge-conflict
+        name: check for merge conflicts
+        entry: check-merge-conflict
+        language: python
+        additional_dependencies: [pre-commit-hooks==5.0.0]
+        types: [text]
       - id: check-yaml
+        name: check yaml
+        entry: check-yaml
+        language: python
+        additional_dependencies: [pre-commit-hooks==5.0.0]
+        types: [yaml]
         args: [--allow-multiple-documents]
       - id: check-added-large-files
+        name: check for added large files
+        entry: check-added-large-files
+        language: python
+        additional_dependencies: [pre-commit-hooks==5.0.0]
+        types: [file]
+      # Install the pinned native tool using the contributor runbook; absence fails the hook.
+      - id: gitleaks
+        name: detect staged secrets
+        entry: gitleaks protect --verbose --redact --staged
+        language: system
+        pass_filenames: false
 
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.4
-    hooks:
-      - id: gitleaks            # D1: no secrets in git
-
-  - repo: local
-    hooks:
       - id: repository-authority
         name: repository authority and Claude compatibility contracts
         entry: ./scripts/check-repo-authority.sh
         language: system
         pass_filenames: false
-      # Match the Redocly step in CI's `contracts` job exactly (including its config, which sets
-      # operation-4xx-response: off, etc.). This hook is lint-only; CI additionally runs
-      # `gen-contracts.sh --check`, while `just contracts` bundles the spec and generates the
-      # Pydantic models + TypeScript schema types.
+      # Keep the same locked contract lint command as CI.
       - id: contracts-lint
         name: openapi contract lint (redocly --config, matches CI)
         entry: bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
