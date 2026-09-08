@@ -15,6 +15,13 @@
   },
   "packageRules": [
     {
+      "description": "The web image package manager stays on the supported npm 11 contract; major upgrades need a separate compatibility review.",
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["npm"],
+      "matchFileNames": ["apps/web/Dockerfile"],
+      "allowedVersions": "<12"
+    },
+    {
       "description": "python-minor-patch \u2014 the uv project at apps/api",
       "matchManagers": [
         "pep621"
@@ -118,6 +125,13 @@
     "enabled": false
   },
   "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^apps/web/Dockerfile$/"],
+      "matchStrings": ["npm@(?<currentValue>[0-9.]+)"],
+      "depNameTemplate": "npm",
+      "datasourceTemplate": "npm"
+    },
     {
       "customType": "regex",
       "managerFilePatterns": [
