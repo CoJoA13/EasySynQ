@@ -11,7 +11,7 @@
 ## 1. Clone + toolchain
 
 ```bash
-git clone https://github.com/CoJoA13/EasySynQ.git ~/Documents/EasySynQ
+git clone https://gitlab.com/synqsuite-group/EasySynQ.git ~/Documents/EasySynQ
 cd ~/Documents/EasySynQ
 
 # Read-only inventory. Names every missing tool and the exact command that installs it.

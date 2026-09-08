@@ -1,72 +1,86 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "_comment": [
-    "Dependency-update automation, replacing .github/dependabot.yml when CI moved to GitLab.",
-    "Dependabot does not run on GitLab, and GitLab's own Dependency Scanning REPORTS vulnerable",
-    "packages rather than raising routine version-bump MRs — so it is not a replacement for this.",
-    "",
-    "This is a faithful port of the Dependabot policy, not a redesign: weekly, grouped minor/patch",
-    "per ecosystem, the same two major-version refusals, and the same python ceiling. Renovate",
-    "detects manifests itself, so the eight per-directory blocks become package rules.",
-    "",
-    "Air-gap-safe exactly as before: Renovate only opens MRs against this project. CI still gates",
-    "every bump (uv sync --frozen / npm ci), and the `security` job surfaces advisories separately.",
-    "",
-    "NO automerge, deliberately. This repository has repeatedly found bumps that were green in CI",
-    "and still wrong: a python base image that built fine and could not START, a Tika major that",
-    "extracted EMPTY text without raising, and three separate exact-pin drifts. Every bump is a",
-    "reviewed MR."
+  "extends": [
+    "config:recommended"
   ],
   "timezone": "America/Chicago",
-  "_schedule_comment": [
-    "NO internal schedule, deliberately. The GitLab pipeline schedule is the single source of",
-    "timing. With both, a cron outside Renovate's own window makes it run, decline to act, and",
-    "exit 0 — a green job that did nothing, which is the inert-opt-in shape this repository has",
-    "already been bitten by twice (EASYSYNQ_IMAGE_PROOF, EASYSYNQ_RELEASE). One clock only."
-  ],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 0,
   "semanticCommits": "disabled",
-  "labels": ["dependencies"],
-  "lockFileMaintenance": { "enabled": false },
+  "labels": [
+    "dependencies"
+  ],
+  "lockFileMaintenance": {
+    "enabled": false
+  },
   "packageRules": [
     {
-      "description": "python-minor-patch — the uv project at apps/api",
-      "matchManagers": ["pep621"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "description": "python-minor-patch \u2014 the uv project at apps/api",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "python-minor-patch"
     },
     {
-      "description": "web-minor-patch — the SPA lock at apps/web",
-      "matchManagers": ["npm"],
-      "matchFileNames": ["apps/web/**"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "description": "web-minor-patch \u2014 the SPA lock at apps/web",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchFileNames": [
+        "apps/web/**"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "web-minor-patch"
     },
     {
-      "description": "contract-tools-minor-patch — the separately locked contract toolchain",
-      "matchManagers": ["npm"],
-      "matchFileNames": ["packages/contracts/**"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "description": "contract-tools-minor-patch \u2014 the separately locked contract toolchain",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchFileNames": [
+        "packages/contracts/**"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "contract-tools-minor-patch"
     },
     {
-      "description": "reportlab is capped <5 — stamp_controlled_copy's byte-determinism depends on reportlab invariant mode; a v5 bump needs dedicated byte-output verification, not an auto-merge (closed PR #271). Minor/patch within 4.x still flow.",
-      "matchPackageNames": ["reportlab"],
-      "matchUpdateTypes": ["major"],
+      "description": "reportlab is capped <5 \u2014 stamp_controlled_copy's byte-determinism depends on reportlab invariant mode; a v5 bump needs dedicated byte-output verification, not an auto-merge (closed PR #271). Minor/patch within 4.x still flow.",
+      "matchPackageNames": [
+        "reportlab"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "enabled": false
     },
     {
-      "description": "Mantine majors are a deliberate UI-lib migration (D4 — the SPA targets v7); a v8/v9 jump breaks the build and is its own scoped project (closed PR #266). Minor/patch within v7 still flow.",
-      "matchPackageNames": ["@mantine/**"],
-      "matchUpdateTypes": ["major"],
+      "description": "Mantine majors are a deliberate UI-lib migration (D4 \u2014 the SPA targets v7); a v8/v9 jump breaks the build and is its own scoped project (closed PR #266). Minor/patch within v7 still flow.",
+      "matchPackageNames": [
+        "@mantine/**"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "enabled": false
     },
     {
-      "description": "The API interpreter is pinned to 3.12 by requires-python (>=3.12,<3.13) and .python-version; moving it is a deliberate slice. A newer base does NOT fail the build — it fails at RUNTIME: uv cannot satisfy requires-python from /usr/local/bin, downloads a managed CPython into root-owned /root, and the image dies as uid 10001 (closed PR #448, which was CLEAN on all sixteen checks). Not a semver-major rule: the tag major is 3 on both sides, so 3.12 -> 3.14 is a MINOR update and a major-only refusal would not match it.",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["python"],
+      "description": "The API interpreter is pinned to 3.12 by requires-python (>=3.12,<3.13) and .python-version; moving it is a deliberate slice. A newer base does NOT fail the build \u2014 it fails at RUNTIME: uv cannot satisfy requires-python from /usr/local/bin, downloads a managed CPython into root-owned /root, and the image dies as uid 10001 (closed PR #448, which was CLEAN on all sixteen checks). Not a semver-major rule: the tag major is 3 on both sides, so 3.12 -> 3.14 is a MINOR update and a major-only refusal would not match it.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
       "allowedVersions": "<3.13"
     }
   ]

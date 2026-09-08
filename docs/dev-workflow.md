@@ -5,10 +5,12 @@
 
 ## Branch + PR flow
 
-`main` is not technically protected on the current hosting plan; no-direct-push and review are
-project conventions. Do slice work on a scoped branch → open a PR → require the current checks →
-squash-merge. See `docs/current-status.md` for the dated CI topology snapshot and the workflow files for
-executable truth.
+GitLab protects `main`: direct pushes and force pushes are disabled, and Maintainers merge reviewed
+merge requests after the pipeline succeeds and all discussions are resolved. A skipped pipeline does
+not satisfy the gate. Do slice work on a scoped branch → open a merge request → review and check →
+squash-merge. Release tags matching `v*` may be created only by Maintainers. See
+[`runbooks/gitlab-repository-setup.md`](runbooks/gitlab-repository-setup.md) for the hosting settings,
+[`current-status.md`](current-status.md) for the dated CI topology, and `.gitlab-ci.yml` for executable truth.
 
 ## Toolchain (Linux CI / a Linux dev host)
 

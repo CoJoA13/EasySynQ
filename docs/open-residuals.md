@@ -4,6 +4,23 @@ This is the sole current, owner-visible ledger for deliberately deferred work. E
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
 
+## RES-CONTAINER-SECURITY-TRIAGE
+
+Status: OPEN
+Owner: Repository owner
+Source: GitLab repository setup audit, 2026-09-08
+Reason: The security job reports high/critical image findings while passing by design: pip-audit
+and Trivy findings are advisory. Its web image scan covers the final base image rather than the
+built application image. Pipeline success therefore does not prove release image security; the
+reported findings need package-level applicability and remediation review before changing the
+established scan policy. Keep detailed vulnerability inventories outside Git under R61.
+Closure contract: Triage findings against the actual built release images, apply available fixes
+with runtime verification, record justified exceptions in the approved external security evidence,
+scan the built web image, and adopt an explicit reviewed gate for actionable high/critical findings.
+Link fresh scan and runtime evidence when closing this record; do not blanket-ignore findings or
+describe report-only scanner success as a clean result.
+Last reviewed: 2026-09-08
+
 ## RES-IP-REGISTER-COLUMN-JUMP
 
 Status: OPEN

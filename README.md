@@ -2,7 +2,7 @@
 
 **A self-hosted ISO 9001:2015 Quality Management System where document drift is engineered out, not policed.**
 
-[![CI](https://github.com/CoJoA13/EasySynQ/actions/workflows/ci.yml/badge.svg)](https://github.com/CoJoA13/EasySynQ/actions/workflows/ci.yml)
+[![CI](https://gitlab.com/synqsuite-group/EasySynQ/badges/main/pipeline.svg)](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines)
 
 EasySynQ runs your quality system on your own server, in the browser — and answers the one question every QMS eventually fails: *"which version governs?"*
 

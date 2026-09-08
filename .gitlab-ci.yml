@@ -38,6 +38,11 @@ variables:
 .uv:
   image: ghcr.io/astral-sh/uv:python3.12-bookworm
 
+.renovate:
+  image:
+    name: renovate/renovate:39
+    entrypoint: [""]
+
 .dind:
   services:
     - name: docker:27-dind
@@ -83,8 +88,8 @@ contracts:
   stage: check
   extends: .node
   script:
-    # R61 backstop lives in THIS job because contracts is a required check; `security` is not, so a
-    # site-data match there would not block a merge.
+    # Run the R61 backstop before hydrating dependencies. GitLab requires the whole pipeline;
+    # Trivy findings in the security job remain report-only and are not the R61 gate.
     - bash scripts/tests/test-agent-authority.sh
     - bash scripts/tests/test-claude-hooks.sh
     - ./scripts/check-repo-authority.sh
@@ -161,8 +166,8 @@ api:
     - *unprivileged-user
     # EASYSYNQ_IMAGE_PROOF un-skips the built-image runtime proof: it BUILDS the API image and runs
     # it (uid 10001, `uv run` with NO network). Every other gate reads source; this is the only one
-    # that starts the artifact. It lives in `api` rather than `security` because security is
-    # non-required, and a guard that cannot redden an MR is the gap it was meant to close.
+    # that starts the artifact. Keep it with the API tests: the security scans inspect findings
+    # and do not prove that the built image can start. Both jobs must succeed before merging.
     - >-
       runuser -u ci -- env HOME="$CI_PROJECT_DIR/.ci-home" PATH="$PATH" DOCKER_HOST="$DOCKER_HOST"
       EASYSYNQ_IMAGE_PROOF=1
@@ -246,7 +251,7 @@ security:
   stage: check
   extends: [.uv, .dind]
   # npm high/critical findings are GATED; pip-audit and trivy FINDINGS stay report-only. Operational
-  # failures still fail the job so a never-ran scan cannot read green. NOT a required check.
+  # failures still fail the job and block merging; a never-ran scan cannot read green.
   before_script:
     - *docker-cli
     # jq is what run-pip-audit.sh parses its report with; the slim image has no jq, and its
@@ -282,24 +287,46 @@ compose-images-lock:
   script:
     - bash scripts/check-compose-images-lock.sh
 
+# Renovate can log repository config errors and still exit successfully. Validate its config
+# independently on every branch, using the same image as the scheduled updater. With this version,
+# no filename argument selects repository validation (an explicit filename selects global config).
+renovate-config:
+  stage: check
+  extends: .renovate
+  script:
+    - test -f renovate.json
+    - renovate-config-validator --strict
+
 # Dependency updates, replacing Dependabot (which does not run on GitLab). SCHEDULE-ONLY: a
 # pipeline schedule drives it, so an ordinary push never raises MRs. Needs a masked CI/CD variable
-# RENOVATE_TOKEN — a project access token with api + write_repository. Renovate reads its policy
+# RENOVATE_TOKEN — a protected project access token with the api scope. Renovate reads its policy
 # from renovate.json, which is a faithful port of the retired .github/dependabot.yml and carries
 # the python ceiling that refuses the bump shipping an unstartable image.
+#
+# Project CI/CD variables already reach eligible jobs. Do not redeclare the token: our protected
+# branch comparison passed a literal self-reference to the job when that YAML declaration existed,
+# and authenticated successfully when it was absent. Use direct project-variable injection.
+# Keep the variable protected and schedule against protected main. The guard checks presence,
+# not credential validity; only a successful scheduled Renovate run proves the integration.
 renovate:
   stage: check
-  image:
-    name: renovate/renovate:39
-    entrypoint: [""]
+  extends: .renovate
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
   variables:
     RENOVATE_PLATFORM: gitlab
     RENOVATE_ENDPOINT: "$CI_API_V4_URL"
     RENOVATE_REPOSITORIES: "$CI_PROJECT_PATH"
-    RENOVATE_TOKEN: "$RENOVATE_TOKEN"
     LOG_LEVEL: info
+  before_script:
+    - |
+      if [ -z "${RENOVATE_TOKEN:-}" ]; then
+        echo "RENOVATE_TOKEN is not reaching this job (unset or empty)."
+        echo "Keep RENOVATE_TOKEN masked and protected in Settings > CI/CD > Variables."
+        echo "Run the schedule on protected main and confirm the variable's environment scope."
+        echo "Do not redeclare RENOVATE_TOKEN in this job's variables: block."
+        exit 1
+      fi
   script:
     - renovate
 

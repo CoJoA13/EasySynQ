@@ -1697,7 +1697,7 @@ restated: no TypeScript, no OpenAPI, no migration.
 ### S-renovate-adopt — dependency automation returns, and the release gate follows the pipeline
 
 Recorded 2026-09-07 after merging [`!3`](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/3)
-as `SHA`. Replaces Dependabot with Renovate and moves two guards that would otherwise have died
+as `13a6bd1`. Replaces Dependabot with Renovate and moves two guards that would otherwise have died
 with the GitHub workflow. No migration, no contract, no permission key, no application code.
 
 ⚠ **Dependency automation was UNATTENDED between the GitLab move and this slice.** Dependabot does
@@ -1744,6 +1744,70 @@ ci-hardening 85/0, `ruff` and `mypy` strict clean across 449 source files, `AUTH
 `check-no-site-data` clean. Every new pin was mutation-verified: loosening the ceiling, deleting its
 rule, resurrecting the mcp-postgres path, flipping Renovate to a push trigger, and enabling
 automerge each redden the matching assertion.
+
+### S-renovate-token-unshadow — the updater's token was shadowed by its own declaration
+
+> Historical diagnosis corrected by the 2026-09-08 setup audit: GitLab documents project CI/CD
+> variables as outranking YAML job variables, so the blanket precedence explanation below is wrong.
+> A protected-variable/unprotected-main mismatch was also confirmed. Subsequent controlled jobs
+> nevertheless reproduced the literal self-reference (HTTP 401) and proved direct project-variable
+> injection works (HTTP 200) on otherwise identical protected branches. The original symptom and
+> line removal are supported by that evidence; the original explanation of GitLab precedence is not.
+
+Recorded 2026-09-07 after the first scheduled Renovate run failed. No migration, no contract, no
+permission key, no application code; the whole slice is one deleted line, a guard, and two pins.
+
+The first run that could execute reported `FATAL: Initialization error` with
+`"errorMessage": "Authentication failure"` and nothing else. The cause was in the pipeline, not the
+project settings: the job declared `RENOVATE_TOKEN: "$RENOVATE_TOKEN"` inside its own `variables:`
+block. A job-level key outranks the project CI/CD variable of the same name, so that line did not
+forward the token — it REPLACED it with a self-reference, which GitLab detects as a cycle and leaves
+unexpanded. Renovate authenticated with a literal dollar-sign string. Project variables already
+reach every job environment unaided, so re-declaring one is precisely what breaks it, and the line
+was written in the belief that it was required plumbing.
+
+⚠ **The failure named neither the variable nor the shadowing**, and the two plausible causes are
+indistinguishable from the log: a token GitLab never supplied (a `Protect variable` tick on an
+unprotected branch omits the variable silently rather than erroring) produces the identical message
+to a token supplied as garbage. The job now checks the variable is non-empty before invoking
+Renovate and, when it is not, prints where to look — the diagnosis the platform withholds. It tests
+presence only and never echoes the value.
+
+This is the same shape as the two findings that preceded it. `RES-IMAGE-PROOF-NEVER-ENABLED` was a
+correct proof that had never run; the scheduled Renovate job before `!3` was a schedule firing
+against a definition that existed only on an unmerged branch. Here the job ran and the credential
+was inert. Each was invisible while the surrounding pipeline stayed green, and each was found by
+asking what a passing signal was actually exercising.
+
+A sweep of every job's `variables:` for a value referencing its own key found no second instance.
+
+Test deltas. gitlab-ci-hardening **53 to 55**. Both new assertions were mutation-verified against
+the specific broken state each names: reinstating the exact self-referencing line reddens the
+shadowing pin, and deleting the diagnostic message reddens the message pin, one assertion each and
+no collateral. API unit holds at **2,011**; `ci_jobs` **11** and `ci_checks` **13** are unchanged,
+the job count included, since nothing was added or removed. `check-no-site-data` clean.
+
+⚠ This slice also back-fills the squash SHA in the S-renovate-adopt entry above, which shipped as
+the literal placeholder `SHA` — the third time that back-fill has been missed after a GitLab merge.
+
+### S-gitlab-setup-audit — enforce hosting checks and validate dependency automation
+
+Recorded 2026-09-08 on the reviewed setup branch; no application, migration or dependency change.
+GitLab now protects `main` from direct/force pushes, requires successful pipelines and resolved
+merge-request discussions, rejects skipped pipelines as merge evidence, and restricts `v*` tag
+creation to Maintainers. The active clone URL, README badge and CI topology now describe GitLab.
+
+Controlled jobs `16358067495` and `16358132692` isolated the token self-reference as described in
+[`current-status.md`](current-status.md). The authenticated dry run also exposed invalid Renovate
+comment keys despite its zero exit status. Only those two non-policy keys were removed; an ordinary
+`renovate-config` job now runs strict repository validation using the updater's image. The current
+validator takes no filename argument because version 39 treats explicit filenames as global config.
+
+Fresh local evidence: GitLab hardening **58/0**, legacy hardening **85/0**, authority check and
+site-data guard passed. The new validator assertion failed before implementation. Application suite
+counts were re-read from successful main pipeline `2828169447`; final branch and scheduled main
+verification remain separate acceptance evidence. `RES-CONTAINER-SECURITY-TRIAGE` records the
+remaining advisory-image-scan work; a green security job is not a clean-image assertion.
 
 ## IDENTITY ONBOARDING
 

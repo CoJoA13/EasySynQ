@@ -183,11 +183,28 @@ assert_text_contains "integration asserts that client actually wins PATH" \
 assert_text_contains "security installs the jq its report parser needs" "$SECURITY_BLOCK" "jq >/dev/null"
 
 # ---- the dependency updater (Dependabot's replacement) -------------------------------------------
+RENOVATE_CONFIG_BLOCK="$(job_block renovate-config)"
+assert_text_contains "renovate config is validated strictly before dependency automation can go green" \
+  "$RENOVATE_CONFIG_BLOCK" 'renovate-config-validator --strict'
+assert_text_contains "renovate config validation requires the repository config to exist" \
+  "$RENOVATE_CONFIG_BLOCK" 'test -f renovate.json'
+assert_text_not_contains "renovate config validation is not restricted to scheduled pipelines" \
+  "$RENOVATE_CONFIG_BLOCK" 'rules:'
 RENOVATE_BLOCK="$(job_block renovate)"
 assert_text_contains "renovate runs ONLY on a schedule, never on an ordinary push" \
   "$RENOVATE_BLOCK" 'if: $CI_PIPELINE_SOURCE == "schedule"'
 assert_text_contains "renovate targets this project only (air-gap posture unchanged)" \
   "$RENOVATE_BLOCK" 'RENOVATE_REPOSITORIES: "$CI_PROJECT_PATH"'
+# Direct project-variable injection authenticated in the protected-branch comparison; adding the
+# YAML self-reference passed its literal text instead. Pin the working wiring, not a precedence theory.
+# Line-anchored so the before_script's own ${RENOVATE_TOKEN:-} does not match.
+if printf '%s\n' "$RENOVATE_BLOCK" | grep -Eq '^[[:space:]]+RENOVATE_TOKEN:[[:space:]]'; then
+  bad "renovate must not redeclare RENOVATE_TOKEN with an unnecessary YAML value"
+else
+  ok "renovate takes RENOVATE_TOKEN directly from the project variables"
+fi
+assert_text_contains "renovate names the missing token instead of failing as 'Authentication failure'" \
+  "$RENOVATE_BLOCK" 'RENOVATE_TOKEN is not reaching this job'
 # Bumps here have repeatedly been green in CI and still wrong -- an image that could not START, a
 # Tika major that extracted EMPTY text. Every bump stays a reviewed MR.
 if grep -Fq '"automerge": true' "$ROOT/renovate.json"; then

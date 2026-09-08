@@ -1,8 +1,8 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-07"
+as_of: "2026-09-08"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-renovate-adopt"
+last_shipped_slice: "S-gitlab-setup-audit"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2011
@@ -11,8 +11,8 @@ web_tests: 2352
 contract_tests: 285
 integration_passed: 1231
 integration_skipped: 2
-ci_jobs: 11
-ci_checks: 13
+ci_jobs: 12
+ci_checks: 14
 ---
 
 # Current execution snapshot
@@ -271,6 +271,36 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
+
+Fresh 2026-09-08 repository setup audit. GitLab now protects `main` against direct and force
+pushes, limits merging to Maintainers, requires a successful pipeline and resolved discussions,
+and rejects skipped pipelines as merge evidence. Release tags matching `v*` are protected for
+Maintainer creation. The [hosting runbook](runbooks/gitlab-repository-setup.md) records the setup.
+
+The Renovate credential failure is now reproduced rather than inferred from a generic error.
+The audit first found a protected token on unprotected `main`. Protecting the branch corrected
+that mismatch, but scheduled pipeline `2828253975` still failed. Two otherwise identical
+protected-branch diagnostic jobs using Renovate **39.264.0** isolated the remaining wiring issue:
+`16358067495` omitted the YAML self-reference and authenticated (`user` and `version`: HTTP 200);
+`16358132692` included it, observed the literal `$RENOVATE_TOKEN`, and received HTTP 401. Neither
+printed the credential. The earlier blanket claim about job variables outranking project variables
+was wrong according to GitLab's documented precedence; the observed effective value is the evidence
+for removing this declaration in this project. The existing bot token did not need rotation.
+
+The authenticated dry run then found invalid `_comment` and `_schedule_comment` configuration
+keys and exited successfully without extracting dependencies. Those unsupported fields are removed;
+all update policy values are preserved. A new `renovate-config` job runs the same image's strict
+repository validator on ordinary branches, so invalid configuration now blocks a merge. Local
+GitLab structural guards pass **58/0** (the new validator assertion failed before its job existed).
+Full branch CI and a real scheduled main run remain the final acceptance checks for this change.
+
+The successful main pipeline `2828169447` at `66675359` supplied fresh audit evidence: API unit
+**2,011 passed / 1 release-only skip**, integration **1,231 passed / 2 skipped**, **285** contracts,
+web **2,352 tests across 281 files**, **80** browser tests, and migration round-trip checks passed.
+The application counts are unchanged. The additional `renovate-config` job moves `ci_jobs` to
+**12** and ordinary `ci_checks` to **14**. The security job succeeded but its
+pip-audit and Trivy findings policy remains report-only; see `RES-CONTAINER-SECURITY-TRIAGE` in
+[`open-residuals.md`](open-residuals.md). This is CI evidence, not deployment acceptance.
 
 Fresh 2026-09-07 evidence for S-renovate-adopt. It moves `ci_jobs` 10 -> **11** and nothing else.
 `api_unit_tests` stays **2,011** and `ci_checks` stays **13**: the slice adds assertions inside
@@ -694,17 +724,22 @@ The frontmatter records the current workflow topology snapshot. The workflow fil
 executable truth. Contributor workflow and evidence expectations live in [`../AGENTS.md`](../AGENTS.md)
 and [`dev-workflow.md`](dev-workflow.md).
 
-The dependency-light `contracts` job runs repository-authority and R61 protection first, then the Fedora
-bootstrap/doctor/proof structural contracts and the disabled PostgreSQL MCP contract before dependency
-hydration. These checks prove tracked interfaces and failure propagation; they do not emulate Fedora,
-SELinux, libvirt, Docker, or a live application stack.
+The dependency-light `contracts` job runs repository-authority, site-data, doctor, disabled
+PostgreSQL MCP, CI-hardening and Compose-image-lock guards before dependency hydration. These
+checks prove tracked interfaces and failure propagation; they do not emulate a developer host or
+live application stack. The retired Fedora bootstrap/proof is not part of the current pipeline.
 
-The dedicated `web-browser` job installs the locked web tree and Chromium with its Linux dependencies,
-runs the complete browser suite, and uploads ignored diagnostics only on failure. Stable check `web` uses
-`always()` and explicitly rejects a non-success result from either `web-shards` or `web-browser`; the
-workflow now exposes twelve jobs and sixteen aggregate/leaf checks, fifteen of which run on an ordinary
-pull request; `release-gate` is skipped outside the release ceremony. Sixteen checks expand from twelve
-jobs because `integration-shards` fans out four ways and `web-shards` two.
+`.gitlab-ci.yml` defines **12** jobs. An ordinary branch pipeline executes **14** instances:
+`integration-shards` expands to four, `web-tests` to two, and schedule-only `renovate` and tag-only
+`release-gate` are omitted. A normal scheduled main pipeline adds Renovate for **15** instances;
+a `v*` tag pipeline adds the release gate instead. There are no GitHub-style aggregator jobs:
+GitLab's successful-pipeline merge requirement gates the entire pipeline. `web-browser` runs the
+Chromium suite and retains ignored failure diagnostics for seven days. `renovate-config` runs
+strict repository configuration validation on every branch using the same image as the updater.
+
+The `security` job must finish successfully, but Trivy and pip-audit findings are report-only.
+Its npm high/critical gate and scanner operational failures still fail the job. A green pipeline
+therefore does not establish that the shipped images are free of high/critical findings.
 
 ## Program 0 acceptance status
 
@@ -717,4 +752,4 @@ jobs because `integration-shards` fans out four ways and `web-shards` two.
   the host contract and CI is the acceptance evidence.
 - Local focused Python acceptance: **PASS on 2026-08-08 with CPython 3.12.13**. The Program 0
   dependency-tooling, deployment-configuration, and CI-workflow matrix completed 80 tests. This does not
-  replace the full repository suites or the pending Fedora VM proof.
+  replace the full repository suites or live deployment acceptance.
