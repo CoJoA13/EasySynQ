@@ -42,6 +42,39 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
   create/enable surface; provisioning is a direct operator INSERT), so an operator who later toggles a
   sink `enabled` false→true should bump it, or the grace window is measured from creation.
 
+## BUILT-IMAGE SECURITY
+
+### S-built-image-security-gate — actual artifacts and a fixed-version threshold
+
+Recorded 2026-09-08. The GitLab security job's previous web scan inspected only the final base
+image, so it could miss packages added during the application build. The job now builds both
+application Dockerfiles with their production contexts and scans the local Docker artifacts.
+HIGH/CRITICAL findings with a reported fixed version block merging; findings without a reported
+fix remain OPEN. Scanner errors, missing or malformed reports, and identity failures cannot become
+zero-finding success. Reports stay private and are removed after aggregate summaries. The existing
+npm policy, filesystem scan, pip-audit behavior and API runtime proof remain in place.
+
+The private baseline on main `5577178` bound scans to actual image IDs and passed both unprivileged
+offline runtime smokes. A separately reviewed compatible tooling update in
+[!15](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/15), candidate `dcd22d7`, pins the web
+image's global npm to **11.19.1** while retaining the Node 26/npm 11 contract and the application
+locks. CPJ evidence `job-mtsztwyv-1cb55a2a` completed at **18:19:54 UTC**: strict Renovate validation
+and actual local extraction passed, the rebuilt image no longer contained the baseline fix-available
+tooling findings, its unprivileged offline preview worked, and the live source-lock audit returned
+`blocked: 0`. Root also exercised the unchanged default Docker command against that same image.
+Owned proof containers were removed; detailed inventories remain outside Git under R61.
+
+Local gate verification passed **393** behavioral assertions, **7** CI semantic tests, **62**
+GitLab hardening assertions and **85** preserved workflow assertions. The synthetic matrix covers
+fixed and no-fix findings in either image, global tooling, valid secret-only records, malformed or
+missing evidence, scanner/parser failures, inherited ignore settings, output privacy and cleanup.
+Shell syntax, Ruff, repository authority, site-data and whitespace checks passed.
+
+The gate is a reviewed minimum threshold, not an exception policy or a claim of clean release
+images. OS applicability and remediation remain open in
+[`RES-CONTAINER-SECURITY-TRIAGE`](open-residuals.md#res-container-security-triage). No production
+deployment, recovery, upgrade, or risk-acceptance conclusion follows from these checks.
+
 ## RECOVERY AND UPGRADE SAFETY
 
 ### Recovery reconciliation — current capability inventory and source-independent recovery ownership
