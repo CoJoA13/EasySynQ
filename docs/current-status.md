@@ -292,7 +292,13 @@ keys and exited successfully without extracting dependencies. Those unsupported 
 all update policy values are preserved. A new `renovate-config` job runs the same image's strict
 repository validator on ordinary branches, so invalid configuration now blocks a merge. Local
 GitLab structural guards pass **58/0** (the new validator assertion failed before its job existed).
-Full branch CI and a real scheduled main run remain the final acceptance checks for this change.
+Final branch pipeline `2828291882` passed all **14** jobs at `c4889eb2` and MR `!4` merged as
+`2a1d614a` with an identical source tree. Real scheduled job `16358301239` then authenticated,
+extracted **134** dependencies from **17** files and opened MRs `!5` through `!9`. It exited
+successfully but reported missing GitHub authentication, tool/version lookup failures and
+unrefreshed lockfile artifacts. Automation is therefore only partially configured; the remaining
+credential and verification work is `RES-RENOVATE-GITHUB-METADATA` in
+[`open-residuals.md`](open-residuals.md), not a clean updater claim.
 
 The successful main pipeline `2828169447` at `66675359` supplied fresh audit evidence: API unit
 **2,011 passed / 1 release-only skip**, integration **1,231 passed / 2 skipped**, **285** contracts,

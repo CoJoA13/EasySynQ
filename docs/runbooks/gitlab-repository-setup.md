@@ -27,8 +27,18 @@ The active weekly schedule is `0 5 * * 1`, timezone `America/Chicago`, targeting
 `renovate.json` owns update grouping and version ceilings; automerge is disabled. The GitLab
 schedule is the sole timing control, so avoid a second Renovate schedule that silently skips work.
 
+Also provide `RENOVATE_GITHUB_COM_TOKEN` as a masked, protected variable with expansion disabled
+and environment scope `*`. Use a dedicated GitHub token limited to public read access; private
+repository or write permissions are unnecessary for this purpose. Renovate uses GitHub-hosted
+dependency and tool metadata even when the project itself lives on GitLab. Its GitLab project
+token cannot authenticate those requests. Do not redeclare either secret in YAML.
+
 After changing the token or pipeline, run the schedule and inspect the **renovate job itself**.
 A passing branch pipeline cannot validate it because the updater runs only for scheduled pipelines.
+Check for dependency extraction, lookup warnings and lockfile/artifact errors as well as its exit
+status. The first authenticated run opened merge requests despite failing tool lookups and leaving
+some lockfiles unrefreshed. A successful job or an open update MR alone does not prove automation
+is fully operational. See `RES-RENOVATE-GITHUB-METADATA` in the residual ledger.
 The `renovate-config` job validates repository configuration on ordinary branch pipelines as well
 as schedules. Keep explanatory prose in this runbook: arbitrary JSON keys such as `_comment` are
 invalid options. Renovate may report a repository config error and still exit successfully, which
@@ -54,4 +64,6 @@ web application image. Current follow-up work belongs in
 
 References: [GitLab variable precedence and protection](https://docs.gitlab.com/ci/variables/),
 [protected branches](https://docs.gitlab.com/user/project/repository/branches/protected/), and
-[Renovate GitLab authentication](https://docs.renovatebot.com/modules/platform/gitlab/).
+[Renovate GitLab authentication](https://docs.renovatebot.com/modules/platform/gitlab/). The
+[Renovate setup guide](https://docs.renovatebot.com/getting-started/running/#githubcom-token-for-changelogs-and-tools)
+explains the additional GitHub token.
