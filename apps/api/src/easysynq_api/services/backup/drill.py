@@ -50,6 +50,9 @@ _SCRATCH_PREFIX = "scratch_easysynq_"
 # verifying a retained archive never sweeps/clobbers a drill's scratch or a standing verification
 # target.
 _VERIFY_PREFIX = "verify_easysynq_"
+_BUCKET_NAME_RE = re.compile(r"(?=.{3,63}\Z)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
+_PROTECTED_SCRATCH_REASON = "scratch target uses a protected bucket role"
+_UNVERIFIED_SCRATCH_REASON = "cannot verify scratch target is non-WORM"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -233,10 +236,140 @@ def _scratch_blob_locators(handle: ScratchHandle) -> list[tuple[str, str, str]]:
         return [(r[0], r[1], r[2]) for r in cur.fetchall()]
 
 
+# --- scratch-target WORM guard ----------------------------------------------------------------
+
+
+def _validated_bucket_name(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or _BUCKET_NAME_RE.fullmatch(value) is None
+        or ".." in value
+        or ".-" in value
+        or "-." in value
+    ):
+        raise BackupError(_UNVERIFIED_SCRATCH_REASON)
+    return value
+
+
+def _static_worm_bucket_names(settings: Settings) -> set[str]:
+    return {
+        _validated_bucket_name(settings.s3_bucket_documents),
+        _validated_bucket_name(settings.s3_bucket_records),
+        _validated_bucket_name(settings.s3_bucket_audit_checkpoints),
+    }
+
+
+def _validate_scratch_bucket_name(
+    settings: Settings,
+    bucket: object,
+    *,
+    source_buckets: set[str],
+    protected_buckets: set[str],
+) -> str:
+    target = _validated_bucket_name(bucket)
+    sources = {_validated_bucket_name(source) for source in source_buckets}
+    protected = {
+        *(_validated_bucket_name(name) for name in protected_buckets),
+        *_static_worm_bucket_names(settings),
+        *sources,
+    }
+    if target in protected:
+        raise BackupError(_PROTECTED_SCRATCH_REASON)
+    return target
+
+
+def _scratch_worm_bucket_names(
+    settings: Settings,
+    owner_dsn: str,
+    scratch_db: str,
+) -> set[str]:
+    """Read every declared WORM bucket role from the restored/standing scratch catalog."""
+    try:
+        with _autocommit(owner_dsn, dbname=scratch_db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT connection FROM public.audit_checkpoint_sink WHERE kind = 'worm_bucket'"
+            )
+            rows = cur.fetchall()
+    except Exception as exc:
+        raise BackupError(_UNVERIFIED_SCRATCH_REASON) from exc
+
+    protected: set[str] = set()
+    default_bucket = _validated_bucket_name(settings.s3_bucket_audit_checkpoints)
+    for row in rows:
+        if not isinstance(row, (tuple, list)) or len(row) != 1:
+            raise BackupError(_UNVERIFIED_SCRATCH_REASON)
+        connection = row[0]
+        if connection is None:
+            protected.add(default_bucket)
+            continue
+        if not isinstance(connection, dict):
+            raise BackupError(_UNVERIFIED_SCRATCH_REASON)
+        configured_bucket = connection.get("bucket")
+        if not configured_bucket:
+            protected.add(default_bucket)
+            continue
+        protected.add(_validated_bucket_name(configured_bucket))
+    return protected
+
+
+def _validate_scratch_bucket_metadata(settings: Settings, bucket: str) -> None:
+    from botocore.exceptions import ClientError
+
+    try:
+        response = _s3(settings).get_object_lock_configuration(Bucket=bucket)
+    except ClientError as exc:
+        code = str((exc.response.get("Error") or {}).get("Code") or "")
+        if code == "ObjectLockConfigurationNotFoundError":
+            return
+        raise BackupError(_UNVERIFIED_SCRATCH_REASON) from exc
+    except Exception as exc:
+        raise BackupError(_UNVERIFIED_SCRATCH_REASON) from exc
+
+    if not isinstance(response, dict):
+        raise BackupError(_UNVERIFIED_SCRATCH_REASON)
+    configuration = response.get("ObjectLockConfiguration")
+    if not isinstance(configuration, dict):
+        raise BackupError(_UNVERIFIED_SCRATCH_REASON)
+    if configuration.get("ObjectLockEnabled") == "Enabled":
+        raise BackupError(_PROTECTED_SCRATCH_REASON)
+    raise BackupError(_UNVERIFIED_SCRATCH_REASON)
+
+
+def _preflight_scratch_target(
+    settings: Settings,
+    bucket: object,
+    *,
+    source_buckets: set[str],
+    protected_buckets: set[str],
+) -> str:
+    target = _validate_scratch_bucket_name(
+        settings,
+        bucket,
+        source_buckets=source_buckets,
+        protected_buckets=protected_buckets,
+    )
+    _validate_scratch_bucket_metadata(settings, target)
+    return target
+
+
 # --- blob copy + re-hash -----------------------------------------------------------------------
 
 
-def _copy_blobs(settings: Settings, blobs: list[BlobRef], bucket: str, prefix: str) -> None:
+def _copy_blobs(
+    settings: Settings,
+    blobs: list[BlobRef],
+    bucket: str,
+    prefix: str,
+    *,
+    protected_buckets: set[str],
+) -> None:
+    source_buckets = {b.bucket for b in blobs}
+    _validate_scratch_bucket_name(
+        settings,
+        bucket,
+        source_buckets=source_buckets,
+        protected_buckets=protected_buckets,
+    )
     client = _s3(settings)
     for b in blobs:
         client.copy_object(
@@ -285,15 +418,29 @@ def _rehash_stored_blob_locators(settings: Settings, handle: ScratchHandle) -> l
     return bad
 
 
-def _delete_scratch_objects(settings: Settings, bucket: str, prefix: str) -> None:
+def _delete_scratch_objects(
+    settings: Settings,
+    bucket: str,
+    prefix: str,
+    *,
+    source_buckets: set[str],
+    protected_buckets: set[str],
+) -> None:
+    target = _validate_scratch_bucket_name(
+        settings,
+        bucket,
+        source_buckets=source_buckets,
+        protected_buckets=protected_buckets,
+    )
+    _validate_scratch_bucket_metadata(settings, target)
     # Single-object deletes: the S3 multi-delete (DeleteObjects) requires a Content-MD5 header that
     # MinIO enforces and recent botocore no longer auto-adds. A per-drill prefix holds few objects,
     # so one delete each is fine and avoids that incompatibility.
     client = _s3(settings)
     paginator = client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+    for page in paginator.paginate(Bucket=target, Prefix=prefix):
         for obj in page.get("Contents", []):
-            client.delete_object(Bucket=bucket, Key=obj["Key"])
+            client.delete_object(Bucket=target, Key=obj["Key"])
 
 
 # --- the triad ---------------------------------------------------------------------------------
@@ -502,6 +649,9 @@ def run_drill(
     scratch_db = f"{_SCRATCH_PREFIX}{drill_id}"
     handle: ScratchHandle | None = None
     archive_path: Path | None = None
+    source_buckets: set[str] = set()
+    protected_buckets: set[str] = set()
+    object_cleanup_allowed = False
     try:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -517,6 +667,13 @@ def run_drill(
             if not archive.verify_archive(archive_path):
                 return DrillResult("FAIL", "archive checksum verification failed")
 
+            source_buckets = {b.bucket for b in blobs}
+            _validate_scratch_bucket_name(
+                settings,
+                settings.s3_bucket_restore_scratch,
+                source_buckets=source_buckets,
+                protected_buckets=set(),
+            )
             restore_dump = archive.unpack_dump(archive_path, tmp_path / "restore")
             _sweep_stale_scratch(owner_dsn)
             _create_scratch_db(owner_dsn, scratch_db)
@@ -528,7 +685,21 @@ def run_drill(
                 expected_counts=counts,
             )
             archive.restore_database(owner_dsn, scratch_db, restore_dump)
-            _copy_blobs(settings, blobs, handle.scratch_bucket, handle.object_prefix)
+            protected_buckets = _scratch_worm_bucket_names(settings, owner_dsn, scratch_db)
+            _preflight_scratch_target(
+                settings,
+                handle.scratch_bucket,
+                source_buckets=source_buckets,
+                protected_buckets=protected_buckets,
+            )
+            object_cleanup_allowed = True
+            _copy_blobs(
+                settings,
+                blobs,
+                handle.scratch_bucket,
+                handle.object_prefix,
+                protected_buckets=protected_buckets,
+            )
 
             if after_restore is not None:
                 after_restore(handle)
@@ -549,10 +720,17 @@ def run_drill(
                 _drop_scratch_db(owner_dsn, scratch_db)
             except Exception:  # best-effort teardown
                 logger.warning("restore-drill: scratch DB teardown failed", exc_info=True)
-            try:
-                _delete_scratch_objects(settings, handle.scratch_bucket, handle.object_prefix)
-            except Exception:
-                logger.warning("restore-drill: scratch bucket teardown failed", exc_info=True)
+            if object_cleanup_allowed:
+                try:
+                    _delete_scratch_objects(
+                        settings,
+                        handle.scratch_bucket,
+                        handle.object_prefix,
+                        source_buckets=source_buckets,
+                        protected_buckets=protected_buckets,
+                    )
+                except Exception:
+                    logger.warning("restore-drill: scratch bucket teardown failed", exc_info=True)
 
 
 # --- retained-archive verify (the scheduled backup-verify; Phase-1 I-7) ------------------------
@@ -628,6 +806,9 @@ def verify_retained_archive(
     verify_id = uuid.uuid4().hex
     scratch_db = f"{_VERIFY_PREFIX}{verify_id}"
     handle: ScratchHandle | None = None
+    source_buckets: set[str] = set()
+    protected_buckets: set[str] = set()
+    object_cleanup_allowed = False
     try:
         # 1. archive bytes match their committed .sha256 sidecar (works for .tar + .tar.enc)
         if not archive.verify_archive(src):
@@ -659,6 +840,13 @@ def verify_retained_archive(
                 for b in manifest.get("blobs", [])
             ]
             counts = (manifest.get("config") or {}).get("table_counts") or {}
+            source_buckets = {b.bucket for b in blobs}
+            _validate_scratch_bucket_name(
+                settings,
+                settings.s3_bucket_restore_scratch,
+                source_buckets=source_buckets,
+                protected_buckets=set(),
+            )
 
             # 4. restore PG into a FRESH verify_ scratch DB
             restore_dump = archive.unpack_dump(plain, tmp_path / "restore")
@@ -676,9 +864,21 @@ def verify_retained_archive(
             # 5. copy the MANIFESTED blobs from the live vault into the non-WORM scratch bucket (a
             #    READ of the content-addressed source; the locked vault is never written). A blob
             #    disposed/corrupted since the backup → the re-hash leg FAILs (the real rot signal).
-            if handle.scratch_bucket == settings.s3_bucket_documents:  # pragma: no cover - guard
-                return DrillResult("FAIL", "refusing to verify into the WORM documents bucket")
-            _copy_blobs(settings, blobs, handle.scratch_bucket, handle.object_prefix)
+            protected_buckets = _scratch_worm_bucket_names(settings, owner_dsn, scratch_db)
+            _preflight_scratch_target(
+                settings,
+                handle.scratch_bucket,
+                source_buckets=source_buckets,
+                protected_buckets=protected_buckets,
+            )
+            object_cleanup_allowed = True
+            _copy_blobs(
+                settings,
+                blobs,
+                handle.scratch_bucket,
+                handle.object_prefix,
+                protected_buckets=protected_buckets,
+            )
 
             if after_restore is not None:
                 after_restore(handle)
@@ -709,7 +909,14 @@ def verify_retained_archive(
                 _drop_scratch_db(owner_dsn, scratch_db)
             except Exception:  # best-effort teardown
                 logger.warning("retained-verify: scratch DB teardown failed", exc_info=True)
-            try:
-                _delete_scratch_objects(settings, handle.scratch_bucket, handle.object_prefix)
-            except Exception:
-                logger.warning("retained-verify: scratch bucket teardown failed", exc_info=True)
+            if object_cleanup_allowed:
+                try:
+                    _delete_scratch_objects(
+                        settings,
+                        handle.scratch_bucket,
+                        handle.object_prefix,
+                        source_buckets=source_buckets,
+                        protected_buckets=protected_buckets,
+                    )
+                except Exception:
+                    logger.warning("retained-verify: scratch bucket teardown failed", exc_info=True)

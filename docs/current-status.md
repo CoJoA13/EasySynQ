@@ -2,7 +2,7 @@
 easysynq_status_schema: 1
 as_of: "2026-09-08"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-built-image-security-gate"
+last_shipped_slice: "S-restore-scratch-worm-guard"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2011
@@ -32,7 +32,9 @@ boot/read proof have not shipped.
 [`RES-SOURCE-INDEPENDENT-RECOVERY`](open-residuals.md#res-source-independent-recovery) now owns that
 overall recovery boundary, with current execution tracked in
 [GitLab issue #3](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/3). Its narrower related records
-remain independently open. Production recovery and upgrade safety are unproven.
+retain separate closure contracts. S-restore-scratch-worm-guard closes the scratch-target record;
+audit orchestration, checkpoint lineage, key rotation and upgrade-lock coverage remain open.
+Production recovery and upgrade safety are unproven.
 
 ## Shipped boundary
 
@@ -276,6 +278,17 @@ enforced by the executable catalog assertion in `apps/api/tests/unit/test_authz.
 set is defined by the headings and self-range declarations in [`decisions-register.md`](decisions-register.md).
 
 ## Verification baseline
+
+S-restore-scratch-worm-guard rejects configured documents, records and checkpoint buckets, all
+manifest source buckets, restored custom checkpoint bucket declarations and any destination with
+Object Lock enabled or unverifiable. Rejected destinations are not copied into or cleaned up.
+The existing storage principal now needs read-only `s3:GetBucketObjectLockConfiguration`; unsupported
+or denied metadata lookup fails closed. See the [operator runbook](runbooks/backup-restore.md) and
+[dated closure evidence](slice-history.md#s-restore-scratch-worm-guard--protected-target-rejection-before-copy).
+Fresh corrected-candidate verification on source base `6491eca` passed **2,083 unit tests** with two
+expected local opt-in skips and **47 affected PostgreSQL/MinIO integration tests**. Ruff, format,
+mypy, repository authority and site-data checks passed. These bounded fresh results do not replace
+the historical full integration baseline below or establish source-independent recovery.
 
 The built-image security gate scans the actual API and web artifacts using their production build
 contexts. HIGH/CRITICAL findings with a reported fixed version block the required `security` job;

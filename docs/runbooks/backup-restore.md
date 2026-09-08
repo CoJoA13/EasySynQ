@@ -92,12 +92,41 @@ The same channel carries **`integrity.alarm`** from the nightly chain verificati
 `./scripts/easysynq backup restore-test` writes a `pg_dump`/manifest test archive, restores the
 database into a throwaway scratch DATABASE, and copies referenced bytes from the configured source
 object store into the configured `restore-scratch` bucket. Operators must provision that bucket as
-distinct and non-WORM; current runtime rejects the documents WORM bucket but does not yet reject
-every WORM bucket role. It then runs the integrity triad
+distinct and non-WORM. The shared guard below checks the destination before any scratch copy.
+It then runs the integrity triad
 (copied-blob SHA-256 re-hash · stored-locator SHA-256 re-hash against the currently configured object
 store · per-table row-count parity · `document_version→blob` FK check) and tears the scratch namespace
 down. Only a **PASS** satisfies the setup gate. This is a source-dependent integrity check, not proof
 of recovery after source-store loss. "Configured but unverified" does not count.
+
+## Scratch destination safety
+
+The fresh drill, retained-backup verifier and operator restore reject a scratch destination that
+matches the configured documents, records or audit-checkpoint role, any source bucket in the complete
+archive manifest, or any `worm_bucket` checkpoint destination declared in the restored database.
+Custom declarations remain protected when disabled or assigned to another organization. Names are
+compared conservatively even across different endpoints; choose a distinct scratch name if this
+rejects an otherwise unrelated destination.
+
+The restore principal also needs `s3:GetBucketObjectLockConfiguration` on the scratch bucket. The
+guard permits only a recognized response that Object Lock is not configured. An enabled lock,
+unreadable or missing bucket, unsupported operation, ambiguous metadata, or unreadable/malformed
+restored checkpoint catalog fails verification before copying. A legacy manifest without table
+counts still works when its restored database has the required checkpoint-sink schema; a missing
+sink table is not treated as an empty set of protected roles.
+
+A rejected target is never eligible for object cleanup. After an allowed copy starts, cleanup checks
+the destination again before listing or deleting this run's prefix. A failed safety check can leave
+scratch objects for operator investigation. Discard reads protected roles and source locations from
+the standing database before dropping it; if those reads or safety checks fail, database removal
+retains its existing behavior while object cleanup is skipped. No retention bypass is used.
+
+Custom-role discovery describes the archive's snapshot, while Settings and Object Lock metadata
+describe the present destination. It cannot discover a newly declared custom sink that exists only
+in the live database and is also incorrectly provisioned without Object Lock. Provision and keep
+scratch separate from every live source/checkpoint destination. This check does not prevent a
+privileged operator from changing the store between validation and copying, and does not establish
+source-independent recovery.
 
 ## Restore integrity verification (not a cutover procedure)
 

@@ -34,6 +34,7 @@ from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services import backup as backup_service
 from easysynq_api.services.audit.linker import link_all
 from easysynq_api.services.backup import archive, crypto, drill, restore
+from easysynq_api.services.backup import service as backup_service_impl
 from easysynq_api.services.backup.dsn import conn_kwargs
 
 from .test_backup import _insert_backup_policy, _make_effective_doc, _s3_client
@@ -113,6 +114,98 @@ async def test_restore_to_verified_target_passes(
         assert verified is not None
     finally:
         await _drop_target(out.get("scratch_db"))
+
+
+async def test_restore_guard_failure_audits_failed_without_verified_or_ack(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"guard-failure-audit-source-v1")
+    dest = tempfile.mkdtemp(prefix="easysynq-restore-guard-audit-")
+    await _insert_backup_policy(org_id, dest)
+    archive_path = await _durable_archive(org_id)
+    async with get_sessionmaker()() as session:
+        before_id = int(await session.scalar(select(func.coalesce(func.max(AuditEvent.id), 0))))
+
+    configured = get_settings()
+    guarded_settings = configured.model_copy(
+        update={"s3_bucket_restore_scratch": configured.s3_bucket_records}
+    )
+    monkeypatch.setattr(backup_service_impl, "get_settings", lambda: guarded_settings)
+
+    out = await backup_service.run_restore(
+        org_id,
+        archive_path=archive_path,
+        audit_checkpoint_ack=True,
+        fetch_off_host=lambda _settings, _org_id: 0,
+    )
+
+    assert out["result"] == "FAIL", out
+    assert out["scratch_db"] is None
+    async with get_sessionmaker()() as session:
+        events = list(
+            (
+                await session.scalars(
+                    select(AuditEvent.event_type)
+                    .where(
+                        AuditEvent.id > before_id,
+                        AuditEvent.org_id == org_id,
+                        AuditEvent.event_type.in_(
+                            [
+                                EventType.RESTORE_STARTED,
+                                EventType.RESTORE_FAILED,
+                                EventType.RESTORE_VERIFIED,
+                                EventType.RESTORE_CHECKPOINT_ACK,
+                            ]
+                        ),
+                    )
+                    .order_by(AuditEvent.id)
+                )
+            ).all()
+        )
+    assert events == [EventType.RESTORE_STARTED, EventType.RESTORE_FAILED]
+
+
+async def test_restored_worm_catalog_query_supports_original_shape_and_fails_closed(
+    app_client: AsyncClient,
+) -> None:
+    del app_client
+    settings = get_settings()
+    scratch_db = f"guard_easysynq_{uuid.uuid4().hex}"
+    drill._create_scratch_db(settings.sync_dsn, scratch_db)
+    try:
+        with drill._autocommit(settings.sync_dsn, dbname=scratch_db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE public.audit_checkpoint_sink ("
+                "id uuid, org_id uuid, kind text NOT NULL, connection jsonb, "
+                "enabled boolean NOT NULL DEFAULT false, last_anchored_at timestamptz)"
+            )
+
+        assert drill._scratch_worm_bucket_names(settings, settings.sync_dsn, scratch_db) == set()
+
+        with drill._autocommit(settings.sync_dsn, dbname=scratch_db) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO public.audit_checkpoint_sink "
+                "(kind, connection, enabled) VALUES "
+                "('worm_bucket', '{\"bucket\": \"test-original-shape-worm\"}'::jsonb, false)"
+            )
+        assert drill._scratch_worm_bucket_names(settings, settings.sync_dsn, scratch_db) == {
+            "test-original-shape-worm"
+        }
+
+        with drill._autocommit(settings.sync_dsn, dbname=scratch_db) as conn, conn.cursor() as cur:
+            cur.execute("ALTER TABLE public.audit_checkpoint_sink DROP COLUMN connection")
+        with pytest.raises(archive.BackupError, match="cannot verify"):
+            drill._scratch_worm_bucket_names(settings, settings.sync_dsn, scratch_db)
+
+        with drill._autocommit(settings.sync_dsn, dbname=scratch_db) as conn, conn.cursor() as cur:
+            cur.execute("DROP TABLE public.audit_checkpoint_sink")
+        with pytest.raises(archive.BackupError, match="cannot verify"):
+            drill._scratch_worm_bucket_names(settings, settings.sync_dsn, scratch_db)
+    finally:
+        drill._drop_scratch_db(settings.sync_dsn, scratch_db)
 
 
 async def test_restore_flagged_on_checkpoint_ahead(
