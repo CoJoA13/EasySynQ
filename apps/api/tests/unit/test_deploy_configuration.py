@@ -668,6 +668,48 @@ def test_first_admin_live_harness_owns_only_its_validated_stack_and_env() -> Non
     assert "set -x" not in harness
 
 
+@pytest.mark.parametrize("existing_entries", [False, True])
+def test_first_admin_live_settings_override_inherited_environment(
+    tmp_path: Path, existing_entries: bool
+) -> None:
+    harness = _read("scripts/test-first-admin-keycloak.sh")
+    setter_start = harness.index("set_env_value() {\n")
+    setter_end = harness.index("\n}\n", setter_start) + len("\n}\n")
+    setter = harness[setter_start:setter_end]
+    expected = {
+        "EASYSYNQ_IMAGE_TAG": "easysynq-first-admin-contract",
+        "HTTP_PORT": "127.0.0.1:8080",
+        "HTTPS_PORT": "127.0.0.1:9443",
+        "TRUSTED_PROXY_CIDRS": "127.0.0.1/32,::1/128,10.0.0.0/24",
+        "APP_BASE_URL": "http://127.0.0.1:8080",
+    }
+    inherited = {
+        "EASYSYNQ_IMAGE_TAG": "dev",
+        "HTTP_PORT": "8080",
+        "HTTPS_PORT": "9443",
+        "TRUSTED_PROXY_CIDRS": "192.0.2.0/24",
+        "APP_BASE_URL": "https://qms.example.test",
+    }
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "".join(f"{key}={value}\n" for key, value in inherited.items()) if existing_entries else ""
+    )
+    shell = setter + "\n".join(f"set_env_value {key} '{value}'" for key, value in expected.items())
+    # A grandchild represents both direct Compose calls and the npm/Playwright Docker child.
+    shell += "\nbash -c 'env'\n"
+    result = subprocess.run(  # noqa: S603 - extracted repository setter and fixed fixture values
+        ["/bin/bash", "-euc", shell],
+        env={"PATH": os.environ["PATH"], "ENV_FILE": str(env_file), **inherited},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    written = dict(line.split("=", 1) for line in env_file.read_text().splitlines())
+    child = dict(line.split("=", 1) for line in result.stdout.splitlines())
+    assert {key: written[key] for key in expected} == expected
+    assert {key: child[key] for key in expected} == expected
+
+
 def test_first_admin_live_network_validator_accepts_only_its_owned_private_ipv4_subnet() -> None:
     harness = _read("scripts/test-first-admin-keycloak.sh")
     network_subnet_start = harness.index('NETWORK_SUBNET="$(\n')

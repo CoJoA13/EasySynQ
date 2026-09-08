@@ -93,6 +93,9 @@ set_env_value() {
   else
     printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
   fi
+  # Compose gives the parent environment precedence over --env-file. Keep every child,
+  # including Playwright's Keycloak recreation and cleanup, on the same owned settings.
+  export "$key=$value"
 }
 
 APP_PORT="$(choose_loopback_port)"
