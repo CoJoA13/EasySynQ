@@ -1694,6 +1694,57 @@ confirms the built-image runtime proof EXECUTED rather than skipping — a green
 have shown that. The web, contract and integration suites were NOT re-run locally and are not
 restated: no TypeScript, no OpenAPI, no migration.
 
+### S-renovate-adopt — dependency automation returns, and the release gate follows the pipeline
+
+Recorded 2026-09-07 after merging [`!3`](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/3)
+as `SHA`. Replaces Dependabot with Renovate and moves two guards that would otherwise have died
+with the GitHub workflow. No migration, no contract, no permission key, no application code.
+
+⚠ **Dependency automation was UNATTENDED between the GitLab move and this slice.** Dependabot does
+not run on GitLab at all, so the thirteen dependency PRs that were in flight two days earlier had no
+successor. GitLab's own Dependency Scanning is not the replacement people assume: it REPORTS
+vulnerable packages, it does not raise routine version-bump merge requests, which is the function
+Dependabot was performing.
+
+**`renovate.json` is a faithful port, deliberately not a redesign.** Weekly, grouped minor/patch per
+ecosystem, and the same two major refusals (reportlab capped below 5 for stamp byte-determinism,
+Mantine capped within v7 as a scoped UI migration). The eight per-directory Dependabot blocks become
+package rules because Renovate detects manifests itself, and the `github-actions` ecosystem block is
+dropped as obsolete. **No automerge**, and that is a considered refusal rather than caution: this
+repository has now found three bumps that were green on every check and still wrong — a python base
+image that built cleanly and could not START, a Tika major that extracted EMPTY text without
+raising, and three separate exact-pin drifts.
+
+⚠ **The python ceiling had to change SHAPE, not just move.** Dependabot expressed it as
+`versions: [">=3.13"]`; Renovate expresses it as an `allowedVersions` ceiling. A major-only refusal
+would not work in either tool, because the tag major is `3` on both sides — `3.12` to `3.14` is a
+semver MINOR update. That subtlety is why the original refusal was not modelled on the neighbouring
+reportlab and Mantine rules, and it survives the port intact.
+
+**Two guards moved that would otherwise have died silently.** `test_airgap_packaging.py` asserted
+that the release gate fires on a `v*` tag with `EASYSYNQ_RELEASE=1` — a guard that exists precisely
+because that check was once INERT and a release could ship floating image tags with everything
+green. It read the GitHub workflow. Retiring that file without moving the assertion would have
+returned the guard to exactly the inertness it was written to end, so it now reads `.gitlab-ci.yml`.
+The ceiling is likewise pinned against `renovate.json`, and against `.github/dependabot.yml` as well
+until that file is retired in its own slice.
+
+**What this deliberately does NOT do.** It does not retire `.github/workflows/ci.yml`,
+`.github/dependabot.yml`, or `test-ci-hardening.sh`. That retirement is a separate slice, sequenced
+AFTER this one on purpose: deleting the Dependabot config first would have left a window with no
+dependency automation and no ceiling at once. ⚠ It also cannot move
+`.github/security/npm-audit-exceptions.json`, which is LIVE policy read by `check-npm-audit.mjs` in
+the running `security` job — a file parked under `.github/` that has nothing to do with GitHub, and
+that a wholesale `.github/` deletion would have broken.
+
+Test deltas. API unit holds at **2,011** passed with one skip: the slice adds assertions inside
+existing tests rather than new tests. `ci_jobs` 10 to **11**, `ci_checks` unchanged at **13** — the
+Renovate job is schedule-gated and never runs on a branch push. gitlab-ci-hardening **49 to 53**,
+ci-hardening 85/0, `ruff` and `mypy` strict clean across 449 source files, `AUTHORITY_OK`,
+`check-no-site-data` clean. Every new pin was mutation-verified: loosening the ceiling, deleting its
+rule, resurrecting the mcp-postgres path, flipping Renovate to a push trigger, and enabling
+automerge each redden the matching assertion.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration

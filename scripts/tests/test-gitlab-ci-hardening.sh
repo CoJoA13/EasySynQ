@@ -182,5 +182,24 @@ assert_text_contains "integration asserts that client actually wins PATH" \
 # the runner's own report parser needs jq; without it 4 of 129 fixtures fail as policy bugs.
 assert_text_contains "security installs the jq its report parser needs" "$SECURITY_BLOCK" "jq >/dev/null"
 
+# ---- the dependency updater (Dependabot's replacement) -------------------------------------------
+RENOVATE_BLOCK="$(job_block renovate)"
+assert_text_contains "renovate runs ONLY on a schedule, never on an ordinary push" \
+  "$RENOVATE_BLOCK" 'if: $CI_PIPELINE_SOURCE == "schedule"'
+assert_text_contains "renovate targets this project only (air-gap posture unchanged)" \
+  "$RENOVATE_BLOCK" 'RENOVATE_REPOSITORIES: "$CI_PROJECT_PATH"'
+# Bumps here have repeatedly been green in CI and still wrong -- an image that could not START, a
+# Tika major that extracted EMPTY text. Every bump stays a reviewed MR.
+if grep -Fq '"automerge": true' "$ROOT/renovate.json"; then
+  bad "renovate must not automerge (found automerge: true)"
+else
+  ok "renovate must not automerge"
+fi
+if grep -Fq '"allowedVersions": "<3.13"' "$ROOT/renovate.json"; then
+  ok "the python ceiling survives in the live updater's config"
+else
+  bad "the python ceiling is missing from renovate.json"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

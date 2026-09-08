@@ -148,9 +148,23 @@ def test_api_image_python_major_matches_requires_python() -> None:
     tracked_parts = tuple(int(part) for part in tracked.split(".")[:2])
     assert low <= tracked_parts < high, f".python-version {tracked} is outside {requires_python}"
 
-    # Keep Dependabot from re-proposing the bump every week. Unlike the reportlab/Mantine majors,
+    # Keep the updater from re-proposing the bump every week. Unlike the reportlab/Mantine majors,
     # this ceiling has a proven RUNTIME consequence, so the refusal is pinned here as well as
     # commented in the config.
+    #
+    # Pinned in BOTH updaters during the GitHub->GitLab transition: renovate.json is the live one
+    # (Dependabot does not run on GitLab), and .github/dependabot.yml is retired in its own slice.
+    # ⚠ Renovate expresses this as an allowedVersions CEILING rather than an ignore rule, because
+    # 3.12 -> 3.14 is a semver MINOR update on a `3`-major tag: a major-only refusal never matches.
+    renovate = _read_json(_ROOT / "renovate.json")
+    ceiling = next(
+        rule
+        for rule in renovate["packageRules"]
+        if rule.get("matchDatasources") == ["docker"]
+        and rule.get("matchPackageNames") == ["python"]
+    )
+    assert ceiling["allowedVersions"] == f"<{high[0]}.{high[1]}"
+
     dependabot = yaml.safe_load((_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
     api_docker = next(
         entry
@@ -179,6 +193,10 @@ def test_vulnerable_postgres_mcp_connector_is_disabled() -> None:
         for entry in dependabot["updates"]
         if entry["package-ecosystem"] == "npm" and entry["directory"] == "/tools/mcp-postgres"
     ]
+    # The live updater must not resurrect it either: Renovate DETECTS manifests rather than being
+    # pointed at directories, so the guarantee here is that no rule re-enables that path and the
+    # manifests it would detect stay absent (asserted above).
+    assert "mcp-postgres" not in (_ROOT / "renovate.json").read_text(encoding="utf-8")
 
 
 def test_local_contract_entry_points_use_the_locked_launcher() -> None:
