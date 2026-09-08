@@ -29,6 +29,7 @@ COMPOSE=(
   -f infra/compose/compose.yml
   -f infra/compose/compose.s.yml
   -f infra/compose/compose.dev.yml
+  -f infra/compose/compose.first-admin-live.yml
 )
 
 cleanup() {
@@ -92,12 +93,19 @@ set_env_value() {
   else
     printf '%s=%s\n' "$key" "$value" >>"$ENV_FILE"
   fi
+  # Compose gives the parent environment precedence over --env-file. Keep every child,
+  # including Playwright's Keycloak recreation and cleanup, on the same owned settings.
+  export "$key=$value"
 }
 
 APP_PORT="$(choose_loopback_port)"
 S3_PORT="$(choose_loopback_port)"
 while [ "$S3_PORT" = "$APP_PORT" ]; do
   S3_PORT="$(choose_loopback_port)"
+done
+HTTPS_PORT="$(choose_loopback_port)"
+while [ "$HTTPS_PORT" = "$APP_PORT" ] || [ "$HTTPS_PORT" = "$S3_PORT" ]; do
+  HTTPS_PORT="$(choose_loopback_port)"
 done
 APP_ORIGIN="http://127.0.0.1:${APP_PORT}"
 S3_ORIGIN="http://127.0.0.1:${S3_PORT}"
@@ -112,7 +120,8 @@ EASYSYNQ_ENV_ONLY=1 "$ROOT/scripts/install.sh" s
   exit 2
 }
 
-set_env_value HTTP_PORT "$APP_PORT"
+set_env_value HTTP_PORT "127.0.0.1:${APP_PORT}"
+set_env_value HTTPS_PORT "127.0.0.1:${HTTPS_PORT}"
 set_env_value S3_PORT "$S3_PORT"
 set_env_value SITE_ADDRESS ":80"
 set_env_value MINIO_SITE_ADDRESS "$S3_ORIGIN"
@@ -125,8 +134,51 @@ set_env_value OIDC_JWKS_URL \
   "http://keycloak:8080/realms/easysynq/protocol/openid-connect/certs"
 set_env_value OIDC_DISCOVERY_URL \
   "http://keycloak:8080/realms/easysynq/.well-known/openid-configuration"
+set_env_value EASYSYNQ_IMAGE_TAG "$PROJECT"
 
 stack_started=1
+"${COMPOSE[@]}" up -d postgres
+
+NETWORK_METADATA="$(
+  docker network inspect --format "{{json .}}" "${PROJECT}_internal"
+)"
+NETWORK_SUBNET="$(
+  EASYSYNQ_LIVE_NETWORK_METADATA="$NETWORK_METADATA" \
+    EASYSYNQ_LIVE_COMPOSE_PROJECT="$PROJECT" \
+    python3 - <<'PY'
+import ipaddress
+import json
+import os
+
+try:
+    metadata = json.loads(os.environ["EASYSYNQ_LIVE_NETWORK_METADATA"])
+except (KeyError, json.JSONDecodeError) as exc:
+    raise SystemExit("live acceptance could not read its Compose network") from exc
+
+project = os.environ.get("EASYSYNQ_LIVE_COMPOSE_PROJECT", "")
+labels = metadata.get("Labels") if isinstance(metadata, dict) else None
+if not isinstance(labels, dict) or labels.get("com.docker.compose.project") != project:
+    raise SystemExit("live acceptance found an unexpected Compose network owner")
+
+ipam = metadata.get("IPAM")
+config = ipam.get("Config") if isinstance(ipam, dict) else None
+if not isinstance(config, list) or len(config) != 1 or not isinstance(config[0], dict):
+    raise SystemExit("live acceptance expected one Compose network subnet")
+try:
+    network = ipaddress.ip_network(config[0].get("Subnet", ""), strict=True)
+except (TypeError, ValueError) as exc:
+    raise SystemExit("live acceptance found an invalid Compose network subnet") from exc
+if network.version != 4 or not network.is_private:
+    raise SystemExit("live acceptance requires a private IPv4 Compose network")
+print(network)
+PY
+)"
+[ -n "$NETWORK_SUBNET" ] || {
+  echo "live acceptance could not resolve its Compose network subnet" >&2
+  exit 1
+}
+set_env_value TRUSTED_PROXY_CIDRS "127.0.0.1/32,::1/128,${NETWORK_SUBNET}"
+
 "${COMPOSE[@]}" up -d --build
 
 ready=0
@@ -161,4 +213,5 @@ EASYSYNQ_LIVE_BASE_URL="${APP_ORIGIN}" \
 EASYSYNQ_LIVE_SETUP_SECRET="${BOOTSTRAP_SECRET}" \
 EASYSYNQ_LIVE_USERNAME="${ADMIN_USERNAME}" \
 EASYSYNQ_LIVE_NEW_PASSWORD="${NEW_PASSWORD}" \
+EASYSYNQ_LIVE_COMPOSE_PROJECT="${PROJECT}" \
 npm --prefix apps/web run test:first-admin-live
