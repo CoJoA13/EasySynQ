@@ -1609,6 +1609,72 @@ strict clean across 449 source files; the CI-workflow shell contract is 85 passe
 web, contract and integration suites were NOT run and are not restated: no TypeScript, no OpenAPI,
 no migration.
 
+### S-gitlab-ci-port — CI moves to GitLab, and the new pipeline is pinned
+
+Recorded 2026-09-07 after merging [`!1`](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/1)
+as `SHA`. ⚠ This is the first entry whose change was reviewed on **GitLab**, not GitHub;
+`.github/workflows/ci.yml` still exists and is still pinned, but it is no longer the gate.
+No migration, no contract, no permission key, no application code.
+
+**Twelve jobs became ten, and that is not a coverage cut.** GitHub's `integration` and `web` jobs
+are AGGREGATORS: they exist only to give branch protection one stable required-check name over a
+matrix. GitLab gates on the whole pipeline, so porting them would assert something already
+guaranteed. Every suite they aggregated still runs — 13 job instances on a branch push, with
+`integration-shards` fanning to four and `web-tests` to two.
+
+**The job graph was right on the first push; six ENVIRONMENTAL differences were not.** Each cost a
+red pipeline, and in every case the symptom failed to name its cause:
+
+⚠ **GitLab runs every `script:` line in ONE shell**, so cwd persists between lines — unlike a GitHub
+step, which starts fresh. `cd ..` after `cd apps/api` lands in `apps/`, and uv reported
+`Failed to spawn: ruff` rather than a bad path. The same persistence applies to ENVIRONMENT: the
+compose block's `export PUBLIC_BASE_URL=https://qms.example.test` was still set when pytest ran, and
+`test_smtp_defaults_are_safe` caught it expecting `http://localhost`. Every `cd` is now absolute via
+`$CI_PROJECT_DIR`, and the export block is a subshell.
+
+⚠ **The containers run as ROOT; GitHub's runner does not.** Root reads a `chmod 000` directory and
+writes an unwritable one, so **six** permission-denial tests passed vacuously — including four
+`test_signing_key_fail_closed` cases proving the app refuses to mint tokens onto an unwritable
+secrets volume. Skipping them under root would have turned the pipeline green immediately and is
+exactly the inert-guard pattern those tests exist to prevent. Measured instead: 4 failed as root,
+14 passed unprivileged. The suites drop to a `ci` user.
+
+**Three smaller ones.** `docker compose` is a separate CLI PLUGIN, and installing it into a user
+home makes it vanish once privileges are dropped — the same exit 125 and usage help from two
+different causes, one round apart. A GitLab service is reached by its ALIAS, not `localhost`.
+Testcontainers under DinD cannot reach a mapped port on `localhost`, so it is pointed at the
+`docker` alias with Ryuk disabled; that was the risk most likely to sink the port and it worked on
+the first attempt, as did Playwright.
+
+**R61's site-data guard rejected the pipeline itself**, correctly: dropping to an unprivileged user
+meant passing the `ci` user's default home as an explicit `HOME`, which is a personal Linux
+home path in a tracked file. A guard written to keep
+customer data out of the repository caught a CI runner's home directory.
+
+**The pins are the point of the slice, not the YAML.**
+`scripts/tests/test-gitlab-ci-hardening.sh` (49 assertions, bash + grep like its sibling so it runs
+before dependencies are hydrated) plus three semantic cases in `test_ci_workflow.py`. Half restate
+the policy `test-ci-hardening.sh` has always held over the GitHub workflow — hard-fail discipline,
+each suite collecting only its authoritative tree, shard topology, the browser job's zero-retry
+rule, the security advisory matrix. The other half encodes the six differences above, because
+nothing else in the repository reads this file and each already happened once. Every pin was
+mutation-verified against the broken state it names: eight shell mutations and three Python ones
+each redden the matching assertion. ⚠ The harness caught its own omission on first run — the
+contracts job did not yet invoke it.
+
+**What this deliberately does NOT do.** It does not retire `.github/workflows/ci.yml` or its 55
+assertions; that file stays pinned while GitHub remains readable, and its 135 historical PR links
+across the authority docs must keep resolving (AGENTS.md forbids rewriting dated evidence). It does
+not port Dependabot, which does not run on GitLab.
+
+Test deltas. API unit **2,008 to 2,011** passed with one skip under `EASYSYNQ_IMAGE_PROOF=1` — three
+semantic pins — with `ruff check`, `ruff format --check` and `mypy` strict clean across 449 source
+files, gitlab-ci-hardening 49/0, ci-hardening 85/0, `AUTHORITY_OK` and `check-no-site-data` clean.
+The full GitLab pipeline is **13/13 green**, and its api job reports `2008 passed, 1 skipped`, which
+confirms the built-image runtime proof EXECUTED rather than skipping — a green job alone would not
+have shown that. The web, contract and integration suites were NOT re-run locally and are not
+restated: no TypeScript, no OpenAPI, no migration.
+
 ## IDENTITY ONBOARDING
 
 ### S-first-admin-provisioning — first administrator without Keycloak administration

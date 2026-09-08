@@ -1,0 +1,294 @@
+# EasySynQ CI — the GitLab port of .github/workflows/ci.yml.
+#
+# Mapping notes that are NOT mechanical, recorded here because the next reader will otherwise
+# assume the two files are line-for-line equivalent:
+#
+#  * GitHub's five marketplace actions have no GitLab equivalent. `actions/checkout` is implicit;
+#    `setup-node` and `setup-uv` become pinned base IMAGES; `upload-artifact` becomes `artifacts:`;
+#    `trivy-action` becomes the pinned trivy binary.
+#  * `$GITHUB_PATH` does not exist. GitHub needed the pg-client install and its PATH assertion in
+#    SEPARATE steps because $GITHUB_PATH only affects LATER steps; GitLab runs one shell per job,
+#    so the export and the assertion sit together. The assertion is kept — it is the load-bearing
+#    half (a bare pg_dump resolving to 16 fails 19 backup/restore tests naming a server version).
+#  * The `integration` and `web` AGGREGATOR jobs are deliberately NOT ported. They exist only to
+#    give GitHub branch protection a stable required-check name over a matrix; GitLab gates on the
+#    whole pipeline, so an aggregator would assert something already guaranteed.
+#  * Testcontainers under DinD cannot reach a mapped port on localhost — the daemon publishes on
+#    the DinD container. TESTCONTAINERS_HOST_OVERRIDE points it at the `docker` service alias, and
+#    Ryuk is disabled because its reaper cannot bind back through the same boundary.
+#  * The `migrations` service is reachable as `postgres`, NOT localhost as on GitHub.
+#  * ⚠ GitLab runs every `script:` line in ONE shell, so cwd PERSISTS between lines — unlike a
+#    GitHub step, which starts fresh (or honours `working-directory`). A relative `cd ..` after
+#    `cd apps/api` therefore lands in `apps/`, not the repo root, and the failure surfaces far
+#    from its cause: uv reported "Failed to spawn: ruff" rather than a bad path. Every `cd` here
+#    is absolute via $CI_PROJECT_DIR so no line depends on what ran before it.
+
+stages: [check]
+
+variables:
+  GIT_DEPTH: "20"
+  NODE_VERSION: "26"
+
+# ---------------------------------------------------------------- shared fragments
+
+.node:
+  image: node:26-bookworm
+  variables: {}
+
+.uv:
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm
+
+.dind:
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    TESTCONTAINERS_HOST_OVERRIDE: docker
+    TESTCONTAINERS_RYUK_DISABLED: "true"
+
+# ⚠ The static docker tarball ships ONLY the `docker` binary. `docker compose` is a separate CLI
+# PLUGIN, so without the second download `docker compose config` exits 125 with the usage help --
+# which reads like a syntax error in the compose files rather than a missing subcommand.
+.docker-cli: &docker-cli
+  - curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz
+      | tar -xz -C /tmp
+  - install -m 0755 /tmp/docker/docker /usr/local/bin/docker
+  # ⚠ SYSTEM path, not /root/.docker: the suites drop to the unprivileged `ci` user, which cannot
+  # read root's home. A per-user install makes `docker compose` vanish for exactly the tests that
+  # need it, and the symptom is the usage help plus exit 125 — indistinguishable from a bad flag.
+  - mkdir -p /usr/local/lib/docker/cli-plugins
+  - curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose
+      https://github.com/docker/compose/releases/download/v5.5.1/docker-compose-linux-x86_64
+  - chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose
+  - docker version
+  - docker compose version
+
+# ⚠ These images run as ROOT; GitHub's runner does not. Root can read a chmod-000
+# directory and write an unwritable one, so every fail-closed permission test passes
+# vacuously — 6 of them, including the signing-key gate that refuses to mint tokens
+# onto an unwritable secrets volume. Skipping them under root would be exactly the
+# inert-guard pattern those tests exist to prevent, so the suites run as `ci`.
+.unprivileged-user: &unprivileged-user
+  # The home is repo-relative on purpose: a literal /home/<user> is a personal Linux home
+  # path and R61's site-data guard rejects it in a tracked file — which it did, correctly.
+  - id ci >/dev/null 2>&1 || useradd -M -d "$CI_PROJECT_DIR/.ci-home" ci
+  - mkdir -p "$CI_PROJECT_DIR/.ci-home"
+  - chown -R ci:ci "$CI_PROJECT_DIR"
+
+# ---------------------------------------------------------------- jobs
+
+contracts:
+  stage: check
+  extends: .node
+  script:
+    # R61 backstop lives in THIS job because contracts is a required check; `security` is not, so a
+    # site-data match there would not block a merge.
+    - bash scripts/tests/test-agent-authority.sh
+    - bash scripts/tests/test-claude-hooks.sh
+    - ./scripts/check-repo-authority.sh
+    - bash scripts/tests/test-check-no-site-data.sh
+    - ./scripts/check-no-site-data.sh
+    - bash scripts/tests/test-doctor.sh
+    - node --test scripts/tests/test-postgres-mcp-disabled.mjs
+    - bash scripts/tests/test-ci-hardening.sh
+    - bash scripts/tests/test-gitlab-ci-hardening.sh
+    - bash scripts/tests/test-check-compose-images-lock.sh
+    - npm ci --prefix packages/contracts --ignore-scripts
+    - bash scripts/tests/test-run-contract-tool.sh
+    - node --test scripts/tests/test-contract-lock.mjs
+    - bash scripts/tests/test-gen-contracts.sh
+    - bash scripts/run-contract-tool.sh redocly lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
+    - npm --prefix packages/contracts audit --package-lock-only --audit-level=high
+    - bash scripts/gen-contracts.sh --check
+
+contract-responses:
+  stage: check
+  extends: [.uv, .dind]
+  timeout: 20m
+  before_script: *docker-cli
+  script:
+    - cd "$CI_PROJECT_DIR/apps/api" && uv sync --frozen
+    - uv run pytest tests/integration/test_contract_response_schemas.py -m contract --tb=short
+
+api:
+  stage: check
+  extends: [.uv, .dind]
+  before_script: *docker-cli
+  script:
+    - |
+      # ⚠ Wrapped in a SUBSHELL: GitLab shares one shell across every script line, so these
+      # exports otherwise survive into pytest — test_smtp_defaults_are_safe caught
+      # PUBLIC_BASE_URL leaking as https://qms.example.test instead of http://localhost.
+      (
+      # --env-file supplies interpolation values; the services' env_file entries still require the
+      # repo-root .env to exist. Materialize the ignored runner copy from the safe template.
+      cp .env.example .env
+      docker compose --env-file .env.example -f infra/compose/compose.yml \
+        -f infra/compose/compose.s.yml -f infra/compose/compose.dev.yml config --quiet
+      export SITE_ADDRESS=https://qms.example.test
+      export MINIO_SITE_ADDRESS=https://qms.example.test:9443
+      export S3_PUBLIC_ENDPOINT=https://qms.example.test:9443
+      export PUBLIC_BASE_URL=https://qms.example.test
+      export APP_BASE_URL=https://qms.example.test
+      export KEYCLOAK_HOSTNAME=https://qms.example.test
+      export KEYCLOAK_DB_PASSWORD=ci-compose-only
+      docker compose --env-file .env.example -f infra/compose/compose.yml \
+        -f infra/compose/compose.s.yml -f infra/compose/compose.production.yml config --quiet
+      docker compose --env-file .env.example -f infra/compose/compose.yml \
+        -f infra/compose/compose.s.yml -f infra/compose/compose.airgap.yml \
+        -f infra/compose/compose.production.yml config --quiet
+      docker compose --env-file .env.example -f infra/compose/compose.yml \
+        -f infra/compose/compose.s.yml -f infra/compose/compose.production.yml \
+        -f infra/compose/compose.offline.yml config --quiet
+      EASYSYNQ_IMAGE_TAG="$(bash scripts/app-images.sh --tag)"
+      export EASYSYNQ_IMAGE_TAG
+      composed_images="$(docker compose --env-file .env.example -f infra/compose/compose.yml \
+        -f infra/compose/compose.s.yml -f infra/compose/compose.production.yml \
+        -f infra/compose/compose.offline.yml config --images)"
+      while IFS= read -r bundled; do
+        printf '%s\n' "$composed_images" | grep -qxF "$bundled" || {
+          echo "the air-gap bundle builds $bundled but no service resolves to it"; exit 1; }
+      done < <(bash scripts/app-images.sh)
+      )
+    - cd "$CI_PROJECT_DIR/apps/api" && uv sync --frozen
+    - uv run ruff check .
+    - uv run ruff format --check --diff .
+    - cd "$CI_PROJECT_DIR" && uv run --project apps/api ruff check --config ruff.toml migrations
+    - uv run --project apps/api ruff format --check --diff --config ruff.toml migrations
+    - cd "$CI_PROJECT_DIR/apps/api" && uv run mypy src
+    - *unprivileged-user
+    # EASYSYNQ_IMAGE_PROOF un-skips the built-image runtime proof: it BUILDS the API image and runs
+    # it (uid 10001, `uv run` with NO network). Every other gate reads source; this is the only one
+    # that starts the artifact. It lives in `api` rather than `security` because security is
+    # non-required, and a guard that cannot redden an MR is the gap it was meant to close.
+    - >-
+      runuser -u ci -- env HOME="$CI_PROJECT_DIR/.ci-home" PATH="$PATH" DOCKER_HOST="$DOCKER_HOST"
+      EASYSYNQ_IMAGE_PROOF=1
+      sh -c 'cd "$CI_PROJECT_DIR/apps/api" && uv run pytest tests/unit -m unit'
+
+migrations:
+  stage: check
+  extends: .uv
+  services:
+    - name: postgres:18
+      alias: postgres
+  variables:
+    POSTGRES_USER: easysynq
+    POSTGRES_PASSWORD: easysynq
+    POSTGRES_DB: easysynq
+    # GitLab reaches a service by its ALIAS, not localhost as on GitHub.
+    DATABASE_URL_SYNC: postgresql+psycopg://easysynq:easysynq@postgres:5432/easysynq
+    DATABASE_URL: postgresql+psycopg://easysynq:easysynq@postgres:5432/easysynq
+    MIGRATION_TEST_DATABASE_URL: postgresql+psycopg://easysynq:easysynq@postgres:5432/easysynq
+  script:
+    - cd "$CI_PROJECT_DIR/apps/api" && uv sync --frozen
+    - uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head
+    - uv run pytest tests/migration/test_migration_coherence.py
+    - uv run alembic check
+
+integration-shards:
+  stage: check
+  extends: [.uv, .dind]
+  parallel: 4
+  timeout: 40m
+  before_script:
+    - *docker-cli
+    # pg_dump REFUSES a newer server, so a 16 client against the postgres:18 testcontainer aborts
+    # every backup/restore test with `server version mismatch` — 19 failures naming a version, not
+    # a cause. Install 18 and make sure it WINS the path; the assertion is the load-bearing half.
+    - apt-get update -qq && apt-get install -y -qq curl ca-certificates gnupg lsb-release >/dev/null
+    - install -d /usr/share/postgresql-common/pgdg
+    - curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    - echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+    - apt-get update -qq && apt-get install -y -qq postgresql-client-18 >/dev/null
+    - export PATH="/usr/lib/postgresql/18/bin:$PATH"
+    - pg_dump --version | grep -qE '\) 18\.' || { pg_dump --version; exit 1; }
+  script:
+    - export PATH="/usr/lib/postgresql/18/bin:$PATH"
+    - cd "$CI_PROJECT_DIR/apps/api" && uv sync --frozen
+    - >-
+      uv run pytest tests/integration -m integration
+      --splits "$CI_NODE_TOTAL" --group "$CI_NODE_INDEX"
+      --durations-path .test_durations --store-durations --clean-durations
+  artifacts:
+    when: on_success
+    expire_in: 7 days
+    paths:
+      - apps/api/.test_durations
+
+web-tests:
+  stage: check
+  extends: .node
+  parallel: 2
+  script:
+    - cd "$CI_PROJECT_DIR/apps/web" && npm ci
+    - npm test -- --shard=$CI_NODE_INDEX/$CI_NODE_TOTAL
+    # Static checks ride shard 2's already-hydrated workspace, as on GitHub.
+    - if [ "$CI_NODE_INDEX" = "2" ]; then npm run lint && npm run build; fi
+
+web-browser:
+  stage: check
+  extends: .node
+  script:
+    - cd "$CI_PROJECT_DIR/apps/web" && npm ci
+    - npx playwright install --with-deps chromium
+    - npm run test:browser
+  artifacts:
+    when: on_failure
+    expire_in: 7 days
+    paths:
+      - apps/web/playwright-report
+      - apps/web/test-results
+
+security:
+  stage: check
+  extends: [.uv, .dind]
+  # npm high/critical findings are GATED; pip-audit and trivy FINDINGS stay report-only. Operational
+  # failures still fail the job so a never-ran scan cannot read green. NOT a required check.
+  before_script:
+    - *docker-cli
+    # jq is what run-pip-audit.sh parses its report with; the slim image has no jq, and its
+    # absence surfaces as 4 harness failures rather than as a missing binary.
+    - apt-get update -qq && apt-get install -y -qq curl ca-certificates git jq >/dev/null
+    - curl -fsSL https://deb.nodesource.com/setup_26.x | bash - >/dev/null
+    - apt-get install -y -qq nodejs >/dev/null
+    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.74.0
+  script:
+    - bash scripts/tests/test-pip-audit-runner.sh
+    - bash scripts/run-pip-audit.sh
+    - cd "$CI_PROJECT_DIR/apps/web" && npm ci --ignore-scripts
+    - cd "$CI_PROJECT_DIR"
+    - *unprivileged-user
+    - >-
+      runuser -u ci -- env HOME="$CI_PROJECT_DIR/.ci-home" PATH="$PATH" sh -c 'cd "$CI_PROJECT_DIR" &&
+      node --test scripts/tests/test-web-security-lock.mjs
+      scripts/tests/test-npm-audit-runner.mjs scripts/tests/test-check-npm-audit.mjs
+      scripts/tests/test-npm-audit-policy.mjs scripts/tests/test-router-rsc-policy.mjs'
+    - node scripts/check-npm-audit.mjs
+    - trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --exit-code 0 --format table .
+    # The fs scan does NOT see base-image/apt/copied-stage CVEs. Build the API image and scan THAT,
+    # so the target is exactly what ships.
+    - docker build -f apps/api/Dockerfile -t easysynq-api:scan .
+    - trivy image --severity HIGH,CRITICAL --exit-code 0 --format table easysynq-api:scan
+    - trivy image --severity HIGH,CRITICAL --exit-code 0 --format table "$(grep -E '^FROM ' apps/web/Dockerfile | tail -1 | awk '{print $2}')"
+
+compose-images-lock:
+  stage: check
+  image: bash:5
+  before_script:
+    - apk add --no-cache git grep >/dev/null
+  script:
+    - bash scripts/check-compose-images-lock.sh
+
+release-gate:
+  stage: check
+  extends: .uv
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  variables:
+    EASYSYNQ_RELEASE: "1"
+  script:
+    - cd "$CI_PROJECT_DIR/apps/api" && uv sync --frozen
+    - uv run pytest tests/unit/test_images_lock_pinned.py -q
