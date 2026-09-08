@@ -19,6 +19,8 @@ def test_restore_pass_preserves_empty_post_cutover_actions_compatibility_key(
         backup_encryption_key="test-key",
         s3_bucket_restore_scratch="restore-scratch",
         s3_bucket_documents="documents",
+        s3_bucket_records="records",
+        s3_bucket_audit_checkpoints="audit-checkpoints",
     )
 
     monkeypatch.setattr(archive, "verify_archive", lambda _src: True)
@@ -36,9 +38,11 @@ def test_restore_pass_preserves_empty_post_cutover_actions_compatibility_key(
     monkeypatch.setattr(restore, "_sweep_stale_restore", lambda _dsn: None)
     monkeypatch.setattr(drill, "_create_scratch_db", lambda _dsn, _db: None)
     monkeypatch.setattr(drill, "_drop_scratch_db", lambda _dsn, _db: None)
-    monkeypatch.setattr(drill, "_delete_scratch_objects", lambda *_args: None)
+    monkeypatch.setattr(drill, "_delete_scratch_objects", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(archive, "restore_database", lambda _dsn, _db, _dump: None)
-    monkeypatch.setattr(drill, "_copy_blobs", lambda *_args: None)
+    monkeypatch.setattr(drill, "_scratch_worm_bucket_names", lambda *_args: set())
+    monkeypatch.setattr(drill, "_validate_scratch_bucket_metadata", lambda *_args: None)
+    monkeypatch.setattr(drill, "_copy_blobs", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         drill,
         "run_triad",

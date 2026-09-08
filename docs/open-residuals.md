@@ -56,8 +56,9 @@ separately scoped ordinary and recovery/administrative capabilities, a certified
 destination, and fresh role-preserving restore targets with durable terminal
 disposition. With source-store reads denied, restore and boot the closed recovered stack and prove document,
 record, sealed-pack, and rendition reads before access reopens. Link the exact evidence before evaluating
-production recovery or upgrade eligibility. The narrower
-[RES-RESTORE-SCRATCH-WORM-GUARD](#res-restore-scratch-worm-guard),
+production recovery or upgrade eligibility. The scratch-target guard is closed with
+[dated evidence](slice-history.md#s-restore-scratch-worm-guard--protected-target-rejection-before-copy).
+The narrower
 [RES-AUDIT-VERIFY-ORCHESTRATOR](#res-audit-verify-orchestrator),
 [RES-AUDIT-CHECKPOINT-LINEAGE](#res-audit-checkpoint-lineage),
 [RES-AUDIT-KEY-ROTATION](#res-audit-key-rotation), and
@@ -456,17 +457,6 @@ Reason: The backend accepts an optional per-risk `clause_id`, but the v1 risk-cr
 picker.
 Closure contract: Design and ship the clause picker with the required authorization, form, API-contract,
 and browser behavior proofs.
-Last reviewed: 2026-08-08
-
-## RES-RESTORE-SCRATCH-WORM-GUARD
-
-Status: OPEN
-Owner: Repository owner
-Source: `apps/api/src/easysynq_api/services/backup/restore.py`
-Reason: Restore verification rejects the configured documents bucket but does not reject every possible
-WORM/object-locked bucket role as a scratch target.
-Closure contract: Define all prohibited WORM bucket roles, fail closed before any scratch copy, and prove
-the guard without weakening the current documents-bucket protection.
 Last reviewed: 2026-08-08
 
 ## RES-WORM-EVENT-BASIS-REEXTENSION

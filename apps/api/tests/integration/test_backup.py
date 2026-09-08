@@ -9,6 +9,7 @@ runner (CI has it; a host without it makes the drill an honest FAIL, not a 500).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 import uuid
@@ -25,6 +26,7 @@ from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.backup_policy import BackupPolicy
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services import backup as backup_service
+from easysynq_api.services.backup import archive, drill
 from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.tasks.app import app as celery_app
 
@@ -61,6 +63,118 @@ def _s3_client() -> object:
         aws_secret_access_key=s.s3_secret_key,
         region_name=s.s3_region,
     )
+
+
+def _bucket_versions(client: object, bucket: str) -> tuple[tuple[object, ...], ...]:
+    entries: list[tuple[object, ...]] = []
+    paginator = client.get_paginator("list_object_versions")  # type: ignore[attr-defined]
+    for response in paginator.paginate(Bucket=bucket):
+        entries.extend(
+            ("version", item["Key"], item["VersionId"], item["IsLatest"], item.get("ETag"))
+            for item in response.get("Versions", [])
+        )
+        entries.extend(
+            ("delete-marker", item["Key"], item["VersionId"], item["IsLatest"], None)
+            for item in response.get("DeleteMarkers", [])
+        )
+    return tuple(sorted(entries, key=lambda entry: tuple(str(part) for part in entry)))
+
+
+@pytest.mark.parametrize("bucket", ["documents", "records", "audit-checkpoints"])
+async def test_real_minio_object_lock_metadata_blocks_immutable_scratch_targets_without_residue(
+    app_under_test: object,
+    bucket: str,
+) -> None:
+    """The pinned MinIO reports all three immutable roles as Object-Lock-enabled. This probe never
+    invokes copy/delete, so even a guard regression cannot strand a version in a retained bucket."""
+    del app_under_test
+    client = _s3_client()
+    before = _bucket_versions(client, bucket)
+    settings = get_settings().model_copy(
+        update={
+            "s3_bucket_documents": "synthetic-documents-role",
+            "s3_bucket_records": "synthetic-records-role",
+            "s3_bucket_audit_checkpoints": "synthetic-audit-role",
+            "s3_bucket_restore_scratch": bucket,
+        }
+    )
+
+    with pytest.raises(archive.BackupError, match="protected bucket role"):
+        drill._preflight_scratch_target(
+            settings,
+            bucket,
+            source_buckets=set(),
+            protected_buckets=set(),
+        )
+
+    assert _bucket_versions(client, bucket) == before
+
+
+async def test_real_minio_plain_scratch_allows_nonempty_copy_and_guarded_cleanup(
+    app_under_test: object,
+) -> None:
+    del app_under_test
+    settings = get_settings()
+    client = _s3_client()
+    token = uuid.uuid4().hex
+    body = b"restore-scratch-guard-minio-round-trip"
+    sha = hashlib.sha256(body).hexdigest()
+    source_key = f"restore-guard-source/{token}"
+    prefix = f"restore-guard-scratch/{token}/"
+    scratch_key = f"{prefix}{sha}"
+    blob = archive.BlobRef(
+        sha256=sha,
+        size_bytes=len(body),
+        bucket=settings.s3_bucket_staging,
+        object_key=source_key,
+    )
+    source_put = client.put_object(  # type: ignore[attr-defined]
+        Bucket=settings.s3_bucket_staging,
+        Key=source_key,
+        Body=body,
+    )
+    try:
+        drill._preflight_scratch_target(
+            settings,
+            settings.s3_bucket_restore_scratch,
+            source_buckets={settings.s3_bucket_staging},
+            protected_buckets=set(),
+        )
+        drill._copy_blobs(
+            settings,
+            [blob],
+            settings.s3_bucket_restore_scratch,
+            prefix,
+            protected_buckets=set(),
+        )
+        restored = client.get_object(  # type: ignore[attr-defined]
+            Bucket=settings.s3_bucket_restore_scratch,
+            Key=scratch_key,
+        )["Body"].read()
+        assert restored == body
+
+        drill._delete_scratch_objects(
+            settings,
+            settings.s3_bucket_restore_scratch,
+            prefix,
+            source_buckets={settings.s3_bucket_staging},
+            protected_buckets=set(),
+        )
+        listing = client.list_objects_v2(  # type: ignore[attr-defined]
+            Bucket=settings.s3_bucket_restore_scratch,
+            Prefix=prefix,
+        )
+        assert listing.get("KeyCount", 0) == 0, listing.get("Contents")
+    finally:
+        client.delete_object(  # type: ignore[attr-defined]
+            Bucket=settings.s3_bucket_staging,
+            Key=source_key,
+            VersionId=source_put["VersionId"],
+        )
+        client.delete_object(  # type: ignore[attr-defined]
+            Bucket=settings.s3_bucket_restore_scratch,
+            Key=scratch_key,
+        )
 
 
 async def _insert_backup_policy(org_id: uuid.UUID, destination: str) -> None:

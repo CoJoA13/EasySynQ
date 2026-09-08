@@ -351,6 +351,9 @@ def run_restore(
     scratch_db = f"{_RESTORE_PREFIX}{restore_id}"
     handle: ScratchHandle | None = None
     keep_standing = False
+    source_buckets: set[str] = set()
+    protected_buckets: set[str] = set()
+    object_cleanup_allowed = False
     try:
         if not src.exists():
             return RestoreResult("FAIL", f"archive not found: {archive_path}")
@@ -380,6 +383,13 @@ def run_restore(
             ]
             counts = (manifest.get("config") or {}).get("table_counts") or {}
             legs = manifest.get("legs") or {}
+            source_buckets = {b.bucket for b in blobs}
+            drill._validate_scratch_bucket_name(
+                settings,
+                settings.s3_bucket_restore_scratch,
+                source_buckets=source_buckets,
+                protected_buckets=set(),
+            )
 
             # 3. restore PG into a FRESH scratch DB
             restore_dump = archive.unpack_dump(plain, tmp_path / "restore")
@@ -394,13 +404,23 @@ def run_restore(
             )
             archive.restore_database(owner_dsn, scratch_db, restore_dump)
 
-            # 4. copy blobs under this run's unique prefix in the configured shared scratch bucket
-            #    (source = a READ; the locked vault is never written). The documents bucket is
-            #    rejected below; rejecting every WORM bucket role is RES-RESTORE-SCRATCH-WORM-GUARD
-            #    in docs/open-residuals.md.
-            if handle.scratch_bucket == settings.s3_bucket_documents:  # pragma: no cover - guard
-                return RestoreResult("FAIL", "refusing to restore into the WORM documents bucket")
-            drill._copy_blobs(settings, blobs, handle.scratch_bucket, handle.object_prefix)
+            # 4. discover every restored WORM sink role and positively verify that the configured
+            #    scratch destination is not protected before authorizing either copy or cleanup.
+            protected_buckets = drill._scratch_worm_bucket_names(settings, owner_dsn, scratch_db)
+            drill._preflight_scratch_target(
+                settings,
+                handle.scratch_bucket,
+                source_buckets=source_buckets,
+                protected_buckets=protected_buckets,
+            )
+            object_cleanup_allowed = True
+            drill._copy_blobs(
+                settings,
+                blobs,
+                handle.scratch_bucket,
+                handle.object_prefix,
+                protected_buckets=protected_buckets,
+            )
 
             if after_restore is not None:
                 after_restore(handle)
@@ -510,10 +530,17 @@ def run_restore(
                 drill._drop_scratch_db(owner_dsn, scratch_db)
             except Exception:  # best-effort teardown
                 logger.warning("restore: scratch DB teardown failed", exc_info=True)
-            try:
-                drill._delete_scratch_objects(settings, handle.scratch_bucket, handle.object_prefix)
-            except Exception:
-                logger.warning("restore: scratch bucket teardown failed", exc_info=True)
+            if object_cleanup_allowed:
+                try:
+                    drill._delete_scratch_objects(
+                        settings,
+                        handle.scratch_bucket,
+                        handle.object_prefix,
+                        source_buckets=source_buckets,
+                        protected_buckets=protected_buckets,
+                    )
+                except Exception:
+                    logger.warning("restore: scratch bucket teardown failed", exc_info=True)
 
 
 def discard_target(settings: Settings, scratch_db: str) -> None:
@@ -521,9 +548,41 @@ def discard_target(settings: Settings, scratch_db: str) -> None:
     scratch DB AND the copied blobs under its prefix in the non-WORM restore-scratch bucket (else a
     discarded restore orphans a copy of the org's Effective blob set). The prefix is derived from
     the DB name (scratch_db = _RESTORE_PREFIX + restore_id; object prefix = restore_id/)."""
-    drill._drop_scratch_db(settings.sync_dsn, scratch_db)
     prefix = scratch_db.removeprefix(_RESTORE_PREFIX) + "/"
+    handle = ScratchHandle(
+        owner_dsn=settings.sync_dsn,
+        scratch_db=scratch_db,
+        scratch_bucket=settings.s3_bucket_restore_scratch,
+        object_prefix=prefix,
+        expected_counts={},
+    )
+    protected_buckets: set[str] = set()
+    source_buckets: set[str] = set()
+    object_cleanup_allowed = False
     try:
-        drill._delete_scratch_objects(settings, settings.s3_bucket_restore_scratch, prefix)
+        protected_buckets = drill._scratch_worm_bucket_names(
+            settings, settings.sync_dsn, scratch_db
+        )
+        source_buckets = {bucket for _sha, bucket, _key in drill._scratch_blob_locators(handle)}
+        drill._preflight_scratch_target(
+            settings,
+            settings.s3_bucket_restore_scratch,
+            source_buckets=source_buckets,
+            protected_buckets=protected_buckets,
+        )
+        object_cleanup_allowed = True
     except Exception:  # best-effort object cleanup must not fail the discard
-        logger.warning("restore: discard scratch-object cleanup failed", exc_info=True)
+        logger.warning("restore: discard scratch-object cleanup safety check failed", exc_info=True)
+
+    drill._drop_scratch_db(settings.sync_dsn, scratch_db)
+    if object_cleanup_allowed:
+        try:
+            drill._delete_scratch_objects(
+                settings,
+                settings.s3_bucket_restore_scratch,
+                prefix,
+                source_buckets=source_buckets,
+                protected_buckets=protected_buckets,
+            )
+        except Exception:  # best-effort object cleanup must not fail the discard
+            logger.warning("restore: discard scratch-object cleanup failed", exc_info=True)

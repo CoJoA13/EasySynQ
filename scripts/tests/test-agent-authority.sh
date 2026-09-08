@@ -536,11 +536,14 @@ run_neutral_document_contract() {
     RES-UPGRADE-LOCK-TIMEOUT \
     RES-AUDIT-KEY-ROTATION \
     RES-RISK-CLAUSE-PICKER \
-    RES-RESTORE-SCRATCH-WORM-GUARD \
     RES-AUDIT-EXPORT; do
     require_live_text docs/open-residuals.md "^## ${residual_id}$" \
       "open residuals registers ${residual_id}"
   done
+  reject_live_text docs/open-residuals.md '^## RES-RESTORE-SCRATCH-WORM-GUARD$' \
+    'closed scratch guard is absent from the open ledger'
+  require_live_text docs/slice-history.md 'RES-RESTORE-SCRATCH-WORM-GUARD is CLOSED' \
+    'slice history preserves scratch guard closure evidence'
   if [ -f "$ROOT/docs/open-residuals.md" ] && \
       validate_residual_blocks "$ROOT/docs/open-residuals.md"; then
     ok 'every open residual independently has the exact record schema'

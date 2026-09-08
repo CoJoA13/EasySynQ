@@ -77,6 +77,45 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-restore-scratch-worm-guard — protected target rejection before copy
+
+Recorded 2026-09-08 against source base `6491eca92c45cdf1c0c435dafcc688267de024d1`.
+**RES-RESTORE-SCRATCH-WORM-GUARD is CLOSED** by this bounded guard and its executable proofs.
+Operator restore, fresh drills and retained-archive verification now reject the configured documents,
+records and audit-checkpoint buckets and every manifest source bucket before creating the scratch DB.
+After restoring PostgreSQL, they read every custom `worm_bucket` declaration from the restored sink
+catalog, including disabled sinks and all organizations, and reject a matching scratch name before
+copying. A malformed or unreadable catalog fails closed. Same-name declarations on other endpoints
+are conservatively forbidden; operators must select a distinct scratch bucket.
+
+The existing storage principal must confirm that destination Object Lock is absent. Only the supported
+`ObjectLockConfigurationNotFoundError` response permits copying; enabled lock, denied/unsupported
+lookup, transport errors and malformed responses fail closed. Cleanup becomes eligible only after the
+whole preflight passes and checks known roles and current lock metadata again before listing/deleting.
+Discard captures restored roles before dropping its scratch database; failed discovery skips object
+cleanup. The [runbook](runbooks/backup-restore.md) documents the new read-only metadata permission.
+
+The corrected candidate's CPJ proof `job-mtt2veg2-8da23a04` completed at **19:46:06 UTC** with source
+hashes unchanged: **2,083 unit tests passed / 2 expected local opt-in skips**, **47 affected integration
+tests passed**, Ruff and format passed over **770 files**, and mypy passed over **449 source files**.
+The two opt-ins are release-pin and API image runtime proofs; they were not executed in this local
+run. Required CI retains its API image proof. Tests cover all three runners' rejection/order/partial-copy
+paths, actual PostgreSQL catalog compatibility and failure, supported MinIO metadata behavior,
+nonempty allowed copy/read/cleanup and immutable protected-object inventories across all pages.
+An actual operator wrapper failure emits STARTED/FAILED without VERIFIED or checkpoint ACK.
+Existing result envelopes, callbacks, standing restore results and teardown behavior remain intact.
+Independent source/specification review passed after correcting falsey non-object catalog rejection
+and expanding explicit failure/compatibility/audit coverage. Authority, site-data and whitespace checks
+passed; exact-session inspection found no owned fixture or reaper containers. Private logs remain
+outside Git. Three existing testcontainers namespace deprecations did not affect test results.
+
+This closes known role and physical-lock protection for scratch operations, not the broader recovery
+program. Snapshot roles plus current settings/metadata cannot discover a post-archive custom role that
+exists only in the live catalog and is also wrongly unlocked, and a metadata check cannot atomically
+prevent subsequent administrative reconfiguration. No schema, dependency, key format or production
+cutover change is included. Source-independent recovery remains open in its
+[separate record](open-residuals.md#res-source-independent-recovery).
+
 ### Recovery reconciliation — current capability inventory and source-independent recovery ownership
 
 Recorded 2026-09-08 against `6077e8a45b5942daf803220765b326f82ddd4417`, with
