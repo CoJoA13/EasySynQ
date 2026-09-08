@@ -476,14 +476,23 @@ def test_the_verifier_refuses_a_manifest_with_no_recorded_ids(tmp_path: Path) ->
 
 def test_the_release_gate_runs_on_a_version_tag() -> None:
     """test_images_lock_pinned.py SKIPS unless EASYSYNQ_RELEASE=1, and nothing set it — the guard
-    was inert, so a release could ship floating third-party tags with every check green."""
-    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
-    assert "v*" in workflow[True]["push"]["tags"], "no tag trigger means the gate never fires"
-    gate = workflow["jobs"]["release-gate"]
-    assert gate["if"] == "startsWith(github.ref, 'refs/tags/v')"
-    steps = [s for s in gate["steps"] if s.get("env", {}).get("EASYSYNQ_RELEASE") == "1"]
-    assert steps, "the gate must actually set EASYSYNQ_RELEASE=1"
-    assert "test_images_lock_pinned" in steps[0]["run"]
+    was inert, so a release could ship floating third-party tags with every check green.
+
+    Asserted against .gitlab-ci.yml, which is the gate. The identical assertion used to read
+    .github/workflows/ci.yml; retiring that workflow without moving this would have returned the
+    guard to the exact inertness it was written to end.
+    """
+    pipeline = yaml.safe_load(_read(".gitlab-ci.yml"))
+    gate = pipeline["release-gate"]
+
+    rules = gate["rules"]
+    assert any("$CI_COMMIT_TAG" in str(rule.get("if", "")) for rule in rules), (
+        "no tag rule means the gate never fires"
+    )
+    assert gate.get("variables", {}).get("EASYSYNQ_RELEASE") == "1", (
+        "the gate must actually set EASYSYNQ_RELEASE=1"
+    )
+    assert any("test_images_lock_pinned" in line for line in gate["script"])
 
 
 def test_images_update_refuses_to_emit_a_partial_pin(tmp_path: Path) -> None:

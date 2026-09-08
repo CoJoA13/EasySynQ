@@ -282,6 +282,27 @@ compose-images-lock:
   script:
     - bash scripts/check-compose-images-lock.sh
 
+# Dependency updates, replacing Dependabot (which does not run on GitLab). SCHEDULE-ONLY: a
+# pipeline schedule drives it, so an ordinary push never raises MRs. Needs a masked CI/CD variable
+# RENOVATE_TOKEN — a project access token with api + write_repository. Renovate reads its policy
+# from renovate.json, which is a faithful port of the retired .github/dependabot.yml and carries
+# the python ceiling that refuses the bump shipping an unstartable image.
+renovate:
+  stage: check
+  image:
+    name: renovate/renovate:39
+    entrypoint: [""]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  variables:
+    RENOVATE_PLATFORM: gitlab
+    RENOVATE_ENDPOINT: "$CI_API_V4_URL"
+    RENOVATE_REPOSITORIES: "$CI_PROJECT_PATH"
+    RENOVATE_TOKEN: "$RENOVATE_TOKEN"
+    LOG_LEVEL: info
+  script:
+    - renovate
+
 release-gate:
   stage: check
   extends: .uv

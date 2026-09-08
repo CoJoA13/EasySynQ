@@ -2,7 +2,7 @@
 easysynq_status_schema: 1
 as_of: "2026-09-07"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-gitlab-ci-port"
+last_shipped_slice: "S-renovate-adopt"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2011
@@ -11,7 +11,7 @@ web_tests: 2352
 contract_tests: 285
 integration_passed: 1231
 integration_skipped: 2
-ci_jobs: 10
+ci_jobs: 11
 ci_checks: 13
 ---
 
@@ -271,6 +271,23 @@ the facts it freshly verifies; partial or unavailable checks must be reported as
 compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
 the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
 differs.
+
+Fresh 2026-09-07 evidence for S-renovate-adopt. It moves `ci_jobs` 10 -> **11** and nothing else.
+`api_unit_tests` stays **2,011** and `ci_checks` stays **13**: the slice adds assertions inside
+existing tests rather than new ones, and the Renovate job is schedule-gated so it never runs on a
+branch push.
+
+⚠ Dependency automation had been UNATTENDED since the GitLab move — Dependabot does not run there,
+and GitLab's own Dependency Scanning reports vulnerable packages rather than raising routine
+version-bump MRs, so it is not a replacement. `renovate.json` is a faithful port of
+`.github/dependabot.yml`, deliberately not a redesign, and carries the python ceiling forward.
+No automerge: this repository has repeatedly found bumps that were green in CI and still wrong.
+
+Measured: api unit **2,011 passed / 1 skipped** under `EASYSYNQ_IMAGE_PROOF=1`, `ruff check` and
+`ruff format --check` clean, `mypy` strict clean across 449 source files, gitlab-ci-hardening
+**53/0** (up from 49 — four new Renovate assertions), ci-hardening 85/0, `AUTHORITY_OK`,
+`check-no-site-data` clean. The web, contract and integration figures are carried unchanged and are
+NOT restated: no TypeScript, no OpenAPI, no migration.
 
 Fresh 2026-09-07 evidence for S-gitlab-ci-port. It moves `api_unit_tests` 2,008 -> **2,011** (three
 semantic pins for the new pipeline) and, more consequentially, the CI-topology fields: `ci_jobs`
