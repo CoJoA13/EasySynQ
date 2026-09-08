@@ -2,7 +2,7 @@
 easysynq_status_schema: 1
 as_of: "2026-09-08"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-gitlab-setup-audit"
+last_shipped_slice: "S-built-image-security-gate"
 migration_head: "0092"
 next_migration: "0093"
 api_unit_tests: 2011
@@ -277,6 +277,22 @@ set is defined by the headings and self-range declarations in [`decisions-regist
 
 ## Verification baseline
 
+The built-image security gate scans the actual API and web artifacts using their production build
+contexts. HIGH/CRITICAL findings with a reported fixed version block the required `security` job;
+findings without a reported fix remain visible as OPEN. Scanner or report-processing failures also
+block merging. The live npm policy remains enforced; filesystem and pip-audit findings remain
+advisory. Passing this threshold does not establish image-security clearance.
+
+Private image evidence collected on 2026-09-08 covers main `5577178` and the compatible web npm
+candidate `dcd22d7` in [!15](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/15).
+Actual image identities, unprivileged offline runtime entry paths and the web default preview
+command were verified. The web image pins npm **11.19.1**; its local Renovate extraction and scoped
+`<12` rule passed, as did the live source-lock audit with `blocked: 0`. The baseline fix-available
+tooling findings are absent in the rebuilt candidate. OS applicability and remediation work remain
+open under [`RES-CONTAINER-SECURITY-TRIAGE`](open-residuals.md#res-container-security-triage);
+detailed inventories stay outside Git under R61. These artifact smokes do not prove production
+deployment, recovery, or upgrade readiness.
+
 The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
 repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
 the facts it freshly verifies; partial or unavailable checks must be reported as such. The implementation
@@ -347,8 +363,9 @@ The successful main pipeline `2828169447` at `66675359` supplied fresh audit evi
 **2,011 passed / 1 release-only skip**, integration **1,231 passed / 2 skipped**, **285** contracts,
 web **2,352 tests across 281 files**, **80** browser tests, and migration round-trip checks passed.
 The application counts are unchanged. The additional `renovate-config` job moves `ci_jobs` to
-**12** and ordinary `ci_checks` to **14**. The security job succeeded but its
-pip-audit and Trivy findings policy remains report-only; see `RES-CONTAINER-SECURITY-TRIAGE` in
+**12** and ordinary `ci_checks` to **14**. At that setup baseline, the security job succeeded with
+pip-audit and Trivy findings still report-only; the later built-image gate is described above.
+See `RES-CONTAINER-SECURITY-TRIAGE` in
 [`open-residuals.md`](open-residuals.md). This is CI evidence, not deployment acceptance.
 
 Fresh 2026-09-07 evidence for S-renovate-adopt. It moves `ci_jobs` 10 -> **11** and nothing else.
@@ -786,9 +803,11 @@ GitLab's successful-pipeline merge requirement gates the entire pipeline. `web-b
 Chromium suite and retains ignored failure diagnostics for seven days. `renovate-config` runs
 strict repository configuration validation on every branch using the same image as the updater.
 
-The `security` job must finish successfully, but Trivy and pip-audit findings are report-only.
-Its npm high/critical gate and scanner operational failures still fail the job. A green pipeline
-therefore does not establish that the shipped images are free of high/critical findings.
+The `security` job must finish successfully. It enforces the npm policy and blocks HIGH/CRITICAL
+vulnerabilities with a reported fixed version in either built application image. No-fix image
+findings remain OPEN; filesystem and pip-audit findings retain their advisory treatment. Scanner
+and report-processing failures fail the job. A green pipeline does not establish that the shipped
+images are free of high/critical findings or close the wider security residual.
 
 ## Program 0 acceptance status
 

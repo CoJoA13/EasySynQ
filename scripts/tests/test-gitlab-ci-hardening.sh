@@ -132,6 +132,14 @@ assert_text_not_contains "security does not invoke raw npm audit on the web lock
   "$SECURITY_BLOCK" "npm audit --prefix apps/web"
 assert_text_not_contains "security does not write an audit report under a runner temp" \
   "$SECURITY_BLOCK" "RUNNER_TEMP"
+assert_text_contains "security runs the built-image behavioral regression" \
+  "$SECURITY_BLOCK" "bash scripts/tests/test-built-image-security.sh"
+assert_text_contains "security gates both built images through the report-validating runner" \
+  "$SECURITY_BLOCK" "bash scripts/check-built-image-security.sh"
+assert_text_contains "security builds the web artifact with its production context" \
+  "$SECURITY_BLOCK" "docker build -f apps/web/Dockerfile -t easysynq-web:scan apps/web"
+assert_text_not_contains "security cannot substitute an extracted base for the built web artifact" \
+  "$SECURITY_BLOCK" "grep -E '^FROM '"
 
 # ---- release gate (ported) -----------------------------------------------------------------------
 assert_text_contains "release gate stays tag-only" "$RELEASE_BLOCK" 'CI_COMMIT_TAG =~ /^v/'

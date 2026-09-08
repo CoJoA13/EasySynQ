@@ -420,3 +420,41 @@ def test_security_job_gates_npm_and_keeps_trivy_findings_report_only() -> None:
     ]
     assert len(trivy_steps) == 3
     assert [step["with"]["exit-code"] for step in trivy_steps] == ["0", "0", "0"]
+
+
+def test_gitlab_security_gates_both_built_images_after_the_live_npm_gate() -> None:
+    """A base scan or a conditional runner must not substitute for built-artifact evidence."""
+    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
+    security = pipeline["security"]
+    assert security["extends"] == [".uv", ".dind"]
+    for job in [security, pipeline[".uv"], pipeline[".dind"]]:
+        for escape in ("allow_failure", "rules", "when", "only", "except"):
+            assert escape not in job, f"security gate cannot inherit {escape}"
+
+    script = security["script"]
+    required = [
+        "node scripts/check-npm-audit.mjs",
+        "trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL "
+        "--exit-code 0 --format table .",
+        "bash scripts/tests/test-built-image-security.sh",
+        "docker build -f apps/api/Dockerfile -t easysynq-api:scan .",
+        "docker build -f apps/web/Dockerfile -t easysynq-web:scan apps/web",
+        "bash scripts/check-built-image-security.sh",
+    ]
+    for command in required:
+        assert script.count(command) == 1, f"missing unconditional command: {command}"
+    indexes = [script.index(command) for command in required]
+    assert indexes == sorted(indexes)
+    assert 'cd "$CI_PROJECT_DIR"' in script[: indexes[0]]
+    assert not any("cd " in line for line in script[indexes[0] :])
+    body = _flatten_script(script[indexes[0] :])
+    assert "||" not in body
+    assert "set +e" not in body
+    assert "trivy image" not in body
+    assert "grep -E '^FROM '" not in body
+    assert "bash scripts/tests/test-pip-audit-runner.sh" in script
+    assert "bash scripts/run-pip-audit.sh" in script
+    setup = _flatten_script(security["before_script"])
+    assert "aquasec/trivy:0.74.0" in setup
+    assert "TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2" in setup
+    assert "TRIVY_JAVA_DB_REPOSITORY=docker.io/aquasec/trivy-java-db:1" in setup

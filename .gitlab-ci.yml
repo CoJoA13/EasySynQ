@@ -92,7 +92,7 @@ contracts:
   extends: .node
   script:
     # Run the R61 backstop before hydrating dependencies. GitLab requires the whole pipeline;
-    # Trivy findings in the security job remain report-only and are not the R61 gate.
+    # This site-data backstop is separate from the vulnerability gates in the security job.
     - bash scripts/tests/test-agent-authority.sh
     - bash scripts/tests/test-claude-hooks.sh
     - ./scripts/check-repo-authority.sh
@@ -256,8 +256,9 @@ web-browser:
 security:
   stage: check
   extends: [.uv, .dind]
-  # npm high/critical findings are GATED; pip-audit and trivy FINDINGS stay report-only. Operational
-  # failures still fail the job and block merging; a never-ran scan cannot read green.
+  # npm high/critical findings and built-image fix-available HIGH/CRITICAL findings are GATED.
+  # No-fix image findings remain OPEN; pip-audit, filesystem and image secrets stay advisory.
+  # Operational failures fail the job and block merging; a never-ran scan cannot read green.
   before_script:
     - *docker-cli
     # jq is what run-pip-audit.sh parses its report with; the slim image has no jq, and its
@@ -288,11 +289,12 @@ security:
       scripts/tests/test-npm-audit-policy.mjs scripts/tests/test-router-rsc-policy.mjs'
     - node scripts/check-npm-audit.mjs
     - trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --exit-code 0 --format table .
-    # The fs scan does NOT see base-image/apt/copied-stage CVEs. Build the API image and scan THAT,
-    # so the target is exactly what ships.
+    - bash scripts/tests/test-built-image-security.sh
+    # The filesystem scan cannot see base-image/apt/copied-stage findings. Build both actual
+    # artifacts with their production contexts and gate their private, validated image reports.
     - docker build -f apps/api/Dockerfile -t easysynq-api:scan .
-    - trivy image --severity HIGH,CRITICAL --exit-code 0 --format table easysynq-api:scan
-    - trivy image --severity HIGH,CRITICAL --exit-code 0 --format table "$(grep -E '^FROM ' apps/web/Dockerfile | tail -1 | awk '{print $2}')"
+    - docker build -f apps/web/Dockerfile -t easysynq-web:scan apps/web
+    - bash scripts/check-built-image-security.sh
 
 compose-images-lock:
   stage: check

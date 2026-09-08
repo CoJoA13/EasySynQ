@@ -70,16 +70,26 @@ Last reviewed: 2026-09-08
 Status: OPEN
 Owner: Repository owner
 Source: GitLab repository setup audit, 2026-09-08
-Reason: The security job reports high/critical image findings while passing by design: pip-audit
-and Trivy findings are advisory. Its web image scan covers the final base image rather than the
-built application image. Pipeline success therefore does not prove release image security; the
-reported findings need package-level applicability and remediation review before changing the
-established scan policy. Keep detailed vulnerability inventories outside Git under R61.
+Reason: Actual built-image scans still contain high/critical OS findings without a reported fixed
+version. Their package-level applicability, alternative remediation and disposition remain open.
+The required security job now scans both built application images and blocks HIGH/CRITICAL findings
+with a reported fixed version while reporting no-fix findings as OPEN. The live npm policy remains
+enforced; filesystem and pip-audit findings remain advisory. This bounded threshold is not release
+image security clearance. Keep detailed vulnerability inventories outside Git under R61.
 Closure contract: Triage findings against the actual built release images, apply available fixes
 with runtime verification, record justified exceptions in the approved external security evidence,
 scan the built web image, and adopt an explicit reviewed gate for actionable high/critical findings.
 Link fresh scan and runtime evidence when closing this record; do not blanket-ignore findings or
 describe report-only scanner success as a clean result.
+Progress, 2026-09-08: Fresh built API/web scans and unprivileged offline runtime smokes were collected
+against main `5577178`; compatible web tooling candidate `dcd22d7` in
+[!15](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/15) was rebuilt and rescanned.
+Its baseline fix-available tooling findings are absent, actual npm/Node/runtime and Renovate
+extraction were verified, and the live application-lock audit returned `blocked: 0`.
+The fixed-version image gate retains no-fix findings and fails closed on scanner/report errors.
+Detailed evidence remains external; no exception, risk acceptance, production exposure conclusion,
+or full residual closure has been created. [Issue #4](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/4)
+tracks the remaining work.
 Last reviewed: 2026-09-08
 
 ## RES-IP-REGISTER-COLUMN-JUMP
