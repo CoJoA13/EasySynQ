@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-09-09"
-baseline_commit: "bf7416dead2c9615a202e2cbe16a4b58849162b3"
-last_shipped_slice: "S-audit-raw-transport"
+baseline_commit: "475490e45b1bef34253c878b26a0ebc97f751d4f"
+last_shipped_slice: "S-audit-isolated-read"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 3070
+api_unit_tests: 3155
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
@@ -106,47 +106,56 @@ only after body/client cleanup. They remain unauthenticated until R78. Actual pr
 preserves opaque retained versions and rejects missing returned identity for literal `null`; marker
 and missing-version responses map to provider failure. Current operational callers remain unchanged.
 
-Initial focused verification passed **92 raw transport tests and 902 affected compatibility tests**.
-Review added cheap credential-length admission before delegated validation: two oversized-input
-regressions failed before the fix, and the exact 4,096-character control passed. All **95 final raw
-transport tests** then passed without failures, errors or skips. All **six private wrong
-implementations** triggered the intended built-in assertion failure in unchanged tests, with clean
-setup and teardown. The complete local API suite passed **3,070 tests with one existing release-only
-skip in 78.22 seconds**. The same offline
-production image ran five codec vectors, 31 key controls, four lineage cases and six bridge cases
-as UID 10001 with development dependencies absent. Ruff, formatting across **802 API files**, mypy
-across **459 source files**, runner static checks, **95 authority fixtures**, repository authority,
-candidate-wide site-data and whitespace checks passed before the documentation update.
+S-audit-isolated-read adds the inactive Linux supervisor under R80. One unchanged R79 request runs
+in a private worker with verified address-space, CPU, descriptor, core and regular-file limits.
+Ready/request/result frames are bounded, credentials stay out of worker argv/environment, and exact
+bytes are admitted only after stdout EOF, zero child exit, cleanup and final cancellation/deadline
+checks. Existing readers, writers, protected enrollment, dependencies and restore remain unchanged.
 
-The final runtime fixture differs from that full-suite candidate only in its credential/URL output
-sentinel selection. Fresh **56 runner tests**, acceptance lint/format and 33 output/command guard
-controls passed. Earlier fixture lifecycle verification covered three complete 13-case stream
-cycles, eight deterministic write-fault controls and a real unexpected-handler failure control.
-The existing owned acceptance runner then passed all **six mandatory actual-image runtime tests**
-without skips in 74.88 seconds: three existing external-verifier cases plus provider/R78 (21 cases),
-routing/TLS (six cases) and streams/cancellation (13 cases). All tests used the same immutable API
-image; owned containers, unique image tag and temporary directory were removed. Three existing
-Testcontainers deprecation warnings remain. Source identities cover **2,012 files and 153 directory
-modes including the root**, preserving all production, dependency and unit bytes across the final
-sentinel correction. Trusted and untrusted routing ran with a populated hostile real default SDK
-session and verified exact restoration. The real SDK exposed a finite 65,536-byte error entity at
-`before-parse.s3.GetObject` before the raw API returned; the stalled successful-body read raised
-`ReadTimeoutError` after 5,087 ms, measured before fixture cleanup.
+The final full suite includes **77 isolated, 95 raw and 64 runner tests**. Independent review found
+that unexpected cleanup exceptions could lose their identities; the correction passed five focused
+checks, including an observed exited-but-unreaped cancellation control. The corrected candidate
+passed **3,155 API tests with one existing release-only skip in 80.67 seconds**. Its offline production-image proof executed five codec vectors, 31 key controls,
+four lineage cases and six bridge cases as UID10001 without development dependencies. Ruff,
+formatting across **807 API files**, mypy across **461 source files**, runner checks, **95 authority
+fixtures**, repository authority, candidate-wide site-data and whitespace passed.
 
-The 64KiB admission bound applies to successful entity data. SDK error buffering before stream
-ownership, framing-hidden octets and blocking/trickling IO remain material limits; 15 seconds is a
-cooperative deadline. Enforced resource/lifetime containment or a reviewed bounded HTTP adapter,
-complete per-witness enumeration, global history reconciliation and actual snapshot comparison still
-precede operational use. Lineage, key rotation and source-independent recovery remain OPEN.
-These are local candidate results; published-source CI remains required. No dependency, lock,
-migration, schema or CI topology changed.
+All **seven mandatory actual-image runtime tests** passed without skips in **117.18 seconds**,
+retaining the six external/raw cases and adding the isolated boundary case. Genuine retained
+noncanonical bytes reached unchanged R78; altered bytes failed. Trusted/untrusted TLS and exact
+routing passed. A finite **536,936,448-byte** chunked error fixture sent **423,952,384 bytes** before
+connection reset; the worker exited 1 with maximum sampled RSS **509,000KiB** and virtual size
+**524,136KiB**, below its **524,288KiB** address-space ceiling. Its parent then performed another
+successful isolated read. This observes containment and survival, not a kernel OOM event.
+
+The actual 20-second watchdog rejected a trickling body after **20,017ms**. Cancellation after a
+valid result prevented publication in **156ms**. Separate image processes using the actual limit
+helper rejected a 600,000,000-byte allocation with MemoryError, returned EFBIG with zero file bytes
+on a proven writable mount, and reached CPU-ceiling termination after **10,003ms**. Parent pipes
+were closed and children reaped; owned containers, temporary directory and unique image tag were
+removed. Three existing Testcontainers deprecation warnings remain.
+
+All **seven private wrong implementations** caused the intended assertion failures in unchanged
+tests after **15 passing control cases**, with no setup errors or skips. They exercised bypassed
+isolation, missing address-space limit, missing output bounds, publication before exit, late deadline
+admission, discarded cancellation and accepted identity mismatch. Complete code/source evidence binds
+**2,017 files and 153 directory modes**. Documentation is updated after these code-candidate gates;
+review and published-source/main CI evidence is recorded with the merge request.
+
+The direct R79 API retains its cooperative IO limitations. R80 supplies one inactive exact read;
+complete per-witness enumeration, bounded page/spool handling, scalable global reconciliation,
+protected rollback knowledge, actual database snapshot comparison and independent activation/restore
+proofs remain required. Process creation and kernel-stuck work can exceed user-space timing bounds.
+Lineage, key rotation, provider-denial and source-independent recovery remain OPEN.
 
 Other full-stack counts are inherited from
-[MR !25](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/25)'s source pipeline
-`2833531276` and merged-main pipeline `2833606617`, both passing all fourteen required checks.
-The merged baseline is `bf7416dead2c9615a202e2cbe16a4b58849162b3`: 1,259 integration passes with two
-existing skips, 285 response contracts, 2,352 web tests and 80 browser tests. No live enrollment,
-grant, key rotation, restore, deployment or upgrade was performed.
+[MR !26](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/26)'s source pipeline
+`2834420570` and merged-main pipeline `2834469617`, both passing all fourteen required checks.
+The merged baseline is `475490e45b1bef34253c878b26a0ebc97f751d4f`: 1,259 integration passes with two
+existing skips, 285 response contracts, 2,352 web tests and 80 browser tests. Its image security gate
+reported no blocking fix-available findings and retained **85 API / 53 web no-fix findings OPEN**;
+this is baseline evidence, not a fresh security clearance. No live enrollment, grant, rotation,
+restore, deployment or upgrade was performed.
 
 ## Shipped boundary
 

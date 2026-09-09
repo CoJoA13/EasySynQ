@@ -35,6 +35,7 @@ _MANDATORY_NAMES = (
     "test_raw_version_runtime_preserves_exact_provider_bytes_and_bridge",
     "test_raw_version_runtime_enforces_routing_and_tls",
     "test_raw_version_runtime_bounds_streams_and_cleans_up",
+    "test_isolated_raw_runtime_enforces_process_and_byte_boundaries",
 )
 
 
@@ -58,6 +59,8 @@ def _repository(tmp_path: Path) -> Path:
         "apps/api/tests/integration/audit_external_runtime_acceptance.py",
         "apps/api/tests/integration/audit_raw_runtime_acceptance.py",
         "apps/api/tests/integration/audit_raw_runtime_probe.py",
+        "apps/api/tests/integration/audit_isolated_raw_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_isolated_raw_runtime_probe.py",
         "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
         "apps/api/tests/unit/test_sample.py",
         "infra/images.lock",
@@ -257,7 +260,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
         ".",
     ]
     harness = next(call for call in fake.calls if call[0][0] == "/tools/uv")
-    assert harness[0][:7] == [
+    assert harness[0][:8] == [
         "/tools/uv",
         "run",
         "--project",
@@ -265,6 +268,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
         "pytest",
         "tests/integration/audit_external_runtime_acceptance.py",
         "tests/integration/audit_raw_runtime_acceptance.py",
+        "tests/integration/audit_isolated_raw_runtime_acceptance.py",
     ]
     assert harness[1] == root / "apps/api"
     assert harness[2] == 1_200
@@ -277,7 +281,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
     ]
     output = capsys.readouterr().out
     assert "runtime_acceptance=passed" in output
-    assert "mandatory_tests=6" in output
+    assert "mandatory_tests=7" in output
     assert _RUNNER._MANDATORY_TESTS == frozenset(_MANDATORY_NAMES)
     assert "secret-never-print" not in output
 
@@ -393,6 +397,8 @@ def test_runner_rejects_each_missing_or_nonpassing_mandatory_case(
         ("apps/api/tests/integration/audit_external_runtime_acceptance.py", "content"),
         ("apps/api/tests/integration/audit_raw_runtime_acceptance.py", "content"),
         ("apps/api/tests/integration/audit_raw_runtime_probe.py", "content"),
+        ("apps/api/tests/integration/audit_isolated_raw_runtime_acceptance.py", "content"),
+        ("apps/api/tests/integration/audit_isolated_raw_runtime_probe.py", "content"),
         ("apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json", "content"),
         ("infra/images.lock", "symlink"),
         ("infra/compose/minio/minio-init.sh", "symlink"),
@@ -419,6 +425,8 @@ def test_source_or_provider_input_change_fails(
         "infra/compose/minio/minio-init.sh",
         "apps/api/tests/integration/audit_raw_runtime_acceptance.py",
         "apps/api/tests/integration/audit_raw_runtime_probe.py",
+        "apps/api/tests/integration/audit_isolated_raw_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_isolated_raw_runtime_probe.py",
         "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
     ],
 )
