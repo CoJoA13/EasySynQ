@@ -77,6 +77,60 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-bootstrap-bridge — validate the pinned supplied legacy package
+
+**2026-09-09; source baseline `90b4616ecd7d18b8bd11f94b0379b59cfde063f5`.** R78 adds a pure
+inactive evaluator for an externally pinned root, its committed pages and bounded supplied legacy
+observations. Separate strict new-wire and historical compatibility decoders preserve legacy
+normalization while domain-separated hashes commit exact original bytes. Complete page membership
+precedes missing/unlisted-body claims. Every scoped authentic record is considered, including older,
+ahead and unlisted versions. Raw locator conflicts, signed-head conflicts, delete markers and
+sticky collection failures remain visible; each required witness independently needs its boundary.
+Only zero issue groups exposes the original external R77 pin and sorted witness summaries.
+
+Root-generated public-only fixtures independently freeze 14 valid legacy signatures, one invalid
+control, nine packages/30 scenarios, three v2 signatures and a transition proof. The baseline has
+514 locators, two genuine 512+2 pages and two required witnesses. Focused verification passed
+**193 bridge and 653 neighboring tests** with no skips. Exact-capacity tests exercised 4,096
+entries/observations, eight pages, eight retained keys and 16 MiB, with no prefix success on excess.
+Seven private single-check removals each made an unchanged public test fail for the intended reason:
+unlisted-old and namespace checks produced false usable consistency; locator/key/body checks lost
+required diagnostics; duplicate-page validation changed the first manifest fault; offset normalization
+broke legacy compatibility. Each disposable import and transformed source hash was verified, and
+accepted source bytes/modes stayed unchanged.
+
+The first focused run passed 190 tests and exposed one incorrect new test expectation: existing
+R77 permits an advancing first signed audit head. The correction preserved that behavior, explicitly
+tested advancing-head consistency plus lower-head/equal-ID-conflicting-hash rejection, and resolved
+bounded lint/type findings. It changed no existing lineage rule. A full-run launch then stopped
+before testing because a private evidence-directory parent was missing; correcting only the root's
+verification script resolved that setup error. Neither failed attempt was recorded as a full pass.
+
+The complete local API suite passed **2,944 tests with one existing release-only skip in 73.93
+seconds**. Its actual production image ran codec5/key31/lineage4/bridge6 cases offline as UID10001,
+with development dependencies absent, all in immutable image
+`sha256:7af9ae7f3fb20e5929b6e0fb30b871b14a68dd35fed7f71d03f5041036fdcb23`.
+The unchanged external-verifier acceptance passed all **three mandatory current-image runtime cases**.
+Build input digest was `ac09fe84d8203893a369a7e26b3bac57fcf43c3ca758a3b215512e955f5e8394`, proof
+input digest `c4dc668e47dbf81026e9ae18d10df9c1d9c5100bbd1e01121d27cd570039bab9`, and runtime image
+`sha256:fc46ee68a8b2c15fbf9368d836546a0734a8a3fbb0157d149a9af040a95acb55`. Owned resources were
+cleaned up. Ruff, formatting798 API files, mypy458 source files, runtime-runner static checks,
+95 authority fixtures, authority, candidate-wide site-data and whitespace checks passed. Root
+independently verified raw JUnit/logs, source/producer/image identities, 2,008 source files and152
+directory modes, and the unchanged real Git index. Required GitLab checks apply to the published
+candidate; other full-stack evidence is inherited from the verified MR24 merged baseline.
+
+Scope always remains `supplied-legacy-bootstrap-package`. Operational legacy-history completeness,
+witness collection completeness, witness custody, actual database-chain comparison, v2 lineage
+consistency, freshness, rollback-memory continuity and operational key activation remain unproved.
+The manifest and supplied observations may share an undetectable omission. Existing storage reads
+return parsed dictionaries and cannot reconstruct original raw commitments. Complete per-witness raw
+collection, scalable global legacy/v2 reconciliation, actual snapshot comparison and independent
+activation/restore proofs still precede operational integration. Current writers/readers, descriptor1,
+R75 reports, R76/R77, schema, grants, dependencies, backup and restore remain unchanged. Lineage,
+key rotation and source-independent recovery stay OPEN; no live enrollment, deployment, key change,
+restore, cutover or GitHub service was performed.
+
 ### S-audit-lineage-reader — supplied signed history with explicit limits
 
 **2026-09-09; source baseline `165990d3734d683371f3234fc0fe03f1e4624c17`.** R77 adds a pure

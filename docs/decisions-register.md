@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R77) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R78) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R77
+## Part 3 — Resolutions R1–R78
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2732,6 +2732,181 @@ lost keys, re-rooting or compaction is introduced.
 and dated [slice history](slice-history.md).
 
 Bumps the resolutions range **R1–R76 → R1–R77**.
+
+---
+
+### R78 — Pinned legacy bootstrap evidence requires complete supplied package validation — 2026-09-09
+
+**Decision.** Add `evaluate_bootstrap_bridge`, a pure inactive reader for an externally pinned
+legacy bridge root, its committed pages and bounded supplied legacy observations. It validates
+package contents before exposing the original external R77 bootstrap pin. Existing legacy writers,
+scheduled/API/CLI readers, R73 descriptor1, R75 reports, R76/R77, schema/grants, backup and restore
+remain unchanged. No producer, storage adapter, new command or operational report is introduced.
+
+Keep three scopes distinct: the externally committed package, the supplied observation tuple and
+the complete retained history of each operational witness. Complete package closure is checkable;
+tuple exhaustion does not prove provider enumeration. The manifest and supplied observations can
+omit the same authentic object without this evaluator detecting it. No caller completeness Boolean,
+preverified callback/result or mutable cache is accepted as evidence.
+
+**External authority.** Typed enrollment contains unchanged R77 StreamEnrollment, one to four
+distinct required witness UUID/namespace-digest pins and up to eight retained legacy public keys.
+This nonempty bridge mode requires a positive external audit boundary. Zero supplied legacy keys
+represents unavailable material and cannot succeed; it does not change R73's one-to-eight-key
+loader. Retained raw keys have their existing SHA256 fingerprints and legacy Ed25519 admission;
+initial v2 material uses unchanged R76 canonical nonidentity prime-order admission. Root contents
+cannot enroll or replace keys. A missing boundary does not authenticate empty history.
+
+**Committed representation.** Legacy bridge format1 is independent of descriptor1 and v2 envelopes.
+Every new object has exact fields; unknown versions/kinds or duplicate decoded members fail without
+fallback. RFC8785 canonical JSON is UTF8 with no trailing newline. SHA256 domains are the following
+ASCII strings each followed by exactly one NUL byte: `EasySynQ/AuditLegacyBridge/v1/namespace`,
+`EasySynQ/AuditLegacyBridge/v1/raw-body`, `EasySynQ/AuditLegacyBridge/v1/page`, and
+`EasySynQ/AuditLegacyBridge/v1/root`. Namespace/page/root hash domain plus canonical bytes; raw-body
+hashes domain plus exact transport bytes. No object hashes its own hash field.
+
+The namespace commits exactly `kind`, `endpoint`, `bucket`, `region` and `prefix`: worm_bucket,
+already validated R73 external location values and exact `checkpoints/{canonical-org-uuid}/`.
+The typed API compares its externally supplied digest; it does not load a protected file, resolve
+aliases or prove DNS/bucket identity, custody or physical immutability. A future loader must bind
+the witness ID to those same external values under a separately versioned file contract.
+
+Root fields are `format_version:1`, `kind:legacy_bridge`, `org_id`, `stream_id`, `initial_key_id`,
+`initial_public_key`, `initial_key_epoch`, `audit_boundary`, `legacy_key_ids`, `witnesses`,
+`entry_count` and `pages`. Root witnesses contain exact `witness_id`, `namespace_hash`,
+`entry_count`, `lowest_head` and `highest_head`. Heads contain `latest_id` and `latest_row_hash`.
+Root page references contain `page_index`, `entry_count` and `page_hash`. Initial identity/material/
+epoch/head and the complete required witness set must match external enrollment. Legacy key IDs
+are sorted/distinct; missing external material is incomplete, extra external IDs fail. Each witness
+has a positive count and its greatest authenticated committed head must equal the common boundary.
+Low/high summaries are recomputed signed-head summaries, never evidence-selection filters.
+
+Page fields are exact `format_version:1`, `kind:legacy_bridge_page`, `org_id`, `stream_id`,
+`page_index` and `entries`. Entries contain exact `witness_id`, `object_key`, `version_id`,
+`body_hash` and `body_bytes`. Canonical locator order is bytewise witness UUID, UTF8 object key,
+UTF8 version ID, with no Unicode normalization. The global order is strictly increasing across
+page seams. Partition into 512 entries per nonfinal page and 1–512 in the final page; indexes start at 0
+and counts must agree at page/root/witness levels. UUID/hash/key-ID/Base64 spellings follow R76;
+all integers other than actual JSON `format_version:1` are canonical decimal strings. Initial epoch
+is 0–9223372036854775807; positive head IDs and optional required-checkpoint sequence are
+1–9223372036854775807. Root entry count is 1–524288; page index is 0–1023.
+Body length is 1–65536. Exact version labels include literal `null`; no current-object
+substitution or provider immutability claim follows from that label.
+
+**Staged validation.** Invalid caller shapes/scalars/labels/limits raise fixed
+`invalid bootstrap bridge input` without raw exception chaining. Public records are immutable
+frozen slots dataclasses. Over-count returns resource-only incomplete before inspecting tuple
+elements; otherwise validate all bounded member fields before aggregate disposition, then admit
+external keys. Every duplicate transport consumes the budget. Expected malformed bytes become
+evidence issues; unexpected resource/system faults propagate. New code performs no IO, settings,
+environment, DB, clock or private-key access and imports no old orchestration layer.
+
+Root structure, commitment and external bindings are checked in that order, stopping at the first
+root category. Only their success makes root inventory authoritative. Invalid/missing roots cannot
+establish key completeness or page/body membership. Parse every bounded supplied page; wrong
+external identity and malformed bytes fail independently. Authoritative roots require every named
+page hash. Extra/competing pages fail; a wrong page cannot satisfy a missing reference. Complete
+manifest membership exists only after all required pages, partition, uniqueness, global order and
+counts pass. Incomplete pages cannot justify either missing-body membership or authentic-unlisted
+claims. Extra pages may fail while an independently complete committed map remains diagnostic input.
+
+Every scoped raw legacy body authenticates once using at most eight retained-key trials. Preserve
+historical JSON numeric limits, exact field sets, UTC/offset/naive timestamp normalization, decoded
+hash bytes and accepted Base64 spelling. Exact raw-body commitment is separate from normalized
+signature identity. Invalid v2 never falls back to legacy. Out-of-scope observations fail and cannot
+enter matching/authentication; no newest-only, timestamp, lowest-head or highest-head selection.
+
+Different raw bytes at one locator conflict even when both retain a genuine normalized signature.
+Missing exact bodies are incomplete; different digest/length fails. A copy at another witness or
+version cannot repair a missing locator. An authentic supplied locator absent from the fully
+established manifest fails, including older, equal-head and ahead observations. Same audit ID with
+different authenticated row hashes conflicts across all supplied evidence; a greater ID than the
+external boundary fails. Increasing legacy IDs alone establish no predecessor or database chain.
+Delete markers fail; unavailable reads and collection gaps stay incomplete even beside healthy
+copies. Each required witness independently needs all exact committed bodies and its boundary;
+no complete union can discharge a deficient witness's obligation.
+
+**Result and diagnostics.** Status is `consistent`, `failed` or `incomplete`, with scope always
+`supplied-legacy-bootstrap-package`. Only zero issue groups yields the original external usable
+bootstrap pin and witness summaries sorted by UUID. Failed/incomplete results expose neither.
+Established checks on consistency are exactly `external-root-content-binding`,
+`committed-page-and-locator-closure`, `retained-legacy-signature-authentication`,
+`supplied-observation-reconciliation` and `per-witness-signed-boundary-binding`; otherwise empty.
+Every result retains, in order, `operational-legacy-history-completeness`,
+`witness-collection-completeness`, `witness-custody`, `audit-chain-comparison`,
+`v2-lineage-consistency`, `freshness`, `rollback-memory-continuity` and `operational-key-activation`
+as unproved checks. No general verified, independent-attestation or activation Boolean is added.
+
+Failures dominate incomplete dependencies. Count every stable issue group before capping display;
+retain at most two representative observation/page indexes total per issue, selected from distinct
+conflicting values where applicable. Order failed first, then code and stable subject. Never emit
+raw bodies, signatures, material, locators or provider exceptions. Root categories stop at first
+fault. Complete manifest shape checks stop at the first category: partition, duplicate locator,
+global order, then aggregate counts, counting all duplicate groups when applicable. Independent
+locator/commitment/authentication/marker/gap/head issues coexist. Malformed body suppresses its
+signature-failed diagnosis; present wrong bytes are not additionally missing. Ambiguous or incomplete
+witness inputs do not produce invented smaller summaries. Duplicate deliveries remain budgeted.
+
+The finite issue vocabulary and grouping are fixed below. Subjects remain internal; public results
+contain only the code, severity and bounded numeric references. Rejected page digests use SHA256 of
+raw page bytes; body digests use the raw-body domain above. Canonical page duplicates count beyond
+the first validated delivery; body duplicates count only authenticated identical bytes at the same
+locator beyond its first delivery. Resource-only results report both duplicate counts as zero.
+
+| Code | Severity | Group subject; representative |
+| --- | --- | --- |
+| `RESOURCE_LIMIT` | incomplete | Singleton; no references, resource-only result |
+| `ROOT_MISSING` | incomplete | Singleton; none |
+| `ROOT_INVALID` | failed | Singleton; none |
+| `ROOT_COMMITMENT_MISMATCH` | failed | Singleton; none |
+| `ROOT_ENROLLMENT_MISMATCH` | failed | Singleton; none |
+| `LEGACY_KEY_MISSING` | incomplete | Missing root key ID; none |
+| `LEGACY_KEYSET_MISMATCH` | failed | Extra external key ID; none |
+| `PAGE_INVALID` | failed | Rejected raw-page digest; one page position |
+| `PAGE_IDENTITY_MISMATCH` | failed | Canonical page hash; one page position |
+| `PAGE_UNLISTED` | failed | Canonical page hash; one page position |
+| `PAGE_CONFLICT` | failed | Page index; two different canonical page positions |
+| `PAGE_MISSING` | incomplete | Required page index; none |
+| `MANIFEST_PARTITION_INVALID` | failed | Singleton; at most two offending page positions |
+| `MANIFEST_LOCATOR_DUPLICATE` | failed | Exact locator; at most two page positions |
+| `MANIFEST_ORDER_INVALID` | failed | Singleton; at most two page positions |
+| `MANIFEST_COUNT_MISMATCH` | failed | Singleton; at most two page positions |
+| `OBSERVATION_SCOPE_MISMATCH` | failed | Exact locator, or witness ID for a gap; one observation |
+| `IMMUTABLE_LOCATOR_CONFLICT` | failed | Exact locator; two different raw-body observations |
+| `LEGACY_BODY_INVALID` | failed | Body digest; one observation |
+| `LEGACY_BODY_UNAVAILABLE` | incomplete | Exact locator; one unavailable observation |
+| `LEGACY_DELETE_MARKER` | failed | Exact locator; one marker observation |
+| `WITNESS_COLLECTION_GAP` | incomplete | Witness ID and gap reason; one gap observation |
+| `LEGACY_AUTHENTICATION_FAILED` | failed | Body digest; one observation |
+| `LEGACY_AUTHENTICATION_UNESTABLISHED` | incomplete | Body digest; one observation |
+| `LEGACY_BODY_MISSING` | incomplete | Required exact locator; none |
+| `LEGACY_BODY_COMMITMENT_MISMATCH` | failed | Exact locator; one mismatching body observation |
+| `UNLISTED_AUTHENTIC_LEGACY` | failed | Exact locator; one authenticated observation |
+| `SIGNED_HEAD_CONFLICT` | failed | Numeric audit ID; two differing authenticated hash representatives, or one plus external boundary |
+| `ABOVE_BOOTSTRAP_BOUNDARY` | failed | Numeric audit ID; one authenticated observation |
+| `WITNESS_SUMMARY_MISMATCH` | failed | Witness ID; at most two authenticated endpoint observations |
+
+**Bounds and integration.** Wire limits are 256 KiB root, 2 MiB page, 64 KiB legacy body, six JSON container
+levels for new wire, 1,024 pages and 524,288 entries. This evaluator permits 4,096 committed entries,
+4,096 supplied legacy observations, 8 page observations, 16 MiB total transport and 32 displayed issues;
+callers may only lower exposed observation/byte/issue ceilings. An authenticated oversized root
+returns resource-only incomplete; an unauthenticated count cannot conceal root failure. No partial
+window is usable. Paging alone does not solve complete retained-history processing.
+
+R77 consumes the unchanged external pin in composition tests and retains all its original assurance
+fields. Live integration still needs separately reviewed raw exact-version collection for every
+witness, globally reconciled scalable legacy/v2 history, protected rollback memory, actual read-only
+snapshot chain comparison, durable issuance/delivery and independent activation/restore proofs.
+Current retained storage reads return parsed dictionaries and cannot reconstruct raw commitments.
+Empty bootstrap, compromise/lost-key recovery, pruning and re-rooting remain deferred. Lineage,
+key rotation and source-independent recovery residuals remain OPEN.
+
+**Back-propagation:** [Security and audit](12-security-and-audit.md),
+[external verification](runbooks/audit-external-verification.md),
+[key rotation](runbooks/key-rotation.md), [open residuals](open-residuals.md),
+[current status](current-status.md) and dated [slice history](slice-history.md).
+
+Bumps the resolutions range **R1–R77 → R1–R78**.
 
 ---
 

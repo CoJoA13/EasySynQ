@@ -24,6 +24,16 @@ without independently retained newer knowledge. This command, its descriptor and
 verification criteria are unchanged. A scalable complete-history reader and the bridge/collection
 proofs must precede operational integration; do not split history into independently accepted windows.
 
+R78 adds an inactive bridge evaluator for exact legacy evidence committed by an external bootstrap
+root. It checks all declared pages and bodies, retained signatures and the common positive boundary
+at every required witness. A consistent package can supply the original external R77 pin for a
+separate graph evaluation. It cannot establish that the input contains every retained object:
+matching omissions from the manifest and supplied observations remain undetectable here. The current
+storage reader returns parsed dictionaries and cannot reconstruct exact original-byte commitments.
+No new CLI option, descriptor version or enrollment procedure is activated. Raw version collection,
+scalable global reconciliation and actual database-chain comparison remain prerequisites; preserve
+the existing protected-file procedure below.
+
 ## Establish the public enrollment
 
 The repository owner approves the expected organization IDs, retained Ed25519 public keys and witness

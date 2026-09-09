@@ -381,6 +381,14 @@ forked, invalid or incomplete history. Current operational consumers remain unch
 bootstrap contents, complete per-witness collection, scalable retained-history processing and
 DB-chain comparison remain separate obligations; this foundation does not close this record.
 
+Pinned-bridge progress on 2026-09-09 (R78): the pure reader now validates an externally committed
+legacy package, all of its declared pages and exact supplied bodies, retained signatures and each
+required witness's positive boundary. An authentic unlisted observation remains a discrepancy;
+missing pages cannot establish body membership. Shared manifest/input omissions remain undetectable,
+and no current consumer is activated. Complete raw per-witness collection, scalable global history,
+actual DB-chain comparison, durable delivery and compatibility/restore proofs remain required.
+This record remains OPEN.
+
 ## RES-MINIO-VERSION-LIST-DENY
 
 Status: OPEN
@@ -464,6 +472,13 @@ from a predecessor edge's permitted signing key/epoch. Detached or rejected tran
 introduce next material, and failed/incomplete results expose no usable key history. A terminal
 transition is not operational activation. Current key loading, issuance and restore stay unchanged;
 complete history, independent delivery/activation confirmation and pre-rotation restore remain OPEN.
+
+Pinned-bridge progress on 2026-09-09 (R78): exact supplied legacy evidence can now be bound to an
+external bootstrap pin without changing historical normalization or retained-key admission. This
+adds no legacy signer epoch, key activation or trust-file update. The bounded package result does
+not prove full retained history, rollback continuity, independent transition confirmation or an
+actual pre-rotation restore. Current signing and restore behavior and this closure contract remain
+unchanged; this record remains OPEN.
 
 ## RES-RISK-CLAUSE-PICKER
 
