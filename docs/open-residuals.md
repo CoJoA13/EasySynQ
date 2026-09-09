@@ -350,7 +350,7 @@ now preserves enrolled witnesses independently of the database, while scheduled/
 still discover their inventory from the database.
 Closure contract: Define and ship a Merkle-chained checkpoint format in which each anchor commits to the
 prior anchor hash, with a binding register entry and migration/compatibility proof.
-Last reviewed: 2026-09-08
+Last reviewed: 2026-09-09
 
 All retained eligible legacy object versions are checked, including older contradictions after a
 genuine producer re-anchors. The explicit protected-file CLI now checks the owner's enrolled
@@ -363,6 +363,12 @@ observation, and descriptor compromise or rollback remains outside cryptographic
 **Closing it needs** Merkle-chained anchors, trusted lineage/key-era bootstrap and the corresponding
 compatibility/restore proofs. The static external enrollment closes only the explicit CLI's database
 selection gap; this record remains OPEN.
+
+Historical-target progress on 2026-09-09 (R75): the explicit consumer now checks a closed older
+inspection database using one database snapshot, authenticates ahead witnesses separately and
+requires complete coverage from every enrolled witness. Retained pre-rewrite contradictions still
+fail. This does not prove the intended recovery point, predecessor continuity or archive provenance;
+the lineage closure contract is unchanged.
 
 ## RES-MINIO-VERSION-LIST-DENY
 
@@ -421,7 +427,7 @@ Reason: Checkpoints contain no key identifier or activation history. Scheduled/A
 uses one key; explicit protected-file verification supports a static legacy public-key allowlist.
 Closure contract: Add a key identifier to checkpoints and retain a public-key verification history, with
 rotation and pre-rotation restore proofs.
-Last reviewed: 2026-09-08
+Last reviewed: 2026-09-09
 
 Restoring a pre-rotation backup still verifies its historical signature against the current key.
 The unattended retained-version scan also uses that single key, so retaining an old public key alone
@@ -430,6 +436,12 @@ public keys per organization and rejects unknown keys, without private-key acces
 allowlist supplies no key activation, revocation era, compromise cutoff or rotation/restore protocol.
 **Closing it needs** a checkpoint key identifier, retained authorized public-key history and actual
 rotation plus pre-rotation restore proofs. This record remains OPEN.
+
+Historical-target progress on 2026-09-09 (R75): the explicit legacy reader now accepts authentic
+newer off-host evidence for an independently selected older target while checking all applicable
+anchors against the static enrolled public-key set. Real two-key and unknown-key cases are covered,
+but no key identifier, activation/revocation era, compromise cutoff or rotation procedure is added.
+The existing restore path and this record's rotation/pre-rotation proof requirements are unchanged.
 
 ## RES-RISK-CLAUSE-PICKER
 

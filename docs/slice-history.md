@@ -77,6 +77,59 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-historical-target — explicit older-target verification with complete witness coverage
+
+Recorded 2026-09-09 against source base `83c9b0eb92d07f8b2e2bb6a2830cb745f45b6ac2`.
+R75 adds `verify-offhost --trust-descriptor PATH --historical-target` with report mode
+`external-historical-legacy-v1`. One read-only REPEATABLE READ snapshot supplies inventory,
+per-organization canonical metadata, the unbounded chain/local checkpoint walk, heads, counts and
+witness comparisons. Every retained eligible off-host version authenticates before applicable/ahead
+classification; genuine later heads do not fill a target coverage gap, and older contradictions
+survive genuine re-anchors. Organization coverage is the minimum of each required witness's valid
+matching head, using actual row counts. Pending rows remain separate and prevent success.
+
+The initial feature falsifier established live success for A and B, then live failure for the closed
+A target after authentic B was published; only the new historical option was unrecognized. Final
+real PostgreSQL/MinIO verification passed **all seven historical cases in 71.80 seconds without
+skips**: A/B mode distinction, retained pre-rewrite anchors at or ahead of the target, enrolled
+legacy key rotation and invalid ahead bodies, all-required-witness lower-prefix/pending coverage,
+later-only/empty witnesses, interleaved per-org heads and missing/unsupported metadata, and a real
+owner update that a separate observer sees while the verifier retains its earlier snapshot.
+The loopback fixture forwards the actual provider bytes and is exercised locally as well as supporting
+GitLab DinD. All owned integration containers were removed.
+
+The affected audit selection confirms **310 distinct tests across two attributed runs**: 303 unchanged
+passing neighborhood cases plus the final seven-case historical module. Controller regressions cover
+unusable snapshots without reopening, timeout/cancellation and cleanup boundaries, independently valid
+witness details after aggregate-count failure, unknown-head underclaiming and preservation of an
+attestation failure observed before command timeout. Default live report shape and behavior remain
+covered. Three inherited Testcontainers namespace deprecation warnings remain.
+
+The repository runner built the current API source and passed **all three mandatory actual-image
+cases** against immutable image `sha256:74ac4d4a19468e5b8744622a2a688b01c3333a51289465fd1a2e6fa9fb38c7fd`.
+Both original live cases retain their minimal reader grants and hostile PostgreSQL environment checks.
+Only the historical reader gains `SELECT (org_id, canonical_serialize_version)` on `system_config`;
+actual unrelated reads and all writes fail with SQLSTATE `42501` in read-write transactions. The proof
+uses UID 10001, read-only root filesystem, a public-file-only mount, real allowed version reads and
+403 write/delete/retention/governance denials. The runner checks exact mandatory JUnit names and
+counts, immutable image identity and unchanged build/proof inputs before cleanup; root separately
+confirmed the exact run-labeled containers and image were absent afterward.
+
+Full local verification passed **2,366 API unit tests with two existing opt-in skips in 63.23 seconds**,
+Ruff, **790-file** API formatting, **453-source-file** mypy, runtime-runner static checks,
+**95 authority fixtures**, repository authority, all **1,997 tracked and new candidate files** through
+an isolated site-data index, and whitespace checks. The two skips are release digest pinning and the
+older opt-in image-start proof; mandatory container acceptance executed separately. Source/log/index
+identities were verified. These overlapping runs are not additive whole-suite counts and do not
+replace required GitLab checks on the published candidate.
+
+Legacy canonical/signature bytes, writers, historical migrations, scheduled/API/no-descriptor callers,
+backup/restore exits and acknowledgment remain unchanged. Historical selection cannot authenticate the
+intended recovery point, archive provenance, key eras or predecessor continuity; DB and object storage
+are not one atomic observation. The protected-file custody boundary is unchanged, and lineage, key
+rotation, provider denial and source-independent recovery remain OPEN. No live enrollment, role grant,
+restore, key rotation, deployment or upgrade was performed.
+
 ### S-upgrade-lock-timeout — bounded online migration lock waits
 
 Recorded 2026-09-08 against source base `7a4baccbaaefb3a34e5cdbddf778976ae6b99eb6`.

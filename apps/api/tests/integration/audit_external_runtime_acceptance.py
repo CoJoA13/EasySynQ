@@ -14,7 +14,7 @@ import json
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -160,14 +160,105 @@ class _DatabaseReader:
     container_dsn: str
 
 
-@pytest.fixture
-async def _database_reader(
-    app_under_test: Any,
+async def _database_ddl(owner_dsn: str, statement: str) -> None:
+    engine = create_async_engine(
+        make_url(owner_dsn).set(database="postgres"),
+        isolation_level="AUTOCOMMIT",
+    )
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text(statement))
+    finally:
+        await engine.dispose()
+
+
+@asynccontextmanager
+async def _frozen_runtime_database(
+    pg: PostgresContainer,
+    owner_dsn: str,
+    reader: _DatabaseReader,
+) -> AsyncIterator[_DatabaseReader]:
+    """Use the owned PostgreSQL 18 container's tools to freeze a closed runtime target."""
+    database = f"runtime_hist_{uuid.uuid4().hex}"
+    archive = f"/tmp/{database}.dump"  # noqa: S108 - UUID-owned container path, exactly cleaned
+    assert database.replace("_", "").isalnum()
+    source_database = make_url(owner_dsn).database
+    assert source_database is not None
+    container_owner = f"postgresql://test:test@127.0.0.1:5432/{source_database}"
+    created = False
+    try:
+        dump = pg.exec(
+            [
+                "timeout",
+                "120",
+                "pg_dump",
+                "--format=custom",
+                "--file",
+                archive,
+                "--dbname",
+                container_owner,
+            ]
+        )
+        assert dump.exit_code == 0
+        await _database_ddl(owner_dsn, f'CREATE DATABASE "{database}" TEMPLATE template0')
+        created = True
+        restore = pg.exec(
+            [
+                "timeout",
+                "120",
+                "pg_restore",
+                "--exit-on-error",
+                "--single-transaction",
+                "--no-owner",
+                "--dbname",
+                f"postgresql://test:test@127.0.0.1:5432/{database}",
+                archive,
+            ]
+        )
+        assert restore.exit_code == 0
+        username = make_url(reader.host_dsn).username
+        assert username is not None and username.replace("_", "").isalnum()
+        await _database_ddl(owner_dsn, f'REVOKE CONNECT ON DATABASE "{database}" FROM PUBLIC')
+        await _database_ddl(
+            owner_dsn,
+            f'GRANT CONNECT ON DATABASE "{database}" TO "{username}"',
+        )
+        yield _DatabaseReader(
+            host_dsn=(
+                make_url(reader.host_dsn)
+                .set(database=database)
+                .render_as_string(hide_password=False)
+            ),
+            container_dsn=(
+                make_url(reader.container_dsn)
+                .set(database=database)
+                .render_as_string(hide_password=False)
+            ),
+        )
+    finally:
+        cleanup_errors: list[Exception] = []
+        if created:
+            try:
+                await _database_ddl(owner_dsn, f'DROP DATABASE "{database}" WITH (FORCE)')
+            except Exception as exc:  # noqa: BLE001 - continue exact owned archive cleanup
+                cleanup_errors.append(exc)
+        try:
+            removed = pg.exec(["timeout", "10", "rm", "-f", archive])
+            assert removed.exit_code == 0
+        except Exception as exc:  # noqa: BLE001 - report after all owned cleanup attempts
+            cleanup_errors.append(exc)
+        if cleanup_errors:
+            raise cleanup_errors[0]
+
+
+@asynccontextmanager
+async def _database_reader_scope(
     dsns: dict[str, str],
     _pg_container: PostgresContainer,
     _minio: dict[str, str],
+    *,
+    historical: bool,
 ) -> AsyncIterator[_DatabaseReader]:
-    assert app_under_test is not None
     role = f"runtime_reader_{uuid.uuid4().hex}"
     password = f"synthetic_{uuid.uuid4().hex}"
     owner = create_async_engine(dsns["owner"])
@@ -178,6 +269,13 @@ async def _database_reader(
         await connection.execute(
             text(f'GRANT SELECT ON TABLE organization, audit_event, audit_checkpoint TO "{role}"')
         )
+        if historical:
+            await connection.execute(
+                text(
+                    "GRANT SELECT (org_id, canonical_serialize_version) "
+                    f'ON TABLE system_config TO "{role}"'
+                )
+            )
     host_url = make_url(dsns["owner"]).set(username=role, password=password)
     internal_url = host_url.set(host=_common_bridge_address(_pg_container, _minio), port=5432)
     reader = _DatabaseReader(
@@ -193,6 +291,30 @@ async def _database_reader(
                 await connection.execute(text(f'DROP ROLE "{role}"'))
         finally:
             await owner.dispose()
+
+
+@pytest.fixture
+async def _database_reader(
+    app_under_test: Any,
+    dsns: dict[str, str],
+    _pg_container: PostgresContainer,
+    _minio: dict[str, str],
+) -> AsyncIterator[_DatabaseReader]:
+    assert app_under_test is not None
+    async with _database_reader_scope(dsns, _pg_container, _minio, historical=False) as reader:
+        yield reader
+
+
+@pytest.fixture
+async def _historical_database_reader(
+    app_under_test: Any,
+    dsns: dict[str, str],
+    _pg_container: PostgresContainer,
+    _minio: dict[str, str],
+) -> AsyncIterator[_DatabaseReader]:
+    assert app_under_test is not None
+    async with _database_reader_scope(dsns, _pg_container, _minio, historical=True) as reader:
+        yield reader
 
 
 @pytest.fixture
@@ -342,7 +464,7 @@ def _assert_storage_denials(reader: Any, *, bucket: str, key: str, version_id: s
     )
 
 
-async def _assert_database_denials(dsn: str) -> None:
+async def _assert_database_denials(dsn: str, *, historical: bool = False) -> None:
     engine = create_async_engine(dsn)
     try:
         async with engine.connect() as connection:
@@ -354,8 +476,12 @@ async def _assert_database_denials(dsn: str) -> None:
                 "SELECT 1 FROM audit_checkpoint LIMIT 1",
             ):
                 await connection.execute(text(statement))
+            if historical:
+                await connection.execute(
+                    text("SELECT org_id, canonical_serialize_version FROM system_config LIMIT 1")
+                )
             await transaction.rollback()
-            for statement in (
+            denied = [
                 "INSERT INTO audit_event DEFAULT VALUES",
                 "UPDATE audit_event SET reason = reason WHERE false",
                 "DELETE FROM audit_event WHERE false",
@@ -365,7 +491,18 @@ async def _assert_database_denials(dsn: str) -> None:
                 "DELETE FROM audit_checkpoint WHERE false",
                 "TRUNCATE TABLE audit_checkpoint",
                 "UPDATE audit_checkpoint_sink SET enabled = false WHERE false",
-            ):
+            ]
+            if historical:
+                denied.extend(
+                    (
+                        "SELECT setup_state FROM system_config LIMIT 1",
+                        "INSERT INTO system_config DEFAULT VALUES",
+                        "UPDATE system_config SET canonical_serialize_version = 1 WHERE false",
+                        "DELETE FROM system_config WHERE false",
+                        "TRUNCATE TABLE system_config",
+                    )
+                )
+            for statement in denied:
                 transaction = await connection.begin()
                 assert await connection.scalar(text("SHOW transaction_read_only")) == "off"
                 with pytest.raises(DBAPIError) as exc:
@@ -399,8 +536,8 @@ def _decode_report(
     return report
 
 
-def _public_cli_command() -> list[str]:
-    return [
+def _public_cli_command(*, historical: bool = False) -> list[str]:
+    command = [
         _IMAGE_PYTHON,
         "-m",
         "easysynq_api.cli.audit",
@@ -408,6 +545,9 @@ def _public_cli_command() -> list[str]:
         "--trust-descriptor",
         _DESCRIPTOR_IN_CONTAINER,
     ]
+    if historical:
+        command.append("--historical-target")
+    return command
 
 
 def _run_external_cli(
@@ -419,6 +559,7 @@ def _run_external_cli(
     secret_key: str,
     *,
     expected_exit: int,
+    historical: bool = False,
     hostile_environment_cases: tuple[tuple[str, dict[str, str]], ...] = (),
 ) -> dict[str, Any]:
     run_id = os.environ["EASYSYNQ_ACCEPTANCE_RUN_ID"]
@@ -478,7 +619,7 @@ def _run_external_cli(
             verifier,
             [_IMAGE_PYTHON, "-c", private_key_probe],
         )
-        command = _public_cli_command()
+        command = _public_cli_command(historical=historical)
         assert all(value not in command for value in supplied_env.values())
         result = verifier.exec(ExecConfig(command=command, environment={}))
         report = _decode_report(
@@ -629,6 +770,92 @@ async def test_external_cli_runtime_preserves_enrolled_obligation_after_db_selec
         assert witness["status"] == "failed"
         assert witness["attest_failures"] == 1
         assert any("row_hash mismatch" in reason["message"] for reason in witness["reasons"])
+    finally:
+        admin.close()
+        if descriptor is not None:
+            descriptor.chmod(0o600)
+            descriptor.unlink(missing_ok=True)
+
+
+async def test_external_cli_runtime_accepts_historical_target_with_newer_witness(
+    _api_image: _ApiImage,
+    _org_id: uuid.UUID,
+    dsns: dict[str, str],
+    _minio: dict[str, str],
+    _mc: DockerContainer,
+    _pg_container: PostgresContainer,
+    _historical_database_reader: _DatabaseReader,
+) -> None:
+    admin, bucket = _create_locked_bucket(_minio, "runtime-historical")
+    signing_key = Ed25519PrivateKey.generate()
+    descriptor: Path | None = None
+    try:
+        await _create_sink(dsns, _org_id, _minio["endpoint"], bucket)
+        event_a = await _append_and_link(dsns, _org_id)
+        checkpoint_a = await _anchor(dsns, _org_id, signing_key)
+        assert checkpoint_a.latest_id == event_a.id
+        descriptor = _descriptor_path(_org_id, bucket, (signing_key,))
+
+        async with _frozen_runtime_database(
+            _pg_container, dsns["owner"], _historical_database_reader
+        ) as target:
+            event_b = await _append_and_link(dsns, _org_id)
+            checkpoint_b = await _anchor(dsns, _org_id, signing_key)
+            assert checkpoint_b.latest_id == event_b.id > event_a.id
+
+            with _restricted_storage_reader(_mc, _minio, bucket) as (
+                access,
+                secret,
+                reader,
+            ):
+                object_key, version_id = _first_retained_version(reader, _org_id, bucket)
+                _assert_storage_denials(
+                    reader,
+                    bucket=bucket,
+                    key=object_key,
+                    version_id=version_id,
+                )
+                await _assert_database_denials(target.host_dsn, historical=True)
+                live = _run_external_cli(
+                    _api_image,
+                    _minio,
+                    descriptor,
+                    target.container_dsn,
+                    access,
+                    secret,
+                    expected_exit=1,
+                )
+                historical = _run_external_cli(
+                    _api_image,
+                    _minio,
+                    descriptor,
+                    target.container_dsn,
+                    access,
+                    secret,
+                    expected_exit=0,
+                    historical=True,
+                )
+
+        assert live["mode"] == "external-legacy-v1"
+        assert live["verified"] is False
+        assert historical["mode"] == "external-historical-legacy-v1"
+        assert historical["verified"] is True
+        organization = historical["organizations"][0]
+        witness = organization["witnesses"][0]
+        assert organization["historical"] == {
+            "canonical_serialize_version": 1,
+            "linked_head_id": event_a.id,
+            "covered_through_id": event_a.id,
+            "covered_rows": 1,
+            "uncovered_linked_rows": 0,
+        }
+        assert witness["status"] == "passed"
+        assert witness["historical"] == {
+            "applicable_checkpoints": 1,
+            "ahead_checkpoints": 1,
+            "highest_ahead_id": event_b.id,
+            "covered_through_id": event_a.id,
+        }
     finally:
         admin.close()
         if descriptor is not None:

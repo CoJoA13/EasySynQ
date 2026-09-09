@@ -26,11 +26,14 @@ from ..db.models.organization import Organization
 from ..services.audit.checkpoint import load_verify_key, verify_offhost_checkpoint
 from ..services.audit.external import (
     ExternalVerificationReport,
+    HistoricalOrganizationDetails,
+    HistoricalWitnessDetails,
     OrganizationVerificationResult,
     VerificationReason,
     WitnessVerificationResult,
     _verify_external,
 )
+from ..services.audit.historical import _verify_historical_external
 from ..services.audit.partitions import ensure_partitions
 from ..services.audit.trust import (
     ExternalCredentials,
@@ -55,6 +58,9 @@ _EXTERNAL_CREDENTIAL_KEYS = frozenset(
     }
 )
 _EXTERNAL_ENVIRONMENT_KEYS = frozenset((*_EXTERNAL_CREDENTIAL_KEYS, *_EXTERNAL_FIXED_ENVIRONMENT))
+_EXTERNAL_LIVE_MODE = "external-legacy-v1"
+_EXTERNAL_HISTORICAL_MODE = "external-historical-legacy-v1"
+_EXTERNAL_WORKER_MODES = frozenset({_EXTERNAL_LIVE_MODE, _EXTERNAL_HISTORICAL_MODE})
 
 
 async def _ensure_partitions() -> list[str]:
@@ -126,8 +132,13 @@ async def _verify_offhost() -> tuple[bool, int, list[tuple[str, list[str]]]]:
 
 
 def _external_failure_report(
-    descriptor: TrustDescriptor | None, *, code: str, message: str
+    descriptor: TrustDescriptor | None,
+    *,
+    code: str,
+    message: str,
+    mode: str = _EXTERNAL_LIVE_MODE,
 ) -> ExternalVerificationReport:
+    historical = mode == _EXTERNAL_HISTORICAL_MODE
     incomplete = VerificationReason(
         "CHECK_INCOMPLETE", "required external verification was not attempted"
     )
@@ -156,11 +167,19 @@ def _external_failure_report(
                         comparison_unavailable=False,
                         reasons=(incomplete,),
                         reasons_omitted=0,
+                        historical=(
+                            HistoricalWitnessDetails(None, None, None, None) if historical else None
+                        ),
                     )
                     for witness in organization.witnesses
                 ),
                 reasons=(incomplete,),
                 reasons_omitted=0,
+                historical=(
+                    HistoricalOrganizationDetails(None, None, None, None, None)
+                    if historical
+                    else None
+                ),
             )
             for organization in descriptor.organizations
         )
@@ -175,6 +194,7 @@ def _external_failure_report(
         organizations=organizations,
         reasons=(VerificationReason(code, message),),
         reasons_omitted=0,
+        mode=mode,
     )
 
 
@@ -187,8 +207,22 @@ def _emit_external_report(
     return 0 if report.verified else 1
 
 
-def _run_external(descriptor_path: Path, environ: Mapping[str, str]) -> int:
+def _run_external(
+    descriptor_path: Path,
+    environ: Mapping[str, str],
+    *,
+    mode: str = _EXTERNAL_LIVE_MODE,
+) -> int:
     """Revalidate and run the strict verifier inside its controlled worker process."""
+    if mode not in _EXTERNAL_WORKER_MODES:
+        return _emit_external_report(
+            _external_failure_report(
+                None,
+                code="CONFIG_INVALID",
+                message="external verifier configuration is invalid",
+            ),
+            configuration=True,
+        )
     try:
         descriptor = load_trust_descriptor(descriptor_path)
     except (TrustConfigurationError, ValueError):
@@ -197,6 +231,7 @@ def _run_external(descriptor_path: Path, environ: Mapping[str, str]) -> int:
                 None,
                 code="CONFIG_INVALID",
                 message="external verifier configuration is invalid",
+                mode=mode,
             ),
             configuration=True,
         )
@@ -208,16 +243,21 @@ def _run_external(descriptor_path: Path, environ: Mapping[str, str]) -> int:
                 descriptor,
                 code="CONFIG_INVALID",
                 message="external verifier configuration is invalid",
+                mode=mode,
             ),
             configuration=True,
         )
     try:
-        report = asyncio.run(_verify_external(descriptor, credentials))
+        verify = (
+            _verify_historical_external if mode == _EXTERNAL_HISTORICAL_MODE else _verify_external
+        )
+        report = asyncio.run(verify(descriptor, credentials))
     except Exception:  # noqa: BLE001 - never expose raw runtime/credential errors
         report = _external_failure_report(
             descriptor,
             code="CHECK_INCOMPLETE",
             message="external verifier did not complete",
+            mode=mode,
         )
     return _emit_external_report(report)
 
@@ -238,8 +278,11 @@ def _exec_external(
     credentials: ExternalCredentials,
     *,
     original_database_url: str,
+    mode: str = _EXTERNAL_LIVE_MODE,
 ) -> None:
     """Replace this process with the strict worker under an exact fresh environment."""
+    if mode not in _EXTERNAL_WORKER_MODES:
+        raise ValueError("invalid external worker mode")
     environment = {
         "DATABASE_URL": original_database_url,
         "AUDIT_SINK_READ_ACCESS_KEY": credentials.access_key,
@@ -257,6 +300,7 @@ def _exec_external(
             "-c",
             _EXTERNAL_BOOTSTRAP,
             source_root,
+            mode,
             str(descriptor_path),
         ],
         environment,
@@ -272,7 +316,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "verify-offhost", help="independent off-host checkpoint read-back (out-of-band)"
     )
     offhost_parser.add_argument("--trust-descriptor")
+    offhost_parser.add_argument("--historical-target", action="store_true")
     args = parser.parse_args(argv)
+
+    if (
+        args.command == "verify-offhost"
+        and args.historical_target
+        and args.trust_descriptor is None
+    ):
+        parser.error("--historical-target requires --trust-descriptor")
 
     if args.command == "ensure-partitions":
         ensured = asyncio.run(_ensure_partitions())
@@ -281,6 +333,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "verify-offhost":
         if args.trust_descriptor is not None:
+            mode = _EXTERNAL_HISTORICAL_MODE if args.historical_target else _EXTERNAL_LIVE_MODE
             descriptor_path = Path(args.trust_descriptor)
             try:
                 descriptor = load_trust_descriptor(descriptor_path)
@@ -290,6 +343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         None,
                         code="CONFIG_INVALID",
                         message="external verifier configuration is invalid",
+                        mode=mode,
                     ),
                     configuration=True,
                 )
@@ -302,6 +356,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         descriptor,
                         code="CONFIG_INVALID",
                         message="external verifier configuration is invalid",
+                        mode=mode,
                     ),
                     configuration=True,
                 )
@@ -310,6 +365,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     descriptor_path,
                     credentials,
                     original_database_url=external_inputs["DATABASE_URL"],
+                    mode=mode,
                 )
             except Exception:  # noqa: BLE001 - redact exec/runtime detail in parent failure
                 return _emit_external_report(
@@ -317,6 +373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         descriptor,
                         code="CHECK_INCOMPLETE",
                         message="external verifier did not complete",
+                        mode=mode,
                     )
                 )
             raise AssertionError("os.execve unexpectedly returned")

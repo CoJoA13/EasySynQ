@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R74) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R75) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R74
+## Part 3 — Resolutions R1–R75
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2484,6 +2484,57 @@ evidence belongs in [slice history](slice-history.md), with current remaining wo
 [open residuals](open-residuals.md).
 
 Bumps the resolutions range **R1–R73 → R1–R74**.
+
+---
+
+### R75 — Historical audit targets require explicit selection and complete witness coverage — 2026-09-09
+
+**Decision.** `verify-offhost --trust-descriptor /absolute/path.json --historical-target`
+checks an already restored, closed inspection database chosen by the operator. It uses R73's
+owner-controlled public enrollment and isolated reader runtime. This selection does not prove
+that the database represents the intended recovery point: intentional rollback and malicious
+loss beyond observed applicable anchors cannot be distinguished by the flag.
+
+The historical consumer uses one read-only REPEATABLE READ database snapshot for organization
+inventory, each organization's explicit supported canonical serialization version, the complete
+chain walk and local checkpoint, linked heads, row counts and all witness comparisons. A failed
+snapshot is never replaced with a newer one. Readers need only the existing audit reads plus
+column-scoped SELECT on `system_config.org_id` and `system_config.canonical_serialize_version`.
+Missing or unsupported metadata fails closed, even with no linked rows.
+
+Authenticate every eligible retained witness version before classifying it. A genuine checkpoint
+above that organization's restored linked head is ahead evidence; it does not attest an absent
+row or extend target coverage. Every applicable checkpoint must match its linked row, and an
+older contradiction survives a newer genuine anchor. Unknown keys, malformed bodies, delete
+markers, unavailable reads and incomplete traversal remain failures or incomplete checks.
+Historical mode omits only the live freshness assessment; all existing resource bounds remain.
+
+Each required witness certifies at most its greatest matching applicable head after a valid
+complete scan and valid full-chain/local attestation. Organization coverage is the minimum of
+those heads across all required witnesses. Count actual organization rows, including gaps and
+interleaved global IDs. Expose lower certified prefixes and uncovered linked rows without
+claiming complete verification. Pending rows remain separate and prevent success.
+
+Historical mode is `external-historical-legacy-v1`. Exit 0 and `verified: true` require every
+enrolled organization and required witness to cover the complete linked head, zero pending rows,
+no extra/missing organizations and no incomplete operation or cleanup failure. Exit 1 includes
+partial coverage, unavailable checks and integrity failures; exit 2 is invalid input/configuration.
+Known enrolled obligations and the selected mode remain visible on controlled failures.
+
+Default live verification, scheduled/API/no-descriptor callers, legacy checkpoint bytes and
+writers retain their existing contracts. This mode creates no target, key era, predecessor
+commitment, archive attestation, restore acknowledgment or recovery eligibility. Database and
+object-store observations are not atomic together. Lineage, key rotation, source-independent
+recovery and the pinned-provider permission residual remain OPEN.
+
+**Back-propagation:** [Security and audit](12-security-and-audit.md), the
+[external verification runbook](runbooks/audit-external-verification.md), the
+[key rotation runbook](runbooks/key-rotation.md), the
+[backup and restore runbook](runbooks/backup-restore.md), and narrow progress in
+[open residuals](open-residuals.md). Current counts belong in
+[current status](current-status.md), and dated evidence in [slice history](slice-history.md).
+
+Bumps the resolutions range **R1–R74 → R1–R75**.
 
 ---
 

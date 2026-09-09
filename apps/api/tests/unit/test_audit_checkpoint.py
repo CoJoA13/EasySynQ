@@ -413,6 +413,142 @@ async def test_latest_authenticated_heartbeat_is_checked_for_staleness_once(
     assert sum("stale" in reason for reason in result.reasons) == 1
 
 
+async def _run_policy_scan(
+    monkeypatch: pytest.MonkeyPatch,
+    documents: list[dict[str, Any]],
+    *,
+    target_id: int | None,
+    target_known: bool,
+    mismatches: dict[int, str] | None = None,
+    freshness_policy: cp.HistoryFreshnessPolicy = "historical-target",
+) -> tuple[cp.WitnessHistoryResult, list[int]]:
+    refs = tuple(
+        sink_service.CheckpointVersionRef(
+            f"checkpoints/{_ORG}/{index + 1}-history.json", f"v{index}"
+        )
+        for index in range(len(documents))
+    )
+    by_version = {ref.version_id: document for ref, document in zip(refs, documents, strict=True)}
+    monkeypatch.setattr(
+        cp,
+        "list_offhost_checkpoint_versions_page",
+        lambda *_args, **_kwargs: sink_service.CheckpointVersionsPage(refs, (), False, None, None),
+    )
+    monkeypatch.setattr(
+        cp,
+        "read_offhost_checkpoint_version",
+        lambda _kind, _connection, ref: by_version[ref.version_id],
+    )
+    compared: list[int] = []
+
+    def verify_signature(**fields: Any) -> bool:
+        return cp.verify_checkpoint_signature(_TEST_KEY.public_key(), **fields)
+
+    async def compare(checkpoint: cp.AuthenticatedCheckpoint) -> str | None:
+        compared.append(checkpoint.latest_id)
+        return (mismatches or {}).get(checkpoint.latest_id)
+
+    result = await cp.scan_offhost_history(
+        _ORG,
+        kind="worm_bucket",
+        connection={"bucket": "synthetic"},
+        reader=None,
+        verify_signature=verify_signature,
+        compare_checkpoint=compare,
+        now=_TS,
+        freshness_policy=freshness_policy,
+        historical_target_id=target_id,
+        historical_target_known=target_known,
+    )
+    return result, compared
+
+
+async def test_historical_policy_accepts_signed_stale_evidence_and_classifies_ahead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_at = _TS - datetime.timedelta(seconds=2701)
+    applicable = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, stale_at)
+    ahead = _signed_legacy_doc(_TEST_KEY, _ORG, 9, b"\xbb" * 32, stale_at)
+
+    live, live_compared = await _run_policy_scan(
+        monkeypatch,
+        [applicable, ahead],
+        target_id=None,
+        target_known=False,
+        freshness_policy="live",
+    )
+    historical, historical_compared = await _run_policy_scan(
+        monkeypatch,
+        [applicable, ahead],
+        target_id=7,
+        target_known=True,
+    )
+
+    assert live.attestation_failed is True
+    assert any("stale" in reason for reason in live.reasons)
+    assert live_compared == [7, 9]
+    assert historical.attestation_failed is False
+    assert historical.reasons == []
+    assert historical_compared == [7]
+    assert historical.historical_applicable_checkpoints == 1
+    assert historical.historical_ahead_checkpoints == 1
+    assert historical.historical_highest_ahead_id == 9
+    assert historical.historical_covered_through_id == 7
+
+
+async def test_historical_policy_does_not_let_ahead_evidence_mask_applicable_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applicable = _signed_legacy_doc(_TEST_KEY, _ORG, 5, _HASH, _TS)
+    ahead = _signed_legacy_doc(_TEST_KEY, _ORG, 9, b"\xbb" * 32, _TS)
+
+    result, compared = await _run_policy_scan(
+        monkeypatch,
+        [applicable, ahead],
+        target_id=7,
+        target_known=True,
+        mismatches={5: "synthetic historical contradiction"},
+    )
+
+    assert compared == [5]
+    assert result.attestation_failed is True
+    assert result.historical_applicable_checkpoints == 1
+    assert result.historical_ahead_checkpoints == 1
+    assert result.historical_covered_through_id is None
+    assert "synthetic historical contradiction" in result.reasons
+
+
+async def test_historical_policy_authenticates_ahead_evidence_and_nulls_unknown_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forged_ahead = _signed_legacy_doc(_TEST_KEY, _ORG, 9, _HASH, _TS)
+    forged_ahead["signature"] = base64.b64encode(b"x" * 64).decode()
+
+    forged, compared = await _run_policy_scan(
+        monkeypatch,
+        [forged_ahead],
+        target_id=7,
+        target_known=True,
+    )
+    unknown, unknown_compared = await _run_policy_scan(
+        monkeypatch,
+        [_signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)],
+        target_id=None,
+        target_known=False,
+    )
+
+    assert forged.attestation_failed is True
+    assert compared == []
+    assert forged.historical_ahead_checkpoints == 0
+    assert forged.historical_covered_through_id is None
+    assert unknown.comparison_unavailable is True
+    assert unknown_compared == []
+    assert unknown.historical_applicable_checkpoints is None
+    assert unknown.historical_ahead_checkpoints is None
+    assert unknown.historical_highest_ahead_id is None
+    assert unknown.historical_covered_through_id is None
+
+
 async def test_existing_future_timestamp_behavior_remains_accepted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

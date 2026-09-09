@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-08"
-baseline_commit: "7a4baccbaaefb3a34e5cdbddf778976ae6b99eb6"
-last_shipped_slice: "S-upgrade-lock-timeout"
+as_of: "2026-09-09"
+baseline_commit: "83c9b0eb92d07f8b2e2bb6a2830cb745f45b6ac2"
+last_shipped_slice: "S-audit-historical-target"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 2341
+api_unit_tests: 2366
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
@@ -62,17 +62,35 @@ separate **20-test focused unit run** covered setup/offline/CI/CLI behavior. The
 closed after failure and distinguishes earlier commits from the rolled-back active segment. This
 closes only the lock-wait record; the broader recovery and production upgrade blockers remain.
 
-The current local API suite passed **2,341 tests with two existing opt-in skips in 64.94 seconds**;
-the skips are release image pinning and the older built-image runtime proof, which required GitLab
-CI enables. Ruff, formatting across **787 API files**, mypy across **452 source files**, migration
-environment static checks, **95 authority fixtures**, repository authority, a site-data scan including
-all **1,994 tracked and new candidate files**, and whitespace checks passed.
+S-audit-historical-target adds the explicit `--historical-target` consumer under R75. It checks a
+closed older inspection database against the owner's enrolled retained legacy witnesses, using one
+read-only REPEATABLE READ database snapshot. Authentic newer off-host anchors are reported as ahead
+evidence; applicable contradictions remain failures. Every required witness must cover the complete
+linked head and pending rows prevent success. The operator still selects the target independently;
+lineage, key eras, archive provenance and recovery eligibility are not established.
 
-The other structured full-suite counts remain inherited from MR !20's GitLab pipeline `2831639778`
-on source `f92411cdadfc288742fcc9b7cfed5ca56648e67d`, whose merged tree is source base `7a4bacc`.
-All fourteen required checks passed there: 1,252 integration passes with two existing skips, 285
-response contracts, 2,352 web tests and 80 browser tests. The lock-wait checks and current local API
-results do not replace required CI on this candidate's published commit.
+All **seven real historical scenarios passed together in 71.80 seconds**, including the older-target
+live failure/historical success, retained contradictions, enrolled key rotation, witness coverage,
+per-org metadata and a concurrent owner change proving the database snapshot stays consistent.
+The affected neighborhood adds **303 unchanged passing checks** from its preceding run: **310 distinct
+selected checks** are confirmed across the two attributed runs. The separate current-image runner
+passed all **three mandatory runtime cases**, preserving the two original live custody/denial cases
+and adding the historical case with its additional column-only metadata reader grant.
+
+The complete local API suite passed **2,366 tests with two existing opt-in skips in 63.23 seconds**.
+The skips are release image pinning and the older image-start proof, which required GitLab CI enables;
+the three-case container acceptance above executed separately. Ruff, formatting across **790 API
+files**, mypy across **453 source files**, runtime-runner static checks, **95 authority fixtures**,
+repository authority, site-data across all **1,997 tracked and new candidate files**, and whitespace
+checks passed. Source, proof and real-index identities were checked.
+
+The other structured full-suite counts remain inherited from
+[MR !21](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/21)'s GitLab pipeline
+`2831773989` on source `cd8086b299b54f77ff07a35a8f8ff634c1e4395e`, whose merged tree is source base
+`83c9b0e`. All fourteen required checks passed there: 1,252 integration passes with two existing
+skips, 285 response contracts, 2,352 web tests and 80 browser tests. These inherited full-stack
+results and the new local audit evidence do not replace required CI on this candidate's published
+commit. No live enrollment, grant, key rotation, restore, deployment or upgrade was performed.
 
 ## Shipped boundary
 
@@ -81,7 +99,7 @@ main document, workflow, compliance, reporting, audit, ingestion, drift, objecti
 DCR, improvement, risk, context, interested-party, identity-provisioning, first-run setup, and read-only
 Records surfaces. Retention Policy and Evidence Pack management remain without dedicated SPA routes.
 
-The latest completed work is the S-ui interface program, slices S-ui-1 to S-ui-6. Routes and information
+The completed S-ui interface program spans slices S-ui-1 to S-ui-6. Routes and information
 architecture are unchanged, as is every permission and gating behaviour, and no migration or permission key
 was added. It is otherwise a surface and layout rework, with two exceptions that are not cosmetic. S-ui-2
 corrected cache invalidation for the caller's own task list, which was previously refreshed only by the
@@ -385,12 +403,12 @@ open under [`RES-CONTAINER-SECURITY-TRIAGE`](open-residuals.md#res-container-sec
 detailed inventories stay outside Git under R61. These artifact smokes do not prove production
 deployment, recovery, or upgrade readiness.
 
-The numeric frontmatter records the latest fresh completion evidence for each suite. It is consumed by
-repository automation and must remain parseable, unique-keyed, and comma-free. A later slice updates only
-the facts it freshly verifies; partial or unavailable checks must be reported as such. The implementation
-compatibility anchor remains `baseline_commit` `1dcbc2bc12b14e11f037a657d44659412a7a39c0`; S-ui-6, like
-the slices before it, does not rewrite that implementation-evidence field merely because its branch SHA
-differs.
+The numeric frontmatter records each suite's latest verified result, with fresh or inherited evidence
+attributed above. It is consumed by repository automation and must remain parseable, unique-keyed and
+comma-free. `baseline_commit` identifies the source base for the current slice; it is not the published
+candidate's test identity. Earlier S-ui-6 evidence used compatibility anchor
+`1dcbc2bc12b14e11f037a657d44659412a7a39c0` and remains dated history. Update only freshly verified facts;
+partial or unavailable checks must stay explicit.
 
 Owner clarification on 2026-09-08: use no GitHub services or hosting. The setup migration replaces
 GitHub-hosted CI tools, configures Renovate to use preinstalled Node/npm and uv/Python, blocks its

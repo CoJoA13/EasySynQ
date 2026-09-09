@@ -3,7 +3,9 @@
 Run `verify-offhost --trust-descriptor` from a separate verifier machine to check the organizations,
 public keys and witness locations recorded in an owner-controlled public file. The file defines the
 expected evidence independently of the database being checked. Removing an organization or rerouting
-a database sink cannot remove an enrolled obligation from this command.
+a database sink cannot remove an enrolled obligation from this command. These instructions describe
+the default live consumer; use [historical target inspection](#inspect-an-explicitly-selected-historical-target)
+for an independently selected, closed older database.
 
 The command is explicit and out of band. Existing nightly jobs, API calls and `verify-offhost` without
 the option retain their database-discovered, single-key behavior.
@@ -136,7 +138,7 @@ The mount contains only the public descriptor file. Provide network access to th
 database and HTTPS witness endpoints. The verifier requires no source-workspace mount, signing key,
 application secrets volume or source-store credential.
 
-## Interpret the result
+## Interpret the live result
 
 | Exit | Meaning |
 | --- | --- |
@@ -162,16 +164,98 @@ installation evidence. A failed result calls for investigation of the reported i
 availability condition. It does not authorize deleting retained evidence or silently changing the
 expected enrollment.
 
+## Inspect an explicitly selected historical target
+
+Use `--historical-target` only for an already restored inspection database whose writers are
+closed and whose recovery point you selected independently. The flag cannot establish that the
+chosen target is intentional or distinguish a deliberately old copy from loss beyond the
+observed applicable anchors. It performs audit verification only; it does not restore an archive,
+acknowledge a flagged restore, prove archive provenance or make the target eligible for service.
+
+Keep the same protected public descriptor, separate verifier machine and dedicated readers.
+The historical database reader additionally needs SELECT on exactly `org_id` and
+`canonical_serialize_version` in `system_config`. After reviewing the effective role privileges,
+the separately authorized provisioning operation is:
+
+```sql
+GRANT SELECT (org_id, canonical_serialize_version)
+ON TABLE system_config TO "<historical-reader-role>";
+```
+
+Replace the role placeholder through the normal controlled provisioning procedure. Confirm that
+the two-column read succeeds, while unrelated configuration reads and all configuration writes
+fail with `42501` in read-write transactions, alongside the audit-table and witness denials above.
+Table-wide SELECT or inherited owner/application rights are unnecessary. The ordinary live
+external verifier does not need this additional grant. Merging code does not provision a live role.
+
+Have the controlled launcher supply a `DATABASE_URL` for the closed historical target, then run:
+
+```bash
+docker run --pull=never --rm --read-only --user 10001:10001 \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --env DATABASE_URL \
+  --env AUDIT_SINK_READ_ACCESS_KEY \
+  --env AUDIT_SINK_READ_SECRET_KEY \
+  --mount "type=bind,source=$AUDIT_TRUST_DESCRIPTOR,target=/run/easysynq/audit-trust.json,readonly" \
+  "$EASYSYNQ_API_IMAGE" \
+  /app/.venv/bin/python -m easysynq_api.cli.audit verify-offhost \
+  --trust-descriptor /run/easysynq/audit-trust.json --historical-target
+```
+
+The report mode is `external-historical-legacy-v1`. It adds these `historical` details without
+changing the existing live report:
+
+| Level | Field | Meaning |
+| --- | --- | --- |
+| Organization | `canonical_serialize_version` | This organization's observed integer serialization version; unsupported values fail verification, and malformed or unavailable values are null. |
+| Organization | `linked_head_id` | Its greatest linked row ID in the observed snapshot. Pending rows cannot raise it. |
+| Organization | `covered_through_id` | The minimum certified head across all required witnesses, or null without certifiable aggregate coverage. |
+| Organization | `covered_rows`, `uncovered_linked_rows` | Actual linked row counts within and beyond that aggregate prefix; IDs can have gaps or interleave organizations. |
+| Witness | `applicable_checkpoints` | Authenticated retained versions at or below the target head. Authentication alone does not prove a matching row. |
+| Witness | `ahead_checkpoints`, `highest_ahead_id` | Authenticated versions above the target head, and their greatest ID. These bodies do not fill a target coverage gap. |
+| Witness | `covered_through_id` | Its greatest matching applicable head after complete valid scanning and full-chain/local attestation. |
+
+An unavailable value is null, not zero. If valid complete scans leave any required witness
+without an applicable anchor, the aggregate head is null, covered rows are zero and all checked
+linked rows remain uncovered. An invalid/incomplete scan or invalid/incomplete chain/local
+attestation prevents certified coverage; observed authenticated checkpoint counts can still be
+reported. A newest local checkpoint above the target head remains invalid: ahead classification
+applies only to off-host evidence.
+
+Exit 0 requires full coverage from every required witness for every enrolled organization,
+successful full-chain/local verification, no pending rows, no missing/extra organization and no
+incomplete checks or cleanup errors. A lower valid prefix is useful evidence, but reports
+`HISTORICAL_COVERAGE_INCOMPLETE`, `verified: false` and exit 1. Pending rows separately report
+`PENDING_ROWS_UNVERIFIED` and prevent exit 0 without being called chain corruption. Missing and
+unsupported per-organization canonical metadata use `CANONICAL_VERSION_MISSING` and
+`CANONICAL_VERSION_UNSUPPORTED`, including for an empty chain. Empty linked chains cannot pass
+without attestation. Configuration and grammar errors use exit 2 as above.
+
+Every eligible retained version must authenticate before it is classified. Old applicable
+contradictions remain failures after re-anchoring; malformed or unknown-key bodies cannot be
+ignored because their claimed heads appear newer. Later-only evidence does not attest the
+restored target. Delete markers, denied version reads and incomplete traversal remain material.
+There is no historical acknowledgment or caller-supplied coverage cutoff.
+
+Historical verification uses one read-only REPEATABLE READ snapshot for all database observations,
+with the same 300-second statement timeout and 900-second cooperative command budget. A failed
+database snapshot is not restarted; feasible independent witness authentication continues while
+unavailable comparisons remain incomplete. The snapshot does not stop other writers and does
+not make object-store reads atomic with the database. Historical mode omits the live freshness
+check; it cannot report current liveness. All retained-history caps and cleanup limitations below
+still apply.
+
 ## Bounds and remaining limits
 
 The whole command has a cooperative 900-second budget and each witness scan a cooperative 300-second
 budget. Existing history limits allow fewer than 1,024 pages and fewer than 524,288 returned versions
 or delete markers, with checkpoint bodies at most 65,536 bytes. Reaching a cap fails closed, including
-on an otherwise terminal page. The newest authenticated timestamp supplies the existing 2,700-second
-liveness check; older retained contradictions remain failures.
+on an otherwise terminal page. In live mode, the newest authenticated timestamp supplies the
+existing 2,700-second liveness check; older retained contradictions remain failures in both modes.
 
-Database reads use fresh read-only READ COMMITTED transactions and a 300-second statement timeout.
-They and object-store listings are separate observations, not an atomic snapshot. In-flight provider
+Live database reads use fresh read-only READ COMMITTED transactions; historical database reads
+share one read-only REPEATABLE READ snapshot. Both use a 300-second statement timeout. Database
+and object-store observations are not an atomic snapshot together. In-flight provider
 threads and database cleanup can outlast a cooperative timeout. The existing chain walk can still
 accumulate an unbounded list of failures internally before the public report is capped.
 
