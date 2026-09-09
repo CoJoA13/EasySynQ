@@ -127,6 +127,95 @@ def test_history_client_uses_reader_identity_and_fixed_network_bounds(
     assert config.retries["total_max_attempts"] == 1
 
 
+def test_explicit_history_reader_controls_client_and_bucket_without_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_clients: list[dict[str, Any]] = []
+    list_client = _Client(page={"IsTruncated": False})
+    body = _Body(b'{"checkpoint":{},"signature":"x"}')
+    read_client = _Client(
+        response={"Body": body, "ContentLength": len(body.data), "VersionId": "retained"}
+    )
+    clients = iter([list_client, read_client])
+
+    def client(service: str, **kwargs: Any) -> _Client:
+        captured_clients.append({"service": service, **kwargs})
+        return next(clients)
+
+    fake_boto = type("Boto", (), {"client": staticmethod(client)})
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto)
+    monkeypatch.setattr(
+        sink,
+        "get_settings",
+        lambda: (_ for _ in ()).throw(AssertionError("explicit reader consulted Settings")),
+    )
+    reader = sink.ExplicitHistoryReader(
+        endpoint="https://enrolled-witness.example.test",
+        bucket="enrolled-history",
+        region="enrolled-region",
+        access_key="explicit-access",
+        secret_key="explicit-secret",
+    )
+    conflicting = {
+        "endpoint": "https://database-controlled.invalid",
+        "bucket": "database-controlled",
+        "region": "database-region",
+    }
+
+    page = sink.list_offhost_checkpoint_versions_page(
+        "worm_bucket", conflicting, _ORG, reader=reader
+    )
+    ref = sink.CheckpointVersionRef(f"{_PREFIX}7-old.json", "retained")
+    document = sink.read_offhost_checkpoint_version("worm_bucket", conflicting, ref, reader=reader)
+
+    assert page.versions == ()
+    assert document == {"checkpoint": {}, "signature": "x"}
+    assert list_client.list_calls[0]["Bucket"] == "enrolled-history"
+    assert read_client.get_calls == [
+        {"Bucket": "enrolled-history", "Key": ref.key, "VersionId": "retained"}
+    ]
+    assert len(captured_clients) == 2
+    for client_args in captured_clients:
+        assert client_args["service"] == "s3"
+        assert client_args["endpoint_url"] == "https://enrolled-witness.example.test"
+        assert client_args["region_name"] == "enrolled-region"
+        assert client_args["aws_access_key_id"] == "explicit-access"
+        assert client_args["aws_secret_access_key"] == "explicit-secret"
+        assert client_args["verify"] is True
+    assert list_client.closed and read_client.closed and body.closed
+
+
+@pytest.mark.parametrize("operation", ["list", "read"])
+def test_explicit_history_reader_requires_direct_credentials_before_client_creation(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    monkeypatch.setattr(
+        sink,
+        "_explicit_history_read_client",
+        lambda _reader: (_ for _ in ()).throw(AssertionError("client created")),
+    )
+    reader = sink.ExplicitHistoryReader(
+        endpoint="https://enrolled-witness.example.test",
+        bucket="enrolled-history",
+        region="enrolled-region",
+        access_key="",
+        secret_key="",
+    )
+
+    with pytest.raises(sink.SinkReadError, match="credentials"):
+        if operation == "list":
+            sink.list_offhost_checkpoint_versions_page(
+                "worm_bucket", {"bucket": "fallback"}, _ORG, reader=reader
+            )
+        else:
+            sink.read_offhost_checkpoint_version(
+                "worm_bucket",
+                {"bucket": "fallback"},
+                sink.CheckpointVersionRef(f"{_PREFIX}1-a.json", "v"),
+                reader=reader,
+            )
+
+
 def test_list_page_forwards_exact_opaque_cursor_and_closes_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

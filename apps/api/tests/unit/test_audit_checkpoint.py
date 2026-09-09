@@ -478,6 +478,45 @@ def test_authentication_preserves_legacy_offset_normalization() -> None:
     assert authenticated.timestamp == _TS
 
 
+def test_callback_authentication_invokes_the_enrolled_verifier_once() -> None:
+    document = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    calls: list[dict[str, Any]] = []
+
+    def verifier(**fields: Any) -> bool:
+        calls.append(fields)
+        return True
+
+    authenticated, reason = cp._authenticate_offhost_doc_with_verifier(_ORG, verifier, document)
+
+    assert reason is None
+    assert authenticated == cp.AuthenticatedCheckpoint(7, _HASH, _TS)
+    assert calls == [
+        {
+            "org_id": _ORG,
+            "latest_id": 7,
+            "latest_row_hash": _HASH,
+            "timestamp": _TS,
+            "signature": base64.b64decode(document["signature"]),
+        }
+    ]
+
+
+def test_callback_authentication_rejects_without_retry_or_key_discovery() -> None:
+    document = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    calls = 0
+
+    def verifier(**_fields: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        return False
+
+    authenticated, reason = cp._authenticate_offhost_doc_with_verifier(_ORG, verifier, document)
+
+    assert authenticated is None
+    assert reason == "off-host checkpoint signature invalid (forged/corrupt)"
+    assert calls == 1
+
+
 async def test_equal_authenticated_heartbeat_tuples_are_all_compared(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -728,6 +767,57 @@ async def test_external_cancellation_propagates(monkeypatch: pytest.MonkeyPatch)
             verify_key=_TEST_KEY.public_key(),
             now=_TS,
         )
+
+
+async def test_shared_scanner_continues_after_database_comparison_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _signed_legacy_doc(_TEST_KEY, _ORG, 7, _HASH, _TS)
+    second = _signed_legacy_doc(_TEST_KEY, _ORG, 8, b"\xbb" * 32, _TS)
+    refs = (
+        sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/7-a.json", "v1"),
+        sink_service.CheckpointVersionRef(f"checkpoints/{_ORG}/8-a.json", "v2"),
+    )
+    documents = iter([first, second])
+    comparisons: list[int] = []
+
+    monkeypatch.setattr(
+        cp,
+        "list_offhost_checkpoint_versions_page",
+        lambda *_args, **_kwargs: sink_service.CheckpointVersionsPage(refs, (), False, None, None),
+    )
+    monkeypatch.setattr(
+        cp,
+        "read_offhost_checkpoint_version",
+        lambda *_args, **_kwargs: next(documents),
+    )
+
+    def verify_signature(**fields: Any) -> bool:
+        return cp.verify_checkpoint_signature(_TEST_KEY.public_key(), **fields)
+
+    async def compare(checkpoint: cp.AuthenticatedCheckpoint) -> str | None:
+        comparisons.append(checkpoint.latest_id)
+        if checkpoint.latest_id == 7:
+            raise cp.CheckpointComparisonUnavailable
+        return None
+
+    result = await cp.scan_offhost_history(
+        _ORG,
+        kind="worm_bucket",
+        connection={"bucket": "legacy"},
+        reader=None,
+        verify_signature=verify_signature,
+        compare_checkpoint=compare,
+        now=_TS,
+    )
+
+    assert comparisons == [7, 8]
+    assert result.parsed_any is True
+    assert result.scan_complete is True
+    assert result.read_failed is False
+    assert result.attestation_failed is False
+    assert result.comparison_unavailable is True
+    assert result.reasons == ["database checkpoint comparison unavailable"]
 
 
 @pytest.mark.parametrize(

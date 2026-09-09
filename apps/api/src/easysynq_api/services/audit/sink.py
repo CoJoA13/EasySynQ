@@ -45,6 +45,15 @@ class CheckpointVersionsPage:
     next_version_id_marker: str | None
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class ExplicitHistoryReader:
+    endpoint: str
+    bucket: str
+    region: str
+    access_key: str = dataclasses.field(repr=False)
+    secret_key: str = dataclasses.field(repr=False)
+
+
 def _audit_sink_client(connection: dict[str, Any] | None = None) -> Any:
     import boto3
 
@@ -100,6 +109,39 @@ def _audit_history_read_client(connection: dict[str, Any] | None = None) -> Any:
             retries={"total_max_attempts": 1},
         ),
     )
+
+
+def _explicit_history_read_client(reader: ExplicitHistoryReader) -> Any:
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client(
+        "s3",
+        endpoint_url=reader.endpoint,
+        aws_access_key_id=reader.access_key,
+        aws_secret_access_key=reader.secret_key,
+        region_name=reader.region,
+        verify=True,
+        config=Config(
+            connect_timeout=3,
+            read_timeout=5,
+            retries={"total_max_attempts": 1},
+        ),
+    )
+
+
+def _history_client_and_bucket(
+    connection: dict[str, Any] | None,
+    reader: ExplicitHistoryReader | None,
+) -> tuple[Any, str]:
+    if reader is None:
+        bucket = (connection or {}).get("bucket") or get_settings().s3_bucket_audit_checkpoints
+        return _audit_history_read_client(connection), bucket
+    if not reader.access_key or not reader.secret_key:
+        raise SinkReadError("explicit history reader credentials are missing")
+    if not reader.endpoint or not reader.bucket or not reader.region:
+        raise SinkReadError("explicit history reader configuration is invalid")
+    return _explicit_history_read_client(reader), reader.bucket
 
 
 def _version_refs(raw: Any, *, field: str, prefix: str) -> tuple[CheckpointVersionRef, ...]:
@@ -170,6 +212,7 @@ def list_offhost_checkpoint_versions_page(
     *,
     key_marker: str | None = None,
     version_id_marker: str | None = None,
+    reader: ExplicitHistoryReader | None = None,
 ) -> CheckpointVersionsPage:
     """List one validated page of retained checkpoint versions using opaque provider cursors."""
     if kind != "worm_bucket":
@@ -182,8 +225,8 @@ def list_offhost_checkpoint_versions_page(
         raise SinkReadError("off-host checkpoint version request has malformed version marker")
     if version_id_marker is not None and key_marker is None:
         raise SinkReadError("off-host checkpoint version request has inconsistent markers")
-    bucket = (connection or {}).get("bucket") or get_settings().s3_bucket_audit_checkpoints
     prefix = f"checkpoints/{org_id}/"
+    client, bucket = _history_client_and_bucket(connection, reader)
     params: dict[str, Any] = {
         "Bucket": bucket,
         "Prefix": prefix,
@@ -193,7 +236,6 @@ def list_offhost_checkpoint_versions_page(
         params["KeyMarker"] = key_marker
     if version_id_marker is not None:
         params["VersionIdMarker"] = version_id_marker
-    client = _audit_history_read_client(connection)
     try:
         try:
             raw_page = client.list_object_versions(**params)
@@ -217,6 +259,8 @@ def read_offhost_checkpoint_version(
     kind: str,
     connection: dict[str, Any] | None,
     ref: CheckpointVersionRef,
+    *,
+    reader: ExplicitHistoryReader | None = None,
 ) -> dict[str, Any]:
     """Read one explicit retained version with bounded bytes and owned resource cleanup."""
     if kind != "worm_bucket":
@@ -225,8 +269,7 @@ def read_offhost_checkpoint_version(
         raise SinkReadError("off-host checkpoint version reference has no key")
     if not isinstance(ref.version_id, str) or not ref.version_id:
         raise SinkReadError("off-host checkpoint version reference has no version ID")
-    bucket = (connection or {}).get("bucket") or get_settings().s3_bucket_audit_checkpoints
-    client = _audit_history_read_client(connection)
+    client, bucket = _history_client_and_bucket(connection, reader)
     try:
         try:
             response = client.get_object(

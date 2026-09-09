@@ -15,7 +15,9 @@ per org). The endpoint passes ``caller.org_id``; the Beat job + CLI iterate ever
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import uuid
+from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from sqlalchemy import func, select
@@ -24,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db.models.audit_checkpoint import AuditCheckpoint
 from ...db.models.audit_event import AuditEvent
 from .canonical import GENESIS_HASH, audit_row_from_orm, compute_row_hash
-from .checkpoint import verify_checkpoint_signature
+from .checkpoint import LegacySignatureVerifier, verify_checkpoint_signature
 
 _VERIFY_BATCH_SIZE = 500
 
@@ -67,6 +69,7 @@ async def verify_chain(
     to_id: int | None = None,
     version: int = 1,
     verify_key: Ed25519PublicKey | None = None,
+    checkpoint_verifier: LegacySignatureVerifier | None = None,
 ) -> VerifyResult:
     """Verify ``org_id``'s linked chain (optionally bounded to ``[from_id, to_id]``). Reports every
     broken link found, the first being the root cause (a mutated/deleted/reordered row).
@@ -79,7 +82,11 @@ async def verify_chain(
     alone is self-consistent, so a privileged DB owner who rewrites the payloads AND recomputes the
     hashes passes clean — only the Ed25519 signature (which the attacker cannot forge) on the latest
     checkpoint exposes the rewrite. When a key is supplied (``load_verify_key``) and the walk is
-    unbounded, a bad signature or a checkpoint↔chain hash mismatch is appended as a break."""
+    unbounded, a bad signature or a checkpoint↔chain hash mismatch is appended as a break.
+    ``checkpoint_verifier`` provides the same operation for an externally enrolled key set and is
+    mutually exclusive with the legacy single-key argument."""
+    if verify_key is not None and checkpoint_verifier is not None:
+        raise ValueError("verify_key and checkpoint_verifier are mutually exclusive")
     stmt = (
         select(AuditEvent)
         .where(AuditEvent.org_id == org_id, AuditEvent.chained_at.is_not(None))
@@ -148,8 +155,38 @@ async def verify_chain(
     # meaningful global-checkpoint compare). A bad signature or a checkpoint↔chain hash mismatch is
     # a break the self-consistent walk above cannot surface.
     checkpoint_status: CheckpointStatus | None = None
-    if verify_key is not None and from_id is None and to_id is None:
-        checkpoint_status, cp_breaks = await _check_checkpoint(session, org_id, verify_key)
+    if (
+        from_id is None
+        and to_id is None
+        and (verify_key is not None or checkpoint_verifier is not None)
+    ):
+        selected_verifier = checkpoint_verifier
+        if selected_verifier is None:
+            if verify_key is None:  # pragma: no cover - narrowed by the enclosing condition
+                raise AssertionError("checkpoint verifier unavailable")
+
+            def single_key_verifier(
+                *,
+                org_id: Any,
+                latest_id: int,
+                latest_row_hash: bytes,
+                timestamp: datetime.datetime,
+                signature: bytes | None,
+            ) -> bool:
+                return verify_checkpoint_signature(
+                    verify_key,
+                    org_id=org_id,
+                    latest_id=latest_id,
+                    latest_row_hash=latest_row_hash,
+                    timestamp=timestamp,
+                    signature=signature,
+                )
+
+            selected_verifier = single_key_verifier
+
+        checkpoint_status, cp_breaks = await _check_checkpoint_with_verifier(
+            session, org_id, selected_verifier
+        )
         breaks.extend(cp_breaks)
 
     pending = (
@@ -172,7 +209,34 @@ async def verify_chain(
 async def _check_checkpoint(
     session: AsyncSession, org_id: uuid.UUID, verify_key: Ed25519PublicKey
 ) -> tuple[CheckpointStatus, list[ChainBreak]]:
-    """Attest the newest signed ``audit_checkpoint`` against ``verify_key`` + the live chain.
+    """Single-key compatibility wrapper for newest-checkpoint attestation."""
+
+    def verifier(
+        *,
+        org_id: Any,
+        latest_id: int,
+        latest_row_hash: bytes,
+        timestamp: datetime.datetime,
+        signature: bytes | None,
+    ) -> bool:
+        return verify_checkpoint_signature(
+            verify_key,
+            org_id=org_id,
+            latest_id=latest_id,
+            latest_row_hash=latest_row_hash,
+            timestamp=timestamp,
+            signature=signature,
+        )
+
+    return await _check_checkpoint_with_verifier(session, org_id, verifier)
+
+
+async def _check_checkpoint_with_verifier(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    checkpoint_verifier: LegacySignatureVerifier,
+) -> tuple[CheckpointStatus, list[ChainBreak]]:
+    """Attest the newest signed checkpoint with the supplied signature callback and live chain.
     Returns the status plus any breaks (empty when it attests)."""
     cp = (
         (
@@ -193,8 +257,7 @@ async def _check_checkpoint(
             CheckpointStatus(False, None, None, None, "no checkpoint anchored yet"),
             [],
         )
-    sig_ok = verify_checkpoint_signature(
-        verify_key,
+    sig_ok = checkpoint_verifier(
         org_id=cp.org_id,
         latest_id=cp.latest_id,
         latest_row_hash=bytes(cp.latest_row_hash),

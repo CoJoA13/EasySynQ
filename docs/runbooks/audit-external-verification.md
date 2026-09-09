@@ -1,0 +1,185 @@
+# External audit verification
+
+Run `verify-offhost --trust-descriptor` from a separate verifier machine to check the organizations,
+public keys and witness locations recorded in an owner-controlled public file. The file defines the
+expected evidence independently of the database being checked. Removing an organization or rerouting
+a database sink cannot remove an enrolled obligation from this command.
+
+The command is explicit and out of band. Existing nightly jobs, API calls and `verify-offhost` without
+the option retain their database-discovered, single-key behavior.
+
+## Establish the public enrollment
+
+The repository owner approves the expected organization IDs, retained Ed25519 public keys and witness
+locations through a trusted channel. Check those values independently of the database under examination;
+exporting its current sink list and treating that list as trusted would recreate the selection weakness.
+Keep the descriptor and its parent directories under the owner's control on the separate verifier
+machine. Changes use that same controlled replacement procedure. No additional offline policy-signing
+key is required.
+
+This is the schema, with placeholders that must be replaced before use:
+
+```json
+{
+  "format_version": 1,
+  "descriptor_id": "<canonical-descriptor-uuid>",
+  "organizations": [
+    {
+      "org_id": "<canonical-organization-uuid>",
+      "public_keys": [
+        {
+          "key_id": "ed25519-sha256:<lowercase-sha256-of-raw-public-key>",
+          "public_key": "<canonical-padded-base64-of-32-public-key-bytes>"
+        }
+      ],
+      "witnesses": [
+        {
+          "witness_id": "<canonical-witness-uuid>",
+          "kind": "worm_bucket",
+          "endpoint": "https://<approved-witness-host>",
+          "bucket": "<approved-checkpoint-bucket>",
+          "region": "<approved-region>"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Use lowercase, hyphenated UUIDs. The key ID is derived from the exact raw 32-byte Ed25519 public key,
+not its PEM text. The descriptor accepts 1–16 organizations, 1–8 public keys per organization and
+1–4 witnesses per organization. Organization IDs and witness IDs must be unique; a public key may be
+shared across organizations but may appear only once within one organization. Unknown properties,
+duplicate JSON members and unsupported formats are rejected.
+
+Witness endpoints use HTTPS with a DNS name or IP address, an optional valid port and no path other
+than `/`. User information, query strings and fragments are rejected. Plain HTTP is limited to numeric
+loopback addresses for a local witness; `http://localhost` and ordinary remote HTTP are rejected. TLS
+certificate verification remains enabled. Bucket and region values are explicit; there is no default
+endpoint, bucket or credential discovery in this mode.
+
+The descriptor must be an absolute-path regular UTF-8 JSON file of at most 65,536 bytes. It cannot be a
+symlink or writable by group/other users. A public file with mode `0444` can be read by the image's
+unprivileged user. Protect the parent directories and the approved replacement procedure as well as
+the file itself.
+
+The report's `descriptor_sha256` identifies the exact file bytes used. It does not authenticate an
+enrollment change or prevent rollback to an older owner-approved file. Retain approved descriptor
+versions and their custody records outside the repository. Enrollment authorizes these public keys
+for legacy verification; it does not activate a signing key or define key-rotation eras.
+
+## Supply dedicated read credentials
+
+Use a fresh database reader with CONNECT on the intended database, USAGE on the schema and SELECT on
+`organization`, `audit_event` and `audit_checkpoint`. It must not inherit application, linker, owner or
+administrative privileges. The external query path does not need access to the database sink inventory.
+Verify actual denials in separate read-write transactions: INSERT, UPDATE, DELETE and TRUNCATE on both
+audit tables, and UPDATE on `audit_checkpoint_sink`, must fail with insufficient-privilege SQLSTATE
+`42501`. A `25006` error proves only that a transaction was read-only.
+
+The witness reader needs current-object read/location/list plus `s3:ListBucketVersions` and
+`s3:GetObjectVersion` on the enrolled checkpoint storage. Check actual allowed version reads and
+denials of writes, deletes, version deletes, retention changes and governance bypass. The pinned
+MinIO version has the limitation recorded in
+[`RES-MINIO-VERSION-LIST-DENY`](../open-residuals.md#res-minio-version-list-deny); omitted action names
+alone are not effective-permission evidence. A merged Compose policy does not update a live principal.
+
+Provide exactly these reader settings through the verifier process environment:
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | Explicit `postgresql+psycopg` URL with user, nonempty password, host and database. |
+| `AUDIT_SINK_READ_ACCESS_KEY` | Dedicated witness-reader access key. |
+| `AUDIT_SINK_READ_SECRET_KEY` | Its secret key. |
+
+The DB URL is limited to 8,192 characters and each witness credential to 4,096 characters. Values
+must be nonempty and have no surrounding whitespace. The URL accepts only `sslmode`, `sslrootcert`
+and `connect_timeout` query options. The connection
+timeout must be a decimal value from 1 to 30 seconds; it defaults to 5 seconds. The supplied reader
+credential pair must work at every enrolled witness. Protect credential delivery separately from the
+public descriptor. Ordinary application `.env`, source-store credentials, writer credentials and
+local private/public key files are not fallback sources for this command.
+
+After validating its inputs, the strict CLI replaces its process with the same interpreter and
+selected application code. It supplies only those three validated values plus fixed `HOME=/dev/null`,
+`LC_ALL=C.UTF-8` and `TZ=UTC`. Inherited PostgreSQL, AWS, proxy, Python and loader environment settings
+are not forwarded. The private worker validates that environment and reads the descriptor again;
+the successful report identifies the bytes the worker actually checked. Each file read uses the
+same file descriptor for safety checks and content.
+
+This process boundary enforces the explicit environment inputs. It does not isolate an arbitrary
+workstation's operating-system configuration, credentials or installed code. Keep using the separate
+verifier runtime and custody rules below. The internal asynchronous scanner is not a supported
+in-process API for obtaining that isolation.
+
+## Run the isolated verifier
+
+On the separate verifier machine, select an approved application image already present locally and
+an absolute descriptor path. Have the controlled launcher supply the three reader variables above;
+do not copy the installation's whole `.env` or shared secrets volume. The following invocation passes
+the existing variable values without placing them as literal values in command arguments:
+
+```bash
+docker run --pull=never --rm --read-only --user 10001:10001 \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --env DATABASE_URL \
+  --env AUDIT_SINK_READ_ACCESS_KEY \
+  --env AUDIT_SINK_READ_SECRET_KEY \
+  --mount "type=bind,source=$AUDIT_TRUST_DESCRIPTOR,target=/run/easysynq/audit-trust.json,readonly" \
+  "$EASYSYNQ_API_IMAGE" \
+  /app/.venv/bin/python -m easysynq_api.cli.audit verify-offhost \
+  --trust-descriptor /run/easysynq/audit-trust.json
+```
+
+`AUDIT_TRUST_DESCRIPTOR` and `EASYSYNQ_API_IMAGE` are launcher values, not new application settings.
+The mount contains only the public descriptor file. Provide network access to the explicitly approved
+database and HTTPS witness endpoints. The verifier requires no source-workspace mount, signing key,
+application secrets volume or source-store credential.
+
+## Interpret the result
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Every enrolled organization, local checkpoint and witness passed, with no extra database organization. |
+| `1` | Integrity failure, unavailable evidence or an incomplete check. |
+| `2` | Invalid descriptor or reader configuration. Ordinary command-line grammar errors use argparse stderr and exit 2. |
+
+The explicit command emits one JSON report. Its mode is `external-legacy-v1`; it records descriptor
+identity, checked and pending chain-row counts, witness reads, the extra-organization result and every
+enrolled organization/witness. Known obligations remain visible after early configuration/runtime
+failures. `attempted: false` and `status: incomplete` distinguish work that did not start; a partially
+attempted check cannot pass.
+
+Missing organizations and missing/invalid local checkpoints fail. An enrolled witness with no
+checkpoint objects fails immediately; changing a database sink's grace fields does not excuse it.
+If a database operation fails, feasible independent witness reads and signature checks continue,
+while unavailable row comparisons remain incomplete. Pending unchained rows are counted but are
+outside the chain's verified portion.
+
+The report contains at most 20 reasons per bounded report level and 20 detailed chain breaks per
+organization, with omitted counts. Store reports outside Git; their stable enrollment IDs are
+installation evidence. A failed result calls for investigation of the reported integrity or
+availability condition. It does not authorize deleting retained evidence or silently changing the
+expected enrollment.
+
+## Bounds and remaining limits
+
+The whole command has a cooperative 900-second budget and each witness scan a cooperative 300-second
+budget. Existing history limits allow fewer than 1,024 pages and fewer than 524,288 returned versions
+or delete markers, with checkpoint bodies at most 65,536 bytes. Reaching a cap fails closed, including
+on an otherwise terminal page. The newest authenticated timestamp supplies the existing 2,700-second
+liveness check; older retained contradictions remain failures.
+
+Database reads use fresh read-only READ COMMITTED transactions and a 300-second statement timeout.
+They and object-store listings are separate observations, not an atomic snapshot. In-flight provider
+threads and database cleanup can outlast a cooperative timeout. The existing chain walk can still
+accumulate an unbounded list of failures internally before the public report is capped.
+
+The descriptor's owner custody remains the trust boundary. A compromised or rolled-back descriptor,
+compromised enrolled signing key, or expired evidence can defeat conclusions this legacy format
+cannot establish. The command adds no predecessor commitment, key-activation protocol or
+source-independent restore proof. Keep
+[`RES-AUDIT-CHECKPOINT-LINEAGE`](../open-residuals.md#res-audit-checkpoint-lineage),
+[`RES-AUDIT-KEY-ROTATION`](../open-residuals.md#res-audit-key-rotation) and the source-independent recovery
+closure contract open. Repository acceptance uses disposable synthetic services; live enrollment and
+principal provisioning remain owner-operated deployment actions.

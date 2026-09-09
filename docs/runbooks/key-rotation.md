@@ -8,16 +8,28 @@ the same custody as the host disk-encryption key.
 |---|---|---|
 | **App master KEK** | `APP_MASTER_KEK` (0600 .env) | Re-wrap the column DEKs with the new KEK (envelope: no bulk re-encryption of data). MVP has no plaintext DB secret columns (federation lives in Keycloak), so this is a forward-seam — rotate by updating the value and restarting. |
 | **Backup key** | `BACKUP_ENCRYPTION_KEY` (0600 .env) | **Separate custody from the KEK.** New `…tar.enc` archives use the new key. **Keep the OLD key as long as any archive sealed with it must remain decryptable/verifiable** (the manifest records `encryption_key_ref`). Losing it makes those archives unusable; key custody does not make a non-self-contained archive a recovery set. |
-| **Audit-checkpoint signing key** | `AUDIT_CHECKPOINT_SIGNING_KEY_PATH` (Ed25519, beat-only) | Current verification loads one trusted key. Retain the old public key as evidence, but do not assume that makes automatic historical selection work: rotating while old retained anchors remain causes their signatures to fail until reviewed key-history support ships (`RES-AUDIT-KEY-ROTATION`). |
+| **Audit-checkpoint signing key** | `AUDIT_CHECKPOINT_SIGNING_KEY_PATH` (Ed25519; shared secrets volume mounted read-write by api and worker, with Beat scheduling work) | Scheduled/API/no-option verification loads one trusted key. Explicit external verification can enroll retained legacy public keys in its protected descriptor, but this does not activate keys or prove historical key eras. Retain old public keys; unattended rotation and pre-rotation restore remain OPEN under `RES-AUDIT-KEY-ROTATION`. |
 | **Verify-token signing key** | `VERIFY_TOKEN_SIGNING_KEY_PATH` (Ed25519, shared api↔worker via the `secrets` volume) | After rotating, force a full mirror re-render so renditions carry a footer token signed with the new key: `./scripts/easysynq mirror rebuild`. |
 | **Off-host sink credential** | `AUDIT_SINK_ACCESS_KEY` / `AUDIT_SINK_SECRET_KEY` | Held in **separate custody** from the KEK/backup key (D-8); rotate at the sink + in `.env`. |
-| **Off-host witness reader credential** | `AUDIT_SINK_READ_ACCESS_KEY` / `AUDIT_SINK_READ_SECRET_KEY` | Read-only principal used by independent verification. It needs current-object read/location/list plus `s3:ListBucketVersions` and `s3:GetObjectVersion`; it must not receive write, delete, retention, or governance-bypass rights. Rotate at the sink + in `.env`. |
+| **Off-host witness reader credential** | `AUDIT_SINK_READ_ACCESS_KEY` / `AUDIT_SINK_READ_SECRET_KEY` | Read-only principal used by independent verification. It needs current-object read/location/list plus `s3:ListBucketVersions` and `s3:GetObjectVersion`; it must not receive write, delete, retention, or governance-bypass rights. Rotate at the sink and update the consumer: installation `.env` for existing scheduled checks, or the separately controlled launcher for explicit external verification. |
 | **Keycloak admin / client secret** | `KEYCLOAK_ADMIN_PASSWORD`, client secrets | Rotate in Keycloak; update `.env` so the worker's realm-export admin login keeps working. JWKS key rotation is automatic (the API re-fetches on `kid` change). |
 | **DB / MinIO root** | `*_PASSWORD`, `S3_*` | Rotate at the service + in `.env`; restart the stack. |
 
-**After any rotation:** restart the affected containers, confirm `/readyz` is green, and run
+**After application-key rotation:** restart the affected containers, confirm `/readyz` is green, and run
 `./scripts/easysynq backup run` so the next archive is sealed with the current key set. Secrets are redacted
 from logs / audit `before`/`after` / error responses by the allowlist serializer.
+
+## Separate external verification
+
+The [external-verification runbook](audit-external-verification.md) documents the explicit
+`verify-offhost --trust-descriptor` consumer. Keep its owner-controlled public enrollment and
+three reader credentials on the separate verifier machine. Its static set of 1–8 public keys per
+organization supports legacy signature checks without mounting a private signing key. It does not
+change the unattended verifier, perform a signing-key rotation or establish pre-rotation restore
+compatibility. Test effective DB/storage read permissions and write denials before live use;
+repository acceptance provisions only disposable synthetic principals.
+After rotating a dedicated external reader credential, update its controlled launcher and rerun the
+explicit verifier against the unchanged approved descriptor.
 
 ## Declaring the off-host witness (`integrity.alarm`)
 
