@@ -9,24 +9,18 @@ boundaries with live dependent rows.
 from __future__ import annotations
 
 import logging
-import os
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 
-import psycopg
 import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from psycopg import sql
-from sqlalchemy.engine import make_url
-from testcontainers.postgres import PostgresContainer
 
 from easysynq_api.config import get_settings
 from easysynq_api.readiness import MIGRATIONS_DIR
-from easysynq_api.services.backup.dsn import conn_kwargs
 
 _M9_REVISION = "0079_migration_orm_coherence"
 _M10_REVISION = "0080_schema_index_design"
@@ -65,48 +59,6 @@ _EXPECTED_RETENTION_GRANTS = {
     ("QMS Owner", "retention.manage"),
     ("QMS Owner", "retention.read"),
 }
-
-
-@pytest.fixture(scope="module")
-def postgres_admin_url() -> Iterator[str]:
-    """Use only an explicitly disposable server; never infer a developer/production DSN."""
-    configured = os.environ.get("MIGRATION_TEST_DATABASE_URL")
-    if configured:
-        yield configured
-        return
-    with PostgresContainer(
-        "postgres:18",
-        username="test",
-        password="test",
-        dbname="test",
-        driver="psycopg",
-    ) as postgres:
-        yield postgres.get_connection_url()
-
-
-@contextmanager
-def _scratch_database(admin_url: str) -> Iterator[str]:
-    database = f"easysynq_migrations_{uuid.uuid4().hex[:12]}"
-    with psycopg.connect(
-        **conn_kwargs(admin_url, dbname="postgres"),
-        autocommit=True,
-    ) as connection:
-        connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
-
-    scratch_url = make_url(admin_url).set(database=database).render_as_string(hide_password=False)
-    try:
-        yield scratch_url
-    finally:
-        with psycopg.connect(
-            **conn_kwargs(admin_url, dbname="postgres"),
-            autocommit=True,
-        ) as connection:
-            connection.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = %s AND pid <> pg_backend_pid()",
-                (database,),
-            )
-            connection.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(database)))
 
 
 def _config() -> Config:
@@ -269,12 +221,12 @@ def _clause7_intent(connection: sa.Connection, framework_id: object) -> str:
 
 
 def test_populated_historical_transitions_and_head_repairs(
-    postgres_admin_url: str,
+    migration_database_factory: Callable[[], AbstractContextManager[str]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application_logger = logging.getLogger("easysynq.migration_isolation_probe")
     application_logger.disabled = False
-    with _scratch_database(postgres_admin_url) as scratch_url:
+    with migration_database_factory() as scratch_url:
         monkeypatch.setenv("DATABASE_URL", scratch_url)
         monkeypatch.setenv("DATABASE_URL_SYNC", scratch_url)
         get_settings.cache_clear()

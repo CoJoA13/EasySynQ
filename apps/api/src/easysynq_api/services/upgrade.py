@@ -7,14 +7,15 @@ honest rollback posture:
   ABORTS the upgrade. It carries a database dump + blob manifest but no object bytes, so it is not a
   self-contained recovery set and cannot authorize production upgrade eligibility.
 * **Migrate** — ``alembic upgrade head`` runs as the OWNER role (the env.py DSN = ``sync_dsn``). A
-  single Alembic migration runs in one transaction that auto-rolls-back on error — that is the
-  honest meaning of "rollback" for a failed migration step.
+  fixed five-second per-lock timeout applies on that connection (R74). Failure stops later work
+  and rolls back the active transactional segment; historical autocommit blocks may already have
+  committed earlier segments.
 * **Health-gate** — ``readiness.check_all()`` must be green (esp. the alembic-at-head probe).
 
-    RECOVERY LIMIT: a failed migration auto-rolls back its own transaction, but a readiness failure
-    has no supported archive-to-cutover path. ``UPGRADE_FAILED.after`` preserves the exact archive
-    pointer for investigation. Keep the service closed and preserve the source object store; do not
-    treat that non-self-contained archive as a disaster safety net.
+    RECOVERY LIMIT: migration failure rolls back the active segment, not earlier committed work.
+    A readiness failure has no supported archive-to-cutover path. ``UPGRADE_FAILED.after`` preserves
+    the exact archive pointer for investigation. Keep the service closed and preserve the source
+    object store; do not treat that non-self-contained archive as a disaster safety net.
 
 Runs on the worker (OWNER DSN + pg client). Audits via the app session like the backup service.
 """
@@ -207,7 +208,7 @@ async def run_upgrade(org_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> d
 
             pre_backup_archive = str(backup["archive"])
 
-            # 2. migrate (a failed migration auto-rolls-back its own txn)
+            # 2. migrate (failure rolls back the active segment; earlier commits remain)
             try:
                 await asyncio.to_thread(_run_alembic_upgrade)
             except Exception as exc:

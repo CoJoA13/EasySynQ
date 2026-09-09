@@ -317,6 +317,18 @@ def test_gitlab_pipeline_preserves_complete_hard_fail_gates() -> None:
         assert job.get("allow_failure") is not True, f"{name} is allowed to fail"
 
 
+def test_gitlab_migrations_job_runs_the_complete_suite_unconditionally() -> None:
+    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
+    migrations = pipeline["migrations"]
+    command = "uv run pytest tests/migration"
+
+    assert migrations["script"].count(command) == 1
+    assert not any("pytest tests/migration/" in entry for entry in migrations["script"])
+    for job in (migrations, pipeline[".uv"]):
+        for bypass in ("allow_failure", "rules", "when", "only", "except"):
+            assert bypass not in job, f"migrations gate cannot inherit {bypass}"
+
+
 def test_the_gitlab_image_runtime_proof_runs_in_the_job_that_can_fail_a_merge() -> None:
     """`EASYSYNQ_IMAGE_PROOF` must be set in the api job, and only there.
 

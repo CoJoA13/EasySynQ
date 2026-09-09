@@ -10,7 +10,8 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from psycopg import Connection
+from sqlalchemy import engine_from_config, event, pool
 
 # Import models so Base.metadata is fully populated.
 import easysynq_api.db.models  # noqa: F401
@@ -25,6 +26,19 @@ _DSN = get_settings().sync_dsn
 config.set_main_option("sqlalchemy.url", _DSN)
 
 target_metadata = Base.metadata
+
+
+def _set_migration_lock_timeout(
+    dbapi_connection: Connection[tuple[object, ...]],
+    _connection_record: object,
+) -> None:
+    original_autocommit = dbapi_connection.autocommit
+    try:
+        dbapi_connection.autocommit = True
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute("SET SESSION lock_timeout = '5s'")
+    finally:
+        dbapi_connection.autocommit = original_autocommit
 
 
 # Functional/expression + partial indexes created by migrations via raw DDL — they cannot be
@@ -96,15 +110,19 @@ def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section) or {}
     section["sqlalchemy.url"] = _DSN
     connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            compare_type=True,
-            include_object=_include_object,
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+    event.listen(connectable, "connect", _set_migration_lock_timeout)
+    try:
+        with connectable.connect() as connection:
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                compare_type=True,
+                include_object=_include_object,
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        connectable.dispose()
 
 
 if context.is_offline_mode():

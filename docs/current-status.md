@@ -1,15 +1,15 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-09-08"
-baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-audit-external-trust"
+baseline_commit: "7a4baccbaaefb3a34e5cdbddf778976ae6b99eb6"
+last_shipped_slice: "S-upgrade-lock-timeout"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 2333
+api_unit_tests: 2341
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
-integration_passed: 1231
+integration_passed: 1252
 integration_skipped: 2
 ci_jobs: 12
 ci_checks: 14
@@ -33,8 +33,8 @@ boot/read proof have not shipped.
 overall recovery boundary, with current execution tracked in
 [GitLab issue #3](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/3). Its narrower related records
 retain separate closure contracts. S-restore-scratch-worm-guard closes the scratch-target record;
-S-audit-verify-orchestrator closes the task-coverage record. Checkpoint lineage, key rotation
-and upgrade-lock coverage remain open.
+S-audit-verify-orchestrator closes the task-coverage record; S-upgrade-lock-timeout closes the lock-wait
+record. Checkpoint lineage and key rotation remain open.
 Production recovery and upgrade safety are unproven.
 
 S-audit-historical-witnesses now checks every retained eligible legacy checkpoint object version at
@@ -54,6 +54,25 @@ fresh process environment; its separate read-only container acceptance passed. E
 and no-option CLI verification retain their prior behavior. See the
 [external-verification runbook](runbooks/audit-external-verification.md) and R73 for manual custody and
 remaining limits. This does not close checkpoint lineage, key rotation or source-independent recovery.
+
+S-upgrade-lock-timeout limits each online Alembic lock acquisition wait to five seconds (R74).
+The populated migration and affected upgrade suite passed **19 tests without skips**, including
+real blocked writers, truthful partial-commit behavior and migration-stage failure auditing. A
+separate **20-test focused unit run** covered setup/offline/CI/CLI behavior. The runbook keeps writers
+closed after failure and distinguishes earlier commits from the rolled-back active segment. This
+closes only the lock-wait record; the broader recovery and production upgrade blockers remain.
+
+The current local API suite passed **2,341 tests with two existing opt-in skips in 64.94 seconds**;
+the skips are release image pinning and the older built-image runtime proof, which required GitLab
+CI enables. Ruff, formatting across **787 API files**, mypy across **452 source files**, migration
+environment static checks, **95 authority fixtures**, repository authority, a site-data scan including
+all **1,994 tracked and new candidate files**, and whitespace checks passed.
+
+The other structured full-suite counts remain inherited from MR !20's GitLab pipeline `2831639778`
+on source `f92411cdadfc288742fcc9b7cfed5ca56648e67d`, whose merged tree is source base `7a4bacc`.
+All fourteen required checks passed there: 1,252 integration passes with two existing skips, 285
+response contracts, 2,352 web tests and 80 browser tests. The lock-wait checks and current local API
+results do not replace required CI on this candidate's published commit.
 
 ## Shipped boundary
 

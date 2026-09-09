@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R73) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R74) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R73
+## Part 3 — Resolutions R1–R74
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2449,6 +2449,41 @@ Existing scheduled/API verification and the CLI without this option retain their
 [current status](current-status.md).
 
 Bumps the resolutions range **R1–R72 → R1–R73**.
+
+---
+
+### R74 — Online migration lock waits are limited to five seconds — 2026-09-08
+
+**Decision.** Every online Alembic connection created by `migrations/env.py` uses a fixed
+PostgreSQL `lock_timeout` of **five seconds per lock acquisition**. This covers upgrade,
+downgrade and boot migrations through that environment. There is no user override. The
+timeout belongs to the migration connection; ordinary application connections retain their
+own settings. Existing DSN query options are preserved.
+
+Set the session value before Alembic starts migration work, without creating an outer
+transaction. Configuration failure aborts the command. Preserve the existing historical
+migration files and transaction grouping: the session timeout must survive their existing
+autocommit blocks. A timeout stops later migration work and rolls back the active transactional
+segment. Earlier committed segments remain applied; failure is not an all-or-nothing rollback
+of an arbitrary multi-revision upgrade.
+
+The operator upgrade path reports `UPGRADE_FAILED` at stage `migrate`, retains the exact
+pre-upgrade archive pointer and exits unsuccessfully. It must not run readiness or emit
+`UPGRADE_COMPLETED` after this failure. There is no automatic retry, downgrade, restoration,
+or writer restart. Keep services closed while the partial state is investigated.
+
+This limit bounds time waiting to acquire each lock. It does not bound the sum of several
+waits, index-build duration or lock holding after acquisition. Maintenance windows and
+stop-writers guidance still apply. Offline SQL generation remains unchanged and does not
+enforce this online connection policy when the generated SQL is executed separately.
+The source-independent recovery requirement and production upgrade eligibility blocker remain.
+
+**Back-propagation:** the [backup and restore runbook](runbooks/backup-restore.md), migration
+connection setup, required populated migration tests and upgrade failure proofs. Dated closure
+evidence belongs in [slice history](slice-history.md), with current remaining work in
+[open residuals](open-residuals.md).
+
+Bumps the resolutions range **R1–R73 → R1–R74**.
 
 ---
 
