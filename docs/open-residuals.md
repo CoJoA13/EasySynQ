@@ -375,6 +375,12 @@ sequence, key identity/epoch and planned transition-proof bytes. Current issuanc
 consumers remain legacy. An authenticated envelope does not establish pinned bootstrap, complete
 predecessor history, durable delivery or restore compatibility; this record remains OPEN.
 
+Supplied-graph progress on 2026-09-09 (R77): the pure v2 reader evaluates externally pinned
+predecessor/sequence/key continuity over all supplied observations and rejects usable output for
+forked, invalid or incomplete history. Current operational consumers remain unchanged. Opaque
+bootstrap contents, complete per-witness collection, scalable retained-history processing and
+DB-chain comparison remain separate obligations; this foundation does not close this record.
+
 ## RES-MINIO-VERSION-LIST-DENY
 
 Status: OPEN
@@ -452,6 +458,12 @@ Versioned-envelope progress on 2026-09-09 (R76): the pure codec authenticates ex
 next key identities, consecutive transition epochs and both keys' signatures, with strict public-key
 admissibility. Its immutable result does not activate keys or establish authorized history. Existing
 signing-key loading, issuance and pre-rotation restore behavior are unchanged; this record remains OPEN.
+
+Supplied-graph progress on 2026-09-09 (R77): the pure reader separates available historical material
+from a predecessor edge's permitted signing key/epoch. Detached or rejected transitions cannot
+introduce next material, and failed/incomplete results expose no usable key history. A terminal
+transition is not operational activation. Current key loading, issuance and restore stay unchanged;
+complete history, independent delivery/activation confirmation and pre-rotation restore remain OPEN.
 
 ## RES-RISK-CLAUSE-PICKER
 

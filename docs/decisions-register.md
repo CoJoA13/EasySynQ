@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R76) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R77) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R75
+## Part 3 — Resolutions R1–R77
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2637,6 +2637,101 @@ policy-signing key is introduced. Compromise/lost-key recovery and history compa
 dated [slice history](slice-history.md). Preserve legacy bytes and all operational closure contracts.
 
 Bumps the resolutions range **R1–R75 → R1–R76**.
+
+---
+
+### R77 — Supplied checkpoint lineage separates authentication from edge authority — 2026-09-09
+
+**Decision.** Add a pure v2 lineage evaluator over explicit public enrollment and bounded supplied
+envelope observations. This is an inactive reader foundation. It changes no existing writer,
+scheduled/API/CLI reader, R73 descriptor, R75 report, backup, restore, schema, grant or key activation.
+R76 representation, key admission and full signature/proof/hash verification remain unchanged.
+
+Enrollment independently pins organization/stream, an opaque bootstrap commitment, initial public
+key/epoch, optional positive audit-head assertion and optional required checkpoint hash/sequence.
+The first v2 sequence is exactly 1 and commits to the supplied bootstrap. Its hash is not proof
+that a legacy bridge exists, contains complete history or agrees with separate enrollment fields.
+An absent audit boundary does not authenticate empty history. The protected public file under the
+owner's separate verifier custody remains selected; this pure typed API cannot prove that custody.
+
+The codec's additive six-field routing record contains organization/stream, predecessor hash, key
+ID/epoch and sequence. It shares strict structural parsing but is expressly unverified: no current
+signature, next-key proof or derived-hash equality is established by inspection. Full verification
+always receives exact established material for the body's declared key ID and expected identities.
+An unavailable key stays incomplete after discovery closes; a guessed-key rejection is never
+evidence of an invalid signature. Invalid v2 never falls back to legacy.
+
+Keep available public material separate from permission on a predecessor edge. Only the enrolled
+initial key and transitions whose own edges have been admitted contribute material. Detached or
+rejected transitions contribute no next key. Check a fully authenticated reachable edge in order:
+permitted key/epoch, exact next sequence, then nondecreasing audit ID/equal-ID hash equality. Report
+only the first edge fault. An ordinary parent preserves key/epoch; a transition requires its exact
+next key/epoch. Valid transitions can occur at unchanged heads or explicitly return to earlier
+material at a later epoch. Timestamps do not order lineage or activate keys.
+
+Examine every supplied observation, including detached records and all individually admissible
+fork branches. A fork never permits selecting a newer branch. Group forks by admitted predecessor,
+anchor-ID conflicts across all distinct authenticated envelopes, and immutable locator conflicts
+by exact source/object/version tuple. Different raw bytes at one immutable locator conflict even
+when both JSON transports canonicalize identically. Canonical authenticated duplicates elsewhere
+are benign repeated deliveries. No cycle or missing-parent-specific diagnosis is inferred from
+unverified routing hints.
+
+`evaluate_lineage` returns immutable records with status `consistent`, `failed` or `incomplete`;
+scope is always `supplied-v2-graph` and bootstrap assurance `external-pin-only`. Only a globally
+consistent result exposes its ordered path, used key epochs and unique tip. An unused terminal
+next key stays in the transition; it is not a used epoch. Failed/incomplete output has empty path
+and key history and null tip, even when internal branches authenticated or a required pin matched.
+Every result retains these unproved checks, in order: `bootstrap-contents`, `legacy-bridge-coverage`,
+`witness-collection-completeness`, `witness-custody`, `audit-chain-comparison`, `freshness`, and
+`operational-key-activation`.
+
+Failed issue codes are `IDENTITY_MISMATCH` (structural, not an authenticity claim),
+`ENVELOPE_INVALID`, `IMMUTABLE_LOCATOR_CONFLICT`, `LINEAGE_FORK`, `ANCHOR_ID_CONFLICT`,
+`KEY_EPOCH_VIOLATION`, `SEQUENCE_DISCONTINUITY`, `AUDIT_HEAD_REGRESSION`, `AUDIT_HEAD_CONFLICT` and
+`REQUIRED_CHECKPOINT_CONFLICT`. Incomplete codes are `EMPTY_GRAPH`, `RESOURCE_LIMIT`, `UNKNOWN_KEY`,
+`DISCONNECTED_GRAPH` and `REQUIRED_CHECKPOINT_MISSING`. Failures dominate incomplete groups.
+Group raw-body issues by body digest, authenticated-node faults by envelope hash, and the named
+conflicts by their stable identity. Count every failed/incomplete group before display truncation;
+`issues_omitted` counts undisplayed groups. Use at most two stable representative observation indexes
+per issue, never raw bodies, signatures or locators. Sort failed before incomplete, then code and
+stable group subject. Input order changes indexes, not semantic verdicts or usable output.
+
+Without a required pin its relation is `not-provided`. Resource preflight leaves a provided pin
+`unassessed`. After completed graph closure, an admitted sequence/hash contradiction is
+`conflicting` before any match; otherwise an admitted exact match is `included`, else `missing`.
+Missing means not established by this evaluation, not proven absent from storage. A matching pin
+before a later fork remains included while the graph fails. An authentic old prefix can be
+consistent without separately retained newer knowledge; this API selects no rollback-memory policy.
+
+Ceilings are 4,096 observations, 16 MiB total body bytes, 32 displayed issues, 4,096 admitted
+nodes/used epochs and 4,097 public-material entries including terminal next material. Callers may
+lower the three exposed limits with positive built-in integers. Source labels are nonempty
+printable ASCII up to 128 characters; object/version labels are nonempty, at most 1,024 UTF-8 bytes,
+without invalid scalars or C0/DEL/C1 controls. Validate exact record/scalar types and cheap lengths
+before encoding or cryptography. Count/aggregate overflow returns only resource-incomplete, never
+prefix success. Complete the count-bounded structural preflight before aggregate disposition.
+Malformed bytes within an otherwise bounded set are envelope issues; invalid arguments raise fixed
+`invalid lineage input` without raw exception chaining. System/resource exceptions never become
+successful evidence. Event indexes permit at most one full verification per distinct raw body and
+one edge assessment per authenticated node; no recursive walk, all-key trials or pairwise lists.
+
+**Integration prerequisites.** The in-memory ceiling is not a deployed retained-history capacity.
+At the current 900-second legacy cadence, 4,096 observations cover about 42.7 days for one copy,
+fewer with duplicates or multiple witnesses. A scalable full-history strategy, authenticated legacy
+bridge, complete coverage for each required witness, consistent full DB-chain comparison, durable
+issuance/delivery, independent activation confirmation and pre-rotation restore proof precede live
+v2 integration. Independent windows or an unauthenticated continuation cannot certify full history.
+Lineage, rotation and source-independent recovery residuals remain OPEN; no policy for compromise,
+lost keys, re-rooting or compaction is introduced.
+
+**Back-propagation:** [Security and audit](12-security-and-audit.md), the
+[external verification runbook](runbooks/audit-external-verification.md),
+[key rotation runbook](runbooks/key-rotation.md) and narrow progress in
+[open residuals](open-residuals.md). Actual evidence belongs in [current status](current-status.md)
+and dated [slice history](slice-history.md).
+
+Bumps the resolutions range **R1–R76 → R1–R77**.
 
 ---
 

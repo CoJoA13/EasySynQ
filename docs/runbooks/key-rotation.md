@@ -44,6 +44,14 @@ change the protected descriptor or provide an operational rotation command. Exis
 issuance and restore still use their legacy paths. Retain current custody and public-key history;
 planned activation and pre-rotation restore require the later lineage/delivery/consumer proofs.
 
+R77's inactive pure lineage evaluator keeps historical verification material separate from the key
+and epoch permitted on each predecessor edge. Only an admitted transition contributes next material;
+a detached or rejected transition cannot authorize its descendants. A terminal transition does not
+prove that the next signer activated, and any failed/incomplete graph exposes no usable path or key
+history. The current signing-key loader, descriptor and restore command remain unchanged. Complete
+bridge/witness history, scalable collection, durable delivery and independent transition confirmation
+are still required before planned rotation; this foundation is not an operator rotation procedure.
+
 ## Declaring the off-host witness (`integrity.alarm`)
 
 The nightly `easysynq.audit.verify_chain` job raises **`integrity.alarm`** to System Administrators

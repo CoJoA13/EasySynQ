@@ -16,6 +16,14 @@ A valid v2 signature or transition proof does not establish a trusted bootstrap,
 active key, witness coverage or recovery eligibility. The codec introduces no new command option
 or enrollment procedure; those consumer changes remain separate work.
 
+R77 adds an inactive pure evaluator for a bounded set of supplied v2 envelopes and explicit public
+bootstrap/key pins. Its `consistent` result proves only continuity and edge authority within that
+supplied graph. It does not prove bridge contents, collection from every required witness, verifier
+custody, audit-row agreement, freshness or live key activation. An old prefix can remain consistent
+without independently retained newer knowledge. This command, its descriptor and its successful
+verification criteria are unchanged. A scalable complete-history reader and the bridge/collection
+proofs must precede operational integration; do not split history into independently accepted windows.
+
 ## Establish the public enrollment
 
 The repository owner approves the expected organization IDs, retained Ed25519 public keys and witness
