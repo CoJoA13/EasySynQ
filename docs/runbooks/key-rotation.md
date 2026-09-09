@@ -60,6 +60,15 @@ R77 bootstrap pin; no public-key activation, protected-file replacement, comprom
 pre-rotation restore procedure follows. Complete raw witness collection, global history processing,
 DB-chain comparison and the independent activation/restore proofs still precede operational rotation.
 
+R79 adds inactive exact raw-version transport for the later collector. It preserves stored entity
+bytes and requires the exact returned version identity before R78 authenticates the evidence. It
+selects no witness or signing key and changes no enrollment, key loader, writer or restore procedure.
+Literal `null` is rejected when a provider omits its returned identity; current-object fallback cannot
+satisfy this API. Successful reads do not establish collection completeness, historical key eras,
+independent transition delivery or pre-rotation recovery. SDK error buffering and cooperative IO limits
+also require operational resource/lifetime containment before integration. Keep existing custody and
+all rotation/restore prerequisites in force.
+
 ## Declaring the off-host witness (`integrity.alarm`)
 
 The nightly `easysynq.audit.verify_chain` job raises **`integrity.alarm`** to System Administrators

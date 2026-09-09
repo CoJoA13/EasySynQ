@@ -77,6 +77,81 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-raw-transport — preserve exact retained bytes through an explicit reader
+
+**2026-09-09; source baseline `bf7416dead2c9615a202e2cbe16a4b58849162b3`.** R79 adds an inactive
+synchronous transport for one exact `CheckpointVersionRef` and `ExplicitHistoryReader`. A fresh
+private SDK client binds explicit credentials, region, endpoint, verified TLS and one exact GET;
+a service-wide send guard blocks later sends and nested region discovery. Response VersionId must
+equal the requested opaque label. Admitted entity bytes remain unchanged within the 65,536-byte
+limit, with bounded reads, cooperative cancellation/deadline and body-then-client cleanup. Fixed
+controlled failures reveal no provider text; unexpected exception identities remain observable.
+The result carries no authentication or witness-custody claim until the separate R78 checks.
+
+Initial focused execution passed **92 raw and 902 neighboring tests** without skips. Review added
+cheap 1–4,096-character credential admission before delegated validation; both oversized-input
+regressions failed before the correction while the exact-boundary control passed. The corrected
+raw unit scope passed **95 tests**. Six private wrong
+implementations were each rejected by an unchanged test for the intended built-in assertion:
+short-prefix return, missing returned identity, omitted request VersionId, JSON reserialization,
+skipped body close and a second same-origin send. Mutated imports and clean setup/teardown were
+verified. The complete API suite passed **3,070 tests plus one existing release-only skip in 78.22
+seconds**. Its actual immutable production image ran five codec vectors, 31 key controls, four lineage cases and six bridge cases offline as
+UID 10001 with development dependencies absent. Ruff, formatting across 802 API files, mypy across 459 source files, runner static checks,
+95 authority fixtures, authority, candidate-wide site-data and whitespace gates passed.
+
+Initial runtime fixture corrections were confined to the test-only HTTP probe. The stdlib cannot encode a
+Unicode response header as Latin-1, so an ASCII opaque version supplies the successful round trip;
+a separate Unicode key/query case proves exact routing and strict mismatching-identity rejection.
+A deliberate chunked-response rejection exposed two peer-close timing windows. One-request close
+headers and joined non-daemon handlers remove the keepalive race. Only chunked body writes/flush
+admit BrokenPipeError or ConnectionResetError, recording the observed type; unrelated handler faults
+fail after cleanup. Three full stream cycles passed with empty output and no observed peer errors.
+Eight deterministic write-fault controls exercised the expected cases and preserved header/other-route
+and unexpected failures; a real handler RuntimeError control proved post-cleanup rejection. Fresh
+56 runner tests and probe lint/format passed. Review then added actual default-session poisoning,
+pre-return SDK error-buffer observations and measured socket-read timeout evidence. The full API
+suite above ran after these review corrections. The final acceptance-only correction replaces an
+overbroad sentinel-name filter that confused AWS boolean policy flags with credential/URL values;
+the unchanged command/output guard passed one valid boolean-output control and 32 deliberate
+credential/URL leak controls. Final acceptance lint/format and 56 runner tests passed. Production,
+unit and build inputs retain the fresh full-suite evidence across this sentinel correction; failed
+fixture attempts are not counted as acceptance passes.
+
+The final owned runner passed **all six mandatory actual-image runtime tests**, zero failures/errors/
+skips, in 74.88 seconds. It retained the three existing external-verifier cases and added 21 actual
+provider/R78 cases, six TLS/routing cases and 13 stream/cancellation cases. The API image was
+`sha256:4664e85a0a1d7166675d7ca54537097a1e7dbdfb24da12d468eaba45824a438d`, with build input
+`6d2b97152c3dfc5339411699f98785cbce59013f89035b58829b6a2079129bed` and proof input
+`49f08286eff2bbdbb16f124b7e6af7d5dea562a999d8de8bd8ec8edd25351638`. The pinned provider image
+was `sha256:cd04ea408e185cb50076ea1c3988d444119b19aaae15aab45387ccf14b2a2f86`. Exact noncanonical
+legacy bytes feed unchanged R78; authentic unlisted, equal-head conflict, above-boundary and required
+unavailable-witness evidence retains its independent outcome. The provider omits VersionId for literal
+`null`, so strict transport returns VERSION_MISMATCH; actual marker and missing-version responses
+become PROVIDER_FAILURE. Trusted/untrusted TLS, exact opaque targets and both region redirect forms
+passed with origin counts [1, 1] and zero target requests. The effective CA bundle was derived from the
+image and only a disposable synthetic trust bundle was mounted read-only. All seven stream categories
+passed, including actual checksum/truncation/read-timeout behavior and released/joined cancellation.
+Both trusted and untrusted routing proved a populated real default SDK session with distinct cached
+credentials and region, and restored the exact prior session. A normal SDK event observer recorded
+the finite 65,536-byte error entity at `before-parse.s3.GetObject` before the raw API returned. The
+successful-body stall produced the actual `StreamingBody.read` `ReadTimeoutError` after 5,087 ms;
+that interval was measured before fixture cleanup, separately from the cooperative deadline.
+Owned containers, unique image tag and directory were removed; raw logs/JUnit and all 2,012 source-file
+and 153 directory-mode identities were independently verified. Three existing Testcontainers module
+deprecations remain. The existing API CI job requires all six tests; all 14 required checks are retained.
+
+The SDK may buffer error responses before returning a body, and HTTP framing can hide extra wire
+bytes. Blocking, DNS, trickling responses and cleanup can exceed the cooperative 15-second deadline.
+Operational adversarial-provider use requires enforced process resource/lifetime containment or a
+reviewed bounded HTTP adapter. Complete per-witness collection, scalable global legacy/v2 history,
+protected rollback memory, actual snapshot agreement, durable delivery and independent activation/
+restore proofs remain required. Existing readers/writers, descriptor version 1, R75 reports, R76/R77/R78,
+schema, grants, dependencies, backup and restore are unchanged. Lineage, key rotation, provider
+version-list denial and source-independent recovery stay OPEN. No live enrollment, deployment, key
+change, restore or cutover occurred. Other full-stack counts are inherited from MR25 source and main
+pipelines, each 14/14; this candidate still requires its own published-source CI.
+
 ### S-audit-bootstrap-bridge — validate the pinned supplied legacy package
 
 **2026-09-09; source baseline `90b4616ecd7d18b8bd11f94b0379b59cfde063f5`.** R78 adds a pure

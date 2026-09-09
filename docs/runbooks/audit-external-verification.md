@@ -34,6 +34,27 @@ No new CLI option, descriptor version or enrollment procedure is activated. Raw 
 scalable global reconciliation and actual database-chain comparison remain prerequisites; preserve
 the existing protected-file procedure below.
 
+R79 now provides an inactive `read_raw_checkpoint_version` API for one explicit retained key/version.
+It returns original entity bytes only when response identity exactly matches and the admitted body
+fits within 65,536 bytes, after cleanup. It does not authenticate those bytes or associate them with
+an enrolled witness; the future collector must preserve that independent identity for R78. The
+existing operational reader still returns parsed dictionaries. This addition activates no CLI option,
+descriptor change, enrollment replacement or collection procedure.
+
+Actual acceptance against the pinned provider preserves retained non-null version bytes. That
+provider omits returned `VersionId` for literal `null`, so the new API rejects it as `VERSION_MISMATCH`;
+it never substitutes current-object data or treats missing identity as null. The tested delete-marker
+and missing-version responses become `PROVIDER_FAILURE` through the SDK. These observations do not
+change existing consumer compatibility or resolve the version-list-denial residual.
+
+Before operational collection, supply complete per-witness enumeration, scalable global reconciliation
+and enforced process resource/lifetime containment or a reviewed bounded HTTP adapter. The SDK can
+buffer error bodies before this API owns a stream, HTTP framing can hide surplus octets, and blocking
+or trickling IO can exceed its cooperative 15-second deadline. TLS verification uses the locked
+certifi bundle (SDK bundle fallback if unavailable), not automatically the verifier's OS trust store.
+The synthetic CA mount in disposable acceptance is not a production trust installation procedure.
+Continue using the protected-file custody procedure below for the existing explicit verifier.
+
 ## Establish the public enrollment
 
 The repository owner approves the expected organization IDs, retained Ed25519 public keys and witness
