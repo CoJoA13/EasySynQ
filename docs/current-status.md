@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-09-09"
-baseline_commit: "165990d3734d683371f3234fc0fe03f1e4624c17"
-last_shipped_slice: "S-audit-lineage-reader"
+baseline_commit: "90b4616ecd7d18b8bd11f94b0379b59cfde063f5"
+last_shipped_slice: "S-audit-bootstrap-bridge"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 2751
+api_unit_tests: 2944
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
@@ -85,31 +85,45 @@ path, used key epochs and a tip. Bootstrap assurance remains `external-pin-only`
 legacy bridge coverage, witness collection completeness, witness custody, audit-chain comparison,
 freshness and operational key activation remain explicitly unproved. Current consumers remain legacy.
 
-The focused suites passed **180 lineage tests**, **204 codec tests** and **173 affected legacy tests**
-without skips. The independently generated lineage fixture covers 35 scenario/permutation cases;
-maximum-size tests exercise 4,096 observations/nodes and 4,097 available key materials. The complete
-local API suite passed **2,751 tests with one release-only skip in 82.29 seconds**. Its actual-image
-test ran all five existing codec vectors, 31 key controls and four lineage cases in the same immutable
-production image, offline as UID 10001 with development packages absent. Two equivalent test slices
-were subsequently rewritten to avoid a site-data guard false positive; all **180 lineage tests passed
-again in 14.01 seconds**, and all other source bytes and modes stayed unchanged.
+S-audit-bootstrap-bridge adds the pure supplied-legacy-bootstrap-package evaluator under R78.
+An externally pinned root binds the exact required witness namespaces, retained-key inventory and
+positive audit boundary. Every committed page and exact raw legacy body must reconcile; authentic
+unlisted older records, conflicting locators and signed-head contradictions cannot be hidden by a
+newer boundary or healthy sibling witness. Missing dependencies remain incomplete. Only a consistent
+supplied package exposes the original external R77 bootstrap pin and per-witness summaries.
 
-The separate current-image external verifier acceptance passed all **three mandatory runtime cases**,
-preserving the existing live/historical custody and denial checks; owned cleanup completed. Ruff,
-formatting across **794 API files**, mypy across **455 source files**, runtime-runner static checks,
-**95 authority fixtures**, repository authority, candidate-wide site-data and whitespace checks passed.
-Source manifests cover **2,003 tracked and new candidate files**. Producer, output and image identities,
-directory modes and the real Git index were verified. No package, lock, migration or CI topology
-changed. This local verification does not replace required CI on the published candidate commit.
+The result explicitly leaves operational legacy-history completeness, witness collection
+completeness, custody, database-chain comparison, v2 lineage consistency, freshness, rollback-memory
+continuity and operational key activation unproved. Matching omissions from the package and supplied
+observations remain undetectable here. Current readers, writers, enrollment descriptors, grants,
+backup and restore are unchanged; complete raw version collection, scalable global reconciliation,
+actual snapshot comparison and independent activation/restore proofs remain prerequisites.
 
-Other full-stack counts are attributed to
-[MR !23](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/23)'s GitLab pipeline
-`2832590561` on source `2eae7c52763b9c21baa89225fe4684c4a1cacc63`, whose merged tree is source base
-`165990d3`. All fourteen required checks passed: 1,259 integration passes with two existing skips,
-285 response contracts, 2,352 web tests and 80 browser tests. Post-merge pipeline `2832646497` also
-passed all fourteen checks on that base. These full-stack results are inherited; the new local
-results above cover this reader candidate. No live enrollment, grant, key rotation, restore,
-deployment or upgrade was performed.
+Focused verification passed **193 bridge tests and 653 affected compatibility tests** without skips.
+Independent public fixtures contain 14 valid legacy signatures, one invalid-signature control and
+nine packages with 30 scenarios. The baseline has 514 locators across two pages and two witnesses;
+capacity tests exercise 4,096 entries/observations, eight pages, eight retained keys and 16 MiB.
+All **seven private single-check falsifiers** were detected by unchanged public-behavior tests:
+two inappropriate usable-consistency results, four diagnostic/precedence regressions and one legacy
+offset-compatibility regression. Accepted source remained unchanged throughout those executions.
+
+The complete local API suite passed **2,944 tests with one release-only skip in 73.93 seconds**.
+Its actual production-image test ran five codec vectors, 31 key controls, four lineage cases and
+six bridge/composition cases in the same immutable image, offline as UID 10001 with development
+packages absent. The unchanged external verifier runner passed all **three mandatory runtime
+cases**, including the current/historical custody and denial behavior; owned cleanup completed.
+Ruff, formatting across **798 API files**, mypy across **458 source files**, runtime-runner static
+checks, **95 authority fixtures**, repository authority, candidate-wide site-data and whitespace
+checks passed. Source identities cover **2,008 files** and **152 directory modes**, with the real
+Git index preserved. These are local candidate results; required CI still runs on the published
+commit. No dependency, lock, migration, schema or CI topology changed.
+
+Other full-stack counts are inherited from
+[MR !24](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/24)'s source pipeline
+`2833081870` and merged-main pipeline `2833118105`, both passing all fourteen required checks.
+The merged baseline is `90b4616ecd7d18b8bd11f94b0379b59cfde063f5`: 1,259 integration passes with two
+existing skips, 285 response contracts, 2,352 web tests and 80 browser tests. No live enrollment,
+grant, key rotation, restore, deployment or upgrade was performed.
 
 ## Shipped boundary
 

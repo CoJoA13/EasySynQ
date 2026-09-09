@@ -575,6 +575,131 @@ def test_the_built_api_image_is_unprivileged_and_starts_offline() -> None:
         assert lineage_result.returncode == 0, lineage_result.stderr
         assert lineage_result.stdout.strip() == "AUDIT_LINEAGE_RUNTIME_OK cases=4"
         print(f"AUDIT_LINEAGE_IMAGE_PROOF_OK image_id={image_id} cases=4")
+        bridge_script = """
+import importlib.util, json, os, sys
+from uuid import UUID
+from easysynq_api.services.audit import bootstrap_bridge as bridge, lineage
+from easysynq_api.services.audit import bootstrap_bridge_codec, legacy_checkpoint_compat
+assert os.getuid() == 10001
+assert importlib.util.find_spec('pytest') is None
+assert importlib.util.find_spec('minio') is None
+for name in sys.modules:
+    assert not name.startswith(('sqlalchemy', 'easysynq_api.settings'))
+    assert name not in (
+        'easysynq_api.core.config', 'easysynq_api.services.audit.checkpoint',
+        'easysynq_api.services.audit.trust', 'easysynq_api.services.audit.sink',
+        'easysynq_api.services.audit.external',
+    )
+fixture = json.load(sys.stdin)
+expected = {
+    'consistent': ('consistent', set()),
+    'unlisted_old': ('failed', {'UNLISTED_AUTHENTIC_LEGACY'}),
+    'missing_page': ('incomplete', {'PAGE_MISSING'}),
+    'same_locator_transport_conflict': (
+        'failed', {'IMMUTABLE_LOCATOR_CONFLICT', 'LEGACY_BODY_COMMITMENT_MISMATCH'}),
+    'offset_compatible': ('consistent', set()),
+}
+unproved = (
+    'operational-legacy-history-completeness', 'witness-collection-completeness',
+    'witness-custody', 'audit-chain-comparison', 'v2-lineage-consistency',
+    'freshness', 'rollback-memory-continuity', 'operational-key-activation',
+)
+checked = set()
+for scenario in fixture['scenarios']:
+    name = scenario['name']
+    if name not in expected:
+        continue
+    package = fixture['packages'][scenario['package']]
+    source = package['enrollment']
+    pin = source['bootstrap']
+    head = pin['audit_boundary']
+    stream = lineage.StreamEnrollment(
+        UUID(source['org_id']), UUID(source['stream_id']),
+        lineage.BootstrapPin(
+            pin['commitment_hash'], pin['initial_key_id'],
+            bytes.fromhex(pin['initial_public_key_hex']), pin['initial_key_epoch'],
+            lineage.AuditHead(head['latest_id'], head['latest_row_hash']),
+        ), None,
+    )
+    enrollment = bridge.BridgeEnrollment(
+        stream,
+        tuple(bridge.BridgeWitnessPin(UUID(w['witness_id']), w['namespace_hash'])
+              for w in source['witnesses']),
+        tuple(bridge.LegacyPublicMaterial(k['key_id'], bytes.fromhex(k['public_key_hex']))
+              for k in source['legacy_keys']),
+    )
+    pages = tuple(bridge.BridgePageObservation(bytes.fromhex(p['body_hex']))
+                  for index, p in enumerate(package['pages'])
+                  if index not in scenario.get('omit_pages', []))
+    observations = tuple(bridge.LegacyBodyObservation(
+        UUID(item['witness_id']), item['object_key'], item['version_id'],
+        bytes.fromhex(fixture['legacy_vectors'][item['vector']]['body_hex']),
+    ) for item in package['observations'] + scenario.get('append_observations', []))
+    result = bridge.evaluate_bootstrap_bridge(
+        enrollment, bytes.fromhex(package['root_body_hex']), pages, observations,
+        limits=bridge.BridgeLimits(4096, 16 * 1024 * 1024, 32),
+    )
+    status, codes = expected[name]
+    assert result.status == status == scenario['expected_status']
+    assert {issue.code for issue in result.issues} == codes == set(scenario['expected_codes'])
+    assert result.scope == 'supplied-legacy-bootstrap-package'
+    assert result.unproved_checks == unproved
+    if status == 'consistent':
+        assert result.usable_bootstrap_pin is stream.bootstrap
+        assert len(result.witness_summaries) == 2
+    else:
+        assert result.usable_bootstrap_pin is None
+        assert result.established_checks == result.witness_summaries == ()
+    if name == 'same_locator_transport_conflict':
+        assert (result.failed_issues, result.incomplete_issues) == (2, 0)
+    if name == 'consistent':
+        usable = result.usable_bootstrap_pin
+        v2_stream = lineage.StreamEnrollment(stream.org_id, stream.stream_id, usable, None)
+        v2 = tuple(lineage.EnvelopeObservation(
+            'synthetic', 'v2-' + str(index), 'version', bytes.fromhex(vector['body_hex']),
+        ) for index, vector in enumerate(fixture['v2_composition']))
+        graph = lineage.evaluate_lineage(
+            v2_stream, v2, limits=lineage.LineageLimits(4096, 16 * 1024 * 1024, 32),
+        )
+        assert graph.status == 'consistent' and graph.tip_sequence == 3
+        assert graph.scope == 'supplied-v2-graph'
+        assert graph.bootstrap_assurance == 'external-pin-only'
+        assert graph.unproved_checks == (
+            'bootstrap-contents', 'legacy-bridge-coverage',
+            'witness-collection-completeness', 'witness-custody',
+            'audit-chain-comparison', 'freshness', 'operational-key-activation',
+        )
+        assert tuple(key.key_epoch for key in graph.key_history) == (0, 1)
+        checked.add('composition')
+    checked.add(name)
+assert checked == set(expected) | {'composition'}
+print('AUDIT_BOOTSTRAP_BRIDGE_RUNTIME_OK cases=6')
+"""
+        bridge_result = subprocess.run(  # noqa: S603 - same immutable image, literal script
+            [
+                docker,
+                "run",
+                "--rm",
+                "-i",
+                "--network",
+                "none",
+                "--user",
+                "10001",
+                image_id,
+                "uv",
+                "run",
+                "python",
+                "-c",
+                bridge_script,
+            ],
+            input=_read("apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json"),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert bridge_result.returncode == 0, bridge_result.stderr
+        assert bridge_result.stdout.strip() == "AUDIT_BOOTSTRAP_BRIDGE_RUNTIME_OK cases=6"
+        print(f"AUDIT_BOOTSTRAP_BRIDGE_IMAGE_PROOF_OK image_id={image_id} cases=6")
     finally:
         subprocess.run(  # noqa: S603 - resolved binary, image built above
             [docker, "rmi", "-f", tag], capture_output=True, check=False

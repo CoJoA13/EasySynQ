@@ -52,6 +52,14 @@ history. The current signing-key loader, descriptor and restore command remain u
 bridge/witness history, scalable collection, durable delivery and independent transition confirmation
 are still required before planned rotation; this foundation is not an operator rotation procedure.
 
+R78's inactive bridge evaluator authenticates retained legacy evidence against an externally pinned
+root and all required witness obligations. It preserves historical signature normalization and key
+admission, while committing exact stored bytes and versions separately. It does not assign legacy
+key epochs or turn a root into a new trust enrollment. Its usable output is only the already external
+R77 bootstrap pin; no public-key activation, protected-file replacement, compromise policy or
+pre-rotation restore procedure follows. Complete raw witness collection, global history processing,
+DB-chain comparison and the independent activation/restore proofs still precede operational rotation.
+
 ## Declaring the off-host witness (`integrity.alarm`)
 
 The nightly `easysynq.audit.verify_chain` job raises **`integrity.alarm`** to System Administrators

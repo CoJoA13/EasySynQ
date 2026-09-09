@@ -471,6 +471,16 @@ flowchart LR
   proofs precede live integration; the integrity and recovery residuals remain OPEN. See
   [R77](decisions-register.md#r77--supplied-checkpoint-lineage-separates-authentication-from-edge-authority--2026-09-09).
 
+- **Pinned legacy bridge foundation (R78).** A pure evaluator checks an external bootstrap root,
+  every committed page and the exact retained legacy bodies supplied for each required witness.
+  Historical signatures and exact raw-byte commitments are separate checks; authentic unlisted
+  evidence, conflicting locators and signed heads remain failures. Missing root/page/key/body
+  dependencies remain incomplete, and partial manifests cannot justify omission claims. Only a
+  fully consistent supplied package exposes the original external R77 pin. Provider history
+  completeness, custody, database-chain agreement, freshness, rollback continuity and activation
+  remain unproved. Existing commands, descriptors and writers remain unchanged. See
+  [R78](decisions-register.md#r78--pinned-legacy-bootstrap-evidence-requires-complete-supplied-package-validation--2026-09-09).
+
 ### 4.5 Audit access & retention
 
 - Read access to the audit trail is a **granted permission** (typically Mara, Ingrid, Avery; Olsen gets scoped audit views within his audit window).
