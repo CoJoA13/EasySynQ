@@ -345,21 +345,24 @@ plus the missing tests.
 Status: OPEN
 Owner: Repository owner
 Source: Batch 7, PR [#364](https://github.com/CoJoA13/EasySynQ/pull/364)
-Reason: Retained legacy versions are now verified, but checkpoints do not commit to a trusted predecessor
-and the mutable database sink inventory does not prove which witnesses must exist.
+Reason: Legacy checkpoints do not commit to a trusted predecessor. The explicit protected-file verifier
+now preserves enrolled witnesses independently of the database, while scheduled/API/no-option checks
+still discover their inventory from the database.
 Closure contract: Define and ship a Merkle-chained checkpoint format in which each anchor commits to the
 prior anchor hash, with a binding register entry and migration/compatibility proof.
 Last reviewed: 2026-09-08
 
-The live verifier now scans all retained eligible legacy object versions encountered at every currently
-configured off-host witness. This detects a locally consistent database rewrite even after the genuine
-producer re-anchors a newer head, and delete markers or incomplete version reads fail closed. It does
-not cryptographically prove that an expected predecessor or witness is present: a database owner can
-still alter the current sink inventory, retention can expire before observation, and legacy checkpoints
-carry neither a predecessor commitment nor independently enrolled sink/key identity. **Closing it needs**
-a Merkle-chained anchor lineage (each checkpoint commits to the prior anchor's hash), externally trusted
-key and witness enrollment, and the corresponding compatibility/restore proofs — a checkpoint
-payload/format change + a register entry.
+All retained eligible legacy object versions are checked, including older contradictions after a
+genuine producer re-anchors. The explicit protected-file CLI now checks the owner's enrolled
+organizations, public keys and witnesses even after database sink retargeting or organization removal;
+[R73](decisions-register.md#r73--external-legacy-audit-verification-uses-an-owner-controlled-public-enrollment-file--2026-09-08)
+and the [runbook](runbooks/audit-external-verification.md) define that manual custody boundary.
+Scheduled/API/no-option callers still use the mutable database inventory. Neither path proves an
+expected predecessor: legacy anchors contain no predecessor commitment, evidence can expire before
+observation, and descriptor compromise or rollback remains outside cryptographic enforcement.
+**Closing it needs** Merkle-chained anchors, trusted lineage/key-era bootstrap and the corresponding
+compatibility/restore proofs. The static external enrollment closes only the explicit CLI's database
+selection gap; this record remains OPEN.
 
 ## RES-MINIO-VERSION-LIST-DENY
 
@@ -438,16 +441,19 @@ Found by the `migration-reviewer` pass on Batch 12.
 Status: OPEN
 Owner: Repository owner
 Source: Batch 7, PR [#364](https://github.com/CoJoA13/EasySynQ/pull/364)
-Reason: Audit checkpoints support only one verification key.
+Reason: Checkpoints contain no key identifier or activation history. Scheduled/API/no-option verification
+uses one key; explicit protected-file verification supports a static legacy public-key allowlist.
 Closure contract: Add a key identifier to checkpoints and retain a public-key verification history, with
 rotation and pre-rotation restore proofs.
-Last reviewed: 2026-08-08
+Last reviewed: 2026-09-08
 
-v1 is single-key; restoring a pre-rotation backup after a future rotation would verify the historical
-signature against the current key. The retained-version scan also verifies every legacy anchor with that
-one current key, so retaining an old public key by itself does not enable automatic historical key
-selection; a rotation while old anchors remain will fail those signatures. **Closing it needs** a key-id
-on the checkpoint + a retained public-key history.
+Restoring a pre-rotation backup still verifies its historical signature against the current key.
+The unattended retained-version scan also uses that single key, so retaining an old public key alone
+does not enable automatic selection. The explicit external verifier accepts 1–8 owner-enrolled legacy
+public keys per organization and rejects unknown keys, without private-key access. That static
+allowlist supplies no key activation, revocation era, compromise cutoff or rotation/restore protocol.
+**Closing it needs** a checkpoint key identifier, retained authorized public-key history and actual
+rotation plus pre-rotation restore proofs. This record remains OPEN.
 
 ## RES-RISK-CLAUSE-PICKER
 

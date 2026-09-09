@@ -340,6 +340,37 @@ def test_the_gitlab_image_runtime_proof_runs_in_the_job_that_can_fail_a_merge() 
         )
 
 
+def test_gitlab_requires_external_trust_runtime_acceptance_after_image_proof() -> None:
+    jobs = _gitlab_jobs()
+    invocation = (
+        'runuser -u ci -- env HOME="$CI_PROJECT_DIR/.ci-home" PATH="$PATH" '
+        'DOCKER_HOST="$DOCKER_HOST" '
+        'python3 "$CI_PROJECT_DIR/scripts/run-audit-external-acceptance.py"'
+    )
+    api = jobs["api"]
+    assert api.get("allow_failure") is not True
+    assert isinstance(api["script"], list)
+    matches = [
+        entry
+        for entry in api["script"]
+        if isinstance(entry, str) and "run-audit-external-acceptance.py" in entry
+    ]
+    assert matches == [invocation]
+    image_proof_index = next(
+        index for index, entry in enumerate(api["script"]) if "EASYSYNQ_IMAGE_PROOF=1" in entry
+    )
+    acceptance_index = api["script"].index(invocation)
+    assert image_proof_index < acceptance_index
+    for escape in ("|| true", "|| :", " if ", "easysynq_acceptance_enable", "skip"):
+        assert escape not in invocation.lower()
+
+    for name, job in jobs.items():
+        occurrences = _flatten_script(job.get("script", [])).count(
+            "run-audit-external-acceptance.py"
+        )
+        assert occurrences == (1 if name == "api" else 0)
+
+
 def test_gitlab_pipeline_collects_only_the_authoritative_test_trees() -> None:
     """The GitLab counterpart of the GitHub per-job command pins."""
     jobs = _gitlab_jobs()

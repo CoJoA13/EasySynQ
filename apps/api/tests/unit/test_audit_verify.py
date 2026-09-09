@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
 from easysynq_api.services.audit import verify as verify_mod
@@ -114,6 +115,48 @@ class _BoundedStreamingSession(_StreamingSession):
         return _CountResult(self.pending)
 
 
+class _UnexpectedQuerySession:
+    async def stream_scalars(self, _statement: Any) -> Any:
+        raise AssertionError("query executed before incompatible verifier arguments were rejected")
+
+
+class _CheckpointScalars:
+    def __init__(self, checkpoint: SimpleNamespace) -> None:
+        self._checkpoint = checkpoint
+
+    def first(self) -> SimpleNamespace:
+        return self._checkpoint
+
+
+class _CheckpointResult:
+    def __init__(self, checkpoint: SimpleNamespace) -> None:
+        self._checkpoint = checkpoint
+
+    def scalars(self) -> _CheckpointScalars:
+        return _CheckpointScalars(self._checkpoint)
+
+
+class _CheckpointSession(_StreamingSession):
+    def __init__(self, org_id: uuid.UUID, event: SimpleNamespace) -> None:
+        super().__init__([event], pending=0)
+        self.checkpoint = SimpleNamespace(
+            org_id=org_id,
+            latest_id=event.id,
+            latest_row_hash=event.row_hash,
+            timestamp=datetime.datetime(2026, 9, 8, 12, 0, tzinfo=datetime.UTC),
+            app_signature=b"synthetic-signature",
+        )
+
+    async def execute(self, _statement: Any) -> Any:
+        self.execute_calls += 1
+        self.calls.append("execute")
+        if self.execute_calls == 1:
+            return _CheckpointResult(self.checkpoint)
+        if self.execute_calls == 2:
+            return _OptionalScalarResult(self.checkpoint.latest_row_hash)
+        return _CountResult(self.pending)
+
+
 async def test_verify_chain_streams_rows_in_bounded_batches() -> None:
     """The full walk must never materialize the organization's ORM row set with ``.all()``."""
     org_id = uuid.uuid4()
@@ -152,3 +195,40 @@ async def test_bounded_stream_seeds_from_the_preceding_link() -> None:
     assert session.execute_calls == 2  # predecessor seed + pending-tail count
     assert session.calls == ["stream", "execute", "execute"]
     assert session.rows.closed is True
+
+
+async def test_verify_chain_rejects_key_and_callback_before_querying() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await verify_mod.verify_chain(  # type: ignore[arg-type]
+            _UnexpectedQuerySession(),
+            uuid.uuid4(),
+            verify_key=Ed25519PrivateKey.generate().public_key(),
+            checkpoint_verifier=lambda **_fields: True,
+        )
+
+
+async def test_verify_chain_uses_callback_for_local_checkpoint_attestation() -> None:
+    org_id = uuid.uuid4()
+    event = _event(1, org_id, GENESIS_HASH)
+    session = _CheckpointSession(org_id, event)
+    calls: list[dict[str, Any]] = []
+
+    def verifier(**fields: Any) -> bool:
+        calls.append(fields)
+        return True
+
+    result = await verify_mod.verify_chain(  # type: ignore[arg-type]
+        session, org_id, checkpoint_verifier=verifier
+    )
+
+    assert result.verified is True
+    assert result.checkpoint == verify_mod.CheckpointStatus(True, True, True, 1, None)
+    assert calls == [
+        {
+            "org_id": org_id,
+            "latest_id": 1,
+            "latest_row_hash": event.row_hash,
+            "timestamp": session.checkpoint.timestamp,
+            "signature": b"synthetic-signature",
+        }
+    ]

@@ -77,6 +77,51 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-external-trust — owner-enrolled legacy verification
+
+Recorded 2026-09-08 against source base `98357eaebcc653dea234abdf8efd774cddc7b54a`.
+The explicit `verify-offhost --trust-descriptor` command takes expected organizations, retained public
+keys and WORM witness locations from an owner-controlled public file on a separate verifier machine
+(R73). Existing scheduled/API/no-option callers keep their database-discovered, single-key behavior.
+The strict path uses dedicated readers, validates the protected descriptor and credentials, re-executes
+with a fixed six-entry environment, and emits bounded JSON with complete enrolled obligations and
+explicit incomplete status. Legacy signature bytes, writers, schema, retention and restore paths are
+unchanged.
+
+Eight PostgreSQL/MinIO component tests passed, including a genuine same-key rewrite and re-anchor:
+the old database-discovered path accepted the replacement witness, while the external reader retained
+the original enrolled witness and rejected its contradiction. Multi-key verification, substituted
+local key files, missing checkpoints, extra/missing organizations and real SELECT-only DB grants were
+also exercised. Separate actual-public-CLI routing tests covered inherited PostgreSQL defaults and
+the 8,192-character URL boundary. The initial unsupported-option RED established feature absence;
+it was not itself the demonstrated security attack.
+
+The repository-owned runner built the exact API source and tested its immutable image ID. Both
+mandatory runtime tests passed with UID 10001, read-only root filesystem, one read-only public
+descriptor mount, no private-key/source-store mount, and dedicated reader credentials. The proof
+checked DB write denials with SQLSTATE 42501 in read-write transactions, actual storage version reads
+and write/delete/retention/governance denials, healthy verification under separate hostile PGHOSTADDR,
+omitted-port PGPORT and service settings, and failure after the genuine witness-selection attack.
+The required GitLab API job invokes this runner after the existing image proof; missing/skipped cases,
+build/identity failures, changed inputs and cleanup failures cannot pass the new gate. Live enrollment
+and principal changes were not performed.
+
+Final local code gates passed **2,333 API unit tests with two existing opt-in skips** in **63.19 seconds**,
+plus **seven affected audit integration tests** in **33.88 seconds** with no skips. Ruff, formatting
+across **784 API files**, mypy across **452 source files**, runner static checks, repository authority,
+site-data and whitespace checks passed. The existing skips were release digest pinning and the older
+opt-in image-start proof; the new two-case container acceptance ran separately and passed. Required
+GitLab CI also enables the older image proof. Three inherited Testcontainers namespace deprecation
+warnings remain. Source and log identities were verified, and the affected integration session left
+no owned containers. An earlier container harness failed because its argv guard mistook the public
+descriptor path for a secret; that guard was corrected and the direct runner then passed.
+
+This is manual external enrollment, not predecessor lineage or a signing-key rotation protocol.
+Descriptor custody/rollback, static key authorization, non-atomic observations, cooperative timeout
+overshoot, internal full-chain failure accumulation, evidence expiry and the pinned-provider denial
+residual remain documented limits. Key rotation, checkpoint lineage and source-independent recovery
+remain OPEN. Local results do not substitute for required checks on the published GitLab commit.
+
 ### S-audit-historical-witnesses — retained checkpoint version verification
 
 Recorded 2026-09-08 against source base `02587988766e4ea7e0acdc76c665428261c33971`.

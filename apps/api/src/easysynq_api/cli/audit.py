@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import Sequence
+import json
+import os
+import sys
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -20,8 +24,37 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from ..config import get_settings
 from ..db.models.organization import Organization
 from ..services.audit.checkpoint import load_verify_key, verify_offhost_checkpoint
+from ..services.audit.external import (
+    ExternalVerificationReport,
+    OrganizationVerificationResult,
+    VerificationReason,
+    WitnessVerificationResult,
+    _verify_external,
+)
 from ..services.audit.partitions import ensure_partitions
+from ..services.audit.trust import (
+    ExternalCredentials,
+    TrustConfigurationError,
+    TrustDescriptor,
+    load_external_credentials,
+    load_trust_descriptor,
+)
 from ..services.audit.verify import verify_chain
+
+_EXTERNAL_BOOTSTRAP = (
+    "import runpy, sys\n"
+    "sys.path.insert(0, sys.argv.pop(1))\n"
+    'runpy.run_module("easysynq_api.cli._audit_external", run_name="__main__")'
+)
+_EXTERNAL_FIXED_ENVIRONMENT = {"HOME": "/dev/null", "LC_ALL": "C.UTF-8", "TZ": "UTC"}
+_EXTERNAL_CREDENTIAL_KEYS = frozenset(
+    {
+        "DATABASE_URL",
+        "AUDIT_SINK_READ_ACCESS_KEY",
+        "AUDIT_SINK_READ_SECRET_KEY",
+    }
+)
+_EXTERNAL_ENVIRONMENT_KEYS = frozenset((*_EXTERNAL_CREDENTIAL_KEYS, *_EXTERNAL_FIXED_ENVIRONMENT))
 
 
 async def _ensure_partitions() -> list[str]:
@@ -92,12 +125,153 @@ async def _verify_offhost() -> tuple[bool, int, list[tuple[str, list[str]]]]:
         await engine.dispose()
 
 
+def _external_failure_report(
+    descriptor: TrustDescriptor | None, *, code: str, message: str
+) -> ExternalVerificationReport:
+    incomplete = VerificationReason(
+        "CHECK_INCOMPLETE", "required external verification was not attempted"
+    )
+    organizations: tuple[OrganizationVerificationResult, ...] = ()
+    if descriptor is not None:
+        organizations = tuple(
+            OrganizationVerificationResult(
+                org_id=organization.org_id,
+                present=None,
+                verified=False,
+                checked=0,
+                pending=0,
+                local_checkpoint=None,
+                break_count=0,
+                breaks=(),
+                breaks_omitted=0,
+                witnesses=tuple(
+                    WitnessVerificationResult(
+                        witness_id=witness.witness_id,
+                        attempted=False,
+                        status="incomplete",
+                        verified=False,
+                        sinks_read=0,
+                        read_failed=False,
+                        attest_failures=0,
+                        comparison_unavailable=False,
+                        reasons=(incomplete,),
+                        reasons_omitted=0,
+                    )
+                    for witness in organization.witnesses
+                ),
+                reasons=(incomplete,),
+                reasons_omitted=0,
+            )
+            for organization in descriptor.organizations
+        )
+    return ExternalVerificationReport(
+        descriptor_id=None if descriptor is None else descriptor.descriptor_id,
+        descriptor_sha256=None if descriptor is None else descriptor.sha256,
+        verified=False,
+        checked=0,
+        pending=0,
+        sinks_read=0,
+        unenrolled_orgs_present=None,
+        organizations=organizations,
+        reasons=(VerificationReason(code, message),),
+        reasons_omitted=0,
+    )
+
+
+def _emit_external_report(
+    report: ExternalVerificationReport, *, configuration: bool = False
+) -> int:
+    print(json.dumps(report.to_dict(), separators=(",", ":")))
+    if configuration:
+        return 2
+    return 0 if report.verified else 1
+
+
+def _run_external(descriptor_path: Path, environ: Mapping[str, str]) -> int:
+    """Revalidate and run the strict verifier inside its controlled worker process."""
+    try:
+        descriptor = load_trust_descriptor(descriptor_path)
+    except (TrustConfigurationError, ValueError):
+        return _emit_external_report(
+            _external_failure_report(
+                None,
+                code="CONFIG_INVALID",
+                message="external verifier configuration is invalid",
+            ),
+            configuration=True,
+        )
+    try:
+        credentials = load_external_credentials(environ)
+    except (TrustConfigurationError, ValueError):
+        return _emit_external_report(
+            _external_failure_report(
+                descriptor,
+                code="CONFIG_INVALID",
+                message="external verifier configuration is invalid",
+            ),
+            configuration=True,
+        )
+    try:
+        report = asyncio.run(_verify_external(descriptor, credentials))
+    except Exception:  # noqa: BLE001 - never expose raw runtime/credential errors
+        report = _external_failure_report(
+            descriptor,
+            code="CHECK_INCOMPLETE",
+            message="external verifier did not complete",
+        )
+    return _emit_external_report(report)
+
+
+def _external_input_snapshot(environ: Mapping[str, str]) -> dict[str, str]:
+    return {
+        name: environ.get(name, "")
+        for name in (
+            "DATABASE_URL",
+            "AUDIT_SINK_READ_ACCESS_KEY",
+            "AUDIT_SINK_READ_SECRET_KEY",
+        )
+    }
+
+
+def _exec_external(
+    descriptor_path: Path,
+    credentials: ExternalCredentials,
+    *,
+    original_database_url: str,
+) -> None:
+    """Replace this process with the strict worker under an exact fresh environment."""
+    environment = {
+        "DATABASE_URL": original_database_url,
+        "AUDIT_SINK_READ_ACCESS_KEY": credentials.access_key,
+        "AUDIT_SINK_READ_SECRET_KEY": credentials.secret_key,
+        **_EXTERNAL_FIXED_ENVIRONMENT,
+    }
+    source_root = str(Path(__file__).resolve().parents[2])
+    os.execve(  # noqa: S606 - required shell-free exec with fixed interpreter/argv/fresh env
+        sys.executable,
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-u",
+            "-c",
+            _EXTERNAL_BOOTSTRAP,
+            source_root,
+            str(descriptor_path),
+        ],
+        environment,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="easysynq-audit", description="Audit-trail operator CLI.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("ensure-partitions", help="create the rolling monthly audit_event partitions")
     sub.add_parser("verify-chain", help="re-walk + verify the hash chain (+ signed checkpoint)")
-    sub.add_parser("verify-offhost", help="independent off-host checkpoint read-back (out-of-band)")
+    offhost_parser = sub.add_parser(
+        "verify-offhost", help="independent off-host checkpoint read-back (out-of-band)"
+    )
+    offhost_parser.add_argument("--trust-descriptor")
     args = parser.parse_args(argv)
 
     if args.command == "ensure-partitions":
@@ -106,6 +280,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "verify-offhost":
+        if args.trust_descriptor is not None:
+            descriptor_path = Path(args.trust_descriptor)
+            try:
+                descriptor = load_trust_descriptor(descriptor_path)
+            except (TrustConfigurationError, ValueError):
+                return _emit_external_report(
+                    _external_failure_report(
+                        None,
+                        code="CONFIG_INVALID",
+                        message="external verifier configuration is invalid",
+                    ),
+                    configuration=True,
+                )
+            try:
+                external_inputs = _external_input_snapshot(os.environ)
+                credentials = load_external_credentials(external_inputs)
+            except (TrustConfigurationError, ValueError):
+                return _emit_external_report(
+                    _external_failure_report(
+                        descriptor,
+                        code="CONFIG_INVALID",
+                        message="external verifier configuration is invalid",
+                    ),
+                    configuration=True,
+                )
+            try:
+                _exec_external(
+                    descriptor_path,
+                    credentials,
+                    original_database_url=external_inputs["DATABASE_URL"],
+                )
+            except Exception:  # noqa: BLE001 - redact exec/runtime detail in parent failure
+                return _emit_external_report(
+                    _external_failure_report(
+                        descriptor,
+                        code="CHECK_INCOMPLETE",
+                        message="external verifier did not complete",
+                    )
+                )
+            raise AssertionError("os.execve unexpectedly returned")
         ok, read, org_reasons = asyncio.run(_verify_offhost())
         print(f"offhost_verified={ok} sinks_read={read}")
         for org_id, reasons in org_reasons:

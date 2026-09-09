@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R72) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R73) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R72
+## Part 3 — Resolutions R1–R73
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2428,6 +2428,27 @@ moving a pin because CI happened to go green; rule 2 requires the audit to have 
 **Back-propagation:** `scripts/tests/test-web-security-lock.mjs` carries the pins at the source.
 
 Bumps the resolutions range **R1–R71 → R1–R72**.
+
+---
+
+### R73 — External legacy audit verification uses an owner-controlled public enrollment file — 2026-09-08
+
+**Decision.** The explicit `verify-offhost --trust-descriptor /absolute/path.json` command takes its expected organizations, retained Ed25519 public keys and WORM witness locations from a protected public file under the owner's control on a separate verifier machine. The owner authorizes enrollment and replacement through that protected-file custody procedure. No additional offline policy-signing key is required. The database being examined cannot authorize changes to that expected inventory.
+
+Run this mode with dedicated database and witness reader credentials, a read-only public descriptor mount and a separately controlled, unprivileged application runtime without signing keys or source-store credentials. The public command validates the three explicit reader values, re-executes the selected application interpreter with a fixed clean environment, and verifies the descriptor bytes read by the worker. File digests identify those bytes; they do not authenticate changes or prevent descriptor rollback. Live enrollment, parent-directory protection and effective reader permission checks remain operator responsibilities outside Git.
+
+Every enrolled organization and witness remains a required obligation, including when a database organization disappears or its sink is retargeted. Missing or invalid local checkpoints, empty enrolled evidence and incomplete checks fail. Static public-key enrollment authorizes legacy signature verification; it does not activate a signing key, define historical key eras or establish predecessor lineage.
+
+Existing scheduled/API verification and the CLI without this option retain their database-discovered, single-key behavior. Checkpoint bytes, writers, migrations, retention, backup and restore behavior are unchanged. The lineage, key-rotation, provider-denial and source-independent recovery residuals remain open. The descriptor custody, cooperative timeout, full-chain failure-memory and non-atomic database/storage observation limits are documented in the external-verification runbook.
+
+**Back-propagation:** [Security and audit](12-security-and-audit.md), the
+[external-verification runbook](runbooks/audit-external-verification.md), the
+[key-rotation runbook](runbooks/key-rotation.md), and the affected
+[current residuals](open-residuals.md). Dated execution evidence remains in
+[slice history](slice-history.md) and current check counts in
+[current status](current-status.md).
+
+Bumps the resolutions range **R1–R72 → R1–R73**.
 
 ---
 

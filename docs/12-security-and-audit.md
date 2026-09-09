@@ -376,7 +376,7 @@ flowchart LR
 - **Mutation detection:** altering any field of row *k* changes `row_hash[k]`, breaking every link from *k* onward — a single fast verification pass localizes the break.
 - **Deletion/reordering detection:** removing or reordering rows breaks the chain and creates an `id` gap.
 - **Insertion detection:** a back-dated insert cannot reproduce the downstream chain without rewriting all later `row_hash` values (and the periodic signed anchors, below).
-- **Anchoring:** `beat` periodically (default hourly + on shutdown) writes a **signed checkpoint** `(latest_id, latest_row_hash, timestamp)` signed with an app private key. The newest checkpoint is attempted as a best-effort backup leg and may be absent; the mandatory off-host/append-only sink, not backup-leg presence, carries the tamper-evidence claim. This is the honest "tamper-evident, not tamper-proof" guarantee (P5).
+- **Anchoring:** Beat schedules a worker to write a **signed checkpoint** `(latest_id, latest_row_hash, timestamp)` every 900 seconds (15 minutes), signed with an app private key. The newest checkpoint is attempted as a best-effort backup leg and may be absent; the mandatory off-host/append-only sink, not backup-leg presence, carries the tamper-evidence claim. This is the honest "tamper-evident, not tamper-proof" guarantee (P5).
 - **Off-host anchor (MANDATORY for tamper-evidence claims) (reconciled per Decisions Register R13):** An off-host / append-only audit-checkpoint anchor is **MANDATORY for any install claiming tamper-evidence / Part-11 readiness** (stakeholder decision c). Backup-bundled checkpoints alone are **not** sufficient, because a privileged operator who controls both the database and the backups could rewrite both. The system therefore **requires** at least one **off-host or append-only checkpoint sink** — e.g., a separate **WORM bucket**, an external object store, or **append-only syslog** — to which signed checkpoints are continuously written. This sink is modeled as the **`audit_checkpoint_sink`** config entity (see §4.6 and Data Model doc / R13) and is **configured during setup as a soft gate**: setup is not blocked, but if no `audit_checkpoint_sink` is configured the system surfaces a **clear, persistent UI warning** that **tamper-evidence cannot be honestly claimed** until an off-host anchor exists. An install with no off-host anchor MUST NOT present itself (in UI, exports, or evidence packs) as tamper-evident.
 
 ### 4.4 Write path & integrity guarantees
@@ -387,7 +387,7 @@ flowchart LR
 - The audit partition has **no UPDATE and no DELETE grant** for the application role; only INSERT and SELECT. A separate, rarely-used `audit_retention` role (operated only via the documented retention job under dual control, §8) may purge whole *expired, sealed* partitions — never individual rows.
 - Partitioned by month (`occurred_at`) for performance and for whole-partition lifecycle; indexed by `object_id`, `actor_id`, `event_type`, `occurred_at`.
 - Mirrored into OpenSearch for fast investigative search (derived, rebuildable; PG remains authoritative).
-- A `beat` **chain-verify** job (default nightly + on-demand) re-walks the chain over rows where `chained_at IS NOT NULL` and compares every retained eligible legacy checkpoint object version at each currently configured off-host `audit_checkpoint_sink` against its signed chain row. A mismatch in an older retained version still raises a high-severity audit alarm after a genuine producer has written a newer consistent checkpoint. The ordered database rows are consumed through a server-side cursor in bounded batches rather than materializing the organization's full ORM row set; the cryptographic walk remains complete and in `id` order. Rows in the written-but-not-yet-chained window (`chained_at IS NULL`) at the chain tail are reported as *pending*, not as a break; a persistent or growing unchained tail (chain-linker stalled) is itself alarmed.
+- A Beat-scheduled worker **chain-verify** job (default nightly + on-demand) re-walks the chain over rows where `chained_at IS NOT NULL` and compares every retained eligible legacy checkpoint object version at each currently configured off-host `audit_checkpoint_sink` against its signed chain row. A mismatch in an older retained version still raises a high-severity audit alarm after a genuine producer has written a newer consistent checkpoint. The ordered database rows are consumed through a server-side cursor in bounded batches rather than materializing the organization's full ORM row set; the cryptographic walk remains complete and in `id` order. Rows in the written-but-not-yet-chained window (`chained_at IS NULL`) at the chain tail are reported as *pending*, not as a break; a persistent or growing unchained tail (chain-linker stalled) is itself alarmed.
 
   The witness scan uses S3 `ListObjectVersions` with both provider pagination markers forwarded
   unchanged and explicit-version `GetObject` reads. Any delete marker under the organization's
@@ -402,8 +402,9 @@ flowchart LR
   count, and has a cooperative 300-second budget. Reaching a cap fails even on an otherwise terminal
   page; it is an integrity-verification availability failure and does not permit sampling or pruning retained
   evidence. A synchronous provider request can finish cleanup after the cooperative budget expires.
-  Configuration and organization selection remain mutable, the trusted checkpoint key remains a
-  single key, and the database walk, witness traversal, and callers remain separate READ COMMITTED
+  In scheduled/API and no-option CLI verification, configuration and organization selection remain
+  mutable and the trusted checkpoint key remains a single key. The database walk, witness traversal,
+  and callers remain separate READ COMMITTED
   observations rather than one transactional database/object-store snapshot. A concurrent anchor can
   fall outside one traversal and is checked by the next full scan. Retention expiry before observation
   remains unrecoverable evidence loss, and the existing future-timestamp behavior is unchanged.
@@ -415,6 +416,27 @@ flowchart LR
   allowed. The verifier still fails closed when the provider actually denies either operation. This
   pinned-provider limitation is tracked as
   [`RES-MINIO-VERSION-LIST-DENY`](open-residuals.md#res-minio-version-list-deny).
+
+- **Externally enrolled legacy verification (R73).** The explicit
+  `verify-offhost --trust-descriptor /absolute/path.json` command reads its required organizations,
+  retained public keys and witness locations from a protected file under the owner's control on a
+  separate verifier machine. It does not discover that inventory or its keys from the checked
+  database. Missing organizations, missing/invalid local checkpoints, extra database organizations,
+  empty enrolled witnesses and incomplete checks fail; a database sink's grace or selection change
+  cannot remove an enrolled obligation. The command checks unchanged legacy bytes against the
+  enrolled public-key allowlist.
+
+  The public CLI validates the three dedicated reader credentials, then re-executes the selected
+  interpreter with only those values and fixed HOME/locale/timezone settings. The worker validates
+  that environment and the actual descriptor bytes it reads. Operate it as an unprivileged,
+  read-only runtime with a file-only public descriptor mount and no signing/source-store secrets.
+  The descriptor digest identifies bytes; it does not authorize changes or prevent rollback.
+  Scheduled/API/no-option callers retain their existing behavior. No background enrollment, key
+  activation, predecessor format, migration or restore behavior is added. Database/storage reads
+  remain non-atomic, deadlines cooperative, and the existing full-chain failure list can grow
+  before the public JSON output is capped. See the
+  [external-verification runbook](runbooks/audit-external-verification.md) for custody, reader grants,
+  command syntax and remaining limits.
 
 ### 4.5 Audit access & retention
 
@@ -512,7 +534,7 @@ flowchart TD
 | **Injection** | Via **Docker secrets** (preferred) or `.env` with `0600` perms owned by the deploy user; the `install.sh` wizard **generates** strong random secrets at first run (DB password, Keycloak admin, app master key, backup key, MinIO root) |
 | **Inventory (the secrets that exist)** | DB credentials; MinIO root/access keys; Keycloak admin + client secrets; app master key (KEK); audit-checkpoint signing key; backup encryption key; SMTP credentials; IdP federation client secret/cert | 
 | **Rotation** | Documented rotation procedure for each: Keycloak client secrets and the app master key are explicitly rotatable; rotation is an audited admin event; envelope encryption means rotating the KEK re-wraps DEKs without re-encrypting all data |
-| **Least exposure** | Each container receives only the secrets it needs (e.g., the renderer gets none; `beat` gets the signing key) |
+| **Secret mounts** | Compose mounts the shared `/run/secrets` volume read-write into `api` and `worker`; Beat schedules the work and has no secrets-volume mount. The external verifier uses a separate public descriptor mount and dedicated reader credentials, without this shared volume. |
 | **Scrubbing** | Secrets are redacted from logs, audit `before`/`after`, error responses, and exports by an allowlist serializer; CSP and error handling prevent secret echo |
 | **Break-glass** | A sealed, documented local admin credential exists for IdP-outage recovery; its use triggers a high-severity audit event |
 

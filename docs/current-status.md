@@ -2,10 +2,10 @@
 easysynq_status_schema: 1
 as_of: "2026-09-08"
 baseline_commit: "1dcbc2bc12b14e11f037a657d44659412a7a39c0"
-last_shipped_slice: "S-audit-historical-witnesses"
+last_shipped_slice: "S-audit-external-trust"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 2011
+api_unit_tests: 2333
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
@@ -46,6 +46,14 @@ The pinned provider's version-list denial limitation is OPEN as
 [`RES-MINIO-VERSION-LIST-DENY`](open-residuals.md#res-minio-version-list-deny). Checkpoint lineage,
 key-history selection and source-independent recovery remain open, and the database/store observations
 are not one snapshot.
+
+S-audit-external-trust adds explicit verification against an owner-controlled public descriptor on a
+separate verifier machine. Enrolled organizations, public keys and witnesses remain required after
+changes to the checked database's inventory. The public CLI uses dedicated reader credentials and a
+fresh process environment; its separate read-only container acceptance passed. Existing scheduled/API
+and no-option CLI verification retain their prior behavior. See the
+[external-verification runbook](runbooks/audit-external-verification.md) and R73 for manual custody and
+remaining limits. This does not close checkpoint lineage, key rotation or source-independent recovery.
 
 ## Shipped boundary
 
@@ -289,6 +297,19 @@ enforced by the executable catalog assertion in `apps/api/tests/unit/test_authz.
 set is defined by the headings and self-range declarations in [`decisions-register.md`](decisions-register.md).
 
 ## Verification baseline
+
+S-audit-external-trust was checked on 2026-09-08 against source base
+`98357eaebcc653dea234abdf8efd774cddc7b54a`. Local API units passed **2,333 with two existing opt-in
+skips** in **63.19 seconds**; the API unit frontmatter now reflects that fresh count. Both mandatory
+current-image custody tests passed through the repository runner, including healthy and hostile-PG
+public CLI cases, actual reader/mount denials and the genuine selection attack. Eight new component
+integration tests and seven affected audit integration cases passed in separately attributed runs.
+Ruff, **784-file** formatting, **452-source-file** mypy, runner static, authority, site-data and
+whitespace checks passed. Three inherited Testcontainers namespace warnings remain. The older
+image-start proof and release digest-pin check were the local unit skips; required GitLab CI enables
+the former, and the new container proof ran independently. Migration head, web/contracts figures,
+CI topology and the historical full-integration baseline are unchanged; no new full-integration
+aggregate is inferred from the selected local modules. Published-commit CI remains the merge gate.
 
 S-audit-historical-witnesses was checked on 2026-09-08 against source base
 `02587988766e4ea7e0acdc76c665428261c33971`. Final local API units passed **2,172 tests with two
