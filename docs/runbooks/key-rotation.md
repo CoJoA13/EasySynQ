@@ -38,6 +38,12 @@ for the additional column-only metadata read, ahead-checkpoint classification an
 witness coverage. This legacy consumer does not choose activation/revocation eras or change the
 restore command's current-key behavior. Rotation and pre-rotation recovery compatibility remain OPEN.
 
+The inactive v2 codec foundation (R76) defines an explicit signing-key identity/epoch and a
+current-key-authorized next-key proof. It authenticates envelope bytes; it does not activate a key,
+change the protected descriptor or provide an operational rotation command. Existing checkpoint
+issuance and restore still use their legacy paths. Retain current custody and public-key history;
+planned activation and pre-rotation restore require the later lineage/delivery/consumer proofs.
+
 ## Declaring the off-host witness (`integrity.alarm`)
 
 The nightly `easysynq.audit.verify_chain` job raises **`integrity.alarm`** to System Administrators

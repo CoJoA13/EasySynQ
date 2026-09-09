@@ -370,6 +370,11 @@ requires complete coverage from every enrolled witness. Retained pre-rewrite con
 fail. This does not prove the intended recovery point, predecessor continuity or archive provenance;
 the lineage closure contract is unchanged.
 
+Versioned-envelope progress on 2026-09-09 (R76): the pure codec freezes predecessor, stream,
+sequence, key identity/epoch and planned transition-proof bytes. Current issuance and all existing
+consumers remain legacy. An authenticated envelope does not establish pinned bootstrap, complete
+predecessor history, durable delivery or restore compatibility; this record remains OPEN.
+
 ## RES-MINIO-VERSION-LIST-DENY
 
 Status: OPEN
@@ -423,7 +428,7 @@ own decision, not a remediation fix. Pinned by
 Status: OPEN
 Owner: Repository owner
 Source: Batch 7, PR [#364](https://github.com/CoJoA13/EasySynQ/pull/364)
-Reason: Checkpoints contain no key identifier or activation history. Scheduled/API/no-option verification
+Reason: Active legacy checkpoints contain no key identifier or activation history. Scheduled/API/no-option verification
 uses one key; explicit protected-file verification supports a static legacy public-key allowlist.
 Closure contract: Add a key identifier to checkpoints and retain a public-key verification history, with
 rotation and pre-rotation restore proofs.
@@ -442,6 +447,11 @@ newer off-host evidence for an independently selected older target while checkin
 anchors against the static enrolled public-key set. Real two-key and unknown-key cases are covered,
 but no key identifier, activation/revocation era, compromise cutoff or rotation procedure is added.
 The existing restore path and this record's rotation/pre-rotation proof requirements are unchanged.
+
+Versioned-envelope progress on 2026-09-09 (R76): the pure codec authenticates explicit current and
+next key identities, consecutive transition epochs and both keys' signatures, with strict public-key
+admissibility. Its immutable result does not activate keys or establish authorized history. Existing
+signing-key loading, issuance and pre-rotation restore behavior are unchanged; this record remains OPEN.
 
 ## RES-RISK-CLAUSE-PICKER
 

@@ -10,6 +10,12 @@ for an independently selected, closed older database.
 The command is explicit and out of band. Existing nightly jobs, API calls and `verify-offhost` without
 the option retain their database-discovered, single-key behavior.
 
+R76 also defines a pure v2 envelope codec for future predecessor and key-history consumers.
+This command and the descriptor below continue to use legacy checkpoints and descriptor version 1.
+A valid v2 signature or transition proof does not establish a trusted bootstrap, complete lineage,
+active key, witness coverage or recovery eligibility. The codec introduces no new command option
+or enrollment procedure; those consumer changes remain separate work.
+
 ## Establish the public enrollment
 
 The repository owner approves the expected organization IDs, retained Ed25519 public keys and witness

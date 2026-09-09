@@ -368,6 +368,9 @@ def test_the_built_api_image_is_unprivileged_and_starts_offline() -> None:
     )
     assert build.returncode == 0, build.stderr
     try:
+        image_id = build.stdout.strip()
+        assert image_id.startswith("sha256:") and len(image_id) == 71, build.stdout
+        assert all(character in "0123456789abcdef" for character in image_id[7:]), build.stdout
         uid = subprocess.run(  # noqa: S603 - resolved binary, image built above
             [docker, "run", "--rm", tag, "id", "-u"],
             capture_output=True,
@@ -386,6 +389,95 @@ def test_the_built_api_image_is_unprivileged_and_starts_offline() -> None:
             f"uv run needs the network at container start — an air-gapped stack dies on "
             f"`migrate` before anything else runs:\n{offline.stderr}"
         )
+
+        codec_script = "\n".join(
+            (
+                "import hashlib, importlib.util, json, os, sys",
+                "from uuid import UUID",
+                "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey",
+                "from easysynq_api.services.audit import checkpoint_v2",
+                "fixture = json.load(sys.stdin)",
+                "assert os.getuid() == 10001",
+                "assert importlib.util.find_spec('pytest') is None",
+                "assert importlib.util.find_spec('minio') is None",
+                "assert len(fixture['vectors']) == 5",
+                "assert len(fixture['key_admissibility']) == 31",
+                "for vector in fixture['vectors']:",
+                "    key = Ed25519PublicKey.from_public_bytes(",
+                "        bytes.fromhex(vector['public_key_hex'])",
+                "    )",
+                "    checkpoint = vector['checkpoint']",
+                "    result = checkpoint_v2.verify_envelope(",
+                "        bytes.fromhex(vector['canonical_envelope_hex']),",
+                "        public_key=key,",
+                "        org_id=UUID(checkpoint['org_id']),",
+                "        stream_id=UUID(checkpoint['stream_id']),",
+                "    )",
+                "    assert result.canonical_checkpoint == (",
+                "        bytes.fromhex(vector['canonical_checkpoint_hex'])",
+                "    )",
+                "    assert result.canonical_envelope == (",
+                "        bytes.fromhex(vector['canonical_envelope_hex'])",
+                "    )",
+                "    assert result.anchor_hash == vector['anchor_hash']",
+                "for case in fixture['key_admissibility']:",
+                "    raw = bytes.fromhex(case['public_key_hex'])",
+                "    try:",
+                "        key = Ed25519PublicKey.from_public_bytes(raw)",
+                "    except ValueError:",
+                "        assert not case['admissible']",
+                "        continue",
+                "    try:",
+                "        key_id = checkpoint_v2.public_key_id(key)",
+                "    except checkpoint_v2.CheckpointV2Error:",
+                "        assert not case['admissible']",
+                "    else:",
+                "        assert case['admissible']",
+                "        assert key_id == 'ed25519-sha256:' + hashlib.sha256(raw).hexdigest()",
+                "rfc_raw = bytes.fromhex(fixture['rfc8032_public_key_hex'])",
+                "checkpoint_v2.public_key_id(Ed25519PublicKey.from_public_bytes(rfc_raw))",
+                "identity = fixture['identity_transition']",
+                "checkpoint = identity['envelope']['checkpoint']",
+                "key = Ed25519PublicKey.from_public_bytes(",
+                "    bytes.fromhex(identity['public_key_hex'])",
+                ")",
+                "try:",
+                "    checkpoint_v2.verify_envelope(",
+                "        bytes.fromhex(identity['canonical_envelope_hex']),",
+                "        public_key=key,",
+                "        org_id=UUID(checkpoint['org_id']),",
+                "        stream_id=UUID(checkpoint['stream_id']),",
+                "    )",
+                "except checkpoint_v2.CheckpointV2Error:",
+                "    pass",
+                "else:",
+                "    raise AssertionError('identity transition accepted')",
+                "print('AUDIT_CHECKPOINT_V2_CODEC_OK vectors=5 key_cases=31')",
+            )
+        )
+        codec = subprocess.run(  # noqa: S603 - resolved binary, same image built above
+            [
+                docker,
+                "run",
+                "--rm",
+                "-i",
+                "--network",
+                "none",
+                image_id,
+                "uv",
+                "run",
+                "python",
+                "-c",
+                codec_script,
+            ],
+            input=_read("apps/api/tests/fixtures/audit_checkpoint_v2_vectors.json"),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert codec.returncode == 0, codec.stderr
+        assert codec.stdout.strip() == "AUDIT_CHECKPOINT_V2_CODEC_OK vectors=5 key_cases=31"
+        print(f"AUDIT_CHECKPOINT_V2_IMAGE_PROOF_OK image_id={image_id} vectors=5 key_cases=31")
     finally:
         subprocess.run(  # noqa: S603 - resolved binary, image built above
             [docker, "rmi", "-f", tag], capture_output=True, check=False
