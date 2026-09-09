@@ -350,7 +350,7 @@ def test_descriptor_accepts_and_normalizes_explicit_endpoints(
         "https://example.test:",
         "https://example.test?",
         "https://example.test#",
-        "https://[fe80::1%25eth0]",
+        "https://[2001:db8::1%25eth0]",
         "https://éxample.test",
         " https://example.test",
     ],
