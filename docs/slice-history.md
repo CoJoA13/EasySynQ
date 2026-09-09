@@ -77,6 +77,53 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-upgrade-lock-timeout — bounded online migration lock waits
+
+Recorded 2026-09-08 against source base `7a4baccbaaefb3a34e5cdbddf778976ae6b99eb6`.
+RES-UPGRADE-LOCK-TIMEOUT is CLOSED under R74. Every online Alembic connection receives a fixed
+five-second PostgreSQL timeout per lock acquisition through an engine-local connection callback.
+Setup restores the original DBAPI autocommit state and fails closed; engine disposal is guaranteed
+when the online operation exits. Historical migration files, transaction grouping, ordinary
+application connection settings and offline SQL generation remain unchanged. The required GitLab
+migration job now runs the whole migration-test directory as well as its existing empty round trip
+and schema-drift check.
+
+The real baseline falsifier first observed the 0075 index waiting for `ShareLock` on `audit_event`
+and a following writer waiting for `RowExclusiveLock`. The unchanged code required its owned
+15-second watchdog to cancel the migration with SQLSTATE `57014`, failing only the required
+`55P03` assertion. After the connection change, **19 PostgreSQL tests passed with no skips in
+55.65 seconds**: the populated coherence test, four new migration proofs and fourteen existing
+upgrade regressions. The 0072 start preserved the table and version committed at 0073 before the
+0074 autocommit boundary, while the active 0074/0075 changes rolled back. The 0074 start retained
+that version. Following writers finished while the original compatible writer remained open.
+An uncontended populated transition committed normally; an existing ordinary connection retained
+its 17-second setting and a fresh ordinary SQLAlchemy connection retained the default zero.
+
+Real upgrade orchestration timed out without the watchdog, retained the exact archive pointer,
+committed one migration-stage `UPGRADE_FAILED` event and performed no readiness/completion step.
+Only its previously verified backup boundary, readiness probe and historical fixture clock were
+substituted. **Twenty focused unit checks passed with no skips in 0.70 seconds**, covering setup
+success/failures, original autocommit restoration, fail-closed engine lifecycle, actual offline SQL,
+GitLab CI consumption and existing CLI failure/exit behavior. Scoped Ruff, formatting and whitespace
+checks passed. Source and log identities were verified; PostgreSQL proof cleanup left no owned
+containers. Three inherited Testcontainers namespace deprecation warnings remain.
+
+The subsequent complete local API suite passed **2,341 tests with two existing opt-in skips in
+64.94 seconds**. Those skips are release digest pinning and the older image-start proof; required
+GitLab CI enables the latter. Ruff, **787-file** API formatting, **452-source-file** mypy, migration
+environment static checks, **95 authority fixtures**, repository authority and whitespace passed.
+The unchanged site-data guard scanned all **1,994 tracked and new candidate files** through an
+isolated candidate index; the real Git index and source identities were preserved. These are
+separate full-suite results, not additional tests to add to the focused counts above.
+
+The limit bounds individual lock acquisition waits, not cumulative wait time, index-build duration
+or acquired-lock holding time. Earlier autocommitted work is not undone by later failure. The runbook
+retains maintenance windows and restarts writers only after successful stop and upgrade commands.
+There is no automatic retry, downgrade or restoration. This closes only the lock-wait record:
+source-independent recovery, checkpoint lineage, key rotation and provider denial remain OPEN,
+and production upgrade eligibility remains blocked. Local evidence does not replace required CI
+on the published commit. No live upgrade, restart, enrollment or recovery operation was performed.
+
 ### S-audit-external-trust — owner-enrolled legacy verification
 
 Recorded 2026-09-08 against source base `98357eaebcc653dea234abdf8efd774cddc7b54a`.

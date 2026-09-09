@@ -60,10 +60,10 @@ production recovery or upgrade eligibility. The scratch-target guard is closed w
 [dated evidence](slice-history.md#s-restore-scratch-worm-guard--protected-target-rejection-before-copy).
 Audit task coverage is also closed with
 [dated evidence](slice-history.md#s-audit-verify-orchestrator--durable-alarms-and-engine-lifecycle).
-The narrower
-[RES-AUDIT-CHECKPOINT-LINEAGE](#res-audit-checkpoint-lineage),
-[RES-AUDIT-KEY-ROTATION](#res-audit-key-rotation), and
-[RES-UPGRADE-LOCK-TIMEOUT](#res-upgrade-lock-timeout) records keep their separate ownership and closure
+Migration lock-wait coverage is closed with
+[dated evidence](slice-history.md#s-upgrade-lock-timeout--bounded-online-migration-lock-waits) under R74.
+The narrower [RES-AUDIT-CHECKPOINT-LINEAGE](#res-audit-checkpoint-lineage) and
+[RES-AUDIT-KEY-ROTATION](#res-audit-key-rotation) records keep their separate ownership and closure
 contracts.
 Last reviewed: 2026-09-08
 
@@ -411,30 +411,6 @@ discriminator that separates legacy raw keys from capped keys (e.g. a one-off ba
 rows, or a `scope_ref_kind` column) — a migration over append-only, hash-chained rows, so a slice with its
 own decision, not a remediation fix. Pinned by
 `test_history_query_never_searches_another_documents_key`.
-
-## RES-UPGRADE-LOCK-TIMEOUT
-
-Status: OPEN
-Owner: Repository owner
-Source: Batch 12 migration-reviewer finding; mitigated in `docs/runbooks/backup-restore.md`
-Reason: `easysynq upgrade` has no `lock_timeout`, so a migration can convoy the live write path.
-Closure contract: Add an owner-reviewed Alembic connection lock-timeout contract and prove its global
-failure semantics under a populated database with a concurrent writer.
-Last reviewed: 2026-08-08
-
-The in-place upgrade runs on a one-off worker **while api/worker/beat stay up** (`scripts/easysynq:82` →
-`cli/upgrade.py`), no `lock_timeout`/`statement_timeout` is set anywhere in the repo, and
-`migrations/env.py:108` wraps the whole run in ONE transaction — so any migration that takes a table lock
-and queues behind an open writer holds everything until the entire `upgrade head` commits. Surfaced by
-`0075`, the first revision to index the hottest, largest, monotonically growing table: its build takes
-`ShareLock` on `audit_event` and every partition, and since nearly every mutating request writes an
-`audit_event` in the same transaction, the write path convoys (reads are unaffected — `AccessShareLock`
-does not conflict). CI is structurally blind to this: the `migrations` job round-trips an **empty,
-single-connection** DB, so there is neither data to index nor a concurrent writer. **Mitigated for now,
-not closed:** `docs/runbooks/backup-restore.md` § Upgrade documents stop/start steps and a row-count
-pre-check. **Closing it needs** a `lock_timeout` on the alembic connection — deliberately NOT taken inside
-a contract-housekeeping PR, since it changes *every* migration's failure mode from "wait" to "abort".
-Found by the `migration-reviewer` pass on Batch 12.
 
 ## RES-AUDIT-KEY-ROTATION
 

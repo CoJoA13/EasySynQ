@@ -5,8 +5,8 @@
 
 Enforces pre-upgrade archive → ``alembic upgrade head`` → readiness health-gate. The archive has a
 database dump + blob manifest but no object bytes, so it is not a self-contained disaster-recovery
-set. A failed migration auto-rolls back its own transaction. Exit 0 = UPGRADE_COMPLETED,
-1 = UPGRADE_FAILED.
+set. A failed migration rolls back the active transactional segment; earlier autocommitted work
+remains applied. Exit 0 = UPGRADE_COMPLETED, 1 = UPGRADE_FAILED.
 """
 
 from __future__ import annotations

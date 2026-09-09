@@ -180,44 +180,56 @@ Discard an unused verification target with
 
 ## Upgrade
 
-`./scripts/easysynq upgrade --confirm` enforces **pre-backup → `alembic upgrade head` → readiness health-gate**
-and audits `UPGRADE_STARTED`/`UPGRADE_COMPLETED`/`UPGRADE_FAILED`. A failed migration auto-rolls back
-its own transaction. The exact pre-upgrade archive pointer is retained in the failure result/audit
-row, but that archive is **non-self-contained**: it has the database dump and blob manifest, not
-object bytes. It is not a disaster safety net and must not be followed by an archive-only
-restore/cutover attempt.
+`./scripts/easysynq upgrade --confirm` enforces **pre-backup → `alembic upgrade head` → readiness
+health-gate** and audits `UPGRADE_STARTED`/`UPGRADE_COMPLETED`/`UPGRADE_FAILED`. Online Alembic
+connections have a fixed **five-second timeout per lock acquisition** (R74), including boot,
+upgrade and downgrade commands. A timeout stops the command, rolls back its active transactional
+segment and prevents readiness/completion. Earlier migration segments committed by existing
+autocommit blocks remain applied; the command does not automatically retry, downgrade or restore.
 
-If migration or readiness fails, keep the service closed and preserve the source object store while
-the failure is investigated. Production upgrade eligibility remains blocked until a self-contained
-recovery generation and source-independent, role-preserving restore/cutover proof pass. The command's
-current mechanics do not establish that eligibility.
+The exact pre-upgrade archive pointer is retained in the failure result and audit row, but that
+archive is **non-self-contained**: it has the database dump and blob manifest, not object bytes.
+It is not a disaster safety net and must not be followed by an archive-only restore/cutover attempt.
+If migration or readiness fails, keep the service closed and preserve the source object store
+while the failure and any earlier committed migration state are investigated. Production upgrade
+eligibility remains blocked until a self-contained recovery generation and source-independent,
+role-preserving restore/cutover proof pass. The command's current mechanics do not establish that
+eligibility.
+
+The timeout applies only to online Alembic connections and preserves ordinary application
+connection settings. Offline SQL generation is unchanged; executing generated SQL separately
+does not acquire this protection from `env.py`.
 
 ### ⚠ Stop the writers first when a revision builds an index on `audit_event`
 
-`./scripts/easysynq upgrade` runs on a **one-off worker while api/worker/beat stay up**, so any migration that
-locks a hot table contends with live traffic. This is unlike a fresh boot, where the compose
-`migrate` one-shot completes *before* those services start.
+`./scripts/easysynq upgrade` runs on a **one-off worker while api/worker/beat stay up**, so a migration
+that locks a hot table contends with live traffic. On fresh boot, the Compose `migrate` one-shot
+completes before those services start.
 
-`0075_audit_scope_ref_index` is the first such revision. Building an index on `audit_event` takes
-`ShareLock` on the parent and every partition: **reads keep serving, writes block.** Because nearly
-every mutating request writes an `audit_event` in the same transaction, the whole write path convoys
-behind it — and since no `lock_timeout` is configured and `migrations/env.py` wraps the run in ONE
-transaction, a build queued behind an open writer holds everything until the entire `upgrade head`
-commits. Budget roughly **50 MB of index per million audit rows**, with build time to match.
+`0075_audit_scope_ref_index` builds an index on `audit_event`, taking `ShareLock` on the parent
+and every partition: **reads keep serving, writes block.** Because nearly every mutating request
+writes an `audit_event` in the same transaction, writers can queue behind the index build. The
+five-second limit aborts a migration that cannot acquire a lock. It does not limit index-build
+duration or release locks after they have been acquired, so a maintenance window remains
+necessary. Budget roughly **50 MB of index per million audit rows**, with build time to match.
 
 ```bash
-docker compose -f infra/compose/compose.yml stop api worker beat
-./scripts/easysynq upgrade --confirm
-docker compose -f infra/compose/compose.yml start api worker beat
+if docker compose -f infra/compose/compose.yml stop api worker beat &&
+  ./scripts/easysynq upgrade --confirm; then
+  docker compose -f infra/compose/compose.yml start api worker beat
+else
+  echo "Stop or upgrade failed; keep services closed and investigate before proceeding." >&2
+  false
+fi
 ```
 
-Check the size of what you are about to index first — on a small install this is seconds and the
-window is academic:
+Check the size of what you are about to index first:
 
 ```bash
 docker compose -f infra/compose/compose.yml exec -T postgres psql -U easysynq -d easysynq -c "SELECT count(*) FROM audit_event;"
 ```
 
-`roll_partitions` / `ensure_partitions` also block during the build, but both are best-effort with a
-daily retry, so they self-heal. Downgrading (`DROP INDEX`) takes a stricter `AccessExclusiveLock`
-that blocks reads too, but it is catalog-only and effectively instant.
+`roll_partitions` / `ensure_partitions` can also block during a build; their existing best-effort
+daily retry behavior is unchanged. Downgrading with `DROP INDEX` requires a stricter
+`AccessExclusiveLock` that also blocks reads. The online timeout bounds its lock acquisition,
+not the duration of subsequent work.

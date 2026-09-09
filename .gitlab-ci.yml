@@ -200,7 +200,7 @@ migrations:
   script:
     - cd "$CI_PROJECT_DIR/apps/api" && uv sync --frozen
     - uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head
-    - uv run pytest tests/migration/test_migration_coherence.py
+    - uv run pytest tests/migration
     - uv run alembic check
 
 integration-shards:
