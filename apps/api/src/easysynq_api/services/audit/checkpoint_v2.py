@@ -73,6 +73,18 @@ class CheckpointV2Error(ValueError):
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class UnverifiedEnvelopeRoute:
+    """Strictly shaped lookup hints, without authentication or edge authority."""
+
+    org_id: UUID
+    stream_id: UUID
+    previous_anchor_hash: str
+    key_id: str
+    key_epoch: int
+    sequence: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class VerifiedEnvelope:
     """Authenticated envelope fields; this record makes no checkpoint-lineage claim."""
 
@@ -353,7 +365,7 @@ def _derived_key_id(raw_public_key: bytes) -> str:
 def _validate_checkpoint(
     checkpoint: dict[str, object],
     *,
-    current_public_key: bytes,
+    current_public_key: bytes | None,
     proof_required: bool,
 ) -> _ValidatedCheckpoint:
     _check_checkpoint_scalars(checkpoint)
@@ -375,7 +387,7 @@ def _validate_checkpoint(
         _checkpoint_error()
 
     key_id = _parse_key_id(checkpoint, "key_id")
-    if key_id != _derived_key_id(current_public_key):
+    if current_public_key is not None and key_id != _derived_key_id(current_public_key):
         _checkpoint_error()
 
     org_id = _parse_uuid(checkpoint, "org_id")
@@ -484,6 +496,37 @@ def sign_checkpoint(
     return _canonicalize(envelope)
 
 
+def _envelope_parts(data: bytes) -> tuple[dict[str, object], bytes, str]:
+    """Share the exact outer grammar between inspection and full authentication."""
+
+    envelope = _decode_envelope(data)
+    _check_member_names(envelope, maximum=3)
+    if envelope.keys() != _ENVELOPE_FIELDS:
+        _checkpoint_error()
+    checkpoint_value = envelope["checkpoint"]
+    if type(checkpoint_value) is not dict:
+        _checkpoint_error()
+    checkpoint = cast(dict[str, object], checkpoint_value)
+    signature = _parse_base64(envelope, "signature", length=64)
+    anchor_hash = _parse_digest(envelope, "anchor_hash")
+    return checkpoint, signature, anchor_hash
+
+
+def inspect_envelope_route(data: bytes) -> UnverifiedEnvelopeRoute:
+    """Inspect strict v2 structure without verifying signatures, proof or own digest."""
+
+    checkpoint, _, _ = _envelope_parts(data)
+    validated = _validate_checkpoint(checkpoint, current_public_key=None, proof_required=True)
+    return UnverifiedEnvelopeRoute(
+        org_id=validated.org_id,
+        stream_id=validated.stream_id,
+        previous_anchor_hash=validated.previous_anchor_hash,
+        key_id=validated.key_id,
+        key_epoch=validated.key_epoch,
+        sequence=validated.sequence,
+    )
+
+
 def verify_envelope(
     data: bytes,
     *,
@@ -495,16 +538,7 @@ def verify_envelope(
 
     if type(org_id) is not UUID or type(stream_id) is not UUID:
         _checkpoint_error()
-    envelope = _decode_envelope(data)
-    _check_member_names(envelope, maximum=3)
-    if envelope.keys() != _ENVELOPE_FIELDS:
-        _checkpoint_error()
-    checkpoint_value = envelope["checkpoint"]
-    if type(checkpoint_value) is not dict:
-        _checkpoint_error()
-    checkpoint = cast(dict[str, object], checkpoint_value)
-    signature = _parse_base64(envelope, "signature", length=64)
-    anchor_hash = _parse_digest(envelope, "anchor_hash")
+    checkpoint, signature, anchor_hash = _envelope_parts(data)
 
     current_raw = _raw_public_key(public_key)
     validated = _validate_checkpoint(

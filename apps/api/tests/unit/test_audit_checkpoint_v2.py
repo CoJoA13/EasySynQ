@@ -804,3 +804,214 @@ def test_legacy_payload_and_signature_remain_exact_and_v2_never_falls_back() -> 
     with pytest.raises(InvalidSignature):
         _K1.public_key().verify(signature, _SIGNATURE_DOMAIN + canonical)
     _assert_invalid(lambda: _verify(canonical))
+
+
+@pytest.mark.parametrize("name", ["anchor", "transition", "successor", "maximum", "minimum"])
+def test_route_exposes_exactly_six_unverified_fields_from_the_shared_grammar(name: str) -> None:
+    vector = _VECTORS[name]
+    body = bytes.fromhex(vector["canonical_envelope_hex"])
+    route = checkpoint_v2.inspect_envelope_route(body)
+    checkpoint = vector["checkpoint"]
+    assert tuple(field.name for field in dataclasses.fields(route)) == (
+        "org_id",
+        "stream_id",
+        "previous_anchor_hash",
+        "key_id",
+        "key_epoch",
+        "sequence",
+    )
+    assert route == checkpoint_v2.UnverifiedEnvelopeRoute(
+        UUID(checkpoint["org_id"]),
+        UUID(checkpoint["stream_id"]),
+        checkpoint["previous_anchor_hash"],
+        checkpoint["key_id"],
+        int(checkpoint["key_epoch"]),
+        int(checkpoint["sequence"]),
+    )
+    assert not hasattr(route, "__dict__")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        route.sequence = 0  # type: ignore[misc]
+    _assert_invalid(lambda: _verify(route, vector))  # type: ignore[arg-type]
+    assert _verify(body, vector).anchor_hash == vector["anchor_hash"]
+
+
+@pytest.mark.parametrize("tamper", ["signature", "hash", "proof", "current-id"])
+def test_inspection_does_not_authenticate_signatures_proof_hash_or_current_material(
+    tamper: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vector = _VECTORS["transition" if tamper == "proof" else "anchor"]
+    envelope = json.loads(bytes.fromhex(vector["canonical_envelope_hex"]))
+    if tamper == "signature":
+        envelope["signature"] = base64.b64encode(bytes(64)).decode("ascii")
+    elif tamper == "hash":
+        envelope["anchor_hash"] = "0" * 64
+    elif tamper == "proof":
+        envelope["checkpoint"]["next_key_signature"] = base64.b64encode(bytes(64)).decode("ascii")
+        envelope = json.loads(_authenticated_envelope(envelope["checkpoint"]))
+    else:
+        envelope["checkpoint"]["key_id"] = "ed25519-sha256:" + hashlib.sha256(_K2_RAW).hexdigest()
+        envelope = json.loads(_authenticated_envelope(envelope["checkpoint"]))
+    body = rfc8785.dumps(envelope)
+    route = checkpoint_v2.inspect_envelope_route(body)
+    assert route.key_id == envelope["checkpoint"]["key_id"]
+    # Even a caller that has inspected the body cannot skip the full verifier's own checks.
+    monkeypatch.setattr(checkpoint_v2, "inspect_envelope_route", lambda data: route)
+    _assert_invalid(lambda: _verify(body, vector))
+
+
+def test_inspector_rejects_missing_extra_and_duplicate_members_at_both_levels() -> None:
+    for name in ("anchor", "transition"):
+        envelope = json.loads(bytes.fromhex(_VECTORS[name]["canonical_envelope_hex"]))
+        for level in ("outer", "checkpoint"):
+            original = envelope if level == "outer" else envelope["checkpoint"]
+            for field in original:
+                changed = copy.deepcopy(envelope)
+                target = changed if level == "outer" else changed["checkpoint"]
+                del target[field]
+                _assert_invalid(
+                    lambda changed=changed: checkpoint_v2.inspect_envelope_route(
+                        rfc8785.dumps(changed)
+                    )
+                )
+            changed = copy.deepcopy(envelope)
+            target = changed if level == "outer" else changed["checkpoint"]
+            target["extra"] = "value"
+            _assert_invalid(
+                lambda changed=changed: checkpoint_v2.inspect_envelope_route(rfc8785.dumps(changed))
+            )
+        encoded = rfc8785.dumps(envelope)
+        duplicate_outer = encoded.replace(b'"signature":', b'"sign\\u0061ture":"x","signature":', 1)
+        duplicate_inner = encoded.replace(b'"anchor_id":', b'"\\u0061nchor_id":"x","anchor_id":', 1)
+        for duplicate in (duplicate_outer, duplicate_inner):
+            _assert_invalid(
+                lambda duplicate=duplicate: checkpoint_v2.inspect_envelope_route(duplicate)
+            )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("format_version", True),
+        ("format_version", "2"),
+        ("format_version", 3),
+        ("kind", "unknown"),
+        ("anchor_id", "00000000000040008000000000000001"),
+        ("org_id", "00000000-0000-4000-8000-00000000000A"),
+        ("stream_id", "not-uuid"),
+        ("sequence", "01"),
+        ("sequence", "0"),
+        ("sequence", "9223372036854775808"),
+        ("sequence", 1),
+        ("previous_anchor_hash", "A" * 64),
+        ("key_id", "sha256:" + "a" * 64),
+        ("key_epoch", "-1"),
+        ("key_epoch", "1e0"),
+        ("key_epoch", True),
+        ("latest_id", "0"),
+        ("latest_id", "\u0661"),
+        ("latest_row_hash", "f" * 63),
+        ("timestamp", "2026-01-01T00:00:00Z"),
+        ("timestamp", "2026-02-29T00:00:00.000000Z"),
+        ("timestamp", "s" * 129),
+        ("timestamp", {"nested": "value"}),
+    ],
+)
+def test_inspector_applies_shared_checkpoint_scalar_grammar(field: str, replacement: Any) -> None:
+    envelope = json.loads(bytes.fromhex(_VECTORS["anchor"]["canonical_envelope_hex"]))
+    envelope["checkpoint"][field] = replacement
+    _assert_invalid(lambda: checkpoint_v2.inspect_envelope_route(json.dumps(envelope).encode()))
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("signature", ""),
+        ("signature", "*" * 88),
+        ("signature", base64.b64encode(bytes(64)).decode("ascii")[:-3] + "B=="),
+        ("anchor_hash", "a" * 63),
+        ("anchor_hash", "G" * 64),
+    ],
+)
+def test_inspector_applies_shared_outer_scalar_grammar(field: str, replacement: Any) -> None:
+    envelope = json.loads(bytes.fromhex(_VECTORS["anchor"]["canonical_envelope_hex"]))
+    envelope[field] = replacement
+    _assert_invalid(lambda: checkpoint_v2.inspect_envelope_route(json.dumps(envelope).encode()))
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("next_key_id", "ed25519-sha256:" + "4" * 64),
+        ("next_key_epoch", "2"),
+        ("next_key_epoch", "0"),
+        ("next_public_key", "AAAA"),
+        ("next_key_signature", "AAAA"),
+    ],
+)
+def test_inspector_checks_embedded_next_key_and_epoch_structure(
+    field: str, replacement: Any
+) -> None:
+    envelope = json.loads(bytes.fromhex(_VECTORS["transition"]["canonical_envelope_hex"]))
+    envelope["checkpoint"][field] = replacement
+    _assert_invalid(lambda: checkpoint_v2.inspect_envelope_route(rfc8785.dumps(envelope)))
+
+
+def test_inspector_applies_every_existing_embedded_public_key_admission_control() -> None:
+    for case in _REFERENCE["key_admissibility"]:
+        if case["admissible"]:
+            continue
+        raw = bytes.fromhex(case["public_key_hex"])
+        envelope = json.loads(bytes.fromhex(_VECTORS["transition"]["canonical_envelope_hex"]))
+        envelope["checkpoint"]["next_public_key"] = base64.b64encode(raw).decode("ascii")
+        envelope["checkpoint"]["next_key_id"] = "ed25519-sha256:" + hashlib.sha256(raw).hexdigest()
+        _assert_invalid(
+            lambda envelope=envelope: checkpoint_v2.inspect_envelope_route(rfc8785.dumps(envelope)),
+            key=len(raw) == 32,
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        b"null",
+        b"[]",
+        b"{",
+        b"{}{}",
+        b"\xff",
+        b'{"checkpoint":NaN}',
+        b'{"checkpoint":Infinity}',
+        b'{"checkpoint":1.5}',
+        b'{"checkpoint":[1]}',
+        b'{"checkpoint":{"x":{"y":"z"}}}',
+        b'{"checkpoint":{"kind":"\\ud800"}}',
+        b'{"checkpoint":{"format_version":222222222222222222222}}',
+        "not-bytes",
+        bytearray(b"{}"),
+        memoryview(b"{}"),
+    ],
+)
+def test_inspector_rejects_ambiguous_transport_without_alternate_parser(body: Any) -> None:
+    _assert_invalid(lambda: checkpoint_v2.inspect_envelope_route(body))
+
+
+def test_inspector_preserves_transport_limit_equivalence_and_safe_errors() -> None:
+    body = bytes.fromhex(_VECTORS["anchor"]["canonical_envelope_hex"])
+    maximum = body + b" " * (65536 - len(body))
+    assert checkpoint_v2.inspect_envelope_route(maximum) == checkpoint_v2.inspect_envelope_route(
+        body
+    )
+    _assert_invalid(lambda: checkpoint_v2.inspect_envelope_route(maximum + b" "))
+    alternate = json.dumps(json.loads(body), indent=2).encode()
+    assert checkpoint_v2.inspect_envelope_route(alternate) == checkpoint_v2.inspect_envelope_route(
+        body
+    )
+    marker = "SYNTHETIC-SENSITIVE-MARKER"
+    malformed = ('{"checkpoint":"' + marker + '",}').encode()
+    with pytest.raises(checkpoint_v2.CheckpointV2Error) as caught:
+        checkpoint_v2.inspect_envelope_route(malformed)
+    assert str(caught.value) == "invalid checkpoint"
+    assert caught.value.__suppress_context__ is True
+    assert marker not in "".join(traceback.format_exception(caught.value))
+    legacy = bytes.fromhex(_REFERENCE["legacy"]["canonical_checkpoint_hex"])
+    _assert_invalid(lambda: checkpoint_v2.inspect_envelope_route(legacy))

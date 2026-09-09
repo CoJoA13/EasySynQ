@@ -77,6 +77,60 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-lineage-reader — supplied signed history with explicit limits
+
+**2026-09-09; source baseline `165990d3734d683371f3234fc0fe03f1e4624c17`.** R77 adds a pure
+evaluator for supplied v2 envelopes. Strict route inspection identifies declared material without
+authenticating it; full codec verification remains independent. An admitted transition can make
+public material available for diagnosis, while every child still requires its own predecessor's
+key/epoch authorization. Indexed material and predecessor events explore all admissible branches.
+Unknown keys remain incomplete; known invalid signatures, forks, conflicting identities, invalid
+key epochs, sequence discontinuities and audit-head contradictions fail. Rejected edges cannot
+introduce further material. Failed or incomplete graphs expose no usable path, key history or tip.
+
+Canonical-node deduplication is separate from raw immutable-locator conflicts. Diagnostics have
+stable group ordering and representatives, exhaustive severity counts and at most two observation
+indexes per issue; truncating display cannot hide failure. Required checkpoint conflicts dominate
+matching branches. Bounds admit 4,096 observations/nodes, 16 MiB of total input, 32 displayed issues
+and 4,097 available public key materials including an unused terminal transition key. Complete
+preflight and actual collaborator-count tests constrain work at those bounds.
+
+Root-generated synthetic fixtures independently freeze 23 envelopes and 35 scenario/permutation
+cases. Focused acceptance passed **180 lineage, 204 codec and 173 affected legacy tests**, with no
+skips. The reversed 4,096-transition chain and full-width 4,096-node fork execute real signatures
+and public-key admission; they passed in the focused suite. The complete local API suite passed
+**2,751 tests with one release-only skip in 82.29 seconds**. The actual production image ran all
+five existing codec vectors, 31 public-key controls and four lineage cases offline as UID 10001,
+with development packages absent, against the same immutable image
+`sha256:e05eb14f0f7be54cfde751241519cd03820d6c59cf5c746f62e766b292b85d5d`.
+
+Earlier local image attempts exposed restrictive directory modes in the recovered checkout and
+stale build output; scoped directory correction and an uncached rebuild resolved imports before
+the passing full suite. A later site-data guard false positive matched two Python odd-index slices.
+Only those expressions changed equivalently; all assertions and other source bytes/modes stayed
+unchanged. The complete **180-test lineage suite passed again in 14.01 seconds**, followed by clean
+Ruff/format and repository guards. The full API/image evidence is inherited through that exact
+test-only correction, rather than reported as another full-suite execution.
+
+The unchanged external verifier runner passed **all three mandatory current-image runtime cases**,
+including public-only custody, actual denied writes and historical-target verification. Its build
+input digest was `6a12d0b6e6143894c64002c6ba9dee34ebe328108898c1844b3d7f8eb6824626`, proof input
+digest `80a4b24c2e179251e54af26c9771fe07654a452d97a9cbc3bf4be6335cdcdb2f`, and immutable image
+`sha256:31980a890a84da8e7b8bcfafb152df40f4a56ebe170056344caef96e182238a6`. Owned containers,
+image and private runner directory were removed. Ruff, formatting **794 API files**, mypy
+**455 source files**, runtime-runner static checks, **95 authority fixtures**, authority,
+candidate-wide site-data and whitespace checks passed. Root independently rechecked all source,
+producer, log/JUnit and image identities; manifests cover 2,003 files and 152 directory modes.
+
+The result's scope is always `supplied-v2-graph`, with `external-pin-only` bootstrap assurance.
+Bootstrap contents, legacy bridge coverage, complete witness collection, witness custody,
+audit-chain comparison, freshness and operational key activation remain unproved. A consistent old
+prefix without later trusted memory remains possible. Complete-history scalability is required
+before live reader activation; independent windows cannot prove a complete stream. No current
+writer, consumer, enrollment, schema, grant, package, lock, backup or restore behavior changed.
+Lineage, planned rotation and source-independent recovery remain OPEN in
+[`open-residuals.md`](open-residuals.md); no live enrollment, deployment, key change or recovery ran.
+
 ### S-audit-checkpoint-v2-codec — frozen signed-envelope representation
 
 **2026-09-09; source baseline `929eb6e9e34501c68ea534d5264bcf477e968021`.** R76 adds a pure v2

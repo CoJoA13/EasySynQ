@@ -461,6 +461,16 @@ flowchart LR
   [R76](decisions-register.md#r76--versioned-checkpoint-bytes-bind-predecessor-and-planned-next-key-proof--2026-09-09)
   for the exact representation and compatibility contract.
 
+- **Supplied lineage foundation (R77).** A pure v2 evaluator follows every supplied predecessor
+  from explicit external bootstrap/key pins. Key material authenticates bodies; each admitted
+  predecessor separately permits its successor's key/epoch. Detached transitions cannot enroll
+  new keys, and a conflicting branch prevents any usable tip. Its bounded `consistent` result
+  concerns only the supplied graph: bridge contents, witness completeness/custody, DB-chain
+  agreement, freshness and operational activation remain explicitly unproved. No current consumer
+  calls this API. Scalable full-history evaluation and the independent collection/bridge/consumer
+  proofs precede live integration; the integrity and recovery residuals remain OPEN. See
+  [R77](decisions-register.md#r77--supplied-checkpoint-lineage-separates-authentication-from-edge-authority--2026-09-09).
+
 ### 4.5 Audit access & retention
 
 - Read access to the audit trail is a **granted permission** (typically Mara, Ingrid, Avery; Olsen gets scoped audit views within his audit window).
