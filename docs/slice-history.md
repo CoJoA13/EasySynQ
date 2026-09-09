@@ -77,6 +77,49 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-checkpoint-v2-codec — frozen signed-envelope representation
+
+**2026-09-09; source baseline `929eb6e9e34501c68ea534d5264bcf477e968021`.** R76 adds a pure v2
+codec beside the legacy implementation. Exact RFC8785 bytes and terminal-NUL application domains
+separate current-key signatures, envelope hashes and next-key possession proofs. Ordinary and
+planned-transition envelopes bind organization/stream, predecessor, sequence, audit head and epoch.
+Canonical decimal strings retain the full PostgreSQL bigint range. Strict field, type, date,
+Base64, UTF-8, duplicate-member, size and pre-decode depth bounds fail through controlled errors;
+verified results retain only immutable typed scalars and canonical bytes.
+
+Every current, next and signer-derived key must be canonical, nonidentity and prime-order. Public
+PyCryptodome import/export and full-order point multiplication implement that rule; explicit identity
+coordinates distinguish the order-two point. PyCryptodome 3.23.0 moves from a development-only
+transitive dependency to a direct runtime dependency. The lock changes only the root dependency and
+metadata edges: all **132 package versions and artifacts** remain unchanged. No private crypto API,
+custom curve arithmetic, new key discovery or application I/O was introduced in the codec.
+
+Root-generated synthetic fixtures independently freeze five complete envelopes, signatures and
+hashes, 31 public-key cases, a fully current-key-signed inadmissible-next-key transition, an RFC8032
+positive control and unchanged legacy bytes/signature. The focused suite passed **143 codec tests**
+and **173 affected legacy tests** without skips. The complete local API suite passed **2,510 tests
+with one release-only skip in 88.66 seconds**. The existing production-image test was enabled and
+executed all five codec vectors and 31 key cases offline as UID 10001 with development packages absent.
+Its immutable image ID was
+`sha256:2dfd1809e079bd82dda67556aed0b977c121a4c88ed23bb406e1db353b588085`.
+
+The unchanged current-image external acceptance passed all **three mandatory runtime cases**,
+including public-only custody, actual denied writes and historical-target verification. Its build
+input digest was `d18269f3887fa05d1b1a3fc8e88c691528bd80946ac212c48cb72d36ee732824`, proof input
+digest `e734d4da882ad844f2295a8544e2a516c5756c15539044465533c2bf7f09c7c2`, and immutable image
+`sha256:8cc7ca9c032d0eeb2cbc746386845d0a61e655d0c095359e141c26a231023585`. Owned cleanup completed.
+Ruff, formatting **792 API files**, mypy **454 source files**, runtime-runner static checks,
+**95 authority fixtures**, authority, candidate-wide site-data and whitespace checks passed. The
+2,000-file source manifest and all producer/log/JUnit identities were independently rechecked;
+no skipped or inherited check was counted as a new pass.
+
+This slice does not activate a v2 writer or consumer. Legacy checkpoint bytes/signatures, R73
+protected public enrollment, R75 report shapes, schedules, routes, backup, restore, schema and grants
+remain unchanged. Stream bootstrap/history validation, durable issuance and delivery, planned key
+activation and pre-rotation restore behavior still require later slices. Checkpoint-lineage,
+key-rotation and source-independent-recovery closure contracts remain in
+[`open-residuals.md`](open-residuals.md). No live deployment, enrollment, key change or recovery ran.
+
 ### S-audit-historical-target — explicit older-target verification with complete witness coverage
 
 Recorded 2026-09-09 against source base `83c9b0eb92d07f8b2e2bb6a2830cb745f45b6ac2`.

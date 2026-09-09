@@ -451,6 +451,16 @@ flowchart LR
   predecessor lineage or key eras, attest an archive, acknowledge a restore or qualify recovery.
   See the [historical inspection procedure](runbooks/audit-external-verification.md#inspect-an-explicitly-selected-historical-target).
 
+- **Versioned envelope foundation (R76).** A pure codec defines ordinary v2 checkpoints and
+  planned key transitions with explicit stream, predecessor, sequence, key identity and epoch.
+  It verifies domain-separated canonical bytes and requires canonical nonidentity prime-order keys;
+  both current and next signatures authenticate a transition. Its immutable result establishes
+  envelope authentication only. Existing producers, scheduled/API/CLI readers, protected enrollment
+  and historical reports remain legacy. Trusted bootstrap, complete predecessor/key history,
+  durable issuance/delivery, planned activation and pre-rotation restore remain OPEN. See
+  [R76](decisions-register.md#r76--versioned-checkpoint-bytes-bind-predecessor-and-planned-next-key-proof--2026-09-09)
+  for the exact representation and compatibility contract.
+
 ### 4.5 Audit access & retention
 
 - Read access to the audit trail is a **granted permission** (typically Mara, Ingrid, Avery; Olsen gets scoped audit views within his audit window).

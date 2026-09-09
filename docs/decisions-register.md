@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R75) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R76) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -2535,6 +2535,108 @@ recovery and the pinned-provider permission residual remain OPEN.
 [current status](current-status.md), and dated evidence in [slice history](slice-history.md).
 
 Bumps the resolutions range **R1–R74 → R1–R75**.
+
+---
+
+### R76 — Versioned checkpoint bytes bind predecessor and planned next-key proof — 2026-09-09
+
+**Decision.** Freeze a pure v2 envelope codec for ordinary checkpoints and planned key transitions.
+This is a representation and signature contract. Existing writers, scheduled/API/CLI verification,
+R73 enrollment, R75 historical reports, backup and restore remain legacy. No v2 producer or consumer
+is activated by this decision, and neither audit lineage nor key-rotation residual closes.
+
+Use ordinary Ed25519, SHA-256 and RFC8785 canonical JSON. The exact application domain bytes are:
+
+| Purpose | ASCII bytes, followed by one terminal NUL |
+| --- | --- |
+| Current-key signature | `EasySynQ/AuditCheckpoint/v2/signature\0` |
+| Envelope hash | `EasySynQ/AuditCheckpoint/v2/hash\0` |
+| Next-key proof | `EasySynQ/AuditCheckpoint/v2/key-transition-proof\0` |
+
+Here `\0` is byte `0x00`, not a printable backslash and zero. These are domain-prefixed ordinary
+Ed25519 messages, not Ed25519ctx or Ed25519ph. An envelope contains exactly `checkpoint`, `signature`
+and `anchor_hash`. Let `J` be RFC8785 bytes of the complete validated checkpoint object. The current
+key signs `signature_domain || J`; `anchor_hash` is lowercase SHA-256 hex of
+`hash_domain || J || raw_64_byte_signature`. The signature is canonical padded standard Base64.
+The codec emits the complete envelope as canonical UTF-8 JSON with no newline. Equivalent JSON
+whitespace, member order or string escaping may verify to the same canonical evidence.
+
+An ordinary checkpoint contains exactly:
+
+| Field | Canonical value |
+| --- | --- |
+| `format_version` | Actual JSON integer `2`; no bool, float or string coercion. |
+| `kind` | `anchor`. |
+| `org_id`, `stream_id`, `anchor_id` | Lowercase hyphenated UUID strings. |
+| `sequence` | ASCII decimal string in `1..9223372036854775807`. |
+| `previous_anchor_hash` | Exactly 64 lowercase hex characters. |
+| `key_id` | `ed25519-sha256:` plus lowercase SHA-256 hex of raw 32-byte public key. |
+| `key_epoch` | ASCII decimal string in `0..9223372036854775807`. |
+| `latest_id` | ASCII decimal string in `1..9223372036854775807`. |
+| `latest_row_hash` | Exactly 64 lowercase hex characters. |
+| `timestamp` | Real UTC date/time exactly `YYYY-MM-DDTHH:MM:SS.ffffffZ`, years 0001 through 9999. |
+
+Decimal strings reject signs, leading zeroes except `0`, Unicode digits, whitespace, exponents,
+decimal points, JSON numeric values and overflow. They retain every PostgreSQL bigint value without
+binary64 rounding. Empty history has no ordinary anchor; a future independently enrolled empty
+bootstrap is a different object. Timestamp spellings never normalize offsets, omitted fractions or
+leap seconds into validity. The codec reads no clock and imposes no freshness or activation policy.
+
+A transition uses `kind: key_transition` and all ordinary fields plus exactly `next_key_id`,
+`next_public_key`, `next_key_epoch` and `next_key_signature`. The next ID has the same material-derived
+grammar and differs from `key_id`; its public key is canonical padded standard Base64 of 32 bytes.
+The next epoch is canonical decimal exactly one above the current epoch without bigint overflow.
+Form `P` as RFC8785 of the full transition excluding only `next_key_signature`. The next private key
+signs `proof_domain || P`. Insert that canonical Base64 proof, then compute `J`, the current-key
+signature and envelope hash. This avoids circular signatures; both signatures bind the identities,
+predecessor, sequence, audit head, timestamp and next epoch/material. The current signature also
+binds the exact proof. An anchor rejects an unsolicited next signer; a transition requires its next
+signer and rejects caller-supplied proof bytes.
+
+Every v2 current/next key, including signer-derived keys and the fingerprint helper's input, must be
+a canonical compressed nonidentity point in the Ed25519 prime-order subgroup. Import raw 32 bytes
+through PyCryptodome's public EdDSA API, require identical raw re-export, reject coordinates `(0,1)`,
+multiply by `2**252 + 27742317777372353535851937790883648493` and require exact result `(0,1)`.
+No private library API, custom curve arithmetic, scalar reduction or cofactor clearing is permitted.
+Do not use the library's Edwards `is_point_at_infinity` predicate: it tests only x=0 and also accepts
+the order-two point. Raw-length/fingerprint checks or a verifying signature alone do not establish
+this key-admission rule. Promote already-locked PyCryptodome 3.23.0 from development to runtime under
+`>=3.23.0,<4`; actual production-image codec execution must be checked. Legacy/R73 key parsing stays
+unchanged. Library-internal arithmetic blinding is permitted; the application codec performs no key
+generation, entropy access, settings discovery, file/network/DB/environment access or clock reads.
+
+The parser accepts at most 65,536 bytes, strict UTF-8 and one JSON object. Before recursive JSON
+decoding, a bounded string/escape-aware scan rejects arrays and nesting deeper than two object
+levels. Reject duplicate decoded names at every level, malformed/nonfinite/float or overlong numeric
+tokens, invalid Unicode scalars, wrong types, missing/extra fields and unknown formats/kinds. Validate
+exact scalar shape/length before canonicalization and expensive conversions. Payload/signing input
+is at most 16 fields with names at most 32 ASCII characters and string values at most 128 ASCII characters;
+the only integer field is actual version 2. Signer input is a built-in dict, not a coercible nested
+mapping. Base64 re-encoding must match exactly, including padding bits. Invalid v2 never falls back
+to legacy. Expected parse/key/signature errors use fixed public text with parser chaining suppressed;
+resource/system failures never become successful evidence.
+
+Verification requires an explicit current public key and expected organization/stream UUIDs. Key IDs
+prove material equality, not enrollment. Return only an immutable typed record and immutable
+canonical checkpoint/envelope bytes after all identity/admissibility/signature/proof/hash checks;
+retain no mutable parsed or caller-owned mappings. A valid transition authenticates the current
+key's authorization and next-key possession for these bytes. It does not authorize that current key,
+activate the next key, prove predecessor existence, certify a lineage or demonstrate witness delivery.
+The derived hash is not independently trusted merely because it appears beside the envelope.
+
+Future consumers must separately pin an external bootstrap/stream and initial authorized key/epoch,
+validate complete retained predecessor/key history and all enrolled witnesses, persist exact issued
+bytes with durable delivery, and establish planned activation and pre-rotation restore behavior.
+R73's protected public file remains the owner-selected custody boundary; no extra offline
+policy-signing key is introduced. Compromise/lost-key recovery and history compaction are unselected.
+
+**Back-propagation:** [Security and audit](12-security-and-audit.md), the
+[external verification runbook](runbooks/audit-external-verification.md),
+[key rotation runbook](runbooks/key-rotation.md), and narrow progress in
+[open residuals](open-residuals.md). Actual checks belong in [current status](current-status.md) and
+dated [slice history](slice-history.md). Preserve legacy bytes and all operational closure contracts.
+
+Bumps the resolutions range **R1–R75 → R1–R76**.
 
 ---
 
