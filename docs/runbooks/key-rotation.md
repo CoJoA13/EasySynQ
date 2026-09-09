@@ -69,6 +69,13 @@ independent transition delivery or pre-rotation recovery. SDK error buffering an
 also require operational resource/lifetime containment before integration. Keep existing custody and
 all rotation/restore prerequisites in force.
 
+R80 now supplies an inactive isolated R79 read with enforced per-process resource limits and a
+parent watchdog. It admits exact bytes only after child exit and cleanup; it selects no signing key,
+assigns no historical epoch and authorizes no enrollment replacement or activation. The existing
+protected-file custody procedure and operational reader are unchanged. Complete independent witness
+history, scalable global reconciliation, rollback continuity, durable transition delivery and actual
+pre-rotation restore remain required. Worker containment alone closes none of those obligations.
+
 ## Declaring the off-host witness (`integrity.alarm`)
 
 The nightly `easysynq.audit.verify_chain` job raises **`integrity.alarm`** to System Administrators

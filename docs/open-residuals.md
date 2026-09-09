@@ -70,6 +70,11 @@ bytes and version identity, with actual-image/provider consumption by unchanged 
 archive, restore or operational verifier. Complete per-witness collection, scalable global history,
 SDK resource/lifetime containment, actual snapshot agreement and a source-denied recovered-stack
 proof remain required; this record stays OPEN.
+Isolated-read progress on 2026-09-09 (R80): the inactive exact-read worker now enforces resource
+limits and post-cleanup result admission, with actual-image hostile-stream and lifecycle proof.
+No archive, restore or operational verifier changes. Complete per-witness page collection, bounded
+spooling/global reconciliation, snapshot agreement and source-denied recovered-stack proof remain
+required; this record stays OPEN.
 Last reviewed: 2026-09-09
 
 ## RES-CONTAINER-SECURITY-TRIAGE
@@ -401,6 +406,12 @@ The new API strictly rejects the pinned provider's literal-null responses with a
 Complete per-witness enumeration, global reconciliation, SDK resource/lifetime containment and the
 existing database/delivery/restore obligations remain OPEN. Current legacy consumers are unchanged.
 
+Isolated-read progress on 2026-09-09 (R80): one exact R79 request can now run behind a bounded
+Linux process/protocol boundary with verified resource limits and watchdog/cleanup admission.
+This supplies no page collector, witness-completeness result or global-history evaluator. Complete
+per-witness collection, bounded spooling, scalable reconciliation and existing database/delivery/
+restore obligations remain OPEN. No current legacy consumer is activated.
+
 ## RES-MINIO-VERSION-LIST-DENY
 
 Status: OPEN
@@ -496,6 +507,11 @@ Raw-transport progress on 2026-09-09 (R79): unchanged retained bytes and exact v
 can now reach R78 through an explicit reader. No key is activated or enrolled and no legacy key era
 is inferred. Complete independent witness history, protected rollback continuity, durable delivery,
 activation confirmation and actual pre-rotation restore remain required; this record stays OPEN.
+
+Isolated-read progress on 2026-09-09 (R80): resource/lifetime containment is available for one
+inactive exact-version read. It changes no key selection, epoch, custody, issuance or restore path.
+Full independent history, protected rollback continuity, durable delivery, activation confirmation
+and pre-rotation restore remain required; this record stays OPEN.
 
 ## RES-RISK-CLAUSE-PICKER
 

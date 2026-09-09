@@ -77,6 +77,80 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-isolated-read — contain exact reads in a private Linux worker
+
+**2026-09-09; source baseline `475490e45b1bef34253c878b26a0ebc97f751d4f`.** R80 adds two inactive
+modules for one unchanged R79 read. Explicit admitted inputs cross a bounded JSON pipe after the
+worker confirms its enforced Linux limits: 512MiB address space, 10 CPU seconds, 64 descriptors,
+zero core bytes and zero regular-file growth. Ready/request/result payload ceilings are
+512/131072/131072 bytes; returned entity bytes remain at most 65536. The request bound preserves
+the admitted 104598-byte Unicode regression. Worker argv/environment contain no request credentials
+or locators. The parent admits no body before exact result identity, stdout EOF, zero exit, closed
+pipes and final cancellation/deadline checks. Abnormal workers are terminated and reaped; an
+unconfirmed reap cannot become success.
+
+The original absence RED passed its independent finite-response control and failed only at the
+missing public API import. The initial real-process vertical then passed both cases. Static/source
+feedback corrected the BrokenPipe write state, immediate ownership of the returned process and
+post-reap signalling. The complete focused suite passed **224 tests: 73 isolated, 95 unchanged raw
+and 56 then-current runner cases**, without skips, in 18.57 seconds. Later unit edits added only
+five concise parametrization IDs; root compared the ASTs without those metadata keywords.
+
+The initial full code candidate passed 3,151 API tests. Independent task review then found that
+unexpected parent cleanup exceptions outside a short allowlist lost their identities, and that the
+required exited-but-unreaped cancellation state lacked a direct control. Two real-child identity
+regressions failed for the intended reason while three lifecycle controls passed. The correction
+keeps expected OS cleanup failures sanitized and preserves every other parent exception/group
+unchanged; all five focused checks then passed. The new cancellation control observes actual exit
+with `waitid(..., WNOWAIT)` before setting cancellation, without consuming the child status.
+
+Corrected candidate 8 retained the same seven code/test/runner paths. Its final full API suite passed
+**3,155 tests and one existing release-only image-pin skip in 80.67 seconds**, including **77 isolated,
+95 raw and 64 runner cases**. The separate offline
+production-image proof ran five codec vectors, 31 key controls, four lineage cases and six bridge
+cases as UID10001 without development dependencies. Ruff, **807-file** formatting, **461-source-file**
+mypy, runner checks, **95 authority fixtures**, repository authority, candidate-indexed site-data and
+whitespace passed. Seven deliberate private bad implementations all caused their intended assertion
+failures after 15 passing controls, with clean setup/teardown and no errors/skips: in-process bypass,
+missing address-space limit, missing output bounds, publication before exit, ignored final deadline,
+ignored final cancellation and accepted identity mismatch. Archival snapshots were not executed.
+
+All **seven mandatory actual-image acceptance tests** passed in **117.18 seconds** without skips,
+preserving the previous six external/raw cases and adding the isolated process case. The common API
+image was `sha256:63abdcf01e4e3663e70b50b97da0af883a52419835d13831f71a072c114952ac`, with build input
+`f47e00d85c883348a89e90037b88c4ca7e5acffefa7e156cb047533930c5ba8f` and proof input
+`7e81651f0b080e4bf6f3bad1a7abb57285528e26d8965490b772d86d626700ec`. The new case used the image's
+Python as UID10001, read-only root, dropped capabilities and no-new-privileges. Only an owned file-limit
+fixture directory was writable. Its genuine locked-provider retained version preserved the exact
+343-byte noncanonical R78 body; unchanged R78 accepted it and rejected the altered-byte control.
+Trusted/untrusted TLS, hostile inherited/default SDK state, opaque target spelling and one original
+redirect with zero target requests passed.
+
+The finite SDK error source planned **536,936,448 bytes** in constant chunks no larger than
+65,536 bytes. It sent **423,952,384 bytes** before observed ConnectionResetError. The worker
+returned no body, exited 1 after **1,835ms**, and reached sampled RSS **509,000KiB** / virtual size
+**524,136KiB** under the **524,288KiB** limit. A subsequent isolated success proved parent survival.
+This is observed failure under enforced limits, not a claimed kernel OOM. The public-worker observer
+only read process state and never polled/reaped the child on the implementation's behalf.
+
+A 3.5-second trickle interval avoided the five-second SDK socket timeout; the parent watchdog
+rejected it after **20,017ms** and the fixture observed peer closure. A separate finite child emitted
+a valid result then stalled; result-observed cancellation prevented publication in **156ms**.
+Independent image processes calling the actual `_apply_limits()` before application imports rejected
+a 600,000,000-byte allocation with MemoryError, returned EFBIG and zero bytes on the verified writable
+mount, and terminated at the CPU ceiling after **10,003ms** with signal 9. All parent pipes were
+closed and direct children reaped. Owned containers, unique image tag, temporary directory and
+writable mount were removed. Three registered Testcontainers deprecation warnings remain.
+
+CPJ `job-mtuoss9h-1f337a3a` completed at **22:49:48 UTC** with all three serial gates passing.
+Raw JUnit/logs, receipt hashes, producer hashes and unchanged **2,017 source-file / 153 directory-mode**
+identities are retained in private evidence. Documentation follows those local code-candidate proofs;
+source/main GitLab evidence belongs to the reviewed MR. Existing R79, consumers, descriptors,
+dependencies, migrations, grants, keys and restore remain unchanged. Complete witness page collection,
+bounded spooling, global reconciliation, custody/rollback knowledge and database/activation/restore
+proofs remain separate work. Kernel-stuck tasks can exceed user-space timing guarantees. The current
+[residual ledger](open-residuals.md) retains all operational closure obligations.
+
 ### S-audit-raw-transport — preserve exact retained bytes through an explicit reader
 
 **2026-09-09; source baseline `bf7416dead2c9615a202e2cbe16a4b58849162b3`.** R79 adds an inactive

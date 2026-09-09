@@ -55,6 +55,23 @@ certifi bundle (SDK bundle fallback if unavailable), not automatically the verif
 The synthetic CA mount in disposable acceptance is not a production trust installation procedure.
 Continue using the protected-file custody procedure below for the existing explicit verifier.
 
+R80 adds the inactive Linux-only `read_raw_checkpoint_version_isolated` foundation. It preserves
+R79's explicit inputs and exact bytes while putting the SDK operation in a private worker with
+512MiB address space, 10 CPU seconds, 64 descriptors and zero core/file-growth allowances. Only a
+bounded request reaches the worker after its ready handshake. No body or completed read error is
+published before normal child exit, stdout EOF, parent cleanup and final cancellation/deadline checks.
+The parent uses a 20-second watchdog and a two-second abnormal reap attempt. An unconfirmed reap
+fails closed; kernel-stuck work can outlast those user-space bounds.
+
+Actual unprivileged-image acceptance exercised retained provider bytes through unchanged R78,
+verified/untrusted TLS, a finite oversized SDK error stream, trickle timeout, late cancellation and
+actual allocation/file/CPU controls. A terminated worker's OS resources are distinct from successful
+Python body/client cleanup. The direct R79 reader keeps its cooperative limits. This addition supplies
+no new command or operator setting and changes no existing consumer. Complete independent witness
+collection, bounded page/spool handling, global reconciliation and actual snapshot comparison still
+precede operational integration. Protect enrollment and rollback knowledge separately; a successful
+isolated GET proves neither complete history nor recovery readiness.
+
 ## Establish the public enrollment
 
 The repository owner approves the expected organization IDs, retained Ed25519 public keys and witness

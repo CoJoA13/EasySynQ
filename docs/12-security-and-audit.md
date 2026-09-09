@@ -493,6 +493,19 @@ flowchart LR
   consumer, enrollment, writer or key activation changes. See
   [R79](decisions-register.md#r79--exact-retained-audit-versions-preserve-raw-bytes-and-explicit-request-identity--2026-09-09).
 
+- **Isolated exact read (R80).** An inactive Linux supervisor runs one unchanged R79 request in
+  a fresh private worker. Before request bytes or SDK/application imports, the worker enforces
+  512MiB address space, 10 CPU seconds, 64 descriptors and zero core/file-growth bytes. A bounded
+  ready/request/result protocol carries explicit inputs without inherited credentials or proxies.
+  The 20-second parent watchdog covers startup and IO; no body is admitted before exact identity,
+  stdout EOF, zero exit, closed parent resources and final cancellation/deadline checks. Abnormal
+  workers are terminated and reaped; failure to confirm cleanup prevents success. Real-image
+  tests exercised oversized SDK error streams and actual allocation/file/CPU controls. These
+  per-process limits do not guarantee a hard real-time return from kernel-stuck work. Complete
+  witness enumeration, bounded page/spool handling, global reconciliation, database comparison
+  and activation/restore proofs remain required. Existing operational consumers remain unchanged.
+  See [R80](decisions-register.md#r80--isolated-retained-version-reads-admit-results-after-bounded-worker-cleanup--2026-09-09).
+
 ### 4.5 Audit access & retention
 
 - Read access to the audit trail is a **granted permission** (typically Mara, Ingrid, Avery; Olsen gets scoped audit views within his audit window).

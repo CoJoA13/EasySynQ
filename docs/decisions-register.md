@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R79) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup; operational collection and adversarial-provider containment remain prerequisites.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R80) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R79
+## Part 3 — Resolutions R1–R80
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -3011,6 +3011,87 @@ slice history; the external-verification and key-rotation runbooks retain the op
 [current status](current-status.md) and dated [slice history](slice-history.md).
 
 Bumps the resolutions range **R1–R78 → R1–R79**.
+
+---
+
+### R80 — Isolated retained-version reads admit results after bounded worker cleanup — 2026-09-09
+
+**Decision.** Add the inactive Linux-only `read_raw_checkpoint_version_isolated(reader, ref,
+*, cancel=None)` API. It validates through the existing R79 input contract and runs one unchanged
+R79 exact-version read in a fresh private process. It returns the existing immutable raw-body
+record only after bounded protocol validation, stdout EOF, zero child exit and parent cleanup.
+The direct R79 API, its successful 65,536-byte entity limit, controlled errors, TLS and exact
+request policy remain unchanged. No operational reader calls the isolated API yet.
+
+**Bootstrap and private inputs.** Launch the exact current Python interpreter with `-I -B -u`,
+the installed private worker script and a fixed trusted source path. Use no shell, a new session,
+closed unrelated descriptors, binary stdin/stdout pipes and discarded stderr. The worker environment
+contains only `LANG=C.UTF-8` and `TZ=UTC`. Explicit credentials and locators travel in the bounded
+stdin request, never worker argv, environment, disk or public diagnostics. The public interface
+accepts no command, environment, callback or limit override, and performs no fallback or retry.
+
+Before reading request bytes or importing SDK/application code, the worker applies and independently
+reads back both soft and hard Linux limits: **536,870,912 bytes address space, 10 CPU seconds,
+64 file descriptors, zero core bytes and zero regular-file growth bytes**. Only trusted standard-library
+bootstrap code runs first; Python startup may load trusted installed site machinery. A failed limit
+setup produces no ready frame or network request. The worker creates no subprocesses or application
+threads. Limits contain trusted SDK processing of hostile data; they are not an arbitrary-code
+sandbox, aggregate host-memory quota or aggregate filesystem quota.
+
+**Framing.** Each private JSON frame has a four-byte unsigned big-endian length. Ready payloads
+are at most 512 bytes; request and result payloads are independently at most 131,072 bytes. The
+request ceiling preserves every R79-admitted credential/key/version, including the tested
+104,598-byte ASCII-escaped Unicode request. It does not widen the successful entity limit.
+Exact flat schemas, builtin scalar types, duplicate-member rejection, finite numbers and a
+pre-parse nesting limit of two prevent general object deserialization. No pickle, eval or logs-as-protocol
+path is used. The parent sends one request only after a valid ready frame and then closes stdin.
+A successful result must preserve the exact requested key/version and canonical padded base64
+for at most 65,536 decoded bytes. A controlled R79 error transmits only its enumerated code.
+
+**Lifecycle and errors.** A 20-second monotonic watchdog starts after argument validation and
+immediately before launch. Nonblocking selector-driven writes and reads check cancellation at
+intervals no greater than 50 milliseconds while waiting. Startup, refused stdin, partial output,
+stdout EOF and child-exit waits share the same attempt deadline. Final cancellation and elapsed-time
+admission checks run after cleanup before either a body or completed R79 error is published.
+Cancellation can discard an already received valid body.
+
+Abnormal termination signals only the owned unreaped process group, followed by a bounded
+two-second direct-child reap attempt. A cached completed return code prevents signalling a released
+PID/PGID. Every parent pipe and selector is closed; an unconfirmed reap or failed close prevents
+success. Normal success also requires unchanged R79 body/client cleanup inside the worker.
+Killing a blocked worker closes its operating-system resources; it does not prove Python-level
+SDK cleanup completed. Kernel-uninterruptible work and process creation can outlast user-space
+timing, so neither a hard real-time return bound nor guaranteed reclamation of a kernel-stuck
+process is promised.
+
+`IsolatedRawReadError` uses fixed text `isolated raw checkpoint read failed` and one code:
+`RUNTIME_UNSUPPORTED`, `WORKER_START_FAILED`, `WORKER_FAILED`, `PROTOCOL_INVALID`, `OUTPUT_LIMIT`,
+`DEADLINE_EXCEEDED` or `CLEANUP_FAILED`. Oversized output fails before unbounded accumulation;
+complete malformed or extra output is a protocol failure; absent/truncated output or a naturally
+nonzero child is a worker failure. Cleanup-induced termination does not replace an already detected
+size/protocol fault. Child traceback, exception classes and provider text are not reconstructed.
+Unexpected parent exceptions retain identity, with cancellation and cleanup leaves when applicable;
+multiple leaves use fixed group text `isolated raw checkpoint operation and cleanup failed`.
+
+**Evidence and integration boundary.** Real-process tests and the same immutable unprivileged API
+image used by the existing external-verifier acceptance prove retained bytes through R78, TLS/routing,
+SDK error-stream containment, watchdog/cancellation, effective resource limits and owned cleanup.
+Actual allocation, writable-file and CPU controls distinguish enforced limits from declared values.
+The hostile error worker's nonzero exit is observed; it is not labeled a kernel OOM event.
+
+This is one exact-read foundation. Complete collection from every required witness, bounded page
+transport and spooling, scalable global reconciliation, protected rollback memory, actual database
+snapshot comparison, durable delivery and independent activation/restore proofs remain separate work.
+The protected public descriptor, trust custody, key loading, writers, backup, restore, dependencies,
+settings, migrations and CLI remain unchanged. Lineage, rotation, provider-denial and recovery
+residuals remain OPEN. No GitHub service, hosting, API or download is introduced.
+
+**Back-propagation:** [Security and audit](12-security-and-audit.md),
+[external verification](runbooks/audit-external-verification.md),
+[key rotation](runbooks/key-rotation.md), [open residuals](open-residuals.md),
+[current status](current-status.md) and dated [slice history](slice-history.md).
+
+Bumps the resolutions range **R1–R79 → R1–R80**.
 
 ---
 
