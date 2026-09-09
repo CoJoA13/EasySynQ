@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R78) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R79) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup; operational collection and adversarial-provider containment remain prerequisites.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R78
+## Part 3 — Resolutions R1–R79
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2907,6 +2907,110 @@ key rotation and source-independent recovery residuals remain OPEN.
 [current status](current-status.md) and dated [slice history](slice-history.md).
 
 Bumps the resolutions range **R1–R77 → R1–R78**.
+
+---
+
+### R79 — Exact retained audit versions preserve raw bytes and explicit request identity — 2026-09-09
+
+**Decision.** Add the inactive synchronous `read_raw_checkpoint_version(reader, ref, *, cancel=None)`
+transport. It requires the existing exact `ExplicitHistoryReader` and `CheckpointVersionRef` records
+and returns a frozen `RawCheckpointVersion(key, version_id, body)` only after response admission,
+complete bounded reads and resource cleanup. Raw bytes and credentials are excluded from record
+representations. The result is unauthenticated transport evidence; R78 separately verifies externally
+committed namespaces, locators, raw-body hashes and legacy signatures.
+
+The transport selects no witness, loads no enrollment file and establishes no witness custody. A later
+collector must preserve the externally selected witness identity when constructing an observation.
+Healthy evidence for one witness cannot discharge another witness's missing or unavailable evidence.
+The current sink/history scanner, operational readers and writers, protected descriptor, R75 reports,
+R76/R77/R78 algorithms and limits, schema/grants, backup and restore retain their existing contracts.
+
+**Explicit inputs and request.** Validate exact record and builtin scalar types before client creation.
+Key and version are nonempty strings of at most 1,024 characters and 1,024 UTF8 bytes, without
+surrogates or C0/DEL/C1 controls; preserve other opaque spelling. Endpoint is at most 267 ASCII
+characters and must already equal its R73 normalized spelling. Bucket/region use the existing R73
+grammar and at most 63 characters. Credentials use R73 required-value rules and at most 4,096
+characters each. HTTP remains restricted to literal loopback. Cancellation is an actual
+`threading.Event` or `None`. Invalid input raises fixed `invalid raw checkpoint version input`.
+
+Create a fresh private SDK session/client with explicit endpoint, region and credentials, session
+token `None`, verified TLS, SigV4, path addressing and no proxy. Disable acceleration, dualstack,
+FIPS and host-prefix injection; ignore configured endpoint URLs. Pin standard retries to one total
+attempt, connect/read timeouts to 3/5 seconds and both checksum modes to `when_supported`.
+The SDK may still inspect profile/model configuration and fail before IO; successful fallback to
+ambient credentials, another destination or another TLS policy is never admitted.
+
+A client-local service-wide `before-send.s3` guard permits only the first exact GET: explicit
+scheme/host/port, independently encoded bucket/key path and sole exact `versionId` query. Reject
+altered targets, userinfo, fragments, extra or duplicate query fields, every later send, and nested
+HeadBucket discovery before network dispatch. Ordinary retry exhaustion alone does not prevent
+S3 region-redirect sends. A result's key identifies the bound request, not a server-echoed key.
+
+**Response and bytes.** Adopt a closable returned body before other metadata checks. Admit only a
+builtin response dict with readable/closable Body, builtin ResponseMetadata dict and builtin integer
+HTTP status 200. Then apply first-fault order: actual true DeleteMarker fails; a supplied nonboolean
+marker is malformed; VersionId must be a nonempty builtin string exactly matching the request;
+ContentLength must be a builtin nonnegative integer and at most 65,536. Missing metadata and boolean
+integers are rejected. No payload is read before admission. Literal `null` remains an exact
+four-character version label; absence cannot be normalized into it, and the label proves no physical
+immutability.
+
+Read 0–65,536 entity bytes unchanged, accumulating short reads with positive requests of at most
+8,192 bytes. Require a final one-byte EOF probe, including for declared length zero. Early EOF,
+visible excess data, oversized chunks and non-builtin bytes fail without a partial result. There
+are at most 65,537 body reads, a bytearray of at most 65,536 bytes, one chunk of at most 8,192 bytes
+and one immutable output copy. No JSON parsing, reserialization, decompression or signature checking
+occurs in this API. Empty transport bytes may succeed while unchanged R78 rejects them as evidence.
+
+**Errors and ownership.** Controlled operation codes are `PROVIDER_FAILURE`, `TRANSPORT_FAILURE`,
+`RESPONSE_INVALID`, `VERSION_MISMATCH`, `DELETE_MARKER`, `LENGTH_MISMATCH`, `BODY_LIMIT`,
+`DEADLINE_EXCEEDED` and `ROUTING_REJECTED`; known close failures use `CLEANUP_FAILED`.
+Their fixed message is `raw checkpoint version read failed: CODE`, with raw chaining suppressed.
+ClientError maps to provider failure. EndpointConnectionError, SSLError, ConnectTimeoutError,
+ReadTimeoutError, ProxyConnectionError, ConnectionClosedError and ResponseStreamingError map to
+transport failure; direct IncompleteReadError maps to length mismatch and
+FlexibleChecksumError to invalid response. Generic HTTPClientError and other unexpected SDK-boundary
+exceptions retain their exact identity, including when the SDK has already wrapped an internal fault.
+The module emits no logs; this does not prevent SDK DEBUG/history from recording a signed request
+before the send guard runs.
+
+Body close precedes client close, with both attempted once despite failure or cancellation. Factory
+ownership includes cleanup if guard registration fails before client transfer. A single fault raises
+directly. Multiple outcomes use `BaseExceptionGroup` with fixed text
+`raw checkpoint version operation and cleanup failed`: primary operation, then body/client close
+faults. Known cleanup leaves become fixed CLEANUP_FAILED; unexpected leaves keep their identity.
+An unexpected primary plus cancellation observed during cleanup preserves both before cleanup faults.
+
+The monotonic 15-second admission deadline is cooperative and checked at IO boundaries and after
+cleanup. Cancellation wins at a shared checkpoint and replaces prospective success or a controlled
+primary; an observed expired deadline replaces only prospective success. Neither permits a usable
+result. Cancellation raises `RawVersionReadCancelled`, a BaseException with fixed
+`raw checkpoint version read cancelled`. A detached thread is not termination or completed cleanup.
+
+**Limits before operational use.** The 64KiB loop bounds admitted successful entity data. The locked
+SDK can buffer status-300-and-above error bodies and allocate/parse metadata before transferring
+response ownership. DNS, blocking calls, trickle responses and cleanup can exceed the cooperative
+deadline. HTTP framing may hide surplus wire octets from the exposed stream. These properties require
+enforced process resource/lifetime containment or a separately reviewed bounded HTTP adapter before
+an operational collector relies on adversarial-provider bounds.
+
+Verified TLS uses the locked effective certifi bundle, with the SDK bundle fallback when certifi is
+unavailable; it is not automatically the operating-system trust store. Disposable TLS acceptance
+may mount a synthetic CA into that exact bundle path, readonly with recorded original/effective
+hashes. It changes no production trust policy and adds no ambient CA bypass or `verify=False`.
+
+No raw GET proves full retained-history enumeration, global reconciliation, database-chain agreement,
+v2 lineage, freshness, rollback continuity, witness custody, key activation or recovery readiness.
+The source-independent-recovery, audit-lineage, key-rotation and provider version-list-denial
+residuals remain OPEN. Evidence and compatibility observations belong in current status and dated
+slice history; the external-verification and key-rotation runbooks retain the operator boundary.
+
+**Back-propagation:** [Security and audit](12-security-and-audit.md),
+[external verification](runbooks/audit-external-verification.md),
+[key rotation](runbooks/key-rotation.md), [open residuals](open-residuals.md),
+[current status](current-status.md) and dated [slice history](slice-history.md).
+
+Bumps the resolutions range **R1–R78 → R1–R79**.
 
 ---
 

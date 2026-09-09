@@ -31,6 +31,9 @@ _MANDATORY_TESTS = frozenset(
         "test_external_cli_runtime_is_public_only_and_read_only",
         "test_external_cli_runtime_preserves_enrolled_obligation_after_db_selection_attack",
         "test_external_cli_runtime_accepts_historical_target_with_newer_witness",
+        "test_raw_version_runtime_preserves_exact_provider_bytes_and_bridge",
+        "test_raw_version_runtime_enforces_routing_and_tls",
+        "test_raw_version_runtime_bounds_streams_and_cleans_up",
     }
 )
 _EXCLUDED_DIRECTORIES = frozenset({".pytest_cache", ".venv", "__pycache__"})
@@ -283,6 +286,7 @@ def _proof_manifest(root: Path) -> _Manifest:
         root / "scripts/run-audit-external-acceptance.py",
         root / "infra/images.lock",
         root / "infra/compose/minio/minio-init.sh",
+        root / "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
     ]
     tests = _walk_inputs(root, root / "apps/api/tests", python_only=True)
     return _manifest(root, [*fixed, *tests])
@@ -576,6 +580,7 @@ def run_acceptance(root: Path | None = None) -> int:
             str(repository_root / "apps/api"),
             "pytest",
             "tests/integration/audit_external_runtime_acceptance.py",
+            "tests/integration/audit_raw_runtime_acceptance.py",
             "-q",
             "--junitxml",
             str(owned / "runtime.xml"),

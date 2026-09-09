@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-09-09"
-baseline_commit: "90b4616ecd7d18b8bd11f94b0379b59cfde063f5"
-last_shipped_slice: "S-audit-bootstrap-bridge"
+baseline_commit: "bf7416dead2c9615a202e2cbe16a4b58849162b3"
+last_shipped_slice: "S-audit-raw-transport"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 2944
+api_unit_tests: 3070
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
@@ -99,29 +99,52 @@ observations remain undetectable here. Current readers, writers, enrollment desc
 backup and restore are unchanged; complete raw version collection, scalable global reconciliation,
 actual snapshot comparison and independent activation/restore proofs remain prerequisites.
 
-Focused verification passed **193 bridge tests and 653 affected compatibility tests** without skips.
-Independent public fixtures contain 14 valid legacy signatures, one invalid-signature control and
-nine packages with 30 scenarios. The baseline has 514 locators across two pages and two witnesses;
-capacity tests exercise 4,096 entries/observations, eight pages, eight retained keys and 16 MiB.
-All **seven private single-check falsifiers** were detected by unchanged public-behavior tests:
-two inappropriate usable-consistency results, four diagnostic/precedence regressions and one legacy
-offset-compatibility regression. Accepted source remained unchanged throughout those executions.
+S-audit-raw-transport adds the inactive exact-version byte reader under R79. One explicit retained
+key/version is fetched through a fresh private SDK client with verified TLS and a one-send exact-target
+guard. Returned identity must match before bounded successful-body reads; unchanged bytes are exposed
+only after body/client cleanup. They remain unauthenticated until R78. Actual provider evidence
+preserves opaque retained versions and rejects missing returned identity for literal `null`; marker
+and missing-version responses map to provider failure. Current operational callers remain unchanged.
 
-The complete local API suite passed **2,944 tests with one release-only skip in 73.93 seconds**.
-Its actual production-image test ran five codec vectors, 31 key controls, four lineage cases and
-six bridge/composition cases in the same immutable image, offline as UID 10001 with development
-packages absent. The unchanged external verifier runner passed all **three mandatory runtime
-cases**, including the current/historical custody and denial behavior; owned cleanup completed.
-Ruff, formatting across **798 API files**, mypy across **458 source files**, runtime-runner static
-checks, **95 authority fixtures**, repository authority, candidate-wide site-data and whitespace
-checks passed. Source identities cover **2,008 files** and **152 directory modes**, with the real
-Git index preserved. These are local candidate results; required CI still runs on the published
-commit. No dependency, lock, migration, schema or CI topology changed.
+Initial focused verification passed **92 raw transport tests and 902 affected compatibility tests**.
+Review added cheap credential-length admission before delegated validation: two oversized-input
+regressions failed before the fix, and the exact 4,096-character control passed. All **95 final raw
+transport tests** then passed without failures, errors or skips. All **six private wrong
+implementations** triggered the intended built-in assertion failure in unchanged tests, with clean
+setup and teardown. The complete local API suite passed **3,070 tests with one existing release-only
+skip in 78.22 seconds**. The same offline
+production image ran five codec vectors, 31 key controls, four lineage cases and six bridge cases
+as UID 10001 with development dependencies absent. Ruff, formatting across **802 API files**, mypy
+across **459 source files**, runner static checks, **95 authority fixtures**, repository authority,
+candidate-wide site-data and whitespace checks passed before the documentation update.
+
+The final runtime fixture differs from that full-suite candidate only in its credential/URL output
+sentinel selection. Fresh **56 runner tests**, acceptance lint/format and 33 output/command guard
+controls passed. Earlier fixture lifecycle verification covered three complete 13-case stream
+cycles, eight deterministic write-fault controls and a real unexpected-handler failure control.
+The existing owned acceptance runner then passed all **six mandatory actual-image runtime tests**
+without skips in 74.88 seconds: three existing external-verifier cases plus provider/R78 (21 cases),
+routing/TLS (six cases) and streams/cancellation (13 cases). All tests used the same immutable API
+image; owned containers, unique image tag and temporary directory were removed. Three existing
+Testcontainers deprecation warnings remain. Source identities cover **2,012 files and 153 directory
+modes including the root**, preserving all production, dependency and unit bytes across the final
+sentinel correction. Trusted and untrusted routing ran with a populated hostile real default SDK
+session and verified exact restoration. The real SDK exposed a finite 65,536-byte error entity at
+`before-parse.s3.GetObject` before the raw API returned; the stalled successful-body read raised
+`ReadTimeoutError` after 5,087 ms, measured before fixture cleanup.
+
+The 64KiB admission bound applies to successful entity data. SDK error buffering before stream
+ownership, framing-hidden octets and blocking/trickling IO remain material limits; 15 seconds is a
+cooperative deadline. Enforced resource/lifetime containment or a reviewed bounded HTTP adapter,
+complete per-witness enumeration, global history reconciliation and actual snapshot comparison still
+precede operational use. Lineage, key rotation and source-independent recovery remain OPEN.
+These are local candidate results; published-source CI remains required. No dependency, lock,
+migration, schema or CI topology changed.
 
 Other full-stack counts are inherited from
-[MR !24](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/24)'s source pipeline
-`2833081870` and merged-main pipeline `2833118105`, both passing all fourteen required checks.
-The merged baseline is `90b4616ecd7d18b8bd11f94b0379b59cfde063f5`: 1,259 integration passes with two
+[MR !25](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/25)'s source pipeline
+`2833531276` and merged-main pipeline `2833606617`, both passing all fourteen required checks.
+The merged baseline is `bf7416dead2c9615a202e2cbe16a4b58849162b3`: 1,259 integration passes with two
 existing skips, 285 response contracts, 2,352 web tests and 80 browser tests. No live enrollment,
 grant, key rotation, restore, deployment or upgrade was performed.
 

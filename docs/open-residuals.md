@@ -65,7 +65,12 @@ Migration lock-wait coverage is closed with
 The narrower [RES-AUDIT-CHECKPOINT-LINEAGE](#res-audit-checkpoint-lineage) and
 [RES-AUDIT-KEY-ROTATION](#res-audit-key-rotation) records keep their separate ownership and closure
 contracts.
-Last reviewed: 2026-09-08
+Raw-transport progress on 2026-09-09 (R79): an inactive API preserves exact retained checkpoint
+bytes and version identity, with actual-image/provider consumption by unchanged R78. It changes no
+archive, restore or operational verifier. Complete per-witness collection, scalable global history,
+SDK resource/lifetime containment, actual snapshot agreement and a source-denied recovered-stack
+proof remain required; this record stays OPEN.
+Last reviewed: 2026-09-09
 
 ## RES-CONTAINER-SECURITY-TRIAGE
 
@@ -389,6 +394,13 @@ and no current consumer is activated. Complete raw per-witness collection, scala
 actual DB-chain comparison, durable delivery and compatibility/restore proofs remain required.
 This record remains OPEN.
 
+Raw-transport progress on 2026-09-09 (R79): exact explicit-version GETs now preserve original
+bytes, enforce returned identity and feed the unchanged R78 evaluator in disposable actual-image
+acceptance. This is an inactive prerequisite, not full history collection or a witness-custody claim.
+The new API strictly rejects the pinned provider's literal-null responses with absent VersionId.
+Complete per-witness enumeration, global reconciliation, SDK resource/lifetime containment and the
+existing database/delivery/restore obligations remain OPEN. Current legacy consumers are unchanged.
+
 ## RES-MINIO-VERSION-LIST-DENY
 
 Status: OPEN
@@ -479,6 +491,11 @@ adds no legacy signer epoch, key activation or trust-file update. The bounded pa
 not prove full retained history, rollback continuity, independent transition confirmation or an
 actual pre-rotation restore. Current signing and restore behavior and this closure contract remain
 unchanged; this record remains OPEN.
+
+Raw-transport progress on 2026-09-09 (R79): unchanged retained bytes and exact version metadata
+can now reach R78 through an explicit reader. No key is activated or enrolled and no legacy key era
+is inferred. Complete independent witness history, protected rollback continuity, durable delivery,
+activation confirmation and actual pre-rotation restore remain required; this record stays OPEN.
 
 ## RES-RISK-CLAUSE-PICKER
 

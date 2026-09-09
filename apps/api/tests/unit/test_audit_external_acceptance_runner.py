@@ -32,6 +32,9 @@ _MANDATORY_NAMES = (
     "test_external_cli_runtime_is_public_only_and_read_only",
     "test_external_cli_runtime_preserves_enrolled_obligation_after_db_selection_attack",
     "test_external_cli_runtime_accepts_historical_target_with_newer_witness",
+    "test_raw_version_runtime_preserves_exact_provider_bytes_and_bridge",
+    "test_raw_version_runtime_enforces_routing_and_tls",
+    "test_raw_version_runtime_bounds_streams_and_cleans_up",
 )
 
 
@@ -53,6 +56,9 @@ def _repository(tmp_path: Path) -> Path:
         "scripts/run-audit-external-acceptance.py",
         "apps/api/tests/conftest.py",
         "apps/api/tests/integration/audit_external_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_raw_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_raw_runtime_probe.py",
+        "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
         "apps/api/tests/unit/test_sample.py",
         "infra/images.lock",
         "infra/compose/minio/minio-init.sh",
@@ -61,11 +67,16 @@ def _repository(tmp_path: Path) -> Path:
     return root
 
 
-def _junit(*, mode: str = "passing") -> str:
+def _junit(*, mode: str = "passing", affected: int = 0) -> str:
     cases: list[str] = []
-    names = _MANDATORY_NAMES if mode != "missing" else _MANDATORY_NAMES[:1]
-    for index, name in enumerate(names):
-        child = "<skipped />" if mode == "skipped" and index == 0 else ""
+    names = tuple(
+        name
+        for index, name in enumerate(_MANDATORY_NAMES)
+        if mode != "missing" or index != affected
+    )
+    for name in names:
+        selected = name == _MANDATORY_NAMES[affected]
+        child = f"<{mode} />" if mode in {"skipped", "failure", "error"} and selected else ""
         cases.append(f'<testcase name="{name}">{child}</testcase>')
     return "<testsuites><testsuite>" + "".join(cases) + "</testsuite></testsuites>"
 
@@ -77,6 +88,7 @@ class _FakeCommands:
         self.build_returncode = 0
         self.harness_returncode = 0
         self.junit_mode = "passing"
+        self.junit_affected = 0
         self.initial_inspect_mode = "valid"
         self.cleanup_inspect_mode = "valid"
         self.image_remove_returncode = 0
@@ -165,7 +177,10 @@ class _FakeCommands:
             )
             junit_path = Path(arguments[-1])
             if self.junit_mode != "absent":
-                _write(junit_path, _junit(mode=self.junit_mode))
+                _write(
+                    junit_path,
+                    _junit(mode=self.junit_mode, affected=self.junit_affected),
+                )
             if self.change_after_harness is not None:
                 path, action = self.change_after_harness
                 if action == "content":
@@ -242,13 +257,14 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
         ".",
     ]
     harness = next(call for call in fake.calls if call[0][0] == "/tools/uv")
-    assert harness[0][:6] == [
+    assert harness[0][:7] == [
         "/tools/uv",
         "run",
         "--project",
         str(root / "apps/api"),
         "pytest",
         "tests/integration/audit_external_runtime_acceptance.py",
+        "tests/integration/audit_raw_runtime_acceptance.py",
     ]
     assert harness[1] == root / "apps/api"
     assert harness[2] == 1_200
@@ -261,7 +277,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
     ]
     output = capsys.readouterr().out
     assert "runtime_acceptance=passed" in output
-    assert "mandatory_tests=3" in output
+    assert "mandatory_tests=6" in output
     assert _RUNNER._MANDATORY_TESTS == frozenset(_MANDATORY_NAMES)
     assert "secret-never-print" not in output
 
@@ -351,12 +367,33 @@ def test_pytest_or_junit_failure_propagates(
     assert _run(root, fake, monkeypatch) == 1
 
 
+@pytest.mark.parametrize("mandatory_index", range(len(_MANDATORY_NAMES)))
+@pytest.mark.parametrize("junit_mode", ["missing", "skipped", "failure", "error"])
+def test_runner_rejects_each_missing_or_nonpassing_mandatory_case(
+    mandatory_index: int,
+    junit_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.junit_mode = junit_mode
+    fake.junit_affected = mandatory_index
+
+    assert _run(root, fake, monkeypatch) == 1
+
+
 @pytest.mark.parametrize(
     ("relative", "action"),
     [
         ("apps/api/src/easysynq_api/__init__.py", "content"),
         ("infra/images.lock", "content"),
         ("infra/compose/minio/minio-init.sh", "content"),
+        ("apps/api/tests/integration/audit_external_runtime_acceptance.py", "content"),
+        ("apps/api/tests/integration/audit_raw_runtime_acceptance.py", "content"),
+        ("apps/api/tests/integration/audit_raw_runtime_probe.py", "content"),
+        ("apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json", "content"),
         ("infra/images.lock", "symlink"),
         ("infra/compose/minio/minio-init.sh", "symlink"),
     ],
@@ -377,7 +414,13 @@ def test_source_or_provider_input_change_fails(
 
 @pytest.mark.parametrize(
     "relative",
-    ["infra/images.lock", "infra/compose/minio/minio-init.sh"],
+    [
+        "infra/images.lock",
+        "infra/compose/minio/minio-init.sh",
+        "apps/api/tests/integration/audit_raw_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_raw_runtime_probe.py",
+        "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
+    ],
 )
 def test_provider_input_symlink_is_rejected_before_build(
     relative: str,

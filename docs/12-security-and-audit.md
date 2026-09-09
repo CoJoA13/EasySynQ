@@ -481,6 +481,18 @@ flowchart LR
   remain unproved. Existing commands, descriptors and writers remain unchanged. See
   [R78](decisions-register.md#r78--pinned-legacy-bootstrap-evidence-requires-complete-supplied-package-validation--2026-09-09).
 
+- **Exact raw version transport (R79).** An inactive synchronous API reads one explicit retained
+  key/version through a fresh private SDK client and permits only the first exact GET destination.
+  Returned version metadata must match, including literal `null`; missing identity fails closed.
+  Successful entity data is preserved unchanged, admitted at at most 65,536 bytes, and returned only
+  after body/client cleanup. Those bytes remain unauthenticated until the separate R78 checks.
+  Verified TLS uses the locked effective CA bundle. The SDK may buffer error entities before body
+  ownership, HTTP framing can hide extra octets, and the 15-second deadline is cooperative. An
+  operational collector still needs enforced resource/lifetime containment or a reviewed bounded
+  HTTP adapter, complete independent witness collection and global reconciliation. No current
+  consumer, enrollment, writer or key activation changes. See
+  [R79](decisions-register.md#r79--exact-retained-audit-versions-preserve-raw-bytes-and-explicit-request-identity--2026-09-09).
+
 ### 4.5 Audit access & retention
 
 - Read access to the audit trail is a **granted permission** (typically Mara, Ingrid, Avery; Olsen gets scoped audit views within his audit window).
