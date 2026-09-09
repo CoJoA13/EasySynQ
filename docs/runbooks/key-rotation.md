@@ -31,6 +31,13 @@ repository acceptance provisions only disposable synthetic principals.
 After rotating a dedicated external reader credential, update its controlled launcher and rerun the
 explicit verifier against the unchanged approved descriptor.
 
+For an independently selected, closed historical inspection database, the same public enrollment
+supports the explicit `--historical-target` mode (R75). Follow the
+[historical inspection procedure](audit-external-verification.md#inspect-an-explicitly-selected-historical-target)
+for the additional column-only metadata read, ahead-checkpoint classification and complete required
+witness coverage. This legacy consumer does not choose activation/revocation eras or change the
+restore command's current-key behavior. Rotation and pre-rotation recovery compatibility remain OPEN.
+
 ## Declaring the off-host witness (`integrity.alarm`)
 
 The nightly `easysynq.audit.verify_chain` job raises **`integrity.alarm`** to System Administrators

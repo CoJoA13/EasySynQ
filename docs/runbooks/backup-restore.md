@@ -146,6 +146,14 @@ explicit discard. It exits:
   (`RESTORE_CHECKPOINT_ACK`). Never auto-proceeds.
 * **1 (FAIL)** — archive/restore/triad/chain failure; the scratch target is torn down.
 
+An already restored inspection database can also be checked separately with the protected-descriptor
+`verify-offhost --historical-target` mode (R75). Select its recovery point independently and keep its
+writers closed; follow the [historical audit procedure](audit-external-verification.md#inspect-an-explicitly-selected-historical-target)
+for dedicated reader grants and complete witness coverage. A genuine off-host checkpoint beyond
+that target is reported as ahead evidence, while applicable contradictions still fail. This separate
+inspection does not alter the restore exits above, authorize `--audit-checkpoint-ack`, attest the
+archive or qualify the target for service.
+
 ### Production recovery/cutover is not currently supported
 
 **Do not cut over to today's CLI scratch target.** Scratch copies are flattened under a verification

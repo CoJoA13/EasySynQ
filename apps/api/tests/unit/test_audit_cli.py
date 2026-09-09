@@ -124,7 +124,10 @@ def test_explicit_trust_option_has_safe_json_configuration_failure(
 
 
 def _report(
-    *, verified: bool, descriptor: TrustDescriptor | None = None
+    *,
+    verified: bool,
+    descriptor: TrustDescriptor | None = None,
+    mode: str = audit_cli._EXTERNAL_LIVE_MODE,
 ) -> external.ExternalVerificationReport:
     reasons = () if verified else (external.VerificationReason("WITNESS_INVALID", "failed"),)
     return external.ExternalVerificationReport(
@@ -138,6 +141,7 @@ def _report(
         organizations=(),
         reasons=reasons,
         reasons_omitted=0,
+        mode=mode,
     )
 
 
@@ -176,7 +180,7 @@ def test_private_worker_emits_only_json_and_uses_external_inputs(
     monkeypatch.setattr(audit_cli, "_verify_external", verify)
     monkeypatch.setattr(audit_external_worker.os, "environ", _worker_environment(credentials))
 
-    result = audit_external_worker.main([str(path)])
+    result = audit_external_worker.main([audit_cli._EXTERNAL_LIVE_MODE, str(path)])
     captured = capsys.readouterr()
 
     assert result == expected_exit
@@ -240,6 +244,7 @@ def test_explicit_trust_mode_reexecs_with_only_reviewed_environment(
         "-c",
         bootstrap,
         expected_source_root,
+        audit_cli._EXTERNAL_LIVE_MODE,
         str(path.resolve()),
     ]
     expected_environment = {
@@ -275,6 +280,96 @@ def test_explicit_trust_mode_reexecs_with_only_reviewed_environment(
 
     assert dict(audit_cli.os.environ) == parent_environment
     assert capsys.readouterr() == ("", "")
+
+
+def test_historical_target_requires_an_explicit_trust_descriptor(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        audit_cli.main(["verify-offhost", "--historical-target"])
+
+    captured = capsys.readouterr()
+    assert raised.value.code == 2
+    assert captured.out == ""
+    assert "--historical-target requires --trust-descriptor" in captured.err
+
+
+def test_historical_target_reexecs_worker_with_explicit_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "trust.json"
+    path.write_text("{}", encoding="utf-8")
+    descriptor = _descriptor()
+    credentials = _credentials()
+    monkeypatch.setattr(audit_cli, "load_trust_descriptor", lambda _path: descriptor)
+    monkeypatch.setattr(audit_cli, "load_external_credentials", lambda _env: credentials)
+    monkeypatch.setattr(
+        audit_cli.os,
+        "environ",
+        {
+            "DATABASE_URL": credentials.database_url,
+            "AUDIT_SINK_READ_ACCESS_KEY": credentials.access_key,
+            "AUDIT_SINK_READ_SECRET_KEY": credentials.secret_key,
+        },
+    )
+
+    def execve(_executable: str, argv: list[str], environment: dict[str, str]) -> None:
+        assert argv[-2:] == [audit_cli._EXTERNAL_HISTORICAL_MODE, str(path)]
+        assert environment == _worker_environment(credentials)
+        raise _ExecReached
+
+    monkeypatch.setattr(audit_cli.os, "execve", execve)
+
+    with pytest.raises(_ExecReached):
+        audit_cli.main(["verify-offhost", "--trust-descriptor", str(path), "--historical-target"])
+
+    assert capsys.readouterr() == ("", "")
+
+
+def test_private_worker_dispatches_historical_verifier_and_emits_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "trust.json"
+    path.write_text("{}", encoding="utf-8")
+    descriptor = _descriptor()
+    credentials = _credentials()
+    monkeypatch.setattr(audit_cli, "load_trust_descriptor", lambda _path: descriptor)
+    monkeypatch.setattr(audit_cli, "load_external_credentials", lambda _env: credentials)
+
+    async def verify_historical(
+        supplied_descriptor: TrustDescriptor,
+        supplied_credentials: ExternalCredentials,
+    ) -> external.ExternalVerificationReport:
+        assert supplied_descriptor is descriptor
+        assert supplied_credentials is credentials
+        return _report(
+            verified=True,
+            descriptor=descriptor,
+            mode=audit_cli._EXTERNAL_HISTORICAL_MODE,
+        )
+
+    monkeypatch.setattr(audit_cli, "_verify_historical_external", verify_historical)
+    monkeypatch.setattr(
+        audit_cli,
+        "_verify_external",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("historical worker dispatched the live verifier")
+        ),
+    )
+    monkeypatch.setattr(audit_external_worker.os, "environ", _worker_environment(credentials))
+
+    result = audit_external_worker.main([audit_cli._EXTERNAL_HISTORICAL_MODE, str(path)])
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+
+    assert result == 0
+    assert report["mode"] == audit_cli._EXTERNAL_HISTORICAL_MODE
+    assert report["descriptor_id"] == str(descriptor.descriptor_id)
+    assert captured.err == ""
 
 
 def _database_url_at_length(length: int, *, explicit_timeout: bool) -> str:
@@ -328,7 +423,7 @@ def test_parent_forwards_original_database_url_to_actual_worker(
     def execve(_executable: str, argv: list[str], environment: dict[str, str]) -> None:
         exec_observed["environment"] = environment
         monkeypatch.setattr(audit_external_worker.os, "environ", environment)
-        exec_observed["worker_exit"] = audit_external_worker.main([argv[-1]])
+        exec_observed["worker_exit"] = audit_external_worker.main(argv[-2:])
         raise _ExecReached
 
     monkeypatch.setattr(audit_cli.os, "execve", execve)
@@ -438,7 +533,7 @@ def test_private_worker_rejects_nonexact_environment_before_dispatch(
     )
     monkeypatch.setattr(audit_external_worker.os, "environ", environment)
 
-    result = audit_external_worker.main([str(path)])
+    result = audit_external_worker.main([audit_cli._EXTERNAL_LIVE_MODE, str(path)])
     captured = capsys.readouterr()
     report = json.loads(captured.out)
 
@@ -453,6 +548,28 @@ def test_private_worker_rejects_nonexact_environment_before_dispatch(
     assert "explicit-secret" not in captured.out
 
 
+def test_private_worker_preserves_recognized_historical_mode_on_environment_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "trust.json"
+    path.write_text("{}", encoding="utf-8")
+    invalid_environment = _worker_environment()
+    invalid_environment["PGHOSTADDR"] = "routing-sentinel"
+    monkeypatch.setattr(audit_external_worker.os, "environ", invalid_environment)
+
+    result = audit_external_worker.main([audit_cli._EXTERNAL_HISTORICAL_MODE, str(path)])
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+
+    assert result == 2
+    assert report["mode"] == audit_cli._EXTERNAL_HISTORICAL_MODE
+    assert report["verified"] is False
+    assert report["reasons"][0]["code"] == "CONFIG_INVALID"
+    assert "routing-sentinel" not in captured.out + captured.err
+
+
 def test_private_worker_configuration_failure_is_safe_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -463,7 +580,7 @@ def test_private_worker_configuration_failure_is_safe_json(
 
     monkeypatch.setattr(audit_external_worker.os, "environ", _worker_environment())
 
-    result = audit_external_worker.main([str(path)])
+    result = audit_external_worker.main([audit_cli._EXTERNAL_LIVE_MODE, str(path)])
     captured = capsys.readouterr()
     report = json.loads(captured.out)
 
@@ -496,7 +613,7 @@ def test_private_worker_reports_identity_from_its_fresh_descriptor_read(
     monkeypatch.setattr(audit_cli, "_verify_external", verify)
     monkeypatch.setattr(audit_external_worker.os, "environ", _worker_environment())
 
-    result = audit_external_worker.main([str(path)])
+    result = audit_external_worker.main([audit_cli._EXTERNAL_LIVE_MODE, str(path)])
     report = json.loads(capsys.readouterr().out)
 
     assert result == 0
@@ -564,7 +681,7 @@ def test_private_worker_runtime_failure_does_not_print_exception_or_credentials(
     monkeypatch.setattr(audit_cli, "_verify_external", failed)
     monkeypatch.setattr(audit_external_worker.os, "environ", _worker_environment())
 
-    result = audit_external_worker.main([str(path)])
+    result = audit_external_worker.main([audit_cli._EXTERNAL_LIVE_MODE, str(path)])
     captured = capsys.readouterr()
     report = json.loads(captured.out)
 

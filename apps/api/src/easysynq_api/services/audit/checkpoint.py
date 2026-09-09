@@ -24,7 +24,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from time import monotonic
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import rfc8785
 from cryptography.exceptions import InvalidSignature
@@ -373,6 +373,13 @@ class WitnessHistoryResult:
     comparison_unavailable: bool
     reasons: list[str]
     reasons_omitted: int
+    historical_applicable_checkpoints: int | None = None
+    historical_ahead_checkpoints: int | None = None
+    historical_highest_ahead_id: int | None = None
+    historical_covered_through_id: int | None = None
+
+
+type HistoryFreshnessPolicy = Literal["live", "historical-target"]
 
 
 @dataclasses.dataclass(slots=True)
@@ -541,13 +548,28 @@ async def scan_offhost_history(
     verify_signature: LegacySignatureVerifier,
     compare_checkpoint: Callable[[AuthenticatedCheckpoint], Awaitable[str | None]],
     now: datetime.datetime,
+    freshness_policy: HistoryFreshnessPolicy = "live",
+    historical_target_id: int | None = None,
+    historical_target_known: bool = False,
+    partial_result_observer: Callable[[WitnessHistoryResult], None] | None = None,
 ) -> WitnessHistoryResult:
     """Authenticate and compare every retained legacy checkpoint at one required witness."""
+    if freshness_policy == "live":
+        if historical_target_id is not None or historical_target_known:
+            raise ValueError("live history scan cannot receive a historical target")
+    elif freshness_policy != "historical-target":
+        raise ValueError("unsupported checkpoint history freshness policy")
+    elif historical_target_id is not None and historical_target_id < 1:
+        raise ValueError("historical target id must be positive when present")
     failures = _HistoryFailures()
     read_failed = False
     parsed_any = False
     scan_complete = False
     comparison_unavailable = False
+    applicable_checkpoints = 0
+    ahead_checkpoints = 0
+    highest_ahead_id: int | None = None
+    covered_through_id: int | None = None
     latest: tuple[datetime.datetime, int] | None = None
     deadline = monotonic() + _HISTORY_SCAN_SECONDS
     page_count = 0
@@ -555,6 +577,30 @@ async def scan_offhost_history(
     key_marker: str | None = None
     version_marker: str | None = None
     seen_cursors: set[tuple[str | None, str | None]] = set()
+
+    def result() -> WitnessHistoryResult:
+        certified_coverage = covered_through_id
+        if not scan_complete or read_failed or failures.attestation or comparison_unavailable:
+            certified_coverage = None
+        historical_counts_known = (
+            freshness_policy == "historical-target" and historical_target_known
+        )
+        return WitnessHistoryResult(
+            parsed_any=parsed_any,
+            scan_complete=scan_complete,
+            read_failed=read_failed,
+            attestation_failed=failures.attestation,
+            comparison_unavailable=comparison_unavailable,
+            reasons=failures.details,
+            reasons_omitted=failures.omitted,
+            historical_applicable_checkpoints=(
+                applicable_checkpoints if historical_counts_known else None
+            ),
+            historical_ahead_checkpoints=(ahead_checkpoints if historical_counts_known else None),
+            historical_highest_ahead_id=(highest_ahead_id if historical_counts_known else None),
+            historical_covered_through_id=(certified_coverage if historical_counts_known else None),
+        )
+
     try:
         async with asyncio.timeout(_HISTORY_SCAN_SECONDS):
             while True:
@@ -623,6 +669,23 @@ async def scan_offhost_history(
                     candidate = (checkpoint.timestamp, checkpoint.latest_id)
                     latest = candidate if latest is None else max(latest, candidate)
                     _check_history_deadline(deadline)
+                    if freshness_policy == "historical-target":
+                        if not historical_target_known:
+                            comparison_unavailable = True
+                            failures.record("database checkpoint comparison unavailable")
+                            continue
+                        if (
+                            historical_target_id is None
+                            or checkpoint.latest_id > historical_target_id
+                        ):
+                            ahead_checkpoints += 1
+                            highest_ahead_id = (
+                                checkpoint.latest_id
+                                if highest_ahead_id is None
+                                else max(highest_ahead_id, checkpoint.latest_id)
+                            )
+                            continue
+                        applicable_checkpoints += 1
                     try:
                         mismatch = await compare_checkpoint(checkpoint)
                     except CheckpointComparisonUnavailable:
@@ -632,6 +695,12 @@ async def scan_offhost_history(
                     _check_history_deadline(deadline)
                     if mismatch is not None:
                         failures.record(mismatch, attestation=True)
+                    elif freshness_policy == "historical-target":
+                        covered_through_id = (
+                            checkpoint.latest_id
+                            if covered_through_id is None
+                            else max(covered_through_id, checkpoint.latest_id)
+                        )
                 _check_history_deadline(deadline)
                 if not page.truncated:
                     scan_complete = True
@@ -641,11 +710,15 @@ async def scan_offhost_history(
                     raise SinkReadError("off-host checkpoint history pagination cursor repeated")
                 seen_cursors.add(cursor)
                 key_marker, version_marker = cursor
+    except asyncio.CancelledError:
+        if partial_result_observer is not None:
+            partial_result_observer(result())
+        raise
     except Exception as exc:  # noqa: BLE001 - every incomplete scan fails closed
         read_failed = True
         failures.record(_history_read_reason(exc))
 
-    if scan_complete and latest is not None:
+    if freshness_policy == "live" and scan_complete and latest is not None:
         age = (now - latest[0]).total_seconds()
         if age > _FRESHNESS_SECONDS:
             failures.record(
@@ -653,15 +726,7 @@ async def scan_offhost_history(
                 attestation=True,
             )
 
-    return WitnessHistoryResult(
-        parsed_any=parsed_any,
-        scan_complete=scan_complete,
-        read_failed=read_failed,
-        attestation_failed=failures.attestation,
-        comparison_unavailable=comparison_unavailable,
-        reasons=failures.details,
-        reasons_omitted=failures.omitted,
-    )
+    return result()
 
 
 async def verify_offhost_checkpoint(

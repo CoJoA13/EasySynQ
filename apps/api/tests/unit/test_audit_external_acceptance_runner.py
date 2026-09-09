@@ -31,6 +31,7 @@ _SESSION_ID = "testcontainers-session-1"
 _MANDATORY_NAMES = (
     "test_external_cli_runtime_is_public_only_and_read_only",
     "test_external_cli_runtime_preserves_enrolled_obligation_after_db_selection_attack",
+    "test_external_cli_runtime_accepts_historical_target_with_newer_witness",
 )
 
 
@@ -260,6 +261,8 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
     ]
     output = capsys.readouterr().out
     assert "runtime_acceptance=passed" in output
+    assert "mandatory_tests=3" in output
+    assert _RUNNER._MANDATORY_TESTS == frozenset(_MANDATORY_NAMES)
     assert "secret-never-print" not in output
 
 

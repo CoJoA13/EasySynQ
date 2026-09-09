@@ -50,6 +50,23 @@ class VerificationReason:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class HistoricalWitnessDetails:
+    applicable_checkpoints: int | None
+    ahead_checkpoints: int | None
+    highest_ahead_id: int | None
+    covered_through_id: int | None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class HistoricalOrganizationDetails:
+    canonical_serialize_version: int | None
+    linked_head_id: int | None
+    covered_through_id: int | None
+    covered_rows: int | None
+    uncovered_linked_rows: int | None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class WitnessVerificationResult:
     witness_id: uuid.UUID
     attempted: bool
@@ -61,6 +78,7 @@ class WitnessVerificationResult:
     comparison_unavailable: bool
     reasons: tuple[VerificationReason, ...]
     reasons_omitted: int
+    historical: HistoricalWitnessDetails | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -77,6 +95,7 @@ class OrganizationVerificationResult:
     witnesses: tuple[WitnessVerificationResult, ...]
     reasons: tuple[VerificationReason, ...]
     reasons_omitted: int
+    historical: HistoricalOrganizationDetails | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -112,8 +131,9 @@ class ExternalVerificationReport:
 
         organizations: list[dict[str, Any]] = []
         for organization in self.organizations:
-            witnesses = [
-                {
+            witnesses: list[dict[str, Any]] = []
+            for witness in organization.witnesses:
+                rendered_witness = {
                     "witness_id": str(witness.witness_id),
                     "attempted": witness.attempted,
                     "status": witness.status,
@@ -125,26 +145,41 @@ class ExternalVerificationReport:
                     "reasons": [reason(item) for item in witness.reasons],
                     "reasons_omitted": witness.reasons_omitted,
                 }
-                for witness in organization.witnesses
-            ]
-            organizations.append(
-                {
-                    "org_id": str(organization.org_id),
-                    "present": organization.present,
-                    "verified": organization.verified,
-                    "checked": organization.checked,
-                    "pending": organization.pending,
-                    "local_checkpoint": checkpoint(organization.local_checkpoint),
-                    "break_count": organization.break_count,
-                    "breaks": [
-                        {"at_id": item.at_id, "reason": item.reason} for item in organization.breaks
-                    ],
-                    "breaks_omitted": organization.breaks_omitted,
-                    "witnesses": witnesses,
-                    "reasons": [reason(item) for item in organization.reasons],
-                    "reasons_omitted": organization.reasons_omitted,
+                if witness.historical is not None:
+                    rendered_witness["historical"] = {
+                        "applicable_checkpoints": witness.historical.applicable_checkpoints,
+                        "ahead_checkpoints": witness.historical.ahead_checkpoints,
+                        "highest_ahead_id": witness.historical.highest_ahead_id,
+                        "covered_through_id": witness.historical.covered_through_id,
+                    }
+                witnesses.append(rendered_witness)
+            rendered_organization = {
+                "org_id": str(organization.org_id),
+                "present": organization.present,
+                "verified": organization.verified,
+                "checked": organization.checked,
+                "pending": organization.pending,
+                "local_checkpoint": checkpoint(organization.local_checkpoint),
+                "break_count": organization.break_count,
+                "breaks": [
+                    {"at_id": item.at_id, "reason": item.reason} for item in organization.breaks
+                ],
+                "breaks_omitted": organization.breaks_omitted,
+                "witnesses": witnesses,
+                "reasons": [reason(item) for item in organization.reasons],
+                "reasons_omitted": organization.reasons_omitted,
+            }
+            if organization.historical is not None:
+                rendered_organization["historical"] = {
+                    "canonical_serialize_version": (
+                        organization.historical.canonical_serialize_version
+                    ),
+                    "linked_head_id": organization.historical.linked_head_id,
+                    "covered_through_id": organization.historical.covered_through_id,
+                    "covered_rows": organization.historical.covered_rows,
+                    "uncovered_linked_rows": organization.historical.uncovered_linked_rows,
                 }
-            )
+            organizations.append(rendered_organization)
         return {
             "mode": self.mode,
             "descriptor_id": None if self.descriptor_id is None else str(self.descriptor_id),

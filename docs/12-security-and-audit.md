@@ -438,6 +438,19 @@ flowchart LR
   [external-verification runbook](runbooks/audit-external-verification.md) for custody, reader grants,
   command syntax and remaining limits.
 
+- **Explicit historical targets (R75).** Add `--historical-target` to the protected-descriptor
+  command only for an independently selected, already restored inspection database with writers
+  closed. One read-only REPEATABLE READ snapshot supplies per-organization serialization metadata,
+  the complete chain/local checkpoint, linked heads, counts and witness comparisons. The reader
+  additionally needs only `SELECT (org_id, canonical_serialize_version)` on `system_config`.
+  Every retained eligible off-host version authenticates before classification: genuine heads
+  above the target are ahead evidence, while all applicable heads must match. Older contradictions
+  remain failures. Each required witness must cover the linked head, and pending rows prevent
+  success. Partial coverage is reported explicitly; an unusable database snapshot is never reopened.
+  Historical mode omits live freshness only. It does not authenticate target selection, establish
+  predecessor lineage or key eras, attest an archive, acknowledge a restore or qualify recovery.
+  See the [historical inspection procedure](runbooks/audit-external-verification.md#inspect-an-explicitly-selected-historical-target).
+
 ### 4.5 Audit access & retention
 
 - Read access to the audit trail is a **granted permission** (typically Mara, Ingrid, Avery; Olsen gets scoped audit views within his audit window).
