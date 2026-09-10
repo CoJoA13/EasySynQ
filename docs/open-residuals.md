@@ -278,6 +278,13 @@ Reason: The API unit checks passed, then the mandatory external-audit runtime ha
 The original runner deleted its private JUnit and child output without naming the failed case.
 One unchanged local run with matching build/proof manifests passed all eight mandatory image checks;
 the local Docker/runtime environment differed from CI, so the original cause remains unestablished.
+Progress, 2026-09-10: A subsequent local actual-image run identified an uncaught memory-sampler
+thread exception that polluted the isolated probe's JSON result. A deterministic real-child regression
+reproduced `ProcessLookupError` when the worker exited between opening and reading its procfs status.
+The sampler now treats that vanished-process condition like the already-handled missing status file;
+permission and other I/O failures still propagate, and the mandatory memory/resource assertions remain.
+The original CI report did not preserve the thread exception, so attribution of that historical
+failure remains unproven.
 Closure contract: Capture actionable, privacy-preserving evidence of the failing check in the affected
 environment, reproduce its mechanism, fix it at the owning boundary, and verify the mandatory acceptance
 without skips, weaker resource/time limits, or reliance on retrying failed gates. A diagnostic summary

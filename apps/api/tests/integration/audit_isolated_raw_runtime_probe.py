@@ -246,7 +246,8 @@ def _limits(pid: int) -> dict[str, list[int]]:
 def _memory_sample(pid: int) -> tuple[int, int] | None:
     try:
         lines = Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # Linux can report ESRCH if the worker exits after open but before read.
         return None
     values: dict[str, int] = {}
     for line in lines:
