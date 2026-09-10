@@ -9,7 +9,7 @@ import { configureTestQueryNotifications, flushTestQueryNotifications } from "./
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: (query: string) => ({
-    matches: false,
+    matches: query === "(prefers-reduced-motion: reduce)",
     media: query,
     onchange: null,
     addListener: () => {},
