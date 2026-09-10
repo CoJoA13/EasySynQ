@@ -35,6 +35,7 @@ _MANDATORY_TESTS = frozenset(
         "test_raw_version_runtime_enforces_routing_and_tls",
         "test_raw_version_runtime_bounds_streams_and_cleans_up",
         "test_isolated_raw_runtime_enforces_process_and_byte_boundaries",
+        "test_version_page_decoder_runtime_rejects_lossy_provider_pages",
     }
 )
 _EXCLUDED_DIRECTORIES = frozenset({".pytest_cache", ".venv", "__pycache__"})
@@ -583,6 +584,7 @@ def run_acceptance(root: Path | None = None) -> int:
             "tests/integration/audit_external_runtime_acceptance.py",
             "tests/integration/audit_raw_runtime_acceptance.py",
             "tests/integration/audit_isolated_raw_runtime_acceptance.py",
+            "tests/integration/audit_version_page_runtime_acceptance.py",
             "-q",
             "--junitxml",
             str(owned / "runtime.xml"),

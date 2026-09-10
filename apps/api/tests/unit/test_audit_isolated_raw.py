@@ -4,6 +4,7 @@ import base64
 import errno
 import json
 import os
+import selectors
 import signal
 import subprocess
 import sys
@@ -783,6 +784,63 @@ def _read_stream_exact(stream: Any, size: int) -> bytes:
     return bytes(output)
 
 
+def _read_real_worker_ready(process: subprocess.Popen[bytes]) -> None:
+    assert process.stdout is not None
+    descriptor = process.stdout.fileno()
+    os.set_blocking(descriptor, False)
+    deadline = time.monotonic() + 5.0
+    selected = selectors.DefaultSelector()
+    frame = bytearray()
+    frame_size: int | None = None
+    try:
+        selected.register(descriptor, selectors.EVENT_READ)
+        while frame_size is None or len(frame) < frame_size:
+            if process.poll() is not None:
+                raise AssertionError("worker exited before READY")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError("worker READY timed out")
+            if not selected.select(remaining):
+                if process.poll() is not None:
+                    raise AssertionError("worker exited before READY")
+                raise AssertionError("worker READY timed out")
+            target = 4 if frame_size is None else frame_size
+            try:
+                chunk = os.read(descriptor, target - len(frame))
+            except BlockingIOError:
+                continue
+            if not chunk:
+                raise AssertionError("worker stream closed before READY")
+            frame.extend(chunk)
+            if frame_size is None and len(frame) == 4:
+                payload_size = int.from_bytes(frame, "big")
+                if payload_size > 512:
+                    raise AssertionError("worker READY exceeded its bound")
+                frame_size = 4 + payload_size
+    finally:
+        selected.close()
+
+    if process.poll() is not None:
+        raise AssertionError("worker exited after READY")
+    try:
+        pairs = json.loads(bytes(frame[4:]).decode("utf-8"), object_pairs_hook=list)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        raise AssertionError("worker emitted malformed READY") from None
+    if not isinstance(pairs, list) or any(
+        not isinstance(item, tuple) or len(item) != 2 for item in pairs
+    ):
+        raise AssertionError("worker emitted malformed READY")
+    ready: dict[str, Any] = {}
+    for key, value in pairs:
+        if not isinstance(key, str) or key in ready:
+            raise AssertionError("worker emitted malformed READY")
+        ready[key] = value
+    assert set(ready) == set(_READY)
+    assert all(
+        type(ready[key]) is type(value) and ready[key] == value for key, value in _READY.items()
+    )
+
+
 def test_actual_private_worker_rejects_oversized_request_before_eof() -> None:
     process = isolated_raw._spawn_worker()
     timed_out = False
@@ -1234,6 +1292,7 @@ def test_worker_command_and_environment_are_fixed_and_do_not_inherit_credentials
     monkeypatch.setenv("HTTPS_PROXY", "http://hostile-proxy.invalid")
     process = isolated_raw._spawn_worker()
     try:
+        _read_real_worker_ready(process)
         argv = Path(f"/proc/{process.pid}/cmdline").read_bytes().split(b"\0")[:-1]
         environment = {
             entry

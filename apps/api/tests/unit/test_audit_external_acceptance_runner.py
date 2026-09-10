@@ -36,6 +36,7 @@ _MANDATORY_NAMES = (
     "test_raw_version_runtime_enforces_routing_and_tls",
     "test_raw_version_runtime_bounds_streams_and_cleans_up",
     "test_isolated_raw_runtime_enforces_process_and_byte_boundaries",
+    "test_version_page_decoder_runtime_rejects_lossy_provider_pages",
 )
 
 
@@ -61,6 +62,8 @@ def _repository(tmp_path: Path) -> Path:
         "apps/api/tests/integration/audit_raw_runtime_probe.py",
         "apps/api/tests/integration/audit_isolated_raw_runtime_acceptance.py",
         "apps/api/tests/integration/audit_isolated_raw_runtime_probe.py",
+        "apps/api/tests/integration/audit_version_page_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_version_page_runtime_probe.py",
         "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
         "apps/api/tests/unit/test_sample.py",
         "infra/images.lock",
@@ -77,8 +80,11 @@ def _junit(*, mode: str = "passing", affected: int = 0) -> str:
         for index, name in enumerate(_MANDATORY_NAMES)
         if mode != "missing" or index != affected
     )
-    for name in names:
-        selected = name == _MANDATORY_NAMES[affected]
+    for original_name in names:
+        selected = original_name == _MANDATORY_NAMES[affected]
+        name = (
+            original_name + "_substitute" if mode == "substituted" and selected else original_name
+        )
         child = f"<{mode} />" if mode in {"skipped", "failure", "error"} and selected else ""
         cases.append(f'<testcase name="{name}">{child}</testcase>')
     return "<testsuites><testsuite>" + "".join(cases) + "</testsuite></testsuites>"
@@ -260,7 +266,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
         ".",
     ]
     harness = next(call for call in fake.calls if call[0][0] == "/tools/uv")
-    assert harness[0][:8] == [
+    assert harness[0][:9] == [
         "/tools/uv",
         "run",
         "--project",
@@ -269,6 +275,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
         "tests/integration/audit_external_runtime_acceptance.py",
         "tests/integration/audit_raw_runtime_acceptance.py",
         "tests/integration/audit_isolated_raw_runtime_acceptance.py",
+        "tests/integration/audit_version_page_runtime_acceptance.py",
     ]
     assert harness[1] == root / "apps/api"
     assert harness[2] == 1_200
@@ -281,7 +288,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
     ]
     output = capsys.readouterr().out
     assert "runtime_acceptance=passed" in output
-    assert "mandatory_tests=7" in output
+    assert "mandatory_tests=8" in output
     assert _RUNNER._MANDATORY_TESTS == frozenset(_MANDATORY_NAMES)
     assert "secret-never-print" not in output
 
@@ -372,7 +379,7 @@ def test_pytest_or_junit_failure_propagates(
 
 
 @pytest.mark.parametrize("mandatory_index", range(len(_MANDATORY_NAMES)))
-@pytest.mark.parametrize("junit_mode", ["missing", "skipped", "failure", "error"])
+@pytest.mark.parametrize("junit_mode", ["missing", "substituted", "skipped", "failure", "error"])
 def test_runner_rejects_each_missing_or_nonpassing_mandatory_case(
     mandatory_index: int,
     junit_mode: str,
@@ -399,6 +406,8 @@ def test_runner_rejects_each_missing_or_nonpassing_mandatory_case(
         ("apps/api/tests/integration/audit_raw_runtime_probe.py", "content"),
         ("apps/api/tests/integration/audit_isolated_raw_runtime_acceptance.py", "content"),
         ("apps/api/tests/integration/audit_isolated_raw_runtime_probe.py", "content"),
+        ("apps/api/tests/integration/audit_version_page_runtime_acceptance.py", "content"),
+        ("apps/api/tests/integration/audit_version_page_runtime_probe.py", "content"),
         ("apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json", "content"),
         ("infra/images.lock", "symlink"),
         ("infra/compose/minio/minio-init.sh", "symlink"),
@@ -427,6 +436,8 @@ def test_source_or_provider_input_change_fails(
         "apps/api/tests/integration/audit_raw_runtime_probe.py",
         "apps/api/tests/integration/audit_isolated_raw_runtime_acceptance.py",
         "apps/api/tests/integration/audit_isolated_raw_runtime_probe.py",
+        "apps/api/tests/integration/audit_version_page_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_version_page_runtime_probe.py",
         "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
     ],
 )

@@ -75,6 +75,11 @@ limits and post-cleanup result admission, with actual-image hostile-stream and l
 No archive, restore or operational verifier changes. Complete per-witness page collection, bounded
 spooling/global reconciliation, snapshot agreement and source-denied recovered-stack proof remain
 required; this record stays OPEN.
+Supplied-page progress on 2026-09-09 (R81): original version-list bytes can now be decoded under
+strict UTF8/XML admission without losing opaque labels, duplicate records or delete markers.
+Actual-image supplied-byte tests do not prove collection. Isolated exact page transport, complete
+required-witness collection, bounded spool/global reconciliation and the unchanged source-denied
+recovered-stack closure contract remain required; this record stays OPEN.
 Last reviewed: 2026-09-09
 
 ## RES-CONTAINER-SECURITY-TRIAGE
@@ -411,6 +416,14 @@ Linux process/protocol boundary with verified resource limits and watchdog/clean
 This supplies no page collector, witness-completeness result or global-history evaluator. Complete
 per-witness collection, bounded spooling, scalable reconciliation and existing database/delivery/
 restore obligations remain OPEN. No current legacy consumer is activated.
+
+Supplied-page progress on 2026-09-09 (R81): the inactive decoder rejects lossy or ambiguous original
+XML and retains every admitted version/delete marker/duplicate and provider cursor as untrusted
+observations. A rejected document yields no page. The actual-image proof covers supplied bytes only;
+private exact page transport, complete per-witness enumeration, persistent gaps, global cursor cycles,
+bounded fresh spooling and scalable global reconciliation remain unimplemented. A terminal flag
+cannot establish non-omission, snapshot atomicity, custody or required-witness coverage. Existing
+snapshot/delivery/restore obligations and this record remain OPEN.
 
 ## RES-MINIO-VERSION-LIST-DENY
 

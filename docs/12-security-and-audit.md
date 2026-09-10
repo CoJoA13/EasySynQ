@@ -506,6 +506,16 @@ flowchart LR
   and activation/restore proofs remain required. Existing operational consumers remain unchanged.
   See [R80](decisions-register.md#r80--isolated-retained-version-reads-admit-results-after-bounded-worker-cleanup--2026-09-09).
 
+- **Supplied version pages (R81).** An inactive pure decoder admits original bytes of one scoped
+  version-list document under strict UTF8/XML grammar and independent body/structure/label limits.
+  Canonical flags and unique fields are required; one strict key percent decode preserves literal
+  plus, while version IDs remain opaque. Every version, delete marker and duplicate remains an
+  untrusted observation. Scope/echo/cursor disagreement and malformed late content produce no page.
+  The 16MiB cap covers supplied bytes, not upstream allocation. A terminal flag supplies no
+  non-omission, atomic-snapshot, custody or required-witness guarantee. Complete isolated transport,
+  bounded spooling and global reconciliation remain required; no operational consumer is activated.
+  See [R81](decisions-register.md#r81--supplied-audit-version-pages-preserve-exact-observations-under-strict-utf8-xml-admission--2026-09-09).
+
 ### 4.5 Audit access & retention
 
 - Read access to the audit trail is a **granted permission** (typically Mara, Ingrid, Avery; Olsen gets scoped audit views within his audit window).

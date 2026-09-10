@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-09-09"
-baseline_commit: "475490e45b1bef34253c878b26a0ebc97f751d4f"
-last_shipped_slice: "S-audit-isolated-read"
+baseline_commit: "27ab104352723e6b56616e35b62f4e00476ce9b9"
+last_shipped_slice: "S-audit-version-page-decoder"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 3155
+api_unit_tests: 3361
 web_test_files: 281
 web_tests: 2352
 contract_tests: 285
@@ -112,35 +112,35 @@ Ready/request/result frames are bounded, credentials stay out of worker argv/env
 bytes are admitted only after stdout EOF, zero child exit, cleanup and final cancellation/deadline
 checks. Existing readers, writers, protected enrollment, dependencies and restore remain unchanged.
 
-The final full suite includes **77 isolated, 95 raw and 64 runner tests**. Independent review found
-that unexpected cleanup exceptions could lose their identities; the correction passed five focused
-checks, including an observed exited-but-unreaped cancellation control. The corrected candidate
-passed **3,155 API tests with one existing release-only skip in 80.67 seconds**. Its offline production-image proof executed five codec vectors, 31 key controls,
-four lineage cases and six bridge cases as UID10001 without development dependencies. Ruff,
-formatting across **807 API files**, mypy across **461 source files**, runner checks, **95 authority
-fixtures**, repository authority, candidate-wide site-data and whitespace passed.
+S-audit-version-page-decoder adds the inactive supplied-byte interface under R81. It admits one
+strict UTF8/XML version-list document with exact scope, unique fields, canonical flags and bounded
+structure. One strict percent decode preserves key identity and literal plus; version IDs stay
+opaque. Every admitted version, delete marker and duplicate remains an untrusted observation.
+Malformed late content yields no page. Original-byte transport and full witness collection are
+separate prerequisites; current operational callers remain unchanged.
 
-All **seven mandatory actual-image runtime tests** passed without skips in **117.18 seconds**,
-retaining the six external/raw cases and adding the isolated boundary case. Genuine retained
-noncanonical bytes reached unchanged R78; altered bytes failed. Trusted/untrusted TLS and exact
-routing passed. A finite **536,936,448-byte** chunked error fixture sent **423,952,384 bytes** before
-connection reset; the worker exited 1 with maximum sampled RSS **509,000KiB** and virtual size
-**524,136KiB**, below its **524,288KiB** address-space ceiling. Its parent then performed another
-successful isolated read. This observes containment and survival, not a kernel OOM event.
+Fresh local verification passed **3,361 API tests with one existing release-only skip in 151.60
+seconds**, including **190 decoder, 77 isolated, 95 raw and 80 runner tests**. The worker command/
+environment test now validates READY before reading procfs; its assertions and production worker
+are unchanged. Five independent valid controls passed, then all five deliberately wrong decoders
+failed their intended assertions: boolean coercion, duplicate suppression, lax/double percent
+decoding and dropped delete markers. All owned execution copies were removed.
 
-The actual 20-second watchdog rejected a trickling body after **20,017ms**. Cancellation after a
-valid result prevented publication in **156ms**. Separate image processes using the actual limit
-helper rejected a 600,000,000-byte allocation with MemoryError, returned EFBIG with zero file bytes
-on a proven writable mount, and reached CPU-ceiling termination after **10,003ms**. Parent pipes
-were closed and children reaped; owned containers, temporary directory and unique image tag were
-removed. Three existing Testcontainers deprecation warnings remain.
+All **eight mandatory actual-image runtime tests** passed without skips in **172.47 seconds**,
+including **33 independent supplied-page vectors**. The new proof observed Python **3.12.14** and
+Expat **2.8.3** in the immutable API image at UID **10001**, without pytest/mypy/Ruff or SDK calls.
+The exact 16MiB body and 1,000-observation positives, their over-limit controls, opaque/key-only
+cursors, malformed flags/XML, strict percent decoding and BOM-less UTF16 regressions passed.
+All seven prior runtime cases remained required and passed; owned containers, temporary directory
+and unique image tag were removed. Three existing Testcontainers deprecation warnings remain.
 
-All **seven private wrong implementations** caused the intended assertion failures in unchanged
-tests after **15 passing control cases**, with no setup errors or skips. They exercised bypassed
-isolation, missing address-space limit, missing output bounds, publication before exit, late deadline
-admission, discarded cancellation and accepted identity mismatch. Complete code/source evidence binds
-**2,017 files and 153 directory modes**. Documentation is updated after these code-candidate gates;
-review and published-source/main CI evidence is recorded with the merge request.
+The separate production-image proof passed five codec vectors, 31 key controls, four lineage cases
+and six bridge cases. Ruff, formatting across **811 API files**, mypy across **462 source files**,
+root runner checks, **95 authority fixtures**, repository authority, candidate-wide site-data and
+whitespace passed. Evidence binds **2,021 source files and 153 directory modes**. These are local
+code-candidate results; source and merged-main CI evidence is recorded through GitLab integration.
+Web/contracts/integration counts in the schema retain their previously verified baseline; this
+change does not introduce a migration, dependency or CI configuration change.
 
 The direct R79 API retains its cooperative IO limitations. R80 supplies one inactive exact read;
 complete per-witness enumeration, bounded page/spool handling, scalable global reconciliation,
