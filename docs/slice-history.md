@@ -11,6 +11,8 @@ Current residuals were migrated without reclassification to
 [`docs/open-residuals.md`](open-residuals.md). The closed records immediately below remain here as dated
 evidence; older `Named residuals` text inside shipped entries is likewise a historical snapshot.
 
+- ~~**`RES-WEB-QUERY-TEARDOWN-NOTIFICATION`** (S-auth-startup-boundary, 2026-08-09).~~
+  **CLOSED 2026-09-10** with [dated reproduction, remedy and repeated verification](#s-web-transition-teardown).
 - ~~**`RES-IMAGE-PROOF-NEVER-ENABLED`** (Dependabot triage, 2026-09-03).~~ **CLOSED in
   S-image-proof-enabled**. The runtime proof that catches an unstartable API image existed, was
   correct, and had never executed, because `EASYSYNQ_IMAGE_PROOF` was set nowhere. It is now set on
@@ -41,6 +43,48 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
   tamper signal. ⚠ `enabled_at` is a v1 approximation — it is set at row creation (there is no in-app
   create/enable surface; provisioning is a direct operator INSERT), so an operator who later toggles a
   sink `enabled` false→true should bump it, or the grace window is measured from creation.
+
+## TEST HARNESS RELIABILITY
+
+### S-web-transition-teardown
+
+**2026-09-10; code candidate `57530017c3a5cd790a8e3c6b45be0d8df1f3bf1b`.**
+**RES-WEB-QUERY-TEARDOWN-NOTIFICATION is CLOSED by the recorded fixes and fresh repeated evidence.**
+The original S-auth-startup-boundary observation was a queued TanStack notification reaching React
+following jsdom teardown. The previously shipped shared notification barrier remains unchanged:
+it preserves macrotask scheduling, drains tracked callbacks to a bounded stable point, and exposes
+callback failures. Its retained queued-observer reproduction and cleanup/error regressions still pass.
+
+A later [MR !30 web job](https://gitlab.com/synqsuite-group/EasySynQ/-/jobs/16412218126) passed its
+assertions, then reported `window is not defined` from a Mantine transition completion timer. A new
+controlled-clock reproduction with the real Button shows that a loading update queued immediately
+before the first transition frame can leave a completion timer after unmounting. Draining that timer
+after removing `window` reproduces the exception. The mechanism matches the captured stack; the
+historical initiating component and exact schedule, and any production causality, remain unproven.
+
+Shared `renderWithProviders` tests now use a cloned theme that respects reduced motion, with only the
+reduced-motion media query matched by the jsdom stub. This avoids the reproduced Transition frame and
+completion-timer path. The forced-colors test delegates other queries to the shared stub and restores
+its override. Loading disabled/enabled states, enter/exit callbacks, visible mounting changes and
+unrelated timers are explicitly checked. Portal behavior, dependency versions, application theme and
+browser entry points are unchanged. Bespoke providers, explicit transition delays and Collapse
+scheduling are outside this specific guarantee. Shared unit renders no longer exercise animation
+timing; this change adds no dedicated browser animation coverage.
+
+Local evidence on the clean code candidate: **21 focused tests** passed, followed by **60 affected
+first-administrator, Drawer, Modal and Select tests** and a successful production web build. Two planned,
+unfiltered full-web runs each passed **2,354 tests across 282 files with zero skips or unhandled errors**,
+in **498.258** and **502.044 seconds**. CPJ `job-mtvyirvn-abbcd025` completed at 20:22:41 UTC. The
+fail-fast workload checked source identity around each stage; neither full run retried a failure.
+Each run emitted **315 React act warnings**. The preceding green main pipeline already emitted these
+warning classes (323 across its two web shards); different execution shapes limit count comparisons.
+These are successful teardown checks, not warning-free runs.
+
+Full-web ESLint and TypeScript, changed-file formatting, repository authority, site-data and whitespace
+checks passed. Independent implementation and evidence review found no actionable issues. This entry
+records local candidate evidence; the GitLab MR and pipelines supply subsequent exact-source and
+post-merge verification. Private reports remain outside Git. Closure is limited to the reported test
+teardown mechanisms and does not establish that every asynchronous callback or timer is safe.
 
 ## BUILT-IMAGE SECURITY
 
@@ -3153,7 +3197,7 @@ named redirect loading while that provider attempt is active. If `signinRedirect
 same document and generation survive, the provider now publishes terminal redirect recovery instead of
 clearing its watchdog while leaving loading forever; unload/unmount generation invalidation still
 suppresses stale completion. The recurring test-runner observation remains tracked only in
-[`RES-WEB-QUERY-TEARDOWN-NOTIFICATION`](open-residuals.md#res-web-query-teardown-notification).
+[`RES-WEB-QUERY-TEARDOWN-NOTIFICATION`](#s-web-transition-teardown).
 
 Fresh completion evidence at implementation head `faf35b4` on 2026-08-09: two complete
 `npm --prefix apps/web run test` runs each passed 250 files/1,513 tests; web typecheck and lint exited 0;

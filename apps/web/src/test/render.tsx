@@ -7,6 +7,11 @@ import { AuthContext, type AuthState } from "../lib/auth";
 import { MutationFeedbackProvider } from "../lib/mutationFeedback";
 import { theme } from "../theme/mantine";
 
+// Unit tests observe settled UI states. Mantine 7 transition frames can retain a timer
+// across unmount when loading changes during flushSync; reduced motion avoids that path.
+// Browser tests keep the application theme and its real transition behavior.
+const testTheme = { ...theme, respectReducedMotion: true };
+
 export const TEST_AUTH: AuthState = {
   status: { kind: "ready" },
   token: "test-token",
@@ -38,7 +43,7 @@ export function renderWithProviders(
     );
 
     return (
-      <MantineProvider theme={theme}>
+      <MantineProvider theme={testTheme}>
         <QueryClientProvider client={queryClient}>
           <AuthContext.Provider value={auth}>
             <MutationFeedbackProvider>

@@ -1137,18 +1137,10 @@ test("uses one shrinkable DOM at 320px with 44px action targets and forced-color
     ),
   );
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 320 });
-  Object.defineProperty(window, "matchMedia", {
-    configurable: true,
-    value: (query: string) => ({
-      matches: query === "(forced-colors: active)",
-      media: query,
-      onchange: null,
-      addListener: () => undefined,
-      removeListener: () => undefined,
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      dispatchEvent: () => false,
-    }),
+  const matchMedia = window.matchMedia;
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => {
+    const result = matchMedia(query);
+    return query === "(forced-colors: active)" ? { ...result, matches: true } : result;
   });
   const user = userEvent.setup();
   renderStep();
