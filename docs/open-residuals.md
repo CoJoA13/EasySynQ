@@ -268,6 +268,42 @@ read-only login, and prove reads succeed while DML, DDL, role switching, sequenc
 functions, owner credentials, production data, and site data remain unavailable.
 Last reviewed: 2026-08-08
 
+## RES-AUDIT-RUNTIME-ACCEPTANCE-FAILURE
+
+Status: OPEN
+Owner: Repository owner
+Source: [Main API job 16412434417](https://gitlab.com/synqsuite-group/EasySynQ/-/jobs/16412434417),
+2026-09-10, commit `f411d06a59818ae00a7e328a8d2546e03994075b`
+Reason: The API unit checks passed, then the mandatory external-audit runtime harness failed.
+The original runner deleted its private JUnit and child output without naming the failed case.
+One unchanged local run with matching build/proof manifests passed all eight mandatory image checks;
+the local Docker/runtime environment differed from CI, so the original cause remains unestablished.
+Progress, 2026-09-10: A subsequent local actual-image run identified an uncaught memory-sampler
+thread exception that polluted the isolated probe's JSON result. A deterministic real-child regression
+reproduced `ProcessLookupError` when the worker exited between opening and reading its procfs status.
+The sampler now treats that vanished-process condition like the already-handled missing status file;
+permission and other I/O failures still propagate, and the mandatory memory/resource assertions remain.
+The original CI report did not preserve the thread exception, so attribution of that historical
+failure remains unproven.
+Closure contract: Capture actionable, privacy-preserving evidence of the failing check in the affected
+environment, reproduce its mechanism, fix it at the owning boundary, and verify the mandatory acceptance
+without skips, weaker resource/time limits, or reliance on retrying failed gates. A diagnostic summary
+or a later green pipeline alone does not close this record.
+Last reviewed: 2026-09-10
+
+## RES-AUDIT-ACCEPTANCE-BUILD-INPUTS
+
+Status: OPEN
+Owner: Repository owner
+Source: Acceptance runner inspection after licensing MR !30, 2026-09-10
+Reason: The API Dockerfile copies `apps/api/LICENSE`, but the acceptance runner's build manifest does
+not include that file. The recorded digest therefore omits a direct image input. This omission has not
+been linked to the runtime harness failure and is separate from its diagnostic change.
+Closure contract: Cover every direct Dockerfile source input in the manifest and prove that an omitted
+or changed input cannot pass the source-binding checks, while retaining the existing symlink and cleanup
+guards.
+Last reviewed: 2026-09-10
+
 ## RES-WEB-QUERY-TEARDOWN-NOTIFICATION
 
 Status: OPEN

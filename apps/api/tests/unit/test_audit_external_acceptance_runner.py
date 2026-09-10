@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -98,6 +99,7 @@ class _FakeCommands:
         self.harness_returncode = 0
         self.junit_mode = "passing"
         self.junit_affected = 0
+        self.junit_content: str | None = None
         self.initial_inspect_mode = "valid"
         self.cleanup_inspect_mode = "valid"
         self.image_remove_returncode = 0
@@ -188,7 +190,9 @@ class _FakeCommands:
             if self.junit_mode != "absent":
                 _write(
                     junit_path,
-                    _junit(mode=self.junit_mode, affected=self.junit_affected),
+                    self.junit_content
+                    if self.junit_content is not None
+                    else _junit(mode=self.junit_mode, affected=self.junit_affected),
                 )
             if self.change_after_harness is not None:
                 path, action = self.change_after_harness
@@ -199,7 +203,11 @@ class _FakeCommands:
                     target.write_text("target\n", encoding="utf-8")
                     path.unlink()
                     path.symlink_to(target)
-            return self._result(self.harness_returncode)
+            return self._result(
+                self.harness_returncode,
+                stdout="private-child-stdout",
+                stderr="private-child-stderr",
+            )
         if arguments[:4] == ["/tools/docker", "ps", "-aq", "--filter"]:
             return self._result(stdout="\n".join(self.container_ids))
         if arguments[:3] == ["/tools/docker", "container", "inspect"]:
@@ -386,6 +394,7 @@ def test_runner_rejects_each_missing_or_nonpassing_mandatory_case(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     root = _repository(tmp_path)
     fake = _FakeCommands(root)
@@ -393,6 +402,132 @@ def test_runner_rejects_each_missing_or_nonpassing_mandatory_case(
     fake.junit_affected = mandatory_index
 
     assert _run(root, fake, monkeypatch) == 1
+    status = {"substituted": "missing", "failure": "failed"}.get(junit_mode, junit_mode)
+    output = capsys.readouterr().out
+    assert f"runtime_case={_MANDATORY_NAMES[mandatory_index]} status={status}" in output
+    assert "runtime_junit=available" in output
+    assert "runtime_acceptance=failed" in output
+    assert "private-child-" not in output
+    assert list((root / ".pytest_cache").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("returncode", "outcome"),
+    [
+        (1, "1"),
+        (2, "2"),
+        (3, "3"),
+        (4, "4"),
+        (5, "5"),
+        (-9, "-9"),
+        (256, "abnormal_exit"),
+    ],
+)
+def test_failure_summary_redacts_all_report_and_child_details(
+    returncode: int,
+    outcome: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = returncode
+    fake.junit_content = """<testsuites><testsuite name="private-suite">
+      <properties><property name="token" value="private-property" /></properties>
+      <testcase name="test_external_cli_runtime_is_public_only_and_read_only[private-param]"
+                classname="private-class" file="private-file" time="private-time">
+        <failure message="private-message">private-trace</failure>
+        <system-out>private-output</system-out><system-err>private-error</system-err>
+      </testcase>
+      <testcase name="test_external_cli_runtime_is_public_only_and_read_only" />
+      <testcase name="private-unknown"><error>private-other</error></testcase>
+    </testsuite></testsuites>"""
+
+    assert _run(root, fake, monkeypatch) == 1
+    output = capsys.readouterr()
+    assert f"runtime_harness_exit={outcome}" in output.out
+    assert "runtime_other_cases=present" in output.out
+    assert (
+        "runtime_case=test_external_cli_runtime_is_public_only_and_read_only status=failed"
+        in output.out
+    )
+    assert output.out.count("runtime_case=") == 8
+    assert "private-" not in output.out + output.err
+    assert "secret-never-print" not in output.out + output.err
+    assert "runtime_acceptance=failed" in output.out
+    assert list((root / ".pytest_cache").iterdir()) == []
+    assert any(call[0][:3] == ["/tools/docker", "rm", "-f"] for call in fake.calls)
+    assert any(call[0][:4] == ["/tools/docker", "image", "rm", "-f"] for call in fake.calls)
+
+
+@pytest.mark.parametrize("report", ["absent", "malformed", "oversized", "entity"])
+def test_unreadable_failure_report_preserves_failure_and_cleanup(
+    report: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    if report == "absent":
+        fake.junit_mode = "absent"
+    else:
+        fake.junit_content = {
+            "malformed": "<private-unclosed>",
+            "oversized": " " * (1_048_576 + 1),
+            "entity": '<!DOCTYPE testsuites [<!ENTITY data "private-entity">]>'
+            "<testsuites>&data;</testsuites>",
+        }[report]
+
+    assert _run(root, fake, monkeypatch) == 1
+    output = capsys.readouterr().out
+    assert "runtime_junit=unavailable" in output
+    assert "failure_stage=runtime_harness" in output
+    assert "runtime_acceptance=failed" in output
+    assert "private-" not in output
+    assert "runtime_case=" not in output
+    assert list((root / ".pytest_cache").iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["symlink", "directory", "fifo"])
+def test_failure_summary_rejects_links_and_special_files_without_blocking(
+    kind: str,
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "runtime.xml"
+    if kind == "symlink":
+        target = tmp_path / "private-target.xml"
+        _write(target, _junit())
+        report.symlink_to(target)
+    elif kind == "directory":
+        report.mkdir()
+    else:
+        os.mkfifo(report)
+    # A separate process makes an accidental blocking open fail with a bounded timeout.
+    result = subprocess.run(  # noqa: S603 - fixed Python helper, controlled temporary path
+        [
+            sys.executable,
+            "-c",
+            "import runpy, sys; from pathlib import Path; "
+            "runner = runpy.run_path(sys.argv[1]); "
+            'print("\\n".join(runner["_runtime_failure_summary"](Path(sys.argv[2]), 1)))',
+            str(_RUNNER_PATH),
+            str(report),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=True,
+    )
+    assert result.stdout.splitlines() == [
+        "runtime_harness_exit=1",
+        "runtime_junit=unavailable",
+    ]
+    assert result.stderr == ""
 
 
 @pytest.mark.parametrize(
