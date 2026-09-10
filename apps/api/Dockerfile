@@ -36,6 +36,7 @@ WORKDIR /app
 # uv REFUSE to resolve — it errors if the lockfile is absent or out of date with pyproject.toml
 # rather than quietly updating it, which is what makes the image reproducible (audit U34).
 COPY apps/api/pyproject.toml apps/api/uv.lock ./
+COPY apps/api/LICENSE ./LICENSE
 RUN uv sync --locked --no-dev --no-install-project
 
 # --- app + migrations ---
