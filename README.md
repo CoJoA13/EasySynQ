@@ -141,5 +141,10 @@ requests. For a suspected vulnerability, follow the confidential-reporting instr
 
 ## License
 
-A project license has not yet been selected. Licensing and distribution terms need an explicit owner
-decision before distribution. Third-party components retain their own licenses and notices.
+EasySynQ's original code and documentation are licensed under
+[PolyForm Shield 1.0.0](LICENSE), a source-available license with restrictions on competing products
+and services. Internal business use is permitted. IT consultants may charge for installation,
+configuration, maintenance, and support of a customer's own instance, subject to the license.
+
+See [licensing guidance](LICENSING.md) for the consulting boundary, competition provisions, and
+third-party notices. Third-party components retain their own licenses.

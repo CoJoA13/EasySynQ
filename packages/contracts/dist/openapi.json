@@ -5,8 +5,8 @@
     "version": "0.1.0",
     "description": "The external HTTP contract for the EasySynQ self-hosted ISO 9001:2015 QMS. OpenAPI-first source of truth (doc 15): the FastAPI server models and the TS client are generated from THIS document; the running server is proven to conform via schemathesis. Lifecycle transitions are named action sub-resources, never `PATCH status=`. Immutability shows up as the absence of write verbs.\nSlice S0 (walking skeleton) covers only the health surface + the shared RFC 9457 problem model and standard parameters. Later slices add the auth, document, version, lock, task, audit, and search routers.",
     "license": {
-      "name": "Proprietary",
-      "identifier": "LicenseRef-Proprietary"
+      "name": "PolyForm Shield License 1.0.0",
+      "identifier": "LicenseRef-PolyForm-Shield-1.0.0"
     }
   },
   "servers": [

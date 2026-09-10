@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R81) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R82) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector. R82 adopts PolyForm Shield for original project materials and permits paid consulting for customer-owned instances.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R81
+## Part 3 — Resolutions R1–R82
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -3189,6 +3189,31 @@ backup or restore is changed. No GitHub service, hosting, API or download is int
 [current status](current-status.md) and dated [slice history](slice-history.md).
 
 Bumps the resolutions range **R1–R80 → R1–R81**.
+
+---
+
+### R82 — PolyForm Shield licensing and paid consulting — 2026-09-10
+
+**Owner decision.** EasySynQ's original code and documentation use the unmodified PolyForm Shield
+License 1.0.0 in the root [`LICENSE`](../LICENSE). This is source-available licensing; it does not
+claim OSI open-source approval or make the GitLab repository public.
+
+Internal business use is permitted subject to those terms. IT consultants may charge for
+installation, configuration, maintenance, and support of a customer's own instance. Providing a
+competing product or service, including a competing hosted offering, remains subject to Shield's
+Noncompete, New Products, and Discontinued Products provisions. No upstream contribution obligation
+or additional perpetual noncompete clause is added.
+
+Third-party software and assets retain their own licenses and notices. Package-local and web-public
+copies must match the canonical root license. The contributor guide identifies the terms for
+original submissions; the license does not require upstream merge requests.
+
+**Back-propagation:** [`README.md`](../README.md), [`LICENSING.md`](../LICENSING.md),
+[`CONTRIBUTING.md`](../CONTRIBUTING.md), the
+[GitLab setup runbook](runbooks/gitlab-repository-setup.md), package metadata and license files,
+API image packaging, and the OpenAPI source with its regenerated bundle and checksum.
+
+Bumps the resolutions range **R1–R81 → R1–R82**.
 
 ---
 

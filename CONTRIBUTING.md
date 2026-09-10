@@ -4,6 +4,14 @@ Use the [GitLab project](https://gitlab.com/synqsuite-group/EasySynQ) for issues
 Start with [AGENTS.md](AGENTS.md) for the shared contributor contract and
 [docs/dev-workflow.md](docs/dev-workflow.md) for commands and toolchain details.
 
+## License and contribution rights
+
+The project's original code and documentation use [PolyForm Shield 1.0.0](LICENSE).
+Submit original contributions under those terms only when you have the right to do so. Identify
+third-party material and preserve its license and notices; do not assume Shield replaces them.
+The [licensing guide](LICENSING.md) explains permitted consulting and the restriction on competing
+products and services. Upstream contributions are welcome; the license does not require them.
+
 ## Report a problem or propose a change
 
 Check existing issues and [current residuals](docs/open-residuals.md) first. Choose the bug-report or

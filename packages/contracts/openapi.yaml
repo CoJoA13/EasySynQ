@@ -13,8 +13,8 @@ info:
     RFC 9457 problem model and standard parameters. Later slices add the auth,
     document, version, lock, task, audit, and search routers.
   license:
-    name: Proprietary
-    identifier: LicenseRef-Proprietary
+    name: PolyForm Shield License 1.0.0
+    identifier: LicenseRef-PolyForm-Shield-1.0.0
 servers:
   - url: /api/v1
     description: Versioned QMS surface (behind Caddy; same origin as the SPA).

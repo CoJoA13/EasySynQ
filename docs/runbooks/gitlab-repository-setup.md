@@ -79,8 +79,10 @@ current follow-up record in
 ## Project front door and collaboration
 
 Keep the project description and topics aligned with the README. Keep the project private unless the
-owner explicitly changes its distribution policy. Select licensing explicitly; do not infer a license
-from a private repository or a dependency's terms.
+owner explicitly changes repository visibility. Project licensing is PolyForm Shield 1.0.0; the
+[license](../../LICENSE) and [licensing guidance](../../LICENSING.md) cover internal use, permitted
+paid consulting, competing offerings, and third-party terms. Describe it as source-available.
+Do not infer broader rights from repository visibility or a dependency's license.
 
 The README links the installation, user, and administrator manuals. The GitLab wiki is a lightweight
 index to those reviewed files, not a second specification or residual ledger. Contribution and

@@ -37,6 +37,7 @@ def test_locked_contract_toolchain_manifest_and_resolution_are_exact() -> None:
         "name": "@easysynq/contracts-toolchain",
         "version": "0.1.0",
         "private": True,
+        "license": "SEE LICENSE IN LICENSE",
         "overrides": {"@redocly/openapi-core": {"js-yaml": "4.3.2"}},
         "devDependencies": {
             "@redocly/cli": "2.51.2",
