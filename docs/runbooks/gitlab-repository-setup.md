@@ -68,12 +68,47 @@ Do not treat an active-token listing as proof that the stored CI value or job is
 
 ## Security evidence
 
-The successful-pipeline requirement includes `security`. Its npm high/critical audit gate and
-scanner operational failures block merging. **pip-audit and Trivy findings are report-only**,
-so a green job is not a clean-image assertion. Review the actual reports before release.
-The built API image is scanned; the current web command scans its final base image, not a built
-web application image. Current follow-up work belongs in
+The successful-pipeline requirement includes `security`. The npm audit policy and scanner operational
+failures block merging. `scripts/check-built-image-security.sh` scans **both built API and web images**
+and blocks HIGH/CRITICAL vulnerabilities with an available fixed version. Image findings without fixes
+remain open; pip-audit findings, the filesystem scan, and image-secret findings remain advisory.
+A passing pipeline is not complete image-security clearance. Review the retained results and the
+current follow-up record in
 [`../open-residuals.md`](../open-residuals.md#res-container-security-triage).
+
+## Project front door and collaboration
+
+Keep the project description and topics aligned with the README. Keep the project private unless the
+owner explicitly changes its distribution policy. Select licensing explicitly; do not infer a license
+from a private repository or a dependency's terms.
+
+The README links the installation, user, and administrator manuals. The GitLab wiki is a lightweight
+index to those reviewed files, not a second specification or residual ledger. Contribution and
+confidential-reporting instructions live in `CONTRIBUTING.md`; `.gitlab/issue_templates/` and
+`.gitlab/merge_request_templates/Default.md` provide the native report/review entry points.
+
+The default merge request template is versioned in Git. Do not paste a separate copy into project
+settings: that setting takes precedence and can silently drift from the reviewed file.
+
+## Optional integrations and observability
+
+GitLab CI and the scheduled Renovate job do not require an entry under **Settings > Integrations**.
+Enable an external integration or webhook only for an actual workflow with a selected recipient,
+minimal events, and a tested delivery path. An empty integration list is a valid configuration.
+
+Project CI status and deployed-application health are separate. EasySynQ currently supplies structured
+JSON/stdout logs, `/healthz`, dependency readiness at `/readyz`, Compose health, and configured
+out-of-band alarm channels. Follow the
+[administrator monitoring procedures](../manuals/administrator-it-manual.md#8-health-logs-and-monitoring).
+A bundled Prometheus/Grafana/Loki overlay is still reserved architecture.
+
+GitLab Observability is an optional experimental service. Evaluate CI traces/metrics separately from
+application telemetry; enabling a GitLab project feature does not instrument an installed EasySynQ
+stack. Before exporting application logs or traces, choose the destination, access, retention,
+redaction rules, and an owned test environment. Preserve the self-hosted and air-gap boundaries.
+The setup page and available terms can change; check the current
+[GitLab Observability documentation](https://docs.gitlab.com/operations/observability/observability/)
+and [CI telemetry instructions](https://docs.gitlab.com/operations/observability/ci_cd/).
 
 References: [GitLab variable precedence and protection](https://docs.gitlab.com/ci/variables/),
 [protected branches](https://docs.gitlab.com/user/project/repository/branches/protected/), and
