@@ -291,19 +291,6 @@ without skips, weaker resource/time limits, or reliance on retrying failed gates
 or a later green pipeline alone does not close this record.
 Last reviewed: 2026-09-10
 
-## RES-AUDIT-ACCEPTANCE-BUILD-INPUTS
-
-Status: OPEN
-Owner: Repository owner
-Source: Acceptance runner inspection after licensing MR !30, 2026-09-10
-Reason: The API Dockerfile copies `apps/api/LICENSE`, but the acceptance runner's build manifest does
-not include that file. The recorded digest therefore omits a direct image input. This omission has not
-been linked to the runtime harness failure and is separate from its diagnostic change.
-Closure contract: Cover every direct Dockerfile source input in the manifest and prove that an omitted
-or changed input cannot pass the source-binding checks, while retaining the existing symlink and cleanup
-guards.
-Last reviewed: 2026-09-10
-
 ## RES-WEB-QUERY-TEARDOWN-NOTIFICATION
 
 Status: OPEN

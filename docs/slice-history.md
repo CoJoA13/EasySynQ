@@ -44,6 +44,33 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## BUILT-IMAGE SECURITY
 
+### S-audit-acceptance-build-inputs — bind the API license to image acceptance
+
+**2026-09-10; code candidate `3e86c0b4303f8d7e06209daca1bcb237a76360b0`.**
+**RES-AUDIT-ACCEPTANCE-BUILD-INPUTS is CLOSED by this change.** Inspection after licensing MR !30
+found that the API Dockerfile copied `apps/api/LICENSE`, but the acceptance build digest omitted it.
+The runner now includes that file alongside the Dockerfile, `.dockerignore`, dependency metadata,
+application source, Alembic configuration and migration tree. These cover every current direct
+Dockerfile source input. License text, permissions and packaging are unchanged.
+
+Six LICENSE regressions failed before the fix: byte changes did not affect the build digest, initial
+missing or symlink inputs were admitted, and content changes, deletion or symlink replacement during
+the harness passed the final source check. The corrected runner suite passed **121 tests**. The expanded
+matrix also checks digest sensitivity and initial missing/symlink rejection across all current direct
+build inputs, with owned-directory cleanup retained. API lint, formatting, typing, repository authority,
+site-data and whitespace checks passed; independent read-only review found no actionable issues.
+
+Local actual-image acceptance on that clean code commit passed **all eight mandatory cases without
+skips**; the runner completed in **138.125 seconds**, including image build, harness, source recheck and
+owned-resource cleanup. CPJ evidence `job-mtvwtvha-0f939bf8` completed successfully at 19:20:29 UTC.
+The build-input digest was `aed5be5bd2d3c71fe6da26f6d160d0ae15390522b5d3946302590aeb9cdfcb01` and
+the proof-input digest was `f6e7a6c42ab988636044ffaceaab38e65c3e6812cb7f8233acdac26f12334c6c`.
+This is local candidate evidence; the GitLab merge request and pipelines record subsequent exact-source
+integration checks. Private JUnit and child diagnostics remain outside Git.
+
+This closure does not attribute or close the separate
+[historical runtime acceptance failure](open-residuals.md#res-audit-runtime-acceptance-failure).
+
 ### S-built-image-security-gate — actual artifacts and a fixed-version threshold
 
 Recorded 2026-09-08. The GitLab security job's previous web scan inspected only the final base
