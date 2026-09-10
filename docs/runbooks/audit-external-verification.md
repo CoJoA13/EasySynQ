@@ -72,6 +72,22 @@ collection, bounded page/spool handling, global reconciliation and actual snapsh
 precede operational integration. Protect enrollment and rollback knowledge separately; a successful
 isolated GET proves neither complete history nor recovery readiness.
 
+R81 adds `decode_checkpoint_version_page(body, *, bucket, org_id, key_marker=None,
+version_id_marker=None)` as an inactive supplied-byte foundation. It accepts one complete scoped
+UTF8 XML version page, preserves versions/delete markers/duplicates and opaque labels, and returns
+untrusted observations plus the admitted provider cursor. Key fields receive exactly one strict
+percent decode with literal plus preserved. Control keys and literal `null` versions are retained
+for later accounting; they do not authorize a retained-object read.
+
+The supplied body ceiling is 16,777,216 bytes and the combined observation ceiling is 1,000, with
+independent XML/scalar/label limits in [R81](../decisions-register.md#r81--supplied-audit-version-pages-preserve-exact-observations-under-strict-utf8-xml-admission--2026-09-09).
+Invalid calls raise the fixed input error; malformed body/grammar, size, scope and continuation
+failures raise the enumerated decode error with no page. A later collector must keep these failures
+as persistent listing gaps. A terminal flag is not complete-history evidence, and the supplied-byte
+cap does not bound downloads. There is no new command or enrollment setting. Original-byte page
+transport, every required witness, full namespace accounting, bounded spool storage, global cursor
+cycles, snapshot comparison and independent recovery proofs still precede operational use.
+
 ## Establish the public enrollment
 
 The repository owner approves the expected organization IDs, retained Ed25519 public keys and witness

@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R80) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R81) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +112,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R80
+## Part 3 — Resolutions R1–R81
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -3092,6 +3092,103 @@ residuals remain OPEN. No GitHub service, hosting, API or download is introduced
 [current status](current-status.md) and dated [slice history](slice-history.md).
 
 Bumps the resolutions range **R1–R79 → R1–R80**.
+
+---
+
+### R81 — Supplied audit version pages preserve exact observations under strict UTF8 XML admission — 2026-09-09
+
+**Decision.** Add the inactive pure `decode_checkpoint_version_page(body, *, bucket, org_id,
+key_marker=None, version_id_marker=None)` API. It admits the original bytes of one explicitly
+scoped `ListObjectVersions` document and returns the unchanged frozen `CheckpointVersionsPage`
+and `CheckpointVersionRef` values. Every version, delete marker and duplicate is retained in input
+order within each kind. It does not infer cross-kind chronology, select latest records, filter names,
+authenticate checkpoints, read objects or join pages. Existing SDK-dictionary listing callers remain
+unchanged. The SDK's coerced booleans and decoded labels are not an admission oracle.
+
+**Inputs and failure meaning.** Validate call arguments before parsing: `body` is exactly `bytes`,
+`bucket` exactly `str` valid under the existing pure R73 bucket validator, and `org_id` exactly
+`uuid.UUID`. The sole namespace prefix is `checkpoints/{canonical-org-uuid}/`. Input markers are
+`None` or nonempty exact strings of at most 1,024 strict UTF8 bytes, without surrogates. A version
+marker requires a key marker; a key marker must start with the exact prefix. Key-only continuation
+is supported.
+
+`CheckpointVersionPageInputError(ValueError)` has fixed text `invalid checkpoint version page input`.
+`CheckpointVersionPageDecodeError(Exception)` has fixed text `checkpoint version page decode failed`
+and one validated code: `BODY_LIMIT`, `RESPONSE_INVALID`, `PAGE_LIMIT`, `SCOPE_MISMATCH` or
+`CURSOR_INVALID`. An unknown constructor code raises `ValueError` with fixed text
+`invalid checkpoint version page decode code`. Oversized bodies, malformed document/label structure,
+excess observations, textual scope mismatches and cursor disagreement map to those respective codes.
+No further precedence is promised for multiply invalid input. Controlled causes/contexts retain no
+raw parser or Unicode exception or supplied values. Unexpected and fatal exception objects propagate
+unchanged. Every controlled failure produces no page; future collection must retain a sticky listing
+gap rather than accept the earlier portion of a rejected document.
+
+**Finite XML admission.** Use standard-library Expat events with namespace expansion and early
+structural/scalar validation. The supplied body is at most **16,777,216 bytes**, with independent
+ceilings of **1,000 combined observations, depth 4, 32,768 elements, 8,192 UTF8 bytes per scalar,
+3,072 ASCII bytes per encoded label and 1,024 UTF8 bytes per admitted label**. The body cap applies
+to already-supplied bytes; it does not bound upstream downloads or caller allocation.
+
+Require strict UTF8 XML 1.0, optionally a UTF8 BOM and declaration; any declared encoding must spell
+`UTF-8` case-insensitively. Reject raw NUL bytes before Expat can autodetect BOM-less UTF16. Exactly
+one `ListVersionsResult` root and all descendants use `http://s3.amazonaws.com/doc/2006-03-01/`.
+Permit XML whitespace between elements and ordinary predefined escapes, numeric references and
+scalar CDATA. Reject empty input, unknown structure, scalar children, mixed container text, attributes
+other than namespace declarations, comments, processing instructions, DTD/entity declarations,
+external entities, a second root or trailing document. No external resource may be resolved.
+
+Root scalar singletons are `Name`, `Prefix`, `KeyMarker`, `VersionIdMarker`, `NextKeyMarker`,
+`NextVersionIdMarker`, `MaxKeys`, `IsTruncated`, `EncodingType` and `Delimiter`; the required fields
+are `Name`, `Prefix`, `MaxKeys`, `IsTruncated` and `EncodingType`. `CommonPrefixes` is rejected;
+`Delimiter` is absent or empty. Every `Version` and `DeleteMarker` requires exactly one `Key`,
+`VersionId` and `IsLatest`. Nonempty labels and exact organization scope are required.
+
+Optional metadata is grammar-checked and bounded, then discarded. A version permits singleton
+`LastModified`, `ETag`, `Size`, `StorageClass`, `ChecksumType`, `Owner` and `RestoreStatus`, plus
+repeated scalar `ChecksumAlgorithm`. A delete marker permits singleton `LastModified` and `Owner`.
+`Owner` permits singleton scalar `ID` and `DisplayName`; `RestoreStatus` permits singleton scalar
+`IsRestoreInProgress` and `RestoreExpiryDate`. Other nesting is rejected. Optional dates, sizes,
+classes and checksums are not interpreted or used as ordering or trust evidence.
+
+**Scalar identity.** `IsTruncated`, every `IsLatest` and any `IsRestoreInProgress` are exactly
+`true` or `false`; no trimming, numeric forms, alternate case, truthiness or duplicate fields.
+`MaxKeys` is exactly `1000`, `EncodingType` exactly `url`, and `Name` exactly the requested bucket.
+`Prefix`, `KeyMarker`, `NextKeyMarker` and each `Key` undergo one strict percent-triplet-to-bytes
+conversion followed by strict UTF8 decoding. Encoded text is ASCII; every percent sign requires two
+hex digits. Literal plus remains plus; no replacement decoding, second decode or normalization.
+Prefix must equal the requested prefix. Version IDs and version markers are opaque XML scalars:
+percent, plus, slash, spaces and Unicode retain identity without URL decoding. Bounded percent-decoded
+control keys and literal version IDs `null` and `None` remain untrusted observations, not immutable-read
+or trust authority. The future collector must account for R79-ineligible locators explicitly.
+
+**Continuation.** Request marker echoes match exactly after their applicable decoding. A missing or
+empty echo is permitted only for a corresponding `None` request. Terminal pages have no nonempty next
+markers. A truncated page requires observations and a nonempty bounded next key within scope; its
+next version may be absent/empty for key-only continuation. Reject a nonempty next version without a
+key and an immediate continuation pair equal to the request pair. Do not require lexicographic version
+ordering or that the next pair name the last observation. Cross-page cycles and duplicate accounting
+belong to the future collector.
+
+A terminal flag does not prove an atomic snapshot, non-omission, retention, custody, freshness,
+required-witness coverage or complete history. The next transport must bind original response bytes
+and exact request scope to an externally selected witness with private credentials/session ownership,
+routing/TLS/retry restrictions, process/IPC/resource bounds and cleanup. Fresh bounded spooling and
+scalable global reconciliation must account for the whole namespace, every required witness, all
+versions/delete markers, persistent gaps, global cursor cycles and storage budgets. A healthy union
+cannot cover a deficient required witness. R77/R78/R79/R80 meanings and limits remain unchanged.
+
+**Integration boundary.** Independent supplied-byte acceptance runs in the immutable unprivileged
+API image without development packages or SDK calls. It is one additional mandatory audit runtime
+case; all seven prior cases remain required. The existing worker command/environment test now waits
+for validated bounded READY before procfs observation, retaining its security and cleanup assertions.
+No production worker, operational caller, writer, enrollment, dependency, CI configuration, migration,
+backup or restore is changed. No GitHub service, hosting, API or download is introduced.
+
+**Back-propagation:** [Security and audit](12-security-and-audit.md),
+[external verification](runbooks/audit-external-verification.md), [open residuals](open-residuals.md),
+[current status](current-status.md) and dated [slice history](slice-history.md).
+
+Bumps the resolutions range **R1–R80 → R1–R81**.
 
 ---
 

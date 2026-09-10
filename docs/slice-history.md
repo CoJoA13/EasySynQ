@@ -77,6 +77,50 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-version-page-decoder — preserve original supplied version-page observations
+
+**2026-09-09; source baseline `27ab104352723e6b56616e35b62f4e00476ce9b9`.** R81 adds an inactive
+pure supplied-byte decoder. The earlier actual-image SDK probe reproduced lost lexical evidence:
+malformed/duplicate truncation could become false, plus could become space and invalid UTF8 could
+be replaced. The new boundary uses finite Expat grammar, canonical flags, strict single key percent
+decoding, opaque version labels, scope/cursor binding and independent body/structure/label bounds.
+Versions, delete markers and duplicates are retained as untrusted observations. No existing caller
+is switched and no collector, trust-policy change or operational recovery path is activated.
+
+Initial public-API tests failed at their bodies for the absent module. The expanded matrix exposed
+BOM-less UTF16 autodetection even with Expat's UTF8 argument; two explicit RED cases reproduced it.
+Rejecting raw NUL bytes before parsing closes that bypass while retaining percent-decoded NUL keys
+as observations. The full suite also exposed one pre-READY procfs observation in an existing worker
+test. The narrowly scoped test correction waits at most five seconds for a valid bounded READY
+frame before retaining all prior command, credential-isolation and cleanup assertions. An initial
+empty procfs read did not record child exit state; later passing diagnostics do not establish that
+state. Production worker code and security/resource policies remain unchanged.
+
+Final code-candidate local evidence: **3,361 API tests passed, one existing release-only skip,
+151.60 seconds**, including 190 decoder, 77 isolated, 95 raw and 80 runner cases. API Ruff/format
+passed across 811 files, mypy across 462 source files, and root runner lint/format passed. Five
+independent controls passed; five isolated wrong implementations failed the intended assertions
+without import/setup errors or skips, then their owned temporary copies were removed. The
+separate production-image proof passed five codec vectors, 31 key controls, four lineage cases
+and six bridge cases.
+
+All **eight mandatory actual-image acceptance tests** passed without skips in **172.47 seconds**.
+The supplied-page case exercised 33 independent vectors and matched the separately reconstructed
+input digest `1ddb5115e30f7bcd7ef9b122b30d58c68355f534744451b882b81cb76ea5a6e4`.
+The actual image was `sha256:c3bf31da649d775e384fb94af6b79e828ae2c8d600e76e22025493252c5e32a2`;
+the new probe observed Python 3.12.14, Expat 2.8.3 and UID10001, with no development packages or SDK
+calls. All seven prior runtime cases and owned-resource cleanup passed. Three existing Testcontainers
+deprecations remain. Ninety-five authority fixtures, repository authority, candidate-wide site-data
+and whitespace passed; independent artifact inspection verified 2,021 source files and 153 directory
+modes. This paragraph records local evidence before review and source/main CI; GitLab integration
+records supply the subsequent exact commit, review and pipeline evidence.
+
+A provider terminal flag proves no non-omission, atomic snapshot, custody, freshness or complete
+required-witness coverage. Private exact page transport, a fresh bounded spool, full namespace and
+every-witness accounting, sticky gaps, global cursor cycles and scalable reconciliation remain
+separate work. Database comparison, rollback continuity, key activation and source-denied recovery
+retain their closure contracts in the open residual ledger.
+
 ### S-audit-isolated-read — contain exact reads in a private Linux worker
 
 **2026-09-09; source baseline `475490e45b1bef34253c878b26a0ebc97f751d4f`.** R80 adds two inactive
