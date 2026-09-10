@@ -120,6 +120,24 @@ locked, audit-clean connector and a separately proven least-privilege developmen
   same four isolated shards as CI with a version-matched client. Treat a failure as evidence to
   diagnose, not as a permanent machine-specific baseline.
 
+### External audit runtime failure diagnostics
+
+The required API job runs `scripts/run-audit-external-acceptance.py` against its freshly built image.
+On a harness or JUnit validation failure, the runner reports `runtime_harness_exit` and,
+when the bounded report is readable, the eight known `runtime_case` names with aggregate statuses.
+An error, failure or skip takes precedence over a passing parameterization or teardown record.
+`runtime_other_cases=present` flags an unrecognized case without publishing its name;
+`runtime_junit=unavailable` means the report could not safely be summarized.
+The exit field records the process code (negative for a signal), or a fixed fallback if unavailable
+or outside the ordinary process-code range. An exit code alone cannot distinguish a pytest failure
+from `uv` failing before pytest starts.
+
+Use these fields with `failure_stage` and the commit/input hashes to focus a reproduction. The summary
+does not replace the acceptance gate or establish a root cause. Child output, exception text, parameters
+and report metadata remain private, and owned containers, image and temporary reports are cleaned up.
+A later passing run alone does not resolve an unexplained earlier failure; track the reproduction and
+closure evidence in the [residual ledger](open-residuals.md#res-audit-runtime-acceptance-failure).
+
 ### Responsive browser evidence
 
 After `just setup`, install Chromium once and run the backend-free browser suite from the web package:

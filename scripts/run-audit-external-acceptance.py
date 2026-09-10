@@ -23,6 +23,7 @@ from typing import NoReturn
 _BUILD_TIMEOUT_SECONDS = 1_200
 _HARNESS_TIMEOUT_SECONDS = 1_200
 _TERMINATE_GRACE_SECONDS = 10
+_DIAGNOSTIC_JUNIT_MAX_BYTES = 1_048_576
 _RUN_LABEL = "com.easysynq.audit-external.run"
 _SOURCE_LABEL = "com.easysynq.audit-external.source"
 _SESSION_LABEL = "org.testcontainers.session-id"
@@ -362,6 +363,81 @@ def _validate_junit(path: Path) -> int:
     return len(cases)
 
 
+def _read_diagnostic_junit(path: Path) -> ET.Element:
+    """Read a bounded regular report without following links or blocking on a FIFO."""
+    _require_real_directory(path.parent)
+    _assert_path_components(path.parent, path)
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+    with os.fdopen(os.open(path, flags), "rb") as report:
+        metadata = os.fstat(report.fileno())
+        if not stat.S_ISREG(metadata.st_mode):
+            raise AcceptanceError("diagnostic report is not a regular file")
+        if metadata.st_size > _DIAGNOSTIC_JUNIT_MAX_BYTES:
+            raise AcceptanceError("diagnostic report is too large")
+        payload = report.read(_DIAGNOSTIC_JUNIT_MAX_BYTES + 1)
+    if len(payload) > _DIAGNOSTIC_JUNIT_MAX_BYTES:
+        raise AcceptanceError("diagnostic report is too large")
+    content = payload.decode("utf-8")
+    if "<!DOCTYPE" in content or "<!ENTITY" in content:
+        raise AcceptanceError("diagnostic report contains declarations")
+    root = ET.fromstring(content)  # noqa: S314 - bounded UTF-8; DTD/entities rejected
+    if root.tag not in {"testsuites", "testsuite"}:
+        raise AcceptanceError("diagnostic report has an unexpected root")
+    return root
+
+
+def _runtime_failure_summary(path: Path, returncode: int | None) -> tuple[str, ...]:
+    """Expose only fixed outcomes and known case names, never child/report details."""
+    # uv can fail before pytest starts; an exit code alone does not identify its cause.
+    if returncode is None:
+        exit_status = "unavailable"
+    elif -255 <= returncode <= 255:
+        exit_status = str(returncode)
+    else:
+        exit_status = "abnormal_exit"
+    header = (f"runtime_harness_exit={exit_status}",)
+    try:
+        root = _read_diagnostic_junit(path)
+        statuses: dict[str, set[str]] = {name: set() for name in _MANDATORY_TESTS}
+        other_cases = False
+        for case in root.iter("testcase"):
+            name = case.attrib.get("name", "").split("[", 1)[0]
+            if name not in statuses:
+                other_cases = True
+                continue
+            status = next(
+                (
+                    label
+                    for tag, label in (
+                        ("error", "error"),
+                        ("failure", "failed"),
+                        ("skipped", "skipped"),
+                    )
+                    if case.find(tag) is not None
+                ),
+                "passed",
+            )
+            statuses[name].add(status)
+        lines = [
+            "runtime_junit=available",
+            f"runtime_other_cases={'present' if other_cases else 'absent'}",
+        ]
+        for name in sorted(_MANDATORY_TESTS):
+            # Multiple parameterizations or teardown records cannot hide a failure.
+            status = next(
+                (
+                    label
+                    for label in ("error", "failed", "skipped", "passed")
+                    if label in statuses[name]
+                ),
+                "missing",
+            )
+            lines.append(f"runtime_case={name} status={status}")
+        return (*header, *lines)
+    except Exception:  # noqa: BLE001 - diagnostics must not leak or prevent owned cleanup
+        return (*header, "runtime_junit=unavailable")
+
+
 def _read_resource_record(path: Path, run_id: str) -> str:
     if path.is_symlink() or not path.is_file():
         raise AcceptanceError("owned resource record unavailable")
@@ -488,6 +564,7 @@ def run_acceptance(root: Path | None = None) -> int:
     resource_record: Path | None = None
     build_started = False
     harness_started = False
+    harness_returncode: int | None = None
     source_digest = ""
     tag = f"easysynq-audit-external:{run_id}"
     image_id: str | None = None
@@ -495,6 +572,7 @@ def run_acceptance(root: Path | None = None) -> int:
     cleanup_failure = False
     failure_stage = "setup"
     runtime_test_count = 0
+    failure_summary: tuple[str, ...] = ()
     tools: _Tools | None = None
     try:
         tools = _required_tools()
@@ -596,6 +674,7 @@ def run_acceptance(root: Path | None = None) -> int:
             timeout=_HARNESS_TIMEOUT_SECONDS,
             environ=child_environment,
         )
+        harness_returncode = harness.returncode
         failure_stage = "input_recheck"
         build_after = _build_manifest(repository_root)
         proof_after = _proof_manifest(repository_root)
@@ -611,6 +690,12 @@ def run_acceptance(root: Path | None = None) -> int:
     except Exception:  # noqa: BLE001 - redact unexpected runner/provider detail
         failure = True
     finally:
+        if (
+            failure
+            and owned is not None
+            and failure_stage in {"runtime_harness", "junit_validation"}
+        ):
+            failure_summary = _runtime_failure_summary(owned / "runtime.xml", harness_returncode)
         if tools is not None:
             if resource_record is not None:
                 try:
@@ -643,6 +728,8 @@ def run_acceptance(root: Path | None = None) -> int:
                 cleanup_failure = True
 
     if failure or cleanup_failure:
+        for line in failure_summary:
+            print(line)
         if failure:
             print(f"failure_stage={failure_stage}")
         if cleanup_failure:
