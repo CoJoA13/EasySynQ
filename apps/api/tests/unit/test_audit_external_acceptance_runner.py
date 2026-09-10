@@ -39,6 +39,19 @@ _MANDATORY_NAMES = (
     "test_isolated_raw_runtime_enforces_process_and_byte_boundaries",
     "test_version_page_decoder_runtime_rejects_lossy_provider_pages",
 )
+# Current Dockerfile COPY sources plus the Dockerfile and context-exclusion policy.
+_BUILD_FILE_INPUTS = (
+    ".dockerignore",
+    "apps/api/Dockerfile",
+    "apps/api/pyproject.toml",
+    "apps/api/uv.lock",
+    "apps/api/LICENSE",
+    "apps/api/alembic.ini",
+)
+_BUILD_TREE_SAMPLES = {
+    "apps/api/src": "apps/api/src/easysynq_api/__init__.py",
+    "migrations": "migrations/001.py",
+}
 
 
 def _write(path: Path, value: str = "fixture\n") -> None:
@@ -49,13 +62,8 @@ def _write(path: Path, value: str = "fixture\n") -> None:
 def _repository(tmp_path: Path) -> Path:
     root = tmp_path / "repository"
     for relative in (
-        ".dockerignore",
-        "apps/api/Dockerfile",
-        "apps/api/pyproject.toml",
-        "apps/api/uv.lock",
-        "apps/api/alembic.ini",
-        "apps/api/src/easysynq_api/__init__.py",
-        "migrations/001.py",
+        *_BUILD_FILE_INPUTS,
+        *_BUILD_TREE_SAMPLES.values(),
         "scripts/run-audit-external-acceptance.py",
         "apps/api/tests/conftest.py",
         "apps/api/tests/integration/audit_external_runtime_acceptance.py",
@@ -198,6 +206,8 @@ class _FakeCommands:
                 path, action = self.change_after_harness
                 if action == "content":
                     path.write_text("changed\n", encoding="utf-8")
+                elif action == "missing":
+                    path.unlink()
                 else:
                     target = path.with_name(path.name + ".target")
                     target.write_text("target\n", encoding="utf-8")
@@ -530,9 +540,45 @@ def test_failure_summary_rejects_links_and_special_files_without_blocking(
     assert result.stderr == ""
 
 
+@pytest.mark.parametrize("relative", (*_BUILD_FILE_INPUTS, *_BUILD_TREE_SAMPLES.values()))
+def test_build_digest_changes_with_each_api_image_input(relative: str, tmp_path: Path) -> None:
+    root = _repository(tmp_path)
+    before = _RUNNER._build_manifest(root).digest
+    (root / relative).write_text("changed image input\n", encoding="utf-8")
+
+    assert _RUNNER._build_manifest(root).digest != before
+
+
+@pytest.mark.parametrize("relative", (*_BUILD_FILE_INPUTS, *_BUILD_TREE_SAMPLES))
+@pytest.mark.parametrize("unavailable", ["missing", "symlink"])
+def test_unavailable_build_input_fails_before_build_and_cleans_owned_directory(
+    relative: str,
+    unavailable: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    path = root / relative
+    target = tmp_path / "outside-build-input"
+    path.rename(target)
+    if unavailable == "symlink":
+        path.symlink_to(target, target_is_directory=target.is_dir())
+    fake = _FakeCommands(root)
+
+    assert _run(root, fake, monkeypatch) == 1
+    assert all(call[0][:2] != ["/tools/docker", "build"] for call in fake.calls)
+    assert "failure_stage=input_manifest" in capsys.readouterr().out
+    assert list((root / ".pytest_cache").iterdir()) == []
+
+
 @pytest.mark.parametrize(
     ("relative", "action"),
     [
+        ("apps/api/LICENSE", "content"),
+        ("apps/api/LICENSE", "missing"),
+        ("apps/api/LICENSE", "symlink"),
         ("apps/api/src/easysynq_api/__init__.py", "content"),
         ("infra/images.lock", "content"),
         ("infra/compose/minio/minio-init.sh", "content"),
@@ -554,12 +600,16 @@ def test_source_or_provider_input_change_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     root = _repository(tmp_path)
     fake = _FakeCommands(root)
     fake.change_after_harness = (root / relative, action)
 
     assert _run(root, fake, monkeypatch) == 1
+    assert any(call[0][0] == "/tools/uv" for call in fake.calls)
+    assert "failure_stage=input_recheck" in capsys.readouterr().out
+    assert list((root / ".pytest_cache").iterdir()) == []
 
 
 @pytest.mark.parametrize(

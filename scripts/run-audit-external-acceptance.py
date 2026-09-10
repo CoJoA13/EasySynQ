@@ -277,6 +277,7 @@ def _build_manifest(root: Path) -> _Manifest:
         root / "apps/api/Dockerfile",
         root / "apps/api/pyproject.toml",
         root / "apps/api/uv.lock",
+        root / "apps/api/LICENSE",
         root / "apps/api/alembic.ini",
     ]
     recursive = _walk_inputs(root, root / "apps/api/src", python_only=False)
