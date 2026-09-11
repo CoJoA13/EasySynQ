@@ -26,7 +26,7 @@ https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.
     && apt-get purge -y curl gnupg \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
-RUN python -m pip install --no-cache-dir --only-binary=:all: uv==0.12.10
+RUN python -m pip install --no-cache-dir --only-binary=:all: uv==0.12.13
 ENV UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
 
