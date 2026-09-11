@@ -183,6 +183,67 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-version-page-transport — original pages through an isolated worker
+
+**2026-09-11; local candidate evidence before integration.** R83 adds inactive direct and isolated
+original ListObjectVersions reads. Exact scope/cursors and one physical request bind the read;
+early capture preserves original XML before SDK parsing, and successful admission requires client
+close, exact bounded IPC, stdout EOF, zero worker exit, owned cleanup and final cancellation/deadline
+checks. The separate worker applies 512MiB address space, 20 CPU seconds, 64 descriptors, zero file
+growth and zero core bytes, with a 30-second parent watchdog. The 16MiB body cap remains a decoder
+boundary after SDK buffering, not a pre-buffer download/allocation cap.
+
+Genuine pinned-provider TLS/trace evidence exposed optional `ETag`, `Size` and `StorageClass` under
+DeleteMarker. R83 explicitly extends only that R81 metadata allowlist: three bounded, discarded
+singletons with no identity, ordering or trust meaning. Seven focused positive/boundary tests failed
+before the extension; duplicate, nested, attributed, oversized and unrelated-unknown metadata stayed
+rejected. All **210 decoder tests** passed afterward. The original XML was never normalized to fit
+the decoder. The earlier R81 entry and its original grammar description remain historical.
+
+Runner membership first produced seven intended failures for the new missing/substituted identity
+and absent fixed diagnostics. All **135 runner unit tests** passed after adding the independent ninth
+case and retaining the prior eight. Scoped verification passed **814 affected unit tests in 97.79
+seconds**, API Ruff/format, mypy across **465 source files** and runner static checks. These are scoped
+results, not a new full-suite baseline or a full `just check` result.
+
+Final immutable-image acceptance passed **all nine mandatory tests in 377.97 seconds**, with no skips,
+errors or failures. The genuine provider case used verified TLS, a distinct read-only identity and
+**1,007 creation-record observations, including three delete markers**, over 1,000/seven-row pages.
+Percent/plus/slash/Unicode keys and opaque version IDs/cursors were preserved. The complete creation
+multiset matched; independent trace events proved the exact physical queries and original response
+body lengths/hashes. A final trace barrier/drain and all owned cleanup passed. The installed image
+ran as UID **10001** without pytest, mypy or Ruff.
+
+Separate fixtures passed **14 body cases**, **five routing cases**, a behavior-sensitive late SDK
+hook control, **five containment cases**, **nine adversarial IPC cases** and **four actual resource
+experiments**. Exact 16MiB and 1,000-row positives and their over-limit controls passed. Original
+malformed-200 and coercible fields failed closed; redirects reached no second target, TLS negatives
+admitted no page, and blocked responses ended under timeout/cancellation. Oversized buffering failed
+within the worker address-space boundary while the parent survived. The finite CPU experiment ended
+after **19,998 ms of child CPU**; file growth and descriptor exhaustion enforced their actual limits.
+Production network workers, substituted IPC producers and direct installed-limit experiments are
+explicitly distinct evidence. Source/proof manifests and execution hashes matched; owned containers,
+image and runtime directory were removed.
+
+Earlier failed attempts exposed fixture API mismatches: testcontainers' tmpfs builder and reserved
+session-label handling, Docker archive writes into a read-only helper, and an invalid empty truncated
+synthetic page. Each was diagnosed at its owning boundary and corrected without weakening transport,
+TLS, decoder, worker-limit or mandatory-case requirements. The final nine-case run is the acceptance
+evidence; earlier partial runs are not counted as success.
+
+Independent task review accepted two explicit maintenance costs: repeated reader admission bounds
+preserve R79, and separate cleanup logic preserves R80 without mutable-state sharing. Future fixes
+must synchronize those policies; shared pure/stateless helpers require regression evidence when
+those paths next change. These accepted findings are not a claim of a clean quality verdict.
+
+Authority checks (`AUTHORITY_OK`) and site-data gates passed. Whole-branch review, full local checks
+and source/merged-main CI remained pending at this evidence entry. The protected owner-controlled
+public file remains trust authority; no current caller, writer, enrollment, IAM policy, activation or
+recovery path changes. Required-witness
+binding and complete traversal, a fresh bounded spool, sticky gaps/global cursor cycles, global
+reconciliation, database agreement, custody/freshness/rollback continuity, key delivery/activation and
+source-denied recovery remain open. This substep does not close GitLab issue #3.
+
 ### S-audit-version-page-decoder — preserve original supplied version-page observations
 
 **2026-09-09; source baseline `27ab104352723e6b56616e35b62f4e00476ce9b9`.** R81 adds an inactive

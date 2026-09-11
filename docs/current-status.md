@@ -1,6 +1,6 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-09"
+as_of: "2026-09-11"
 baseline_commit: "27ab104352723e6b56616e35b62f4e00476ce9b9"
 last_shipped_slice: "S-audit-version-page-decoder"
 migration_head: "0092"
@@ -116,37 +116,47 @@ S-audit-version-page-decoder adds the inactive supplied-byte interface under R81
 strict UTF8/XML version-list document with exact scope, unique fields, canonical flags and bounded
 structure. One strict percent decode preserves key identity and literal plus; version IDs stay
 opaque. Every admitted version, delete marker and duplicate remains an untrusted observation.
-Malformed late content yields no page. Original-byte transport and full witness collection are
-separate prerequisites; current operational callers remain unchanged.
+Malformed late content yields no page. Complete witness collection remains a separate prerequisite;
+current operational callers remain unchanged.
 
-Fresh local verification passed **3,361 API tests with one existing release-only skip in 151.60
-seconds**, including **190 decoder, 77 isolated, 95 raw and 80 runner tests**. The worker command/
-environment test now validates READY before reading procfs; its assertions and production worker
-are unchanged. Five independent valid controls passed, then all five deliberately wrong decoders
-failed their intended assertions: boolean coercion, duplicate suppression, lax/double percent
-decoding and dropped delete markers. All owned execution copies were removed.
+The **2026-09-11 local candidate, S-audit-version-page-transport (R83)**, adds one inactive original
+version-page read through a private Linux worker. Its exact request binds reader, bucket,
+organization and both opaque cursors; original XML reaches the R81 decoder before SDK parsing.
+No page is admitted before client close, exact IPC, stdout EOF, zero worker exit, owned cleanup
+and final cancellation/deadline checks. Genuine provider evidence required a narrow R81 extension:
+optional DeleteMarker `ETag`, `Size` and `StorageClass` are bounded discarded singletons. Existing
+strict structure, identity and limit rules remain; provider XML is never rewritten.
 
-All **eight mandatory actual-image runtime tests** passed without skips in **172.47 seconds**,
-including **33 independent supplied-page vectors**. The new proof observed Python **3.12.14** and
-Expat **2.8.3** in the immutable API image at UID **10001**, without pytest/mypy/Ruff or SDK calls.
-The exact 16MiB body and 1,000-observation positives, their over-limit controls, opaque/key-only
-cursors, malformed flags/XML, strict percent decoding and BOM-less UTF16 regressions passed.
-All seven prior runtime cases remained required and passed; owned containers, temporary directory
-and unique image tag were removed. Three existing Testcontainers deprecation warnings remain.
+Scoped verification passed **814 affected unit tests in 97.79 seconds**, API Ruff/format, mypy over
+**465 source files** and runner static checks. The metadata extension separately passed **210
+decoder tests** after seven intended admission failures; runner membership passed **135 tests**
+after its seven intended failures. These are scoped checks, not a fresh full API suite count.
 
-The separate production-image proof passed five codec vectors, 31 key controls, four lineage cases
-and six bridge cases. Ruff, formatting across **811 API files**, mypy across **462 source files**,
-root runner checks, **95 authority fixtures**, repository authority, candidate-wide site-data and
-whitespace passed. Evidence binds **2,021 source files and 153 directory modes**. These are local
-code-candidate results; source and merged-main CI evidence is recorded through GitLab integration.
-Web/contracts/integration counts in the schema retain their previously verified baseline; this
-change does not introduce a migration, dependency or CI configuration change.
+All **nine mandatory actual-image tests** passed in **377.97 seconds**, with zero skips, errors or
+failures. The new case used genuine verified provider TLS and a distinct read-only identity,
+collecting **1,007 independently created observations, including three delete markers**, in pages
+of 1,000 and seven. It matched the complete creation multiset, opaque cursor chain, exact physical
+queries and original trace-body bytes. The installed API ran at UID **10001** without development
+packages. Fourteen body cases, five routing cases, the late-hook wrong-design control, five
+containment cases, nine adversarial IPC cases and four actual resource experiments passed.
+The CPU limit terminated its finite fixture at **19,998 ms of child CPU**; oversized SDK buffering
+failed within the worker's 512MiB address-space limit and the parent remained usable.
+Source/proof manifests and execution hashes matched; owned containers, image and runtime directory
+were removed. Earlier failing fixture runs are not counted as acceptance passes.
 
-The direct R79 API retains its cooperative IO limitations. R80 supplies one inactive exact read;
-complete per-witness enumeration, bounded page/spool handling, scalable global reconciliation,
-protected rollback knowledge, actual database snapshot comparison and independent activation/restore
-proofs remain required. Process creation and kernel-stuck work can exceed user-space timing bounds.
-Lineage, key rotation, provider-denial and source-independent recovery remain OPEN.
+The 16MiB body cap applies after SDK buffering; it is not a pre-buffer download/allocation bound.
+Real network workers, substituted adversarial IPC producers and direct installed-limit experiments
+are identified separately in the proof. Accepted review costs retain repeated reader admission
+bounds and separate worker cleanup logic to keep R79/R80 unchanged; future fixes must synchronize
+those paths. Whole required-witness binding/traversal, sticky gaps and global cursor cycles, a fresh
+bounded spool, global reconciliation, actual database comparison, rollback continuity, key delivery
+and independent activation/recovery proofs remain OPEN. GitLab issue #3 is not closed.
+
+Authority checks (`AUTHORITY_OK`) and site-data checks passed. Whole-branch review, full local gates
+and source/merged-main CI are still pending for this candidate. The schema's shipped slice, commit
+and suite counts retain their earlier verified baseline; the R81 dated evidence remains in
+[slice history](slice-history.md). No migration,
+dependency, CI configuration, operational caller, deployment or restore is changed.
 
 Other full-stack counts are inherited from
 [MR !26](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/26)'s source pipeline

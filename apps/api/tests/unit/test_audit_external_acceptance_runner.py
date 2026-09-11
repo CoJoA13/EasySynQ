@@ -38,6 +38,7 @@ _MANDATORY_NAMES = (
     "test_raw_version_runtime_bounds_streams_and_cleans_up",
     "test_isolated_raw_runtime_enforces_process_and_byte_boundaries",
     "test_version_page_decoder_runtime_rejects_lossy_provider_pages",
+    "test_version_page_transport_runtime_preserves_original_observations_and_limits",
 )
 # Current Dockerfile COPY sources plus the Dockerfile and context-exclusion policy.
 _BUILD_FILE_INPUTS = (
@@ -73,6 +74,8 @@ def _repository(tmp_path: Path) -> Path:
         "apps/api/tests/integration/audit_isolated_raw_runtime_probe.py",
         "apps/api/tests/integration/audit_version_page_runtime_acceptance.py",
         "apps/api/tests/integration/audit_version_page_runtime_probe.py",
+        "apps/api/tests/integration/audit_version_page_transport_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_version_page_transport_runtime_probe.py",
         "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
         "apps/api/tests/unit/test_sample.py",
         "infra/images.lock",
@@ -284,7 +287,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
         ".",
     ]
     harness = next(call for call in fake.calls if call[0][0] == "/tools/uv")
-    assert harness[0][:9] == [
+    assert harness[0][:10] == [
         "/tools/uv",
         "run",
         "--project",
@@ -294,6 +297,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
         "tests/integration/audit_raw_runtime_acceptance.py",
         "tests/integration/audit_isolated_raw_runtime_acceptance.py",
         "tests/integration/audit_version_page_runtime_acceptance.py",
+        "tests/integration/audit_version_page_transport_runtime_acceptance.py",
     ]
     assert harness[1] == root / "apps/api"
     assert harness[2] == 1_200
@@ -306,7 +310,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
     ]
     output = capsys.readouterr().out
     assert "runtime_acceptance=passed" in output
-    assert "mandatory_tests=8" in output
+    assert "mandatory_tests=9" in output
     assert _RUNNER._MANDATORY_TESTS == frozenset(_MANDATORY_NAMES)
     assert "secret-never-print" not in output
 
@@ -422,6 +426,28 @@ def test_runner_rejects_each_missing_or_nonpassing_mandatory_case(
 
 
 @pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("missing", "missing a mandatory test"),
+        ("substituted", "missing a mandatory test"),
+        ("skipped", "contains a nonpassing test"),
+        ("failure", "contains a nonpassing test"),
+        ("error", "contains a nonpassing test"),
+    ],
+)
+def test_transport_runtime_case_cannot_pass_incomplete_junit(
+    mode: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "runtime.xml"
+    path.write_text(_junit(mode=mode, affected=8), encoding="utf-8")
+
+    with pytest.raises(_RUNNER.AcceptanceError, match=message):
+        _RUNNER._validate_junit(path)
+
+
+@pytest.mark.parametrize(
     ("returncode", "outcome"),
     [
         (1, "1"),
@@ -463,7 +489,7 @@ def test_failure_summary_redacts_all_report_and_child_details(
         "runtime_case=test_external_cli_runtime_is_public_only_and_read_only status=failed"
         in output.out
     )
-    assert output.out.count("runtime_case=") == 8
+    assert output.out.count("runtime_case=") == 9
     assert "private-" not in output.out + output.err
     assert "secret-never-print" not in output.out + output.err
     assert "runtime_acceptance=failed" in output.out
@@ -589,6 +615,11 @@ def test_unavailable_build_input_fails_before_build_and_cleans_owned_directory(
         ("apps/api/tests/integration/audit_isolated_raw_runtime_probe.py", "content"),
         ("apps/api/tests/integration/audit_version_page_runtime_acceptance.py", "content"),
         ("apps/api/tests/integration/audit_version_page_runtime_probe.py", "content"),
+        (
+            "apps/api/tests/integration/audit_version_page_transport_runtime_acceptance.py",
+            "content",
+        ),
+        ("apps/api/tests/integration/audit_version_page_transport_runtime_probe.py", "content"),
         ("apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json", "content"),
         ("infra/images.lock", "symlink"),
         ("infra/compose/minio/minio-init.sh", "symlink"),
@@ -623,6 +654,8 @@ def test_source_or_provider_input_change_fails(
         "apps/api/tests/integration/audit_isolated_raw_runtime_probe.py",
         "apps/api/tests/integration/audit_version_page_runtime_acceptance.py",
         "apps/api/tests/integration/audit_version_page_runtime_probe.py",
+        "apps/api/tests/integration/audit_version_page_transport_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_version_page_transport_runtime_probe.py",
         "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
     ],
 )

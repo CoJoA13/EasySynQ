@@ -58,7 +58,9 @@ _VERSION_SCALARS = frozenset(
         "ChecksumType",
     }
 )
-_DELETE_SCALARS = frozenset({"Key", "VersionId", "IsLatest", "LastModified"})
+_DELETE_SCALARS = frozenset(
+    {"Key", "VersionId", "IsLatest", "LastModified", "ETag", "Size", "StorageClass"}
+)
 _ENTRY_REQUIRED = frozenset({"Key", "VersionId", "IsLatest"})
 _OWNER_SCALARS = frozenset({"ID", "DisplayName"})
 _RESTORE_SCALARS = frozenset({"IsRestoreInProgress", "RestoreExpiryDate"})
