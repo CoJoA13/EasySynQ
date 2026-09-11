@@ -430,7 +430,13 @@ def _body_cases(config: dict[str, Any]) -> dict[str, Any]:
         ),
         ("malformed-200", b"<ListVersionsResult>", None, None, "RESPONSE_INVALID"),
         ("coercible-truncation", blank.replace(b"false", b"1"), None, None, "RESPONSE_INVALID"),
-        ("coercible-latest", simple.replace(b"false", b"0"), None, None, "RESPONSE_INVALID"),
+        (
+            "coercible-latest",
+            simple.replace(b"<IsLatest>false</IsLatest>", b"<IsLatest>0</IsLatest>"),
+            None,
+            None,
+            "RESPONSE_INVALID",
+        ),
         (
             "wrong-namespace",
             blank.replace(b"2006-03-01", b"2006-03-02"),

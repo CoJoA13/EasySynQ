@@ -130,10 +130,17 @@ strict structure, identity and limit rules remain; provider XML is never rewritt
 Scoped verification passed **814 affected unit tests in 97.79 seconds**, API Ruff/format, mypy over
 **465 source files** and runner static checks. The metadata extension separately passed **210
 decoder tests** after seven intended admission failures; runner membership passed **135 tests**
-after its seven intended failures. These are scoped checks, not a fresh full API suite count.
+after its seven intended failures.
+
+Full local `just check` passed at `1ef5edbd3aa7d8fa84327f30593c8e05a66f7780`: **3,737 API tests
+passed with two intentional skips**, **2,357 web tests passed**, and Ruff, formatting over **819
+files**, mypy over **465 source files**, ESLint, TypeScript and the Vite build passed. The skips are
+the release digest check (`test_images_lock_pinned.py`, requires `EASYSYNQ_RELEASE=1`) and the
+built-image/offline-start check (`test_infra_hardening.py`, requires `EASYSYNQ_IMAGE_PROOF=1`).
 
 All **nine mandatory actual-image tests** passed in **377.97 seconds**, with zero skips, errors or
-failures. The new case used genuine verified provider TLS and a distinct read-only identity,
+failures; three pre-existing Testcontainers deprecation warnings remain. The new case used genuine
+verified provider TLS and a distinct read-only identity,
 collecting **1,007 independently created observations, including three delete markers**, in pages
 of 1,000 and seven. It matched the complete creation multiset, opaque cursor chain, exact physical
 queries and original trace-body bytes. The installed API ran at UID **10001** without development
@@ -144,6 +151,9 @@ failed within the worker's 512MiB address-space limit and the parent remained us
 Source/proof manifests and execution hashes matched; owned containers, image and runtime directory
 were removed. Earlier failing fixture runs are not counted as acceptance passes.
 
+Task review found that `coercible-latest` also changed the truncation flag. The fixture now changes
+only the complete `IsLatest` element; fresh root confirmation of that revised case is pending.
+
 The 16MiB body cap applies after SDK buffering; it is not a pre-buffer download/allocation bound.
 Real network workers, substituted adversarial IPC producers and direct installed-limit experiments
 are identified separately in the proof. Accepted review costs retain repeated reader admission
@@ -152,8 +162,8 @@ those paths. Whole required-witness binding/traversal, sticky gaps and global cu
 bounded spool, global reconciliation, actual database comparison, rollback continuity, key delivery
 and independent activation/recovery proofs remain OPEN. GitLab issue #3 is not closed.
 
-Authority checks (`AUTHORITY_OK`) and site-data checks passed. Whole-branch review, full local gates
-and source/merged-main CI are still pending for this candidate. The schema's shipped slice, commit
+Authority checks (`AUTHORITY_OK`) and site-data checks passed. Whole-branch review and
+source/merged-main CI are still pending for this candidate. The schema's shipped slice, commit
 and suite counts retain their earlier verified baseline; the R81 dated evidence remains in
 [slice history](slice-history.md). No migration,
 dependency, CI configuration, operational caller, deployment or restore is changed.

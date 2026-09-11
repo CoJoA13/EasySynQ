@@ -203,11 +203,18 @@ the decoder. The earlier R81 entry and its original grammar description remain h
 Runner membership first produced seven intended failures for the new missing/substituted identity
 and absent fixed diagnostics. All **135 runner unit tests** passed after adding the independent ninth
 case and retaining the prior eight. Scoped verification passed **814 affected unit tests in 97.79
-seconds**, API Ruff/format, mypy across **465 source files** and runner static checks. These are scoped
-results, not a new full-suite baseline or a full `just check` result.
+seconds**, API Ruff/format, mypy across **465 source files** and runner static checks.
+
+Full local `just check` subsequently passed at `1ef5edbd3aa7d8fa84327f30593c8e05a66f7780`:
+**3,737 API tests passed with two intentional skips**, **2,357 web tests passed**, and Ruff,
+formatting over **819 files**, mypy over **465 source files**, ESLint, TypeScript and the Vite build
+passed. The release digest check in `test_images_lock_pinned.py` requires `EASYSYNQ_RELEASE=1`;
+the built-image/offline-start check in `test_infra_hardening.py` requires `EASYSYNQ_IMAGE_PROOF=1`.
+Those two opt-in skips are separate from the mandatory actual-image acceptance below.
 
 Final immutable-image acceptance passed **all nine mandatory tests in 377.97 seconds**, with no skips,
-errors or failures. The genuine provider case used verified TLS, a distinct read-only identity and
+errors or failures, with three pre-existing Testcontainers deprecation warnings. The genuine provider
+case used verified TLS, a distinct read-only identity and
 **1,007 creation-record observations, including three delete markers**, over 1,000/seven-row pages.
 Percent/plus/slash/Unicode keys and opaque version IDs/cursors were preserved. The complete creation
 multiset matched; independent trace events proved the exact physical queries and original response
@@ -231,13 +238,18 @@ synthetic page. Each was diagnosed at its owning boundary and corrected without 
 TLS, decoder, worker-limit or mandatory-case requirements. The final nine-case run is the acceptance
 evidence; earlier partial runs are not counted as success.
 
+Task review found a Minor coverage defect: `coercible-latest` changed both latest and truncation
+flags. Its correction replaces only the complete `IsLatest` element, retaining valid truncation;
+fresh root confirmation of the revised installed-worker case is pending. No production defect was
+inferred from this coverage gap.
+
 Independent task review accepted two explicit maintenance costs: repeated reader admission bounds
 preserve R79, and separate cleanup logic preserves R80 without mutable-state sharing. Future fixes
 must synchronize those policies; shared pure/stateless helpers require regression evidence when
 those paths next change. These accepted findings are not a claim of a clean quality verdict.
 
-Authority checks (`AUTHORITY_OK`) and site-data gates passed. Whole-branch review, full local checks
-and source/merged-main CI remained pending at this evidence entry. The protected owner-controlled
+Authority checks (`AUTHORITY_OK`) and site-data gates passed. Whole-branch review and
+source/merged-main CI remained pending at this evidence entry. The protected owner-controlled
 public file remains trust authority; no current caller, writer, enrollment, IAM policy, activation or
 recovery path changes. Required-witness
 binding and complete traversal, a fresh bounded spool, sticky gaps/global cursor cycles, global
