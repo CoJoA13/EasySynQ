@@ -80,7 +80,15 @@ strict UTF8/XML admission without losing opaque labels, duplicate records or del
 Actual-image supplied-byte tests do not prove collection. Isolated exact page transport, complete
 required-witness collection, bounded spool/global reconciliation and the unchanged source-denied
 recovered-stack closure contract remain required; this record stays OPEN.
-Last reviewed: 2026-09-09
+Original-page transport progress on 2026-09-11 (R83): the inactive isolated API now admits one
+original version page only after exact request/response validation and worker cleanup. Genuine TLS
+provider pagination and hostile response/IPC/resource acceptance passed. R81 additionally admits
+three bounded discarded DeleteMarker metadata scalars; no archive, restore or operational verifier
+is activated. Whole required-witness binding/traversal, a fresh private bounded spool, sticky gaps
+and global cursor cycles, global reconciliation, actual snapshot agreement and the source-denied
+recovered-stack proof remain required. Finite fixture pagination does not satisfy those contracts;
+this record and GitLab issue #3 remain OPEN.
+Last reviewed: 2026-09-11
 
 ## RES-CONTAINER-SECURITY-TRIAGE
 
@@ -375,7 +383,7 @@ now preserves enrolled witnesses independently of the database, while scheduled/
 still discover their inventory from the database.
 Closure contract: Define and ship a Merkle-chained checkpoint format in which each anchor commits to the
 prior anchor hash, with a binding register entry and migration/compatibility proof.
-Last reviewed: 2026-09-09
+Last reviewed: 2026-09-11
 
 All retained eligible legacy object versions are checked, including older contradictions after a
 genuine producer re-anchors. The explicit protected-file CLI now checks the owner's enrolled
@@ -435,6 +443,17 @@ bounded fresh spooling and scalable global reconciliation remain unimplemented. 
 cannot establish non-omission, snapshot atomicity, custody or required-witness coverage. Existing
 snapshot/delivery/restore obligations and this record remain OPEN.
 
+Original-page transport progress on 2026-09-11 (R83): one original page can now cross an exact
+request and isolated worker boundary with bounded admitted bytes, both opaque cursors preserved
+and success only after cleanup. Actual-image TLS provider evidence retains every independently
+created version/delete marker; a narrow bounded metadata extension admits the provider's marker
+ETag/Size/StorageClass without interpreting them or rewriting XML. No terminal page or finite test
+multiset establishes whole-witness completeness. Required-witness namespace binding and complete
+traversal, sticky gaps, cross-page cursor-cycle/duplicate accounting, a fresh bounded private spool
+and scalable global reconciliation remain unimplemented. Database-chain agreement, custody,
+freshness/rollback continuity, durable delivery and activation/restore proofs remain required.
+Current operational consumers are unchanged and this record stays OPEN.
+
 ## RES-MINIO-VERSION-LIST-DENY
 
 Status: OPEN
@@ -492,7 +511,7 @@ Reason: Active legacy checkpoints contain no key identifier or activation histor
 uses one key; explicit protected-file verification supports a static legacy public-key allowlist.
 Closure contract: Add a key identifier to checkpoints and retain a public-key verification history, with
 rotation and pre-rotation restore proofs.
-Last reviewed: 2026-09-09
+Last reviewed: 2026-09-11
 
 Restoring a pre-rotation backup still verifies its historical signature against the current key.
 The unattended retained-version scan also uses that single key, so retaining an old public key alone
@@ -535,6 +554,12 @@ Isolated-read progress on 2026-09-09 (R80): resource/lifetime containment is ava
 inactive exact-version read. It changes no key selection, epoch, custody, issuance or restore path.
 Full independent history, protected rollback continuity, durable delivery, activation confirmation
 and pre-rotation restore remain required; this record stays OPEN.
+
+Original-page transport progress on 2026-09-11 (R83): exact isolated page observations and their
+opaque cursors are available to future collection. They activate no key, infer no signer epoch and
+change no enrollment, custody or restore path. Complete required-witness history, bounded spooling,
+global reconciliation, protected rollback memory, independent key delivery/activation confirmation
+and an actual pre-rotation restore remain required; this record stays OPEN.
 
 ## RES-RISK-CLAUSE-PICKER
 

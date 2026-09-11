@@ -243,6 +243,93 @@ def test_duplicate_observations_are_retained_in_input_order_within_each_kind() -
     ]
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        b"<ETag/>",
+        b"<Size>0</Size>",
+        b"<StorageClass>STANDARD</StorageClass>",
+        b"<ETag>&quot;ignored&quot;</ETag><Size>0</Size><StorageClass>STANDARD</StorageClass>",
+    ],
+    ids=["etag", "size", "storage-class", "combined"],
+)
+def test_delete_marker_provider_metadata_is_discarded_without_losing_observations(
+    metadata: bytes,
+) -> None:
+    module = _module()
+    marker = _entry(
+        "DeleteMarker",
+        key=ENCODED_PREFIX + "deleted%252F%2B%2F%E9%9B%AA",
+        version_id="null%2F+/雪",
+        extra=metadata,
+    )
+    fields = _truncated_fields(
+        f"<KeyMarker>{ENCODED_PREFIX}prior%252F%2B%2F%E9%9B%AA</KeyMarker>".encode(),
+        "<VersionIdMarker>prior%2F+/雪</VersionIdMarker>".encode(),
+        f"<NextKeyMarker>{ENCODED_PREFIX}next%252F%2B%2F%E9%9B%AA</NextKeyMarker>".encode(),
+        "<NextVersionIdMarker>next%2F+/雪</NextVersionIdMarker>".encode(),
+    )
+
+    result = module.decode_checkpoint_version_page(
+        _page(VERSION, marker, marker, fields=fields),
+        bucket="history-probe",
+        org_id=ORG,
+        key_marker=PREFIX + "prior%2F+/雪",
+        version_id_marker="prior%2F+/雪",
+    )
+
+    assert [(item.key, item.version_id) for item in result.versions] == [
+        (PREFIX + "a%2B+☃", "opaque%2F+/")
+    ]
+    assert [(item.key, item.version_id) for item in result.delete_markers] == [
+        (PREFIX + "deleted%2F+/雪", "null%2F+/雪"),
+        (PREFIX + "deleted%2F+/雪", "null%2F+/雪"),
+    ]
+    assert result.truncated is True
+    assert result.next_key_marker == PREFIX + "next%2F+/雪"
+    assert result.next_version_id_marker == "next%2F+/雪"
+
+
+@pytest.mark.parametrize("tag", ["ETag", "Size", "StorageClass"])
+def test_delete_marker_provider_metadata_admits_exact_utf8_scalar_limit(tag: str) -> None:
+    module = _module()
+    content = "雪" * 2730 + "aa"
+    assert len(content.encode("utf-8")) == 8192
+    metadata = f"<{tag}>{content}</{tag}>".encode()
+
+    result = module.decode_checkpoint_version_page(
+        _page(_entry("DeleteMarker", extra=metadata)), bucket="history-probe", org_id=ORG
+    )
+
+    assert result.versions == ()
+    assert [(item.key, item.version_id) for item in result.delete_markers] == [
+        (PREFIX + "object", "opaque+version/1")
+    ]
+    assert result.truncated is False
+    assert result.next_key_marker is result.next_version_id_marker is None
+
+
+@pytest.mark.parametrize("tag", ["ETag", "Size", "StorageClass"])
+@pytest.mark.parametrize("shape", ["duplicate", "nested", "attributed", "utf8-one-over"])
+def test_delete_marker_provider_metadata_keeps_strict_scalar_grammar(tag: str, shape: str) -> None:
+    content = "雪" * 2730 + "aaa"
+    assert len(content.encode("utf-8")) == 8193
+    metadata = {
+        "duplicate": f"<{tag}/><{tag}>second</{tag}>",
+        "nested": f"<{tag}><Size>0</Size></{tag}>",
+        "attributed": f'<{tag} extra="ignored">value</{tag}>',
+        "utf8-one-over": f"<{tag}>{content}</{tag}>",
+    }[shape].encode()
+
+    _assert_decode_error(_page(_entry("DeleteMarker", extra=metadata)))
+
+
+def test_delete_marker_provider_metadata_does_not_admit_unrelated_scalar() -> None:
+    _assert_decode_error(
+        _page(_entry("DeleteMarker", extra=b"<UnreviewedMetadata>ignored</UnreviewedMetadata>"))
+    )
+
+
 def test_optional_metadata_grammar_is_admitted_and_discarded() -> None:
     module = _module()
     metadata = (
