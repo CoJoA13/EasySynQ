@@ -1,12 +1,14 @@
+import type { TestingLibraryMatchers } from "@testing-library/jest-dom/matchers";
 import "vitest";
 
-interface CustomMatchers<R = unknown> {
-  toHaveNoViolations(): R;
-}
-
 declare module "vitest" {
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-  interface Assertion<T = unknown> extends CustomMatchers<T> {}
-  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-  interface AsymmetricMatchersContaining extends CustomMatchers {}
+  // The first jest-dom parameter allows additional expected values, including asymmetric
+  // matchers. Keep that extension open as in its adapter; R controls the assertion result.
+  interface Matchers<
+    R extends void | Promise<void> = void | Promise<void>,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Match Vitest's received-value parameter.
+    T = unknown,
+  > extends TestingLibraryMatchers<unknown, R> {
+    toHaveNoViolations(): R;
+  }
 }
