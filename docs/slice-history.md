@@ -212,7 +212,8 @@ passed. The release digest check in `test_images_lock_pinned.py` requires `EASYS
 the built-image/offline-start check in `test_infra_hardening.py` requires `EASYSYNQ_IMAGE_PROOF=1`.
 Those two opt-in skips are separate from the mandatory actual-image acceptance below.
 
-Final immutable-image acceptance passed **all nine mandatory tests in 377.97 seconds**, with no skips,
+The **2026-09-11 pre-correction immutable-image run** passed **all nine mandatory tests in
+377.97 seconds**, with no skips,
 errors or failures, with three pre-existing Testcontainers deprecation warnings. The genuine provider
 case used verified TLS, a distinct read-only identity and
 **1,007 creation-record observations, including three delete markers**, over 1,000/seven-row pages.
@@ -235,22 +236,28 @@ image and runtime directory were removed.
 Earlier failed attempts exposed fixture API mismatches: testcontainers' tmpfs builder and reserved
 session-label handling, Docker archive writes into a read-only helper, and an invalid empty truncated
 synthetic page. Each was diagnosed at its owning boundary and corrected without weakening transport,
-TLS, decoder, worker-limit or mandatory-case requirements. The final nine-case run is the acceptance
-evidence; earlier partial runs are not counted as success.
+TLS, decoder, worker-limit or mandatory-case requirements. Earlier partial runs are not counted as
+success.
 
 Task review found a Minor coverage defect: `coercible-latest` changed both latest and truncation
 flags. Its correction replaces only the complete `IsLatest` element, retaining valid truncation;
-fresh root confirmation of the revised installed-worker case is pending. No production defect was
-inferred from this coverage gap.
+no production defect was inferred from this coverage gap. Fresh canonical acceptance at
+`94af759731fa01ac2d237fa77076820496ae8bab` passed **all nine mandatory installed-image cases in
+382.108 seconds**, with zero skips, errors or failures and the same three pre-existing Testcontainers
+warnings. The corrected latest-only vector returned `RESPONSE_INVALID`. Genuine TLS and all 1,007
+observations across two pages, plus the remaining body, routing, containment, IPC and resource cases,
+passed again. Source, output, script, manifest and image hashes and all owned cleanup were verified.
 
 Independent task review accepted two explicit maintenance costs: repeated reader admission bounds
 preserve R79, and separate cleanup logic preserves R80 without mutable-state sharing. Future fixes
 must synchronize those policies; shared pure/stateless helpers require regression evidence when
 those paths next change. These accepted findings are not a claim of a clean quality verdict.
 
-Authority checks (`AUTHORITY_OK`) and site-data gates passed. Whole-branch review and
-source/merged-main CI remained pending at this evidence entry. The protected owner-controlled
-public file remains trust authority; no current caller, writer, enrollment, IAM policy, activation or
+Authority checks (`AUTHORITY_OK`) and site-data gates passed. Whole-branch review approved the source
+with zero new findings, carrying the two previously accepted Important maintenance costs and
+pre-existing Minor warnings. Source/merged-main CI remained pending at this evidence entry. The
+protected owner-controlled public file remains trust authority; no current caller, writer, enrollment,
+IAM policy, activation or
 recovery path changes. Required-witness
 binding and complete traversal, a fresh bounded spool, sticky gaps/global cursor cycles, global
 reconciliation, database agreement, custody/freshness/rollback continuity, key delivery/activation and

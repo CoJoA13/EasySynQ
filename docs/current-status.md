@@ -138,7 +138,8 @@ files**, mypy over **465 source files**, ESLint, TypeScript and the Vite build p
 the release digest check (`test_images_lock_pinned.py`, requires `EASYSYNQ_RELEASE=1`) and the
 built-image/offline-start check (`test_infra_hardening.py`, requires `EASYSYNQ_IMAGE_PROOF=1`).
 
-All **nine mandatory actual-image tests** passed in **377.97 seconds**, with zero skips, errors or
+The **2026-09-11 pre-correction run** passed all **nine mandatory actual-image tests** in
+**377.97 seconds**, with zero skips, errors or
 failures; three pre-existing Testcontainers deprecation warnings remain. The new case used genuine
 verified provider TLS and a distinct read-only identity,
 collecting **1,007 independently created observations, including three delete markers**, in pages
@@ -152,7 +153,12 @@ Source/proof manifests and execution hashes matched; owned containers, image and
 were removed. Earlier failing fixture runs are not counted as acceptance passes.
 
 Task review found that `coercible-latest` also changed the truncation flag. The fixture now changes
-only the complete `IsLatest` element; fresh root confirmation of that revised case is pending.
+only the complete `IsLatest` element. Fresh canonical acceptance at
+`94af759731fa01ac2d237fa77076820496ae8bab` passed **all nine mandatory installed-image cases in
+382.108 seconds**, with zero skips, errors or failures and the same three pre-existing warnings.
+The corrected latest-only vector returned `RESPONSE_INVALID`; genuine TLS, all 1,007 observations
+over two pages, and the remaining body, routing, containment, IPC and resource cases passed.
+Source, output, script, manifest and image hashes and all owned cleanup were verified.
 
 The 16MiB body cap applies after SDK buffering; it is not a pre-buffer download/allocation bound.
 Real network workers, substituted adversarial IPC producers and direct installed-limit experiments
@@ -162,9 +168,10 @@ those paths. Whole required-witness binding/traversal, sticky gaps and global cu
 bounded spool, global reconciliation, actual database comparison, rollback continuity, key delivery
 and independent activation/recovery proofs remain OPEN. GitLab issue #3 is not closed.
 
-Authority checks (`AUTHORITY_OK`) and site-data checks passed. Whole-branch review and
-source/merged-main CI are still pending for this candidate. The schema's shipped slice, commit
-and suite counts retain their earlier verified baseline; the R81 dated evidence remains in
+Authority checks (`AUTHORITY_OK`) and site-data checks passed. Whole-branch review approved the
+source with zero new findings, carrying the two previously accepted Important maintenance costs
+and pre-existing Minor warnings. Source/merged-main CI remain pending. The schema's shipped slice,
+commit and suite counts retain their earlier verified baseline; the R81 dated evidence remains in
 [slice history](slice-history.md). No migration,
 dependency, CI configuration, operational caller, deployment or restore is changed.
 
