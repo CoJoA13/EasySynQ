@@ -40,7 +40,7 @@ variables:
   variables:
     UV_PYTHON_DOWNLOADS: "never"
   before_script: &uv-setup
-    - 'python -m pip install --no-cache-dir --only-binary=:all: uv==0.12.10'
+    - 'python -m pip install --no-cache-dir --only-binary=:all: uv==0.12.13'
 
 .renovate:
   image: python:3.12-bookworm
