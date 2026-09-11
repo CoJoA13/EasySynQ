@@ -6,7 +6,9 @@ finite responses are separate proof components; neither can substitute for the o
 
 from __future__ import annotations
 
+import datetime
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -21,11 +23,15 @@ from typing import Any
 from urllib.parse import quote
 
 import boto3
-import docker
 import pytest
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from testcontainers.core.container import DockerContainer, ExecConfig
+from testcontainers.core.docker_client import DockerClient
 from testcontainers.core.labels import LABEL_SESSION_ID, SESSION_ID
 
 from .audit_external_runtime_acceptance import _api_image as _api_image
@@ -387,6 +393,84 @@ def _trace_snapshot(trace: Any) -> tuple[list[dict[str, Any]], str]:
         offset = end
 
 
+def _provider_address(host: str) -> tuple[str, str]:
+    """Return the exact TLS host and a daemon-side publish address reachable from it."""
+    assert type(host) is str and host and "%" not in host
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        name = host.encode("idna").decode("ascii").lower()
+        assert len(name) <= 253 and re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+            r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*",
+            name,
+        )
+        # A remote Docker service must publish beyond its own loopback namespace.
+        binding = "127.0.0.1" if name == "localhost" else "0.0.0.0"  # noqa: S104
+        return name, binding
+    if address.is_loopback:
+        binding = str(address)
+    else:
+        binding = "::" if address.version == 6 else "0.0.0.0"  # noqa: S104 - remote fixture
+    return str(address), binding
+
+
+def _provider_endpoint(host: str, port: str) -> str:
+    host, _binding = _provider_address(host)
+    assert type(port) is str and port.isascii() and port.isdecimal() and 1 <= int(port) <= 65535
+    authority = f"[{host}]" if ":" in host else host
+    return f"https://{authority}:{port}"
+
+
+def _provider_certificate_material(host: str) -> tuple[bytes, bytes, bytes]:
+    """Issue this provider's certificate for both external admin and namespace-local readers."""
+    host, _binding = _provider_address(host)
+    names: list[x509.GeneralName] = [
+        x509.DNSName("localhost"),
+        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+    ]
+    try:
+        identity: x509.GeneralName = x509.IPAddress(ipaddress.ip_address(host))
+    except ValueError:
+        identity = x509.DNSName(host)
+    if identity not in names:
+        names.append(identity)
+    now = datetime.datetime.now(datetime.UTC)
+    ca_key = rsa.generate_private_key(public_exponent=65_537, key_size=2_048)
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "EasySynQ Page Test CA")])
+    ca = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(hours=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    server_key = rsa.generate_private_key(public_exponent=65_537, key_size=2_048)
+    server = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")]))
+        .issuer_name(ca_name)
+        .public_key(server_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(hours=1))
+        .add_extension(x509.SubjectAlternativeName(names), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    ca_bytes = ca.public_bytes(serialization.Encoding.PEM)
+    certificate = server.public_bytes(serialization.Encoding.PEM) + ca_bytes
+    private = server_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    return ca_bytes, certificate, private
+
+
 def _provider_client(endpoint: str, access: str, secret: str, ca: Path) -> Any:
     return boto3.client(
         "s3",
@@ -513,7 +597,9 @@ def _provider_acceptance(image: _ApiImage) -> dict[str, Any]:
         LABEL_SESSION_ID: SESSION_ID,
         _FIXTURE_LABEL: fixture_id,
     }
-    client = docker.from_env(timeout=15)
+    # The resolver owns this SDK client; the existing finally closes it after all cleanup.
+    resolver = DockerClient(timeout=15)
+    client = resolver.client
     admin = None
     containers = []
     created: list[dict[str, str]] = []
@@ -521,7 +607,8 @@ def _provider_acceptance(image: _ApiImage) -> dict[str, Any]:
     outcome = None
     try:
         identities = _pinned_images(client)
-        ca, certificate, private = _certificate_material()
+        host, publish_address = _provider_address(resolver.host())
+        ca, certificate, private = _provider_certificate_material(host)
         certs = material / "certs"
         certs.mkdir(mode=0o755)
         certs.chmod(0o755)
@@ -545,7 +632,7 @@ def _provider_acceptance(image: _ApiImage) -> dict[str, Any]:
                 "MINIO_ROOT_PASSWORD": root_secret,
                 "MINIO_BROWSER": "off",
             },
-            ports={"9000/tcp": ("127.0.0.1", None)},
+            ports={"9000/tcp": (publish_address, None)},
             volumes={str(certs): {"bind": "/certs", "mode": "ro"}},
             tmpfs={
                 "/data": "rw,size=134217728,mode=0700",
@@ -579,7 +666,7 @@ def _provider_acceptance(image: _ApiImage) -> dict[str, Any]:
             for mount in provider.attrs["Mounts"]
         )
         port = provider.attrs["NetworkSettings"]["Ports"]["9000/tcp"][0]["HostPort"]
-        endpoint = "https://127.0.0.1:" + port
+        endpoint = _provider_endpoint(host, port)
         admin = _provider_client(endpoint, root_access, root_secret, ca_file)
         deadline = time.monotonic() + 25
         while True:
