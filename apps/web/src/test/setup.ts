@@ -1,4 +1,4 @@
-import "@testing-library/jest-dom/vitest";
+import * as domMatchers from "@testing-library/jest-dom/matchers";
 import { cleanup } from "@testing-library/react";
 import { toHaveNoViolations } from "jest-axe";
 import { afterAll, afterEach, beforeAll, expect } from "vitest";
@@ -56,6 +56,9 @@ if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !=
   Element.prototype.scrollIntoView = function () {};
 }
 
+// Register the same matchers without jest-dom 7's Vitest 4 Assertion<T> augmentation.
+// Their Vitest 5 return types are declared in vitest.d.ts.
+expect.extend(domMatchers);
 expect.extend(toHaveNoViolations);
 
 configureTestQueryNotifications();
