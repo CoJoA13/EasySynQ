@@ -85,7 +85,7 @@ def _minio() -> Iterator[dict[str, str]]:
     import boto3
     from testcontainers.minio import MinioContainer
 
-    container = MinioContainer("minio/minio:RELEASE.2024-09-13T20-26-02Z")
+    container = MinioContainer("quay.io/minio/minio:RELEASE.2024-09-13T20-26-02Z")
     # Community MinIO's CORS control is global browser response access only. IAM/presigned request
     # authorization remains the access boundary, and the exact shipped image is exercised here.
     container.with_env("MINIO_API_CORS_ALLOW_ORIGIN", "http://test")
