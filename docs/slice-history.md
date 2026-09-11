@@ -46,6 +46,41 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## TEST HARNESS RELIABILITY
 
+### S-vitest-5-compatibility
+
+**2026-09-10; code candidate `ef328eea00c2bc2cc129034a24cf5a3dfeaf0ca0`.**
+The [Vitest 5 dependency MR](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/9)
+was revisited after the shared transition teardown prerequisite closed. Its initial manifest-only
+update could not install from the committed lock. npm regenerated the lock for Vitest **5.0.0**;
+all changed packages belong to its development dependency graph, with tarballs from the npm registry.
+The existing Renovate commit and current main ancestry are retained.
+
+An initial full run passed, but focused compiler checks exposed incompatible `Assertion<T>`
+augmentations in the local accessibility matcher and jest-dom adapter. Vitest 5 separates the
+assertion return type from the received value; `skipLibCheck` had hidden that mismatch. The shared
+setup now registers jest-dom's standalone implementations, and a `Matchers<R,T>` augmentation
+provides the correct `void` or `Promise<void>` types. The expected-value extension remains open as in
+the prior adapter. Eight compiler assertions failed before the fix and pass afterward. Three new
+tests also retain invalid-call checks, string/regular-expression/asymmetric expectations, awaited
+asynchronous assertions, and genuine failing DOM and accessibility conditions.
+
+Vitest 5's default clearing of mock call history before each test is accepted. Serial forks,
+per-file isolation, discovery exclusions, the notification barrier and reduced-motion test theme
+remain configured as before. No application behavior, required checks or warning handling changes.
+
+The final committed code passed **2,357 tests across 283 files**, with **zero skips or unhandled
+errors**, in **403.551 seconds**. The workload verified clean source identity and file hashes before
+and after execution, without retries. It compared the full test inventory with all **2,354 existing
+tests plus three new regressions**; six generated parameter titles differ only in quote formatting.
+CPJ `job-mtw84wyh-abf64080` completed at **2026-09-11 00:41:25 UTC**. The same **315 React act warnings**
+remain visible. This is not a warning-free result.
+
+Clean npm installation, the existing dependency lock policy and live npm audit gate (zero blocked
+findings), full web lint, application and browser TypeScript checks, production build, and all
+**20 focused harness tests** passed. Independent source review approved the matcher correction.
+This entry records local candidate evidence; MR !9 and its pipelines supply the subsequent exact-source
+and post-merge integration evidence. Detailed diagnostics remain outside Git.
+
 ### S-web-transition-teardown
 
 **2026-09-10; code candidate `57530017c3a5cd790a8e3c6b45be0d8df1f3bf1b`.**

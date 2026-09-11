@@ -45,10 +45,12 @@ The initial full suite passed, but eight focused compiler assertions exposed inc
 
 **Files:** The final dependency/compatibility diff, this plan, and dated evidence in `docs/slice-history.md` if the upgrade is accepted.
 
-- [ ] Pass full web lint, type checking, production build, all web tests, and the existing npm lock/audit gates. Compare test inventory with the merged baseline of 2,354 tests in 282 files; explain any runner reporting differences.
-- [ ] Run repository authority, site-data, formatting, and whitespace checks. Preserve existing React warnings as visible diagnostics.
-- [ ] Obtain fresh independent review of the complete candidate and actual verification evidence.
+- [x] Pass full web lint, type checking, production build, all web tests, and the existing npm lock/audit gates. Compare test inventory with the merged baseline of 2,354 tests in 282 files; explain any runner reporting differences.
+- [x] Run repository authority, site-data, formatting, and whitespace checks. Preserve existing React warnings as visible diagnostics.
+- [x] Obtain fresh independent review of the complete candidate and actual verification evidence.
 - [ ] Update MR !9 through a normal push only after verifying its source has not changed. Remove Draft/deferred status only when compatibility is established.
 - [ ] Require all 14 nonoptional CI jobs on the exact reviewed source before merging. Verify merge tree identity and the automatic main pipeline afterward.
 
 If a required dependency remains incompatible, keep MR !9 Draft and record the precise reopening condition instead of merging an incomplete upgrade.
+
+Final local verification on `ef328eea00c2bc2cc129034a24cf5a3dfeaf0ca0` passed 2,357 tests in 283 files with zero skips or unhandled errors. The inventory preserves all 2,354 existing tests and adds the three matcher regressions; six generated parameter titles merely omit their former quotes. See the [dated evidence](../../slice-history.md#s-vitest-5-compatibility) and MR !9 for integration status.
