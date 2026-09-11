@@ -362,6 +362,7 @@ def _traverse_required(
             if ticket is None:
                 spool.record_cycle(witness_index)
                 break
+            spool._guard_external_io()
             try:
                 raw_page = isolated_version_page.read_raw_checkpoint_version_page_isolated(
                     witness.reader,
@@ -396,6 +397,7 @@ def _traverse_required(
                 except raw_transport.RawVersionInputError:
                     spool.record_version_failure(ordinal, "INELIGIBLE_LOCATOR", ineligible=True)
                     continue
+                spool._guard_external_io()
                 try:
                     raw = isolated_raw.read_raw_checkpoint_version_isolated(
                         witness.reader,

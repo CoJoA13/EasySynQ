@@ -1997,6 +1997,59 @@ def test_real_storage_worker_death_after_healthy_page_prevents_next_listing(
     assert not owners[0]._thread.is_alive() and list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("boundary", ["reserve", "admit", "body"])
+def test_real_storage_worker_death_at_io_boundary_prevents_later_network_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    boundary: str,
+) -> None:
+    from easysynq_api.services.audit import _history_spool
+
+    collection = _collection_module()
+    owners = _capture_owners(monkeypatch, collection)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    # The independently authored original page and parsed result both contain two
+    # eligible deliveries. No second reservation intervenes between these GETs.
+    original_xml = _original_page(_ENTRY_XML * 2)
+    pages = [("synthetic-witness-1", None, None, _raw_page(original_xml, 2))]
+    bodies = [b"first committed body", b"second must remain unread"]
+    gets, _events = _boundary_transports(monkeypatch, pages, bodies)
+    method = {"reserve": "reserve_page", "admit": "admit_page", "body": "record_body"}[boundary]
+    original = getattr(_history_spool._SpoolSession, method)
+    committed = []
+    dead_children = []
+
+    def complete_boundary_then_kill(self: Any, *args: Any, **kwargs: Any) -> Any:
+        result = original(self, *args, **kwargs)
+        if boundary == "body":
+            committed.append(args)
+        if not dead_children:
+            process = self._process
+            assert process is not None and process.returncode is None
+            process.kill()
+            process.wait(timeout=2.0)
+            dead_children.append(process)
+        # Return normally: the collector must discover the established death
+        # before entering either unchanged network transport again.
+        return result
+
+    monkeypatch.setattr(_history_spool._SpoolSession, method, complete_boundary_then_kill)
+    with pytest.raises(collection.HistoryCollectionError) as caught:
+        _collector(collection)(ORG_ID, (_pin(),), (_required(collection),), _limits(collection))
+    assert caught.value.code == "WORKER_FAILED"
+    assert len(dead_children) == 1 and dead_children[0].returncode is not None
+    assert len(owners) == 1 and not owners[0]._thread.is_alive()
+    assert list(tmp_path.iterdir()) == []
+    assert gets == ([("synthetic-witness-1", _EXACT_KEY, "null")] if boundary == "body" else [])
+    assert committed == ([(1, b"first committed body")] if boundary == "body" else [])
+    assert bodies == (
+        [b"second must remain unread"]
+        if boundary == "body"
+        else [b"first committed body", b"second must remain unread"]
+    )
+    assert len(pages) == (1 if boundary == "reserve" else 0)
+
+
 def test_spool_cleanup_failure_with_cancellation_keeps_group_and_stops_watchdog(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

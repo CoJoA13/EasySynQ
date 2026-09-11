@@ -350,6 +350,13 @@ class _SpoolSession:
         self._check(deadline)
 
     @_owned
+    def _guard_external_io(self) -> None:
+        """Forbid another network read when retention ownership is already lost."""
+        process = self._process
+        if process is None or process.poll() is not None:
+            raise HistoryCollectionError("WORKER_FAILED")
+
+    @_owned
     def reserve_page(
         self, witness_index: int, key_marker: str | None, version_id_marker: str | None
     ) -> _PageTicket | None:
