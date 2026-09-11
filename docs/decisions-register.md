@@ -1,6 +1,9 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R83) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector. R82 adopts PolyForm Shield for original project materials and permits paid consulting for customer-owned instances. R83 adds inactive isolated original version-page transport and a bounded DeleteMarker metadata compatibility extension; full required-witness collection and recovery remain open.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R84) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector. R82 adopts PolyForm Shield for original project materials and permits paid consulting for customer-owned instances. R83 adds inactive isolated original version-page transport and a bounded DeleteMarker metadata compatibility extension; that R83 boundary left required-witness collection and recovery open.
+
+R84 adds inactive required-witness namespace traversal with a fresh bounded private spool and
+post-cleanup diagnostics. It authenticates no history and activates no operational consumer.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -112,7 +115,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R83
+## Part 3 — Resolutions R1–R84
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -3294,6 +3297,103 @@ label, graph path or bridge pin, and closes none of those residuals.
 dated [slice history](slice-history.md).
 
 Bumps the resolutions range **R1–R82 → R1–R83**.
+
+---
+
+### R84 — Required-witness traversal retains observations in a fresh bounded spool — 2026-09-11
+
+**Decision.** Add inactive `collect_required_checkpoint_history(org_id, required_witnesses,
+readers, limits, *, cancel=None)` with frozen `RequiredHistoryWitness`, `HistoryCollectionLimits`,
+`HistoryWitnessSummary`, `HistoryCollectionIssue` and `HistoryCollectionReport` types. The
+[approved design](superpowers/specs/2026-09-11-audit-required-witness-collection-design.md)
+defines the complete contract. The result is bounded traversal diagnostics after owned cleanup;
+it is not authenticated history, a graph/bridge pin, a database comparison or a key permission.
+No CLI/API route, scheduled caller, enrollment format, migration, writer or restore path is activated.
+
+**Admission and traversal.** Validate every exact input before any worker, directory, watchdog or
+network I/O. Require one through four unique externally pinned witnesses and exactly matching
+reader identities. Recompute each existing R78 namespace commitment from the explicit reader,
+organization prefix and canonical fields; reject a mismatch before visiting any witness. Traverse
+in witness UUID order through unchanged R83 page requests and serial one-shot R80 GETs. Preserve
+every original admitted XML page and every version/marker delivery, including repeated locators,
+unknown bodies, literal `null` and R81-admitted control labels. Ineligible versions are accounted
+for without GET. No manifest/current-version filter, retry, alternate reader or GET deduplication
+may replace namespace traversal. Non-adjacent opaque cursor cycles stop the affected witness only
+after its admitted page/body outcomes are retained. A healthy witness never repairs another's gap.
+
+Explicit inclusive limits are 1–4,096 attempted pages, 1–100,000 version/marker observations,
+1–1,073,741,824 admitted XML/body bytes, 65,536–1,073,741,824 logical spool bytes in 4,096-byte
+multiples, 1–86,400 whole-attempt seconds and 1–32 displayed issue groups. These limits do not
+expand R79's 64KiB body or R81's 16MiB/1,000-entry page limits. Admitted-byte accounting includes
+duplicate successful deliveries; it is not a network-transfer quota. Exhaustion yields no prefix.
+
+**Private storage and ownership.** The parent owns one storage-only SQLite worker and at most one
+network worker. A fresh unpredictable 0700 directory holds one exclusively created 0600 database.
+The fixed protocol accepts admitted non-secret scope, original bytes and fixed operations only;
+credentials remain in the existing reader inputs/network pipes. No public path, connection, SQL,
+callback, supplied database, resume token or reopen API is exposed. BLOB locator indexes preserve
+exact bytes. Identical deliveries remain separate observations; conflicting bytes at the same
+witness/key/version create a sticky conflict. Original pages are decoded independently in storage.
+
+SQLite uses 4,096-byte pages and the admitted page-count ceiling, MEMORY journal/temp stores,
+`mmap_size=0`, `cache_size=-1024`, a 67,108,864-byte hard heap ceiling, `synchronous=OFF`,
+`trusted_schema=OFF`, `threads=0` and `busy_timeout=0`. Extension loading, attachments, mutable
+schema/PRAGMAs and arbitrary operations are denied after fixed initialization. The logical single
+database length is bounded; filesystem metadata/allocator overhead and a host-wide quota are not.
+MEMORY rollback is not durable recovery: interruption or storage/protocol failure poisons the
+attempt, forbids later reads/results and requires abandonment without reopening the database.
+
+The fresh `-I -B -u` storage worker applies and verifies 512MiB address space, 120 CPU seconds,
+32 descriptors, zero core bytes and an initial 1GiB file ceiling lowered to the admitted spool cap.
+Fixed bounded metadata/chunk frames and sequence IDs admit one outstanding operation. Each storage
+command has one 10-second deadline, including all upload chunks. One watchdog propagates caller
+cancellation and the whole-attempt deadline to unchanged R80/R83; worker reaping is bounded to two
+seconds. Normal return requires final frame, EOF, zero worker exit, descriptor/selector closure,
+owned-directory removal, watchdog termination and final cancellation/deadline checks. Cleanup is
+attempted independently after other faults; an unproved reap or cleanup cannot publish a report.
+These are application/OS bounds, not real-time kernel guarantees or a sandbox for arbitrary code.
+
+**Diagnostics and errors.** Report scope is exactly `required-witness-provider-traversal`.
+`traversed` means each required witness reached a terminal page with every observation resolved;
+it authenticates no body. Status is `failed` for any DELETE_OBSERVATION or LOCATOR_CONFLICT group,
+otherwise `incomplete` for LIST_UNAVAILABLE, VERSION_UNAVAILABLE, INELIGIBLE_LOCATOR or CURSOR_CYCLE,
+otherwise `traversed`. Issue truncation never changes status. Reports contain no raw location,
+body, endpoint or credential text. Input/cancellation/error classes and fixed codes follow the
+approved design; unexpected/fatal faults and cleanup failures are not ordinary unavailable reads.
+The fixed unproved checks retain body/signature validity, global history consistency, provider
+non-omission, snapshot atomicity, historical deletion absence, custody, database-chain agreement,
+freshness, rollback continuity and key activation.
+
+**Acceptance and startup cost.** Independent synthetic scaling retains 5,002 deliveries and late
+contradictions through the real collector/storage process. Separate pinned-provider acceptance
+requires two distinct namespaces, separate read-only credentials, 1,001 A versions plus two B
+versions, all 1,003 real GETs and three original XML pages of 1,000/one/two entries. Seeded complete
+locator/length/SHA256 tuples independently match actual downloaded receipts. MinIO trace confirms
+GET metadata and its literal `<BLOB>` marker, not GET object bytes; original LIST XML remains
+length/hash checked. Receipt mutations, actual OS limits, CPU/heap/FD/file failures, disk journal/temp
+controls, hostile IPC and owned cleanup are independent acceptance obligations. All ten mandatory
+runtime cases remain required; a focused case or small profile does not replace that harness.
+
+Build-time checked-hash bytecode at optimization zero and a narrow unused-import refactor reduce
+fresh-reader startup while preserving assertions, no runtime cache writes, SDK behavior, fixed
+worker flags/limits and isolation. The shared legacy verifier Protocol is re-exported from its old
+modules; its defining-module/repr/new-pickle metadata changes. The deferred sink settings wrapper
+retains the patchable call seam and original cached settings behavior, but not the original callable
+identity, precise return annotation or cache-management attributes. No supported consumer of those
+incidental attributes or removed trust-module import aliases was found. Image/build/cache costs
+and measured evidence are recorded in [slice history](slice-history.md#s-audit-required-witness-collection--fresh-bounded-traversal-diagnostics).
+
+Global R77/R78 reconciliation within this lifetime, scalable bridge/key/edge indexes, DB snapshot
+agreement, protected enrollment/rollback memory, independent custody/delivery, activation/rotation
+and source-denied recovered-stack proofs remain open. The discarded diagnostic spool cannot be
+reconstructed from counts or used to certify an empty history after failure. No residual or issue #3
+is closed by this inactive increment.
+
+**Back-propagation:** [Current status](current-status.md), [open residuals](open-residuals.md),
+[slice history](slice-history.md), [external verification runbook](runbooks/audit-external-verification.md)
+and the [approved design](superpowers/specs/2026-09-11-audit-required-witness-collection-design.md).
+
+Bumps the resolutions range **R1–R83 → R1–R84**.
 
 ---
 

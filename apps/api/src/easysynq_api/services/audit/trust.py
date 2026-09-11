@@ -23,9 +23,8 @@ from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from sqlalchemy.engine import make_url
 
-from .checkpoint import LegacySignatureVerifier, verify_checkpoint_signature
+from ._legacy_signature_protocol import LegacySignatureVerifier as LegacySignatureVerifier
 
 _DESCRIPTOR_MAX_BYTES = 65_536
 _KEY_PREFIX = "ed25519-sha256:"
@@ -343,6 +342,8 @@ def _required_environment_value(environ: Mapping[str, str], name: str, *, maximu
 
 
 def _database_url(value: str) -> str:
+    from sqlalchemy.engine import make_url
+
     if "#" in value:
         raise TrustConfigurationError("DATABASE_URL is invalid")
     try:
@@ -395,6 +396,8 @@ def legacy_verifier(keys: tuple[TrustedLegacyKey, ...]) -> LegacySignatureVerifi
     """Return a verifier bounded to the one-to-eight externally enrolled legacy keys."""
     if not 1 <= len(keys) <= 8:
         raise ValueError("legacy keys must contain between 1 and 8 entries")
+
+    from .checkpoint import verify_checkpoint_signature
 
     def verify(
         *,

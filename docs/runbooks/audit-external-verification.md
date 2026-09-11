@@ -88,6 +88,39 @@ cap does not bound downloads. There is no new command or enrollment setting. Ori
 transport, every required witness, full namespace accounting, bounded spool storage, global cursor
 cycles, snapshot comparison and independent recovery proofs still precede operational use.
 
+## Inactive page and required-witness collection foundations
+
+R83 adds original page transport through a fresh isolated worker. Exact reader, organization and
+opaque cursor inputs select one physical request; original XML is admitted only after response
+validation, worker exit and cleanup. This extends the supplied R81 decoder without changing the
+live command described in this runbook.
+
+The R84 candidate adds `collect_required_checkpoint_history` as an inactive Python foundation.
+It validates one through four externally required witness namespaces before I/O and traverses each
+through existing serial R80/R83 workers. It preserves every admitted original page, repeated body
+delivery, marker, unavailable read and cursor gap in one fresh private bounded spool. A healthy
+witness cannot cover a missing obligation at another witness. No new command flag, enrollment file,
+operator settings, IAM policy or deployment procedure is introduced.
+
+The result contains traversal diagnostics only. `traversed` means the required observations reached
+terminal pages and received outcomes; it proves no signature, global consistency, non-omission,
+atomic snapshot, witness custody, database agreement, freshness, rollback continuity or key activation.
+Unknown or malformed readable bodies remain opaque evidence for later reconciliation. Explicit
+limits can prevent a history from finishing; cancellation, resource/storage failure or unproved
+cleanup yields no accepted prefix. Do not interpret a failed collection as an empty history.
+
+The MEMORY journal/temp spool has no recovery or resume contract. It is discarded after success or
+interruption and is never reopened or exported. A later global reconciler must use it within the
+owned lifetime before publishing its own post-cleanup result. Diagnostic counts cannot reconstruct
+that evidence. Full R77/R78 reconciliation, actual snapshot comparison, independently protected
+enrollment/rollback knowledge, custody, key delivery/activation and source-denied recovery remain
+separate prerequisites before operational integration.
+
+Runtime acceptance does not establish a production trust installation, live enrollment or recovery
+readiness. The collector remains inactive pending the operational prerequisites above. See
+[R84](../decisions-register.md#r84--required-witness-traversal-retains-observations-in-a-fresh-bounded-spool--2026-09-11)
+and its [dated evidence](../slice-history.md#s-audit-required-witness-collection--fresh-bounded-traversal-diagnostics).
+
 ## Establish the public enrollment
 
 The repository owner approves the expected organization IDs, retained Ed25519 public keys and witness

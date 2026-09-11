@@ -24,7 +24,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from time import monotonic
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 import rfc8785
 from cryptography.exceptions import InvalidSignature
@@ -48,6 +48,7 @@ from ...db.models.audit_checkpoint import AuditCheckpoint
 from ...db.models.audit_checkpoint_sink import AuditCheckpointSink
 from ...db.models.audit_event import AuditEvent
 from ..common.signing import SigningKeyUnavailable, describe_unpersistable
+from ._legacy_signature_protocol import LegacySignatureVerifier as LegacySignatureVerifier
 from .sink import (
     ExplicitHistoryReader,
     SinkReadError,
@@ -65,18 +66,6 @@ _HISTORY_MAX_PAGES = 1024
 _HISTORY_MAX_ENTRIES = 524_288
 _HISTORY_REASON_LIMIT = 20
 _HISTORY_SCAN_SECONDS = 300
-
-
-class LegacySignatureVerifier(Protocol):
-    def __call__(
-        self,
-        *,
-        org_id: Any,
-        latest_id: int,
-        latest_row_hash: bytes,
-        timestamp: datetime.datetime,
-        signature: bytes | None,
-    ) -> bool: ...
 
 
 def _now() -> datetime.datetime:

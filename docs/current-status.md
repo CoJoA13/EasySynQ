@@ -119,7 +119,7 @@ opaque. Every admitted version, delete marker and duplicate remains an untrusted
 Malformed late content yields no page. Complete witness collection remains a separate prerequisite;
 current operational callers remain unchanged.
 
-The **2026-09-11 local candidate, S-audit-version-page-transport (R83)**, adds one inactive original
+The **2026-09-11 development record for S-audit-version-page-transport (R83)** adds one inactive original
 version-page read through a private Linux worker. Its exact request binds reader, bucket,
 organization and both opaque cursors; original XML reaches the R81 decoder before SDK parsing.
 No page is admitted before client close, exact IPC, stdout EOF, zero worker exit, owned cleanup
@@ -173,22 +173,71 @@ three existing warnings. Genuine TLS, all **1,007 observations over 1,000/seven-
 trace bytes/requests and the remaining acceptance cases passed. All **823 source hashes** were
 unchanged; command, output and artifact custody and owned cleanup were verified, including absence
 of owned containers and image. Earlier local runs remain evidence for their earlier source states;
-fresh source/DinD and merged-main CI are pending.
+fresh source/DinD and merged-main CI were pending at that checkpoint. The verified R83 merged-main
+baseline for the next increment is `f08b8b0ba96f049531e01a59f31427d9156a61d3`; its file tree equals
+the previously verified clean `e26cb14` tree. The earlier run counts remain historical evidence.
 
 The 16MiB body cap applies after SDK buffering; it is not a pre-buffer download/allocation bound.
 Real network workers, substituted adversarial IPC producers and direct installed-limit experiments
 are identified separately in the proof. Accepted review costs retain repeated reader admission
 bounds and separate worker cleanup logic to keep R79/R80 unchanged; future fixes must synchronize
-those paths. Whole required-witness binding/traversal, sticky gaps and global cursor cycles, a fresh
-bounded spool, global reconciliation, actual database comparison, rollback continuity, key delivery
-and independent activation/recovery proofs remain OPEN. GitLab issue #3 is not closed.
+those paths. At the R83 boundary, required-witness traversal, sticky gaps/global cursor cycles and
+fresh bounded spooling remained future work. The inactive R84 candidate below adds that foundation;
+global reconciliation, actual database comparison, rollback continuity, key delivery and independent
+activation/recovery proofs remain OPEN. GitLab issue #3 is not closed.
 
 Authority checks (`AUTHORITY_OK`) and site-data checks passed. Whole-branch review approved the
 source with zero new findings, carrying the two previously accepted Important maintenance costs
-and pre-existing Minor warnings. Source/merged-main CI remain pending. The schema's shipped slice,
+and pre-existing Minor warnings. Source/merged-main CI were pending in that earlier record. The schema's shipped slice,
 commit and suite counts retain their earlier verified baseline; the R81 dated evidence remains in
 [slice history](slice-history.md). No migration,
 dependency, CI configuration, operational caller, deployment or restore is changed.
+
+The **2026-09-11 local candidate, S-audit-required-witness-collection (R84)**, binds all externally
+required namespaces before I/O and traverses them through the existing serial R80/R83 workers.
+One fresh storage-only SQLite worker retains every admitted original page, repeated body delivery,
+marker, unavailable version and traversal gap. Its MEMORY journal/temp database is discarded after
+finish or interruption and is never reopened. The API returns only post-cleanup traversal diagnostics;
+`traversed` is not authentication, globally consistent history, database agreement or activation.
+Existing protected enrollment, operational callers, writers and restore paths are unchanged.
+
+Independent local verification passed **921 affected unit tests in 58.95 seconds**, zero failures,
+errors or skips, plus scoped Ruff, format and mypy gates. The unchanged mandatory actual-image
+harness then passed **all ten cases in 814.87 seconds**, with zero failures, errors or skips. Its
+new collection case took **606,102 ms**, following a separate focused pass. It exercised synthetic
+5,002-body scaling, actual resource/SQL/IPC controls, and **1,003 real provider GETs across three LIST
+pages of 1,000/one/two observations**. Every downloaded locator/length/SHA256 tuple matched literal
+seeded data independently. Trace validated exact GET metadata and its `<BLOB>` representation;
+LIST XML bytes remained length/hash checked. Actual CPU consumption was **119,981 ms**;
+seven adversarial IPC and ten actual-worker cases passed. All **2,055 source identities**, build,
+proof, driver/log/JUnit hashes and fresh owned container/image/directory cleanup were verified.
+
+The provider collector took **443,338 ms** within its unchanged 450-second allowance—a margin of
+about **6.7 seconds**, not a general performance guarantee. Provider fixture/setup/cleanup took
+**452,043 ms**; the other phases were synthetic **9,018**, resources **144,247** and certifi **767 ms**.
+The proof stayed below the new-case 780-second and full-harness 1,200-second caps.
+
+Full local `just check` then passed in **494.432 seconds**: **4,078 API tests in 152.51 seconds**,
+**2,357 web tests across 283 files in 328.64 seconds**, API/web lint, formatting, type checks and
+the web production build. The production-image runtime check ran with `EASYSYNQ_IMAGE_PROOF=1`.
+The only skip was release-ceremony image digest pinning, since `EASYSYNQ_RELEASE` was not enabled.
+`just authority-check`, site-data and whitespace checks also passed, with all **2,056 source
+identities** unchanged during the gates. This checkpoint records local acceptance before Task 4
+and whole-branch reviews and GitLab source/main CI and merge.
+
+Fresh-worker startup required build-time checked-hash bytecode with assertions enabled and no
+runtime cache writes, plus removal of unused database/settings imports. The Protocol keeps shared
+runtime identity through re-exports, with defining-module/repr/new-pickle metadata changes. The
+sink getter remains patchable and delegates to the original settings cache; callable metadata and
+cache-management attributes are not identical. The bytecode-only comparison added **74,659,361
+Docker-reported image bytes**; that measurement is not the final candidate's image-size delta.
+See [the dated history](slice-history.md#s-audit-required-witness-collection--fresh-bounded-traversal-diagnostics)
+for scope and costs. Global reconciliation, full bridge/key indexes, DB comparison, provider
+non-omission, custody, freshness/rollback memory, key delivery/activation and independent recovery
+remain open. No migration, dependency version, live IAM, deployment or restore is changed.
+
+The machine-readable frontmatter retains the earlier verified shipped snapshot and suite counts;
+it does not infer a new full-suite baseline from the 921 affected tests or local runtime evidence.
 
 Other full-stack counts are inherited from
 [MR !26](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/26)'s source pipeline

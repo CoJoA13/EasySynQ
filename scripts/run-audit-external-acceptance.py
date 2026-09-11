@@ -38,6 +38,7 @@ _MANDATORY_TESTS = frozenset(
         "test_isolated_raw_runtime_enforces_process_and_byte_boundaries",
         "test_version_page_decoder_runtime_rejects_lossy_provider_pages",
         "test_version_page_transport_runtime_preserves_original_observations_and_limits",
+        "test_history_collection_runtime_preserves_required_witnesses_and_resource_boundaries",
     }
 )
 _EXCLUDED_DIRECTORIES = frozenset({".pytest_cache", ".venv", "__pycache__"})
@@ -292,6 +293,7 @@ def _proof_manifest(root: Path) -> _Manifest:
         root / "infra/images.lock",
         root / "infra/compose/minio/minio-init.sh",
         root / "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
+        root / "apps/api/tests/fixtures/audit_history_collection_vectors.json",
     ]
     tests = _walk_inputs(root, root / "apps/api/tests", python_only=True)
     return _manifest(root, [*fixed, *tests])
@@ -666,6 +668,8 @@ def run_acceptance(root: Path | None = None) -> int:
             "tests/integration/audit_isolated_raw_runtime_acceptance.py",
             "tests/integration/audit_version_page_runtime_acceptance.py",
             "tests/integration/audit_version_page_transport_runtime_acceptance.py",
+            "tests/integration/audit_history_collection_runtime_acceptance.py"
+            "::test_history_collection_runtime_preserves_required_witnesses_and_resource_boundaries",
             "-q",
             "--junitxml",
             str(owned / "runtime.xml"),

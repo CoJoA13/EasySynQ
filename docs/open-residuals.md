@@ -88,6 +88,15 @@ is activated. Whole required-witness binding/traversal, a fresh private bounded 
 and global cursor cycles, global reconciliation, actual snapshot agreement and the source-denied
 recovered-stack proof remain required. Finite fixture pagination does not satisfy those contracts;
 this record and GitLab issue #3 remain OPEN.
+Required-witness traversal progress on 2026-09-11 (R84 candidate): the inactive collector binds
+every required namespace before I/O, retains observed original pages/bodies and sticky gaps in one
+fresh bounded private spool, and publishes diagnostics only after cleanup. Root verified the full
+new-case 1,003-GET/three-page provider proof and real resource/storage controls as part of the
+passing ten-case mandatory harness. The MEMORY spool is abandoned after interruption
+and cannot be resumed. This supplies neither global R77/R78 reconciliation nor an authenticated
+snapshot, archived object generation or actual recovered-stack proof. Database comparison,
+independent custody/delivery, protected rollback memory and the source-denied boot/read closure
+contract remain required. This record and issue #3 stay OPEN; no restore or activation is enabled.
 Last reviewed: 2026-09-11
 
 ## RES-CONTAINER-SECURITY-TRIAGE
@@ -454,6 +463,19 @@ and scalable global reconciliation remain unimplemented. Database-chain agreemen
 freshness/rollback continuity, durable delivery and activation/restore proofs remain required.
 Current operational consumers are unchanged and this record stays OPEN.
 
+Required-witness traversal progress on 2026-09-11 (R84 candidate): one inactive attempt now binds
+the entire externally required witness set before I/O, traverses original R83 pages and every
+eligible R80 version serially, and preserves duplicate deliveries, conflicts, markers, unavailable
+reads and cursor gaps in a fresh bounded storage-only spool. A `traversed` report is unauthenticated
+observation accounting after cleanup, not a verified global history. Root verified full new-case
+acceptance with 1,003 actual GETs and three original pages, separate 5,002-body synthetic scaling,
+actual resource/SQL/IPC controls and owned cleanup. The unchanged ten-case harness also passed;
+integration state is tracked in [current status](current-status.md). The spool is discarded and never reopened after
+success or failure; a later reconciler must work within that lifetime. Global R77/R78 equivalence,
+larger bridge/key/edge indexes, actual DB-chain agreement, non-omission/atomicity, protected custody
+and rollback memory, durable delivery and activation/restore compatibility remain required.
+Current operational consumers remain unchanged; this record stays OPEN.
+
 ## RES-MINIO-VERSION-LIST-DENY
 
 Status: OPEN
@@ -560,6 +582,15 @@ opaque cursors are available to future collection. They activate no key, infer n
 change no enrollment, custody or restore path. Complete required-witness history, bounded spooling,
 global reconciliation, protected rollback memory, independent key delivery/activation confirmation
 and an actual pre-rotation restore remain required; this record stays OPEN.
+
+Required-witness traversal progress on 2026-09-11 (R84 candidate): the inactive bounded collector
+preserves observed namespace evidence without choosing legacy/v2 membership, authenticating bodies
+or inferring key eras. Full new-case and ten-case harness acceptance are verified; integration
+state is tracked in [current status](current-status.md). The private diagnostic spool is discarded after its lifetime; it is
+not a retained key-history store or activation authority. Global history reconciliation, protected
+rollback knowledge, independent transition delivery/activation confirmation and actual rotation
+plus pre-rotation restore proofs remain open. Existing signing, key loading, enrollment and restore
+behavior are unchanged; this record stays OPEN.
 
 ## RES-RISK-CLAUSE-PICKER
 
