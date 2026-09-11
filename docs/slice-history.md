@@ -241,12 +241,28 @@ success.
 
 Task review found a Minor coverage defect: `coercible-latest` changed both latest and truncation
 flags. Its correction replaces only the complete `IsLatest` element, retaining valid truncation;
-no production defect was inferred from this coverage gap. Fresh canonical acceptance at
+no production defect was inferred from this coverage gap. Historical local canonical acceptance at
 `94af759731fa01ac2d237fa77076820496ae8bab` passed **all nine mandatory installed-image cases in
 382.108 seconds**, with zero skips, errors or failures and the same three pre-existing Testcontainers
 warnings. The corrected latest-only vector returned `RESPONSE_INVALID`. Genuine TLS and all 1,007
 observations across two pages, plus the remaining body, routing, containment, IPC and resource cases,
 passed again. Source, output, script, manifest and image hashes and all owned cleanup were verified.
+
+Source CI **2840588422** subsequently failed the new provider fixture while **13 other checks
+passed**, API units passed **3,738 with one release-only skip**, and the eight older runtime cases
+passed. A finite real-network reproduction confirmed that daemon-loopback publishing and a
+job-loopback URL do not cross DinD namespaces. The correction uses the installed Testcontainers
+host resolver, reachable publishing and a matching typed DNS/IP certificate SAN. Verified TLS and
+provider-local loopback endpoints remain intact. Independent scoped review marked the correction
+**ADDRESSED with zero new findings**; no production behavior changed.
+
+At `61a9c7c891049a314ec3bc54d867b5b1fa761979`, fresh local canonical acceptance passed **all nine
+mandatory actual-image cases in 384.010 seconds**, with zero skips, errors or failures and the same
+three existing Testcontainers warnings. Genuine TLS, **1,007 observations in 1,000/seven-row pages**,
+exact trace bytes/requests and the remaining acceptance cases passed. All **823 source hashes**
+remained unchanged; command/output/artifact custody, cleanup records and absence of owned Docker
+containers and image were verified. The earlier local runs remain historical evidence for their
+respective source states. Fresh source/DinD and merged-main CI remain pending.
 
 Independent task review accepted two explicit maintenance costs: repeated reader admission bounds
 preserve R79, and separate cleanup logic preserves R80 without mutable-state sharing. Future fixes

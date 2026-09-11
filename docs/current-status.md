@@ -153,12 +153,27 @@ Source/proof manifests and execution hashes matched; owned containers, image and
 were removed. Earlier failing fixture runs are not counted as acceptance passes.
 
 Task review found that `coercible-latest` also changed the truncation flag. The fixture now changes
-only the complete `IsLatest` element. Fresh canonical acceptance at
+only the complete `IsLatest` element. Historical local canonical acceptance at
 `94af759731fa01ac2d237fa77076820496ae8bab` passed **all nine mandatory installed-image cases in
 382.108 seconds**, with zero skips, errors or failures and the same three pre-existing warnings.
 The corrected latest-only vector returned `RESPONSE_INVALID`; genuine TLS, all 1,007 observations
 over two pages, and the remaining body, routing, containment, IPC and resource cases passed.
 Source, output, script, manifest and image hashes and all owned cleanup were verified.
+
+Source CI **2840588422** then failed the new fixture's DinD reachability assumptions: the job and
+daemon have separate loopbacks. The other **13 checks passed**; API units passed **3,738 with one
+release-only skip**, and the eight older runtime cases passed. The fixture now uses Testcontainers'
+resolved Docker host, a reachable publish address and a matching DNS/IP certificate SAN with TLS
+verification retained. Provider-local endpoints remain unchanged. Independent scoped review marked
+the correction **ADDRESSED with zero new findings**.
+
+The latest local canonical proof at `61a9c7c891049a314ec3bc54d867b5b1fa761979` passed **all nine
+mandatory actual-image cases in 384.010 seconds**, with zero skips, errors or failures and the same
+three existing warnings. Genuine TLS, all **1,007 observations over 1,000/seven-row pages**, exact
+trace bytes/requests and the remaining acceptance cases passed. All **823 source hashes** were
+unchanged; command, output and artifact custody and owned cleanup were verified, including absence
+of owned containers and image. Earlier local runs remain evidence for their earlier source states;
+fresh source/DinD and merged-main CI are pending.
 
 The 16MiB body cap applies after SDK buffering; it is not a pre-buffer download/allocation bound.
 Real network workers, substituted adversarial IPC producers and direct installed-limit experiments
