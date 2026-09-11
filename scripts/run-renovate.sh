@@ -28,6 +28,7 @@ if [ "$mode" = validate ]; then
   test -f renovate.json
   "$renovate_node" "$renovate_dist/config-validator.js" --strict --no-global renovate.json
   "$renovate_node" "$renovate_dist/config-validator.js" --strict renovate-self-hosted.cjs
+  "$renovate_node" scripts/tests/test-renovate-images.mjs "$renovate_dist"
   exit
 fi
 
