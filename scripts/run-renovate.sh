@@ -17,7 +17,7 @@ install_node() {
   tar -xJf "$tools_dir/$archive" --strip-components=1 -C "$destination"
 }
 # The application uses Node 26; Renovate 44's supported runtime is Node 24.
-install_node 24.20.0 "$tools_dir/node24"
+install_node 24.21.0 "$tools_dir/node24"
 renovate_node="$tools_dir/node24/bin/node"
 export PATH="$tools_dir/node24/bin:$PATH"
 # Lifecycle scripts are disabled: dependencies come from npm, without native-addon GitHub installers.
