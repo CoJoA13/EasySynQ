@@ -766,9 +766,19 @@ def _child_case(config: dict[str, Any], mode: str) -> dict[str, Any]:
         try:
             stdout, stderr = process.communicate(timeout=140 if mode == "cpu" else 45)
         finally:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.communicate(timeout=2)
+            try:
+                try:
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                finally:
+                    process.communicate(timeout=2)
+            finally:
+                for stream in (process.stdout, process.stderr):
+                    if not stream.closed:
+                        stream.close()
         ended_cpu = resource.getrusage(resource.RUSAGE_CHILDREN)
         assert stderr == b""
         value = json.loads(stdout)
