@@ -1,7 +1,7 @@
-"""Pure scope admission for externally required audit-history witnesses.
+"""Inactive, bounded traversal of externally required audit-history witnesses.
 
-This module binds caller-supplied readers to protected namespace commitments. It
-does not discover providers, start workers, create storage, or perform network I/O.
+Pure admission precedes all ownership. Diagnostics are published only after the
+private spool and watchdog are gone; traversal authenticates no retained body.
 """
 
 from __future__ import annotations
@@ -10,14 +10,23 @@ import dataclasses
 import hashlib
 import re
 import threading
-from typing import Literal, NoReturn
+import time
+from typing import TYPE_CHECKING, Literal, NoReturn
 from uuid import UUID
 
 import rfc8785
 
-from . import version_page_transport
+from . import isolated_raw, isolated_version_page, raw_transport, version_page_transport
 from .bootstrap_bridge import BridgeWitnessPin
 from .sink import ExplicitHistoryReader
+
+if TYPE_CHECKING:
+    from ._history_spool import _SpoolSession
+    from ._history_spool_protocol import _SpoolSummary
+
+_monotonic = time.monotonic
+_WATCH_POLL_SECONDS = 0.05
+_WATCH_JOIN_SECONDS = 2.0
 
 _NAMESPACE_DOMAIN = b"EasySynQ/AuditLegacyBridge/v1/namespace\0"
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -214,3 +223,286 @@ def _validate_collection_inputs(
             _input_invalid()
 
     return tuple(sorted(readers, key=lambda required: required.witness_id.bytes))
+
+
+def _raise_collection_faults(faults: list[BaseException]) -> NoReturn:
+    if len(faults) == 1:
+        raise faults[0] from None
+    raise BaseExceptionGroup("checkpoint history collection operation and cleanup failed", faults)
+
+
+def _contains_fault(container: BaseException, fault: BaseException) -> bool:
+    pending = [container]
+    while pending:
+        current = pending.pop()
+        if current is fault:
+            return True
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+    return False
+
+
+class _CollectionOwner:
+    """One interrupt signal with a separately observed cancellation/deadline reason."""
+
+    def __init__(self, cancel: threading.Event | None, deadline: float) -> None:
+        self.cancel = threading.Event()
+        self.deadline = deadline
+        self._caller = cancel
+        self._stop = threading.Event()
+        self._stopping = False
+        self._faults: list[BaseException] = []
+        self._thread = threading.Thread(target=self._watch, name="audit-history-watchdog")
+
+    def check(self) -> None:
+        if self._faults:
+            _raise_collection_faults(list(self._faults))
+        if self._caller is not None and self._caller.is_set():
+            raise HistoryCollectionCancelled()
+        if _monotonic() >= self.deadline:
+            raise HistoryCollectionError("DEADLINE_EXCEEDED")
+
+    def _watch(self) -> None:
+        try:
+            while not self._stopping:
+                if (
+                    self._caller is not None and self._caller.is_set()
+                ) or _monotonic() >= self.deadline:
+                    self.cancel.set()
+                    return
+                if self._stop.wait(_WATCH_POLL_SECONDS):
+                    return
+        except BaseException as error:  # noqa: BLE001 - target faults belong to the owner
+            self._faults.append(error)
+            try:
+                self.cancel.set()
+            except BaseException as interrupt_error:  # noqa: BLE001 - retain both failures
+                self._faults.append(interrupt_error)
+
+    def start(self) -> None:
+        self.check()
+        self._thread.start()
+        self.check()
+
+    def close(self) -> list[BaseException]:
+        faults: list[BaseException] = []
+        # The flag also stops the bounded loop if waking its Event fails.
+        self._stopping = True
+        try:
+            self._stop.set()
+        except BaseException as error:  # noqa: BLE001 - joining remains independently required
+            faults.append(error)
+        try:
+            if self._thread.ident is not None:
+                self._thread.join(_WATCH_JOIN_SECONDS)
+        except BaseException as error:  # noqa: BLE001 - retain unexpected join identities
+            faults.append(error)
+        try:
+            if self._thread.is_alive():
+                faults.append(HistoryCollectionError("CLEANUP_FAILED"))
+        except BaseException as error:  # noqa: BLE001 - uncertain liveness forbids publication
+            faults.extend((error, HistoryCollectionError("CLEANUP_FAILED")))
+        faults.extend(self._faults)
+        return faults
+
+
+def _list_failure_code(error: BaseException, owner: _CollectionOwner) -> str:
+    if type(error) is version_page_transport.VersionPageReadCancelled:
+        owner.check()
+        raise error
+    if type(error) not in (
+        isolated_version_page.IsolatedVersionPageError,
+        version_page_transport.VersionPageReadError,
+    ):
+        raise error
+    if isinstance(
+        error,
+        (
+            isolated_version_page.IsolatedVersionPageError,
+            version_page_transport.VersionPageReadError,
+        ),
+    ):
+        if error.code == "CLEANUP_FAILED":
+            raise error
+        owner.check()
+        return error.code
+    raise error
+
+
+def _version_failure_code(error: BaseException, owner: _CollectionOwner) -> str:
+    if type(error) is raw_transport.RawVersionReadCancelled:
+        owner.check()
+        raise error
+    if type(error) not in (isolated_raw.IsolatedRawReadError, raw_transport.RawVersionReadError):
+        raise error
+    if isinstance(error, (isolated_raw.IsolatedRawReadError, raw_transport.RawVersionReadError)):
+        if error.code == "CLEANUP_FAILED":
+            raise error
+        owner.check()
+        return error.code
+    raise error
+
+
+def _traverse_required(
+    org_id: UUID,
+    readers: tuple[RequiredHistoryWitness, ...],
+    spool: _SpoolSession,
+    owner: _CollectionOwner,
+) -> _SpoolSummary:
+    from ._history_spool_protocol import _PageAdmission
+
+    observation_count = 0
+    for witness_index, witness in enumerate(readers):
+        key_marker: str | None = None
+        version_marker: str | None = None
+        while True:
+            owner.check()
+            ticket = spool.reserve_page(witness_index, key_marker, version_marker)
+            owner.check()
+            if ticket is None:
+                spool.record_cycle(witness_index)
+                break
+            try:
+                raw_page = isolated_version_page.read_raw_checkpoint_version_page_isolated(
+                    witness.reader,
+                    org_id,
+                    key_marker=key_marker,
+                    version_id_marker=version_marker,
+                    cancel=owner.cancel,
+                )
+            except BaseException as error:  # noqa: BLE001 - only exact plain errors are gaps
+                code = _list_failure_code(error, owner)
+                spool.record_list_failure(ticket, code)
+                break
+            owner.check()
+            if type(raw_page) is not version_page_transport.RawCheckpointVersionPage:
+                raise HistoryCollectionError("PROTOCOL_INVALID")
+            admitted = spool.admit_page(ticket, raw_page.body)
+            owner.check()
+            page = raw_page.page
+            versions, deletes = len(page.versions), len(page.delete_markers)
+            first = observation_count + 1 if versions + deletes else 0
+            if type(admitted) is not _PageAdmission or (
+                admitted.first_ordinal,
+                admitted.version_count,
+                admitted.delete_count,
+            ) != (first, versions, deletes):
+                raise HistoryCollectionError("PROTOCOL_INVALID")
+            observation_count += versions + deletes
+            for ordinal, ref in enumerate(page.versions, start=first):
+                owner.check()
+                try:
+                    raw_transport._validate_inputs(witness.reader, ref, owner.cancel)
+                except raw_transport.RawVersionInputError:
+                    spool.record_version_failure(ordinal, "INELIGIBLE_LOCATOR", ineligible=True)
+                    continue
+                try:
+                    raw = isolated_raw.read_raw_checkpoint_version_isolated(
+                        witness.reader,
+                        ref,
+                        cancel=owner.cancel,
+                    )
+                except BaseException as error:  # noqa: BLE001 - cleanup/fatal groups abort intact
+                    code = _version_failure_code(error, owner)
+                    spool.record_version_failure(
+                        ordinal, code, delete_marker=code == "DELETE_MARKER"
+                    )
+                    continue
+                owner.check()
+                if (
+                    type(raw) is not raw_transport.RawCheckpointVersion
+                    or type(raw.key) is not str
+                    or type(raw.version_id) is not str
+                    or (raw.key, raw.version_id) != (ref.key, ref.version_id)
+                ):
+                    raise HistoryCollectionError("PROTOCOL_INVALID")
+                spool.record_body(ordinal, raw.body)
+                owner.check()
+            if not page.truncated:
+                break
+            key_marker, version_marker = page.next_key_marker, page.next_version_id_marker
+    owner.check()
+    summary = spool.finish()
+    if (
+        tuple(w.witness_id for w in summary.witnesses) != tuple(w.witness_id for w in readers)
+        or sum(w.version_observations + w.delete_observations for w in summary.witnesses)
+        != observation_count
+        or any(
+            w.version_observations != w.successful_reads + w.unavailable_reads
+            for w in summary.witnesses
+        )
+    ):
+        raise HistoryCollectionError("PROTOCOL_INVALID")
+    return summary
+
+
+def collect_required_checkpoint_history(
+    org_id: UUID,
+    required_witnesses: tuple[BridgeWitnessPin, ...],
+    readers: tuple[RequiredHistoryWitness, ...],
+    limits: HistoryCollectionLimits,
+    *,
+    cancel: threading.Event | None = None,
+) -> HistoryCollectionReport:
+    admitted = _validate_collection_inputs(org_id, required_witnesses, readers, limits, cancel)
+    deadline = _monotonic() + limits.maximum_wall_seconds
+    # Runtime imports follow pure admission and avoid a spool/public-types cycle.
+    from ._history_spool import _SpoolSession
+    from ._history_spool_protocol import _SpoolWitness
+
+    pins = {pin.witness_id: pin.namespace_hash for pin in required_witnesses}
+    scopes = tuple(
+        _SpoolWitness(w.witness_id, pins[w.witness_id], w.reader.bucket) for w in admitted
+    )
+    owner = _CollectionOwner(cancel, deadline)
+    faults: list[BaseException] = []
+    summary = None
+    try:
+        owner.start()
+        with _SpoolSession(org_id, scopes, limits, cancel=owner.cancel, deadline=deadline) as spool:
+            summary = _traverse_required(org_id, admitted, spool, owner)
+    except BaseException as error:  # noqa: BLE001 - every exit must stop/join the watchdog
+        faults.append(error)
+    for fault in owner.close():
+        if not any(_contains_fault(existing, fault) for existing in faults):
+            faults.append(fault)
+    try:
+        owner.check()
+    except BaseException as error:  # noqa: BLE001 - final checks cannot erase fatal identities
+        if len(faults) == 1 and (
+            type(faults[0]) is HistoryCollectionCancelled
+            or (
+                type(faults[0]) is HistoryCollectionError
+                and isinstance(faults[0], HistoryCollectionError)
+                and faults[0].code != "CLEANUP_FAILED"
+            )
+        ):
+            faults = [error]
+        elif not any(_contains_fault(existing, error) for existing in faults):
+            faults.append(error)
+    if faults:
+        _raise_collection_faults(faults)
+    if summary is None:
+        raise HistoryCollectionError("PROTOCOL_INVALID")
+    status: _CollectionStatus = (
+        "failed"
+        if summary.failed_issues
+        else "incomplete"
+        if summary.incomplete_issues
+        else "traversed"
+    )
+    if status == "traversed" and any(not witness.terminal_reached for witness in summary.witnesses):
+        raise HistoryCollectionError("PROTOCOL_INVALID")
+    report = HistoryCollectionReport(
+        status,
+        "required-witness-provider-traversal",
+        summary.witnesses,
+        summary.issues,
+        summary.failed_issues,
+        summary.incomplete_issues,
+        summary.issues_omitted,
+        summary.admitted_total_bytes,
+        _UNPROVED,
+    )
+    owner.check()
+    return report
