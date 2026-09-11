@@ -35,7 +35,7 @@ fi
 python3 -c 'import sys; assert sys.version_info[:2] == (3, 12), "Python 3.12 is required"'
 python3 -m venv "$tools_dir/python-tools"
 "$tools_dir/python-tools/bin/pip" install --only-binary=:all: --disable-pip-version-check uv==0.12.13
-install_node 26.8.1 "$tools_dir/node26"
+install_node 26.8.2 "$tools_dir/node26"
 export PATH="$tools_dir/node26/bin:$tools_dir/python-tools/bin:$PATH"
 export UV_PYTHON
 UV_PYTHON="$(python3 -c 'import sys; print(sys.executable)')"
