@@ -142,6 +142,13 @@ owned cleanup were independently verified. The unchanged web image's latest sour
 scan reports 55 no-fix findings OPEN and zero blocking findings; it was not rescanned locally
 for the API-only update. Fresh source/main gates remain pending. Detailed inventories remain
 external, with no exception, exposure conclusion or residual closure.
+Subsequent progress, 2026-09-12: The next source pipeline at `2113200` confirmed the API threshold
+passed but found twelve fix-available web base-package findings. Targeted web-image upgrades passed
+a fresh built-image scan with zero blocking findings / 43 no-fix findings OPEN, 123 affected tests,
+and offline preview/page/SPA checks plus all 29 referenced JS/CSS assets on that same scanned image. Node 26,
+the npm pin, application locks and scanner policy remain unchanged; owned cleanup was verified.
+API no-fix findings remain 85, with its build/proof inputs unchanged. Fresh source/main gates are
+still required; this progress does not close the residual or establish image-security clearance.
 Last reviewed: 2026-09-12
 
 ## RES-IP-REGISTER-COLUMN-JUMP

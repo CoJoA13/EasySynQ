@@ -60,6 +60,15 @@ Current build digest: `67002eaaf7c5e8bc4f9f015b863ee1d8a4e7420adbe7dbeaa3995745d
 proof digest: `8c591a931c34fd8a9178b4d5d9fbd07ca11a072bf65d99ecae78b53f691e2aba`.
 Fresh GitLab source and merged-main gates remain pending.
 
+The subsequent source pipeline at `2113200` again passed thirteen required jobs, including all
+eleven runtime cases, and confirmed zero API-image blocking findings. Its web image had twelve
+newly fix-available base-package findings. Targeted web-image upgrades now pass a fresh scan with
+**zero blocking findings / 43 no-fix findings OPEN**, plus **123 affected tests in 3.09 seconds**.
+The exact scanned image ran its normal preview command offline as UID 1000 on Node 26.8.2 /
+npm 11.19.1. The page, SPA fallback and all 29 referenced JS/CSS assets matched packaged bytes; package
+checks and owned cleanup passed. Application locks and API build/proof inputs are unchanged.
+Fresh source and merged-main GitLab gates remain required for this web-image update.
+
 The first full check's 56 failures were attributed to a new test leaking a synthetic reader
 across teardown and older CLI fixtures depending on host file permissions. Both test-only
 fixes passed their focused regressions and the fresh complete check above. Dated earlier
@@ -72,9 +81,9 @@ No operational consumer, enrollment, signing, IAM, deployment or restore was act
 observed history leaves database agreement, provider non-omission, custody, freshness/rollback
 memory, delivery, key activation and source-independent recovery unproved. Issue #3 remains open
 at 3/5; the historical runtime failure, Testcontainers warnings, MinIO permission limitation and
-85 API / 55 web no-fix security findings retain their existing open records. The web count is
-from MR !46's first source pipeline; the unchanged web image was not rescanned locally for the
-API-only package update. Passing the fixed-version threshold is not image-security clearance.
+85 API / 43 web no-fix security findings retain their existing open records. The API count is
+confirmed by the source pipeline at `2113200`; the web count is from the fresh local updated-image
+scan. Passing the fixed-version threshold is not image-security clearance.
 
 A recovery reconciliation completed on 2026-09-08 against
 `6077e8a45b5942daf803220765b326f82ddd4417`. Server-verified staged upload digests, the non-root API

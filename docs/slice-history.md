@@ -201,7 +201,7 @@ compact post-cleanup publication. Collection gaps and late contradictions suppre
 beside healthy copies or an already included required checkpoint. R77/R78 remain independent
 supplied-input references with their original smaller limits; R84 remains a storage-only diagnostic
 API. No operational consumer, enrollment format, application lock, migration, writer or restore
-changes. The API base-runtime package update described below followed image-gate evidence.
+changes. The API and web base-runtime package updates described below followed image-gate evidence.
 
 Independent fixtures begin with public disposable primitives and original XML/body bytes.
 Differential tests compare every current R77/R78 fixture within shared capacities; larger fixtures
@@ -329,6 +329,29 @@ matched. Updated build digest is `67002eaaf7c5e8bc4f9f015b863ee1d8a4e7420adbe7db
 proof digest remains `8c591a931c34fd8a9178b4d5d9fbd07ca11a072bf65d99ecae78b53f691e2aba`.
 Scoped image-update review found no material issues. Fresh source and merged-main GitLab gates
 remain pending; this scan does not close the container-security residual.
+
+The next [source pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843213853)
+at `2113200` passed thirteen required jobs, including 4,939 API tests and all eleven mandatory
+runtime cases. The API scan reported zero blocking findings / 85 no-fix findings OPEN, but the
+web scan now reported twelve fix-available findings / 43 no-fix findings OPEN. A fresh uncached
+web-image reproduction confirmed available updates for existing Debian base packages. The web
+Dockerfile now explicitly upgrades those packages before switching to its existing unprivileged
+user; Node major, npm pin, application locks, preview command and scanner policy are unchanged.
+
+Fresh web verification passed **123 affected deployment/dependency/CI tests in 3.09 seconds**,
+the security-policy guard, site-data and whitespace checks. The built web scan returned **zero
+blocking findings / 43 no-fix findings OPEN / zero secret advisories**. The exact scanned image
+ran its default preview command with networking disabled as UID **1000**, Node **26.8.2** and npm
+**11.19.1**. Package-version floors, gzip round trip, PCRE2/Perl matching, page bytes, SPA fallback
+and every bundled JS/CSS asset referenced by the actual packaged index passed. All **29 JS/CSS assets**
+totaling **877,779 bytes** matched packaged bytes; Playwright and browser fixtures were absent.
+An initial private smoke incorrectly capped the reference count at ten and stopped before asset
+retrieval; its corrected bounded check visits the complete inventory and retains the actual
+image index for independent verification. No product or mandatory acceptance limit changed.
+All 2,083 source / 240 environment identities and 36 raw log hashes matched; owned preview/scanner
+containers and image cleanup were independently confirmed. The API build/proof digests above
+remain unchanged, so its completed eleven-case acceptance was retained. This web-only runtime
+proof does not claim a fresh full browser suite. Fresh source/main GitLab gates remain required.
 
 This establishes observed-history consistency within the admitted evidence and bounds. It does
 not establish provider non-omission, atomicity, historical deletion absence, custody, actual
