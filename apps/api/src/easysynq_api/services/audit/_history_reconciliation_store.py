@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from collections.abc import Callable
-from typing import Concatenate
+from typing import Concatenate, cast
 
 from . import _history_reconciliation_protocol as protocol
 from . import _history_spool_protocol as wire
@@ -117,6 +117,10 @@ _TABLES = frozenset(
 _WRITES = frozenset({sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE})
 
 
+def _raw_digest(body: bytes) -> bytes:
+    return hashlib.sha256(body).digest()
+
+
 def _operation[**P, Result](
     method: Callable[Concatenate[_ReconciliationStore, P], Result],
 ) -> Callable[Concatenate[_ReconciliationStore, P], Result]:
@@ -134,6 +138,13 @@ class _ReconciliationStore(base._SpoolStore):
         self._scope = scope
         self._reconciliation_limits = scope.limits
         self._package_bytes = 0
+        self._identity_work = 0
+        self._identity_after = 0
+        self._identity_ordinal: int | None = None
+        self._identity_candidate = 0
+        self._identity_digest = b""
+        self._identity_done = False
+        self._issue_group_count = 0
         self._next_package = 0 if scope.root_length is not None else 1
         self._state = "package" if self._next_package <= len(scope.page_lengths) else "collecting"
         self._package_position: int | None = None
@@ -302,3 +313,99 @@ class _ReconciliationStore(base._SpoolStore):
         # previously prepared evidence UPDATE cannot outlive the write boundary.
         self._connection().set_authorizer(self._sealed_authorize)
         return summary
+
+    def _observation_order(self, ordinal: int) -> tuple[bytes, bytes, bytes, bytes, int]:
+        row = (
+            self._connection()
+            .execute(
+                "SELECT w.uuid,o.key,o.version,o.digest,o.ordinal FROM observations o "
+                "JOIN witnesses w ON w.id=o.witness WHERE o.ordinal=?",
+                (ordinal,),
+            )
+            .fetchone()
+        )
+        if row is None:
+            wire.invalid()
+        return cast(tuple[bytes, bytes, bytes, bytes, int], row)
+
+    def _link_identity(self, raw_id: int | None, body: bytes) -> None:
+        ordinal = self._identity_ordinal
+        if ordinal is None:
+            wire.invalid()
+        db = self._connection()
+        db.execute("BEGIN")
+        if raw_id is None:
+            raw_id = db.execute(
+                "INSERT INTO raw_bodies(digest,byte_length,representative_ordinal) VALUES(?,?,?)",
+                (self._identity_digest, len(body), ordinal),
+            ).lastrowid
+            if raw_id is None:
+                wire.invalid()
+        else:
+            representative = db.execute(
+                "SELECT representative_ordinal FROM raw_bodies WHERE raw_id=?",
+                (raw_id,),
+            ).fetchone()[0]
+            if self._observation_order(ordinal) < self._observation_order(representative):
+                db.execute(
+                    "UPDATE raw_bodies SET representative_ordinal=? WHERE raw_id=?",
+                    (ordinal, raw_id),
+                )
+        db.execute("INSERT INTO body_deliveries(ordinal,raw_id) VALUES(?,?)", (ordinal, raw_id))
+        db.execute("COMMIT")
+        self._identity_after = ordinal
+        self._identity_ordinal = None
+        self._identity_candidate = 0
+
+    @_operation
+    def index_bodies_step(self) -> bool:
+        if self.state != "sealed":
+            wire.invalid()
+        if self._identity_done:
+            return True
+        db = self._connection()
+        work = 0
+        body: bytes | None = None
+        while work < 64:
+            if body is None:
+                if self._identity_ordinal is None:
+                    row = db.execute(
+                        "SELECT ordinal,body FROM observations "
+                        "WHERE ordinal>? AND body IS NOT NULL "
+                        "ORDER BY ordinal LIMIT 1",
+                        (self._identity_after,),
+                    ).fetchone()
+                    if row is None:
+                        self._identity_done = True
+                        return True
+                    self._identity_ordinal = row[0]
+                    self._identity_digest = _raw_digest(row[1])
+                    self._identity_candidate = 0
+                    body = row[1]
+                else:
+                    body = db.execute(
+                        "SELECT body FROM observations WHERE ordinal=?", (self._identity_ordinal,)
+                    ).fetchone()[0]
+                if type(body) is not bytes:
+                    wire.invalid()
+                work += 1
+                self._identity_work += 1
+                if work == 64:
+                    break
+            candidate = db.execute(
+                "SELECT r.raw_id,o.body FROM raw_bodies r "
+                "JOIN observations o ON o.ordinal=r.representative_ordinal "
+                "WHERE r.digest=? AND r.byte_length=? AND r.raw_id>? ORDER BY r.raw_id LIMIT 1",
+                (self._identity_digest, len(body), self._identity_candidate),
+            ).fetchone()
+            if candidate is None:
+                self._link_identity(None, body)
+                body = None
+            else:
+                work += 1
+                self._identity_work += 1
+                self._identity_candidate = candidate[0]
+                if candidate[1] == body:
+                    self._link_identity(candidate[0], body)
+                    body = None
+        return False
