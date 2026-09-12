@@ -35,6 +35,7 @@ _HISTORY_NAME = (
 )
 _HISTORY_FAILURE_PREFIX = "AUDIT_HISTORY_COLLECTION_FAILURE "
 _HISTORY_SOURCE = "audit_history_collection_runtime_acceptance.py"
+_PROVIDER_RECEIPT_PREFIX = "provider exact-read multiset differs; history_provider_v1 "
 _MANDATORY_NAMES = (
     "test_external_cli_runtime_is_public_only_and_read_only",
     "test_external_cli_runtime_preserves_enrolled_obligation_after_db_selection_attack",
@@ -191,8 +192,33 @@ def _history_stdout(
     )
 
 
+def _provider_receipt(**overrides: str) -> str:
+    fields = {
+        "outcome": "report",
+        "status": "traversed",
+        "elapsed_ms": "42",
+        "attempted_reads": "2",
+        "returned_reads": "2",
+        "attempted_pages": "1",
+        "returned_pages": "1",
+        "expected_reads": "2",
+        "locator_matches": "2",
+        "exact_matches": "2",
+        "terminal_witnesses": "2",
+        "unavailable_reads": "0",
+    }
+    fields.update(overrides)
+    return _PROVIDER_RECEIPT_PREFIX + " ".join(f"{name}={value}" for name, value in fields.items())
+
+
 def _history_lines(output: str) -> list[str]:
     return [line for line in output.splitlines() if line.startswith("runtime_history_")]
+
+
+def test_history_source_line_cap_matches_formatted_fixture() -> None:
+    source = _REPOSITORY_ROOT / "apps/api/tests/integration" / _HISTORY_SOURCE
+
+    assert _RUNNER._HISTORY_SOURCE_MAX_LINE == len(source.read_text(encoding="utf-8").splitlines())
 
 
 class _FakeCommands:
@@ -687,7 +713,12 @@ def test_failed_history_case_emits_only_validated_phase_timings_and_source(
     expected.extend(
         f"runtime_history_resource_subcase={name} elapsed_ms=7" for name in resource_subcases
     )
-    expected.append(f"runtime_history_failure_source={_HISTORY_SOURCE}:1283")
+    expected.extend(
+        [
+            "runtime_history_provider_diagnostic=unavailable",
+            f"runtime_history_failure_source={_HISTORY_SOURCE}:1283",
+        ]
+    )
     assert _history_lines(output.out) == expected
     assert "private-" not in output.out + output.err
     assert _HISTORY_FAILURE_PREFIX not in output.out + output.err
@@ -828,11 +859,237 @@ def test_failed_history_case_rejects_malformed_or_ambiguous_stdout_diagnostic(
     output = capsys.readouterr()
     assert _history_lines(output.out) == [
         "runtime_history_diagnostic=unavailable",
+        "runtime_history_provider_diagnostic=unavailable",
         f"runtime_history_failure_source={_HISTORY_SOURCE}:1283",
     ]
     assert "private-" not in output.out + output.err
     assert _HISTORY_FAILURE_PREFIX not in output.out + output.err
     assert list((root / ".pytest_cache").iterdir()) == []
+
+
+def test_failed_history_case_emits_only_validated_provider_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    fake.junit_content = _history_junit(
+        "private before\n"
+        "E       AssertionError: " + _provider_receipt() + "\nprivate after\n"
+        f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    )
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    assert _history_lines(capsys.readouterr().out) == [
+        "runtime_history_diagnostic=unavailable",
+        "runtime_history_provider_diagnostic=available",
+        "runtime_history_provider_outcome=report",
+        "runtime_history_provider_status=traversed",
+        "runtime_history_provider_elapsed_ms=42",
+        "runtime_history_provider_attempted_reads=2",
+        "runtime_history_provider_returned_reads=2",
+        "runtime_history_provider_attempted_pages=1",
+        "runtime_history_provider_returned_pages=1",
+        "runtime_history_provider_expected_reads=2",
+        "runtime_history_provider_locator_matches=2",
+        "runtime_history_provider_exact_matches=2",
+        "runtime_history_provider_terminal_witnesses=2",
+        "runtime_history_provider_unavailable_reads=0",
+        f"runtime_history_failure_source={_HISTORY_SOURCE}:1283",
+    ]
+
+
+def test_failed_history_case_emits_deadline_receipt_without_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    receipt = _provider_receipt(
+        outcome="DEADLINE_EXCEEDED",
+        status="none",
+        attempted_reads="2",
+        returned_reads="1",
+        attempted_pages="2",
+        returned_pages="1",
+        expected_reads="2",
+        locator_matches="1",
+        exact_matches="1",
+        terminal_witnesses="none",
+        unavailable_reads="none",
+    )
+    fake.junit_content = _history_junit(
+        "E AssertionError: "
+        + receipt
+        + f"\napps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    )
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    assert _history_lines(capsys.readouterr().out) == [
+        "runtime_history_diagnostic=unavailable",
+        "runtime_history_provider_diagnostic=available",
+        "runtime_history_provider_outcome=DEADLINE_EXCEEDED",
+        "runtime_history_provider_status=none",
+        "runtime_history_provider_elapsed_ms=42",
+        "runtime_history_provider_attempted_reads=2",
+        "runtime_history_provider_returned_reads=1",
+        "runtime_history_provider_attempted_pages=2",
+        "runtime_history_provider_returned_pages=1",
+        "runtime_history_provider_expected_reads=2",
+        "runtime_history_provider_locator_matches=1",
+        "runtime_history_provider_exact_matches=1",
+        "runtime_history_provider_terminal_witnesses=none",
+        "runtime_history_provider_unavailable_reads=none",
+        f"runtime_history_failure_source={_HISTORY_SOURCE}:1283",
+    ]
+
+
+def test_provider_receipt_ignores_oversized_unrelated_junit_detail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    fake.junit_content = _history_junit(
+        "E AssertionError: "
+        + _provider_receipt()
+        + "\nprivate-surrounding="
+        + ("x" * 1_025)
+        + f"\napps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    )
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    assert tuple(
+        line
+        for line in _history_lines(capsys.readouterr().out)
+        if line.startswith("runtime_history_provider_")
+    ) == (
+        "runtime_history_provider_diagnostic=available",
+        "runtime_history_provider_outcome=report",
+        "runtime_history_provider_status=traversed",
+        "runtime_history_provider_elapsed_ms=42",
+        "runtime_history_provider_attempted_reads=2",
+        "runtime_history_provider_returned_reads=2",
+        "runtime_history_provider_attempted_pages=1",
+        "runtime_history_provider_returned_pages=1",
+        "runtime_history_provider_expected_reads=2",
+        "runtime_history_provider_locator_matches=2",
+        "runtime_history_provider_exact_matches=2",
+        "runtime_history_provider_terminal_witnesses=2",
+        "runtime_history_provider_unavailable_reads=0",
+    )
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "private assertion",
+        "E AssertionError: " + _provider_receipt(elapsed_ms="1200001"),
+        "E AssertionError: " + _provider_receipt(elapsed_ms="99999999999999999999"),
+        "E AssertionError: " + _provider_receipt(elapsed_ms="True"),
+        "E AssertionError: " + _provider_receipt(elapsed_ms="01"),
+        "E AssertionError: " + _provider_receipt(returned_reads="3"),
+        "E AssertionError: " + _provider_receipt(locator_matches="3"),
+        "E AssertionError: " + _provider_receipt(exact_matches="3"),
+        "E AssertionError: " + _provider_receipt(outcome="private-error"),
+        "E AssertionError: " + _provider_receipt(status="private-status"),
+        "E AssertionError: " + _provider_receipt(status="none"),
+        "E AssertionError: " + _provider_receipt(outcome="DEADLINE_EXCEEDED", status="traversed"),
+        "E AssertionError: " + _provider_receipt() + " private-extra=secret",
+        "E AssertionError: " + _provider_receipt() + "\nE AssertionError: " + _provider_receipt(),
+        "E AssertionError: "
+        + _provider_receipt()
+        + "\nE AssertionError: "
+        + _PROVIDER_RECEIPT_PREFIX
+        + "private-malformed",
+    ],
+)
+def test_failed_history_case_rejects_malformed_provider_receipts(
+    detail: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    fake.junit_content = _history_junit(
+        detail + f"\napps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    )
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    output = capsys.readouterr().out
+    assert _history_lines(output) == [
+        "runtime_history_diagnostic=unavailable",
+        "runtime_history_provider_diagnostic=unavailable",
+        f"runtime_history_failure_source={_HISTORY_SOURCE}:1283",
+    ]
+    assert "secret" not in output
+
+
+def test_real_pytest_junit_provider_receipt_reaches_bounded_runner_consumer(
+    tmp_path: Path,
+) -> None:
+    producer = tmp_path / "test_provider_receipt.py"
+    report = tmp_path / "runtime.xml"
+    producer.write_text(
+        "from tests.integration import "
+        "audit_history_collection_runtime_acceptance as acceptance\n\n"
+        "def test_history_collection_runtime_preserves_required_witnesses_"
+        "and_resource_boundaries():\n"
+        "    acceptance._assert_runtime = lambda _result: None\n"
+        "    expected = [['bucket-a', 'checkpoints/a', 'version-a', 3, 'a' * 64], "
+        "['bucket-b', 'checkpoints/b', 'version-b', 5, 'b' * 64]]\n"
+        "    case = {'outcome': 'report', 'report': {'status': 'traversed', 'witnesses': "
+        "[{'terminal_reached': True, 'unavailable_reads': 0}, "
+        "{'terminal_reached': True, 'unavailable_reads': 0}]}, 'elapsed_ms': 42, "
+        "'reads': [expected[0]], 'attempted_exact_reads': 2, 'pages': [{}], "
+        "'list_attempts': 1}\n"
+        "    acceptance._assert_provider({'provider': case}, [], expected, [])\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(  # noqa: S603 - fixed pytest argv and owned temporary fixture
+        [sys.executable, "-m", "pytest", str(producer), "-q", "--junitxml", str(report)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        cwd=_REPOSITORY_ROOT / "apps/api",
+    )
+
+    assert result.returncode == 1
+    assert report.is_file()
+    summary = _RUNNER._runtime_failure_summary(report, 1)
+    assert tuple(line for line in summary if line.startswith("runtime_history_provider_")) == (
+        "runtime_history_provider_diagnostic=available",
+        "runtime_history_provider_outcome=report",
+        "runtime_history_provider_status=traversed",
+        "runtime_history_provider_elapsed_ms=42",
+        "runtime_history_provider_attempted_reads=2",
+        "runtime_history_provider_returned_reads=1",
+        "runtime_history_provider_attempted_pages=1",
+        "runtime_history_provider_returned_pages=1",
+        "runtime_history_provider_expected_reads=2",
+        "runtime_history_provider_locator_matches=1",
+        "runtime_history_provider_exact_matches=1",
+        "runtime_history_provider_terminal_witnesses=2",
+        "runtime_history_provider_unavailable_reads=0",
+    )
 
 
 @pytest.mark.parametrize(
@@ -849,8 +1106,12 @@ def test_history_diagnostics_require_one_exact_failed_or_errored_case(
     root = _repository(tmp_path)
     fake = _FakeCommands(root)
     fake.harness_returncode = 1
-    fake.harness_stdout = _history_stdout("identity")
-    frame = f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    fake.harness_stdout = _history_stdout("identity") + "\n" + _provider_receipt()
+    frame = (
+        "E AssertionError: "
+        + _provider_receipt()
+        + f"\napps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    )
     if gate == "history-passed":
         fake.junit_content = _junit()
     elif gate == "other-failed":
@@ -878,9 +1139,11 @@ def test_duplicate_exact_failed_history_cases_make_both_diagnostics_unavailable(
     root = _repository(tmp_path)
     fake = _FakeCommands(root)
     fake.harness_returncode = 1
-    fake.harness_stdout = _history_stdout("identity")
+    fake.harness_stdout = _history_stdout("identity") + "\n" + _provider_receipt()
     fake.junit_content = _history_junit(
-        f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError",
+        "E AssertionError: "
+        + _provider_receipt()
+        + f"\napps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError",
         copies=2,
     )
 
@@ -888,6 +1151,7 @@ def test_duplicate_exact_failed_history_cases_make_both_diagnostics_unavailable(
 
     assert _history_lines(capsys.readouterr().out) == [
         "runtime_history_diagnostic=unavailable",
+        "runtime_history_provider_diagnostic=unavailable",
         "runtime_history_failure_source=unavailable",
     ]
     assert list((root / ".pytest_cache").iterdir()) == []
@@ -906,8 +1170,8 @@ def test_duplicate_exact_failed_history_cases_make_both_diagnostics_unavailable(
             "audit_history_collection_runtime_acceptance.py:1",
         ),
         (
-            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1354: Error",
-            "audit_history_collection_runtime_acceptance.py:1354",
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1484: Error",
+            "audit_history_collection_runtime_acceptance.py:1484",
         ),
         (
             "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1269: "
@@ -935,7 +1199,7 @@ def test_duplicate_exact_failed_history_cases_make_both_diagnostics_unavailable(
             None,
         ),
         (
-            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1355: Error",
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1485: Error",
             None,
         ),
         (
@@ -979,6 +1243,7 @@ def test_history_source_reconstructs_only_complete_allowlisted_traceback_frames(
     output = capsys.readouterr()
     assert _history_lines(output.out) == [
         "runtime_history_diagnostic=unavailable",
+        "runtime_history_provider_diagnostic=unavailable",
         f"runtime_history_failure_source={source}",
     ]
     assert "runtime_junit=available" in output.out
@@ -996,7 +1261,7 @@ def test_history_diagnostic_does_not_consume_valid_record_from_stderr(
     fake = _FakeCommands(root)
     fake.harness_returncode = 1
     fake.harness_stdout = "private-child-stdout"
-    fake.harness_stderr = _history_stdout("identity")
+    fake.harness_stderr = _history_stdout("identity") + "\n" + _provider_receipt()
     fake.junit_content = _history_junit(
         f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
     )
@@ -1006,6 +1271,7 @@ def test_history_diagnostic_does_not_consume_valid_record_from_stderr(
     output = capsys.readouterr().out
     assert _history_lines(output) == [
         "runtime_history_diagnostic=unavailable",
+        "runtime_history_provider_diagnostic=unavailable",
         f"runtime_history_failure_source={_HISTORY_SOURCE}:1283",
     ]
     assert _HISTORY_FAILURE_PREFIX not in output
@@ -1022,7 +1288,9 @@ def test_input_recheck_failure_suppresses_valid_history_diagnostics(
     fake.harness_returncode = 1
     fake.harness_stdout = _history_stdout("identity")
     fake.junit_content = _history_junit(
-        f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+        "E AssertionError: "
+        + _provider_receipt()
+        + f"\napps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
     )
     fake.change_after_harness = (root / "apps/api/LICENSE", "content")
 

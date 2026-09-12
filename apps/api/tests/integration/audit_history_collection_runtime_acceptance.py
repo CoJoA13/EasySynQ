@@ -60,6 +60,22 @@ _PROOF_PREFIX = "AUDIT_HISTORY_COLLECTION_PROOF "
 _FAILURE_PREFIX = "AUDIT_HISTORY_COLLECTION_FAILURE "
 _RESOURCE_FAILURE_PREFIX = "AUDIT_HISTORY_COLLECTION_RESOURCE_FAILURE "
 _RAW_WORKER_FAILURE_PREFIX = "AUDIT_HISTORY_COLLECTION_RAW_WORKER_FAILURE "
+_PROVIDER_FAILURE_MESSAGE_PREFIX = "provider exact-read multiset differs; history_provider_v1 "
+_PROVIDER_FAILURE_OUTCOMES = frozenset(
+    {
+        "report",
+        "cancelled",
+        "RESOURCE_LIMIT",
+        "RUNTIME_UNSUPPORTED",
+        "WORKER_START_FAILED",
+        "WORKER_FAILED",
+        "PROTOCOL_INVALID",
+        "STORAGE_FAILED",
+        "DEADLINE_EXCEEDED",
+        "CLEANUP_FAILED",
+    }
+)
+_PROVIDER_FAILURE_STATUSES = frozenset({"traversed", "failed", "incomplete"})
 _ROOT = Path(__file__).resolve().parents[4]
 _ORG = "00000000-0000-4000-8000-000000000011"
 _PREFIX = f"checkpoints/{_ORG}/"
@@ -761,6 +777,120 @@ def _trace_response_header(response: dict[str, Any], name: str) -> str:
     return value
 
 
+def _provider_failure_message(case: object, expected: object) -> str:
+    """Reduce a failed provider read comparison to bounded, non-sensitive facts."""
+    try:
+        if type(case) is not dict or type(expected) is not list or len(expected) > 6_000:
+            raise ValueError
+        outcome = case.get("outcome")
+        if type(outcome) is not str or outcome not in _PROVIDER_FAILURE_OUTCOMES:
+            raise ValueError
+        reads = case.get("reads")
+        pages = case.get("pages")
+        if type(reads) is not list or type(pages) is not list:
+            raise ValueError
+        if len(reads) > 6_000 or len(pages) > 16:
+            raise ValueError
+
+        def valid_row(row: object) -> tuple[str, str, str, int, str]:
+            if type(row) is not list or len(row) != 5:
+                raise ValueError
+            bucket, key, version, body_length, digest = row
+            if (
+                type(bucket) is not str
+                or type(key) is not str
+                or type(version) is not str
+                or type(body_length) is not int
+                or body_length < 0
+                or type(digest) is not str
+            ):
+                raise ValueError
+            return bucket, key, version, body_length, digest
+
+        actual_rows = [valid_row(row) for row in reads]
+        expected_rows = [valid_row(row) for row in expected]
+
+        def bounded_count(name: str, maximum: int) -> int:
+            value = case.get(name)
+            if type(value) is not int or not 0 <= value <= maximum:
+                raise ValueError
+            return value
+
+        elapsed_ms = bounded_count("elapsed_ms", 1_200_000)
+        attempted_reads = bounded_count("attempted_exact_reads", 6_000)
+        attempted_pages = bounded_count("list_attempts", 16)
+        returned_reads = len(actual_rows)
+        returned_pages = len(pages)
+        expected_reads = len(expected_rows)
+        if returned_reads > attempted_reads or returned_pages > attempted_pages:
+            raise ValueError
+
+        report = case.get("report")
+        if report is None:
+            if outcome == "report":
+                raise ValueError
+            status = "none"
+            terminal_witnesses = "none"
+            unavailable_reads = "none"
+        else:
+            if outcome != "report" or type(report) is not dict:
+                raise ValueError
+            status = report.get("status")
+            witnesses = report.get("witnesses")
+            if (
+                type(status) is not str
+                or status not in _PROVIDER_FAILURE_STATUSES
+                or type(witnesses) is not list
+                or len(witnesses) > 2
+            ):
+                raise ValueError
+            terminal_witnesses = 0
+            unavailable_reads = 0
+            for witness in witnesses:
+                if type(witness) is not dict:
+                    raise ValueError
+                terminal = witness.get("terminal_reached")
+                unavailable = witness.get("unavailable_reads")
+                if type(terminal) is not bool or type(unavailable) is not int:
+                    raise ValueError
+                if not 0 <= unavailable <= 6_000:
+                    raise ValueError
+                terminal_witnesses += int(terminal)
+                unavailable_reads += unavailable
+            if unavailable_reads > 6_000:
+                raise ValueError
+
+        exact_matches = sum((Counter(actual_rows) & Counter(expected_rows)).values())
+        locator_matches = sum(
+            (
+                Counter(row[:3] for row in actual_rows) & Counter(row[:3] for row in expected_rows)
+            ).values()
+        )
+        if not (
+            exact_matches <= locator_matches <= returned_reads and locator_matches <= expected_reads
+        ):
+            raise ValueError
+        fields = (
+            ("outcome", outcome),
+            ("status", status),
+            ("elapsed_ms", elapsed_ms),
+            ("attempted_reads", attempted_reads),
+            ("returned_reads", returned_reads),
+            ("attempted_pages", attempted_pages),
+            ("returned_pages", returned_pages),
+            ("expected_reads", expected_reads),
+            ("locator_matches", locator_matches),
+            ("exact_matches", exact_matches),
+            ("terminal_witnesses", terminal_witnesses),
+            ("unavailable_reads", unavailable_reads),
+        )
+        return _PROVIDER_FAILURE_MESSAGE_PREFIX + " ".join(
+            f"{name}={value}" for name, value in fields
+        )
+    except Exception:  # noqa: BLE001 - failed assertions must retain their original failure
+        return _PROVIDER_FAILURE_MESSAGE_PREFIX + "unavailable"
+
+
 def _assert_provider(
     result: dict[str, Any],
     events: list[dict[str, Any]],
@@ -771,7 +901,7 @@ def _assert_provider(
     case = result["provider"]
     assert Counter(tuple(row) for row in case["reads"]) == Counter(
         tuple(row) for row in expected
-    ), "provider exact-read multiset differs"
+    ), _provider_failure_message(case, expected)
     report = _assert_report(case, witnesses, "traversed")
     assert report["issues"] == []
     assert [row["successful_reads"] for row in report["witnesses"]] == [1001, 2]

@@ -26,15 +26,17 @@ _TERMINATE_GRACE_SECONDS = 10
 _DIAGNOSTIC_JUNIT_MAX_BYTES = 1_048_576
 _HISTORY_DIAGNOSTIC_MAX_RECORD_BYTES = 4_096
 _HISTORY_DIAGNOSTIC_MAX_DURATION_MS = 1_200_000
+_HISTORY_PROVIDER_RECEIPT_MAX_BYTES = 1_024
 _RUN_LABEL = "com.easysynq.audit-external.run"
 _SOURCE_LABEL = "com.easysynq.audit-external.source"
 _SESSION_LABEL = "org.testcontainers.session-id"
 _HISTORY_FAILURE_PREFIX = "AUDIT_HISTORY_COLLECTION_FAILURE "
+_HISTORY_PROVIDER_RECEIPT_PREFIX = "provider exact-read multiset differs; history_provider_v1 "
 _HISTORY_TEST_NAME = (
     "test_history_collection_runtime_preserves_required_witnesses_and_resource_boundaries"
 )
 _HISTORY_SOURCE_NAME = "audit_history_collection_runtime_acceptance.py"
-_HISTORY_SOURCE_MAX_LINE = 1_354
+_HISTORY_SOURCE_MAX_LINE = 1_484
 _HISTORY_PHASES = (
     "identity",
     "synthetic",
@@ -87,6 +89,39 @@ _HISTORY_PROGRESS_RECORD = re.compile(
 _HISTORY_SOURCE_FRAME = re.compile(
     rf"(?:/?(?:[A-Za-z0-9_.-]+/)*){re.escape(_HISTORY_SOURCE_NAME)}:"
     r"(?P<line>[1-9][0-9]{0,3}): .+\Z"
+)
+_HISTORY_PROVIDER_ASSERTION = re.compile(
+    r"(?:E\s+)?AssertionError: (?P<receipt>provider exact-read multiset differs; "
+    r"history_provider_v1 .+)\Z"
+)
+_HISTORY_PROVIDER_OUTCOMES = frozenset(
+    {
+        "report",
+        "cancelled",
+        "RESOURCE_LIMIT",
+        "RUNTIME_UNSUPPORTED",
+        "WORKER_START_FAILED",
+        "WORKER_FAILED",
+        "PROTOCOL_INVALID",
+        "STORAGE_FAILED",
+        "DEADLINE_EXCEEDED",
+        "CLEANUP_FAILED",
+    }
+)
+_HISTORY_PROVIDER_STATUSES = frozenset({"traversed", "failed", "incomplete"})
+_HISTORY_PROVIDER_FIELDS = (
+    "outcome",
+    "status",
+    "elapsed_ms",
+    "attempted_reads",
+    "returned_reads",
+    "attempted_pages",
+    "returned_pages",
+    "expected_reads",
+    "locator_matches",
+    "exact_matches",
+    "terminal_witnesses",
+    "unavailable_reads",
 )
 _MANDATORY_TESTS = frozenset(
     {
@@ -555,6 +590,97 @@ def _history_failure_source(case: ET.Element) -> str:
     )
 
 
+def _history_provider_diagnostic(case: ET.Element) -> tuple[str, ...]:
+    unavailable = ("runtime_history_provider_diagnostic=unavailable",)
+    try:
+        child = case.find("error")
+        if child is None:
+            child = case.find("failure")
+        if child is None:
+            return unavailable
+        records = []
+        for line in "".join(child.itertext()).splitlines():
+            if _HISTORY_PROVIDER_RECEIPT_PREFIX not in line:
+                continue
+            if len(line.encode("utf-8")) > _HISTORY_PROVIDER_RECEIPT_MAX_BYTES:
+                return unavailable
+            match = _HISTORY_PROVIDER_ASSERTION.fullmatch(line)
+            if match is None:
+                return unavailable
+            records.append(match.group("receipt"))
+        if len(records) != 1:
+            return unavailable
+        receipt = records[0]
+        if len(receipt.encode("utf-8")) > _HISTORY_PROVIDER_RECEIPT_MAX_BYTES:
+            return unavailable
+        if not receipt.startswith(_HISTORY_PROVIDER_RECEIPT_PREFIX):
+            return unavailable
+        parts = receipt[len(_HISTORY_PROVIDER_RECEIPT_PREFIX) :].split(" ")
+        if len(parts) != len(_HISTORY_PROVIDER_FIELDS):
+            return unavailable
+        values: dict[str, str] = {}
+        for field, part in zip(_HISTORY_PROVIDER_FIELDS, parts, strict=True):
+            key, separator, value = part.partition("=")
+            if key != field or separator != "=" or not value:
+                return unavailable
+            values[field] = value
+
+        def decimal(field: str, maximum: int) -> int:
+            value = values[field]
+            if (
+                len(value) > 7
+                or not value.isascii()
+                or not value.isdecimal()
+                or (len(value) > 1 and value.startswith("0"))
+            ):
+                raise ValueError
+            number = int(value)
+            if number > maximum:
+                raise ValueError
+            return number
+
+        outcome = values["outcome"]
+        status = values["status"]
+        if outcome not in _HISTORY_PROVIDER_OUTCOMES:
+            return unavailable
+        decimal("elapsed_ms", _HISTORY_DIAGNOSTIC_MAX_DURATION_MS)
+        attempted_reads = decimal("attempted_reads", 6_000)
+        returned_reads = decimal("returned_reads", 6_000)
+        attempted_pages = decimal("attempted_pages", 16)
+        returned_pages = decimal("returned_pages", 16)
+        expected_reads = decimal("expected_reads", 6_000)
+        locator_matches = decimal("locator_matches", 6_000)
+        exact_matches = decimal("exact_matches", 6_000)
+        if (
+            returned_reads > attempted_reads
+            or returned_pages > attempted_pages
+            or locator_matches > returned_reads
+            or locator_matches > expected_reads
+            or exact_matches > locator_matches
+        ):
+            return unavailable
+        if status == "none":
+            if (
+                outcome == "report"
+                or values["terminal_witnesses"] != "none"
+                or values["unavailable_reads"] != "none"
+            ):
+                return unavailable
+        else:
+            if outcome != "report" or status not in _HISTORY_PROVIDER_STATUSES:
+                return unavailable
+            decimal("terminal_witnesses", 2)
+            decimal("unavailable_reads", 6_000)
+        lines = ["runtime_history_provider_diagnostic=available"]
+        lines.extend(
+            f"runtime_history_provider_{field}={values[field]}"
+            for field in _HISTORY_PROVIDER_FIELDS
+        )
+        return tuple(lines)
+    except Exception:  # noqa: BLE001 - malformed JUnit detail is never a diagnostic channel
+        return unavailable
+
+
 def _history_diagnostics(root: ET.Element, stdout: str) -> tuple[str, ...]:
     failed_cases = [
         case
@@ -567,9 +693,14 @@ def _history_diagnostics(root: ET.Element, stdout: str) -> tuple[str, ...]:
     if len(failed_cases) != 1:
         return (
             "runtime_history_diagnostic=unavailable",
+            "runtime_history_provider_diagnostic=unavailable",
             "runtime_history_failure_source=unavailable",
         )
-    return (*_history_phase_diagnostic(stdout), _history_failure_source(failed_cases[0]))
+    return (
+        *_history_phase_diagnostic(stdout),
+        *_history_provider_diagnostic(failed_cases[0]),
+        _history_failure_source(failed_cases[0]),
+    )
 
 
 def _runtime_failure_summary(
