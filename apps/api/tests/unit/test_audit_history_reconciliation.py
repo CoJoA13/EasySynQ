@@ -408,11 +408,17 @@ def test_initial_material_still_requires_v2_admission() -> None:
         module.collect_and_reconcile_checkpoint_history(**inputs)
 
 
-def test_valid_public_call_cannot_fabricate_a_report_before_worker_is_implemented() -> None:
+def test_valid_public_call_requires_owned_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+    from easysynq_api.services.audit.history_collection import HistoryCollectionError
+
+    def unavailable(self: Any, *args: Any) -> Any:
+        raise HistoryCollectionError("WORKER_START_FAILED")
+
+    monkeypatch.setattr(collection._CollectionOwner, "__init__", unavailable)
     module = _module()
     with pytest.raises(module.HistoryReconciliationError) as raised:
         module.collect_and_reconcile_checkpoint_history(**_inputs(module))
-    assert raised.value.code == "RUNTIME_UNSUPPORTED"
+    assert raised.value.code == "WORKER_START_FAILED"
 
 
 @pytest.mark.parametrize(

@@ -53,6 +53,7 @@ def _write(stream: BinaryIO, body: bytes) -> None:
 
 def _main() -> int:
     store = None
+    engine = None
     try:
         _apply_limits()
         source_root = os.path.dirname(
@@ -63,8 +64,11 @@ def _main() -> int:
         sys.path.insert(0, source_root)
         from easysynq_api.services.audit import _history_reconciliation_protocol as protocol
         from easysynq_api.services.audit import _history_spool_protocol as wire
+        from easysynq_api.services.audit._history_reconciliation_engine import _ReconciliationEngine
+        from easysynq_api.services.audit._history_reconciliation_report import _report_payload
         from easysynq_api.services.audit._history_reconciliation_store import _ReconciliationStore
         from easysynq_api.services.audit.history_collection import HistoryCollectionError
+        from easysynq_api.services.audit.history_reconciliation import HistoryReconciliationError
 
         stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
 
@@ -176,20 +180,27 @@ def _main() -> int:
                     response["summary"] = wire.summary_payload(
                         store.seal(request["expected_observations"])
                     )
+                    engine = _ReconciliationEngine(store, scope)
                 elif op == "STEP":
                     wire.fields(request, {"op", "id"})
-                    if store.state != "sealed":
+                    if store.state != "sealed" or engine is None:
                         wire.invalid()
-                    # The bounded kernels and engine are installed by later tasks.
-                    # No partial result or test-only success path is available here.
-                    raise HistoryCollectionError("RUNTIME_UNSUPPORTED")
+                    response["progress"] = dataclasses.asdict(engine.step())
                 elif op == "FINISH_RECONCILIATION":
                     wire.fields(request, {"op", "id"})
-                    wire.invalid()  # No engine can reach ready-to-finish yet.
+                    if engine is None or stdin.read(1) != b"":
+                        wire.invalid()
+                    response["result"] = _report_payload(engine.finish())
+                    if len(wire.encode(response)) > protocol.RESULT_MAX:
+                        wire.invalid()
+                    store.close()
+                    store = None
+                    send(response)
+                    return 0
                 else:
                     wire.invalid()
                 send(response)
-            except HistoryCollectionError as error:
+            except (HistoryCollectionError, HistoryReconciliationError) as error:
                 if store is not None:
                     store.close()
                     store = None

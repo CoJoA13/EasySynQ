@@ -220,9 +220,14 @@ def test_package_and_collection_must_finish_before_reconciliation(
     assert frames[-1] == {"op": "ERROR", "id": 2, "code": "PROTOCOL_INVALID"}
 
 
-def test_valid_step_is_explicitly_unsupported_until_engine_wiring(tmp_path: Path) -> None:
+def test_valid_step_advances_owned_engine_without_publishing_a_result(tmp_path: Path) -> None:
     frames = _raw_worker(tmp_path, [_init(), *_empty_collection(), {"op": "STEP", "id": 5}])
-    assert frames[-1] == {"op": "ERROR", "id": 5, "code": "RUNTIME_UNSUPPORTED"}
+    from easysynq_api.services.audit._history_reconciliation_protocol import decode_progress
+
+    assert set(frames[-1]) == {"op", "id", "progress"}
+    assert frames[-1]["op"] == "ACK" and frames[-1]["id"] == 5
+    progress = decode_progress(frames[-1]["progress"])
+    assert progress.phase == "package-pages" and not progress.done
 
 
 def _session(
@@ -273,14 +278,15 @@ def test_real_session_retains_collection_after_seal_and_owns_cleanup(
         ticket = session.reserve_page(0, None, None)
         session.admit_page(ticket, _page_xml())
         summary = session.seal(0)
-        assert summary.admitted_total_bytes == len(_page_xml())
+        assert summary.admitted_total_bytes == len(_page_xml()) + 6
         assert summary.witnesses[0].terminal_reached
         assert process.poll() is None and directory.is_dir()
         session._guard_external_io()
+        assert session.step().phase == "package-pages"
         with pytest.raises(HistoryCollectionError) as caught:
-            session.step()
+            session.finish_reconciliation()
         assert type(caught.value) is HistoryCollectionError
-        assert caught.value.code == "RUNTIME_UNSUPPORTED"
+        assert caught.value.code == "PROTOCOL_INVALID"
         assert process.returncode is not None
         assert process.stdin.closed and process.stdout.closed
         assert session._selector is None and session._directory is None
@@ -471,7 +477,7 @@ def test_package_and_original_xml_share_the_aggregate_ceiling(
             assert caught.value.code == "RESOURCE_LIMIT"
         else:
             session.admit_page(ticket, _page_xml())
-            assert session.seal(0).admitted_total_bytes == len(_page_xml())
+            assert session.seal(0).admitted_total_bytes == len(_page_xml()) + 4
     assert list(tmp_path.iterdir()) == []
 
 
@@ -852,5 +858,5 @@ def test_oversize_package_stream_does_not_allocate_a_sqlite_value(
         assert (Path(session._directory) / "spool.sqlite3").stat().st_size < 1048576
         ticket = session.reserve_page(0, None, None)
         session.admit_page(ticket, _page_xml())
-        assert session.seal(0).admitted_total_bytes == len(_page_xml())
+        assert session.seal(0).admitted_total_bytes == len(_page_xml()) + size
     assert list(tmp_path.iterdir()) == []

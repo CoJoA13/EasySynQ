@@ -1,8 +1,4 @@
-"""Inactive bounded reconciliation of externally required checkpoint history.
-
-Complete caller admission precedes owned resources. The worker implementation is
-not yet wired; an admitted request cannot produce a consistency claim here.
-"""
+"""Bounded global reconciliation foundation; no operational consumer is activated."""
 
 from __future__ import annotations
 
@@ -275,6 +271,108 @@ def collect_and_reconcile_checkpoint_history(
     *,
     cancel: threading.Event | None = None,
 ) -> HistoryReconciliationReport:
-    _admit_reconciliation(enrollment, root_body, pages, readers, limits, cancel)
-    # Replaced only when the complete owned worker and final-report boundary are wired.
-    raise HistoryReconciliationError("RUNTIME_UNSUPPORTED") from None
+    admitted = _admit_reconciliation(enrollment, root_body, pages, readers, limits, cancel)
+    deadline = _collection._monotonic() + limits.maximum_wall_seconds
+    try:
+        return _collect(enrollment, root_body, pages, admitted, limits, cancel, deadline)
+    except BaseException as error:
+        translated = _translate_fault(error)
+        if translated is error:
+            raise
+        raise translated from None
+
+
+def _translate_fault(error: BaseException) -> BaseException:
+    # Fatal groups are not bounded by the worker protocol; preserve their leaves
+    # and avoid adding a recursion failure while reporting the original failure.
+    pending = [(error, False)]
+    translated: dict[int, BaseException] = {}
+    while pending:
+        current, visited = pending.pop()
+        result: BaseException = current
+        if type(current) is _collection.HistoryCollectionError:
+            result = HistoryReconciliationError(current.code)
+        elif type(current) is _collection.HistoryCollectionCancelled:
+            result = HistoryReconciliationCancelled()
+        elif isinstance(current, BaseExceptionGroup):
+            if not visited:
+                pending.append((current, True))
+                pending.extend((child, False) for child in current.exceptions)
+                continue
+            children = tuple(translated[id(child)] for child in current.exceptions)
+            if any(a is not b for a, b in zip(children, current.exceptions, strict=True)):
+                result = current.derive(children)
+        translated[id(current)] = result
+    return translated[id(error)]
+
+
+def _collect(
+    enrollment: BridgeEnrollment,
+    root_body: bytes | None,
+    pages: tuple[BridgePageObservation, ...],
+    readers: tuple[RequiredHistoryWitness, ...],
+    limits: HistoryReconciliationLimits,
+    cancel: threading.Event | None,
+    deadline: float,
+) -> HistoryReconciliationReport:
+    from ._history_reconciliation_protocol import _PublicScope
+    from ._history_reconciliation_report import _decode_report
+    from ._history_reconciliation_session import _ReconciliationSession
+    from ._history_spool_protocol import _SpoolWitness
+
+    pins = {pin.witness_id: pin.namespace_hash for pin in enrollment.witnesses}
+    scope = _PublicScope(
+        enrollment,
+        tuple(_SpoolWitness(w.witness_id, pins[w.witness_id], w.reader.bucket) for w in readers),
+        limits,
+        None if root_body is None else len(root_body),
+        tuple(len(page.body) for page in pages),
+    )
+    owner = _collection._CollectionOwner(cancel, deadline)
+    faults: list[BaseException] = []
+    raw = summary = None
+    try:
+        owner.start()
+        with _ReconciliationSession(scope, cancel=owner.cancel, deadline=deadline) as spool:
+            spool.upload_package(root_body, pages)
+            observation_count = _collection._collect_into_spool(
+                enrollment.stream.org_id, readers, spool, owner
+            )
+            owner.check()
+            summary = spool.seal(observation_count)
+            _collection._check_traversal_summary(summary, readers, observation_count)
+            while not spool.step().done:
+                owner.check()
+            owner.check()
+            raw = spool.finish_reconciliation()
+    except BaseException as error:  # noqa: BLE001 - every exit must close/join the watchdog
+        faults.append(error)
+    for fault in owner.close():
+        if not any(_collection._contains_fault(existing, fault) for existing in faults):
+            faults.append(fault)
+    try:
+        owner.check()
+    except BaseException as error:  # noqa: BLE001 - final checks preserve fatal identities
+        if len(faults) == 1 and (
+            type(faults[0]) is _collection.HistoryCollectionCancelled
+            or (
+                type(faults[0]) is _collection.HistoryCollectionError
+                and isinstance(faults[0], _collection.HistoryCollectionError)
+                and faults[0].code != "CLEANUP_FAILED"
+            )
+        ):
+            faults = [error]
+        elif not any(_collection._contains_fault(existing, error) for existing in faults):
+            faults.append(error)
+    if faults:
+        _collection._raise_collection_faults(faults)
+    if raw is None or summary is None:
+        raise HistoryReconciliationError("PROTOCOL_INVALID")
+    report = _decode_report(raw, scope)
+    if (
+        report.witnesses != summary.witnesses
+        or report.counts.admitted_total_bytes != summary.admitted_total_bytes
+    ):
+        raise HistoryReconciliationError("PROTOCOL_INVALID")
+    owner.check()
+    return report

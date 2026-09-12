@@ -58,7 +58,7 @@ print(json.dumps(result))
     assert [a[0], b[0], c[0]] == [1, 2, 3]
     assert a[1] == c[1] != b[1]
     assert result["reps"] == [[3], [2]]
-    assert result["formats"] == [[None, None], [None, None]]
+    assert result["formats"] == [["invalid", None], ["invalid", None]]
 
 
 def test_long_collision_bucket_resumes_without_a_guessed_identity(tmp_path: Path) -> None:

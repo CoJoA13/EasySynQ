@@ -36,6 +36,10 @@ class _ReconciliationSession(base._SpoolSession):
     def __init__(self, scope: protocol._PublicScope, *, cancel: Event, deadline: float) -> None:
         self._scope = scope
         self._package_uploaded = False
+        self._sealed_summary: wire._SpoolSummary | None = None
+        self._progress_phase = 0
+        self._progress_work = 0
+        self._reconciliation_done = False
         super().__init__(
             scope.enrollment.stream.org_id,
             scope.witnesses,
@@ -132,7 +136,10 @@ class _ReconciliationSession(base._SpoolSession):
             if process is None or process.stdin is None:
                 wire.invalid()
             process.stdin.close()
-        response = wire.metadata(self._receive(deadline))
+        raw_response = self._receive(deadline)
+        if op == "FINISH_RECONCILIATION" and len(raw_response) > protocol.RESULT_MAX:
+            wire.invalid()
+        response = wire.metadata(raw_response)
         self._accept_response(response, request_id, expected or set(), deadline)
         if op == "INIT" and (
             type(response["version"]) is not int or response["version"] != protocol.VERSION
@@ -180,6 +187,8 @@ class _ReconciliationSession(base._SpoolSession):
 
     @_owned
     def seal(self, expected_observations: int) -> wire._SpoolSummary:
+        if not self._package_uploaded or self._sealed_summary is not None:
+            wire.invalid()
         response = self._rpc(
             "SEAL", {"expected_observations": expected_observations}, expected={"summary"}
         )
@@ -189,16 +198,49 @@ class _ReconciliationSession(base._SpoolSession):
             != expected_observations
         ):
             wire.invalid()
+        self._sealed_summary = summary
         return summary
 
     @_owned
     def step(self) -> protocol._Progress:
+        if self._sealed_summary is None or self._reconciliation_done:
+            wire.invalid()
         response = self._rpc("STEP", {}, expected={"progress"})
-        return protocol.decode_progress(response["progress"])
+        progress = protocol.decode_progress(response["progress"])
+        phase = protocol.PHASES.index(progress.phase)
+        maximum = 512 if protocol.PHASES[self._progress_phase] == "package-pages" else 64
+        if (
+            phase not in (self._progress_phase, self._progress_phase + 1)
+            or not 0 <= progress.completed_work - self._progress_work <= maximum
+        ):
+            wire.invalid()
+        self._progress_phase, self._progress_work = phase, progress.completed_work
+        self._reconciliation_done = progress.done
+        return progress
 
     @_owned
-    def finish_reconciliation(self) -> protocol._RawResult:
-        self._rpc("FINISH_RECONCILIATION", {}, expected={"result"})
-        # Real result decoding and post-result EOF/reaping/publication belong to
-        # engine wiring. A premature or fabricated success cannot be returned.
-        wire.invalid()
+    def finish_reconciliation(self) -> bytes:
+        if not self._reconciliation_done:
+            wire.invalid()
+        response = self._rpc("FINISH_RECONCILIATION", {}, expected={"result"})
+        raw = wire.encode(response["result"])
+        shutdown_deadline = min(self._deadline, base._monotonic() + base._REAP_SECONDS)
+        if self._read(1, shutdown_deadline) != b"":
+            wire.invalid()
+        process = self._process
+        if process is None:
+            wire.invalid()
+        try:
+            status = process.wait(timeout=max(0, shutdown_deadline - base._monotonic()))
+        except subprocess.TimeoutExpired:
+            raise HistoryCollectionError("WORKER_FAILED") from None
+        if status != 0:
+            raise HistoryCollectionError("WORKER_FAILED")
+        faults = self._cleanup()
+        if faults:
+            base._raise_faults(faults)
+        self._check()
+        self._finished = True
+        # The public owner still has to close/join and pass its final checks.
+        # Keep only bounded provisional bytes until that boundary has completed.
+        return raw

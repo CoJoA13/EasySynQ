@@ -165,6 +165,118 @@ def kernel_bridge(case: _ReferenceCase, *, maximum_issues: int = 32) -> bridge.B
     return _bridge_result(case, value)
 
 
+def _mixed_originals() -> tuple[tuple[Any, ...], tuple[tuple[UUID, str, str, bytes], ...]]:
+    """Independently rebind retained R78 vectors to admissible reader namespaces."""
+    import base64
+    import dataclasses
+    import hashlib
+
+    import rfc8785
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    from easysynq_api.services.audit.history_collection import RequiredHistoryWitness
+    from easysynq_api.services.audit.sink import ExplicitHistoryReader
+    from tests.unit.test_audit_bootstrap_bridge import _reference, _reference_case, _repin
+
+    reference = _reference()
+    case = _reference_case("consistent", bridge)
+    root = json.loads(case.root_body)
+    pins, readers = [], []
+    # R78's frozen namespaces have an empty region, which R84 correctly rejects.
+    # Change only public fixture enrollment/root bindings and resign the linked
+    # v2 chain with new disposable material; keep every original legacy locator.
+    for vector in reference["namespaces"]:
+        namespace = {**vector["namespace"], "region": "fixture-region"}
+        digest = hashlib.sha256(
+            b"EasySynQ/AuditLegacyBridge/v1/namespace\0" + rfc8785.dumps(namespace)
+        ).hexdigest()
+        witness = UUID(vector["witness_id"])
+        pins.append(bridge.BridgeWitnessPin(witness, digest))
+        readers.append(
+            RequiredHistoryWitness(
+                witness,
+                ExplicitHistoryReader(
+                    namespace["endpoint"],
+                    namespace["bucket"],
+                    namespace["region"],
+                    "fixture-access",
+                    "fixture-secret",
+                ),
+            )
+        )
+        next(w for w in root["witnesses"] if w["witness_id"] == str(witness))["namespace_hash"] = (
+            digest
+        )
+    keys = tuple(Ed25519PrivateKey.from_private_bytes(bytes([n]) * 32) for n in (113, 114))
+    public = tuple(k.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw) for k in keys)
+    ids = tuple("ed25519-sha256:" + hashlib.sha256(k).hexdigest() for k in public)
+    pin = dataclasses.replace(
+        case.enrollment.stream.bootstrap, initial_key_id=ids[0], initial_public_key=public[0]
+    )
+    case = dataclasses.replace(
+        case,
+        enrollment=dataclasses.replace(
+            case.enrollment,
+            witnesses=tuple(pins),
+            stream=dataclasses.replace(case.enrollment.stream, bootstrap=pin),
+        ),
+    )
+    root.update(initial_key_id=ids[0], initial_public_key=base64.b64encode(public[0]).decode())
+    case = _repin(case, root=root)
+    observations = [
+        (o.witness_id, o.object_key, o.version_id, o.body)
+        for o in case.observations
+        if isinstance(o, bridge.LegacyBodyObservation)
+    ]
+    assert len(observations) == len(case.observations)
+    previous = case.enrollment.stream.bootstrap.commitment_hash
+    for i, vector in enumerate(reference["v2_composition"]):
+        checkpoint = json.loads(bytes.fromhex(vector["body_hex"]))["checkpoint"]
+        material = 1 if i == 2 else 0
+        checkpoint.update(previous_anchor_hash=previous, key_id=ids[material])
+        if checkpoint["kind"] == "key_transition":
+            checkpoint.update(
+                next_key_id=ids[1], next_public_key=base64.b64encode(public[1]).decode()
+            )
+            proof = {k: v for k, v in checkpoint.items() if k != "next_key_signature"}
+            checkpoint["next_key_signature"] = base64.b64encode(
+                keys[1].sign(
+                    b"EasySynQ/AuditCheckpoint/v2/key-transition-proof\0" + rfc8785.dumps(proof)
+                )
+            ).decode()
+        canonical = rfc8785.dumps(checkpoint)
+        signature = keys[material].sign(b"EasySynQ/AuditCheckpoint/v2/signature\0" + canonical)
+        previous = hashlib.sha256(
+            b"EasySynQ/AuditCheckpoint/v2/hash\0" + canonical + signature
+        ).hexdigest()
+        raw = rfc8785.dumps(
+            {
+                "checkpoint": checkpoint,
+                "signature": base64.b64encode(signature).decode(),
+                "anchor_hash": previous,
+            }
+        )
+        for witness in pins:
+            observations.append(
+                (
+                    witness.witness_id,
+                    f"checkpoints/{case.enrollment.stream.org_id}/v2-node-{i}",
+                    "v2-version",
+                    raw,
+                )
+            )
+    limits = HistoryReconciliationLimits(8, 4096, 8, 4096, 16_777_216, 67_108_864, 90, 100_000, 32)
+    return (
+        (case.enrollment, case.root_body, case.pages, tuple(readers), limits),
+        tuple(observations),
+    )
+
+
+def mixed_case() -> tuple[Any, ...]:
+    return _mixed_originals()[0]
+
+
 def _bridge_result(case: _ReferenceCase, value: dict[str, Any]) -> bridge.BridgeEvaluation:
     if set(value) == {"error"}:
         raise HistoryReconciliationError(value["error"])

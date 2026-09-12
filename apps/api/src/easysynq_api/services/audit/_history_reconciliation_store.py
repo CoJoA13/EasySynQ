@@ -2,16 +2,41 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
 import sqlite3
 from collections.abc import Callable
-from typing import Concatenate, cast
+from typing import Concatenate, Literal, cast
 
 from . import _history_reconciliation_protocol as protocol
 from . import _history_spool_protocol as wire
 from . import _history_spool_store as base
+from . import legacy_checkpoint_compat as legacy
 from .history_collection import HistoryCollectionError
 from .history_reconciliation import HistoryReconciliationLimits
+
+
+def _classify_body(raw: bytes) -> Literal["legacy", "v2", "invalid"]:
+    """Only route bounded original shape; authentication owns its numeric grammar."""
+    try:
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=legacy._pairs)
+    except (ValueError, RecursionError, OverflowError):
+        return "invalid"
+    if type(value) is not dict or type(value.get("checkpoint")) is not dict:
+        return "invalid"
+    checkpoint = value["checkpoint"]
+    if "format_version" in checkpoint:
+        return "v2"
+    if value.keys() == {"checkpoint", "signature"} and checkpoint.keys() == {
+        "org_id",
+        "latest_id",
+        "latest_row_hash",
+        "timestamp",
+    }:
+        return "legacy"
+    return "invalid"
+
 
 # Every relation is created before the authorizer is installed. Later kernels
 # insert only into these fixed indexes; the protocol never accepts SQL or schema.
@@ -306,7 +331,10 @@ class _ReconciliationStore(base._SpoolStore):
     def seal(self, expected_observations: int) -> wire._SpoolSummary:
         self._require_collecting()
         wire.integer(expected_observations, 0, self.limits.maximum_observations)
-        summary = super().finish()
+        collected = super().finish()
+        summary = dataclasses.replace(
+            collected, admitted_total_bytes=collected.admitted_total_bytes + self._package_bytes
+        )
         if (
             self._ordinal != expected_observations
             or sum(w.version_observations + w.delete_observations for w in summary.witnesses)
@@ -314,6 +342,7 @@ class _ReconciliationStore(base._SpoolStore):
         ):
             wire.invalid()
         self._state = "sealed"
+        self._sealed_summary = summary
         # Reinstall to invalidate SQLite's cached statement authorizations, so a
         # previously prepared evidence UPDATE cannot outlive the write boundary.
         self._connection().set_authorizer(self._sealed_authorize)
@@ -341,8 +370,9 @@ class _ReconciliationStore(base._SpoolStore):
         db.execute("BEGIN")
         if raw_id is None:
             raw_id = db.execute(
-                "INSERT INTO raw_bodies(digest,byte_length,representative_ordinal) VALUES(?,?,?)",
-                (self._identity_digest, len(body), ordinal),
+                "INSERT INTO raw_bodies(digest,byte_length,representative_ordinal,format) "
+                "VALUES(?,?,?,?)",
+                (self._identity_digest, len(body), ordinal, _classify_body(body)),
             ).lastrowid
             if raw_id is None:
                 wire.invalid()
