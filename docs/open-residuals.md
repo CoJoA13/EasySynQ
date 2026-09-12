@@ -99,6 +99,15 @@ independent custody/delivery, protected rollback memory and the source-denied bo
 contract remain required. This record and issue #3 stay OPEN; no restore or activation is enabled.
 Last reviewed: 2026-09-11
 
+Global reconciliation progress on 2026-09-12 (R85 candidate): the inactive API now checks collected
+legacy/bootstrap and v2 history globally in one owned lifetime, with whole-path coverage at each
+required witness and compact output after cleanup. Eleven mandatory image cases passed, including
+genuine TLS missing-copy/consistent/late-conflict cases and separate large synthetic closure.
+This supplies observed-history consistency only; no archive generation, actual database snapshot
+comparison, independent custody/delivery, protected rollback memory or source-denied recovered-stack
+boot/content-read proof is added. The closure contract and issue #3 remain OPEN. See
+[current status](current-status.md) for candidate integration state. Last reviewed: 2026-09-12.
+
 ## RES-CONTAINER-SECURITY-TRIAGE
 
 Status: OPEN
@@ -492,6 +501,15 @@ larger bridge/key/edge indexes, actual DB-chain agreement, non-omission/atomicit
 and rollback memory, durable delivery and activation/restore compatibility remain required.
 Current operational consumers remain unchanged; this record stays OPEN.
 
+Global reconciliation progress on 2026-09-12 (R85 candidate): indexed R77/R78-equivalent kernels now
+consume complete collected original evidence within one fresh worker, beyond the older 4,096-node/
+eight-page supplied limits. All required witnesses must cover the full accepted v2 path, and late
+cross-format signed-head contradictions suppress usable output. Independent large/truncation
+controls, eleven-case actual-image acceptance and owned cleanup passed. This is an inactive
+observed-history foundation; actual DB-chain agreement, non-omission/atomicity, protected custody/
+rollback memory, durable delivery and operational/restore integration remain required. This record
+stays OPEN; [current status](current-status.md) tracks candidate delivery. Last reviewed: 2026-09-12.
+
 ## RES-MINIO-VERSION-LIST-DENY
 
 Status: OPEN
@@ -607,6 +625,15 @@ not a retained key-history store or activation authority. Global history reconci
 rollback knowledge, independent transition delivery/activation confirmation and actual rotation
 plus pre-rotation restore proofs remain open. Existing signing, key loading, enrollment and restore
 behavior are unchanged; this record stays OPEN.
+
+Global reconciliation progress on 2026-09-12 (R85 candidate): the inactive global kernel distinguishes
+known authenticating key material from predecessor-authorized key/epoch edges across complete
+observed history. Detached/rejected transitions cannot enroll successor authority; whole-path
+witness coverage and late contradictions are checked before compact post-cleanup output. Actual
+image and independent scale controls passed. No key is activated, delivered or loaded differently;
+protected rollback knowledge, independent transition delivery/activation confirmation and real
+rotation/pre-rotation restore proof remain open under the unchanged closure contract. Candidate
+integration is tracked in [current status](current-status.md). Last reviewed: 2026-09-12.
 
 ## RES-RISK-CLAUSE-PICKER
 

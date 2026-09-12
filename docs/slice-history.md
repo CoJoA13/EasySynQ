@@ -183,6 +183,127 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-global-history-reconciliation — bounded global closure
+
+**2026-09-12; full local repository and eleven-case image acceptance verified; reviewed GitLab
+integration gates pending.** The baseline is MR !45's merged main
+`b2885e1300ca1fb69a4ab0917301f344c9ed0e62`. Its
+[source pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2842482630) and
+[merged-main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2842504738)
+passed all fourteen required jobs, including the ten R84-era mandatory runtime cases. The older
+R84 local candidate records below remain historical; MR !45 is complete.
+
+R85 adds one inactive public call that keeps original traversal evidence and all derived
+bootstrap/material/edge/coverage indexes inside one fresh bounded SQLite worker. Root/manifest
+precedence, exact raw equality, once-per-distinct-body authentication, separate material and edge
+authority, complete per-witness path coverage and cross-format signed-head comparison precede
+compact post-cleanup publication. Collection gaps and late contradictions suppress usable output
+beside healthy copies or an already included required checkpoint. R77/R78 remain independent
+supplied-input references with their original smaller limits; R84 remains a storage-only diagnostic
+API. No operational consumer, enrollment format, dependency, migration, writer or restore changes.
+
+Independent fixtures begin with public disposable primitives and original XML/body bytes.
+Differential tests compare every current R77/R78 fixture within shared capacities; larger fixtures
+use independently computed path/epoch expectations. Late fork, reused anchor ID, raw locator
+variant, legacy/cross-format signed-head conflict, manifest order/duplicate and missing-copy
+controls cross former observation/page limits. Deliberately truncated identity/event/manifest
+scans fail the independent oracle. Real worker death, cleanup failure, stale/trailing IPC,
+command/whole deadlines, cancellation and actual SQL/OS limits prevent partial publication.
+
+The affected reconciliation cohort passed **1,361 tests in 374.66 seconds**, with Ruff/format
+and mypy over **481 source files**. Finite synthetic scales of 257 / 4,097 / 8,193 v2 nodes used
+1,033 / 12,809 / 21,001 GET deliveries and 2 / 14 / 22 LIST pages. Public call wall time was
+1.081 / 10.952 / 14.870 seconds; measured kernel CPU was 0.720 / 8.616 / 11.523 seconds and
+fresh VmHWM 60,464 / 91,888 / 96,648 KiB on local SQLite 3.53.1. These are synthetic measurements;
+genuine provider work is separately counted below. None promises throughput at maximum limits.
+
+The complete fresh installed-image harness passed **all eleven mandatory cases in 962.708 seconds**,
+zero errors/failures/skips. The new case consumed **113,458 ms**, including fixture and teardown,
+within its 300,000-ms allocation. Old R84 retained all **1,003 genuine GETs / three LIST pages**;
+its collector took **442,548 ms** below 450,000 and its whole case **618,303 ms** below 780,000.
+The full harness remained below 1,200 seconds without removing cases or changing existing caps.
+Three existing Testcontainers import deprecations remain recorded, not suppressed.
+
+One genuine TLS provider enrollment supplied three-node rotating history and its positive legacy
+bridge on two independently scoped witnesses. Missing B's middle copy, complete coverage and a
+late signed contradiction made **10 / 11 / 12 genuine GETs** and **two LISTs each**, returning
+incomplete / consistent / failed. The external enrollment/root stayed identical across all three
+runs; the incomplete and failed results retained the separately included early checkpoint. Original
+LIST XML and exact GET version metadata were traced. MinIO's GET trace body is `<BLOB>`; independently
+retained seed bytes at each exact version supplied the expected raw-byte digest, compared with
+actual downloaded bytes. Nine missing-read/version/byte receipt mutations were rejected.
+
+Separate installed-image synthetic cases made **12,809 / 12,810 GETs** and **fourteen LISTs** each.
+The positive result had the independently expected **4,097-node path, 65 used epochs and ten
+committed legacy pages**; adding the late signed contradiction suppressed usable output. Eight
+public hostile attempts and ten fixed SQL/OS workers tested kills after seal, during graph work
+and after provisional output, stale/trailing bytes, cancellation/deadline, cleanup failure,
+address-space/CPU/FD/file/SQL-heap ceilings and rejected disk-journal/sort/attachment policy.
+Every owned reconciliation worker, pipe, watchdog, directory, fixture container and image was
+removed; credentials stayed out of spool, worker argv/environment and reports.
+
+Installed runtime was Python **3.12.14**, SQLite **3.40.1**, UID **10001**, with read-only root and
+no mypy/pytest/ruff. All **39 installed audit module identities** matched source. The separately
+owned test kernel used that installed code and returned full path/epoch digests, **4,097** raw
+inspections/authentications/edge assessments, **4,609** legacy decodes/authentications, and **58
+actual query plans** without temporary B-trees. It measured **16.852 seconds CPU**, **16.881 seconds
+wall**, **110.622 ms maximum STEP**, **64 maximum work items**, **40,738,816 database bytes** and
+**91,556 KiB fresh VmHWM**. Historical process-rusage highwater was **143,656 KiB**, recorded separately
+because it can retain fork/pre-exec highwater. Fixed resource and command limits were preserved.
+
+All **2,082 source identities**, **232 environment identities**, driver/adapter/input identity,
+seventeen saved command/JUnit/runner/resource artifacts and outer logs were independently checked.
+The new six-receipt proof was **28,273 bytes**, below 65,536. The bounded private recorder passed
+every complete-runner command/result unchanged and retained evidence before normal owned cleanup.
+Runtime build digest was `154237a3c7ada1cedee2196536fe20887dd0b307c6c9eb6b67295d1687e367e1`;
+proof digest `ad52ceaf4d359605728bbfbb6eaa94d3aa63eb4a9826510670d078f00315290f`.
+The runtime proof was source-bound before Task 9 commit
+`d7aac1f42f63735cf043dccf6b1816750e2f575e`; the commit preserves those bytes. Focused receipt/runner
+acceptance passed **340 tests in 16.67 seconds**, plus Ruff, 855-file formatting, mypy, whitespace
+and site-data checks. At that checkpoint, full repository gates and reviewed GitLab delivery
+were still pending.
+
+The first complete repository check passed contract synchronization and API Ruff/format/mypy,
+then reported **4,881 passed, 56 failed and one existing release-only skip** in 969.71 seconds.
+The web stages were not reached. Focused reproduction attributed 53 isolated-reader failures
+to a new cleanup-fault test whose outer patch teardown reinstalled a synthetic reader; three
+older CLI tests created group-writable trust fixtures under the host's file-creation permissions.
+Commit `8a8d800` scopes the fault patch inside the synthetic transport lifetime and explicitly
+protects the test descriptor with mode 0600. Two added teardown regressions failed before the
+fix; all **102 focused CLI/cleanup/reader cases passed in 19.85 seconds** afterward. Production
+trust checks and runtime code are unchanged. These test changes altered the proof digest, requiring
+fresh complete repository and mandatory eleven-case image acceptance; the earlier
+receipt above describes its original inputs only.
+
+Fresh complete verification at `8a8d8003fef38b34776f2e92e17f3232af01219b` subsequently passed
+**4,939 API tests** with the one existing release-only skip in **967.73 seconds**, API Ruff,
+855-file formatting and 481-source mypy. Web lint/build and all **2,357 tests across 283 files**
+passed (Vitest 694.40 seconds). The complete repository command took 1,688.000 seconds. The
+four existing contract schema-overlap warnings and Testcontainers deprecations remain unchanged.
+
+Fresh mandatory image acceptance passed **all eleven cases in 965.223 seconds**, no skips,
+errors or failures. New R85 case: **114.373 seconds**; old R84 case: **620.419 seconds**, including
+**444.768 seconds** for its unchanged 1,003-GET/three-LIST collector. Original 300/780/450/1,200-
+second caps remain unchanged. The same six receipt semantics and independent path/epoch,
+transport, hostile-worker and cleanup checks above passed again. The new proof is **28,272 bytes**.
+Actual-image SQLite 3.40.1 kernel: 58 indexed plans, **16.851 seconds CPU**, **16.860 seconds wall**,
+**110.419 ms maximum STEP**, maximum 64 work items, **40,738,816 database bytes** and **91,596 KiB
+fresh VmHWM** (143,380 KiB historical process-rusage highwater recorded separately).
+
+Build digest remains `154237a3c7ada1cedee2196536fe20887dd0b307c6c9eb6b67295d1687e367e1`.
+Fresh proof digest: `8c591a931c34fd8a9178b4d5d9fbd07ca11a072bf65d99ecae78b53f691e2aba`.
+All 2,083 source identities, 240 environment identities, immutable driver/adapter/manifest,
+17 saved runtime artifacts and four outer log digests were independently checked. Fresh owned
+container/image queries and the exact recorded acceptance directory confirmed cleanup. No
+completed job was restarted; changed proof inputs received a new complete acceptance run.
+
+This establishes observed-history consistency within the admitted evidence and bounds. It does
+not establish provider non-omission, atomicity, historical deletion absence, custody, actual
+DB-chain agreement, freshness/rollback continuity, durable delivery, operational activation or
+source-independent recovery. Related residuals and issue #3 remain OPEN. The historical runtime
+acceptance failure is not attributed or closed by this later green run; no live IAM, enrollment,
+activation, deployment, restore or cutover occurred.
+
 ### S-audit-required-witness-collection — fresh bounded traversal diagnostics
 
 **2026-09-11; all ten mandatory runtime cases verified, integration gates pending.** The starting R83
