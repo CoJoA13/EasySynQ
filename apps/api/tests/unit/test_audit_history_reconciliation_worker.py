@@ -399,6 +399,7 @@ print(json.dumps(result))
         "committed_entries",
         "legacy_bodies",
         "legacy_membership",
+        "legacy_locators",
         "legacy_witness_heads",
         "v2_routes",
         "v2_nodes",

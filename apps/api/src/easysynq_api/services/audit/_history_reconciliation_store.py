@@ -55,9 +55,13 @@ _SCHEMA = (
     "CREATE INDEX legacy_heads ON legacy_bodies(audit_id,row_hash,raw_id)",
     "CREATE TABLE legacy_membership(ordinal INTEGER PRIMARY KEY, committed INTEGER NOT NULL, "
     "exact_match INTEGER NOT NULL)",
+    "CREATE TABLE legacy_locators(witness BLOB NOT NULL, key BLOB NOT NULL, version BLOB NOT "
+    "NULL, raw_id INTEGER NOT NULL, representative_ordinal INTEGER NOT NULL, "
+    "PRIMARY KEY(witness,key,version,raw_id))",
     "CREATE TABLE legacy_witness_heads(witness BLOB NOT NULL, audit_id INTEGER NOT NULL, "
     "row_hash TEXT NOT NULL, representative_ordinal INTEGER NOT NULL, PRIMARY "
     "KEY(witness,audit_id,row_hash))",
+    "CREATE INDEX global_legacy_heads ON legacy_witness_heads(audit_id,row_hash,witness)",
     "CREATE TABLE v2_routes(raw_id INTEGER PRIMARY KEY, key_id TEXT, state TEXT NOT NULL)",
     "CREATE INDEX waiting_routes ON v2_routes(key_id,state,raw_id)",
     "CREATE TABLE v2_nodes(envelope_hash TEXT PRIMARY KEY, anchor_id TEXT NOT NULL, "
@@ -101,6 +105,7 @@ _TABLES = frozenset(
         "committed_entries",
         "legacy_bodies",
         "legacy_membership",
+        "legacy_locators",
         "legacy_witness_heads",
         "v2_routes",
         "v2_nodes",
