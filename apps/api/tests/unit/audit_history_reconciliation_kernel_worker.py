@@ -523,6 +523,182 @@ def _lineage(value: dict[str, Any], source: Path) -> dict[str, Any]:
     return result
 
 
+def _global(value: dict[str, Any], source: Path) -> dict[str, Any]:
+    """Full production engine fed original XML, without provider completeness claims."""
+    import sqlite3
+    import time
+
+    from easysynq_api.services.audit import _history_reconciliation_lineage as lineage
+    from easysynq_api.services.audit import _history_reconciliation_protocol as protocol
+    from easysynq_api.services.audit import _history_spool_protocol as wire
+    from easysynq_api.services.audit import checkpoint_v2 as codec
+    from easysynq_api.services.audit import legacy_checkpoint_compat as legacy
+    from easysynq_api.services.audit._history_reconciliation_engine import _ReconciliationEngine
+    from easysynq_api.services.audit._history_reconciliation_report import _report_payload
+    from easysynq_api.services.audit._history_reconciliation_store import _ReconciliationStore
+
+    wire.fields(value, {"kind", "scope", "root", "pages", "provider", "mutant"})
+    mutant = value["mutant"]
+    assert mutant in {"", "identity-prefix", "first-event-batch", "last-manifest-page"}
+    mutant_reached = []
+    assert value["kind"] == "global"
+    scope = protocol.decode_init({**value["scope"], "op": "INIT", "id": 1})
+    resource.setrlimit(resource.RLIMIT_FSIZE, (scope.limits.maximum_spool_bytes,) * 2)
+    began = time.monotonic()
+    cpu = time.process_time()
+    store = _ReconciliationStore(scope)
+    try:
+        for kind, index, raw in [("root", 0, bytes.fromhex(value["root"]))] + [
+            ("page", i, bytes.fromhex(p)) for i, p in enumerate(value["pages"])
+        ]:
+            store.package_begin(kind, index, len(raw))
+            for offset in range(0, len(raw), wire.CHUNK_MAX):
+                store.package_chunk(raw[offset : offset + wire.CHUNK_MAX])
+            store.package_end()
+        ordinal = 0
+        for item in value["provider"]:
+            wire.fields(item, {"witness", "key_marker", "version_marker", "xml", "bodies"})
+            ticket = store.reserve_page(item["witness"], item["key_marker"], item["version_marker"])
+            assert ticket is not None
+            raw = bytes.fromhex(item["xml"])
+            store.page_begin(ticket, len(raw))
+            for offset in range(0, len(raw), wire.CHUNK_MAX):
+                store.page_chunk(raw[offset : offset + wire.CHUNK_MAX])
+            admission = store.page_end()
+            assert admission.version_count == len(item["bodies"]) and admission.delete_count == 0
+            for body in item["bodies"]:
+                ordinal += 1
+                store.record_body(ordinal, bytes.fromhex(body))
+        store.seal(ordinal)
+        counts = dict(inspect=0, verify=0, edge=0, legacy_decode=0, legacy_auth=0)
+
+        def count(name: str, function: Any) -> Any:
+            def counted(*args: Any, **kwargs: Any) -> Any:
+                counts[name] += 1
+                return function(*args, **kwargs)
+
+            return counted
+
+        codec.inspect_envelope_route = count("inspect", codec.inspect_envelope_route)
+        codec.verify_envelope = count("verify", codec.verify_envelope)
+        lineage._edge_fault = count("edge", lineage._edge_fault)
+        legacy._decode = count("legacy_decode", legacy._decode)
+        legacy._authenticate = count("legacy_auth", legacy._authenticate)
+        engine = _ReconciliationEngine(store, scope)
+        if mutant == "identity-prefix":
+            link = store._link_identity
+
+            def truncated_identity(raw_id: int | None, body: bytes) -> None:
+                link(raw_id, body)
+                if store._identity_after == 4096:
+                    mutant_reached.append(4096)
+                    store._identity_after = 2_147_483_647
+
+            store._link_identity = truncated_identity
+        elif mutant == "first-event-batch":
+            events = engine.lineage._events_step
+
+            def dropped_dependency() -> bool:
+                done = events()
+                if not mutant_reached:
+                    assert not done and engine.lineage.work >= 64
+                    store._connection().execute(
+                        "UPDATE parent_events SET done=1 WHERE predecessor_hash=?",
+                        (scope.enrollment.stream.bootstrap.commitment_hash,),
+                    )
+                    mutant_reached.append(64)
+                return done
+
+            engine.lineage._events_step = dropped_dependency
+        elif mutant == "last-manifest-page":
+            pages_step = engine.bridge._pages_step
+
+            def omitted_last_page() -> bool:
+                if engine.bridge._page_after == len(value["pages"]) - 1:
+                    mutant_reached.append(engine.bridge._page_after)
+                    return True
+                return pages_step()
+
+            engine.bridge._pages_step = omitted_last_page
+        maximum_step, maximum_work, prior_work, steps = 0.0, 0, 0, 0
+        phase_steps: dict[str, int] = {}
+        while True:
+            phase = protocol.PHASES[engine._phase]
+            tick = time.monotonic()
+            progress = engine.step()
+            elapsed = time.monotonic() - tick
+            maximum_step = max(maximum_step, elapsed)
+            delta = progress.completed_work - prior_work
+            assert 0 <= delta <= (512 if phase == "package-pages" else 64)
+            assert elapsed < 10
+            maximum_work = max(maximum_work, delta)
+            prior_work = progress.completed_work
+            steps += 1
+            phase_steps[phase] = phase_steps.get(phase, 0) + 1
+            assert steps <= 100_000
+            if progress.done:
+                break
+        db = store._connection()
+        path = [
+            row[0] for row in db.execute("SELECT envelope_hash FROM path_nodes ORDER BY sequence")
+        ]
+        epochs = [
+            row[0] for row in db.execute("SELECT key_epoch FROM used_epochs ORDER BY key_epoch")
+        ]
+        plans = []
+        for filename in (
+            "_history_reconciliation_bridge.py",
+            "_history_reconciliation_lineage.py",
+            "_history_reconciliation_engine.py",
+        ):
+            syntax = ast.parse((source / "easysynq_api/services/audit" / filename).read_text())
+            for node in ast.walk(syntax):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "execute"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and type(node.args[0].value) is str
+                    and node.args[0].value.startswith("SELECT ")
+                ):
+                    sql = node.args[0].value
+                    plan = [
+                        row[3]
+                        for row in db.execute("EXPLAIN QUERY PLAN " + sql, (b"",) * sql.count("?"))
+                    ]
+                    assert not any("TEMP B-TREE" in item for item in plan), (sql, plan)
+                    plans.append(dict(file=filename, sql=sql, plan=plan))
+        result = {
+            "report": _report_payload(engine.finish()),
+            "mutant_reached": mutant_reached,
+            "path": path,
+            "epochs": epochs,
+            "counts": counts,
+            "measurements": dict(
+                sqlite=sqlite3.sqlite_version,
+                wall_seconds=time.monotonic() - began,
+                cpu_seconds=time.process_time() - cpu,
+                peak_rss_kib=int(
+                    next(
+                        line.split()[1]
+                        for line in Path("/proc/self/status").read_text().splitlines()
+                        if line.startswith("VmHWM:")
+                    )
+                ),
+                process_rusage_peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                database_bytes=Path("spool.sqlite3").stat().st_size,
+                maximum_step_seconds=maximum_step,
+                maximum_step_work=maximum_work,
+                phase_steps=phase_steps,
+            ),
+            "plans": plans,
+        }
+    finally:
+        store.close()
+    return result
+
+
 def _main() -> None:
     source = Path(__file__).resolve().parents[2] / "src"
     assert sys.argv[1:] == [str(source)]
@@ -539,6 +715,8 @@ def _main() -> None:
     assert type(value) is dict
     if value.get("kind") == "bridge":
         result = _bridge(value, source)
+    elif value.get("kind") == "global":
+        result = _global(value, source)
     else:
         assert value.get("kind") == "lineage"
         result = _lineage(value, source)

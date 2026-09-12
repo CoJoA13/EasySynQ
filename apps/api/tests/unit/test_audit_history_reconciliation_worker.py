@@ -860,3 +860,373 @@ def test_oversize_package_stream_does_not_allocate_a_sqlite_value(
         session.admit_page(ticket, _page_xml())
         assert session.seal(0).admitted_total_bytes == len(_page_xml()) + size
     assert list(tmp_path.iterdir()) == []
+
+
+def _capture_owned_lifetime(monkeypatch):
+    from easysynq_api.services.audit import history_collection as collection
+    from easysynq_api.services.audit._history_reconciliation_session import _ReconciliationSession
+
+    sessions, owners, paths, pipes = [], [], [], []
+    enter, initialize = _ReconciliationSession.__enter__, collection._CollectionOwner.__init__
+
+    def entered(self):
+        sessions.append(self)
+        result = enter(self)
+        paths.append(self._directory)
+        pipes.extend(
+            os.readlink(f"/proc/self/fd/{p.fileno()}")
+            for p in (self._process.stdin, self._process.stdout)
+        )
+        return result
+
+    def initialized(self, *args, **kwargs):
+        initialize(self, *args, **kwargs)
+        owners.append(self)
+
+    monkeypatch.setattr(_ReconciliationSession, "__enter__", entered)
+    monkeypatch.setattr(collection._CollectionOwner, "__init__", initialized)
+
+    def check():
+        assert owners and all(not owner._thread.is_alive() for owner in owners)
+        for session in sessions:
+            assert session._process.returncode is not None
+            assert not Path(f"/proc/{session._process.pid}").exists()
+            assert session._process.stdin.closed and session._process.stdout.closed
+            assert session._directory is None and session._selector is None
+        links = []
+        for path in Path("/proc/self/fd").iterdir():
+            try:
+                links.append(os.readlink(path))
+            except FileNotFoundError:
+                pass
+        assert not set(pipes) & set(links)
+        assert all(not any(directory in link for directory in paths) for link in links)
+        assert all(not Path(directory).exists() for directory in paths)
+
+    return owners, check
+
+
+_FINAL_WORKER_MUTANT = r"""
+import os, runpy, sys
+worker, source, mutant = sys.argv[1:]
+namespace = runpy.run_path(worker)
+namespace['_apply_limits']()
+import json, signal, sqlite3
+if mutant in {'journal-delete','temp-file','attach-limit'}:
+    connect = sqlite3.connect
+    class ChangedConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            if mutant == 'journal-delete' and sql == 'PRAGMA journal_mode=memory':
+                sql = 'PRAGMA journal_mode=delete'
+            elif mutant == 'temp-file' and sql == 'PRAGMA temp_store=2':
+                sql = 'PRAGMA temp_store=1'
+            return super().execute(sql, parameters)
+        def setlimit(self, category, limit):
+            if mutant == 'attach-limit' and category == sqlite3.SQLITE_LIMIT_ATTACHED:
+                limit = 1
+            return super().setlimit(category, limit)
+    def changed_connect(*args, **kwargs):
+        return connect(*args, factory=ChangedConnection, **kwargs)
+    sqlite3.connect = changed_connect
+else:
+    assert mutant in {'stop-after-final','extra-after-final'}
+    write = namespace['_write']
+    def final_write(stream, raw):
+        write(stream, raw)
+        if 'result' in json.loads(raw[5:]):
+            if mutant == 'stop-after-final':
+                os.kill(os.getpid(), signal.SIGSTOP)
+            else:
+                write(stream, b'x')
+    namespace['_main'].__globals__['_write'] = final_write
+sys.argv = [worker, source]
+raise SystemExit(namespace['_main']())
+"""
+
+
+def _launch_mutant(monkeypatch, mutant):
+    from easysynq_api.services.audit import _history_reconciliation_session as session
+
+    launch = session.subprocess.Popen
+
+    def changed(argv, *args, **kwargs):
+        assert Path(argv[4]).name == "_history_reconciliation_worker.py"
+        return launch([*argv[:4], "-c", _FINAL_WORKER_MUTANT, *argv[4:], mutant], *args, **kwargs)
+
+    monkeypatch.setattr(session.subprocess, "Popen", changed)
+
+
+@pytest.mark.parametrize("stage", ["traversal", "seal", "graph", "provisional-final"])
+def test_actual_worker_death_blocks_later_transport_and_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stage: str,
+) -> None:
+    import signal
+
+    from easysynq_api.services.audit import history_reconciliation as public
+    from easysynq_api.services.audit._history_reconciliation_session import _ReconciliationSession
+    from tests.unit.audit_history_reconciliation_vectors import large_case, synthetic_transport
+
+    case = large_case(3, 5, 2)
+    _, clean = _capture_owned_lifetime(monkeypatch)
+    rpc = _ReconciliationSession._rpc
+    reached = []
+    if stage == "provisional-final":
+        _launch_mutant(monkeypatch, "stop-after-final")
+
+    with synthetic_transport(case, monkeypatch, tmp_path) as receipt:
+
+        def killed(self, op, *args, **kwargs):
+            from easysynq_api.services.audit._history_reconciliation_protocol import PHASES
+
+            prior_phase = PHASES[self._progress_phase]
+            result = rpc(self, op, *args, **kwargs)
+            target = {
+                "traversal": op == "BODY",
+                "seal": op == "SEAL",
+                "graph": op == "STEP" and prior_phase == "v2-events",
+                "provisional-final": op == "FINISH_RECONCILIATION",
+            }[stage]
+            if target and not reached:
+                assert self._process.poll() is None
+                assert Path(self._directory, "spool.sqlite3").exists()
+                if stage == "provisional-final":
+                    assert result["result"]["status"] == "consistent"
+                reached.append(dict(receipt))
+                os.killpg(self._process.pid, signal.SIGKILL)
+                # Prove the identity died before testing the next transport guard.
+                assert self._process.wait(timeout=2) == -signal.SIGKILL
+            return result
+
+        monkeypatch.setattr(_ReconciliationSession, "_rpc", killed)
+        with pytest.raises(public.HistoryReconciliationError) as caught:
+            public.collect_and_reconcile_checkpoint_history(*case.args)
+        assert caught.value.code == "WORKER_FAILED"
+        assert reached == [receipt]
+    clean()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "mutant,code",
+    [
+        ("extra-after-final", "PROTOCOL_INVALID"),
+        ("journal-delete", "RUNTIME_UNSUPPORTED"),
+        ("temp-file", "RUNTIME_UNSUPPORTED"),
+        ("attach-limit", "RUNTIME_UNSUPPORTED"),
+    ],
+)
+def test_actual_worker_stream_and_sql_policy_mutants_block_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutant: str,
+    code: str,
+) -> None:
+    from easysynq_api.services.audit import history_reconciliation as public
+    from tests.unit.audit_history_reconciliation_vectors import large_case, synthetic_transport
+
+    case = large_case(3, 5, 2)
+    _, clean = _capture_owned_lifetime(monkeypatch)
+    _launch_mutant(monkeypatch, mutant)
+    with synthetic_transport(case, monkeypatch, tmp_path) as receipt:
+        with pytest.raises(public.HistoryReconciliationError) as caught:
+            public.collect_and_reconcile_checkpoint_history(*case.args)
+        assert caught.value.code == code
+        if mutant != "extra-after-final":
+            assert receipt == dict(list=0, get=0)
+    clean()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "upload",
+        "traversal",
+        "package-pages",
+        "legacy-auth",
+        "v2-events",
+        "witness-coverage",
+        "global-heads",
+        "issues",
+        "post-cleanup",
+    ],
+)
+@pytest.mark.parametrize("fault", ["cancel", "deadline"])
+def test_interruptions_at_every_engine_boundary_discard_the_owned_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stage: str,
+    fault: str,
+) -> None:
+    from easysynq_api.services.audit import history_collection as collection
+    from easysynq_api.services.audit import history_reconciliation as public
+    from easysynq_api.services.audit._history_reconciliation_session import _ReconciliationSession
+    from tests.unit.audit_history_reconciliation_vectors import large_case, synthetic_transport
+
+    case = large_case(3, 5, 2)
+    cancel = Event()
+    owners, clean = _capture_owned_lifetime(monkeypatch)
+    rpc, close = _ReconciliationSession._rpc, collection._CollectionOwner.close
+    reached = []
+
+    def interrupt():
+        reached.append(stage)
+        if fault == "cancel":
+            cancel.set()
+        else:
+            owners[0].deadline = time.monotonic() - 1
+
+    def after_rpc(self, op, *args, **kwargs):
+        from easysynq_api.services.audit._history_reconciliation_protocol import PHASES
+
+        phase, before = PHASES[self._progress_phase], self._progress_work
+        result = rpc(self, op, *args, **kwargs)
+        worked = result.get("progress", {}).get("completed_work", before) > before
+        target = (
+            (stage == "upload" and op == "PACKAGE_BEGIN")
+            or (stage == "traversal" and op == "BODY")
+            or (op == "STEP" and stage == phase and worked)
+        )
+        if target and not reached:
+            interrupt()
+        return result
+
+    def after_close(self):
+        result = close(self)
+        if stage == "post-cleanup" and not reached:
+            assert not self._thread.is_alive()
+            assert not list(tmp_path.iterdir())
+            interrupt()
+        return result
+
+    monkeypatch.setattr(_ReconciliationSession, "_rpc", after_rpc)
+    monkeypatch.setattr(collection._CollectionOwner, "close", after_close)
+    with synthetic_transport(case, monkeypatch, tmp_path):
+        with pytest.raises(
+            public.HistoryReconciliationCancelled
+            if fault == "cancel"
+            else public.HistoryReconciliationError
+        ) as caught:
+            public.collect_and_reconcile_checkpoint_history(*case.args, cancel=cancel)
+        if fault == "deadline":
+            assert caught.value.code == "DEADLINE_EXCEEDED"
+    assert reached == [stage]
+    clean()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("fault", ["stale-id", "replayed-frame", "phase-order", "oversized-final"])
+def test_late_ipc_faults_discard_complete_collected_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fault: str,
+) -> None:
+    from easysynq_api.services.audit import _history_spool_protocol as wire
+    from easysynq_api.services.audit import history_reconciliation as public
+    from easysynq_api.services.audit._history_reconciliation_session import _ReconciliationSession
+    from tests.unit.audit_history_reconciliation_vectors import large_case, synthetic_transport
+
+    case = large_case(3, 5, 2)
+    _, clean = _capture_owned_lifetime(monkeypatch)
+    receive = _ReconciliationSession._receive
+    reached, previous = [], []
+
+    def altered(self, deadline):
+        raw = receive(self, deadline)
+        value = wire.metadata(raw)
+        if fault == "oversized-final" and "result" in value:
+            assert value["result"]["status"] == "consistent"
+            reached.append(True)
+            return raw + b" " * (65537 - len(raw))
+        if "progress" in value:
+            if (
+                value["progress"]["phase"] == "v2-diagnostics"
+                and not reached
+                and fault != "oversized-final"
+            ):
+                reached.append(True)
+                if fault == "stale-id":
+                    value["id"] -= 1
+                elif fault == "replayed-frame":
+                    assert previous and wire.metadata(previous[-1])["id"] < value["id"]
+                    return previous[-1]
+                else:
+                    value["progress"]["phase"] = "package-root"
+                return wire.encode(value)
+            previous.append(raw)
+        return raw
+
+    monkeypatch.setattr(_ReconciliationSession, "_receive", altered)
+    with synthetic_transport(case, monkeypatch, tmp_path) as receipt:
+        with pytest.raises(public.HistoryReconciliationError) as caught:
+            public.collect_and_reconcile_checkpoint_history(*case.args)
+        assert caught.value.code == "PROTOCOL_INVALID"
+        assert receipt == dict(list=case.list_deliveries, get=case.body_deliveries)
+    assert reached == [True]
+    clean()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("fault,code", [("reap", "WORKER_FAILED"), ("remove", "CLEANUP_FAILED")])
+def test_unavailable_read_cannot_hide_a_failed_reap_or_removal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fault: str,
+    code: str,
+) -> None:
+    from easysynq_api.services.audit import _history_spool as base
+    from easysynq_api.services.audit import history_reconciliation as public
+    from easysynq_api.services.audit import isolated_raw
+    from easysynq_api.services.audit._history_reconciliation_session import _ReconciliationSession
+    from easysynq_api.services.audit.raw_transport import RawVersionReadError
+    from tests.unit.audit_history_reconciliation_vectors import large_case, synthetic_transport
+
+    case = large_case(3, 5, 2)
+    _, clean = _capture_owned_lifetime(monkeypatch)
+    rpc, rmtree = _ReconciliationSession._rpc, base.shutil.rmtree
+    final, failures, denied = [], [], []
+
+    def after_rpc(self, op, *args, **kwargs):
+        result = rpc(self, op, *args, **kwargs)
+        if op == "FINISH_RECONCILIATION":
+            assert result["result"]["status"] == "incomplete"
+            assert any(i["code"] == "VERSION_UNAVAILABLE" for i in result["result"]["issues"])
+            final.append(True)
+            if fault == "reap":
+                wait = self._process.wait
+
+                def failed_wait(*args, **kwargs):
+                    if not failures:
+                        failures.append("reap")
+                        raise subprocess.TimeoutExpired("synthetic failed reap", 0)
+                    return wait(*args, **kwargs)
+
+                self._process.wait = failed_wait
+        return result
+
+    def failed_remove(*args, **kwargs):
+        if final and fault == "remove" and not failures:
+            failures.append("remove")
+            raise PermissionError("synthetic removal failure")
+        return rmtree(*args, **kwargs)
+
+    monkeypatch.setattr(_ReconciliationSession, "_rpc", after_rpc)
+    monkeypatch.setattr(base.shutil, "rmtree", failed_remove)
+    with synthetic_transport(case, monkeypatch, tmp_path):
+        read = isolated_raw.read_raw_checkpoint_version_isolated
+
+        def first_unavailable(*args, **kwargs):
+            if not denied:
+                denied.append(True)
+                raise RawVersionReadError("PROVIDER_FAILURE")
+            return read(*args, **kwargs)
+
+        monkeypatch.setattr(isolated_raw, "read_raw_checkpoint_version_isolated", first_unavailable)
+        with pytest.raises(public.HistoryReconciliationError) as caught:
+            public.collect_and_reconcile_checkpoint_history(*case.args)
+        assert caught.value.code == code
+    assert denied == final == [True] and failures == [fault]
+    clean()
+    assert list(tmp_path.iterdir()) == []
