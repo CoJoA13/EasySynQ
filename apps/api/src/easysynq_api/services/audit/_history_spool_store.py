@@ -175,8 +175,7 @@ class _SpoolStore:
             result = db.execute(f"PRAGMA {name}").fetchone()
             if result is None or result[0] != setting_value:
                 raise HistoryCollectionError("RUNTIME_UNSUPPORTED")
-        for statement in _SCHEMA:
-            db.execute(statement)
+        self._create_schema(db)
         for index, witness in enumerate(self._witnesses):
             db.execute(
                 "INSERT INTO witnesses(id,uuid,namespace_hash,bucket,next_key,next_version) "
@@ -191,6 +190,10 @@ class _SpoolStore:
                 ),
             )
         db.set_authorizer(self._authorize)
+
+    def _create_schema(self, db: sqlite3.Connection) -> None:
+        for statement in _SCHEMA:
+            db.execute(statement)
 
     @staticmethod
     def _verify_file(info: os.stat_result) -> None:

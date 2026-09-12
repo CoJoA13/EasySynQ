@@ -67,7 +67,13 @@ def _page_xml(
     )
 
 
-def _store_process(tmp_path: Path, program: str, payload: dict[str, object]) -> dict:
+def _store_process(
+    tmp_path: Path,
+    program: str,
+    payload: dict[str, object],
+    *,
+    store_definition: str = "",
+) -> dict:
     """Inspect only a fresh test-owned store in a finite process, never pytest SQLite."""
     from easysynq_api.services.audit import _history_spool_store
 
@@ -86,8 +92,8 @@ org = UUID("11111111-1111-4111-8111-111111111111")
 scopes = tuple(_SpoolWitness(UUID(value), "a" * 64, "history-probe")
                for value in payload["witnesses"])
 limits = HistoryCollectionLimits(16, 10000, 33554432, 33554432, 30, 32)
-store = _SpoolStore(org, scopes, limits)
 """
+    prelude += store_definition + "\nstore = _SpoolStore(org, scopes, limits)\n"
     completed = subprocess.run(  # noqa: S603 - fixed interpreter and test-owned inspection program
         [sys.executable, "-I", "-B", "-c", prelude + program, str(source)],
         input=json.dumps(payload).encode(),
@@ -541,6 +547,46 @@ print(json.dumps(result))
         {"witnesses": [str(WITNESS_ID)], "page": _page_xml(_entry_xml() * 3).hex()},
     )
     assert result == {"duplicates": 1, "conflicts": 1}
+
+
+def test_fixed_schema_extension_precedes_locked_authorizer(tmp_path: Path) -> None:
+    result = _store_process(
+        tmp_path,
+        """
+try:
+    db = store._connection()
+    assert db.execute("SELECT value FROM derived_example").fetchone() == (7,)
+    assert db.execute("SELECT count(*) FROM witnesses").fetchone() == (1,)
+    rejected = []
+    for sql in ("CREATE TABLE rogue(value)", "DROP INDEX observation_locator",
+                "INSERT INTO derived_example(value) VALUES(8)", "PRAGMA temp_store=FILE"):
+        try: db.execute(sql)
+        except sqlite3.DatabaseError: rejected.append(sql)
+        else: raise AssertionError("schema initialization privilege escaped into operations")
+    result = {"value": db.execute("SELECT value FROM derived_example").fetchone()[0],
+              "denied": len(rejected)}
+finally:
+    store.close()
+print(json.dumps(result))
+""",
+        {"witnesses": [str(WITNESS_ID)]},
+        store_definition="""
+base_store = _SpoolStore
+class _SpoolStore(base_store):
+    def _create_schema(self, db):
+        super()._create_schema(db)
+        db.execute("CREATE TABLE derived_example(value INTEGER NOT NULL)")
+        db.execute("INSERT INTO derived_example(value) VALUES(7)")
+
+    @staticmethod
+    def _authorize(action, arg1, arg2, database, source):
+        if action == sqlite3.SQLITE_READ and arg1 == "derived_example":
+            return sqlite3.SQLITE_OK
+        return base_store._authorize(action, arg1, arg2, database, source)
+""",
+    )
+    assert result == {"value": 7, "denied": 4}
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_store_policy_fixed_schema_authorizer_and_live_writable_descriptors(tmp_path: Path) -> None:

@@ -1,6 +1,11 @@
 # EasySynQ web SPA — build the static assets, serve them with `vite preview`.
 # Caddy reverse-proxies `/` here and `/api`,`/healthz`,`/readyz` to the api service.
 FROM node:26-slim AS build
+# Refresh existing base packages before switching to the unprivileged build/runtime user.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade \
+        gzip libpcre2-8-0 libsqlite3-0 perl-base \
+    && rm -rf /var/lib/apt/lists/*
 # --- non-root (audit U33) ---
 # node:26-slim ships an unprivileged `node` user (uid 1000). USER is set BEFORE the install so the
 # tree is created owned correctly; a `chown -R` afterwards would duplicate the whole 300 MB

@@ -703,6 +703,101 @@ def test_collects_every_required_witness_with_unchanged_version_identity(
     assert "unclassified" not in repr(report)
 
 
+def test_collection_loop_leaves_finalization_to_its_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from easysynq_api.services.audit import _history_spool
+    from easysynq_api.services.audit._history_spool_protocol import _SpoolWitness
+    from easysynq_api.services.audit.raw_transport import RawVersionReadError
+
+    collection = _collection_module()
+    collect_into_spool = getattr(collection, "_collect_into_spool", None)
+    assert callable(collect_into_spool), "private nonterminal collection loop is not implemented"
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    readers = (_required(collection), _required(collection, _OTHER_NAMESPACE))
+    scopes = tuple(
+        _SpoolWitness(reader.witness_id, pin.namespace_hash, reader.reader.bucket)
+        for reader, pin in zip(readers, (_pin(), _pin(_OTHER_NAMESPACE)), strict=True)
+    )
+    first_xml = _original_page()
+    second_xml = _original_page(bucket="synthetic-witness-2")
+    pages = [
+        ("synthetic-witness-1", None, None, _raw_page(first_xml)),
+        ("synthetic-witness-2", None, None, _raw_page(second_xml)),
+    ]
+    bodies = [_OPAQUE_BODY, RawVersionReadError("PROVIDER_FAILURE")]
+    gets, events = _boundary_transports(monkeypatch, pages, bodies)
+    finished = []
+    original_finish = _history_spool._SpoolSession.finish
+
+    def finish(self: Any) -> Any:
+        finished.append("finish")
+        return original_finish(self)
+
+    monkeypatch.setattr(_history_spool._SpoolSession, "finish", finish)
+    deadline = collection._monotonic() + 30
+    owner = collection._CollectionOwner(None, deadline)
+    try:
+        owner.start()
+        with _history_spool._SpoolSession(
+            ORG_ID, scopes, _limits(collection), cancel=owner.cancel, deadline=deadline
+        ) as spool:
+            count = collect_into_spool(ORG_ID, readers, spool, owner)
+            assert type(count) is int and count == 2
+            assert finished == []
+            assert spool._process is not None and spool._process.poll() is None
+            assert spool._directory is not None and Path(spool._directory).is_dir()
+            # A live health check and owner-controlled FINISH must still work after
+            # every original delivery has been retained and resolved.
+            spool._guard_external_io()
+            summary = spool.finish()
+        assert finished == ["finish"]
+        assert [w.successful_reads for w in summary.witnesses] == [1, 0]
+        assert [w.unavailable_reads for w in summary.witnesses] == [0, 1]
+        assert summary.admitted_total_bytes == len(first_xml) + len(second_xml) + len(_OPAQUE_BODY)
+    finally:
+        assert owner.close() == []
+    assert not owner._thread.is_alive()
+    assert gets == [
+        ("synthetic-witness-1", _EXACT_KEY, "null"),
+        ("synthetic-witness-2", _EXACT_KEY, "null"),
+    ]
+    assert len(events) == 4 and all(event is owner.cancel for event in events)
+    assert not pages and not bodies
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("mutation", ["none", "witness-order", "count", "balance"])
+def test_traversal_summary_preserves_exact_inventory_and_resolved_counts(mutation: str) -> None:
+    from easysynq_api.services.audit._history_spool_protocol import _SpoolSummary
+
+    collection = _collection_module()
+    check_summary = getattr(collection, "_check_traversal_summary", None)
+    assert callable(check_summary), "private traversal summary check is not implemented"
+    readers = (_required(collection), _required(collection, _OTHER_NAMESPACE))
+    witnesses = tuple(
+        collection.HistoryWitnessSummary(
+            reader.witness_id, pin.namespace_hash, True, 1, 1, 1, 0, 1, 0, 0, 0
+        )
+        for reader, pin in zip(readers, (_pin(), _pin(_OTHER_NAMESPACE)), strict=True)
+    )
+    count = 2
+    if mutation == "witness-order":
+        witnesses = tuple(reversed(witnesses))
+    elif mutation == "count":
+        count = 1
+    elif mutation == "balance":
+        witnesses = (dataclasses.replace(witnesses[0], successful_reads=0), witnesses[1])
+    summary = _SpoolSummary(witnesses, (), 0, 0, 0, 1000)
+    if mutation == "none":
+        check_summary(summary, readers, count)
+    else:
+        with pytest.raises(collection.HistoryCollectionError) as caught:
+            check_summary(summary, readers, count)
+        assert caught.value.code == "PROTOCOL_INVALID"
+
+
 def test_late_conflict_after_4096_deliveries_keeps_every_duplicate_get(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

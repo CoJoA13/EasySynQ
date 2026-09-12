@@ -33,6 +33,9 @@ _SESSION_ID = "testcontainers-session-1"
 _HISTORY_NAME = (
     "test_history_collection_runtime_preserves_required_witnesses_and_resource_boundaries"
 )
+_RECONCILIATION_NAME = (
+    "test_history_reconciliation_runtime_preserves_global_closure_and_owned_limits"
+)
 _HISTORY_FAILURE_PREFIX = "AUDIT_HISTORY_COLLECTION_FAILURE "
 _HISTORY_SOURCE = "audit_history_collection_runtime_acceptance.py"
 _PROVIDER_RECEIPT_PREFIX = "provider exact-read multiset differs; history_provider_v1 "
@@ -47,6 +50,7 @@ _MANDATORY_NAMES = (
     "test_version_page_decoder_runtime_rejects_lossy_provider_pages",
     "test_version_page_transport_runtime_preserves_original_observations_and_limits",
     _HISTORY_NAME,
+    _RECONCILIATION_NAME,
 )
 _RESOURCE_SUBCASES = (
     "cases/memory",
@@ -116,8 +120,13 @@ def _repository(tmp_path: Path) -> Path:
         "apps/api/tests/integration/audit_version_page_transport_runtime_probe.py",
         "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py",
         "apps/api/tests/integration/audit_history_collection_runtime_probe.py",
+        "apps/api/tests/integration/audit_history_reconciliation_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_history_reconciliation_runtime_probe.py",
+        "apps/api/tests/unit/audit_history_reconciliation_kernel_worker.py",
+        "apps/api/tests/unit/audit_history_reconciliation_vectors.py",
         "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
         "apps/api/tests/fixtures/audit_history_collection_vectors.json",
+        "apps/api/tests/fixtures/audit_history_reconciliation_vectors.json",
         "apps/api/tests/unit/test_sample.py",
         "infra/images.lock",
         "infra/compose/minio/minio-init.sh",
@@ -411,7 +420,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
         ".",
     ]
     harness = next(call for call in fake.calls if call[0][0] == "/tools/uv")
-    assert harness[0][:11] == [
+    assert harness[0][:12] == [
         "/tools/uv",
         "run",
         "--project",
@@ -424,6 +433,8 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
         "tests/integration/audit_version_page_transport_runtime_acceptance.py",
         "tests/integration/audit_history_collection_runtime_acceptance.py"
         "::test_history_collection_runtime_preserves_required_witnesses_and_resource_boundaries",
+        "tests/integration/audit_history_reconciliation_runtime_acceptance.py"
+        "::test_history_reconciliation_runtime_preserves_global_closure_and_owned_limits",
     ]
     assert harness[1] == root / "apps/api"
     assert harness[2] == 1_200
@@ -436,7 +447,7 @@ def test_runner_uses_owned_cache_immutable_image_and_exact_cleanup(
     ]
     output = capsys.readouterr().out
     assert "runtime_acceptance=passed" in output
-    assert "mandatory_tests=10" in output
+    assert "mandatory_tests=11" in output
     assert _RUNNER._MANDATORY_TESTS == frozenset(_MANDATORY_NAMES)
     assert "secret-never-print" not in output
 
@@ -637,7 +648,7 @@ def test_failure_summary_redacts_all_report_and_child_details(
         "runtime_case=test_external_cli_runtime_is_public_only_and_read_only status=failed"
         in output.out
     )
-    assert output.out.count("runtime_case=") == 10
+    assert output.out.count("runtime_case=") == 11
     assert "private-" not in output.out + output.err
     assert "secret-never-print" not in output.out + output.err
     assert "runtime_acceptance=failed" in output.out
@@ -1247,7 +1258,7 @@ def test_history_source_reconstructs_only_complete_allowlisted_traceback_frames(
         f"runtime_history_failure_source={source}",
     ]
     assert "runtime_junit=available" in output.out
-    assert output.out.count("runtime_case=") == 10
+    assert output.out.count("runtime_case=") == 11
     assert "private-" not in output.out + output.err
 
 
@@ -1503,6 +1514,16 @@ def test_unavailable_build_input_fails_before_build_and_cleans_owned_directory(
         ("apps/api/tests/integration/audit_history_collection_runtime_probe.py", "content"),
         ("apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json", "content"),
         ("apps/api/tests/fixtures/audit_history_collection_vectors.json", "content"),
+        ("apps/api/tests/fixtures/audit_history_reconciliation_vectors.json", "content"),
+        ("apps/api/tests/fixtures/audit_history_reconciliation_vectors.json", "missing"),
+        ("apps/api/tests/fixtures/audit_history_reconciliation_vectors.json", "symlink"),
+        (
+            "apps/api/tests/integration/audit_history_reconciliation_runtime_acceptance.py",
+            "content",
+        ),
+        ("apps/api/tests/integration/audit_history_reconciliation_runtime_probe.py", "content"),
+        ("apps/api/tests/unit/audit_history_reconciliation_kernel_worker.py", "content"),
+        ("apps/api/tests/unit/audit_history_reconciliation_vectors.py", "content"),
         ("apps/api/tests/fixtures/audit_history_collection_vectors.json", "missing"),
         ("apps/api/tests/fixtures/audit_history_collection_vectors.json", "symlink"),
         ("infra/images.lock", "symlink"),
@@ -1542,6 +1563,10 @@ def test_source_or_provider_input_change_fails(
         "apps/api/tests/integration/audit_version_page_transport_runtime_probe.py",
         "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py",
         "apps/api/tests/integration/audit_history_collection_runtime_probe.py",
+        "apps/api/tests/integration/audit_history_reconciliation_runtime_acceptance.py",
+        "apps/api/tests/integration/audit_history_reconciliation_runtime_probe.py",
+        "apps/api/tests/unit/audit_history_reconciliation_kernel_worker.py",
+        "apps/api/tests/unit/audit_history_reconciliation_vectors.py",
         "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
     ],
 )

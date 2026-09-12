@@ -98,6 +98,7 @@ def _write_descriptor(path: Path, descriptor_id: uuid.UUID) -> bytes:
     }
     encoded = json.dumps(document, separators=(",", ":")).encode()
     path.write_bytes(encoded)
+    path.chmod(0o600)
     return encoded
 
 

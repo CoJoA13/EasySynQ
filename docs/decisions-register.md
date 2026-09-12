@@ -1,9 +1,11 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R84) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector. R82 adopts PolyForm Shield for original project materials and permits paid consulting for customer-owned instances. R83 adds inactive isolated original version-page transport and a bounded DeleteMarker metadata compatibility extension; that R83 boundary left required-witness collection and recovery open.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R85) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector. R82 adopts PolyForm Shield for original project materials and permits paid consulting for customer-owned instances. R83 adds inactive isolated original version-page transport and a bounded DeleteMarker metadata compatibility extension; that R83 boundary left required-witness collection and recovery open.
 
 R84 adds inactive required-witness namespace traversal with a fresh bounded private spool and
 post-cleanup diagnostics. It authenticates no history and activates no operational consumer.
+R85 adds inactive global bootstrap/lineage reconciliation within one fresh owned lifetime, with
+entire-path coverage at every required witness and compact output only after complete closure.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -115,7 +117,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R84
+## Part 3 — Resolutions R1–R85
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -3394,6 +3396,113 @@ is closed by this inactive increment.
 and the [approved design](superpowers/specs/2026-09-11-audit-required-witness-collection-design.md).
 
 Bumps the resolutions range **R1–R83 → R1–R84**.
+
+---
+
+### R85 — Collected audit history requires global closure before bounded output — 2026-09-12
+
+**Decision.** Add inactive `collect_and_reconcile_checkpoint_history(enrollment, root_body,
+pages, readers, limits, *, cancel=None)` and frozen `HistoryReconciliationLimits`,
+`HistoryReference`, `HistoryReconciliationIssue`, `HistoryReconciliationCounts`,
+`HistoryReconciliationTip`, `HistoryReconciliationUsable` and `HistoryReconciliationReport`.
+The [approved design](superpowers/specs/2026-09-12-audit-global-history-reconciliation-design.md)
+defines the complete contract. The result concerns `collected-required-witness-history` under
+explicit external enrollment. A positive pinned legacy boundary and a nonempty v2 graph are
+required for `consistent`; a valid bridge alone yields incomplete `EMPTY_GRAPH`. Existing R77/R78
+supplied-input APIs and their smaller limits remain unchanged. R84 diagnostics remain storage-only.
+No operational CLI/API/scheduled consumer, enrollment format, writer, migration or restore is activated.
+
+**Admission and one owned lifetime.** Validate all exact caller records, tuples, bytes, non-Boolean
+integers, cancellation type and one through four externally required witness/reader pairs before
+any worker, directory, watchdog or network I/O. `BridgeEnrollment.stream` is the sole stream/pin
+and `BridgeEnrollment.witnesses` the sole witness authority. Recompute namespace commitments;
+package/provider/database contents cannot change enrollment. Missing or malformed package content
+within admitted aggregate bounds becomes diagnostic evidence, with no network fallback.
+
+Upload original package bytes, traverse unchanged R84/R80/R83 observations, seal evidence, exhaust
+all reconciliation phases, then admit one final result after exact EOF, zero exit, reaping,
+descriptor/selector/directory cleanup, watchdog join and final cancellation/deadline checks. One
+fresh worker owns one SQLite connection throughout; no finished diagnostic spool is reopened.
+Original rows become immutable at seal. No SQL, path, supplied database, continuation token,
+callback, preverified result or caller-selected phase is admitted. Progress never authorizes a
+partial result or renews the command/whole-attempt deadline. A poisoned attempt is abandoned;
+cleanup failures remain fatal even alongside ordinary unavailable reads.
+
+**Global closure.** Fixed indexed relations preserve original deliveries and all issue groups.
+Raw SHA256/length accelerate lookup only; exact bytes decide raw equality. Repeated deliveries
+remain charged and counted. Root checks stop in R78 order: structure, commitment, enrollment,
+capacity. Page/manifest stages preserve missing-page, partition, duplicate-locator, order and
+count precedence. Every committed legacy locator is compared with collected bytes before format
+partitioning. Presence of a v2 discriminator reserves v2 interpretation; malformed/ambiguous bodies
+cannot fall back to legacy. Distinct legacy bodies authenticate once against bounded retained keys.
+
+Public key material can authenticate an envelope without authorizing its predecessor edge. Only
+admitted parents grant successor key/epoch permission; all admissible branches and dependency queues
+must close. Detached/rejected transitions cannot grant keys. Each distinct v2 raw authenticates once
+and each authenticated edge is assessed once. An included required pin remains diagnostic evidence
+when a later contradiction prevents success. Every required witness must contain every canonical
+node on the accepted v2 path: missing coverage yields incomplete `V2_WITNESS_COVERAGE_MISSING`.
+Authenticated v2 signed heads, including detached/rejected edges, join legacy and v2 heads globally;
+conflicting hashes for one audit ID yield failed `GLOBAL_SIGNED_HEAD_CONFLICT`. Collection gaps,
+unavailable reads, markers and same-locator conflicts remain sticky beside healthy copies.
+
+**Fixed bounds.** Inclusive caller limits are 1–4,096 attempted pages, 1–100,000 observations,
+1–1,024 supplied bridge pages, 1–100,000 manifest entries, 1–1,073,741,824 aggregate original bytes,
+65,536–1,073,741,824 spool bytes in 4,096-byte multiples, 1–86,400 whole-attempt seconds,
+1–1,000,000 internal issue groups and 1–32 displayed groups. Original XML, package and repeated
+body bytes count toward the aggregate. Existing 16MiB/1,000-entry LIST, 64KiB exact body,
+256KiB bridge root and 2MiB bridge-page wire bounds remain. Derived node/epoch/material/coverage
+bounds follow the admitted observation/witness inventory; exhaustion never returns a prefix.
+
+The worker retains 512MiB address space, 120 cumulative CPU seconds, 32 descriptors, zero core,
+and the admitted single-file ceiling. SQLite retains the 64MiB hard heap, 1MiB cache, MEMORY
+journal/temp storage, no mmap, threads or busy wait, no attachments/extensions and fixed schema/
+authorizer rules. Indexed keyset batches avoid history-sized Python maps and unbounded scans.
+Frames stay at most 131,072 bytes, upload chunks 65,536 bytes and final JSON 65,536 bytes.
+Each complete command has a ten-second deadline; a step processes at most 64 work items or one
+bridge page of at most 512 entries. These are application/OS bounds, not kernel real-time or
+maximum-history throughput guarantees.
+
+**Result and assurance.** Failed groups outrank incomplete groups, including omitted display
+groups. Any group leaves `usable=None` and `established_checks=()`. Only complete consistency
+exposes the original bootstrap pin, compact tip, exact path/used-epoch counts and bounded witness
+summaries; full internal paths, key collections, raw locators/bodies, endpoints and credentials
+never escape. Required-pin relation remains separate. Input/cancellation/error classes are
+`HistoryReconciliationInputError`, `HistoryReconciliationCancelled` and
+`HistoryReconciliationError`; fixed fatal codes match the approved design.
+
+A consistent result establishes exactly `required-witness-provider-traversal`,
+`external-root-content-binding`, `committed-page-and-locator-closure`,
+`retained-legacy-signature-authentication`, `per-witness-signed-boundary-binding`,
+`collected-observation-reconciliation`, `v2-material-and-edge-consistency`,
+`per-witness-v2-path-coverage`, `cross-format-signed-head-consistency`, in that order.
+Every result retains exactly `provider-non-omission`, `atomic-snapshot`,
+`historical-deletion-absence`, `witness-custody`, `database-chain-agreement`, `freshness`,
+`rollback-memory-continuity`, `durable-delivery`, `operational-key-activation`,
+`source-independent-recovery` as unproved checks, in that order. No generic verified, activation
+or recovery-ready Boolean is added. A consistently omitted newer suffix can remain undetectable
+without independently retained newer evidence.
+
+**Acceptance.** Independent primitive fixtures and unchanged R77/R78 references distinguish stage
+stopping, late contradictions, every-witness coverage, material versus edge authority and truncated
+internal scans. Finite histories exceed the old 4,096-node/eight-page bounds. Actual-image acceptance
+uses one genuine two-witness TLS enrollment for missing-copy/consistent/late-conflict cases,
+independently checks exact version/byte receipts, and separately labels large synthetic transport.
+Installed source identity, non-root/read-only operation, actual SQLite plans, real OS/SQL/IPC limits
+and owned cleanup are required. All eleven mandatory runtime cases remain required, with the new
+case capped at 300 seconds and old collector/history/harness caps preserved. Measured evidence is
+recorded in [slice history](slice-history.md#s-audit-global-history-reconciliation--bounded-global-closure).
+
+The owner-controlled protected public trust file remains on a separate verifier machine. This
+inactive observed-history result does not close database agreement, custody/rollback memory,
+delivery, activation/rotation, pre-rotation restore or independent recovery obligations. Issue #3
+and the related residuals remain open; no live enrollment, IAM, deployment or restore is authorized.
+
+**Back-propagation:** [Current status](current-status.md), [open residuals](open-residuals.md),
+[slice history](slice-history.md), [security and audit](12-security-and-audit.md), and the
+[approved design](superpowers/specs/2026-09-12-audit-global-history-reconciliation-design.md).
+
+Bumps the resolutions range **R1–R84 → R1–R85**.
 
 ---
 

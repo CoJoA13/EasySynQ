@@ -516,6 +516,20 @@ flowchart LR
   bounded spooling and global reconciliation remain required; no operational consumer is activated.
   See [R81](decisions-register.md#r81--supplied-audit-version-pages-preserve-exact-observations-under-strict-utf8-xml-admission--2026-09-09).
 
+- **Collected global history (R85).** One inactive API binds the complete external witness inventory
+  before I/O, retains original R84 traversal evidence, and reconciles positive legacy bootstrap,
+  v2 material/edge authority, every-witness full-path coverage and signed heads globally inside one
+  fresh bounded worker. Existing R84 `traversed` diagnostics remain unauthenticated and storage-only.
+  Any failed/incomplete group suppresses usable output, including after an early required pin is
+  found. Only complete consistency returns a compact tip/count/bootstrap projection after owned
+  worker, pipe, directory and watchdog cleanup. The old supplied-evaluator limits stay unchanged;
+  the new indexed interface has separately admitted evidence/spool/work bounds. A consistent result
+  still leaves provider non-omission, atomicity, historical deletion absence, witness custody,
+  database-chain agreement, freshness, rollback continuity, durable delivery, operational activation
+  and source-independent recovery unproved. No current operational caller or writer is activated.
+  See [R85](decisions-register.md#r85--collected-audit-history-requires-global-closure-before-bounded-output--2026-09-12)
+  and [the approved design](superpowers/specs/2026-09-12-audit-global-history-reconciliation-design.md).
+
 ### 4.5 Audit access & retention
 
 - Read access to the audit trail is a **granted permission** (typically Mara, Ingrid, Avery; Olsen gets scoped audit views within his audit window).
