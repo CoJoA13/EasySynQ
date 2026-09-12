@@ -24,9 +24,105 @@ _BUILD_TIMEOUT_SECONDS = 1_200
 _HARNESS_TIMEOUT_SECONDS = 1_200
 _TERMINATE_GRACE_SECONDS = 10
 _DIAGNOSTIC_JUNIT_MAX_BYTES = 1_048_576
+_HISTORY_DIAGNOSTIC_MAX_RECORD_BYTES = 4_096
+_HISTORY_DIAGNOSTIC_MAX_DURATION_MS = 1_200_000
+_HISTORY_PROVIDER_RECEIPT_MAX_BYTES = 1_024
 _RUN_LABEL = "com.easysynq.audit-external.run"
 _SOURCE_LABEL = "com.easysynq.audit-external.source"
 _SESSION_LABEL = "org.testcontainers.session-id"
+_HISTORY_FAILURE_PREFIX = "AUDIT_HISTORY_COLLECTION_FAILURE "
+_HISTORY_PROVIDER_RECEIPT_PREFIX = "provider exact-read multiset differs; history_provider_v1 "
+_HISTORY_TEST_NAME = (
+    "test_history_collection_runtime_preserves_required_witnesses_and_resource_boundaries"
+)
+_HISTORY_SOURCE_NAME = "audit_history_collection_runtime_acceptance.py"
+_HISTORY_SOURCE_MAX_LINE = 1_484
+_HISTORY_PHASES = (
+    "identity",
+    "synthetic",
+    "resources",
+    "certifi",
+    "provider-budget",
+    "provider",
+)
+_HISTORY_COMPLETED_PREFIXES = {
+    "identity": (),
+    "synthetic": (),
+    "resources": ("synthetic",),
+    "certifi": ("synthetic", "resources"),
+    "provider-budget": ("synthetic", "resources", "certifi"),
+    "provider": ("synthetic", "resources", "certifi"),
+}
+_HISTORY_RESOURCE_SUBCASES = (
+    "cases/memory",
+    "cases/descriptors",
+    "cases/file-limit",
+    "cases/cpu",
+    "cases/heap",
+    "cases/store",
+    "cases/disk-journal",
+    "cases/disk-sort",
+    "open_transaction_death",
+    "cleanup_failure",
+    "upload_deadline",
+    "ipc/valid-result",
+    "ipc/oversized",
+    "ipc/truncated",
+    "ipc/flood",
+    "ipc/stale",
+    "ipc/late-output",
+    "ipc/withheld-eof",
+    "raw_worker/valid-empty",
+    "raw_worker/oversized-input",
+    "raw_worker/truncated-input",
+    "raw_worker/stale-input",
+    "raw_worker/duplicate-field",
+    "raw_worker/chunk-sequence",
+    "raw_worker/trailing-chunk",
+    "raw_worker/entry-over",
+    "raw_worker/xml-over",
+    "raw_worker/body-over",
+)
+_HISTORY_PROGRESS_RECORD = re.compile(
+    rf"[.sFxXE]*{re.escape(_HISTORY_FAILURE_PREFIX)}(?P<payload>.+)\Z"
+)
+_HISTORY_SOURCE_FRAME = re.compile(
+    rf"(?:/?(?:[A-Za-z0-9_.-]+/)*){re.escape(_HISTORY_SOURCE_NAME)}:"
+    r"(?P<line>[1-9][0-9]{0,3}): .+\Z"
+)
+_HISTORY_PROVIDER_ASSERTION = re.compile(
+    r"(?:E\s+)?AssertionError: (?P<receipt>provider exact-read multiset differs; "
+    r"history_provider_v1 .+)\Z"
+)
+_HISTORY_PROVIDER_OUTCOMES = frozenset(
+    {
+        "report",
+        "cancelled",
+        "RESOURCE_LIMIT",
+        "RUNTIME_UNSUPPORTED",
+        "WORKER_START_FAILED",
+        "WORKER_FAILED",
+        "PROTOCOL_INVALID",
+        "STORAGE_FAILED",
+        "DEADLINE_EXCEEDED",
+        "CLEANUP_FAILED",
+    }
+)
+_HISTORY_PROVIDER_STATUSES = frozenset({"traversed", "failed", "incomplete"})
+_HISTORY_PROVIDER_FIELDS = (
+    "outcome",
+    "status",
+    "elapsed_ms",
+    "attempted_reads",
+    "returned_reads",
+    "attempted_pages",
+    "returned_pages",
+    "expected_reads",
+    "locator_matches",
+    "exact_matches",
+    "terminal_witnesses",
+    "unavailable_reads",
+)
 _MANDATORY_TESTS = frozenset(
     {
         "test_external_cli_runtime_is_public_only_and_read_only",
@@ -38,6 +134,7 @@ _MANDATORY_TESTS = frozenset(
         "test_isolated_raw_runtime_enforces_process_and_byte_boundaries",
         "test_version_page_decoder_runtime_rejects_lossy_provider_pages",
         "test_version_page_transport_runtime_preserves_original_observations_and_limits",
+        _HISTORY_TEST_NAME,
     }
 )
 _EXCLUDED_DIRECTORIES = frozenset({".pytest_cache", ".venv", "__pycache__"})
@@ -292,6 +389,7 @@ def _proof_manifest(root: Path) -> _Manifest:
         root / "infra/images.lock",
         root / "infra/compose/minio/minio-init.sh",
         root / "apps/api/tests/fixtures/audit_bootstrap_bridge_vectors.json",
+        root / "apps/api/tests/fixtures/audit_history_collection_vectors.json",
     ]
     tests = _walk_inputs(root, root / "apps/api/tests", python_only=True)
     return _manifest(root, [*fixed, *tests])
@@ -388,7 +486,226 @@ def _read_diagnostic_junit(path: Path) -> ET.Element:
     return root
 
 
-def _runtime_failure_summary(path: Path, returncode: int | None) -> tuple[str, ...]:
+def _history_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate history diagnostic key")
+        value[key] = item
+    return value
+
+
+def _is_history_duration(value: object, total: int | None = None) -> bool:
+    return (
+        type(value) is int
+        and 0 <= value <= _HISTORY_DIAGNOSTIC_MAX_DURATION_MS
+        and (total is None or value <= total)
+    )
+
+
+def _history_phase_diagnostic(stdout: str) -> tuple[str, ...]:
+    unavailable = ("runtime_history_diagnostic=unavailable",)
+    try:
+        if stdout.count(_HISTORY_FAILURE_PREFIX) != 1:
+            return unavailable
+        record = next(line for line in stdout.splitlines() if _HISTORY_FAILURE_PREFIX in line)
+        match = _HISTORY_PROGRESS_RECORD.fullmatch(record)
+        if match is None or len(record.encode("utf-8")) > _HISTORY_DIAGNOSTIC_MAX_RECORD_BYTES:
+            return unavailable
+        payload = match.group("payload")
+        value = json.loads(payload, object_pairs_hook=_history_json_object)
+        if (
+            not isinstance(value, dict)
+            or json.dumps(value, sort_keys=True, separators=(",", ":")) != payload
+        ):
+            return unavailable
+        if set(value) != {
+            "completed_phases_ms",
+            "phase",
+            "phase_elapsed_ms",
+            "resource_subcases_ms",
+            "total_elapsed_ms",
+        }:
+            return unavailable
+        phase = value["phase"]
+        total = value["total_elapsed_ms"]
+        phase_elapsed = value["phase_elapsed_ms"]
+        completed = value["completed_phases_ms"]
+        resource_subcases = value["resource_subcases_ms"]
+        if (
+            phase not in _HISTORY_PHASES
+            or not _is_history_duration(total)
+            or not _is_history_duration(phase_elapsed, total)
+            or not isinstance(completed, dict)
+            or not isinstance(resource_subcases, dict)
+        ):
+            return unavailable
+        expected_completed = _HISTORY_COMPLETED_PREFIXES[phase]
+        if set(completed) != set(expected_completed):
+            return unavailable
+        if set(resource_subcases) not in (set(), set(_HISTORY_RESOURCE_SUBCASES)):
+            return unavailable
+        if not all(_is_history_duration(item, total) for item in completed.values()):
+            return unavailable
+        if not all(_is_history_duration(item, total) for item in resource_subcases.values()):
+            return unavailable
+        lines = [
+            "runtime_history_diagnostic=available",
+            f"runtime_history_phase={phase}",
+            f"runtime_history_phase_elapsed_ms={phase_elapsed}",
+            f"runtime_history_total_elapsed_ms={total}",
+        ]
+        lines.extend(
+            f"runtime_history_completed_phase={name} elapsed_ms={completed[name]}"
+            for name in expected_completed
+        )
+        lines.extend(
+            f"runtime_history_resource_subcase={name} elapsed_ms={resource_subcases[name]}"
+            for name in _HISTORY_RESOURCE_SUBCASES
+            if resource_subcases
+        )
+        return tuple(lines)
+    except Exception:  # noqa: BLE001 - malformed child stdout is always unavailable
+        return unavailable
+
+
+def _history_failure_source(case: ET.Element) -> str:
+    child = case.find("error")
+    if child is None:
+        child = case.find("failure")
+    if child is None:
+        return "runtime_history_failure_source=unavailable"
+    source: str | None = None
+    for line in "".join(child.itertext()).splitlines():
+        match = _HISTORY_SOURCE_FRAME.fullmatch(line)
+        if match is None:
+            continue
+        line_number = int(match.group("line"))
+        if line_number <= _HISTORY_SOURCE_MAX_LINE:
+            source = f"{_HISTORY_SOURCE_NAME}:{line_number}"
+    return (
+        "runtime_history_failure_source=unavailable"
+        if source is None
+        else f"runtime_history_failure_source={source}"
+    )
+
+
+def _history_provider_diagnostic(case: ET.Element) -> tuple[str, ...]:
+    unavailable = ("runtime_history_provider_diagnostic=unavailable",)
+    try:
+        child = case.find("error")
+        if child is None:
+            child = case.find("failure")
+        if child is None:
+            return unavailable
+        records = []
+        for line in "".join(child.itertext()).splitlines():
+            if _HISTORY_PROVIDER_RECEIPT_PREFIX not in line:
+                continue
+            if len(line.encode("utf-8")) > _HISTORY_PROVIDER_RECEIPT_MAX_BYTES:
+                return unavailable
+            match = _HISTORY_PROVIDER_ASSERTION.fullmatch(line)
+            if match is None:
+                return unavailable
+            records.append(match.group("receipt"))
+        if len(records) != 1:
+            return unavailable
+        receipt = records[0]
+        if len(receipt.encode("utf-8")) > _HISTORY_PROVIDER_RECEIPT_MAX_BYTES:
+            return unavailable
+        if not receipt.startswith(_HISTORY_PROVIDER_RECEIPT_PREFIX):
+            return unavailable
+        parts = receipt[len(_HISTORY_PROVIDER_RECEIPT_PREFIX) :].split(" ")
+        if len(parts) != len(_HISTORY_PROVIDER_FIELDS):
+            return unavailable
+        values: dict[str, str] = {}
+        for field, part in zip(_HISTORY_PROVIDER_FIELDS, parts, strict=True):
+            key, separator, value = part.partition("=")
+            if key != field or separator != "=" or not value:
+                return unavailable
+            values[field] = value
+
+        def decimal(field: str, maximum: int) -> int:
+            value = values[field]
+            if (
+                len(value) > 7
+                or not value.isascii()
+                or not value.isdecimal()
+                or (len(value) > 1 and value.startswith("0"))
+            ):
+                raise ValueError
+            number = int(value)
+            if number > maximum:
+                raise ValueError
+            return number
+
+        outcome = values["outcome"]
+        status = values["status"]
+        if outcome not in _HISTORY_PROVIDER_OUTCOMES:
+            return unavailable
+        decimal("elapsed_ms", _HISTORY_DIAGNOSTIC_MAX_DURATION_MS)
+        attempted_reads = decimal("attempted_reads", 6_000)
+        returned_reads = decimal("returned_reads", 6_000)
+        attempted_pages = decimal("attempted_pages", 16)
+        returned_pages = decimal("returned_pages", 16)
+        expected_reads = decimal("expected_reads", 6_000)
+        locator_matches = decimal("locator_matches", 6_000)
+        exact_matches = decimal("exact_matches", 6_000)
+        if (
+            returned_reads > attempted_reads
+            or returned_pages > attempted_pages
+            or locator_matches > returned_reads
+            or locator_matches > expected_reads
+            or exact_matches > locator_matches
+        ):
+            return unavailable
+        if status == "none":
+            if (
+                outcome == "report"
+                or values["terminal_witnesses"] != "none"
+                or values["unavailable_reads"] != "none"
+            ):
+                return unavailable
+        else:
+            if outcome != "report" or status not in _HISTORY_PROVIDER_STATUSES:
+                return unavailable
+            decimal("terminal_witnesses", 2)
+            decimal("unavailable_reads", 6_000)
+        lines = ["runtime_history_provider_diagnostic=available"]
+        lines.extend(
+            f"runtime_history_provider_{field}={values[field]}"
+            for field in _HISTORY_PROVIDER_FIELDS
+        )
+        return tuple(lines)
+    except Exception:  # noqa: BLE001 - malformed JUnit detail is never a diagnostic channel
+        return unavailable
+
+
+def _history_diagnostics(root: ET.Element, stdout: str) -> tuple[str, ...]:
+    failed_cases = [
+        case
+        for case in root.iter("testcase")
+        if case.attrib.get("name") == _HISTORY_TEST_NAME
+        and (case.find("error") is not None or case.find("failure") is not None)
+    ]
+    if not failed_cases:
+        return ()
+    if len(failed_cases) != 1:
+        return (
+            "runtime_history_diagnostic=unavailable",
+            "runtime_history_provider_diagnostic=unavailable",
+            "runtime_history_failure_source=unavailable",
+        )
+    return (
+        *_history_phase_diagnostic(stdout),
+        *_history_provider_diagnostic(failed_cases[0]),
+        _history_failure_source(failed_cases[0]),
+    )
+
+
+def _runtime_failure_summary(
+    path: Path, returncode: int | None, harness_stdout: str = ""
+) -> tuple[str, ...]:
     """Expose only fixed outcomes and known case names, never child/report details."""
     # uv can fail before pytest starts; an exit code alone does not identify its cause.
     if returncode is None:
@@ -435,7 +752,7 @@ def _runtime_failure_summary(path: Path, returncode: int | None) -> tuple[str, .
                 "missing",
             )
             lines.append(f"runtime_case={name} status={status}")
-        return (*header, *lines)
+        return (*header, *lines, *_history_diagnostics(root, harness_stdout))
     except Exception:  # noqa: BLE001 - diagnostics must not leak or prevent owned cleanup
         return (*header, "runtime_junit=unavailable")
 
@@ -567,6 +884,7 @@ def run_acceptance(root: Path | None = None) -> int:
     build_started = False
     harness_started = False
     harness_returncode: int | None = None
+    harness_stdout = ""
     source_digest = ""
     tag = f"easysynq-audit-external:{run_id}"
     image_id: str | None = None
@@ -666,6 +984,8 @@ def run_acceptance(root: Path | None = None) -> int:
             "tests/integration/audit_isolated_raw_runtime_acceptance.py",
             "tests/integration/audit_version_page_runtime_acceptance.py",
             "tests/integration/audit_version_page_transport_runtime_acceptance.py",
+            "tests/integration/audit_history_collection_runtime_acceptance.py"
+            "::test_history_collection_runtime_preserves_required_witnesses_and_resource_boundaries",
             "-q",
             "--junitxml",
             str(owned / "runtime.xml"),
@@ -678,6 +998,7 @@ def run_acceptance(root: Path | None = None) -> int:
             environ=child_environment,
         )
         harness_returncode = harness.returncode
+        harness_stdout = harness.stdout
         failure_stage = "input_recheck"
         build_after = _build_manifest(repository_root)
         proof_after = _proof_manifest(repository_root)
@@ -698,7 +1019,9 @@ def run_acceptance(root: Path | None = None) -> int:
             and owned is not None
             and failure_stage in {"runtime_harness", "junit_validation"}
         ):
-            failure_summary = _runtime_failure_summary(owned / "runtime.xml", harness_returncode)
+            failure_summary = _runtime_failure_summary(
+                owned / "runtime.xml", harness_returncode, harness_stdout
+            )
         if tools is not None:
             if resource_record is not None:
                 try:

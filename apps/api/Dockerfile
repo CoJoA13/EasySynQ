@@ -45,6 +45,15 @@ COPY apps/api/alembic.ini ./alembic.ini
 COPY migrations /migrations
 RUN uv sync --locked --no-dev
 
+# Fresh isolated audit readers can reuse bytecode without writing at runtime. The slim Python
+# image leaves standard-library source caches absent, so compile it separately from global package
+# directories. Checked source hashes prevent stale code; optimization 0 preserves assertions.
+RUN .venv/bin/python -m compileall -q -f -o 0 \
+    --invalidation-mode checked-hash .venv/lib/python3.12/site-packages src
+RUN .venv/bin/python -m compileall -q -f -o 0 \
+    --invalidation-mode checked-hash \
+    -x '(^|/)(site-packages|dist-packages)(/|$)' /usr/local/lib/python3.12
+
 # --- non-root runtime (audit U33) ---
 # A fixed UID/GID, not a floating one: Docker seeds a FRESH named volume with the ownership of the
 # image path behind it, so mirror/secrets/backups come up writable on a new install without any

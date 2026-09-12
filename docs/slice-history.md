@@ -183,6 +183,104 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-audit-required-witness-collection — fresh bounded traversal diagnostics
+
+**2026-09-11; all ten mandatory runtime cases verified, integration gates pending.** The starting R83
+merged-main baseline is `f08b8b0ba96f049531e01a59f31427d9156a61d3`, with the same file tree as the
+previously verified clean `e26cb14` tree. Earlier R83 counts and corrections below remain historical.
+R84 adds inactive whole-namespace traversal for one through four externally pinned witnesses, with
+all scope admitted before I/O and no provider-selected witness identity. The parent uses unchanged
+serial one-shot R80/R83 reads and owns one separate storage-only SQLite worker.
+
+Every original admitted XML page, duplicate delivery, opaque locator, marker and unavailable/gap
+outcome is retained under fixed limits. Non-adjacent cursor cycles and byte conflicts remain sticky;
+healthy A cannot erase missing evidence at B. The fresh 0700/0600 spool uses MEMORY journals/temp
+storage, fixed SQL/IPC and verified OS limits. It is abandoned after interruption, never reopened or
+returned publicly. A later global reconciler must run within the ownership lifetime. The current
+entry point returns only bounded post-cleanup diagnostics and authenticates nothing.
+
+Scope includes the explicit 4,096-page/100,000-observation ceilings, admitted-byte/logical-file caps,
+one 10-second upload-command deadline, whole-attempt cancellation/watchdog and mandatory cleanup.
+Actual limits include 512MiB address space, 120 CPU seconds and 32 descriptors. SQL journal/temp
+mutation cases expose ordinary and already-unlinked writable files; failure cannot yield a prefix.
+Original XML and opaque bytes are preserved without legacy/v2 classification or fallback.
+
+**Verified evidence.** Root checked **921 affected unit tests in 58.95 seconds**, zero failures,
+errors or skips, and native scoped Ruff/format/mypy gates. The complete new immutable-image case
+first passed **one test in 607.07 seconds**, zero failures/errors/skips. The unchanged mandatory
+harness then passed **all ten tests in 814.87 seconds**, zero failures/errors/skips and three
+pre-existing warnings. In that full run the new-case proof took **606,102 ms**.
+Synthetic scaling preserved **5,002** raw-body deliveries and a
+late contradiction after ordinal 4,096. Separate real pinned-provider evidence preserved **1,003
+GETs**, A's **1,000/one** pages and B's **two** observations, with separate restricted readers and
+six denied write/cross-witness operations. All actual body hashes were independently recomputed
+from the literal seeded bytes; GET trace metadata and original LIST XML matched. MinIO's `<BLOB>`
+trace marker supplies no GET object bytes. Twelve receipt mutations rejected incorrect reads,
+metadata, redaction, headers, missing/duplicate GETs and blank extra query parameters.
+
+Seven adversarial IPC cases, ten actual-worker cases and the actual resource/store/death/cleanup
+oracles passed; CPU consumption was **119,981 ms**. Phase times were synthetic **9,018 ms**, resources
+**144,247 ms**, certifi **767 ms** and provider fixture **452,043 ms**. The collector itself used
+**443,338 ms** of its 450-second allowance; this narrow margin is an observed run, not a throughput
+promise. Root verified all **2,055 source identities**, build/proof/driver/log/JUnit identities,
+actual source/resource assertions and fresh absence of every owned run/session container, run image
+and runtime directory. Build digest was `b1f3e547f125e4b962b2d2d8ffdce21ca1e49e103bc6de69cedb60279eafa824`;
+proof digest was `9142f3ae985b6e513ab074fa8de4cb301e05cfdd5e8bdc27126200e44ecead9a`.
+
+**Evidence-driven fixture corrections and costs.** Early failed resource attempts exposed extra
+application imports in seven fake IPC peers and insufficient visibility into completed subcases.
+The fixed fake bootstrap now uses only stdlib framing; receipts retain active/completed timings.
+The upload observer distinguishes two attempts from one successful chunk and confirms successful
+write counts `[65553, 0]`, retaining the actual 10.1-second pause. Actual raw workers use one bounded
+10-second READY allowance and their original five-second exchange bound. Measured aggregate work
+required the resource fixture allowance to change from 175 to 200 seconds, with its container from
+205 to 230 seconds; the real CPU120, all oracles and 450/780/1,200-second collector/new-case/harness
+gates remain unchanged. Admin cleanup adds Content-MD5 over the already serialized DeleteObjects
+body before signing for pinned MinIO compatibility, retaining CRC32 and attempt-every-owner cleanup.
+Trace header casing and GET-body redaction were corrected from actual failing provider evidence.
+
+Fresh network workers initially spent most of each call importing unused application dependencies.
+The retained build step compiles installed dependencies and application source to checked-hash
+bytecode at optimization zero; `-I -B -u`, assertions and read-only runtime caches remain. In the
+bytecode-only three-read comparison, Docker-reported image size grew from **596,951,065** to
+**671,610,426 bytes** (**+74,659,361**). That cached build took **12.215 seconds**, versus **4.147**
+for its comparison build; host/cache variability prevents treating those build times as a fixed cost.
+That specific image-size delta is not a measurement of the later final candidate.
+
+A further narrow change moves the unchanged legacy verifier Protocol to a dependency-light private
+module with explicit checkpoint/trust re-exports, and defers unused trust database/signature imports
+and settings-backed sink access to their consuming calls. Shared runtime identity and type hints
+remain valid. The Protocol's defining module/repr/new pickle path changes; the patchable sink getter
+delegates to the original cache but has different callable identity/return annotation and no exposed
+cache-management methods. No known supported consumer relied on those incidental attributes or
+the removed trust import aliases. Actual transports, crypto payloads, validators, fresh workers,
+protocols, limits and operational behavior remain unchanged.
+
+Small separate three-read measurements progressed from **1,562.832** to **904.992** to **435.175 ms**
+mean total read time. The final profile independently verified **3,000 source-matching checked-hash
+caches** (2,529 dependency and 471 application sources), optimization zero/assertions and no runtime
+writability. These profiles support the startup decision; only the subsequent complete new-case run
+establishes its full 1,003-read acceptance. They do not benchmark 100,000 network reads.
+
+Full local `just check` subsequently passed in **494.432 seconds**: API Ruff check/format, mypy
+over **471 source files**, **4,078 API unit tests in 152.51 seconds**, web ESLint/TypeScript/production
+build, and **2,357 web tests across 283 files in 328.64 seconds**. The built-image runtime proof was
+enabled and passed. The sole skipped test was release-only image digest pinning; this was not a
+release-ceremony run. Authority (`AUTHORITY_OK`), site-data and whitespace checks passed. Root
+verified all **2,056 source identities**, the exact driver/preflight/commands and every raw log hash.
+
+**Remaining gates at this checkpoint:** Task 4 and whole-branch reviews, and GitLab source/main
+CI and merge. This is verified local candidate evidence, not a
+shipped-state claim. The source/build/proof identities above bind the immutable runtime evidence;
+subsequent documentation changes do not alter those tested build or proof inputs.
+
+Global R77/R78 reconciliation and equivalence, larger bridge/key/edge indexes, actual database
+comparison, provider non-omission, atomic snapshot, custody, freshness/rollback continuity, independent
+key delivery/activation, rotation and source-denied recovery remain OPEN. The MEMORY spool cannot
+be resumed or reconstructed from diagnostics. Existing enrollment, CLI/API/scheduled consumers,
+writer naming, dependency versions, migrations and live grants remain unchanged. No deployment,
+restore, upgrade or operational activation occurred; issue #3 and the existing residuals stay open.
+
 ### S-audit-version-page-transport — original pages through an isolated worker
 
 **2026-09-11; local candidate evidence before integration.** R83 adds inactive direct and isolated

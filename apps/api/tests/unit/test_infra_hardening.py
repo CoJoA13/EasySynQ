@@ -390,6 +390,81 @@ def test_the_built_api_image_is_unprivileged_and_starts_offline() -> None:
             f"`migrate` before anything else runs:\n{offline.stderr}"
         )
 
+        stdlib_bytecode_script = "\n".join(
+            (
+                "import importlib.util, os, pathlib, sys, sysconfig",
+                "assert os.getuid() == 10001",
+                "assert sys.flags.optimize == 0 and __debug__ and sys.dont_write_bytecode",
+                "stdlib = pathlib.Path(sysconfig.get_path('stdlib')).resolve()",
+                "expected = pathlib.Path('/usr/local/lib/python3.12')",
+                "assert stdlib == expected and stdlib.is_dir()",
+                "excluded = {'site-packages', 'dist-packages'}",
+                "sources = []",
+                "for parent, directories, filenames in os.walk(stdlib):",
+                "    directories[:] = sorted(name for name in directories if name not in excluded)",
+                "    sources.extend(",
+                "        pathlib.Path(parent) / name for name in sorted(filenames)",
+                "        if name.endswith('.py')",
+                "    )",
+                "assert 0 < len(sources) < 1000",
+                "errors = []",
+                "for source in sources:",
+                "    relative = source.relative_to(stdlib).as_posix()",
+                "    cache = pathlib.Path(importlib.util.cache_from_source(str(source)))",
+                "    if not cache.is_file():",
+                "        errors.append('missing:' + relative)",
+                "        continue",
+                "    if not os.access(cache, os.R_OK):",
+                "        errors.append('unreadable:' + relative)",
+                "        continue",
+                "    if os.access(cache, os.W_OK):",
+                "        errors.append('writable:' + relative)",
+                "        continue",
+                "    try:",
+                "        header = cache.read_bytes()[:16]",
+                "        source_hash = importlib.util.source_hash(source.read_bytes())",
+                "    except OSError:",
+                "        errors.append('unreadable:' + relative)",
+                "        continue",
+                "    if header[:4] != importlib.util.MAGIC_NUMBER:",
+                "        errors.append('magic:' + relative)",
+                "    elif len(header) != 16 or int.from_bytes(header[4:8], 'little') != 3:",
+                "        errors.append('checked-hash:' + relative)",
+                "    elif header[8:16] != source_hash:",
+                "        errors.append('source-hash:' + relative)",
+                "assert not errors, ','.join(errors[:10])",
+                "print(f'STDLIB_BYTECODE_OK files={len(sources)}')",
+            )
+        )
+        stdlib_bytecode = subprocess.run(  # noqa: S603 - same immutable image
+            [
+                docker,
+                "run",
+                "--rm",
+                "--read-only",
+                "--network",
+                "none",
+                "--user",
+                "10001",
+                image_id,
+                "/app/.venv/bin/python",
+                "-I",
+                "-B",
+                "-c",
+                stdlib_bytecode_script,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert stdlib_bytecode.returncode == 0, stdlib_bytecode.stderr
+        bytecode_output = stdlib_bytecode.stdout.strip()
+        bytecode_prefix = "STDLIB_BYTECODE_OK files="
+        assert bytecode_output.startswith(bytecode_prefix), bytecode_output
+        bytecode_count = bytecode_output.removeprefix(bytecode_prefix)
+        assert bytecode_count.isdecimal() and 0 < int(bytecode_count) < 1000
+        print(f"STDLIB_BYTECODE_IMAGE_PROOF_OK files={bytecode_count}")
+
         codec_script = "\n".join(
             (
                 "import hashlib, importlib.util, json, os, sys",

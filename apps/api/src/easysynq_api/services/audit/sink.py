@@ -14,7 +14,12 @@ import dataclasses
 import json
 from typing import Any
 
-from ...config import get_settings
+
+def get_settings() -> Any:
+    """Load application settings only when a sink operation requests them."""
+    from ...config import get_settings as load_settings
+
+    return load_settings()
 
 
 class SinkPushError(Exception):
