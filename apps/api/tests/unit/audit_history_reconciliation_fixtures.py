@@ -196,3 +196,86 @@ def _bridge_result(case: _ReferenceCase, value: dict[str, Any]) -> bridge.Bridge
         tuple(value["established_checks"]),
         tuple(value["unproved_checks"]),
     )
+
+
+def _lineage_payload(enrollment: Any, observations: Any, maximum_issues: int) -> dict[str, Any]:
+    import dataclasses
+
+    from easysynq_api.services.audit import lineage
+
+    limits = lineage.LineageLimits(4096, 16_777_216, maximum_issues)
+    lineage._preflight_shapes(enrollment, observations, limits)
+    if len(observations) > 4096 or lineage._preflight_observations(observations) > 16_777_216:
+        raise ValueError("kernel fixture exceeds shared capacity")
+    stream = dataclasses.asdict(enrollment)
+    stream["org_id"], stream["stream_id"] = str(stream["org_id"]), str(stream["stream_id"])
+    stream["bootstrap"]["initial_public_key"] = stream["bootstrap"]["initial_public_key"].hex()
+    return {
+        "kind": "lineage",
+        "enrollment": stream,
+        "maximum_issues": maximum_issues,
+        "observations": [
+            {
+                "source_id": o.source_id,
+                "object_key": o.object_key,
+                "version_id": o.version_id,
+                "body": o.body.hex(),
+            }
+            for o in observations
+        ],
+    }
+
+
+def _project_envelope(raw: bytes) -> Any:
+    """Restore fields of an already kernel-verified path node, without reauthentication."""
+    import dataclasses
+
+    import rfc8785
+
+    from easysynq_api.services.audit import checkpoint_v2 as codec
+
+    checkpoint, signature, anchor_hash = codec._envelope_parts(raw)
+    fields = codec._validate_checkpoint(checkpoint, current_public_key=None, proof_required=True)
+    return codec.VerifiedEnvelope(
+        format_version=2,
+        **dataclasses.asdict(fields),
+        signature=signature,
+        anchor_hash=anchor_hash,
+        canonical_checkpoint=rfc8785.dumps(checkpoint),
+        canonical_envelope=raw,
+    )
+
+
+def kernel_lineage(enrollment: Any, observations: Any, *, maximum_issues: int = 32) -> Any:
+    return _lineage_result(_exchange(_lineage_payload(enrollment, observations, maximum_issues)))
+
+
+def _lineage_result(value: dict[str, Any]) -> Any:
+    from easysynq_api.services.audit import lineage
+
+    if set(value) == {"error"}:
+        raise HistoryReconciliationError(value["error"])
+    return lineage.LineageEvaluation(
+        value["status"],
+        value["scope"],
+        value["bootstrap_assurance"],
+        tuple(value["unproved_checks"]),
+        tuple(_project_envelope(bytes.fromhex(raw)) for raw in value["path"]),
+        tuple(
+            lineage.AuthorizedKeyEpoch(
+                k["key_epoch"], k["key_id"], bytes.fromhex(k["public_key"]), k["introduced_by"]
+            )
+            for k in value["key_history"]
+        ),
+        value["tip_hash"],
+        value["tip_sequence"],
+        tuple(
+            lineage.LineageIssue(i["code"], i["severity"], tuple(i["observation_indexes"]))
+            for i in value["issues"]
+        ),
+        value["issues_omitted"],
+        value["failed_issues"],
+        value["incomplete_issues"],
+        value["duplicate_observations"],
+        value["required_checkpoint_relation"],
+    )

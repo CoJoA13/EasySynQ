@@ -19,14 +19,7 @@ from typing import Any
 from uuid import UUID
 
 
-def _main() -> None:
-    source = Path(__file__).resolve().parents[2] / "src"
-    assert sys.argv[1:] == [str(source)]
-    policy = runpy.run_path(
-        str(source / "easysynq_api/services/audit/_history_reconciliation_worker.py")
-    )
-    policy["_apply_limits"]()
-    sys.path.insert(0, str(source))
+def _bridge(value: dict[str, Any], source: Path) -> dict[str, Any]:
     from easysynq_api.services.audit import _history_reconciliation_protocol as protocol
     from easysynq_api.services.audit import _history_spool_protocol as wire
     from easysynq_api.services.audit import bootstrap_bridge as bridge
@@ -36,11 +29,6 @@ def _main() -> None:
     from easysynq_api.services.audit._history_reconciliation_store import _ReconciliationStore
     from easysynq_api.services.audit.history_reconciliation import HistoryReconciliationError
 
-    read = policy["_read_exact"]
-    size = int.from_bytes(read(sys.stdin.buffer, 4), "big")
-    assert 0 < size <= 64 * 1024 * 1024
-    value = json.loads(read(sys.stdin.buffer, size))
-    assert sys.stdin.buffer.read(1) == b""
     wire.fields(value, {"kind", "scope", "root", "pages", "observations"})
     assert value["kind"] == "bridge"
     scope = protocol.decode_init({**value["scope"], "op": "INIT", "id": 1})
@@ -270,6 +258,290 @@ def _main() -> None:
         result = {"error": error.code}
     finally:
         store.close()
+    return result
+
+
+def _lineage(value: dict[str, Any], source: Path) -> dict[str, Any]:
+    import rfc8785
+
+    from easysynq_api.services.audit import _history_reconciliation_lineage as module
+    from easysynq_api.services.audit import _history_reconciliation_protocol as protocol
+    from easysynq_api.services.audit import _history_spool_protocol as wire
+    from easysynq_api.services.audit import bootstrap_bridge as bridge
+    from easysynq_api.services.audit import checkpoint_v2 as codec
+    from easysynq_api.services.audit import lineage
+    from easysynq_api.services.audit._history_reconciliation_issues import _IssueIndex
+    from easysynq_api.services.audit._history_reconciliation_store import _ReconciliationStore
+    from easysynq_api.services.audit.history_reconciliation import (
+        HistoryReconciliationError,
+        HistoryReconciliationLimits,
+    )
+
+    wire.fields(value, {"kind", "enrollment", "maximum_issues", "observations"})
+    doc = wire.fields(
+        value["enrollment"], {"org_id", "stream_id", "bootstrap", "required_checkpoint"}
+    )
+    pin = wire.fields(
+        doc["bootstrap"],
+        {
+            "commitment_hash",
+            "initial_key_id",
+            "initial_public_key",
+            "initial_key_epoch",
+            "audit_boundary",
+        },
+    )
+    boundary, required = pin["audit_boundary"], doc["required_checkpoint"]
+    if boundary is not None:
+        wire.fields(boundary, {"latest_id", "latest_row_hash"})
+        boundary = lineage.AuditHead(**boundary)
+    if required is not None:
+        wire.fields(required, {"anchor_hash", "sequence"})
+        required = lineage.RequiredCheckpointPin(**required)
+    enrollment = lineage.StreamEnrollment(
+        UUID(doc["org_id"]),
+        UUID(doc["stream_id"]),
+        lineage.BootstrapPin(
+            pin["commitment_hash"],
+            pin["initial_key_id"],
+            bytes.fromhex(pin["initial_public_key"]),
+            pin["initial_key_epoch"],
+            boundary,
+        ),
+        required,
+    )
+    assert type(value["observations"]) is list and len(value["observations"]) <= 4096
+    observations = []
+    for item in value["observations"]:
+        wire.fields(item, {"source_id", "object_key", "version_id", "body"})
+        observations.append(
+            lineage.EnvelopeObservation(
+                item["source_id"],
+                item["object_key"],
+                item["version_id"],
+                bytes.fromhex(item["body"]),
+            )
+        )
+    observations = tuple(observations)
+    limits = lineage.LineageLimits(4096, 16_777_216, value["maximum_issues"])
+    lineage._preflight_shapes(enrollment, observations, limits)
+    assert lineage._preflight_observations(observations) <= 16_777_216
+    # R77 permits arbitrary ASCII source labels and an absent boundary. Its
+    # original enrollment goes to the real lineage kernel, without inventing a
+    # positive bridge boundary or asserting provider completeness. Stable UUID
+    # ranks preserve exact source-label order solely in this typed-domain store.
+    scope = protocol._PublicScope(
+        bridge.BridgeEnrollment(enrollment, (), ()),
+        (),
+        HistoryReconciliationLimits(
+            4096, 4096, 8, 4096, 16_777_216, 268_435_456, 90, 100_000, limits.maximum_issues
+        ),
+        None,
+        (),
+    )
+    resource.setrlimit(resource.RLIMIT_FSIZE, (scope.limits.maximum_spool_bytes,) * 2)
+    store = _ReconciliationStore(scope)
+    try:
+        db = store._connection()
+        sources = {
+            label: number
+            for number, label in enumerate(sorted({o.source_id for o in observations}))
+        }
+        for number in sources.values():
+            db.execute(
+                "INSERT INTO witnesses(id,uuid,namespace_hash,bucket,next_key,next_version) "
+                "VALUES(?,?,?,?,?,?)",
+                (number, UUID(int=number + 1).bytes, "0" * 64, "fixture", b"\0", b"\0"),
+            )
+        for ordinal, item in enumerate(observations, 1):
+            db.execute(
+                "INSERT INTO "
+                "observations(ordinal,page,witness,key,version,kind,outcome,body,digest) "
+                "VALUES(?,0,?,?,?,'version','body',?,?)",
+                (
+                    ordinal,
+                    sources[item.source_id],
+                    item.object_key.encode(),
+                    item.version_id.encode(),
+                    item.body,
+                    hashlib.sha256(item.body).digest(),
+                ),
+            )
+        store._ordinal = len(observations)
+        store._total = sum(len(o.body) for o in observations)
+        store._budget()
+        store._state = "sealed"
+        db.set_authorizer(store._sealed_authorize)
+        while not store.index_bodies_step():
+            pass
+        db.execute(
+            "UPDATE raw_bodies SET format='v2'"
+        )  # Original EnvelopeObservation domain tag only.
+        issues = _IssueIndex(store)
+        kernel = module._LineageKernel(store, enrollment, issues)
+        counts = {"inspect": 0, "verify": 0, "edge": 0, "reopened_parents": 0}
+        verify_keys = []
+        old_inspect, old_verify, old_edge = (
+            codec.inspect_envelope_route,
+            codec.verify_envelope,
+            module._edge_fault,
+        )
+        old_wake = module._LineageKernel._wake_parent
+
+        def awakened(kernel: Any, predecessor: str) -> None:
+            prior = db.execute(
+                "SELECT done FROM parent_events WHERE predecessor_hash=?", (predecessor,)
+            ).fetchone()
+            old_wake(kernel, predecessor)
+            if prior is not None and prior[0] == 1:
+                counts["reopened_parents"] += 1
+
+        def inspected(*args: Any, **kwargs: Any) -> Any:
+            counts["inspect"] += 1
+            return old_inspect(*args, **kwargs)
+
+        def verified(*args: Any, **kwargs: Any) -> Any:
+            from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+            counts["verify"] += 1
+            verify_keys.append(
+                kwargs["public_key"].public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+            )
+            return old_verify(*args, **kwargs)
+
+        def assessed(*args: Any, **kwargs: Any) -> Any:
+            counts["edge"] += 1
+            return old_edge(*args, **kwargs)
+
+        codec.inspect_envelope_route, codec.verify_envelope, module._edge_fault = (
+            inspected,
+            verified,
+            assessed,
+        )
+        module._LineageKernel._wake_parent = awakened
+        maximum_work = 0
+        for phase in ("v2-route", "v2-events", "v2-diagnostics", "v2-required", "v2-path"):
+            done, steps = False, 0
+            while not done:
+                before = kernel.work
+                done = kernel.step(phase)
+                assert 0 <= kernel.work - before <= 64
+                maximum_work = max(maximum_work, kernel.work - before)
+                steps += 1
+                assert steps <= 100_000
+        plans = []
+        syntax = ast.parse(
+            (source / "easysynq_api/services/audit/_history_reconciliation_lineage.py").read_text()
+        )
+        for node in ast.walk(syntax):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "execute"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and type(node.args[0].value) is str
+                and node.args[0].value.startswith("SELECT ")
+            ):
+                sql = node.args[0].value
+                plan = [
+                    row[3]
+                    for row in db.execute("EXPLAIN QUERY PLAN " + sql, (b"",) * sql.count("?"))
+                ]
+                assert not any("TEMP B-TREE" in item for item in plan), (sql, plan)
+                plans.append(plan)
+        path = []
+        if kernel.consistent:
+            for (raw,) in db.execute(
+                "SELECT o.body FROM path_nodes p JOIN v2_nodes n ON "
+                "n.envelope_hash=p.envelope_hash JOIN raw_bodies r ON "
+                "r.raw_id=n.representative_raw_id JOIN observations o ON "
+                "o.ordinal=r.representative_ordinal ORDER BY p.sequence"
+            ):
+                path.append(rfc8785.dumps(json.loads(raw)).hex())
+        history = (
+            [
+                dict(key_epoch=e, key_id=k, public_key=raw.hex(), introduced_by=by)
+                for e, k, raw, by in db.execute(
+                    "SELECT e.key_epoch,e.key_id,m.public_key,e.introduced_by FROM used_epochs "
+                    "e JOIN materials m ON m.key_id=e.key_id ORDER BY e.key_epoch"
+                )
+            ]
+            if kernel.consistent
+            else []
+        )
+        failed, incomplete = issues.counts()
+        displayed = issues.display(limits.maximum_issues)
+        tip = kernel.tip()
+        result = {
+            "status": "failed" if failed else "incomplete" if incomplete else "consistent",
+            "scope": "supplied-v2-graph",
+            "bootstrap_assurance": "external-pin-only",
+            "unproved_checks": [
+                "bootstrap-contents",
+                "legacy-bridge-coverage",
+                "witness-collection-completeness",
+                "witness-custody",
+                "audit-chain-comparison",
+                "freshness",
+                "operational-key-activation",
+            ],
+            "path": path,
+            "key_history": history,
+            "tip_hash": None if tip is None else tip.anchor_hash,
+            "tip_sequence": None if tip is None else tip.sequence,
+            "issues": [
+                {
+                    "code": i.code,
+                    "severity": i.severity,
+                    "observation_indexes": [r.index - 1 for r in i.references],
+                }
+                for i in displayed
+            ],
+            "issues_omitted": max(0, failed + incomplete - len(displayed)),
+            "failed_issues": failed,
+            "incomplete_issues": incomplete,
+            "duplicate_observations": kernel.duplicate_observations,
+            "required_checkpoint_relation": kernel.required_checkpoint_relation,
+            "inspection": {
+                **counts,
+                "verify_keys": verify_keys,
+                "maximum_step_work": maximum_work,
+                "plans": plans,
+                "materials": db.execute("SELECT count(*) FROM materials").fetchone()[0],
+                "key_events": db.execute("SELECT count(*) FROM material_events").fetchone()[0],
+                "path_count": kernel.path_length,
+                "used_epochs": kernel.used_epoch_count,
+            },
+        }
+    except HistoryReconciliationError as error:
+        if type(error) is not HistoryReconciliationError:
+            raise
+        result = {"error": error.code}
+    finally:
+        store.close()
+    return result
+
+
+def _main() -> None:
+    source = Path(__file__).resolve().parents[2] / "src"
+    assert sys.argv[1:] == [str(source)]
+    policy = runpy.run_path(
+        str(source / "easysynq_api/services/audit/_history_reconciliation_worker.py")
+    )
+    policy["_apply_limits"]()
+    sys.path.insert(0, str(source))
+    read = policy["_read_exact"]
+    size = int.from_bytes(read(sys.stdin.buffer, 4), "big")
+    assert 0 < size <= 64 * 1024 * 1024
+    value = json.loads(read(sys.stdin.buffer, size))
+    assert sys.stdin.buffer.read(1) == b""
+    assert type(value) is dict
+    if value.get("kind") == "bridge":
+        result = _bridge(value, source)
+    else:
+        assert value.get("kind") == "lineage"
+        result = _lineage(value, source)
     raw = json.dumps(result, separators=(",", ":")).encode()
     assert 0 < len(raw) <= 16 * 1024 * 1024
     policy["_write"](sys.stdout.buffer, len(raw).to_bytes(4, "big") + raw)
