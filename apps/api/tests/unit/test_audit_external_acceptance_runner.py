@@ -11,6 +11,7 @@ import sys
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import pytest
 
@@ -29,6 +30,11 @@ _RUN_ID = "00000000-0000-4000-8000-000000000001"
 _IMAGE_ID = "sha256:" + ("a" * 64)
 _CONTAINER_ID = "b" * 64
 _SESSION_ID = "testcontainers-session-1"
+_HISTORY_NAME = (
+    "test_history_collection_runtime_preserves_required_witnesses_and_resource_boundaries"
+)
+_HISTORY_FAILURE_PREFIX = "AUDIT_HISTORY_COLLECTION_FAILURE "
+_HISTORY_SOURCE = "audit_history_collection_runtime_acceptance.py"
 _MANDATORY_NAMES = (
     "test_external_cli_runtime_is_public_only_and_read_only",
     "test_external_cli_runtime_preserves_enrolled_obligation_after_db_selection_attack",
@@ -39,7 +45,37 @@ _MANDATORY_NAMES = (
     "test_isolated_raw_runtime_enforces_process_and_byte_boundaries",
     "test_version_page_decoder_runtime_rejects_lossy_provider_pages",
     "test_version_page_transport_runtime_preserves_original_observations_and_limits",
-    "test_history_collection_runtime_preserves_required_witnesses_and_resource_boundaries",
+    _HISTORY_NAME,
+)
+_RESOURCE_SUBCASES = (
+    "cases/memory",
+    "cases/descriptors",
+    "cases/file-limit",
+    "cases/cpu",
+    "cases/heap",
+    "cases/store",
+    "cases/disk-journal",
+    "cases/disk-sort",
+    "open_transaction_death",
+    "cleanup_failure",
+    "upload_deadline",
+    "ipc/valid-result",
+    "ipc/oversized",
+    "ipc/truncated",
+    "ipc/flood",
+    "ipc/stale",
+    "ipc/late-output",
+    "ipc/withheld-eof",
+    "raw_worker/valid-empty",
+    "raw_worker/oversized-input",
+    "raw_worker/truncated-input",
+    "raw_worker/stale-input",
+    "raw_worker/duplicate-field",
+    "raw_worker/chunk-sequence",
+    "raw_worker/trailing-chunk",
+    "raw_worker/entry-over",
+    "raw_worker/xml-over",
+    "raw_worker/body-over",
 )
 # Current Dockerfile COPY sources plus the Dockerfile and context-exclusion policy.
 _BUILD_FILE_INPUTS = (
@@ -106,12 +142,68 @@ def _junit(*, mode: str = "passing", affected: int = 0) -> str:
     return "<testsuites><testsuite>" + "".join(cases) + "</testsuite></testsuites>"
 
 
+def _history_junit(
+    detail: str,
+    *,
+    status: str = "failure",
+    name: str = _HISTORY_NAME,
+    copies: int = 1,
+) -> str:
+    cases = [f'<testcase name="{item}" />' for item in _MANDATORY_NAMES if item != _HISTORY_NAME]
+    child = (
+        f'<{status} message="private-message">{escape(detail)}</{status}>'
+        "<system-out>private-junit-output</system-out>"
+        "<system-err>private-junit-error</system-err>"
+    )
+    cases.extend(
+        f'<testcase name="{name}" classname="private-class" file="private-file" '
+        f'time="private-time">{child}</testcase>'
+        for _ in range(copies)
+    )
+    return (
+        '<testsuites><testsuite name="private-suite">'
+        '<properties><property name="token" value="private-property" /></properties>'
+        + "".join(cases)
+        + "</testsuite></testsuites>"
+    )
+
+
+def _history_stdout(
+    phase: str,
+    *,
+    completed: dict[str, int] | None = None,
+    resource_subcases: dict[str, int] | None = None,
+    phase_elapsed_ms: object = 23,
+    total_elapsed_ms: object = 101,
+    progress: str = ".........",
+) -> str:
+    payload = {
+        "completed_phases_ms": {} if completed is None else completed,
+        "phase": phase,
+        "phase_elapsed_ms": phase_elapsed_ms,
+        "resource_subcases_ms": {} if resource_subcases is None else resource_subcases,
+        "total_elapsed_ms": total_elapsed_ms,
+    }
+    return (
+        progress
+        + _HISTORY_FAILURE_PREFIX
+        + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    )
+
+
+def _history_lines(output: str) -> list[str]:
+    return [line for line in output.splitlines() if line.startswith("runtime_history_")]
+
+
 class _FakeCommands:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.calls: list[tuple[list[str], Path, int, dict[str, str] | None]] = []
         self.build_returncode = 0
         self.harness_returncode = 0
+        self.harness_stdout = "private-child-stdout"
+        self.harness_stderr = "private-child-stderr"
+        self.harness_timeout = False
         self.junit_mode = "passing"
         self.junit_affected = 0
         self.junit_content: str | None = None
@@ -201,6 +293,8 @@ class _FakeCommands:
                     }
                 ),
             )
+            if self.harness_timeout:
+                raise _RUNNER.AcceptanceError("command timed out")
             junit_path = Path(arguments[-1])
             if self.junit_mode != "absent":
                 _write(
@@ -222,8 +316,8 @@ class _FakeCommands:
                     path.symlink_to(target)
             return self._result(
                 self.harness_returncode,
-                stdout="private-child-stdout",
-                stderr="private-child-stderr",
+                stdout=self.harness_stdout,
+                stderr=self.harness_stderr,
             )
         if arguments[:4] == ["/tools/docker", "ps", "-aq", "--filter"]:
             return self._result(stdout="\n".join(self.container_ids))
@@ -526,6 +620,460 @@ def test_failure_summary_redacts_all_report_and_child_details(
     assert any(call[0][:4] == ["/tools/docker", "image", "rm", "-f"] for call in fake.calls)
 
 
+@pytest.mark.parametrize(
+    ("phase", "status", "progress", "completed", "with_resources"),
+    [
+        ("identity", "failure", "", {}, False),
+        ("resources", "error", ".sFxXE", {"synthetic": 11}, True),
+        (
+            "provider",
+            "failure",
+            ".........",
+            {"synthetic": 11, "resources": 22, "certifi": 33},
+            True,
+        ),
+    ],
+)
+def test_failed_history_case_emits_only_validated_phase_timings_and_source(
+    phase: str,
+    status: str,
+    progress: str,
+    completed: dict[str, int],
+    with_resources: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    resource_subcases = {name: 7 for name in _RESOURCE_SUBCASES} if with_resources else {}
+    fake.harness_stdout = (
+        "private-before\n"
+        + _history_stdout(
+            phase,
+            completed=completed,
+            resource_subcases=resource_subcases,
+            phase_elapsed_ms=23,
+            total_elapsed_ms=101,
+            progress=progress,
+        )
+        + "\nprivate-after"
+    )
+    fake.harness_stderr = "private-harness-stderr"
+    fake.junit_content = _history_junit(
+        "private assertion\n"
+        "apps/api/tests/integration/"
+        f"{_HISTORY_SOURCE}:1269: RuntimeError\n"
+        "/private-host/private-project/apps/api/tests/integration/"
+        f"{_HISTORY_SOURCE}:1283: AssertionError",
+        status=status,
+    )
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    output = capsys.readouterr()
+    expected = [
+        "runtime_history_diagnostic=available",
+        f"runtime_history_phase={phase}",
+        "runtime_history_phase_elapsed_ms=23",
+        "runtime_history_total_elapsed_ms=101",
+    ]
+    expected.extend(
+        f"runtime_history_completed_phase={name} elapsed_ms={elapsed}"
+        for name, elapsed in completed.items()
+    )
+    expected.extend(
+        f"runtime_history_resource_subcase={name} elapsed_ms=7" for name in resource_subcases
+    )
+    expected.append(f"runtime_history_failure_source={_HISTORY_SOURCE}:1283")
+    assert _history_lines(output.out) == expected
+    assert "private-" not in output.out + output.err
+    assert _HISTORY_FAILURE_PREFIX not in output.out + output.err
+    assert "/private-host/" not in output.out + output.err
+    assert list((root / ".pytest_cache").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "absent",
+        "duplicate-prefix",
+        "oversized",
+        "malformed",
+        "duplicate-key",
+        "noncanonical",
+        "extra-key",
+        "missing-key",
+        "invalid-phase",
+        "string-duration",
+        "float-duration",
+        "bool-duration",
+        "negative-duration",
+        "over-bound-duration",
+        "nested-bool-duration",
+        "subordinate-over-total",
+        "total-bool-duration",
+        "completed-over-total",
+        "resource-bool-duration",
+        "resource-over-total",
+        "inconsistent-completed-prefix",
+        "unknown-completed-phase",
+        "unknown-resource-subcase",
+        "incomplete-resource-subcases",
+        "invalid-progress-prefix",
+        "trailing-text",
+    ],
+)
+def test_failed_history_case_rejects_malformed_or_ambiguous_stdout_diagnostic(
+    case: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    payload: dict[str, object] = {
+        "completed_phases_ms": {"synthetic": 11, "resources": 22, "certifi": 33},
+        "phase": "provider",
+        "phase_elapsed_ms": 23,
+        "resource_subcases_ms": {},
+        "total_elapsed_ms": 101,
+    }
+    if case == "absent":
+        stdout = "private-child-stdout"
+    elif case == "duplicate-prefix":
+        valid = _history_stdout("provider", completed=payload["completed_phases_ms"])
+        stdout = valid + "\n" + valid
+    elif case == "oversized":
+        stdout = _HISTORY_FAILURE_PREFIX + json.dumps(payload) + (" " * 4097)
+    elif case == "malformed":
+        stdout = _HISTORY_FAILURE_PREFIX + "{private-unclosed"
+    elif case == "duplicate-key":
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        stdout = _HISTORY_FAILURE_PREFIX + canonical.replace(
+            '"phase":"provider"', '"phase":"provider","phase":"identity"'
+        )
+    else:
+        if case == "extra-key":
+            payload["private-extra"] = "private-value"
+        elif case == "missing-key":
+            payload.pop("phase_elapsed_ms")
+        elif case == "invalid-phase":
+            payload["phase"] = "private-phase"
+        elif case == "string-duration":
+            payload["phase_elapsed_ms"] = "23"
+        elif case == "float-duration":
+            payload["phase_elapsed_ms"] = 23.0
+        elif case == "bool-duration":
+            payload["phase_elapsed_ms"] = True
+        elif case == "negative-duration":
+            payload["phase_elapsed_ms"] = -1
+        elif case == "over-bound-duration":
+            payload["phase_elapsed_ms"] = 1_200_001
+        elif case == "nested-bool-duration":
+            payload["completed_phases_ms"] = {
+                "synthetic": True,
+                "resources": 22,
+                "certifi": 33,
+            }
+        elif case == "subordinate-over-total":
+            payload["phase_elapsed_ms"] = 102
+        elif case == "total-bool-duration":
+            payload["total_elapsed_ms"] = True
+        elif case == "completed-over-total":
+            payload["completed_phases_ms"] = {
+                "synthetic": 102,
+                "resources": 22,
+                "certifi": 33,
+            }
+        elif case == "resource-bool-duration":
+            payload["resource_subcases_ms"] = {
+                name: True if name == "cases/memory" else 7 for name in _RESOURCE_SUBCASES
+            }
+        elif case == "resource-over-total":
+            payload["resource_subcases_ms"] = {
+                name: 102 if name == "cases/memory" else 7 for name in _RESOURCE_SUBCASES
+            }
+        elif case == "inconsistent-completed-prefix":
+            payload["completed_phases_ms"] = {"synthetic": 11}
+        elif case == "unknown-completed-phase":
+            payload["completed_phases_ms"] = {
+                "synthetic": 11,
+                "resources": 22,
+                "private-phase": 33,
+            }
+        elif case == "unknown-resource-subcase":
+            payload["resource_subcases_ms"] = {"private-subcase": 7}
+        elif case == "incomplete-resource-subcases":
+            payload["resource_subcases_ms"] = {"cases/memory": 7}
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        if case == "noncanonical":
+            serialized = json.dumps(payload, sort_keys=True)
+        stdout = _HISTORY_FAILURE_PREFIX + serialized
+        if case == "invalid-progress-prefix":
+            stdout = "private-progress" + stdout
+        elif case == "trailing-text":
+            stdout += " private-trailing"
+    fake.harness_stdout = stdout
+    fake.junit_content = _history_junit(
+        f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    )
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    output = capsys.readouterr()
+    assert _history_lines(output.out) == [
+        "runtime_history_diagnostic=unavailable",
+        f"runtime_history_failure_source={_HISTORY_SOURCE}:1283",
+    ]
+    assert "private-" not in output.out + output.err
+    assert _HISTORY_FAILURE_PREFIX not in output.out + output.err
+    assert list((root / ".pytest_cache").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "gate",
+    ["history-passed", "history-skipped", "history-missing", "parameterized", "other-failed"],
+)
+def test_history_diagnostics_require_one_exact_failed_or_errored_case(
+    gate: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    fake.harness_stdout = _history_stdout("identity")
+    frame = f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    if gate == "history-passed":
+        fake.junit_content = _junit()
+    elif gate == "other-failed":
+        fake.junit_content = _junit(mode="failure", affected=0)
+    elif gate == "history-skipped":
+        fake.junit_content = _junit(mode="skipped", affected=9)
+    elif gate == "history-missing":
+        fake.junit_content = _junit(mode="missing", affected=9)
+    else:
+        fake.junit_content = _history_junit(frame, name=_HISTORY_NAME + "[private-param]")
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    output = capsys.readouterr().out
+    assert _history_lines(output) == []
+    assert _HISTORY_FAILURE_PREFIX not in output
+
+
+def test_duplicate_exact_failed_history_cases_make_both_diagnostics_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    fake.harness_stdout = _history_stdout("identity")
+    fake.junit_content = _history_junit(
+        f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError",
+        copies=2,
+    )
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    assert _history_lines(capsys.readouterr().out) == [
+        "runtime_history_diagnostic=unavailable",
+        "runtime_history_failure_source=unavailable",
+    ]
+    assert list((root / ".pytest_cache").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    [
+        (
+            "/private-host/project/apps/api/tests/integration/"
+            "audit_history_collection_runtime_acceptance.py:291: AssertionError",
+            "audit_history_collection_runtime_acceptance.py:291",
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1: Error",
+            "audit_history_collection_runtime_acceptance.py:1",
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1354: Error",
+            "audit_history_collection_runtime_acceptance.py:1354",
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1269: "
+            "RuntimeError\n"
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1283: "
+            "AssertionError",
+            "audit_history_collection_runtime_acceptance.py:1283",
+        ),
+        ("apps/api/tests/integration/private.py:291: AssertionError", None),
+        ("apps/api/tests/integration/audit_history_collection_runtime_probe.py:291: Error", None),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:0: Error",
+            None,
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:+1: Error",
+            None,
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:-1: Error",
+            None,
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:01: Error",
+            None,
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:1355: Error",
+            None,
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:"
+            + ("9" * 5_000)
+            + ": Error",
+            None,
+        ),
+        (
+            "E AssertionError: apps/api/tests/integration/"
+            "audit_history_collection_runtime_acceptance.py:291: private assertion",
+            None,
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:291",
+            None,
+        ),
+        (
+            "apps/api/tests/integration/audit_history_collection_runtime_acceptance.py:291:Error",
+            None,
+        ),
+    ],
+)
+def test_history_source_reconstructs_only_complete_allowlisted_traceback_frames(
+    detail: str,
+    expected: str | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    fake.harness_stdout = "private-child-stdout"
+    fake.junit_content = _history_junit(detail)
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    source = "unavailable" if expected is None else expected
+    output = capsys.readouterr()
+    assert _history_lines(output.out) == [
+        "runtime_history_diagnostic=unavailable",
+        f"runtime_history_failure_source={source}",
+    ]
+    assert "runtime_junit=available" in output.out
+    assert output.out.count("runtime_case=") == 10
+    assert "private-" not in output.out + output.err
+
+
+def test_history_diagnostic_does_not_consume_valid_record_from_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    fake.harness_stdout = "private-child-stdout"
+    fake.harness_stderr = _history_stdout("identity")
+    fake.junit_content = _history_junit(
+        f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    )
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    output = capsys.readouterr().out
+    assert _history_lines(output) == [
+        "runtime_history_diagnostic=unavailable",
+        f"runtime_history_failure_source={_HISTORY_SOURCE}:1283",
+    ]
+    assert _HISTORY_FAILURE_PREFIX not in output
+
+
+def test_input_recheck_failure_suppresses_valid_history_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_returncode = 1
+    fake.harness_stdout = _history_stdout("identity")
+    fake.junit_content = _history_junit(
+        f"apps/api/tests/integration/{_HISTORY_SOURCE}:1283: AssertionError"
+    )
+    fake.change_after_harness = (root / "apps/api/LICENSE", "content")
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    output = capsys.readouterr().out
+    assert "failure_stage=input_recheck" in output
+    assert _history_lines(output) == []
+    assert _HISTORY_FAILURE_PREFIX not in output
+
+
+def test_cleanup_only_failure_does_not_consume_forged_history_stdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_stdout = _history_stdout("identity")
+    fake.container_remove_returncode = 1
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    output = capsys.readouterr().out
+    assert "cleanup_status=failed" in output
+    assert _history_lines(output) == []
+    assert _HISTORY_FAILURE_PREFIX not in output
+
+
+def test_harness_timeout_has_no_partial_history_diagnostic_channel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runner_environment: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _repository(tmp_path)
+    fake = _FakeCommands(root)
+    fake.harness_timeout = True
+    fake.harness_stdout = _history_stdout("identity")
+
+    assert _run(root, fake, monkeypatch) == 1
+
+    output = capsys.readouterr().out
+    assert "runtime_harness_exit=unavailable" in output
+    assert "runtime_junit=unavailable" in output
+    assert _history_lines(output) == []
+    assert _HISTORY_FAILURE_PREFIX not in output
+    assert list((root / ".pytest_cache").iterdir()) == []
+
+
 @pytest.mark.parametrize("report", ["absent", "malformed", "oversized", "entity"])
 def test_unreadable_failure_report_preserves_failure_and_cleanup(
     report: str,
@@ -537,6 +1085,7 @@ def test_unreadable_failure_report_preserves_failure_and_cleanup(
     root = _repository(tmp_path)
     fake = _FakeCommands(root)
     fake.harness_returncode = 1
+    fake.harness_stdout = _history_stdout("identity")
     if report == "absent":
         fake.junit_mode = "absent"
     else:
@@ -554,6 +1103,8 @@ def test_unreadable_failure_report_preserves_failure_and_cleanup(
     assert "runtime_acceptance=failed" in output
     assert "private-" not in output
     assert "runtime_case=" not in output
+    assert _history_lines(output) == []
+    assert _HISTORY_FAILURE_PREFIX not in output
     assert list((root / ".pytest_cache").iterdir()) == []
 
 
