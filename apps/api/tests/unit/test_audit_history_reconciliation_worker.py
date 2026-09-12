@@ -1214,7 +1214,8 @@ def test_unavailable_read_cannot_hide_a_failed_reap_or_removal(
 
     monkeypatch.setattr(_ReconciliationSession, "_rpc", after_rpc)
     monkeypatch.setattr(base.shutil, "rmtree", failed_remove)
-    with synthetic_transport(case, monkeypatch, tmp_path):
+    # Undo the unavailable-read override before restoring the real transport.
+    with synthetic_transport(case, monkeypatch, tmp_path), monkeypatch.context() as patch:
         read = isolated_raw.read_raw_checkpoint_version_isolated
 
         def first_unavailable(*args, **kwargs):
@@ -1223,10 +1224,22 @@ def test_unavailable_read_cannot_hide_a_failed_reap_or_removal(
                 raise RawVersionReadError("PROVIDER_FAILURE")
             return read(*args, **kwargs)
 
-        monkeypatch.setattr(isolated_raw, "read_raw_checkpoint_version_isolated", first_unavailable)
+        patch.setattr(isolated_raw, "read_raw_checkpoint_version_isolated", first_unavailable)
         with pytest.raises(public.HistoryReconciliationError) as caught:
             public.collect_and_reconcile_checkpoint_history(*case.args)
         assert caught.value.code == code
     assert denied == final == [True] and failures == [fault]
     clean()
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("fault,code", [("reap", "WORKER_FAILED"), ("remove", "CLEANUP_FAILED")])
+def test_unavailable_read_cleanup_fault_restores_real_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fault: str, code: str
+) -> None:
+    from easysynq_api.services.audit import isolated_raw
+
+    original = isolated_raw.read_raw_checkpoint_version_isolated
+    with monkeypatch.context() as patch:
+        test_unavailable_read_cannot_hide_a_failed_reap_or_removal(patch, tmp_path, fault, code)
+    assert isolated_raw.read_raw_checkpoint_version_isolated is original
