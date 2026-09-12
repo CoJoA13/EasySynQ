@@ -14,7 +14,9 @@ ENV PYTHONUNBUFFERED=1 \
 # (bookworm ships only client-15); build-time only, so air-gapped *installs* are unaffected (the
 # image is pre-built). Only the worker runs the drill; the shared image carries it for both.
 # S-ing-1: libmagic1 — the system lib python-magic content-sniffs imported files with (doc 09 §4.1).
+# Refresh the base runtime PCRE2 library explicitly; unrelated installs can leave it stale.
 RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 \
     && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \

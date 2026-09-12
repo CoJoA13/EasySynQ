@@ -200,7 +200,8 @@ authority, complete per-witness path coverage and cross-format signed-head compa
 compact post-cleanup publication. Collection gaps and late contradictions suppress usable output
 beside healthy copies or an already included required checkpoint. R77/R78 remain independent
 supplied-input references with their original smaller limits; R84 remains a storage-only diagnostic
-API. No operational consumer, enrollment format, dependency, migration, writer or restore changes.
+API. No operational consumer, enrollment format, application lock, migration, writer or restore
+changes. The API base-runtime package update described below followed image-gate evidence.
 
 Independent fixtures begin with public disposable primitives and original XML/body bytes.
 Differential tests compare every current R77/R78 fixture within shared capacities; larger fixtures
@@ -296,6 +297,38 @@ All 2,083 source identities, 240 environment identities, immutable driver/adapte
 17 saved runtime artifacts and four outer log digests were independently checked. Fresh owned
 container/image queries and the exact recorded acceptance directory confirmed cleanup. No
 completed job was restarted; changed proof inputs received a new complete acceptance run.
+
+Complete independent branch review found no material issues; GitLab Duo reported no findings
+and disclosed partial diff coverage. MR
+[!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46)'s first
+[source pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843042925) passed
+thirteen required jobs, including all eleven runtime cases, but its image-security job blocked
+two fix-available base-runtime findings. A fresh uncached reproduction confirmed the cause.
+The API Dockerfile now explicitly upgrades the existing runtime library from the configured
+Debian repositories; scanner thresholds, ignores and application locks are unchanged.
+
+Fresh verification of that image update passed **290 affected tests in 12.60 seconds**, including
+the built-image offline/non-root/bytecode proof, plus security-policy, distribution, site-data
+and whitespace guards. The built API scan returned **zero blocking findings, 85 no-fix findings
+OPEN and zero secret advisories**. A separate package/load/match/PG-client/Alembic smoke passed
+as UID 10001 with no network, read-only root and an 8MiB memory-backed temporary directory.
+The first private smoke attempt lacked writable temporary storage for `uv` and stopped before
+the affected tests and full runtime harness; correcting that fixture changed no production code.
+
+The updated image passed **all eleven mandatory cases in 632.551 seconds**, zero errors/failures/
+skips. The new case took **55.791 seconds** and the old R84 case **378.652 seconds**; every original
+cap and required count remained. Scan and runtime images had identical filesystem layers. All
+39 installed audit modules, six receipts, same-enrollment TLS 33-GET/six-LIST evidence, synthetic
+4,097-node/ten-page closure, hostile controls and owned cleanup were independently checked.
+Actual SQLite 3.40.1 returned all 58 indexed plans and the complete path/epoch digests. Kernel
+measurements were **8.031 seconds CPU**, **55.869 ms maximum STEP**, maximum 64 work items,
+**40,738,816 database bytes** and **91,832 KiB fresh VmHWM**; historical process-rusage highwater
+143,668 KiB remains separate. These are measurements for this run, not throughput guarantees.
+All 2,083 source and 240 environment identities, 34 outer log hashes and 17 saved runtime artifacts
+matched. Updated build digest is `67002eaaf7c5e8bc4f9f015b863ee1d8a4e7420adbe7dbeaa3995745d8c17672`;
+proof digest remains `8c591a931c34fd8a9178b4d5d9fbd07ca11a072bf65d99ecae78b53f691e2aba`.
+Scoped image-update review found no material issues. Fresh source and merged-main GitLab gates
+remain pending; this scan does not close the container-security residual.
 
 This establishes observed-history consistency within the admitted evidence and bounds. It does
 not establish provider non-omission, atomicity, historical deletion absence, custody, actual

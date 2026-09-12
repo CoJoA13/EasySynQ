@@ -133,7 +133,16 @@ The fixed-version image gate retains no-fix findings and fails closed on scanner
 Detailed evidence remains external; no exception, risk acceptance, production exposure conclusion,
 or full residual closure has been created. [Issue #4](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/4)
 tracks the remaining work.
-Last reviewed: 2026-09-08
+Progress, 2026-09-12: MR
+[!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46)'s first source pipeline
+blocked two fix-available base-runtime findings. A targeted API-image package update passed a
+fresh built-image scan with zero blocking findings and 85 no-fix findings still OPEN. All eleven
+mandatory runtime cases and 290 affected tests passed; scan/runtime filesystem identity and
+owned cleanup were independently verified. The unchanged web image's latest source-pipeline
+scan reports 55 no-fix findings OPEN and zero blocking findings; it was not rescanned locally
+for the API-only update. Fresh source/main gates remain pending. Detailed inventories remain
+external, with no exception, exposure conclusion or residual closure.
+Last reviewed: 2026-09-12
 
 ## RES-IP-REGISTER-COLUMN-JUMP
 

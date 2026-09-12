@@ -46,7 +46,19 @@ seconds**, zero failures/errors/skips. The new case took **114.373 seconds** wit
 separate synthetic acceptance checked **4,097 v2 nodes, ten bridge pages and 12,809 GETs**,
 plus a late conflict. Installed Python 3.12.14 / SQLite 3.40.1, 58 indexed plans,
 resource/IPC controls, non-root/read-only execution and owned cleanup were verified.
-Complete branch review and GitLab source/main integration gates remain pending for R85.
+Complete independent branch review found no material issues. GitLab Duo completed its review
+without findings and disclosed partial diff coverage. MR
+[!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46) remains unmerged.
+Its first source pipeline passed thirteen jobs but the built-image security gate found two
+fix-available findings in a base runtime library. A targeted API-image package upgrade now
+passes a fresh scan with **zero blocking findings / 85 no-fix findings still OPEN**.
+The updated image passed **290 affected tests** and **all eleven mandatory runtime cases in
+632.551 seconds**, zero failures/errors/skips; the new case took **55.791 seconds**. Scan and
+acceptance image filesystem layers, all 39 installed module identities, complete receipt
+semantics and owned cleanup were independently checked. Existing limits remain unchanged.
+Current build digest: `67002eaaf7c5e8bc4f9f015b863ee1d8a4e7420adbe7dbeaa3995745d8c17672`;
+proof digest: `8c591a931c34fd8a9178b4d5d9fbd07ca11a072bf65d99ecae78b53f691e2aba`.
+Fresh GitLab source and merged-main gates remain pending.
 
 The first full check's 56 failures were attributed to a new test leaking a synthetic reader
 across teardown and older CLI fixtures depending on host file permissions. Both test-only
@@ -60,7 +72,9 @@ No operational consumer, enrollment, signing, IAM, deployment or restore was act
 observed history leaves database agreement, provider non-omission, custody, freshness/rollback
 memory, delivery, key activation and source-independent recovery unproved. Issue #3 remains open
 at 3/5; the historical runtime failure, Testcontainers warnings, MinIO permission limitation and
-85 API / 53 web no-fix security findings retain their existing open records.
+85 API / 55 web no-fix security findings retain their existing open records. The web count is
+from MR !46's first source pipeline; the unchanged web image was not rescanned locally for the
+API-only package update. Passing the fixed-version threshold is not image-security clearance.
 
 A recovery reconciliation completed on 2026-09-08 against
 `6077e8a45b5942daf803220765b326f82ddd4417`. Server-verified staged upload digests, the non-root API
