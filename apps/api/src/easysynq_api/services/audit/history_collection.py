@@ -343,12 +343,12 @@ def _version_failure_code(error: BaseException, owner: _CollectionOwner) -> str:
     raise error
 
 
-def _traverse_required(
+def _collect_into_spool(
     org_id: UUID,
     readers: tuple[RequiredHistoryWitness, ...],
     spool: _SpoolSession,
     owner: _CollectionOwner,
-) -> _SpoolSummary:
+) -> int:
     from ._history_spool_protocol import _PageAdmission
 
     observation_count = 0
@@ -424,7 +424,14 @@ def _traverse_required(
                 break
             key_marker, version_marker = page.next_key_marker, page.next_version_id_marker
     owner.check()
-    summary = spool.finish()
+    return observation_count
+
+
+def _check_traversal_summary(
+    summary: _SpoolSummary,
+    readers: tuple[RequiredHistoryWitness, ...],
+    observation_count: int,
+) -> None:
     if (
         tuple(w.witness_id for w in summary.witnesses) != tuple(w.witness_id for w in readers)
         or sum(w.version_observations + w.delete_observations for w in summary.witnesses)
@@ -435,6 +442,18 @@ def _traverse_required(
         )
     ):
         raise HistoryCollectionError("PROTOCOL_INVALID")
+
+
+def _traverse_required(
+    org_id: UUID,
+    readers: tuple[RequiredHistoryWitness, ...],
+    spool: _SpoolSession,
+    owner: _CollectionOwner,
+) -> _SpoolSummary:
+    observation_count = _collect_into_spool(org_id, readers, spool, owner)
+    owner.check()
+    summary = spool.finish()
+    _check_traversal_summary(summary, readers, observation_count)
     return summary
 
 
