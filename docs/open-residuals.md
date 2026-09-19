@@ -160,7 +160,16 @@ Delivery, 2026-09-18: Both updates merged with R85 in
 [merged-main](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970) security jobs report
 API zero blocking / 85 no-fix OPEN and web zero blocking / 43 no-fix OPEN. The no-fix findings are
 untriaged, so this record and issue #4 stay OPEN.
-Last reviewed: 2026-09-18
+Progress, 2026-09-19 (candidate): Every remaining no-fix finding in both images was an OS package
+from the base image, and the API image was the only one still on Debian 12. Moving its base to
+`python:3.12-slim-trixie` with trixie-pgdg (Python 3.12.14 and `pg_dump` 18.x unchanged; SQLite
+3.40.1 → 3.46.1) cut the API image from **85 to 47 no-fix findings, with none CRITICAL**, under
+the repository gate (zero blocking in both images; web unchanged at 43). At `80ab9b2`, all **11
+mandatory runtime cases** passed in 582 seconds and **4,939 API unit tests** passed with the built-image
+proof enabled. The remaining findings are the base-OS set both images now share. Their
+applicability triage belongs in a confidential GitLab issue rather than in Git, and the record and
+issue #4 stay OPEN until that triage and any justified dispositions exist.
+Last reviewed: 2026-09-19
 
 ## RES-IP-REGISTER-COLUMN-JUMP
 
@@ -342,7 +351,17 @@ Closure contract: Capture actionable, privacy-preserving evidence of the failing
 environment, reproduce its mechanism, fix it at the owning boundary, and verify the mandatory acceptance
 without skips, weaker resource/time limits, or reliance on retrying failed gates. A diagnostic summary
 or a later green pipeline alone does not close this record.
-Last reviewed: 2026-09-10
+Occurrence, 2026-09-19: On !51's trixie API-image candidate `9dc60c1`, [API job
+16602276811](https://gitlab.com/synqsuite-group/EasySynQ/-/jobs/16602276811) passed the unit suite
+and ten mandatory cases, but failed `test_version_page_transport_runtime_preserves_original_observations_and_limits`.
+A single diagnostic retry, [job 16603495378](https://gitlab.com/synqsuite-group/EasySynQ/-/jobs/16603495378),
+passed all eleven on the same commit and the same runner class (`saas-linux-small-amd64`). Local
+evidence showed no trixie-specific mechanism. The full eleven-case run and two isolated runs of this
+case passed on trixie, and the isolated bookworm and trixie runs recorded equivalent peak worker
+memory and elapsed times with the same bundled expat. The runner still withholds the failed
+assertion, so the cause remains unestablished; this occurrence is intermittent, and the retry does
+not close this record.
+Last reviewed: 2026-09-19
 
 ## RES-TESTCONTAINERS-IMPORT-DEPRECATIONS
 

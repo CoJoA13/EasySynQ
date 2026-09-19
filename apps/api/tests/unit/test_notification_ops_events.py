@@ -161,7 +161,7 @@ async def test_no_channel_configured_returns_empty_and_never_raises() -> None:
 
 
 def test_syslog_address_defaults_to_empty_not_dev_log() -> None:
-    """⚠ The worker/beat images are python:3.12-slim-bookworm with no syslog daemon, and the shipped
+    """⚠ The worker/beat images are python:3.12-slim-trixie with no syslog daemon, and the shipped
     Compose services bind-mount no host socket — so a ``/dev/log`` default would look configured and
     reliably fail, leaving a database-outage alarm in the very container log it was meant to escape
     (Codex P2). Empty is honest: the channel reports ``skipped``, and the runbook gives the two ways
