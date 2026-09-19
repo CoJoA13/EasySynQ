@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 _ROOT = Path(__file__).resolve().parents[4]
@@ -501,3 +502,78 @@ def test_gitlab_security_gates_both_built_images_after_the_live_npm_gate() -> No
     assert "aquasec/trivy:0.74.0" in setup
     assert "TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2" in setup
     assert "TRIVY_JAVA_DB_REPOSITORY=docker.io/aquasec/trivy-java-db:1" in setup
+
+
+# --- compute budget: path rules may narrow branch pipelines, never main or tags ---------------
+
+_MAIN = {"if": "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"}
+_TAG = {"if": "$CI_COMMIT_TAG"}
+_NOT_SCHEDULED = {"if": '$CI_PIPELINE_SOURCE == "schedule"', "when": "never"}
+
+
+def _resolved_rules(pipeline: dict[str, Any], job: dict[str, Any]) -> list[Any] | None:
+    """The rules a job receives: its own, else those of the last `extends` template setting them."""
+    if "rules" in job:
+        return list(job["rules"])
+    extends = job.get("extends", [])
+    templates = [extends] if isinstance(extends, str) else list(extends)
+    for name in reversed(templates):
+        if "rules" in pipeline[name]:
+            return list(pipeline[name]["rules"])
+    return None
+
+
+@pytest.mark.parametrize(
+    ("job_name", "required_paths"),
+    [
+        ("integration-shards", {"apps/api/**/*", "migrations/**/*", "packages/contracts/**/*"}),
+        ("contract-responses", {"apps/api/**/*", "migrations/**/*", "packages/contracts/**/*"}),
+        ("web-tests", {"apps/web/**/*", "packages/contracts/**/*"}),
+        ("web-browser", {"apps/web/**/*", "packages/contracts/**/*"}),
+    ],
+)
+def test_path_filtered_suites_still_run_on_every_main_and_tag_pipeline(
+    job_name: str, required_paths: set[str]
+) -> None:
+    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
+    rules = _resolved_rules(pipeline, pipeline[job_name])
+    assert rules is not None, f"{job_name} has no rules"
+    # Order is the policy: skip schedules, then run unconditionally on main and tags, and only
+    # then consult the changed paths. A `changes` rule ahead of main would let it skip there.
+    assert rules[:3] == [_NOT_SCHEDULED, _MAIN, _TAG], job_name
+    assert len(rules) == 4, job_name
+    changes = rules[3]["changes"]
+    assert changes["compare_to"] == "refs/heads/main"
+    paths = set(changes["paths"])
+    assert ".gitlab-ci.yml" in paths, "a pipeline edit must exercise every suite"
+    assert required_paths <= paths, job_name
+
+
+def test_the_api_suite_is_not_path_filtered() -> None:
+    """Its unit tests read docs, scripts and web files, so no path list could be complete."""
+    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
+    assert _resolved_rules(pipeline, pipeline["api"]) == [_NOT_SCHEDULED, {"when": "on_success"}]
+
+
+@pytest.mark.parametrize(
+    "job_name", ["contracts", "security", "migrations", "compose-images-lock", "renovate-config"]
+)
+def test_cheap_guards_and_the_security_scan_run_on_every_pipeline(job_name: str) -> None:
+    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
+    assert _resolved_rules(pipeline, pipeline[job_name]) is None, job_name
+
+
+def test_only_feature_branch_pipelines_are_auto_cancelled() -> None:
+    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
+    workflow = pipeline["workflow"]
+    assert workflow["auto_cancel"] == {"on_new_commit": "interruptible"}
+    # main is exempt: each main pipeline is the post-merge record for its own merge.
+    assert workflow["rules"][0] == {**_MAIN, "auto_cancel": {"on_new_commit": "none"}}
+    assert workflow["rules"][-1] == {"when": "always"}
+    assert pipeline["default"]["interruptible"] is True
+
+
+def test_renovate_rebases_only_on_conflict_and_holds_majors_for_approval() -> None:
+    renovate = json.loads((_ROOT / "renovate.json").read_text(encoding="utf-8"))
+    assert renovate["rebaseWhen"] == "conflicted"
+    assert renovate["major"] == {"dependencyDashboardApproval": True}
