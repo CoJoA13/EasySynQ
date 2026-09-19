@@ -179,6 +179,12 @@ services:
   migrate:
     build: *api-build
     image: easysynq/api:${EASYSYNQ_IMAGE_TAG:-dev}
+    # The application containers run as a fixed non-root user and need no Linux capability.
+    # Dropping them all and forbidding privilege gain makes any setuid binary left in the
+    # image inert, independently of the images stripping those bits (container triage, #4).
+    # The proxy is excluded: Caddy binds 80/443.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     <<: *api-env
     command: ["uv", "run", "alembic", "upgrade", "head"]
     depends_on:
@@ -190,6 +196,8 @@ services:
   api:
     build: *api-build
     image: easysynq/api:${EASYSYNQ_IMAGE_TAG:-dev}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     <<: *api-env
     restart: unless-stopped
     depends_on:
@@ -221,6 +229,8 @@ services:
   worker:
     build: *api-build
     image: easysynq/api:${EASYSYNQ_IMAGE_TAG:-dev}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     <<: *api-env
     restart: unless-stopped
     command: ["uv", "run", "celery", "-A", "easysynq_api.tasks.app", "worker", "-l", "info"]
@@ -254,6 +264,8 @@ services:
   beat:
     build: *api-build
     image: easysynq/api:${EASYSYNQ_IMAGE_TAG:-dev}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     <<: *api-env
     restart: unless-stopped
     command: ["uv", "run", "celery", "-A", "easysynq_api.tasks.app", "beat", "-l", "info"]
@@ -271,6 +283,8 @@ services:
       context: ../../apps/web
       dockerfile: Dockerfile
     image: easysynq/web:${EASYSYNQ_IMAGE_TAG:-dev}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:5173').then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
