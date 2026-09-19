@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-12"
-baseline_commit: "b2885e1300ca1fb69a4ab0917301f344c9ed0e62"
-last_shipped_slice: "S-audit-required-witness-collection"
+as_of: "2026-09-18"
+baseline_commit: "9158a5dab6daff6a4ba7f9493f6588e9081eb835"
+last_shipped_slice: "S-audit-global-history-reconciliation"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 4181
+api_unit_tests: 4939
 web_test_files: 283
 web_tests: 2357
 contract_tests: 285
@@ -22,14 +22,17 @@ authority and it is not runtime discovery: binding decisions live in
 [`decisions-register.md`](decisions-register.md), while current deferred work lives only in
 [`open-residuals.md`](open-residuals.md).
 
-The verified shipped baseline is MR !45's merged main `b2885e1300ca1fb69a4ab0917301f344c9ed0e62`.
-Its [source](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2842482630) and
-[merged-main](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2842504738) pipelines passed
-all fourteen required jobs and all ten R84-era mandatory runtime cases. R84 is complete; the older
-candidate evidence below records its development chronology. Frontmatter counts describe this
-shipped baseline, including 4,181 API passes with one existing release-only skip and 2,357 web tests.
+The verified shipped baseline is MR !46's merged main `9158a5dab6daff6a4ba7f9493f6588e9081eb835`
+(a merge commit, not a squash; merged 2026-09-12). Its final
+[source pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843299684) at `7ee474e`
+and [merged-main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970)
+passed all fourteen required jobs, including all eleven mandatory runtime cases. R85 is complete;
+the candidate evidence below records its development chronology. Frontmatter counts are read from
+the merged-main job logs: **4,939 API passes** with one existing release-only skip, **2,357 web tests
+across 283 files**, 285 response-contract tests and **1,259 integration passes / 2 skips**. The
+2026-09-14 scheduled main pipeline on the same commit also passed.
 
-**Current candidate: S-audit-global-history-reconciliation (R85), September 12.** One inactive
+**Shipped: S-audit-global-history-reconciliation (R85), September 12.** One inactive
 entry point admits external enrollment, collects original R84 evidence, globally reconciles legacy
 bootstrap and v2 material/edges, checks the entire path at every required witness, and returns a
 compact result only after complete closure and owned cleanup. Its first supported success requires
@@ -48,7 +51,7 @@ plus a late conflict. Installed Python 3.12.14 / SQLite 3.40.1, 58 indexed plans
 resource/IPC controls, non-root/read-only execution and owned cleanup were verified.
 Complete independent branch review found no material issues. GitLab Duo completed its review
 without findings and disclosed partial diff coverage. MR
-[!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46) remains unmerged.
+[!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46) has since merged (above).
 Its first source pipeline passed thirteen jobs but the built-image security gate found two
 fix-available findings in a base runtime library. A targeted API-image package upgrade now
 passes a fresh scan with **zero blocking findings / 85 no-fix findings still OPEN**.
@@ -58,8 +61,6 @@ acceptance image filesystem layers, all 39 installed module identities, complete
 semantics and owned cleanup were independently checked. Existing limits remain unchanged.
 Current build digest: `67002eaaf7c5e8bc4f9f015b863ee1d8a4e7420adbe7dbeaa3995745d8c17672`;
 proof digest: `8c591a931c34fd8a9178b4d5d9fbd07ca11a072bf65d99ecae78b53f691e2aba`.
-Fresh GitLab source and merged-main gates remain pending.
-
 The subsequent source pipeline at `2113200` again passed thirteen required jobs, including all
 eleven runtime cases, and confirmed zero API-image blocking findings. Its web image had twelve
 newly fix-available base-package findings. Targeted web-image upgrades now pass a fresh scan with
@@ -67,7 +68,8 @@ newly fix-available base-package findings. Targeted web-image upgrades now pass 
 The exact scanned image ran its normal preview command offline as UID 1000 on Node 26.8.2 /
 npm 11.19.1. The page, SPA fallback and all 29 referenced JS/CSS assets matched packaged bytes; package
 checks and owned cleanup passed. Application locks and API build/proof inputs are unchanged.
-Fresh source and merged-main GitLab gates remain required for this web-image update.
+The final source and merged-main pipelines above confirmed both image thresholds: **API zero
+blocking / 85 no-fix OPEN, web zero blocking / 43 no-fix OPEN**.
 
 The first full check's 56 failures were attributed to a new test leaking a synthetic reader
 across teardown and older CLI fixtures depending on host file permissions. Both test-only
@@ -75,15 +77,14 @@ fixes passed their focused regressions and the fresh complete check above. Dated
 receipts remain evidence for their recorded inputs; they are not substituted for this run.
 [Dated evidence](slice-history.md#s-audit-global-history-reconciliation--bounded-global-closure) and
 [the approved design](superpowers/specs/2026-09-12-audit-global-history-reconciliation-design.md)
-state the exact limits and evidence scope. Candidate results do not replace the shipped baseline.
+state the exact limits and evidence scope.
 
 No operational consumer, enrollment, signing, IAM, deployment or restore was activated. A consistent
 observed history leaves database agreement, provider non-omission, custody, freshness/rollback
 memory, delivery, key activation and source-independent recovery unproved. Issue #3 remains open
 at 3/5; the historical runtime failure, Testcontainers warnings, MinIO permission limitation and
-85 API / 43 web no-fix security findings retain their existing open records. The API count is
-confirmed by the source pipeline at `2113200`; the web count is from the fresh local updated-image
-scan. Passing the fixed-version threshold is not image-security clearance.
+85 API / 43 web no-fix security findings retain their existing open records. Both counts are
+confirmed by the merged-main security job. Passing the fixed-version threshold is not image-security clearance.
 
 A recovery reconciliation completed on 2026-09-08 against
 `6077e8a45b5942daf803220765b326f82ddd4417`. Server-verified staged upload digests, the non-root API
@@ -300,7 +301,7 @@ non-omission, custody, freshness/rollback memory, key delivery/activation and in
 remain open. No migration, dependency version, live IAM, deployment or restore is changed.
 
 Those earlier local candidate runs did not define a shipped baseline. Current frontmatter now
-records the verified R84 merge; the R85 candidate above awaits its own complete integration gates.
+records the verified R85 merge above.
 
 Other full-stack counts are inherited from
 [MR !26](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/26)'s source pipeline
@@ -553,6 +554,16 @@ enforced by the executable catalog assertion in `apps/api/tests/unit/test_authz.
 set is defined by the headings and self-range declarations in [`decisions-register.md`](decisions-register.md).
 
 ## Verification baseline
+
+Fresh 2026-09-18 evidence for S-audit-global-history-reconciliation (R85, MR !46), read from job logs
+rather than inferred. It moves `api_unit_tests` 4,181 → **4,939** (+758), measured in the R84
+[merged-main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2842504738) and the
+R85 [merged-main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970), and
+the mandatory runtime cases 10 → **11**, which is not a frontmatter field. Web (283 files / 2,357
+tests), Playwright Chromium (80), response contracts (285) and integration (1,259 passed / 2 skipped)
+were measured again at the same values. `uv run alembic heads` still reports
+`0092_user_color_scheme (head)`; the slice adds no migration, permission key or contract change. CI
+topology is unchanged (12 defined jobs, 14 branch instances).
 
 S-audit-external-trust was checked on 2026-09-08 against source base
 `98357eaebcc653dea234abdf8efd774cddc7b54a`. Local API units passed **2,333 with two existing opt-in
