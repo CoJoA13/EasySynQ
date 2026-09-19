@@ -302,7 +302,7 @@ class Settings(BaseSettings):
     # syslog channel: a unix socket path ("/dev/log") or "host:port" for a UDP collector. Empty ⇒
     # the channel is inert (reports "skipped").
     # ⚠ Deliberately EMPTY by default, not "/dev/log": the worker/beat images are
-    # python:3.12-slim-bookworm with no syslog daemon, and the shipped Compose services do not
+    # python:3.12-slim-trixie with no syslog daemon, and the shipped Compose services do not
     # bind-mount the host socket — so a "/dev/log" default would look configured and reliably fail.
     # Either bind-mount /dev/log into worker AND beat (see runbooks/backup-restore.md) or point this
     # at a collector reachable from the container.

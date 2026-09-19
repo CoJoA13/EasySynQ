@@ -3,7 +3,7 @@
 #   /app/alembic.ini  + script_location %(here)s/../../migrations -> /migrations
 # Build with:  docker build -f apps/api/Dockerfile -t easysynq/api .   (from repo root)
 
-FROM python:3.12-slim-bookworm AS base
+FROM python:3.12-slim-trixie AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     EASYSYNQ_MIGRATIONS_DIR=/migrations
@@ -11,7 +11,7 @@ ENV PYTHONUNBUFFERED=1 \
 # to match the postgres:18 server in infra/images.lock. pg_dump REFUSES a newer server outright, so
 # a stale client here breaks the worker's drill in the container while CI (which runs from source
 # with the host's own client) stays green. Via the PGDG apt repo
-# (bookworm ships only client-15); build-time only, so air-gapped *installs* are unaffected (the
+# (trixie ships only client-17); build-time only, so air-gapped *installs* are unaffected (the
 # image is pre-built). Only the worker runs the drill; the shared image carries it for both.
 # S-ing-1: libmagic1 — the system lib python-magic content-sniffs imported files with (doc 09 §4.1).
 # Refresh the base runtime PCRE2 library explicitly; unrelated installs can leave it stale.
@@ -22,7 +22,7 @@ RUN apt-get update \
     && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
-https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+https://apt.postgresql.org/pub/repos/apt trixie-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends postgresql-client-18 libmagic1 \
     && apt-get purge -y curl gnupg \

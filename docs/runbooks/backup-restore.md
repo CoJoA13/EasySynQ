@@ -55,7 +55,7 @@ org email flag and the recipient's own preferences).
 > `OPS_ALERT_CHANNELS` to a comma-separated subset of `syslog,smtp,webhook` (see `.env.example`):
 >
 > * `syslog` → `OPS_ALERT_SYSLOG_ADDRESS`. ⚠ **Empty by default, and there is no working `/dev/log`
->   in the shipped Compose deployment** — `worker` and `beat` run `python:3.12-slim-bookworm` with no
+>   in the shipped Compose deployment** — `worker` and `beat` run `python:3.12-slim-trixie` with no
 >   syslog daemon, and neither bind-mounts the host socket, so a `/dev/log` value would look
 >   configured and reliably fail. Either point it at a collector reachable from the container
 >   (`syslog.internal:514`), or mount the host journald socket into **both** `worker` and `beat` —
