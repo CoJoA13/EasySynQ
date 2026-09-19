@@ -107,6 +107,11 @@ This supplies observed-history consistency only; no archive generation, actual d
 comparison, independent custody/delivery, protected rollback memory or source-denied recovered-stack
 boot/content-read proof is added. The closure contract and issue #3 remain OPEN. See
 [current status](current-status.md) for candidate integration state. Last reviewed: 2026-09-12.
+Delivery, 2026-09-18: MR [!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46) merged R85 on 2026-09-12 as `9158a5d`; its final
+[source](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843299684) and
+[merged-main](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970) pipelines passed all fourteen required jobs,
+including eleven mandatory runtime cases. Nothing above is activated
+or changed by the merge; this record stays OPEN. Last reviewed: 2026-09-18.
 
 ## RES-CONTAINER-SECURITY-TRIAGE
 
@@ -149,7 +154,13 @@ and offline preview/page/SPA checks plus all 29 referenced JS/CSS assets on that
 the npm pin, application locks and scanner policy remain unchanged; owned cleanup was verified.
 API no-fix findings remain 85, with its build/proof inputs unchanged. Fresh source/main gates are
 still required; this progress does not close the residual or establish image-security clearance.
-Last reviewed: 2026-09-12
+Delivery, 2026-09-18: Both updates merged with R85 in
+[!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46). The final
+[source](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843299684) and
+[merged-main](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970) security jobs report
+API zero blocking / 85 no-fix OPEN and web zero blocking / 43 no-fix OPEN. The no-fix findings are
+untriaged, so this record and issue #4 stay OPEN.
+Last reviewed: 2026-09-18
 
 ## RES-IP-REGISTER-COLUMN-JUMP
 
@@ -525,6 +536,11 @@ controls, eleven-case actual-image acceptance and owned cleanup passed. This is 
 observed-history foundation; actual DB-chain agreement, non-omission/atomicity, protected custody/
 rollback memory, durable delivery and operational/restore integration remain required. This record
 stays OPEN; [current status](current-status.md) tracks candidate delivery. Last reviewed: 2026-09-12.
+Delivery, 2026-09-18: MR [!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46) merged R85 on 2026-09-12 as `9158a5d`; its final
+[source](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843299684) and
+[merged-main](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970) pipelines passed all fourteen required jobs,
+including eleven mandatory runtime cases. The foundation remains
+inactive; this record stays OPEN. Last reviewed: 2026-09-18.
 
 ## RES-MINIO-VERSION-LIST-DENY
 
@@ -650,6 +666,11 @@ image and independent scale controls passed. No key is activated, delivered or l
 protected rollback knowledge, independent transition delivery/activation confirmation and real
 rotation/pre-rotation restore proof remain open under the unchanged closure contract. Candidate
 integration is tracked in [current status](current-status.md). Last reviewed: 2026-09-12.
+Delivery, 2026-09-18: MR [!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46) merged R85 on 2026-09-12 as `9158a5d`; its final
+[source](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843299684) and
+[merged-main](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970) pipelines passed all fourteen required jobs,
+including eleven mandatory runtime cases. No key is activated;
+this record stays OPEN. Last reviewed: 2026-09-18.
 
 ## RES-RISK-CLAUSE-PICKER
 

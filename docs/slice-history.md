@@ -360,6 +360,21 @@ source-independent recovery. Related residuals and issue #3 remain OPEN. The his
 acceptance failure is not attributed or closed by this later green run; no live IAM, enrollment,
 activation, deployment, restore or cutover occurred.
 
+**Delivery, recorded 2026-09-18.** MR
+[!46](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/46) merged on 2026-09-12 as merge
+commit `9158a5dab6daff6a4ba7f9493f6588e9081eb835` (no squash), with head `7ee474e`. Its final
+[source pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843299684) and
+[merged-main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970) passed
+all fourteen required jobs; the 2026-09-14 scheduled main pipeline on the same commit also passed.
+Merged-main job logs report **4,939 API passes / one release-only skip**, `mandatory_tests=11`
+with runtime acceptance passed, **2,357 web tests across 283 files**, **80 Chromium tests**, **285
+response-contract tests** and **1,259 integration passes / 2 skips**. Against the R84 merged-main
+logs this is API 4,181 → 4,939 and runtime cases 10 → 11, with every other figure unchanged. The
+security job reported **API zero blocking / 85 no-fix OPEN** and **web zero blocking / 43 no-fix
+OPEN**, a fixed-version threshold pass rather than image-security clearance. No migration (head stays
+`0092`), permission key, seed or contract changed. The earlier two source pipelines at `6ad3d2e` and
+`2113200` failed only on the image-security findings described above.
+
 ### S-audit-required-witness-collection — fresh bounded traversal diagnostics
 
 **2026-09-11; all ten mandatory runtime cases verified, integration gates pending.** The starting R83
