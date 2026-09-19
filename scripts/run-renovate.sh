@@ -21,7 +21,7 @@ install_node 24.21.0 "$tools_dir/node24"
 renovate_node="$tools_dir/node24/bin/node"
 export PATH="$tools_dir/node24/bin:$PATH"
 # Lifecycle scripts are disabled: dependencies come from npm, without native-addon GitHub installers.
-npm install --prefix "$tools_dir/renovate" --ignore-scripts --no-audit --no-fund renovate@44.79.6
+npm install --prefix "$tools_dir/renovate" --ignore-scripts --no-audit --no-fund renovate@44.85.0
 renovate_dist="$tools_dir/renovate/node_modules/renovate/dist"
 
 if [ "$mode" = validate ]; then
