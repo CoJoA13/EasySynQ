@@ -169,6 +169,16 @@ mandatory runtime cases** passed in 582 seconds and **4,939 API unit tests** pas
 proof enabled. The remaining findings are the base-OS set both images now share. Their
 applicability triage belongs in a confidential GitLab issue rather than in Git, and the record and
 issue #4 stay OPEN until that triage and any justified dispositions exist.
+Progress, 2026-09-19 (merged and candidate): !51 merged the trixie base. The remaining findings
+reduce to eight base-OS CVEs; their per-package applicability triage is in confidential issue #5,
+outside Git under R61. None is reachable in the shipped configuration, and none is risk-accepted.
+The triage also found that the shipped Compose services set no capability or privilege-gain limits,
+and that both images carried setuid/setgid tools. The candidate hardening clears those bits in both
+images and runs `migrate`, `api`, `worker`, `beat` and `web` with `cap_drop: [ALL]` and
+`no-new-privileges`. The proxy keeps its bind capability. A live stack under those settings passed
+health checks, a verified encrypted backup, the restore drill and a mirror rebuild. Scanner counts
+are unchanged, because this removes attack surface rather than packages. This record and issue #4
+stay OPEN until Debian fixes land or the dispositions are otherwise closed.
 Last reviewed: 2026-09-19
 
 ## RES-IP-REGISTER-COLUMN-JUMP

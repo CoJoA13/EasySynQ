@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 def _repo_root() -> Path:
@@ -74,6 +75,30 @@ def test_api_image_runs_unprivileged_and_owns_its_volume_mount_points() -> None:
 
 def test_web_image_runs_unprivileged() -> None:
     assert "USER node" in _instructions(_read("apps/web/Dockerfile"))
+
+
+_CLEAR_SETUID = "&& find / -xdev -perm /6000 -type f -exec chmod a-s {} +"
+_APP_SERVICES = ("migrate", "api", "worker", "beat", "web")
+
+
+@pytest.mark.parametrize("dockerfile", ["apps/api/Dockerfile", "apps/web/Dockerfile"])
+def test_images_clear_setuid_and_setgid_bits(dockerfile: str) -> None:
+    """The base's setuid tools (mount, su, passwd, ...) are the privilege-gain path (#4)."""
+    instructions = _instructions(_read(dockerfile))
+    assert _CLEAR_SETUID in instructions
+    # Before USER: an unprivileged `find` could not clear root-owned bits and would pass silently.
+    assert instructions.index(_CLEAR_SETUID) < next(
+        index for index, line in enumerate(instructions) if line.startswith("USER ")
+    )
+
+
+def test_app_services_drop_capabilities_and_forbid_privilege_gain() -> None:
+    services = yaml.safe_load(_read("infra/compose/compose.yml"))["services"]
+    for name in _APP_SERVICES:
+        assert services[name]["cap_drop"] == ["ALL"], name
+        assert services[name]["security_opt"] == ["no-new-privileges:true"], name
+    # Caddy binds 80/443 and keeps its capability; dropping ALL there breaks the edge.
+    assert "cap_drop" not in services["proxy"]
 
 
 def test_the_api_user_has_a_fixed_uid() -> None:
@@ -378,6 +403,25 @@ def test_the_built_api_image_is_unprivileged_and_starts_offline() -> None:
             check=True,
         )
         assert uid.stdout.strip() == "10001"
+
+        # The sentinel proves `find` completed; without it an empty listing could mean it never ran.
+        privileged = subprocess.run(  # noqa: S603 - resolved binary, image built above
+            [
+                docker,
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                tag,
+                "sh",
+                "-c",
+                "find / -xdev -perm /6000 -type f 2>/dev/null; echo FIND_DONE",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert privileged.stdout.split() == ["FIND_DONE"], privileged.stdout
 
         offline = subprocess.run(  # noqa: S603 - resolved binary, image built above
             [docker, "run", "--rm", "--network", "none", tag, "uv", "run", "alembic", "--version"],

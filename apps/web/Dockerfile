@@ -15,9 +15,12 @@ RUN apt-get update \
 # to seed and nothing an existing install has to migrate.
 # Track the base's bundled package manager separately from application dependencies.
 # Only the global tooling update needs root; the application install/build stays unprivileged.
+# The base's setuid/setgid tools (mount, su, passwd, …) are never used by the preview server;
+# clearing those bits removes the privilege-gain path under any orchestrator (#4).
 RUN npm install --global --ignore-scripts npm@11.19.1 \
     && npm cache clean --force \
-    && mkdir -p /app && chown node:node /app
+    && mkdir -p /app && chown node:node /app \
+    && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
 USER node
 WORKDIR /app
 COPY --chown=node:node package.json package-lock.json ./
