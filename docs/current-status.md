@@ -1135,10 +1135,15 @@ PostgreSQL MCP, CI-hardening and Compose-image-lock guards before dependency hyd
 checks prove tracked interfaces and failure propagation; they do not emulate a developer host or
 live application stack. The retired Fedora bootstrap/proof is not part of the current pipeline.
 
-`.gitlab-ci.yml` defines **12** jobs. An ordinary branch pipeline executes **14** instances:
+`.gitlab-ci.yml` defines **12** jobs. A main pipeline executes **14** instances:
 `integration-shards` expands to four, `web-tests` to two, and schedule-only `renovate` and tag-only
-`release-gate` are omitted. A normal scheduled main pipeline adds Renovate for **15** instances;
-a `v*` tag pipeline adds the release gate instead. There are no GitHub-style aggregator jobs:
+`release-gate` are omitted. A `v*` tag pipeline runs the same set and adds the release gate. A
+feature-branch pipeline runs `integration-shards` and `contract-responses` only when API-side inputs
+differ from main, and `web-tests` and `web-browser` only when `apps/web` or the contract differs;
+editing `.gitlab-ci.yml` runs all of them. `api`, `security`, `migrations`, `contracts` and the two
+configuration guards run on every branch pipeline. A scheduled pipeline runs only Renovate, the
+security scan and the cheap guards, **6** instances. A newer commit cancels an older feature-branch
+pipeline; main pipelines are never auto-cancelled. There are no GitHub-style aggregator jobs:
 GitLab's successful-pipeline merge requirement gates the entire pipeline. `web-browser` runs the
 Chromium suite and retains ignored failure diagnostics for seven days. `renovate-config` runs
 strict repository configuration validation on every branch using the same image as the updater.

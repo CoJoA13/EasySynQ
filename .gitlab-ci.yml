@@ -29,6 +29,78 @@ variables:
   GIT_DEPTH: "20"
   NODE_VERSION: "26"
 
+# ---------------------------------------------------------------- compute budget
+#
+# A full pipeline costs about an hour of runner time, and the monthly quota is finite. Three
+# mechanisms keep that spend on work that can find something, without weakening a gate:
+#
+#  * A newer commit on a feature branch cancels that branch's older pipeline. main is exempt:
+#    every main pipeline is the post-merge record for its own merge and must finish.
+#  * Scheduled pipelines exist to run Renovate. They keep the cheap guards and the security scan
+#    (new advisories land without a commit) and skip the suites a merge to main already ran.
+#  * On a feature branch, a suite runs only when a path it reads differs from main. main and tag
+#    pipelines run every suite unconditionally, so a path list that is too narrow is caught at
+#    merge at the latest. `api`, `security`, `migrations`, `contracts` and the config guards stay
+#    unconditional: the API unit suite reads docs, scripts and web files across the repository.
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      auto_cancel:
+        on_new_commit: none
+    - when: always
+
+default:
+  interruptible: true
+
+# Everything the API-side suites read. Integration and contract tests reach outside apps/api only
+# for packages/contracts, infra (images.lock, compose) and VERSION; scripts/ is included because the
+# suites shell out to repository tooling. Err wide: a stray match costs minutes, a miss costs a gate.
+.changes-api-suites: &changes-api-suites
+  - .gitlab-ci.yml
+  - .dockerignore
+  - .env.example
+  - VERSION
+  - apps/api/**/*
+  - migrations/**/*
+  - infra/**/*
+  - packages/contracts/**/*
+  - scripts/**/*
+
+# The SPA is self-contained under apps/web (its generated API types are committed there, and the
+# contracts job proves they match the contract), so web suites follow apps/web and the contract.
+.changes-web-suites: &changes-web-suites
+  - .gitlab-ci.yml
+  - apps/web/**/*
+  - packages/contracts/**/*
+
+.rules-api-suites:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+    - changes:
+        paths: *changes-api-suites
+        compare_to: refs/heads/main
+
+.rules-web-suites:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+    - changes:
+        paths: *changes-web-suites
+        compare_to: refs/heads/main
+
+.rules-not-scheduled:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
+
 # ---------------------------------------------------------------- shared fragments
 
 .node:
@@ -114,7 +186,7 @@ contracts:
 
 contract-responses:
   stage: check
-  extends: [.uv, .dind]
+  extends: [.uv, .dind, .rules-api-suites]
   timeout: 20m
   before_script: *docker-cli
   script:
@@ -123,7 +195,7 @@ contract-responses:
 
 api:
   stage: check
-  extends: [.uv, .dind]
+  extends: [.uv, .dind, .rules-not-scheduled]
   before_script: *docker-cli
   script:
     - bash scripts/tests/test-contributor-hosting.sh
@@ -205,7 +277,7 @@ migrations:
 
 integration-shards:
   stage: check
-  extends: [.uv, .dind]
+  extends: [.uv, .dind, .rules-api-suites]
   parallel: 4
   timeout: 40m
   before_script:
@@ -235,7 +307,7 @@ integration-shards:
 
 web-tests:
   stage: check
-  extends: .node
+  extends: [.node, .rules-web-suites]
   parallel: 2
   script:
     - cd "$CI_PROJECT_DIR/apps/web" && npm ci
@@ -245,7 +317,7 @@ web-tests:
 
 web-browser:
   stage: check
-  extends: .node
+  extends: [.node, .rules-web-suites]
   script:
     - cd "$CI_PROJECT_DIR/apps/web" && npm ci
     - npx playwright install --with-deps chromium

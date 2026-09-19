@@ -6,6 +6,10 @@
   "timezone": "America/Chicago",
   "prConcurrentLimit": 5,
   "prHourlyLimit": 0,
+  "rebaseWhen": "conflicted",
+  "major": {
+    "dependencyDashboardApproval": true
+  },
   "semanticCommits": "disabled",
   "labels": [
     "dependencies"
