@@ -71,6 +71,16 @@
       "groupName": "contract-tools-minor-patch"
     },
     {
+      "description": "js-yaml majors are refused: js-yaml reaches this toolchain through openapi-typescript -> @redocly/openapi-core, which declares an exact js-yaml 4.3.0 and calls js_yaml.types.merge. That export is gone in js-yaml 5, so the module throws at load and contract generation produces nothing, while redocly lint still passes (closed MR !7). The override exists to keep Redocly off the vulnerable 4.3.0 and stays at a patched 4.x; revisit when @redocly/openapi-core itself supports js-yaml 5.",
+      "matchPackageNames": [
+        "js-yaml"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
       "description": "reportlab is capped <5 \u2014 stamp_controlled_copy's byte-determinism depends on reportlab invariant mode; a v5 bump needs dedicated byte-output verification, not an auto-merge (closed PR #271). Minor/patch within 4.x still flow.",
       "matchPackageNames": [
         "reportlab"
