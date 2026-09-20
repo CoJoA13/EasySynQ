@@ -179,6 +179,13 @@ images and runs `migrate`, `api`, `worker`, `beat` and `web` with `cap_drop: [AL
 health checks, a verified encrypted backup, the restore drill and a mirror rebuild. Scanner counts
 are unchanged, because this removes attack surface rather than packages. This record and issue #4
 stay OPEN until Debian fixes land or the dispositions are otherwise closed.
+Delivery, 2026-09-19: The hardening merged in
+[!52](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/52) (squash `c5cc68d`). The
+[merged-main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2863960314) at `6017f1a`
+passed all fourteen jobs, with eleven mandatory runtime cases and a security job reporting API 0
+blocking / 47 no-fix and web 0 / 43. Remaining to close: the Debian fixes for the eight triaged CVEs,
+and an optional read-only root filesystem for the application services, which needs a writable-path
+inventory and is not done.
 Last reviewed: 2026-09-19
 
 ## RES-IP-REGISTER-COLUMN-JUMP
