@@ -31,28 +31,67 @@ variables:
 
 # ---------------------------------------------------------------- compute budget
 #
-# A full pipeline costs about an hour of runner time, and the monthly quota is finite. Three
-# mechanisms keep that spend on work that can find something, without weakening a gate:
+# A full pipeline costs about an hour of runner time and the monthly quota is finite, so each
+# pipeline runs what can still find something, without weakening a gate:
 #
-#  * A newer commit on a feature branch cancels that branch's older pipeline. main is exempt:
-#    every main pipeline is the post-merge record for its own merge and must finish.
-#  * Scheduled pipelines exist to run Renovate. They keep the cheap guards and the security scan
-#    (new advisories land without a commit) and skip the suites a merge to main already ran.
-#  * On a feature branch, a suite runs only when a path it reads differs from main. main and tag
-#    pipelines run every suite unconditionally, so a path list that is too narrow is caught at
-#    merge at the latest. `api`, `security`, `migrations`, `contracts` and the config guards stay
-#    unconditional: the API unit suite reads docs, scripts and web files across the repository.
+#  * Merge requests run MERGED-RESULTS pipelines (project setting), and the merge method requires
+#    the source to be rebased onto main first. The MR pipeline therefore tests the exact tree main
+#    receives, and it is the evidence for a merge. Plain branch pushes run nothing: the MR pipeline
+#    covers them without a duplicate.
+#  * A main pipeline after a merge re-runs only the cheap guards, migrations and the security scan.
+#    The suites already passed on this exact tree in its merged-results pipeline.
+#  * In an MR, a suite runs only when a path it reads differs from main. Editing this file runs
+#    every suite. A docs-only MR (only docs/** or root *.md) runs the guards plus `docs-tests`, the
+#    unit tests that read documentation. `docs-tests` runs only in docs-only MRs: every other
+#    pipeline that runs tests runs the full `api` unit suite, which already contains it. `.changes-code` must cover every other tracked path; a unit
+#    test enforces that, so a new top-level file can never fall into the docs-only lane.
+#  * Tags and manually started pipelines (Run pipeline, API, trigger) run every suite, which gives
+#    main a full run on demand. Schedules run Renovate, the security scan and the cheap guards.
+#  * A newer commit cancels an older MR pipeline. main pipelines are never auto-cancelled.
 workflow:
   auto_cancel:
     on_new_commit: interruptible
   rules:
+    - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       auto_cancel:
         on_new_commit: none
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: never
     - when: always
 
 default:
   interruptible: true
+
+# Every tracked path outside the docs-only lane (docs/** and root-level *.md). Only two forms are
+# allowed, `<dir>/**/*` and an exact root file name, so the coverage test can check it exactly.
+.changes-code: &changes-code
+  - .claude/**/*
+  - .github/**/*
+  - .gitlab/**/*
+  - .impeccable/**/*
+  - .superpowers/**/*
+  - apps/**/*
+  - infra/**/*
+  - migrations/**/*
+  - mockup/**/*
+  - packages/**/*
+  - scripts/**/*
+  - .dockerignore
+  - .editorconfig
+  - .env.example
+  - .gitattributes
+  - .gitignore
+  - .gitlab-ci.yml
+  - .mcp.json
+  - .node-version
+  - .pre-commit-config.yaml
+  - LICENSE
+  - VERSION
+  - justfile
+  - renovate-self-hosted.cjs
+  - renovate.json
+  - ruff.toml
 
 # Everything the API-side suites read. Integration and contract tests reach outside apps/api only
 # for packages/contracts, infra (images.lock, compose) and VERSION; scripts/ is included because the
@@ -77,27 +116,62 @@ default:
 
 .rules-api-suites:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-      when: never
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
-    - changes:
+    - if: $CI_PIPELINE_SOURCE =~ /^(web|api|trigger)$/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
         paths: *changes-api-suites
         compare_to: refs/heads/main
 
 .rules-web-suites:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-      when: never
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
-    - changes:
+    - if: $CI_PIPELINE_SOURCE =~ /^(web|api|trigger)$/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
         paths: *changes-web-suites
         compare_to: refs/heads/main
 
-.rules-not-scheduled:
+# The API unit suite reads files across the repository, so it runs for any non-docs change.
+.rules-code:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE =~ /^(web|api|trigger)$/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        paths: *changes-code
+        compare_to: refs/heads/main
+
+# The same, plus every post-merge main pipeline: cheap enough to keep as a merge backstop.
+.rules-code-and-main:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE =~ /^(web|api|trigger)$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        paths: *changes-code
+        compare_to: refs/heads/main
+
+# The security scan also runs on schedules: new advisories land without a commit.
+.rules-security:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE =~ /^(web|api|trigger|schedule)$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        paths: *changes-code
+        compare_to: refs/heads/main
+
+# The docs-only lane: runs exactly when an MR changes nothing in `.changes-code`.
+.rules-docs-only:
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "merge_request_event"
+      when: never
+    - changes:
+        paths: *changes-code
+        compare_to: refs/heads/main
       when: never
     - when: on_success
 
@@ -195,7 +269,7 @@ contract-responses:
 
 api:
   stage: check
-  extends: [.uv, .dind, .rules-not-scheduled]
+  extends: [.uv, .dind, .rules-code]
   before_script: *docker-cli
   script:
     - bash scripts/tests/test-contributor-hosting.sh
@@ -257,7 +331,7 @@ api:
 
 migrations:
   stage: check
-  extends: .uv
+  extends: [.uv, .rules-code-and-main]
   services:
     - name: postgres:18
       alias: postgres
@@ -274,6 +348,27 @@ migrations:
     - uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head
     - uv run pytest tests/migration
     - uv run alembic check
+
+# The docs-only lane. Selection is by content, not a list: every unit test file that names a
+# documentation path runs, so a new docs-reading test joins the lane automatically. An empty
+# selection fails the job rather than passing it vacuously.
+docs-tests:
+  stage: check
+  extends: [.uv, .rules-docs-only]
+  script:
+    - cd "$CI_PROJECT_DIR/apps/api" && uv sync --frozen
+    - *unprivileged-user
+    - >-
+      runuser -u ci -- env HOME="$CI_PROJECT_DIR/.ci-home" PATH="$PATH"
+      sh -c 'cd "$CI_PROJECT_DIR/apps/api" &&
+      files="$(grep -rlE "$DOCS_TEST_PATTERN" tests/unit --include="test_*.py" | sort)" &&
+      test -n "$files" &&
+      uv run pytest $files -m unit'
+  variables:
+    # Two alternatives are quote-anchored on purpose: `"docs"` matches a quoted path segment
+    # (ROOT / "docs" / ...) without matching every identifier containing "docs", and `\.md"`
+    # matches any quoted *.md path. Do not "balance" the quotes; a unit test pins the selection.
+    DOCS_TEST_PATTERN: '"docs"|docs/|README|AGENTS|CLAUDE|CONTRIBUTING|LICENSING|PRODUCT\.md|\.md"'
 
 integration-shards:
   stage: check
@@ -331,7 +426,7 @@ web-browser:
 
 security:
   stage: check
-  extends: [.uv, .dind]
+  extends: [.uv, .dind, .rules-security]
   # npm high/critical findings and built-image fix-available HIGH/CRITICAL findings are GATED.
   # No-fix image findings remain OPEN; pip-audit, filesystem and image secrets stay advisory.
   # Operational failures fail the job and block merging; a never-ran scan cannot read green.

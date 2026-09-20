@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -318,16 +321,19 @@ def test_gitlab_pipeline_preserves_complete_hard_fail_gates() -> None:
         assert job.get("allow_failure") is not True, f"{name} is allowed to fail"
 
 
-def test_gitlab_migrations_job_runs_the_complete_suite_unconditionally() -> None:
+def test_gitlab_migrations_job_runs_the_complete_suite_without_escape_hatches() -> None:
     pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
     migrations = pipeline["migrations"]
     command = "uv run pytest tests/migration"
 
     assert migrations["script"].count(command) == 1
     assert not any("pytest tests/migration/" in entry for entry in migrations["script"])
+    assert migrations["extends"] == [".uv", ".rules-code-and-main"]
     for job in (migrations, pipeline[".uv"]):
         for bypass in ("allow_failure", "rules", "when", "only", "except"):
             assert bypass not in job, f"migrations gate cannot inherit {bypass}"
+    # Its only conditions are the reviewed template, pinned by the compute-budget tests below.
+    assert all("when" not in rule for rule in pipeline[".rules-code-and-main"]["rules"])
 
 
 def test_the_gitlab_image_runtime_proof_runs_in_the_job_that_can_fail_a_merge() -> None:
@@ -470,10 +476,12 @@ def test_gitlab_security_gates_both_built_images_after_the_live_npm_gate() -> No
     """A base scan or a conditional runner must not substitute for built-artifact evidence."""
     pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
     security = pipeline["security"]
-    assert security["extends"] == [".uv", ".dind"]
+    assert security["extends"] == [".uv", ".dind", ".rules-security"]
     for job in [security, pipeline[".uv"], pipeline[".dind"]]:
         for escape in ("allow_failure", "rules", "when", "only", "except"):
             assert escape not in job, f"security gate cannot inherit {escape}"
+    # Its only conditions are the reviewed template, pinned by the compute-budget tests below.
+    assert all("when" not in rule for rule in pipeline[".rules-security"]["rules"])
 
     script = security["script"]
     required = [
@@ -504,11 +512,16 @@ def test_gitlab_security_gates_both_built_images_after_the_live_npm_gate() -> No
     assert "TRIVY_JAVA_DB_REPOSITORY=docker.io/aquasec/trivy-java-db:1" in setup
 
 
-# --- compute budget: path rules may narrow branch pipelines, never main or tags ---------------
+# --- compute budget: MRs are narrowed by path, never tags or manual runs ------------------------
 
-_MAIN = {"if": "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"}
 _TAG = {"if": "$CI_COMMIT_TAG"}
-_NOT_SCHEDULED = {"if": '$CI_PIPELINE_SOURCE == "schedule"', "when": "never"}
+_MANUAL = {"if": "$CI_PIPELINE_SOURCE =~ /^(web|api|trigger)$/"}
+_MAIN_PUSH = {"if": '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'}
+_MR = '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+
+def _pipeline() -> dict[str, Any]:
+    return yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
 
 
 def _resolved_rules(pipeline: dict[str, Any], job: dict[str, Any]) -> list[Any] | None:
@@ -523,54 +536,144 @@ def _resolved_rules(pipeline: dict[str, Any], job: dict[str, Any]) -> list[Any] 
     return None
 
 
+def _mr_changes(rule: dict[str, Any]) -> list[str]:
+    assert rule["if"] == _MR
+    assert rule["changes"]["compare_to"] == "refs/heads/main"
+    assert "when" not in rule
+    return list(rule["changes"]["paths"])
+
+
+def _is_docs_only(path: str) -> bool:
+    return path.startswith("docs/") or ("/" not in path and path.endswith(".md"))
+
+
+def _covered_by(path: str, patterns: list[str]) -> bool:
+    for pattern in patterns:
+        if pattern.endswith("/**/*"):
+            if path.startswith(pattern[: -len("**/*")]):
+                return True
+        else:
+            assert "*" not in pattern, f"only <dir>/**/* or exact root files: {pattern}"
+            if path == pattern:
+                return True
+    return False
+
+
+def test_every_non_docs_path_is_code_for_the_ci_rules() -> None:
+    """A tracked file outside docs/ and root *.md must never fall into the docs-only lane."""
+    git = shutil.which("git")
+    assert git is not None
+    tracked = subprocess.run(  # noqa: S603 - resolved binary, fixed arguments
+        [git, "ls-files"], cwd=_ROOT, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    assert len(tracked) > 1000
+    code = list(_pipeline()[".changes-code"])
+    uncovered = [
+        path for path in tracked if not _is_docs_only(path) and not _covered_by(path, code)
+    ]
+    assert uncovered == []
+    assert not any(_is_docs_only(path) and _covered_by(path, code) for path in tracked)
+
+
 @pytest.mark.parametrize(
-    ("job_name", "required_paths"),
+    ("job_name", "anchor", "required_paths"),
     [
-        ("integration-shards", {"apps/api/**/*", "migrations/**/*", "packages/contracts/**/*"}),
-        ("contract-responses", {"apps/api/**/*", "migrations/**/*", "packages/contracts/**/*"}),
-        ("web-tests", {"apps/web/**/*", "packages/contracts/**/*"}),
-        ("web-browser", {"apps/web/**/*", "packages/contracts/**/*"}),
+        ("integration-shards", ".changes-api-suites", {"apps/api/**/*", "migrations/**/*"}),
+        ("contract-responses", ".changes-api-suites", {"apps/api/**/*", "packages/contracts/**/*"}),
+        ("web-tests", ".changes-web-suites", {"apps/web/**/*", "packages/contracts/**/*"}),
+        ("web-browser", ".changes-web-suites", {"apps/web/**/*", "packages/contracts/**/*"}),
+        ("api", ".changes-code", {"apps/**/*", "scripts/**/*", "infra/**/*"}),
     ],
 )
-def test_path_filtered_suites_still_run_on_every_main_and_tag_pipeline(
-    job_name: str, required_paths: set[str]
+def test_path_filtered_jobs_always_run_for_tags_and_manual_pipelines(
+    job_name: str, anchor: str, required_paths: set[str]
 ) -> None:
-    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
+    pipeline = _pipeline()
     rules = _resolved_rules(pipeline, pipeline[job_name])
-    assert rules is not None, f"{job_name} has no rules"
-    # Order is the policy: skip schedules, then run unconditionally on main and tags, and only
-    # then consult the changed paths. A `changes` rule ahead of main would let it skip there.
-    assert rules[:3] == [_NOT_SCHEDULED, _MAIN, _TAG], job_name
-    assert len(rules) == 4, job_name
-    changes = rules[3]["changes"]
-    assert changes["compare_to"] == "refs/heads/main"
-    paths = set(changes["paths"])
+    assert rules is not None and len(rules) == 3, job_name
+    assert rules[:2] == [_TAG, _MANUAL], job_name
+    paths = _mr_changes(rules[2])
+    assert paths == list(pipeline[anchor]), job_name
     assert ".gitlab-ci.yml" in paths, "a pipeline edit must exercise every suite"
-    assert required_paths <= paths, job_name
-
-
-def test_the_api_suite_is_not_path_filtered() -> None:
-    """Its unit tests read docs, scripts and web files, so no path list could be complete."""
-    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
-    assert _resolved_rules(pipeline, pipeline["api"]) == [_NOT_SCHEDULED, {"when": "on_success"}]
+    assert required_paths <= set(paths), job_name
 
 
 @pytest.mark.parametrize(
-    "job_name", ["contracts", "security", "migrations", "compose-images-lock", "renovate-config"]
+    ("job_name", "first_rules"),
+    [
+        ("migrations", [_TAG, _MANUAL, _MAIN_PUSH]),
+        (
+            "security",
+            [_TAG, {"if": "$CI_PIPELINE_SOURCE =~ /^(web|api|trigger|schedule)$/"}, _MAIN_PUSH],
+        ),
+    ],
 )
-def test_cheap_guards_and_the_security_scan_run_on_every_pipeline(job_name: str) -> None:
-    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
+def test_merge_backstops_run_on_every_main_push_and_code_mr(
+    job_name: str, first_rules: list[dict[str, str]]
+) -> None:
+    pipeline = _pipeline()
+    rules = _resolved_rules(pipeline, pipeline[job_name])
+    assert rules is not None and rules[:3] == first_rules, job_name
+    assert len(rules) == 4
+    assert _mr_changes(rules[3]) == list(pipeline[".changes-code"])
+
+
+def test_the_docs_lane_runs_exactly_when_an_mr_touches_no_code() -> None:
+    pipeline = _pipeline()
+    job = pipeline["docs-tests"]
+    assert _resolved_rules(pipeline, job) == [
+        {"if": '$CI_PIPELINE_SOURCE != "merge_request_event"', "when": "never"},
+        {
+            "changes": {"paths": list(pipeline[".changes-code"]), "compare_to": "refs/heads/main"},
+            "when": "never",
+        },
+        {"when": "on_success"},
+    ]
+    script = _flatten_script(job["script"])
+    # Content-selected, unprivileged, and fail-closed on an empty selection.
+    assert 'grep -rlE "$DOCS_TEST_PATTERN" tests/unit --include="test_*.py"' in script
+    assert 'test -n "$files"' in script
+    assert "runuser -u ci" in script
+    assert "uv run pytest $files -m unit" in script
+
+
+def test_the_docs_lane_selection_keeps_its_documentation_pinning_tests() -> None:
+    """Narrowing DOCS_TEST_PATTERN (e.g. "balancing" its quotes) would silently drop these."""
+    pattern = re.compile(_pipeline()["docs-tests"]["variables"]["DOCS_TEST_PATTERN"])
+    unit = _ROOT / "apps" / "api" / "tests" / "unit"
+    selected = {
+        path.name
+        for path in unit.glob("test_*.py")
+        if any(pattern.search(line) for line in path.read_text(encoding="utf-8").splitlines())
+    }
+    assert {
+        "test_recovery_claims_content.py",
+        "test_identity_onboarding_contract.py",
+        "test_first_admin_contract.py",
+        # Selected only by the quote-anchored alternatives (`"docs"` or `\.md"`).
+        "test_upload_identity_rollback_runbook.py",
+    } <= selected
+
+
+@pytest.mark.parametrize("job_name", ["contracts", "compose-images-lock", "renovate-config"])
+def test_cheap_guards_run_on_every_pipeline(job_name: str) -> None:
+    pipeline = _pipeline()
     assert _resolved_rules(pipeline, pipeline[job_name]) is None, job_name
 
 
-def test_only_feature_branch_pipelines_are_auto_cancelled() -> None:
-    pipeline = yaml.safe_load(_PIPELINE.read_text(encoding="utf-8"))
-    workflow = pipeline["workflow"]
+def test_workflow_uses_merge_request_pipelines_and_never_cancels_main() -> None:
+    workflow = _pipeline()["workflow"]
     assert workflow["auto_cancel"] == {"on_new_commit": "interruptible"}
-    # main is exempt: each main pipeline is the post-merge record for its own merge.
-    assert workflow["rules"][0] == {**_MAIN, "auto_cancel": {"on_new_commit": "none"}}
-    assert workflow["rules"][-1] == {"when": "always"}
-    assert pipeline["default"]["interruptible"] is True
+    assert workflow["rules"] == [
+        _TAG,
+        {
+            "if": "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH",
+            "auto_cancel": {"on_new_commit": "none"},
+        },
+        {"if": '$CI_PIPELINE_SOURCE == "push"', "when": "never"},
+        {"when": "always"},
+    ]
+    assert _pipeline()["default"]["interruptible"] is True
 
 
 def test_renovate_rebases_only_on_conflict_and_holds_majors_for_approval() -> None:

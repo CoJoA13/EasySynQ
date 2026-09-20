@@ -11,7 +11,7 @@ web_tests: 2357
 contract_tests: 285
 integration_passed: 1259
 integration_skipped: 2
-ci_jobs: 12
+ci_jobs: 13
 ci_checks: 14
 ---
 
@@ -1135,15 +1135,18 @@ PostgreSQL MCP, CI-hardening and Compose-image-lock guards before dependency hyd
 checks prove tracked interfaces and failure propagation; they do not emulate a developer host or
 live application stack. The retired Fedora bootstrap/proof is not part of the current pipeline.
 
-`.gitlab-ci.yml` defines **12** jobs. A main pipeline executes **14** instances:
-`integration-shards` expands to four, `web-tests` to two, and schedule-only `renovate` and tag-only
-`release-gate` are omitted. A `v*` tag pipeline runs the same set and adds the release gate. A
-feature-branch pipeline runs `integration-shards` and `contract-responses` only when API-side inputs
-differ from main, and `web-tests` and `web-browser` only when `apps/web` or the contract differs;
-editing `.gitlab-ci.yml` runs all of them. `api`, `security`, `migrations`, `contracts` and the two
-configuration guards run on every branch pipeline. A scheduled pipeline runs only Renovate, the
-security scan and the cheap guards, **6** instances. A newer commit cancels an older feature-branch
-pipeline; main pipelines are never auto-cancelled. There are no GitHub-style aggregator jobs:
+`.gitlab-ci.yml` defines **13** jobs. Merge requests run **merged-results pipelines**, and the
+project's semi-linear merge method requires a rebase onto main before merging. The MR pipeline
+therefore tests the exact tree main receives, and **it is the merge evidence**; plain branch pushes
+run no pipeline. In an MR, `integration-shards` and `contract-responses` run when API-side inputs
+differ from main, `web-tests` and `web-browser` when `apps/web` or the contract differs, and `api`,
+`security` and `migrations` when anything outside `docs/**` and root `*.md` differs. Editing
+`.gitlab-ci.yml` runs every suite. A docs-only MR runs the three guards plus `docs-tests`, the unit
+tests that read documentation (selected by content). A main pipeline after a merge runs the
+guards, `migrations` and `security`. Tag and manually started pipelines run every suite, which is
+**14** instances plus the release gate on a `v*` tag; start a pipeline on main by hand for a full
+check. A scheduled pipeline runs Renovate, `security` and the guards. A newer commit cancels an
+older MR pipeline; main pipelines are never auto-cancelled. There are no GitHub-style aggregator jobs:
 GitLab's successful-pipeline merge requirement gates the entire pipeline. `web-browser` runs the
 Chromium suite and retains ignored failure diagnostics for seven days. `renovate-config` runs
 strict repository configuration validation on every branch using the same image as the updater.
