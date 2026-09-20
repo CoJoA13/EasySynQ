@@ -380,6 +380,27 @@ assertion, so the cause remains unestablished; this occurrence is intermittent, 
 not close this record.
 Last reviewed: 2026-09-19
 
+## RES-TYPESCRIPT-7-UPGRADE
+
+Status: OPEN
+Owner: Project maintainer
+Source: Closed [!8](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/8) and its measured
+evaluation on main `f991f89`, 2026-09-20
+Reason: The SPA pins `typescript ^6.0.3` while 7.0.2 is the released `latest`. The application code
+is already compatible: with `typescript@7.0.2` installed in a throwaway worktree, both strict
+projects (`tsconfig.json` and `tsconfig.browser.json`) type-check clean, `npm run build` succeeds and
+the whole suite passes at **2,357 tests across 283 files**. `npm run lint` is the blocker and fails
+before linting a file: `typescript-eslint` refuses TS 7.0 outright and tracks support for TS >= 7.1
+upstream. Lint is a required job, so the upgrade cannot land. The vendor's side-by-side workaround
+(retaining TypeScript 6 for the ESLint API while building with 7) is rejected here: it puts two
+compilers in the lockfile and the air-gap bundle and lints against a compiler the build does not use.
+Closure contract: Upgrade once `typescript-eslint` supports the installed TypeScript major, with one
+compiler in the lockfile, and verify the complete web loop — ESLint, both strict `tsc` projects, the
+production build, the full Vitest suite and the Playwright browser job — on the upgraded tree. Record
+the measured evidence. Do not disable or downgrade the lint job, pin a second compiler, or treat a
+passing type-check and build as closure while lint is skipped.
+Last reviewed: 2026-09-20
+
 ## RES-TESTCONTAINERS-IMPORT-DEPRECATIONS
 
 Status: OPEN
