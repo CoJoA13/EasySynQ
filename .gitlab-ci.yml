@@ -354,7 +354,10 @@ migrations:
 # selection fails the job rather than passing it vacuously.
 docs-tests:
   stage: check
-  extends: [.uv, .rules-docs-only]
+  # `.dind` + the docker CLI because the selected files also hold tests that require Docker and
+  # assert its presence rather than skipping; without it the lane fails on its own environment.
+  extends: [.uv, .dind, .rules-docs-only]
+  before_script: *docker-cli
   script:
     - cd "$CI_PROJECT_DIR/apps/api" && uv sync --frozen
     - *unprivileged-user

@@ -629,6 +629,9 @@ def test_the_docs_lane_runs_exactly_when_an_mr_touches_no_code() -> None:
         },
         {"when": "on_success"},
     ]
+    # Selected files include tests that assert Docker is present rather than skipping.
+    assert job["extends"] == [".uv", ".dind", ".rules-docs-only"]
+    assert "docker version" in _flatten_script(job["before_script"])
     script = _flatten_script(job["script"])
     # Content-selected, unprivileged, and fail-closed on an empty selection.
     assert 'grep -rlE "$DOCS_TEST_PATTERN" tests/unit --include="test_*.py"' in script
