@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-18"
-baseline_commit: "9158a5dab6daff6a4ba7f9493f6588e9081eb835"
-last_shipped_slice: "S-audit-global-history-reconciliation"
+as_of: "2026-09-20"
+baseline_commit: "7f6174b854c7a5c02047266cb068bb6abeb61e2c"
+last_shipped_slice: "S-runtime-trixie-hardening"
 migration_head: "0092"
 next_migration: "0093"
-api_unit_tests: 4939
+api_unit_tests: 4957
 web_test_files: 283
 web_tests: 2357
 contract_tests: 285
@@ -22,15 +22,42 @@ authority and it is not runtime discovery: binding decisions live in
 [`decisions-register.md`](decisions-register.md), while current deferred work lives only in
 [`open-residuals.md`](open-residuals.md).
 
-The verified shipped baseline is MR !46's merged main `9158a5dab6daff6a4ba7f9493f6588e9081eb835`
-(a merge commit, not a squash; merged 2026-09-12). Its final
-[source pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843299684) at `7ee474e`
-and [merged-main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970)
-passed all fourteen required jobs, including all eleven mandatory runtime cases. R85 is complete;
-the candidate evidence below records its development chronology. Frontmatter counts are read from
-the merged-main job logs: **4,939 API passes** with one existing release-only skip, **2,357 web tests
-across 283 files**, 285 response-contract tests and **1,259 integration passes / 2 skips**. The
-2026-09-14 scheduled main pipeline on the same commit also passed.
+The verified shipped baseline is MR !54's merged main `7f6174b854c7a5c02047266cb068bb6abeb61e2c` (merged 2026-09-20). Under the
+pipeline policy that same merge request shipped, **an MR's merged-results pipeline is the merge
+evidence**: with the semi-linear merge method it tests the exact tree main receives, and the
+post-merge main pipeline keeps only the cheap backstops. !54's
+[merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2864107244)
+passed all fourteen jobs, including all eleven mandatory runtime cases. Its `contracts` and
+`security` jobs first failed inside an npm registry maintenance window, which made `npm audit`
+return a maintenance page instead of a report; both passed on retry after the window closed, and
+nothing else was restarted. Frontmatter counts are read from that pipeline's job logs: **4,957 API
+passes** with one existing release-only skip, **2,357 web tests across 283 files**, 285
+response-contract tests and **1,259 integration passes / 2 skips**.
+
+**Also shipped, 2026-09-19/20: the pipeline compute policy (!53, !54).** September had consumed the
+whole monthly compute allowance, about 40% of it re-running on main what a merge request had just
+proved. Merge requests now run merged-results pipelines and plain branch pushes run none; suites are
+selected by the paths an MR changes; a docs-only merge request runs the guards plus `docs-tests`;
+main keeps the guards, `migrations` and `security`; schedules run Renovate, the security scan and
+the guards; and tags or a manually started pipeline still run everything. See the CI topology
+section below. Between R85 and this baseline, `main` also received the R85 status
+record (!49), an `anyio` 4.14.2 lock fix (!50), Renovate 44.85.0 (!48) and Redocly 2.53.0 (!47).
+None of them changed a migration or contract.
+
+**Shipped: S-runtime-trixie-hardening, September 19 (!51, !52).** The API image now uses Debian 13
+(trixie), like the web image. Both images clear setuid/setgid bits, and the five application services
+run with `cap_drop: [ALL]` and `no-new-privileges`; the proxy keeps its capabilities. The built-image
+gate reports **API 0 blocking / 47 no-fix, none CRITICAL (was 85 no-fix, 14 CRITICAL)** and web
+0 / 43. The remaining findings are eight shared base-OS CVEs, triaged in confidential issue #5 under
+R61: none is reachable in the shipped configuration and none is risk-accepted. The runtime SQLite is
+now 3.46.1. A read-only root filesystem is not done; `RES-CONTAINER-SECURITY-TRIAGE` and issue #4
+stay OPEN. See
+[dated evidence](slice-history.md#s-runtime-trixie-hardening--one-base-release-no-capabilities-no-setuid).
+
+The previous shipped baseline was MR !46's merged main `9158a5dab6daff6a4ba7f9493f6588e9081eb835`
+(merged 2026-09-12). Its final [source pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843299684)
+at `7ee474e` and [merged-main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970)
+passed all fourteen required jobs, including all eleven mandatory runtime cases.
 
 **Shipped: S-audit-global-history-reconciliation (R85), September 12.** One inactive
 entry point admits external enrollment, collects original R84 evidence, globally reconciles legacy
@@ -554,6 +581,24 @@ enforced by the executable catalog assertion in `apps/api/tests/unit/test_authz.
 set is defined by the headings and self-range declarations in [`decisions-register.md`](decisions-register.md).
 
 ## Verification baseline
+
+Fresh 2026-09-20 evidence for the pipeline compute policy (!53, !54), read from !54's
+[merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2864107244) job
+logs. It moves `api_unit_tests` 4,942 → **4,954** (!53's twelve policy tests) → **4,957** (!54's net
+three), and `ci_jobs` 12 → **13** (`docs-tests`). Web (283 files / 2,357 tests), Playwright Chromium
+(80), response contracts (285), integration (1,259 passed / 2 skipped) and the eleven mandatory
+runtime cases were measured again at the same values; `uv run alembic heads` still reports
+`0092_user_color_scheme (head)`. `ci_checks` stays **14**: that is a tag or manual pipeline, and now
+also the widest merge-request pipeline. The first post-merge main pipeline under the new policy ran
+its **5** backstop jobs.
+
+Fresh 2026-09-19 evidence for S-runtime-trixie-hardening (!51, !52), read from the
+[merged-main pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2863960314) job logs
+at `6017f1a`. It moves `api_unit_tests` 4,939 → **4,942** (+3 hardening pins; measured against the
+R85 merged-main pipeline). Web (283 files / 2,357 tests), Playwright Chromium (80), response contracts
+(285), integration (1,259 passed / 2 skipped) and the eleven mandatory runtime cases were measured
+again at the same values. `uv run alembic heads` still reports `0092_user_color_scheme (head)`. CI
+topology is unchanged (12 defined jobs, 14 branch instances).
 
 Fresh 2026-09-18 evidence for S-audit-global-history-reconciliation (R85, MR !46), read from job logs
 rather than inferred. It moves `api_unit_tests` 4,181 → **4,939** (+758), measured in the R84

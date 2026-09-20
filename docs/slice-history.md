@@ -46,6 +46,62 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## TEST HARNESS RELIABILITY
 
+### S-ci-compute-policy — merge-request evidence, path-selected suites, a docs lane
+
+**2026-09-19/20; shipped in MR [!53](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/53)
+(squash `3f5b553`) and MR [!54](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/54)
+(squash `664377f`).** CI configuration and its tests only; no application code, migration, contract
+or permission change.
+
+September consumed the whole monthly compute allowance, about 10,190 job-minutes against 10,000, at
+roughly 65 job-minutes per pipeline. Measured from every job's own duration: **40%** re-ran suites on
+main that the branch pipeline had just run, **22%** was Renovate rebasing dependency branches, and a
+docs-only merge request still ran all fourteen jobs.
+
+**What shipped.** !53 filtered the integration, contract-response and web suites by the paths they
+read, made jobs `interruptible` so a newer commit cancels an older pipeline (main exempt), cut the
+weekly schedule to Renovate plus the security scan and the cheap guards, and set Renovate to
+`rebaseWhen: "conflicted"` with `major.dependencyDashboardApproval`. !54 followed the owner enabling
+**merged-results pipelines** and the **semi-linear merge method**: a merge request's pipeline now
+tests the exact tree main receives and is the merge evidence, plain branch pushes run nothing, the
+post-merge main pipeline keeps the guards plus `migrations` and `security`, and a docs-only merge
+request runs the guards plus the new `docs-tests` job. Tags and manually started pipelines still run
+everything, which leaves a full run on main available on demand.
+
+**Load-bearing decisions and traps.**
+- **`api` is not path-filtered.** Its unit tests read docs, runbooks, mockups, `.claude` and web
+  files, so no path list could be complete; it runs for any non-docs change.
+- **GitLab rules cannot express "only docs changed"** (there is no exclusion syntax), so the policy
+  inverts it: `.changes-code` lists every non-docs path, and a unit test walks `git ls-files` and
+  fails if any tracked file outside `docs/**` and root `*.md` is uncovered. A new top-level file
+  therefore cannot fall into the docs lane silently.
+- **The docs lane selects its tests by content,** every unit test file naming a documentation path,
+  and fails on an empty selection. A planted recovery overclaim in `docs/runbooks/backup-restore.md`
+  made it fail, which is the evidence that the lane can still catch a docs regression.
+- **Two earlier tests pinned `migrations` and `security` as rule-free.** They now pin the reviewed
+  rule templates instead; neither job gained `allow_failure`, `when`, `only` or `except`.
+- **Review caught two clarity risks** (Codex/Duo): the quote-anchored `DOCS_TEST_PATTERN`
+  alternatives read like a typo, and `docs-tests` not running on tag/manual pipelines was unstated.
+  Both are now commented, and a test pins that the selection keeps the documentation-pinning files.
+
+**Verification.** 24 CI policy tests; each policy was mutated in place (thirteen mutations across the
+two merge requests) and the intended test reddened every time. Two further mutations of
+`DOCS_TEST_PATTERN` were deliberately inert and are not counted as evidence: dropping the anchoring
+quotes widens the match, and removing one quoted alternative still leaves the other selecting the
+same file. Removing both is the narrowing edit, and that one reddens. `glab ci lint` accepted both
+configurations, and the existing hardening checks passed unchanged (62 GitLab, 85 GitHub-workflow
+assertions). Live: pushing !54's branch created no pipeline, opening the merge request created a
+merged-results pipeline on `refs/merge-requests/54/merge` with all fourteen jobs, and the first
+post-merge main pipeline ran its five backstop jobs. !54's `contracts` and `security` jobs first
+failed inside an npm registry maintenance window (`npm audit` returned a maintenance page, and the
+audit gate failed closed on the unexpected shape); both passed on retry once npm reported all
+systems operational.
+
+**Deferred.** Merge trains are not enabled; the semi-linear merge method is what keeps the tested
+tree equal to the merged tree. Splitting the eleven-minute runtime acceptance out of `api` into its
+own path-filtered job would save more on docs and web-only merge requests, but a test pins that step
+inside `api` as a deliberate decision, so it is left to the owner.
+
 ### S-vitest-5-compatibility
 
 **2026-09-10; code candidate `ef328eea00c2bc2cc129034a24cf5a3dfeaf0ca0`.**
@@ -122,6 +178,78 @@ post-merge verification. Private reports remain outside Git. Closure is limited 
 teardown mechanisms and does not establish that every asynchronous callback or timer is safe.
 
 ## BUILT-IMAGE SECURITY
+
+### S-runtime-trixie-hardening — one base release, no capabilities, no setuid
+
+**2026-09-19; shipped in MR
+[!51](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/51) (squash `9aec637`, merge
+`bec7edd`) and MR [!52](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/52) (squash
+`c5cc68d`, merge `6017f1a`).** Part of [issue #4](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/4)
+and [`RES-CONTAINER-SECURITY-TRIAGE`](open-residuals.md#res-container-security-triage), which stays
+OPEN. The runtime images changed; there was no migration (head stays `0092`), permission key,
+endpoint or contract change.
+
+**Precondition.** A CRITICAL `anyio` advisory, published after R85 merged, blocked the `security`
+job on every pipeline because `main` shared the affected lock. MR
+[!50](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/50) (squash `7f2ab7f`) moved only
+that transitive entry, 4.13.0 → 4.14.2. A fresh image scan then showed zero blocking findings.
+
+**What shipped.**
+- **!51:** the API image moves from `python:3.12-slim-bookworm` to `python:3.12-slim-trixie`, and
+  `postgresql-client-18` now comes from `trixie-pgdg`. Every remaining no-fix finding was a base-OS
+  package, and the API image was the only application image still on Debian 12. Checked in the
+  built image: Python stays 3.12.14 and `pg_dump` 18.x, and SQLite moves 3.40.1 → 3.46.1. The four
+  comments that name the worker base now say trixie; it still has no syslog daemon or `/dev/log`.
+- **!52:** both Dockerfiles clear setuid/setgid bits in their last root step, before `USER`.
+  `migrate`, `api`, `worker`, `beat` and `web` run with `cap_drop: [ALL]` and `no-new-privileges`.
+  The proxy keeps its capabilities because Caddy binds 80/443.
+
+**Findings.** The API image went from **85 no-fix HIGH/CRITICAL findings (14 CRITICAL) to 47 (none
+CRITICAL)**; the web image stays at 43. Both images show zero blocking findings. The 90 remaining
+findings come from **eight base-OS CVEs** shared by both images. Their per-package applicability triage
+is in confidential issue #5, outside Git under R61. None is reachable in the shipped configuration,
+and none is risk-accepted. The triage also found the gap !52 closes: the shipped Compose files set no
+capability or privilege-gain limits, and both images carried eleven setuid/setgid tools, including
+`mount`, `umount` and `su`. !52 changes no scanner count, because it removes attack surface, not
+packages.
+
+**Load-bearing decisions and traps.**
+- **The SQLite change was the real risk of the base move.** The R85 kernel runs under fixed SQLite
+  limits and expects indexed query plans. All eleven mandatory runtime cases passed on trixie, locally
+  and in CI.
+- **The acceptance runner requires `UV_PYTHON_DOWNLOADS=never`,** which the CI template sets. Without
+  it, the runner fails at `failure_stage=setup` in under a second and gives no reason.
+- **The strip must run before `USER`.** An unprivileged `find` cannot clear root-owned bits and would
+  pass silently. A source pin enforces the order, and the built-image proof now runs `find` inside the
+  real image with a completion sentinel, so an empty result can't be vacuous.
+- **One intermittent CI occurrence.** !51's first pipeline failed one runtime case,
+  `test_version_page_transport_runtime_preserves_original_observations_and_limits`, on the 2-vCPU
+  runner. A single diagnostic retry passed on the same commit, and a fresh full pipeline then passed.
+  Isolated local runs of that case recorded equivalent worker peaks on bookworm and trixie, with the
+  same bundled expat. It is recorded under
+  [`RES-AUDIT-RUNTIME-ACCEPTANCE-FAILURE`](open-residuals.md#res-audit-runtime-acceptance-failure) with
+  its cause unestablished.
+
+**Verification.**
+- **Mutations:** each hardening assertion was mutation-checked in place. Removing either strip,
+  a worker `cap_drop`, or the web `no-new-privileges`, or moving the web strip after `USER`, turned
+  the intended test red; for the API strip, both the source pin and the built-image proof failed.
+- **Live stack:** a rebuilt `s`+`dev` stack under the hardened settings came up healthy, and
+  `migrate` exited 0. The worker reported zero effective and bounding capabilities with `NoNewPrivs: 1`.
+  Under those settings, `easysynq backup run` produced a verified encrypted archive,
+  `easysynq backup restore-test` passed, and `easysynq mirror rebuild` synced.
+- **Merged-main [pipeline 2863960314](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2863960314)
+  at `6017f1a`:** all fourteen jobs passed with no retry. That run recorded **4,942 API unit tests /
+  one release-only skip** (4,939 → 4,942: two parametrized setuid pins and one Compose pin), eleven
+  mandatory runtime cases, **2,357 web tests across 283 files**, 80 Chromium tests, 285
+  response-contract tests and **1,259 integration passes / 2 skips**.
+
+**Deferred.**
+- `read_only: true` for the application services needs a writable-path inventory (temporary,
+  cache and schedule paths). It is not done and is left for its own slice.
+- An optional direct call to the versioned `pg_dump` would take Perl off the runtime path, but
+  Perl stays installed because it is Debian Essential. Not done.
+- The eight CVEs close only when Debian ships fixes; the residual and issue #4 stay OPEN.
 
 ### S-audit-acceptance-build-inputs — bind the API license to image acceptance
 
