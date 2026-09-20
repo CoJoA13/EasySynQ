@@ -56,6 +56,21 @@ def test_locked_contract_toolchain_manifest_and_resolution_are_exact() -> None:
     )
 
 
+def test_js_yaml_majors_stay_refused_until_redocly_supports_them() -> None:
+    """js-yaml 5 removed `types.merge`, which @redocly/openapi-core calls at module load.
+
+    Forcing it through the override leaves contract generation dead while `redocly lint` still
+    passes, so the refusal is pinned here as well as explained in the config (closed MR !7).
+    """
+    renovate = _read_json(_ROOT / "renovate.json")
+    refusal = next(
+        rule for rule in renovate["packageRules"] if rule.get("matchPackageNames") == ["js-yaml"]
+    )
+    assert refusal["matchUpdateTypes"] == ["major"]
+    assert refusal["enabled"] is False
+    assert "types.merge" in refusal["description"]
+
+
 def test_locked_python_security_group_and_resolution_are_exact() -> None:
     project = _read_toml(_ROOT / "apps" / "api" / "pyproject.toml")
     lock = _read_toml(_ROOT / "apps" / "api" / "uv.lock")
