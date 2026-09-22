@@ -11,6 +11,12 @@
 # low; majors come as individual PRs (they usually need a human migration). Tune the limits/cadence
 # freely. NOTE: Dependabot updates the manifests + lockfiles, but CI (uv sync --frozen / npm ci) still
 # gates every bump, and the `security` CI job surfaces advisories independently.
+#
+# Every entry waits out a seven-day `cooldown` before proposing a newly published version: most
+# hijacked-package releases are caught and yanked within days, and a week costs nothing on a weekly
+# schedule. Cooldown applies to version updates only; Dependabot SECURITY updates (enabled in the
+# repository settings) still open immediately. zizmor's dependabot-cooldown audit in the
+# `workflow-and-secrets` CI job holds this at seven days or more.
 version: 2
 updates:
   # Python API (uv — updates pyproject.toml + uv.lock together)
@@ -19,6 +25,8 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       python-minor-patch:
         update-types: ["minor", "patch"]
@@ -35,6 +43,8 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       web-minor-patch:
         update-types: ["minor", "patch"]
@@ -51,6 +61,8 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       contract-tools-minor-patch:
         applies-to: version-updates
@@ -67,12 +79,16 @@ updates:
       - dependency-name: "js-yaml"
         update-types: ["version-update:semver-major"]
 
-  # CI action pins (keeps astral-sh/setup-uv, actions/*, trivy fresh — supply-chain hygiene)
+  # CI action pins (keeps the SHA-pinned astral-sh/setup-uv and actions/* fresh, bumping each SHA and
+# its version comment together). The trivy, actionlint, zizmor and gitleaks images that ci.yml runs
+# from shell steps are NOT tracked here; they are manual pins.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       ci-actions:
         update-types: ["minor", "patch"]
@@ -83,12 +99,14 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     ignore:
       # The API interpreter is pinned to 3.12 by `requires-python = ">=3.12,<3.13"`
       # (apps/api/pyproject.toml) and .python-version; moving it is a deliberate slice, not an
-      # auto-bump. ⚠ A newer base does NOT fail the build — it fails at RUNTIME, and no CI job that
-      # can block a merge starts the image (closed PR #448, python 3.12 -> 3.14, CLEAN on all
-      # sixteen checks). With a 3.14 base,
+      # auto-bump. ⚠ A newer base does NOT fail the build — it fails at RUNTIME, and at the time
+      # no CI job that could block a merge started the image (closed PR #448, python 3.12 -> 3.14,
+      # CLEAN on all sixteen checks). With a 3.14 base,
       # `uv sync --locked` cannot satisfy requires-python from /usr/local/bin, so it downloads a
       # managed CPython 3.12 into /root/.local/share/uv/python/ and points the venv's `home` there.
       # /root is 0700, the image runs as USER easysynq (uid 10001), and the CMD `uv run gunicorn`
@@ -106,11 +124,15 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
   - package-ecosystem: "docker"
     directory: "/infra/compose/keycloak"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
 
   # Deployed stack runtime images pinned in infra/compose/compose.yml (postgres, redis, minio,
   # gotenberg, tika, caddy, mailpit) — a SEPARATE Dependabot ecosystem from the Dockerfiles
@@ -120,3 +142,5 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7

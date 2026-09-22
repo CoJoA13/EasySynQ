@@ -1,0 +1,17 @@
+# Gitleaks configuration shared by the pre-commit hook (`gitleaks protect --staged`) and the gated
+# `secrets` step of the `workflow-and-secrets` CI job. Gitleaks reads this file from the scan
+# root automatically. It EXTENDS the upstream default rule set; it never replaces it.
+#
+# Allowlist narrowly. The audit test vectors below are pinned hex digests and signatures that the
+# generic-api-key rule reads as keys. Individual reviewed false positives elsewhere belong in
+# .gitleaksignore by fingerprint, not here by path, so a real secret added next to them still fails.
+title = "EasySynQ gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Pinned audit test vectors (hex digests and signatures, no secrets)"
+paths = [
+  '''^apps/api/tests/fixtures/audit_[a-z0-9_]+_vectors\.json$''',
+]

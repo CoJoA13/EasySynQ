@@ -32,7 +32,11 @@ Install the contributor tools through the pinned PyPI and official package paths
 0.11.14 or newer; this explicitly prevents upstream-host fallback for managed CPython downloads.
 Alternatively, use `UV_PYTHON_DOWNLOADS=never` with CPython 3.12 already installed. Pre-commit uses
 project-locked Ruff, pinned PyPI text/YAML hooks, and native Gitleaks 8.x (minimum 8.18.4). Missing Gitleaks fails
-the staged secret check; installing hooks no longer clones remote hook repositories.
+the staged secret check; installing hooks no longer clones remote hook repositories. The hook and the
+CI `workflow-and-secrets` job read the same `.gitleaks.toml` and `.gitleaksignore`; CI scans the
+whole history reachable from the checked-out commit, so a commit that skipped hooks still meets the
+gate. Record a reviewed false positive in `.gitleaksignore` by fingerprint; never allowlist by path
+beyond the pinned audit test vectors.
 
 Optional hosting commands use authenticated `gh` against the GitHub repository remote. To refresh
 integration timing data, run `bash scripts/refresh-test-durations.sh [run-id]`. It selects one
@@ -112,8 +116,14 @@ locked, audit-clean connector and a separately proven least-privilege developmen
 - Web: `cd apps/web && npm run lint && npm run build && npm test` (or the `/check-web` skill; `build`
   already runs `tsc --noEmit`).
 - npm dependency policy: run `just security-npm` after `just setup` to execute the policy regressions
-  and then the live high/critical gate against the committed web lock. npm high/critical findings are
-  gated; pip-audit and Trivy findings are report-only.
+  and then the live high/critical gate against the committed web lock. npm high/critical findings and
+  built-image HIGH/CRITICAL findings with an available fix are gated; pip-audit and the Trivy
+  filesystem scan are report-only. Pull requests also run GitHub dependency review, which fails on a
+  newly introduced high or critical advisory.
+- Workflow edits: CI runs actionlint (with shellcheck over every `run:` script) and zizmor over
+  `.github/`. Reproduce locally with the same pinned images named in the `workflow-and-secrets` job,
+  for example `docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12 -oneline`.
+  Pin every new action to a full commit SHA with a `# vX.Y.Z` comment.
 - **Docker-backed checks:** when `docker info` succeeds, run integration tests via testcontainers and
   migrations against a disposable PostgreSQL 18 instance. Backup/restore tests also require a
   version-matched PostgreSQL client (`pg_dump`/`pg_restore`). If group membership requires it, wrap

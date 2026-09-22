@@ -26,7 +26,7 @@ The browser interface organizes work around ISO 9001:2015 clauses, processes, an
 | Report a problem or contribute | [Contribution guide](CONTRIBUTING.md) |
 | Check shipped work and limitations | [Current status](docs/current-status.md), [residuals](docs/open-residuals.md), and [slice history](docs/slice-history.md) |
 
-The [GitLab wiki](https://gitlab.com/synqsuite-group/EasySynQ/-/wikis/home) is a navigation index.
+The [project wiki](https://github.com/CoJoA13/EasySynQ/wiki) is a navigation index.
 The reviewed documentation in this repository remains authoritative.
 
 ## Capabilities
@@ -137,8 +137,10 @@ remain deliberate. The [GitHub setup runbook](docs/runbooks/github-repository-se
 the branch gates, update bot, security checks, and the archived GitLab project.
 
 Use [issues](https://github.com/CoJoA13/EasySynQ/issues) for sanitized bug reports and feature
-requests. For a suspected vulnerability, follow the confidential-reporting instructions in
-[CONTRIBUTING.md](CONTRIBUTING.md#report-a-security-concern). Do not include credentials or installation data.
+requests; the [project board](https://github.com/CoJoA13/EasySynQ/projects) tracks them. Issues
+titled `[RES-…]` mirror records in the [residual ledger](docs/open-residuals.md), which stays
+authoritative. For a suspected vulnerability, follow [SECURITY.md](SECURITY.md) and report
+privately. Do not include credentials or installation data.
 
 ## License
 
