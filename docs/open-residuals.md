@@ -112,6 +112,24 @@ Delivery, 2026-09-18: MR [!46](https://gitlab.com/synqsuite-group/EasySynQ/-/mer
 [merged-main](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2843322970) pipelines passed all fourteen required jobs,
 including eleven mandatory runtime cases. Nothing above is activated
 or changed by the merge; this record stays OPEN. Last reviewed: 2026-09-18.
+Exact-version progress, 2026-09-20 (candidate): the first bounded step of this record's
+exact-version boundary ships persistent object-version binding. Migration `0093` adds
+`blob.object_version_id`/`object_version_source` under a CHECK; the four WORM write paths bind the
+version their verified promotion already read back and discarded, and the four renditions paths
+record `unversioned` because that bucket has none. Manifest v3 carries the binding and a generation
+state (`sealed`/`observed`/`partial`/`absent`), v2 archives still restore unchanged, the copy and
+stored-locator legs resolve the bound version instead of the current one, and the re-hash now also
+checks the recorded length. `backup bind-versions` binds pre-0093 rows as `backfill`, attesting only
+the version observed at backfill time. Proven against real PostgreSQL and MinIO: an object
+overwritten AFTER its generation was written restores from the sealed version, and reverting the
+version-aware copy turns that case red; a bound version that cannot be resolved and a size
+disagreement each FAIL, and each has its own mutation. This closes NOTHING in the contract above:
+the archive still carries no object bytes, restore stays source-dependent and non-cutover, and
+service-capability separation, complete encrypted generations (still whole-archive-in-memory),
+certified destinations, fresh role-preserving targets and the source-denied boot-and-read proof all
+remain required. See the
+[design](superpowers/specs/2026-09-20-recovery-exact-version-binding-design.md). Last reviewed:
+2026-09-20.
 
 ## RES-CONTAINER-SECURITY-TRIAGE
 

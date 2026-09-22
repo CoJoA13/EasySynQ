@@ -75,7 +75,7 @@ from ..records import service as records_svc
 from ..records.service import EvidenceInput
 from ..reports.checklist import compute_checklist
 from ..vault import repository as vault_repo
-from ..vault import storage, upload_rejection
+from ..vault import storage, upload_rejection, version_binding
 from ..vault.mirror_sink import get_mirror_enqueue_sink
 from ..vault.service import _snapshot
 from ..vault.signature import SignatureEvent, get_vault_signature_sink
@@ -634,6 +634,7 @@ async def _commit_document(
                 object_key=promoted.target_key,
                 worm_locked=True,
                 worm_retain_until=promoted.retain_until,
+                **version_binding.promotion_binding(promoted.target_version_id),
             )
             .on_conflict_do_nothing(index_elements=["sha256"])
         )

@@ -118,9 +118,19 @@ def _capture_and_dump(owner_dsn: str, dump_path: Path) -> tuple[dict[str, int], 
                 cur.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(t)))
                 cr = cur.fetchone()
                 counts[t] = int(cr[0]) if cr else 0
-            cur.execute("SELECT sha256, size_bytes, bucket, object_key FROM blob")
+            cur.execute(
+                "SELECT sha256, size_bytes, bucket, object_key,"
+                " object_version_id, object_version_source FROM blob"
+            )
             blobs = [
-                BlobRef(sha256=r[0], size_bytes=int(r[1]), bucket=r[2], object_key=r[3])
+                BlobRef(
+                    sha256=r[0],
+                    size_bytes=int(r[1]),
+                    bucket=r[2],
+                    object_key=r[3],
+                    object_version_id=r[4],
+                    object_version_source=r[5],
+                )
                 for r in cur.fetchall()
             ]
         archive.dump_database(owner_dsn, dump_path, snapshot=snapshot)
@@ -229,11 +239,14 @@ def _scratch_blob_shas(handle: ScratchHandle) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
-def _scratch_blob_locators(handle: ScratchHandle) -> list[tuple[str, str, str]]:
-    """The blob locators stored in the restored database, not derived scratch-copy paths."""
+def _scratch_blob_locators(handle: ScratchHandle) -> list[tuple[str, str, str, str | None, int]]:
+    """The blob locators stored in the restored database, not derived scratch-copy paths.
+
+    Carries each row's own version binding and recorded size so the re-hash can resolve the exact
+    stored version and check length, not merely the content digest."""
     with _autocommit(handle.owner_dsn, dbname=handle.scratch_db) as conn, conn.cursor() as cur:
-        cur.execute("SELECT sha256, bucket, object_key FROM blob")
-        return [(r[0], r[1], r[2]) for r in cur.fetchall()]
+        cur.execute("SELECT sha256, bucket, object_key, object_version_id, size_bytes FROM blob")
+        return [(r[0], r[1], r[2], r[3], int(r[4])) for r in cur.fetchall()]
 
 
 # --- scratch-target WORM guard ----------------------------------------------------------------
@@ -372,11 +385,15 @@ def _copy_blobs(
     )
     client = _s3(settings)
     for b in blobs:
-        client.copy_object(
-            Bucket=bucket,
-            Key=f"{prefix}{b.sha256}",
-            CopySource={"Bucket": b.bucket, "Key": b.object_key},
-        )
+        # A bound generation copies THAT version, not whatever is current. Equal bytes hash
+        # identically, so without this an object overwritten after the generation was written is
+        # indistinguishable from the sealed one. An unbound (v2 / pre-binding) blob keeps the
+        # current-version behaviour; a bound version that no longer resolves fails the copy, which
+        # the caller turns into a FAIL rather than falling back.
+        source: dict[str, str] = {"Bucket": b.bucket, "Key": b.object_key}
+        if b.object_version_id:
+            source["VersionId"] = b.object_version_id
+        client.copy_object(Bucket=bucket, Key=f"{prefix}{b.sha256}", CopySource=source)
 
 
 def _rehash_scratch_blobs(settings: Settings, handle: ScratchHandle) -> list[str]:
@@ -407,13 +424,19 @@ def _rehash_stored_blob_locators(settings: Settings, handle: ScratchHandle) -> l
     """
     client = _s3(settings)
     bad: list[str] = []
-    for sha, bucket, object_key in _scratch_blob_locators(handle):
+    for sha, bucket, object_key, version_id, size_bytes in _scratch_blob_locators(handle):
+        params: dict[str, Any] = {"Bucket": bucket, "Key": object_key}
+        if version_id:
+            # The restored row's OWN binding: resolve that exact version, never the current one.
+            params["VersionId"] = version_id
         try:
-            body = client.get_object(Bucket=bucket, Key=object_key)["Body"].read()
-        except Exception:  # noqa: BLE001 — missing/unreadable stored locator fails closed
+            body = client.get_object(**params)["Body"].read()
+        except Exception:  # noqa: BLE001 — missing/unreadable stored locator or version fails closed
             bad.append(sha)
             continue
-        if hashlib.sha256(body).hexdigest() != sha:
+        # Length as well as digest: size_bytes has always ridden the row and was never checked, so
+        # a truncated object could only ever have been caught by the digest.
+        if hashlib.sha256(body).hexdigest() != sha or len(body) != size_bytes:
             bad.append(sha)
     return bad
 
@@ -830,15 +853,7 @@ def verify_retained_archive(
             # 3. read the archive's OWN manifest (point-in-time blob set + per-table counts the
             #    archive was built against — NOT a fresh capture; this verifies the stored archive).
             manifest = archive.read_manifest(plain)
-            blobs = [
-                BlobRef(
-                    sha256=b["sha256"],
-                    size_bytes=int(b["size_bytes"]),
-                    bucket=b["bucket"],
-                    object_key=b["object_key"],
-                )
-                for b in manifest.get("blobs", [])
-            ]
+            blobs = archive.blob_refs_from_manifest(manifest)
             counts = (manifest.get("config") or {}).get("table_counts") or {}
             source_buckets = {b.bucket for b in blobs}
             _validate_scratch_bucket_name(

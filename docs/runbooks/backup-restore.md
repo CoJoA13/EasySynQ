@@ -39,9 +39,45 @@ none of these properties; it uses a separate transient plaintext tar.
 > role-preserving restore-target work are implemented and proven, do not treat any durable or
 > pre-upgrade archive as a disaster safety net.
 
+> **Version binding (manifest v3).** Each referenced object is recorded with the exact stored
+> version it was sealed as, and restore resolves **that** version rather than whatever is current.
+> A generation reports its binding state, which restore echoes in its result:
+>
+> | State | Meaning |
+> |---|---|
+> | `sealed` | every bindable object is bound to the version its own write returned |
+> | `observed` | at least one binding came from `backup bind-versions`, so it attests the version current at backfill time, not the one originally sealed |
+> | `partial` | at least one bindable object has no binding — a row written before migration 0093 and never backfilled |
+> | `absent` | a pre-binding (manifest v2) archive |
+>
+> Objects in the unversioned `renditions` bucket are recorded as `unversioned`: derived, rebuildable
+> and with no version to bind, they neither seal nor spoil a generation. A bound version that no
+> longer resolves is a **FAIL**, never a silent fall back to the current version. ⚠ Binding makes a
+> generation exact about what it references; it does **not** make any archive a recovery set, and
+> changes nothing about the paragraph above.
+
 > **Key custody (critical):** `BACKUP_ENCRYPTION_KEY` lives ONLY in the `0600` `.env` / a Docker
 > secret — never in the archive. **Lose it and every `.tar.enc` is undecryptable and unusable.** Back it up
 > out-of-band with the same custody as the host disk-encryption key. See [key-rotation.md](key-rotation.md).
+
+## Binding existing rows to their object versions
+
+Rows written before migration 0093 carry no version binding, so a generation containing any of them
+reports `partial`. Bind them once, from the worker:
+
+```bash
+./scripts/easysynq backup bind-versions
+```
+
+It walks only unbound rows, resolves each object's current version, and records it as `backfill`
+(or `unversioned` where the bucket has no versions). It is idempotent and **never overwrites an
+existing binding**, so re-running it cannot weaken a `promotion` binding to an observation, and a
+missing object is reported rather than guessed — that row simply stays unbound.
+
+⚠ What a backfilled binding attests: the version that object has **now**. It cannot prove that
+version is the one originally sealed, because the row carried nothing to compare against. That is
+why generations over backfilled rows report `observed` and never `sealed`, and why the command
+prints the same caveat every time it runs. Only rows bound by their own write can be `sealed`.
 
 ## When a backup fails — the operator alarm
 
@@ -137,9 +173,11 @@ configured shared scratch bucket
 tamper check, and a **restored-chain re-verify**. The target remains standing only for inspection or
 explicit discard. It exits:
 
-* **0 (PASS)** — integrity verification passed. The copied scratch bytes re-hash correctly, and the
-  restored database's stored locators resolve against the **currently configured source object
-  store**. This is source-store-dependent and **not cutover-ready**.
+* **0 (PASS)** — integrity verification passed. The copied scratch bytes re-hash correctly and match
+  their recorded length, and the restored database's stored locators resolve — at their bound
+  version, when they carry one — against the **currently configured source object store**. The
+  result's `version_binding` reports how exactly the generation referenced its objects. This is
+  source-store-dependent and **not cutover-ready**, whatever the binding state says.
 * **3 (FLAGGED)** — the audit checkpoint is **ahead** of the restored head (the backup is older than
   the last anchored checkpoint, a deliberate point-in-time target, **or** a truncated/tampered tail).
   Re-run with `--audit-checkpoint-ack` to proceed; the acknowledgement is **audited**

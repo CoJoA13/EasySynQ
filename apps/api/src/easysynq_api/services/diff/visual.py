@@ -32,7 +32,7 @@ from ...db.models.document_version import DocumentVersion
 from ...db.models.visual_diff import VisualDiff
 from ...domain.diff.visual import diff_pages, rasterize
 from ..vault import repository as vault_repo
-from ..vault import storage
+from ..vault import storage, version_binding
 from ..vault.render import RenderRequest, RenderSink, RenderStatus
 
 logger = logging.getLogger("easysynq.visual_diff")
@@ -55,7 +55,7 @@ async def _cache_png(session: AsyncSession, org_id: uuid.UUID, png: bytes) -> st
     row together — the _cache_rendition / blob-row-iff-bytes pattern). Returns the sha256."""
     bucket = get_settings().s3_bucket_renditions
     sha = hashlib.sha256(png).hexdigest()
-    await storage.put_bytes(png, sha, bucket=bucket, content_type="image/png")
+    version_id = await storage.put_bytes(png, sha, bucket=bucket, content_type="image/png")
     await session.execute(
         pg_insert(Blob)
         .values(
@@ -66,6 +66,7 @@ async def _cache_png(session: AsyncSession, org_id: uuid.UUID, png: bytes) -> st
             bucket=bucket,
             object_key=sha,
             worm_locked=False,  # derived + regenerable (doc 14 §5.4)
+            **version_binding.write_binding(version_id),
         )
         .on_conflict_do_nothing(index_elements=["sha256"])
     )

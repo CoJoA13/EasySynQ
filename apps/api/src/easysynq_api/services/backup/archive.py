@@ -49,6 +49,48 @@ class BlobRef:
     size_bytes: int
     bucket: str
     object_key: str
+    #: The exact stored version this generation references, and how the row obtained it
+    #: (``promotion``/``write``/``backfill``, or ``unversioned`` for a bucket that has no versions).
+    #: Both are ``None`` for a row written before the binding existed; a v2 manifest carries
+    #: neither, and reading one leaves them ``None`` rather than inferring a version.
+    object_version_id: str | None = None
+    object_version_source: str | None = None
+
+
+#: Every referenced object is bound to its exact version, and every binding came from the write.
+BINDING_SEALED = "sealed"
+#: Every bindable object is bound, but at least one binding was observed later by a backfill.
+BINDING_OBSERVED = "observed"
+#: At least one bindable object has no binding at all.
+BINDING_PARTIAL = "partial"
+#: A manifest that predates the binding, or a generation with no blobs to bind.
+BINDING_ABSENT = "absent"
+
+
+def binding_state(blobs: list[BlobRef], *, manifest_version: int | None = None) -> str:
+    """How completely a generation binds its objects to exact versions.
+
+    ``unversioned`` blobs are counted as bindable-with-nothing-to-bind: the renditions bucket has no
+    versions, and those objects are derived and rebuildable, so they neither seal nor spoil a
+    generation. A blob with no binding at all does make the generation ``partial``.
+
+    ⚠ ``manifest_version`` is not optional information for a restore: an archive written before the
+    binding existed carries blobs that all read back unbound, which is indistinguishable BY THE BLOB
+    LIST ALONE from a current generation whose rows were never backfilled. Those are different facts
+    — "this archive predates version binding" versus "this generation has unbacked objects" — and
+    the state is the only one an operator sees, so the caller passes the version it read. Omitting
+    it (as ``build_manifest`` does, writing v3 by construction) judges by the blobs alone.
+    """
+    if manifest_version is not None and manifest_version < 3:
+        return BINDING_ABSENT
+    bindable = [b for b in blobs if b.object_version_source != "unversioned"]
+    if not bindable:
+        return BINDING_ABSENT
+    if any(b.object_version_source is None for b in bindable):
+        return BINDING_PARTIAL
+    if any(b.object_version_source == "backfill" for b in bindable):
+        return BINDING_OBSERVED
+    return BINDING_SEALED
 
 
 def _run(cmd: list[str], *, env_extra: dict[str, str], timeout: int, what: str) -> None:
@@ -124,10 +166,14 @@ def build_manifest(
     """The MinIO blob-snapshot manifest (doc 18 §337) + recorded backup config + the S11 ``legs``
     presence markers, encryption state, and ``encryption_key_ref``. ``config`` may carry
     ``table_counts`` so the restore triad has point-in-time expected counts without re-reading the
-    (gone) source DB."""
+    (gone) source DB.
+
+    v3 adds the per-object version binding and records the generation's ``version_binding``
+    state in ``config``. A v2 manifest stays readable and restores exactly as before: absent
+    bindings are read as absent, never inferred."""
     return {
-        "manifest_version": 2,
-        "config": config,
+        "manifest_version": 3,
+        "config": {**config, "version_binding": binding_state(blobs)},
         "blobs": [dataclasses.asdict(b) for b in blobs],
         "legs": {
             "realm_export": realm_export,
@@ -137,6 +183,27 @@ def build_manifest(
         "encrypted": encrypted,
         "encryption_key_ref": encryption_key_ref,
     }
+
+
+def blob_refs_from_manifest(manifest: dict[str, Any]) -> list[BlobRef]:
+    """Rehydrate the manifest's blob list, including the version binding when the manifest carries
+    one. A v2 manifest has no binding keys, and this reads them as absent rather than inferring a
+    version — a generation cannot become exact retroactively."""
+    refs: list[BlobRef] = []
+    for b in manifest.get("blobs", []):
+        source = b.get("object_version_source")
+        version = b.get("object_version_id")
+        refs.append(
+            BlobRef(
+                sha256=b["sha256"],
+                size_bytes=int(b["size_bytes"]),
+                bucket=b["bucket"],
+                object_key=b["object_key"],
+                object_version_id=str(version) if version else None,
+                object_version_source=str(source) if source else None,
+            )
+        )
+    return refs
 
 
 def _sidecar(path: Path) -> Path:

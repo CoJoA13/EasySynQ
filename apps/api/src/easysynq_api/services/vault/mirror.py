@@ -77,7 +77,7 @@ from ...db.models.process import Process
 from ...db.models.process_link import ProcessLink
 from ...db.session import get_sessionmaker
 from ..common.org import get_single_org_id
-from . import storage, verify_token
+from . import storage, verify_token, version_binding
 from .render import RenderRequest, RenderSink, RenderStatus, get_render_sink
 
 logger = logging.getLogger("easysynq.mirror")
@@ -554,7 +554,7 @@ async def _cache_rendition(session: AsyncSession, eff: EffectiveDoc, pdf: bytes)
     ``session`` (sync_mirror commits)."""
     bucket = get_settings().s3_bucket_renditions
     sha = hashlib.sha256(pdf).hexdigest()
-    await storage.put_bytes(pdf, sha, bucket=bucket, content_type="application/pdf")
+    version_id = await storage.put_bytes(pdf, sha, bucket=bucket, content_type="application/pdf")
     await session.execute(
         pg_insert(Blob)
         .values(
@@ -565,6 +565,7 @@ async def _cache_rendition(session: AsyncSession, eff: EffectiveDoc, pdf: bytes)
             bucket=bucket,
             object_key=sha,
             worm_locked=False,  # renditions are derived + rebuildable (doc 14 §5.4)
+            **version_binding.write_binding(version_id),
         )
         .on_conflict_do_nothing(index_elements=["sha256"])
     )

@@ -12,6 +12,7 @@ restored chain re-verify runs. The blob bytes are READ from the locked vault —
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -59,7 +60,7 @@ async def _drop_target(scratch_db: str | None) -> None:
 async def test_durable_backup_encrypted_roundtrips(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """The durable archive is AES-256-GCM ``.tar.enc`` (manifest v2 + the config-snapshot leg);
+    """The durable archive is AES-256-GCM ``.tar.enc`` (manifest v3 + the config-snapshot leg);
     decrypt+unpack recovers a valid plaintext tar. Keycloak is absent in CI → realm leg 'absent'."""
     org_id = await _org_id()
     await _make_effective_doc(app_client, token_factory, b"enc-roundtrip-source-v1")
@@ -81,7 +82,7 @@ async def test_durable_backup_encrypted_roundtrips(
         enc, Path(tempfile.mkdtemp()) / "round.tar", secret=get_settings().backup_encryption_key
     )
     manifest = archive.read_manifest(plain)
-    assert manifest["manifest_version"] == 2
+    assert manifest["manifest_version"] == 3
     assert manifest["legs"]["config_snapshot"] == "present"
 
 
@@ -913,3 +914,136 @@ async def test_durable_backup_without_key_omits_sensitive_legs(
     assert out["archive"].endswith(".tar"), out
     assert out["legs"]["realm_export"] == "absent"
     assert out["legs"]["config_snapshot"] == "absent"
+
+
+async def test_restore_resolves_the_bound_version_not_the_current_one(
+    app_client: AsyncClient, token_factory: Callable[..., str], tmp_path: Path
+) -> None:
+    """The case the binding exists for.
+
+    After the generation is written, the object is overwritten in place. Blobs are
+    content-addressed and the triad only ever checked the digest, so a current-version restore
+    copies the NEW bytes and fails — while a generation bound to the version its write returned
+    resolves the sealed bytes and passes. Mutating ``_copy_blobs`` back to a version-less
+    ``CopySource`` turns this red, which is the evidence that the binding is load-bearing.
+    """
+    org_id = await _org_id()
+    sealed = b"bound-version-source-v1"
+    await _make_effective_doc(app_client, token_factory, sealed)
+    await _insert_backup_policy(org_id, str(tmp_path))
+    archive_path = await _durable_archive(org_id)
+
+    plain = (
+        crypto.decrypt_archive(
+            Path(archive_path),
+            tmp_path / "bound.tar",
+            secret=get_settings().backup_encryption_key,
+        )
+        if crypto.is_encrypted_archive(Path(archive_path))
+        else Path(archive_path)
+    )
+    manifest = archive.read_manifest(plain)
+    blobs = archive.blob_refs_from_manifest(manifest)
+    assert manifest["manifest_version"] == 3
+    # Run-scoped: this suite shares one database, and other files seed blob rows directly (with no
+    # binding, which a production write path never does), so the GENERATION's state is not this
+    # test's to assert. Assert the binding of the blob this test created, addressed by its content.
+    sealed_sha = hashlib.sha256(sealed).hexdigest()
+    bound = [b for b in blobs if b.sha256 == sealed_sha]
+    assert bound, "expected this test's source blob in the generation"
+    assert bound[0].object_version_source == "promotion", bound[0]
+    assert bound[0].object_version_id, bound[0]
+
+    client = _s3_client()
+    for blob in bound:
+        # A newer version of the same key. Object lock protects the sealed VERSION, not the key.
+        client.put_object(  # type: ignore[attr-defined]
+            Bucket=blob.bucket, Key=blob.object_key, Body=b"overwritten-after-the-generation"
+        )
+        current = client.head_object(Bucket=blob.bucket, Key=blob.object_key)  # type: ignore[attr-defined]
+        assert current["VersionId"] != blob.object_version_id, "expected a distinct newer version"
+
+    out = await backup_service.run_restore(
+        org_id, archive_path=archive_path, fetch_off_host=lambda _s, _o: 0
+    )
+    try:
+        assert out["result"] == "PASS", out
+        assert out["details"]["bound_blobs"] >= 1, out["details"]
+    finally:
+        await _drop_target(out.get("scratch_db"))
+
+
+async def test_restore_fails_when_a_bound_version_cannot_be_resolved(
+    app_client: AsyncClient, token_factory: Callable[..., str], tmp_path: Path
+) -> None:
+    """A bound version that no longer resolves is a FAIL, never a silent fall back to current."""
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"missing-bound-version-source-v1")
+    await _insert_backup_policy(org_id, str(tmp_path))
+    archive_path = await _durable_archive(org_id)
+    restored_handle: backup_service.ScratchHandle | None = None
+
+    def _point_at_a_dead_version(handle: backup_service.ScratchHandle) -> None:
+        import psycopg
+
+        nonlocal restored_handle
+        restored_handle = handle
+        with (
+            psycopg.connect(
+                **conn_kwargs(handle.owner_dsn, dbname=handle.scratch_db), autocommit=True
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(
+                "UPDATE blob SET object_version_id = %s, object_version_source = 'promotion'"
+                " WHERE object_version_source = 'promotion'",
+                ("0000-not-a-live-version",),
+            )
+            assert cur.rowcount >= 1, "expected a bound restored blob to mutate"
+
+    out = await backup_service.run_restore(
+        org_id,
+        archive_path=archive_path,
+        fetch_off_host=lambda _s, _o: 0,
+        after_restore=_point_at_a_dead_version,
+    )
+    try:
+        assert out["result"] == "FAIL", out
+    finally:
+        await _drop_target(restored_handle.scratch_db if restored_handle else out.get("scratch_db"))
+
+
+async def test_restore_fails_when_a_restored_row_disagrees_about_size(
+    app_client: AsyncClient, token_factory: Callable[..., str], tmp_path: Path
+) -> None:
+    """``size_bytes`` has always ridden the row and was never checked; now a disagreement FAILs."""
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"size-disagreement-source-v1")
+    await _insert_backup_policy(org_id, str(tmp_path))
+    archive_path = await _durable_archive(org_id)
+    restored_handle: backup_service.ScratchHandle | None = None
+
+    def _shrink_recorded_size(handle: backup_service.ScratchHandle) -> None:
+        import psycopg
+
+        nonlocal restored_handle
+        restored_handle = handle
+        with (
+            psycopg.connect(
+                **conn_kwargs(handle.owner_dsn, dbname=handle.scratch_db), autocommit=True
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("UPDATE blob SET size_bytes = size_bytes - 1 WHERE size_bytes > 1")
+            assert cur.rowcount >= 1, "expected a restored blob row to mutate"
+
+    out = await backup_service.run_restore(
+        org_id,
+        archive_path=archive_path,
+        fetch_off_host=lambda _s, _o: 0,
+        after_restore=_shrink_recorded_size,
+    )
+    try:
+        assert out["result"] == "FAIL", out
+    finally:
+        await _drop_target(restored_handle.scratch_db if restored_handle else out.get("scratch_db"))

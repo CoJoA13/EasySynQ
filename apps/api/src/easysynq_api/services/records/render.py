@@ -41,7 +41,7 @@ from ...db.models.disposition_event import DispositionEvent
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.record import Record
-from ..vault import schema_from_version, storage
+from ..vault import schema_from_version, storage, version_binding
 
 logger = logging.getLogger("easysynq.records.render")
 
@@ -186,7 +186,7 @@ async def build_structured_pdf(session: AsyncSession, record_id: uuid.UUID) -> N
     pdf = _text_pdf(f"Record {base.identifier}", _render_lines(record, base, version, version_base))
     bucket = get_settings().s3_bucket_renditions
     sha = hashlib.sha256(pdf).hexdigest()
-    await storage.put_bytes(pdf, sha, bucket=bucket, content_type="application/pdf")
+    version_id = await storage.put_bytes(pdf, sha, bucket=bucket, content_type="application/pdf")
     await session.execute(
         pg_insert(Blob)
         .values(
@@ -197,6 +197,7 @@ async def build_structured_pdf(session: AsyncSession, record_id: uuid.UUID) -> N
             bucket=bucket,
             object_key=sha,
             worm_locked=False,  # derived + rebuildable (doc 14 §5.4)
+            **version_binding.write_binding(version_id),
         )
         .on_conflict_do_nothing(index_elements=["sha256"])
     )

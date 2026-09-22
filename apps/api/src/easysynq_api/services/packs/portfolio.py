@@ -47,7 +47,7 @@ from ...db.models.blob import Blob
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_pack import EvidencePack
-from ..vault import storage, watermark
+from ..vault import storage, version_binding, watermark
 from . import repository as repo
 from .locks import lock_pack_build_shared
 
@@ -301,7 +301,7 @@ async def build_and_cache_portfolio(session: AsyncSession, pack_id: uuid.UUID) -
         return
     bucket = get_settings().s3_bucket_renditions
     sha = hashlib.sha256(pdf).hexdigest()
-    await storage.put_bytes(pdf, sha, bucket=bucket, content_type="application/pdf")
+    version_id = await storage.put_bytes(pdf, sha, bucket=bucket, content_type="application/pdf")
     await session.execute(
         pg_insert(Blob)
         .values(
@@ -312,6 +312,7 @@ async def build_and_cache_portfolio(session: AsyncSession, pack_id: uuid.UUID) -
             bucket=bucket,
             object_key=sha,
             worm_locked=False,  # derived + rebuildable (doc 14 §5.4)
+            **version_binding.write_binding(version_id),
         )
         .on_conflict_do_nothing(index_elements=["sha256"])
     )

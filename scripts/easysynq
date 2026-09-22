@@ -92,6 +92,9 @@ usage: easysynq <command>
   backup restore-test
                     Run the backup->restore-into-scratch drill + integrity triad
                     (gate G-C); persists PASS/FAIL.                      [S8b2]
+  backup bind-versions
+                    Bind blob rows written before migration 0093 to their
+                    CURRENT object version (observed, not sealed).        [S8b2]
   restore <file> --confirm [--audit-checkpoint-ack]
                     Restore integrity verification in a fresh scratch target;
                     depends on the source object store and is NOT cutover-ready.
