@@ -99,8 +99,14 @@ the archive still carries no object bytes, restore stays source-dependent and no
 service-capability separation, complete encrypted generations (still whole-archive-in-memory),
 certified destinations, fresh role-preserving targets and the source-denied boot-and-read proof all
 remain required. See the
-[design](superpowers/specs/2026-09-20-recovery-exact-version-binding-design.md). Last reviewed:
-2026-09-20.
+[design](superpowers/specs/2026-09-20-recovery-exact-version-binding-design.md).
+Delivery, 2026-09-22: merged in
+[!63](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/63) (squash `909fef6`); its
+[merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2869629501) passed
+all eleven jobs it ran, including the migration suite and eleven mandatory runtime cases. Review
+added the manifest-version input to the generation state (a v2 archive now reports `absent`, a
+never-backfilled v3 generation `partial`) and closed the backfill command's never-raise contract.
+The contract above is untouched by the merge; this record stays OPEN. Last reviewed: 2026-09-22.
 
 ## RES-CONTAINER-SECURITY-TRIAGE
 
@@ -368,6 +374,25 @@ memory and elapsed times with the same bundled expat. The runner still withholds
 assertion, so the cause remains unestablished; this occurrence is intermittent, and the retry does
 not close this record.
 Last reviewed: 2026-09-19
+
+## RES-INTEGRATION-SETUP-ORDER-FAILURE
+
+Status: OPEN
+Owner: Repository owner
+Source: S-recovery-exact-version-binding verification, 2026-09-22, clean `main` worktree `bdfdf95`
+Reason: A full single-process run of the integration suite (`pytest -m integration`) fails
+`tests/integration/test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment`
+while every other case passes (1,258 passed / 1 failed on `bdfdf95`); the same tree passes the
+case in CI because the four-way duration-balanced sharding never places it after the test whose
+leftover state it trips on. The failure is therefore order-dependent, masked by shard composition,
+and a `.test_durations` refresh that moves the chunk boundary can surface it in CI without any
+code change.
+Closure contract: Identify the earlier test (or fixture) whose shared-database or process state
+the setup case depends on, make the case self-provide or isolate that precondition so it passes
+in any order, prove the fix with a full single-process integration run and with the specific
+ordering that reproduced the failure, and confirm CI sharding is not relied on. A green sharded
+run alone does not close this record.
+Last reviewed: 2026-09-22
 
 ## RES-TYPESCRIPT-7-UPGRADE
 
