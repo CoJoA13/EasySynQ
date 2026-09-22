@@ -1,0 +1,9 @@
+# zizmor configuration, read by the `workflow-and-secrets` CI job. Each exception names its reason.
+rules:
+  # cache-poisoning: zizmor treats the `v*` tag trigger as a release workflow and flags every
+  # dependency cache in it. Tag runs here PUBLISH NOTHING (release-gate only asserts image digests),
+  # and a pull request's cache is scoped to its own ref and cannot be read by main or tag runs.
+  # ⚠ Revisit before any job starts publishing images or release assets: that job must not
+  # restore a cache, and this exception must not cover it.
+  cache-poisoning:
+    disable: true

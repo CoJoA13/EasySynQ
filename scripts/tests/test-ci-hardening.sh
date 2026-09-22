@@ -71,6 +71,8 @@ printf '== ci hardening contract ==\n'
 CHANGES_BLOCK="$(job_block changes)"
 CONTRACTS_BLOCK="$(job_block contracts)"
 COMPOSE_LOCK_BLOCK="$(job_block compose-images-lock)"
+WORKFLOW_SECRETS_BLOCK="$(job_block workflow-and-secrets)"
+DEPENDENCY_REVIEW_BLOCK="$(job_block dependency-review)"
 API_BLOCK="$(job_block api)"
 MIGRATIONS_BLOCK="$(job_block migrations)"
 SECURITY_BLOCK="$(job_block security)"
@@ -94,6 +96,21 @@ assert_not_contains "no retired hosting CLI in the workflow" "$WORKFLOW" "glab "
 assert_contains "pull requests are the only branch trigger" "$WORKFLOW" $'on:\n  push:\n    branches: [main]'
 assert_contains "version tags trigger the release gate" "$WORKFLOW" "    tags: ['v*']"
 assert_contains "manual runs exist so main can get a full run on demand" "$WORKFLOW" "  workflow_dispatch:"
+assert_contains "a weekly scheduled run re-scans an unchanged main" "$WORKFLOW" \
+  $'  schedule:\n    - cron: "17 6 * * 1"'
+assert_not_contains "no action is referenced by a movable tag" "$WORKFLOW" "@v7"
+if grep -nE 'uses: [^ ]+@' "$WORKFLOW" | grep -vqE '@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$'; then
+  bad "every action is pinned to a full commit SHA with its version comment"
+else
+  ok "every action is pinned to a full commit SHA with its version comment"
+fi
+checkouts="$(grep -c 'uses: actions/checkout@' "$WORKFLOW")"
+no_persist="$(grep -c 'persist-credentials: false' "$WORKFLOW")"
+if [ "$checkouts" -gt 0 ] && [ "$checkouts" -eq "$no_persist" ]; then
+  ok "no checkout persists the job token ($checkouts of $checkouts)"
+else
+  bad "no checkout persists the job token ($no_persist of $checkouts)"
+fi
 assert_contains "only pull-request runs are superseded by a newer commit" "$WORKFLOW" \
   "cancel-in-progress: \${{ github.event_name == 'pull_request' }}"
 assert_contains "main runs each get a unique concurrency group" "$WORKFLOW" \
@@ -123,7 +140,7 @@ assert_text_contains "security also runs as a post-merge backstop" \
   "$SECURITY_BLOCK" "if: needs.changes.outputs.code == 'true' || needs.changes.outputs.main_push == 'true'"
 assert_text_contains "the docs lane runs exactly when nothing else is owed" \
   "$DOCS_BLOCK" "if: needs.changes.outputs.docs_only == 'true'"
-for job in contracts compose-images-lock; do
+for job in contracts compose-images-lock workflow-and-secrets; do
   block="$(job_block "$job")"
   assert_text_not_contains "$job runs on every run (no needs)" "$block" "    needs:"
   assert_text_not_contains "$job runs on every run (no if)" "$block" "    if:"
@@ -131,7 +148,7 @@ done
 
 # ---- the one required check -------------------------------------------------------------------------
 assert_text_contains "gate always evaluates" "$GATE_BLOCK" "    if: \${{ always() }}"
-for job in changes contracts compose-images-lock api migrations security docs-tests contract-responses integration-shards web-shards web-browser release-gate; do
+for job in changes contracts compose-images-lock workflow-and-secrets dependency-review api migrations security docs-tests contract-responses integration-shards web-shards web-browser release-gate; do
   assert_text_contains "gate needs $job" "$GATE_BLOCK" "      - $job"
   assert_text_contains "gate judges $job" "$GATE_BLOCK" "owed $job"
 done
@@ -226,9 +243,9 @@ assert_text_contains "contracts audits the locked dependency graph" "$CONTRACTS_
 assert_text_contains "contracts checks the committed contract lock" "$CONTRACTS_BLOCK" "run: bash scripts/gen-contracts.sh --check"
 assert_text_not_contains "contracts does not run floating npx contract tools" "$CONTRACTS_BLOCK" "npx"
 assert_before "authority contracts run before contract tool hydration" "$CONTRACTS_BLOCK" \
-  "      - name: Agent authority and Claude compatibility contracts" "      - uses: actions/setup-node@v7"
+  "      - name: Agent authority and Claude compatibility contracts" "      - uses: actions/setup-node@"
 assert_before "R61 regression runs before contract tool hydration" "$CONTRACTS_BLOCK" \
-  "      - name: R61 backstop regression harness" "      - uses: actions/setup-node@v7"
+  "      - name: R61 backstop regression harness" "      - uses: actions/setup-node@"
 assert_before "site-data backstop stays ahead of the doctor contracts" "$CONTRACTS_BLOCK" \
   "      - name: R61 site-data backstop (check-no-site-data)" "      - name: doctor shell contracts"
 assert_before "workflow regression runs before contract tool hydration" "$CONTRACTS_BLOCK" \
@@ -272,6 +289,18 @@ assert_contains "pip-audit runner exports the frozen default graph without its s
 assert_contains "pip-audit executes only through the frozen security group" "$PIP_AUDIT_RUNNER" \
   'uv run --frozen --only-group security pip-audit \'
 assert_not_contains "active workflow rejects floating pip-audit" "$WORKFLOW" "uvx pip-audit"
+
+# ---- workflow lint, secret scan, dependency review ------------------------------------------------------
+assert_text_contains "the secret scan checks out the whole history" "$WORKFLOW_SECRETS_BLOCK" "          fetch-depth: 0"
+assert_text_contains "actionlint runs from a digest-pinned image" "$WORKFLOW_SECRETS_BLOCK" "rhysd/actionlint:1.7.12@sha256:"
+assert_text_contains "zizmor runs from a digest-pinned image" "$WORKFLOW_SECRETS_BLOCK" "ghcr.io/zizmorcore/zizmor:1.30.1@sha256:"
+assert_text_contains "gitleaks runs from a digest-pinned image" "$WORKFLOW_SECRETS_BLOCK" "ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:"
+assert_text_contains "gitleaks scans history and fails on a finding" "$WORKFLOW_SECRETS_BLOCK" 'git --redact --no-banner --exit-code 1 --log-opts="--full-history HEAD" .'
+assert_text_not_contains "the secret scan is not advisory" "$WORKFLOW_SECRETS_BLOCK" "--exit-code 0"
+assert_contains "the shared gitleaks config extends the default rules" "$ROOT/.gitleaks.toml" $'[extend]\nuseDefault = true'
+assert_text_contains "dependency review is pull-request only" "$DEPENDENCY_REVIEW_BLOCK" "    if: github.event_name == 'pull_request'"
+assert_text_contains "dependency review fails on high severity" "$DEPENDENCY_REVIEW_BLOCK" "fail-on-severity: high"
+assert_text_contains "gate owes dependency review exactly on pull requests" "$GATE_BLOCK" 'owed dependency-review  "$R_DEPENDENCY_REVIEW"  "$IS_PR"'
 
 # ---- release gate ----------------------------------------------------------------------------------------
 assert_text_contains "release gate stays tag-only" "$RELEASE_BLOCK" "if: startsWith(github.ref, 'refs/tags/v')"

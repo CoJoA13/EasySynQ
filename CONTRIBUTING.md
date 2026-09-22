@@ -24,7 +24,7 @@ unredacted logs out of the repository and issue tracker. Use placeholders and sa
 ## Report a security concern
 
 Use GitHub's private vulnerability reporting (the repository's **Security** tab, "Report a
-vulnerability") and verify the report is private before submitting. If private reporting is
+vulnerability"; see also [SECURITY.md](SECURITY.md)) and verify the report is private before submitting. If private reporting is
 unavailable to you, contact a project owner through an existing private channel. Do not post
 vulnerability details in a normal issue or pull request while waiting for access.
 

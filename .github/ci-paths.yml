@@ -23,6 +23,8 @@ code:
   - .env.example
   - .gitattributes
   - .gitignore
+  - .gitleaks.toml
+  - .gitleaksignore
   - .mcp.json
   - .node-version
   - .pre-commit-config.yaml

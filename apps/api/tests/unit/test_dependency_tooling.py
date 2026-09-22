@@ -127,6 +127,7 @@ def test_dependabot_tracks_only_version_updates_for_the_locked_contract_toolchai
             "directory": "/packages/contracts",
             "schedule": {"interval": "weekly"},
             "open-pull-requests-limit": 5,
+            "cooldown": {"default-days": 7},
             "groups": {
                 "contract-tools-minor-patch": {
                     "applies-to": "version-updates",
@@ -289,8 +290,13 @@ def test_active_guidance_tracks_both_frozen_npm_locks_and_mixed_policy() -> None
     assert "frozen" in dev_workflow
     assert "just security-npm" in dev_workflow
     normalized_workflow = " ".join(dev_workflow.split())
-    assert "npm high/critical findings are gated" in normalized_workflow
-    assert "pip-audit and Trivy findings are report-only" in normalized_workflow
+    assert (
+        "npm high/critical findings and built-image HIGH/CRITICAL findings with an available fix "
+        "are gated" in normalized_workflow
+    )
+    assert "pip-audit and the Trivy filesystem scan are report-only" in normalized_workflow
+    # The built-image threshold is gated in `security`; the old blanket claim was wrong.
+    assert "pip-audit and Trivy findings are report-only" not in normalized_workflow
     assert "`security` is warn-only" not in dev_workflow
 
     for setup_guide in (readme, fresh_linux):
@@ -304,3 +310,13 @@ def test_contract_lock_hook_keeps_the_reminder_without_stale_ci_claims() -> None
     assert "Contract-lock reminder:" in hook
     assert "NO CI JOB RUNS scripts/gen-contracts.sh" not in hook
     assert "NO CI job runs scripts/gen-contracts.sh" not in hook
+
+
+def test_every_dependabot_entry_waits_out_a_seven_day_cooldown() -> None:
+    """Hijacked-package releases are usually caught and yanked within days; a cooldown keeps the
+    weekly updater from proposing one in that window. Security updates are exempt by design, so
+    this costs no advisory response time."""
+    for entry in _dependabot_updates():
+        cooldown = entry.get("cooldown", {})
+        where = (entry["package-ecosystem"], entry["directory"])
+        assert cooldown.get("default-days", 0) >= 7, where

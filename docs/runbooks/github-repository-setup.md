@@ -26,7 +26,8 @@ ruleset carries:
 - Merge methods: **squash only** (allow squash merge on; merge commits and rebase merging off).
   Rebase merging would replay commits the run never saw. The squash commit message is the pull
   request body, so write the body as the commit message. Auto-merge and delete-branch-on-merge stay
-  on.
+  on. **Always suggest updating pull request branches** is on (enabled 2026-09-22), so the
+  up-to-date rule above is one click rather than a local rebase.
 
 A second ruleset targets tags `v*`: **restrict creation** to repository administrators, **block
 force pushes** and **restrict deletions**. A protected tag still needs its `release-gate` job to
@@ -42,10 +43,35 @@ Work on scoped branches and use reviewed pull requests. Plain branch pushes run 
 
 ## Actions
 
-Actions are enabled for the repository with the `ci` workflow only. Workflow permissions are
+Actions are enabled for the repository with one tracked workflow, `ci`. CodeQL's default setup
+and Dependabot also start their own dynamic runs, which are managed from settings. Workflow permissions are
 read-only for `contents` (the workflow declares its own `permissions:`); do not raise the
 repository default. Pull requests from forks run with a read-only token and no secrets, which is
 sufficient because the gate needs none.
+
+Every action is pinned to a full commit SHA with a `# vX.Y.Z` comment, and every checkout sets
+`persist-credentials: false`; both are asserted by `test_ci_workflow.py` and
+`scripts/tests/test-ci-hardening.sh`, and zizmor enforces them from the workflow side. The
+repository setting **Require actions to be pinned to a full-length commit SHA** may be turned on
+to enforce the same rule server-side; it is off today, and turning it on is safe because no
+workflow references a tag.
+
+Two jobs keep the workflow and the history honest on every run:
+
+- `workflow-and-secrets` runs actionlint (with shellcheck over each `run:` script), zizmor over
+  `.github/` (the one reviewed exception is in `.github/zizmor.yml`), and a **gated** gitleaks scan
+  of the whole history reachable from the checked-out commit. The scan reads the same
+  `.gitleaks.toml` and `.gitleaksignore` as the pre-commit hook. The three tools run from upstream
+  images pinned by tag and digest in the workflow; like trivy's binary in `security`, they are
+  **manual pins** that no updater reads.
+- `dependency-review` runs on pull requests only and fails when the change introduces a high or
+  critical advisory.
+
+A weekly scheduled run (Mondays 06:17 UTC) executes every suite against an unchanged `main`, so an
+advisory published against locked dependencies or a base image turns `main` red without waiting for
+a push. Treat a red scheduled run as the alert it is: open a pull request that fixes it. GitHub
+disables scheduled workflows after 60 days without repository activity; re-enable it under
+Actions if that happens.
 
 **No secrets are required by CI today.** Every guard, suite and built-image scan runs from the
 tracked source, public registries and the runner's own Docker. An empty Actions secrets list is the
@@ -62,6 +88,9 @@ Settings > Code security and leave grouping, schedules, ignores and version ceil
 Dependabot refreshes `uv.lock` and the npm lockfiles itself as part of each update pull request,
 and every update still requires review and a green `gate`.
 
+Each entry waits out a seven-day `cooldown` before proposing a newly published version (zizmor
+holds this at seven days or more). Security updates ignore the cooldown.
+
 What Dependabot does not do, and the maintainer does by hand (R86):
 
 - `infra/images.lock` digests are not tracked. A Compose image update reddens `compose-images-lock`
@@ -73,9 +102,12 @@ What Dependabot does not do, and the maintainer does by hand (R86):
   (`test_deploy_configuration`).
 - `overrides` in `package.json` are not edited, so an advisory against a pinned override (the
   contract tools' `js-yaml`) is a manual change.
+- Container images referenced from workflow shell steps (trivy, actionlint, zizmor, gitleaks) and
+  the `postgres:18` service image in the `migrations` job are not tracked; bump tag and digest
+  together, deliberately.
 
-Dependabot security updates and alerts may stay enabled; they open pull requests through the same
-gate. There is no scheduled pipeline to inspect after a settings change; verify the configuration by
+**Dependabot alerts** and **Dependabot security updates** are on (enabled 2026-09-22). Security
+update pull requests go through the same gate as version updates. There is no scheduled pipeline to inspect after a settings change; verify the configuration by
 the next weekly run opening at least one grouped pull request, and read the Dependabot logs under
 Insights > Dependency graph > Dependabot when a group is silent.
 
@@ -89,8 +121,19 @@ A green check run is not complete image-security clearance. Review the retained 
 current follow-up record in
 [`../open-residuals.md`](../open-residuals.md#res-container-security-triage).
 
-Enable **private vulnerability reporting** (Settings > Code security) so `CONTRIBUTING.md`'s
-security-reporting instructions have a destination.
+Code security settings as of 2026-09-22 (Settings > Code security):
+
+| Setting | State | Why |
+| --- | --- | --- |
+| Private vulnerability reporting | On | The destination `SECURITY.md` and `CONTRIBUTING.md` send reporters to. |
+| Dependency graph, Dependabot alerts, Dependabot security updates | On | Advisory alerts and fix pull requests. |
+| Secret scanning and push protection | On | Blocks known provider tokens at push time. |
+| Secret scanning non-provider patterns, validity checks | Off | Not available for this repository without GitHub Secret Protection; the API accepted the request and left both disabled. The gated gitleaks scan covers generic patterns. |
+| Code scanning (CodeQL default setup) | On | Python, JavaScript/TypeScript and Actions, on pull requests, pushes and a weekly schedule. Not a required check: results appear under Security > Code scanning and as pull request annotations. Triage alerts there; a dismissed alert needs a reason. |
+
+CodeQL's default setup is configured in settings, not in a tracked workflow, so it does not appear
+in `ci.yml` and `gate` does not wait for it. Promote it to a tracked advanced-setup workflow only if
+it needs to become merge-blocking.
 
 ## Project front door and collaboration
 

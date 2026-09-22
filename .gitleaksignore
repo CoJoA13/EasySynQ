@@ -1,0 +1,26 @@
+# Reviewed gitleaks false positives, by fingerprint (<commit>:<path>:<rule>:<line>). Every entry
+# was inspected on 2026-09-22 and none of them is a live secret. They are Ed25519 key type
+# annotations, the doctor's DOCTOR_SENTINEL non-disclosure fixture, a Keycloak test password
+# literal, an example object hash and spec prose. Entries cover both the pinned CI gitleaks and
+# the 8.18 pre-commit floor, whose default rules differ. Add a line only after reviewing the
+# finding; never add a real secret here. Rotate and purge it instead.
+0c1bbd81f0df085e66587f10bd4198ba46bf6479:docs/15-api-design.md:generic-api-key:3
+1499734d86e8cafbcf75539c2cb36859d60d9003:docs/superpowers/plans/2026-08-08-codex-fedora-foundation.md:generic-api-key:426
+1499734d86e8cafbcf75539c2cb36859d60d9003:scripts/tests/test-doctor.sh:generic-api-key:339
+1499734d86e8cafbcf75539c2cb36859d60d9003:scripts/tests/test-doctor.sh:generic-api-key:340
+165990d3734d683371f3234fc0fe03f1e4624c17:apps/api/src/easysynq_api/services/audit/checkpoint_v2.py:generic-api-key:437
+165990d3734d683371f3234fc0fe03f1e4624c17:apps/api/tests/unit/test_audit_checkpoint_v2.py:generic-api-key:77
+2eae7c52763b9c21baa89225fe4684c4a1cacc63:apps/api/src/easysynq_api/services/audit/checkpoint_v2.py:generic-api-key:437
+2eae7c52763b9c21baa89225fe4684c4a1cacc63:apps/api/tests/unit/test_audit_checkpoint_v2.py:generic-api-key:77
+348f31efe98285056ee3d66e7b34497e71b4b638:docs/15-api-design.md:generic-api-key:3
+405facb0daa3dfc9f887b967c578ff8599c97887:apps/api/src/easysynq_api/services/packs/share_token.py:generic-api-key:68
+405facb0daa3dfc9f887b967c578ff8599c97887:apps/api/src/easysynq_api/services/packs/share_token.py:generic-api-key:84
+9cc3a3479658b7d4a42d3c6ce28b21192e7fe004:docs/15-api-design.md:generic-api-key:460
+9cc3a3479658b7d4a42d3c6ce28b21192e7fe004:docs/superpowers/plans/2026-08-06-s-upload-identity.md:generic-api-key:847
+cf2673087a77de42bb5491fd7a4cad72241640f7:apps/api/src/easysynq_api/services/vault/verify_token.py:generic-api-key:101
+cf2673087a77de42bb5491fd7a4cad72241640f7:apps/api/src/easysynq_api/services/vault/verify_token.py:generic-api-key:114
+cf2673087a77de42bb5491fd7a4cad72241640f7:apps/api/src/easysynq_api/services/vault/verify_token.py:generic-api-key:50
+e627f35eb2fe4d62b4798d38ef9455684ad9ed62:apps/api/tests/unit/test_audit_checkpoint.py:private-key:139
+ec2e93e11dd4958134e0a846cae3ceeaa92525be:apps/api/tests/unit/test_keycloak_provisioning.py:generic-api-key:164
+ec2e93e11dd4958134e0a846cae3ceeaa92525be:apps/api/tests/unit/test_keycloak_provisioning.py:generic-api-key:194
+ec2e93e11dd4958134e0a846cae3ceeaa92525be:docs/superpowers/plans/2026-08-03-s-user-create.md:generic-api-key:384

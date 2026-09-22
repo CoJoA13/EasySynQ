@@ -1,0 +1,10 @@
+# Routes reporters before they reach a blank issue. The security link keeps vulnerability details
+# out of the public tracker.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/CoJoA13/EasySynQ/security/advisories/new
+    about: Report privately. Do not open a public issue for a suspected vulnerability.
+  - name: Known deferred work (open residuals)
+    url: https://github.com/CoJoA13/EasySynQ/blob/main/docs/open-residuals.md
+    about: Check whether the problem is already a tracked residual before filing it.
