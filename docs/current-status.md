@@ -40,9 +40,12 @@ check; Dependabot replaces Renovate; the guards require `gh` and the GitHub clon
 approved R86 on 2026-09-22. The rulesets from
 [`github-repository-setup.md`](runbooks/github-repository-setup.md) were applied on 2026-09-22.
 The GitLab project was archived on 2026-09-22 once both `main` tips agreed. The docs-only CI lane
-first ran live on this record's own PR (#555) and failed on a port gap — the lane never
-materialized the `.env` the Compose-rendering tests need — fixed and pinned in #556. Still owed:
-triage of the open Dependabot pull requests. See
+first ran live on this record's own PR (#555): [run 35703051883](https://github.com/CoJoA13/EasySynQ/actions/runs/35703051883)
+selected the lane and failed on a port gap — the lane never materialized the `.env` the
+Compose-rendering tests need — fixed and pinned in #556; rebased onto it,
+[run 35717332682](https://github.com/CoJoA13/EasySynQ/actions/runs/35717332682) ran the guards and
+`docs-tests` only, all green, and `gate` passed. The eight pre-move Dependabot pull requests are
+tracked as [`RES-DEPENDABOT-BACKLOG-TRIAGE`](open-residuals.md#res-dependabot-backlog-triage). See
 [dated evidence](slice-history.md#s-ci-github-primary--primary-hosting-returns-to-github-and-one-required-check-gates-main-r86).
 
 The previous shipped baseline was MR !63's merged main `c62ce09d0442b6b3d5df0ebb57ee0efb60dd3e52`

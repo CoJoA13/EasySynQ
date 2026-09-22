@@ -101,7 +101,10 @@ creates (on GitLab `docs-tests` inherited that from the `api` template). `gate` 
 designed. PR [#556](https://github.com/CoJoA13/EasySynQ/pull/556) adds the step and pins it in
 both `test_ci_workflow.py` (every job that runs the unit tree or a content selection of it must
 materialize `.env` before pytest) and `test-ci-hardening.sh` (150 → 152), each mutation-checked
-red; #555 was rebased onto it to prove the lane green.
+red. Rebased onto #556 (`f42bf57`), #555's
+[run 35717332682](https://github.com/CoJoA13/EasySynQ/actions/runs/35717332682) is the lane's first
+green: `contracts`, `compose-images-lock`, `docs-tests` and `gate` succeeded, every suite skipped as
+owed.
 
 **Test deltas (measured on run 35681656565).** API unit **4,977 → 4,985 passes** with the one
 existing release-only skip (the rewritten `test_ci_workflow.py` carries 32 cases, each policy
@@ -121,9 +124,12 @@ agreed in content and the GitLab project was **archived on 2026-09-22** with the
 superseded. No AI review replaces Duo; no merge queue; the images-lock refresh stays manual; the
 twelve carried-over GitHub issues are untouched. The eight open Dependabot pull requests are
 **not** superseded — Dependabot refreshed them after the move, so they are live proposals under
-the adopted updater, to be triaged one by one (two already green on `gate`; the Compose image ones
-redden `compose-images-lock` exactly as R86 predicts). The residual ledger did not change here: the
-Renovate GitHub-metadata record left it as superseded inside #552 itself.
+the adopted updater (two already green on `gate`; the Compose image ones redden
+`compose-images-lock` exactly as R86 predicts); their review is the one live obligation this slice
+leaves, registered as
+[`RES-DEPENDABOT-BACKLOG-TRIAGE`](open-residuals.md#res-dependabot-backlog-triage) with a
+closure contract. The Renovate GitHub-metadata record left the ledger as superseded inside #552
+itself.
 
 ### S-ci-compute-policy — merge-request evidence, path-selected suites, a docs lane
 
