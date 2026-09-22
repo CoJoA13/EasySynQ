@@ -58,7 +58,12 @@ from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..vault import repository as vault_repo
-from ..vault import resolve_template_version, schema_from_version, storage
+from ..vault import (
+    resolve_template_version,
+    schema_from_version,
+    storage,
+    version_binding,
+)
 from ..vault.staged_identity import StagedObjectRef, StagingDomain, StagingVersionRequired
 from ..vault.upload_rejection import (
     RejectionContext,
@@ -464,6 +469,7 @@ async def _attach_evidence(
                     object_key=promoted.target_key,
                     worm_locked=True,
                     worm_retain_until=promoted.retain_until,
+                    **version_binding.promotion_binding(promoted.target_version_id),
                 )
                 .on_conflict_do_nothing(index_elements=["sha256"])
             )

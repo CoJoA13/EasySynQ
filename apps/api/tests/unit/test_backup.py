@@ -103,11 +103,12 @@ def test_libpq_env_url_decodes_credentials() -> None:
 
 
 def test_build_manifest_lists_blob_snapshot() -> None:
-    """S11: manifest v2 carries the blob snapshot + the legs presence markers + encryption_key_ref;
-    the legs default to 'absent' and the key ref to None (an unencrypted/plain archive)."""
+    """S11: the manifest carries the blob snapshot + the legs presence markers + encryption_key_ref;
+    the legs default to 'absent' and the key ref to None (an unencrypted/plain archive). v3 adds the
+    per-object version binding (see test_blob_version_binding.py); v2 documents stay readable."""
     blobs = [BlobRef(sha256="a" * 64, size_bytes=10, bucket="documents", object_key="a" * 64)]
     m = archive.build_manifest(blobs, config={"source": "restore-drill", "blob_count": 1})
-    assert m["manifest_version"] == 2
+    assert m["manifest_version"] == 3
     assert m["config"]["blob_count"] == 1
     assert m["blobs"][0]["sha256"] == "a" * 64
     assert m["blobs"][0]["bucket"] == "documents"

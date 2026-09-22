@@ -3,6 +3,7 @@
 
     python -m easysynq_api.cli.backup run            # durable archive of every configured policy
     python -m easysynq_api.cli.backup restore-test   # the backup→restore-into-scratch drill (G-C)
+    python -m easysynq_api.cli.backup bind-versions  # bind pre-0093 blob rows to their versions
 
 ``restore-test`` persists PASS/FAIL to ``backup_policy.last_restore_test_result`` (the signal the
 G-C setup gate reads) and exits non-zero on FAIL. The separate WORM-aware restore integrity
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ..config import get_settings
 from ..db.models.organization import Organization
 from ..services.backup import run_restore_test, run_scheduled_backups
+from ..services.backup.version_backfill import backfill_version_bindings
 
 
 async def _restore_test() -> dict[str, object]:
@@ -45,6 +47,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("run", help="write a durable backup archive of every configured policy")
     sub.add_parser("restore-test", help="run the backup→restore-into-scratch drill (gate G-C)")
+    sub.add_parser(
+        "bind-versions",
+        help="bind blob rows written before the version binding to their current object version",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "run":
@@ -54,6 +60,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         for b in backups:
             print(f"  - {b}")
         return 0 if all("error" not in b for b in backups) else 1
+
+    if args.command == "bind-versions":
+        report = backfill_version_bindings()
+        if report.get("result") == "FAIL" and "reason" in report:
+            print(f"bind-versions: FAIL — {report['reason']}")
+            return 1
+        print(
+            "bind-versions: examined {examined}, bound {bound}, unversioned {unversioned}, "
+            "missing {missing}, failed {failed}".format(**report)
+        )
+        # Say what the binding attests every time, not only in the runbook: a backfilled binding is
+        # the version observed now, so these generations report `observed`, never `sealed`.
+        print(f"  note: {report['attests']}")
+        return 0 if report.get("result") == "OK" else 1
 
     out = asyncio.run(_restore_test())
     print(f"restore-test: {out.get('result')} — {out.get('reason')}")

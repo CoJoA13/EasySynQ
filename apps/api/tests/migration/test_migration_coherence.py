@@ -231,7 +231,11 @@ def test_populated_historical_transitions_and_head_repairs(
         monkeypatch.setenv("DATABASE_URL_SYNC", scratch_url)
         get_settings.cache_clear()
         config = _config()
-        assert ScriptDirectory.from_config(config).get_heads() == ["0092_user_color_scheme"]
+        # A single-head pin: every migration slice bumps it, and a branch (two heads) fails here
+        # before any of the populated transitions below run.
+        assert ScriptDirectory.from_config(config).get_heads() == [
+            "0093_blob_object_version_binding"
+        ]
         engine = sa.create_engine(scratch_url)
         try:
             # 0004: role assignments and permission overrides must preserve their full FK closure.

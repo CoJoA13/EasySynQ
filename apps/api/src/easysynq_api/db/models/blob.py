@@ -5,10 +5,11 @@ are one row globally — that is the point of content-addressing (re-upload of i
 creates no new blob and, downstream, no new version). Under D1's single-organization contract,
 each global identity owns the one ``bucket``/``object_key`` placement stored on its row and
 ``org_id`` is provenance; document/record boundaries reject reuse from the other retention domain.
-Content/identity immutable — the ONLY updates are the two D1 operational stamps (``verified_at`` =
+Content/identity immutable — the only updates are the two D1 operational stamps (``verified_at`` =
 last passing re-hash, S-drift-3; ``verify_failed_at`` = the alarm latch, set on a finding / cleared
-on a pass, sorted first in the rotation sample); WORM object-lock in MinIO backs the storage layer
-(the ``documents`` bucket's GOVERNANCE default retention auto-locks on PUT).
+on a pass, sorted first in the rotation sample) and the one-way version binding below, which is
+written once for a row that has none and never overwritten; WORM object-lock in MinIO backs the
+storage layer (the ``documents`` bucket's GOVERNANCE default retention auto-locks on PUT).
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Text, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,4 +51,32 @@ class Blob(Base):
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+    # The exact stored version of the sealed object, and where that binding came from. A recovery
+    # generation binds each referenced object to its version, not merely to bucket/object_key: a
+    # content-addressed key is written once, so an overwrite creates a NEWER version that a
+    # current-version restore would silently prefer (equal bytes hash identically).
+    # `promotion` is the version the verified WORM write returned and read back; `write` is one a
+    # direct server-side put returned; `backfill` is a version observed later by
+    # `backup bind-versions`, attesting only what was current at that moment; `unversioned` records
+    # that the write returned NO version because the bucket has none (renditions), which keeps a
+    # deliberately absent binding distinguishable from a missing one. Nullable because rows predate
+    # the binding, and `unversioned` carries a source without an id.
+    object_version_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    object_version_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            # COALESCE, not a bare IS NULL chain: with a NULL source every branch evaluates to
+            # NULL, the whole expression is NULL, and a CHECK admits NULL — so an id with no
+            # source slipped through. Proven by inserting that exact row against live PostgreSQL.
+            "CASE COALESCE(object_version_source, '')"
+            " WHEN '' THEN object_version_id IS NULL"
+            " WHEN 'unversioned' THEN object_version_id IS NULL"
+            " WHEN 'promotion' THEN object_version_id IS NOT NULL"
+            " WHEN 'write' THEN object_version_id IS NOT NULL"
+            " WHEN 'backfill' THEN object_version_id IS NOT NULL"
+            " ELSE false END",
+            name="object_version_binding",
+        ),
     )

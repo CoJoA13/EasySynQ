@@ -372,15 +372,7 @@ def run_restore(
 
             # 2. read the manifest (point-in-time blob set + table counts + legs)
             manifest = archive.read_manifest(plain)
-            blobs = [
-                archive.BlobRef(
-                    sha256=b["sha256"],
-                    size_bytes=int(b["size_bytes"]),
-                    bucket=b["bucket"],
-                    object_key=b["object_key"],
-                )
-                for b in manifest.get("blobs", [])
-            ]
+            blobs = archive.blob_refs_from_manifest(manifest)
             counts = (manifest.get("config") or {}).get("table_counts") or {}
             legs = manifest.get("legs") or {}
             source_buckets = {b.bucket for b in blobs}
@@ -505,6 +497,18 @@ def run_restore(
                 details={
                     "blobs": len(blobs),
                     "legs": legs,
+                    # How exactly this generation referenced its objects. `sealed` means every
+                    # bindable object was resolved at the version its write returned; `observed`
+                    # that at least one binding was a later backfill, attesting only what was
+                    # current then; `partial` that some bindable object had no binding; `absent`
+                    # a pre-binding (v2) generation. None of these makes a restore a cutover.
+                    "version_binding": archive.binding_state(
+                        blobs, manifest_version=int(manifest.get("manifest_version") or 0)
+                    ),
+                    "bound_blobs": sum(1 for b in blobs if b.object_version_id),
+                    "unversioned_blobs": sum(
+                        1 for b in blobs if b.object_version_source == "unversioned"
+                    ),
                     # Compatibility for callers of the former cutover-oriented contract. Empty is
                     # intentional: this verification target has no safe post-cutover procedure.
                     "post_cutover_actions": [],
@@ -563,7 +567,7 @@ def discard_target(settings: Settings, scratch_db: str) -> None:
         protected_buckets = drill._scratch_worm_bucket_names(
             settings, settings.sync_dsn, scratch_db
         )
-        source_buckets = {bucket for _sha, bucket, _key in drill._scratch_blob_locators(handle)}
+        source_buckets = {row[1] for row in drill._scratch_blob_locators(handle)}
         drill._preflight_scratch_target(
             settings,
             settings.s3_bucket_restore_scratch,

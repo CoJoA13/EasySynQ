@@ -47,7 +47,7 @@ from ...domain.records.form_schema import FieldError, validate_schema
 from ...domain.vault import format_identifier, revision_label
 from ...logging import request_id_var
 from ...problems import ProblemException
-from . import locks, repository, storage, watermark
+from . import locks, repository, storage, version_binding, watermark
 from .audit import VaultAuditEvent, VaultAuditSink
 from .review import REVIEW_PERIOD_DEFAULT_MONTHS
 from .staged_identity import StagingDomain
@@ -520,6 +520,7 @@ async def _ensure_generated_documents_blob(
                 object_key=promoted.target_key,
                 worm_locked=True,
                 worm_retain_until=promoted.retain_until,
+                **version_binding.promotion_binding(promoted.target_version_id),
             )
             .on_conflict_do_nothing(index_elements=["sha256"])
         )
@@ -695,6 +696,7 @@ async def checkin(
                 object_key=promoted.target_key,
                 worm_locked=True,
                 worm_retain_until=promoted.retain_until,
+                **version_binding.promotion_binding(promoted.target_version_id),
             )
             .on_conflict_do_nothing(index_elements=["sha256"])
         )

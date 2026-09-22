@@ -681,12 +681,19 @@ def _put_bytes_sync(data: bytes, object_key: str, bucket: str, content_type: str
 
 async def put_bytes(
     data: bytes, object_key: str, *, bucket: str, content_type: str = "application/octet-stream"
-) -> None:
+) -> str | None:
     """Write bytes server-side (the **worker** path: the renderer caches a generated PDF rendition).
     Targets the **non-WORM** renditions bucket — renditions are derived + rebuildable (doc 14 §5.4),
     so this is a plain ``put_object`` (not the staged exact-version WORM promotion cycle controlled
-    source bytes take). Off the event loop."""
-    await asyncio.to_thread(_put_bytes_sync, data, object_key, bucket, content_type)
+    source bytes take). Off the event loop.
+
+    Returns the store's ``VersionId`` for the write, or ``None`` when the bucket is unversioned —
+    which the renditions bucket is (`minio-init.sh` creates it without object lock or versioning).
+    Callers record that distinction on the blob row so a deliberately absent version binding stays
+    distinguishable from a missing one; ``None`` is a fact about the bucket, never a failure."""
+    response = await asyncio.to_thread(_put_bytes_sync, data, object_key, bucket, content_type)
+    version_id = response.get("VersionId")
+    return version_id if isinstance(version_id, str) and version_id else None
 
 
 async def put_staging_bytes(
