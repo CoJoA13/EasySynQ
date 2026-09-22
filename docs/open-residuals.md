@@ -951,9 +951,11 @@ Reason: The install runbooks tell operators to create site-specific Compose over
 installation root CA as `easysynq-root-ca.crt` inside the working tree, but `.gitignore` covers
 neither. A routine `git add -A` on an operator checkout can therefore stage site data that R61
 forbids in the repository.
-Closure contract: Add `.gitignore` rules for site-specific Compose overlays and the exported root CA
-without hiding the tracked overlays, and prove both with `git check-ignore` plus a check that every
-tracked `infra/compose/compose.*.yml` stays tracked.
+Closure contract: First name one supported location and filename for a site overlay in the install
+runbooks (today they show an inline override fragment without prescribing a path, so no ignore rule
+can be targeted safely, and a wildcard broad enough to cover every valid Compose filename would hide
+tracked files). Then ignore exactly that path and the exported root CA, and prove both with
+`git check-ignore` plus a check that every tracked `infra/compose/compose.*.yml` stays tracked.
 Last reviewed: 2026-09-22
 
 ## RES-BACKUP-CRON-IGNORED
@@ -981,11 +983,14 @@ Source: [GitHub issue #430](https://github.com/CoJoA13/EasySynQ/issues/430), def
 Reason: R64 rule 5 requires a system-tier caller to reset another user's credential. The roster still
 offers "Issue new temp password" to any caller holding `user.create` (`UsersAdmin.tsx`), so a
 granular-override holder sees an action that always returns `422 two_tier_violation`. The PEP check
-in `services/authz/pep.py` has no self exception, while its denial message and doc 07 still say
-"another user", which no longer matches the contract.
+in `services/authz/pep.py` is unconditional (no self exception), while R64 rule 5, its denial
+message and doc 07 §351 say "another user"; doc 07 then justifies system tier for "every reset", and
+the published contract describes the guard as unconditional. The authorities disagree, and choosing
+the weaker reading would change a security boundary.
 Closure contract: Gate the roster action on the same system-tier rule the server enforces, with a
-component test for a granular `user.create` holder, and make the self-reset behaviour, its denial
-text and doc 07 agree with R64 rule 5.
+component test for a granular `user.create` holder. Keep the unconditional guard and correct R64
+rule 5, the denial text and doc 07 to say every reset needs system tier; a self-reset exception is
+out of scope for this record and needs its own owner-approved register amendment first.
 Last reviewed: 2026-09-22
 
 ## RES-KEYCLOAK-ERROR-CLASSIFICATION
@@ -998,8 +1003,12 @@ Reason: `KeycloakProvisioningClient` turns every 4xx on create, including admin-
 into `KeycloakRejected` (reported as invalid operator input), and turns a 404 from
 `set_temporary_password` into `KeycloakUnavailable` (reported as an outage). A stale identity link
 therefore reads as Keycloak being down, and a broken admin credential reads as a typo.
-Closure contract: Classify a missing subject distinctly so the stale link can be repaired, route
-401/403 to the configuration/availability path, and unit-test each status class.
+Closure contract: Classify a missing subject distinctly, route 401/403 to the
+configuration/availability path, and unit-test each status class. Because no supported operation
+replaces a dead `keycloak_subject` today (`POST /users` creates a separate `app_user`, and the only
+user PATCH changes status), the closure must also either ship an audited relink operation for a
+stale subject, with authorization and a test, or return a response naming the documented manual
+recovery. An error class alone does not close this record.
 Last reviewed: 2026-09-22
 
 ## RES-KEYCLOAK-LOCATION-SUBJECT
@@ -1053,10 +1062,12 @@ Source: [GitHub issue #435](https://github.com/CoJoA13/EasySynQ/issues/435), def
 2026-08-04; verified against `3d8613a` on 2026-09-22.
 Reason: The Create user role picker is gated on `permission.grant`, but its data comes from
 `GET /api/v1/roles`, which requires `role.read`. A granular-override caller without `role.read` sees
-an enabled, silently empty dropdown. The seeded System Administrator holds all three keys, so a
+an enabled, silently empty dropdown. The roster's Manage drawer (`UsersAdmin.tsx`) issues the same
+roles query unconditionally for a roster reader, so its "Assign a role" selector fails the same way. The seeded System Administrator holds all three keys, so a
 default install does not hit this.
-Closure contract: Include `role.read` in the picker's gate or render the denied query as a calm
-no-access state (`forbidden` flag, `retry: false`), with a component test for the denied case.
+Closure contract: In both the Create user modal and the Manage drawer, include `role.read` in the
+role selector's gate or render the denied query as a calm no-access state (`forbidden` flag,
+`retry: false`), with a component test for the denied case on each surface.
 Last reviewed: 2026-09-22
 
 ## RES-UNBOUND-SCOPE-TEMPLATE-ROLES
@@ -1068,9 +1079,12 @@ verified against `3d8613a` on 2026-09-22.
 Reason: Five of the eight seeded roles carry parameterized scope templates (`:assignment_process`,
 `:assigned_folder`, `:assigned_doc_class`). `_grant_from_role` in `services/authz/repository.py`
 falls back to the raw template when an assignment has no `bound_scope`, the assignment API accepts
-that, and the roster's Manage drawer posts only `role_id`. The user appears to hold the role and
-receives none of its access. Only the process-owner flow binds a scope.
-Closure contract: Either refuse an unbound assignment of a parameterized role with a named 422, or
-collect the binding in the assignment UI, and prove that an unbound Author or Approver assignment can
-no longer be created silently.
+that, and the roster's Manage drawer posts only `role_id`. Provisioning has the same gap:
+`CreateUserModal` submits `role_ids` to `/users/provision`, which creates each assignment without a
+`bound_scope`. The user appears to hold the role and receives none of its access. Only the
+process-owner flow binds a scope.
+Closure contract: Enforce the rule at the server for every assignment path (post-creation
+assignment and provisioning): either refuse an unbound parameterized role with a named 422, or
+collect the binding in both UIs and require it. Prove that an unbound Author or Approver can be
+created silently by neither path.
 Last reviewed: 2026-09-22
