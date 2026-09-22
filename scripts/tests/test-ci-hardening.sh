@@ -168,6 +168,10 @@ assert_text_contains "migrations reaches its service on localhost (GitHub servic
 assert_text_contains "the docs lane selects tests by content" "$DOCS_BLOCK" \
   'files="$(grep -rlE "$DOCS_TEST_PATTERN" tests/unit --include="test_*.py" | sort)"'
 assert_text_contains "the docs lane fails closed on an empty selection" "$DOCS_BLOCK" 'test -n "$files"'
+assert_text_contains "the docs lane materializes the env file the Compose renderers need" "$DOCS_BLOCK" \
+  "run: cp .env.example .env"
+assert_before "the docs lane materializes .env before its unit tests" "$DOCS_BLOCK" \
+  "run: cp .env.example .env" "uv run pytest \$files -m unit"
 
 # ---- the postgres client trap (hit twice) -------------------------------------------------------------
 assert_text_contains "integration installs the matching postgres client major" \
