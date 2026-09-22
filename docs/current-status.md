@@ -32,9 +32,12 @@ carried from the local gate. Between S-runtime-trixie-hardening and this baselin
 received Redis 8 (!43), the js-yaml major refusal (!57), the TypeScript 7 residual (!58) and the
 CI compute policy (!53, !54, !56); none changed a migration or contract.
 
-**Shipped: S-recovery-exact-version-binding, September 20–22 (!63).** Migration `0093` binds every
-`blob` row to the exact object version it was sealed as, written by the WORM promotion that already
-read it back; renditions record `unversioned` because their bucket has no versions. Manifest v3
+**Shipped: S-recovery-exact-version-binding, September 20–22 (!63).** Migration `0093` adds the
+binding columns, and every `blob` row written from this slice on carries the exact object version
+it was sealed as, recorded by the WORM promotion that already read it back; renditions record
+`unversioned` because their bucket has no versions. Rows written before `0093` stay unbound (their
+generations report `partial`) until the operator runs `backup bind-versions`, which records the
+version observed at backfill time as `backfill` — never presented as sealed. Manifest v3
 carries the binding and a generation state (`sealed` / `observed` / `partial` / `absent`); restore
 resolves the bound version and now also checks recorded length; `backup bind-versions` binds older
 rows as `backfill`. The motivating case — an object overwritten after its generation was written
@@ -594,7 +597,8 @@ a manifest assertion re-pinned from v2 to v3 adds none), and `integration_passed
 **`0094`** (`uv run alembic heads` reports `0093_blob_object_version_binding (head)`). Contracts
 (285), the eleven runtime cases and the migration suite (5) were measured again at the same values;
 web was path-skipped in that pipeline and is carried at 283 files / 2,357 tests from the local
-gate. CI topology is unchanged (13 defined jobs, 14 on a tag or manual run).
+gate. CI topology was unchanged at that date (13 defined jobs; 14 instances on a tag or manual run
+of the GitLab pipeline — under the R86 workflow the same 13 jobs expand to 15, or 16 on a `v*` tag).
 
 Fresh 2026-09-20 evidence for the pipeline compute policy (!53, !54), read from !54's
 [merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2864107244) job

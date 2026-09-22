@@ -134,3 +134,25 @@ loss. Service-capability separation, the certified worker-owned destination, fre
 targets, streaming encryption (the envelope is still whole-archive in memory,
 `services/backup/crypto.py:66-74`) and the source-denied boot-and-read proof all stay open under the
 same record. `RES-SOURCE-INDEPENDENT-RECOVERY` and issue #3 do not close here.
+
+## Amendment 1 — two further provenance values (2026-09-22; approval requested)
+
+Implementation found the model above too narrow at two of the eight write sites, and shipped in
+!63 (`c62ce09`) with two additional `object_version_source` literals. This amendment records them
+so the design, the database CHECK (`ck_blob_object_version_binding`, migration `0093`) and
+`services/vault/version_binding.py` say the same thing. It is presented to the owner for approval
+as an amendment to the approved design; until approved, the shipped behaviour is recorded here as
+fact, not as policy.
+
+| Value | Meaning | Effect on the generation state |
+|---|---|---|
+| `write` | A direct server-side put (not the WORM promotion) that returned a version id. | Counts as bound at write time: a generation whose bindings are all `promotion` or `write` is `sealed`. |
+| `unversioned` | The write returned no version because the bucket has none — the `renditions` bucket is created without versioning. Carries no version id (the CHECK forbids one). | Neither seals nor spoils: such blobs are excluded from the `sealed` / `observed` / `partial` judgement, and a generation with only `unversioned` blobs is `absent`. |
+
+The alternative — leaving rendition rows unbound — would make every generation `partial` forever,
+which would hide the real `partial` case (a row that should be bound and is not). Renditions are
+derived and rebuildable from the bound source objects, so a generation is exact about the
+irreplaceable bytes without them. The `sealed` definition in the Model section therefore reads:
+every bindable blob is bound and every binding came from `promotion` or `write`. Restore behaviour
+is unchanged: an `unversioned` blob keeps today's current-version copy, and no binding is ever
+inferred.

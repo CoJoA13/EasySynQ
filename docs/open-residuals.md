@@ -375,6 +375,25 @@ assertion, so the cause remains unestablished; this occurrence is intermittent, 
 not close this record.
 Last reviewed: 2026-09-19
 
+## RES-INTEGRATION-SETUP-ORDER-FAILURE
+
+Status: OPEN
+Owner: Repository owner
+Source: S-recovery-exact-version-binding verification, 2026-09-22, clean `main` worktree `bdfdf95`
+Reason: A full single-process run of the integration suite (`pytest -m integration`) fails
+`tests/integration/test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment`
+while every other case passes (1,258 passed / 1 failed on `bdfdf95`); the same tree passes the
+case in CI because the four-way duration-balanced sharding never places it after the test whose
+leftover state it trips on. The failure is therefore order-dependent, masked by shard composition,
+and a `.test_durations` refresh that moves the chunk boundary can surface it in CI without any
+code change.
+Closure contract: Identify the earlier test (or fixture) whose shared-database or process state
+the setup case depends on, make the case self-provide or isolate that precondition so it passes
+in any order, prove the fix with a full single-process integration run and with the specific
+ordering that reproduced the failure, and confirm CI sharding is not relied on. A green sharded
+run alone does not close this record.
+Last reviewed: 2026-09-22
+
 ## RES-TYPESCRIPT-7-UPGRADE
 
 Status: OPEN

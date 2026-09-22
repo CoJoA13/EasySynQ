@@ -387,7 +387,8 @@ web 43 no-fix. Web was not run in that pipeline and is carried at 2,357 from the
 **Found in passing, not this slice's.** A full single-process integration run fails
 `test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment`; it fails
 identically on a clean `main` worktree (`bdfdf95`, 1,258 passed / 1 failed) and CI's four-way
-sharding never places it where it fails. Left for its own change.
+sharding never places it where it fails. Left for its own change, tracked as
+[`RES-INTEGRATION-SETUP-ORDER-FAILURE`](open-residuals.md#res-integration-setup-order-failure).
 
 **Deferred, honestly.** The archive still carries no object bytes, so restore stays
 source-dependent and non-cutover; every limit block, CLI warning and the `post_cutover_actions: []`
