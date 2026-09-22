@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,6 +29,8 @@ _ALL_JOBS = {
     "changes",
     "contracts",
     "compose-images-lock",
+    "workflow-and-secrets",
+    "dependency-review",
     "api",
     "migrations",
     "security",
@@ -241,6 +244,7 @@ def test_gate_needs_every_other_job_and_judges_each_by_what_the_run_owed() -> No
         ("web-shards", "needs.changes.outputs.web_suites == 'true'"),
         ("web-browser", "needs.changes.outputs.web_suites == 'true'"),
         ("release-gate", "startsWith(github.ref, 'refs/tags/v')"),
+        ("dependency-review", "github.event_name == 'pull_request'"),
     ],
 )
 def test_each_conditional_job_keys_off_the_filter_and_gate_expects_the_same(
@@ -249,7 +253,7 @@ def test_each_conditional_job_keys_off_the_filter_and_gate_expects_the_same(
     jobs = _jobs()
     job = jobs[job_name]
     assert job["if"] == condition
-    if job_name != "release-gate":
+    if job_name not in {"release-gate", "dependency-review"}:
         assert job["needs"] == "changes"
     # The gate must expect the job exactly when its own condition says it runs.
     script = jobs["gate"]["steps"][0]["run"]
@@ -263,6 +267,7 @@ def test_each_conditional_job_keys_off_the_filter_and_gate_expects_the_same(
         "web-shards": '"$WEB_SUITES"',
         "web-browser": '"$WEB_SUITES"',
         "release-gate": '"$IS_TAG"',
+        "dependency-review": '"$IS_PR"',
     }[job_name]
     assert any(
         line.split()[:2] == ["owed", job_name] and line.rstrip().endswith(expectation)
@@ -270,7 +275,9 @@ def test_each_conditional_job_keys_off_the_filter_and_gate_expects_the_same(
     ), (job_name, expectation)
 
 
-@pytest.mark.parametrize("job_name", ["contracts", "compose-images-lock", "changes"])
+@pytest.mark.parametrize(
+    "job_name", ["contracts", "compose-images-lock", "workflow-and-secrets", "changes"]
+)
 def test_guards_run_on_every_run(job_name: str) -> None:
     job = _jobs()[job_name]
     assert "if" not in job
@@ -286,6 +293,8 @@ def test_only_pull_request_runs_are_superseded_and_main_is_never_cancelled() -> 
     assert on["push"] == {"branches": ["main"], "tags": ["v*"]}
     assert on["pull_request"] is None
     assert on["workflow_dispatch"] is None
+    # The weekly run re-scans an unchanged main for new advisories; it owes every suite.
+    assert on["schedule"] == [{"cron": "17 6 * * 1"}]
     assert workflow["concurrency"] == {
         "group": "ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
         "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
@@ -343,7 +352,8 @@ def test_the_suite_path_lists_name_what_the_suites_read() -> None:
 def test_the_filter_job_runs_the_tracked_decision_script() -> None:
     changes = _jobs()["changes"]
     checkout = changes["steps"][0]
-    assert checkout == {"uses": "actions/checkout@v7", "with": {"fetch-depth": 0}}
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"] == {"persist-credentials": False, "fetch-depth": 0}
     _, decide = _step(changes, "decide which suites this run owes")
     assert decide["run"] == "python3 scripts/ci-changed-paths.py"
     assert decide["env"] == {
@@ -399,6 +409,7 @@ def test_the_filter_job_runs_the_tracked_decision_script() -> None:
         ("push", "refs/heads/main", None, {"code": False, "main_push": True, "full": False}),
         ("push", "refs/tags/v1.2.3", None, {"code": True, "main_push": False, "full": True}),
         ("workflow_dispatch", "refs/heads/main", None, {"code": True, "full": True}),
+        ("schedule", "refs/heads/main", None, {"code": True, "full": True, "main_push": False}),
     ],
 )
 def test_the_decision_script_owes_the_right_suites(
@@ -516,3 +527,115 @@ def test_the_decision_script_sees_both_sides_of_a_rename(tmp_path: Path) -> None
     assert names == {"apps/api/x.py", "docs/x.py"}
     flags = module.decide("pull_request", "refs/pull/1/merge", "main", files=sorted(names))
     assert flags["code"] is True and flags["docs_only"] is False
+
+
+# --- supply-chain hardening ----------------------------------------------------------------------
+
+_FULL_SHA_PIN = re.compile(r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
+_DIGEST_PINNED_IMAGE = re.compile(r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}")
+
+
+def _all_steps() -> list[tuple[str, dict[str, Any]]]:
+    return [(name, step) for name, job in _jobs().items() for step in job.get("steps", [])]
+
+
+def test_every_action_is_pinned_to_a_full_commit_sha_with_its_version_comment() -> None:
+    """A tag is mutable: whoever controls the action repository can move `v7` to new code, and
+    every run picks it up. A 40-hex SHA cannot move. The trailing `# vX.Y.Z` comment is what lets
+    Dependabot's github-actions ecosystem bump the SHA and the readable version together."""
+    uses = [(job, step["uses"]) for job, step in _all_steps() if "uses" in step]
+    assert uses, "the workflow runs no actions at all?"
+    for job, ref in uses:
+        assert _FULL_SHA_PIN.match(ref), (job, ref)
+    raw_uses = [
+        line.strip()
+        for line in _WORKFLOW.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith(("- uses:", "uses:"))
+    ]
+    assert len(raw_uses) == len(uses)
+    for line in raw_uses:
+        assert re.search(r"@[0-9a-f]{40} # v\d+\.\d+\.\d+$", line), line
+
+
+def test_no_checkout_leaves_the_token_in_the_git_config() -> None:
+    """actions/checkout persists the job token into .git/config by default, where any later step
+    (or an uploaded artifact that includes the workspace) can read it. No job pushes."""
+    checkouts = [
+        (job, step)
+        for job, step in _all_steps()
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert checkouts
+    for job, step in checkouts:
+        assert step.get("with", {}).get("persist-credentials") is False, job
+
+
+def test_every_job_has_a_timeout() -> None:
+    """The default is six hours. A hung image build or testcontainer should fail in minutes."""
+    for name, job in _jobs().items():
+        timeout = job.get("timeout-minutes")
+        assert isinstance(timeout, int), name
+        assert 0 < timeout <= 60, (name, timeout)
+
+
+def test_workflow_and_secrets_lints_the_workflow_and_gates_a_full_history_secret_scan() -> None:
+    job = _jobs()["workflow-and-secrets"]
+    checkout = job["steps"][0]
+    # The secret scan reads every commit, so a shallow clone would silently scan one.
+    assert checkout["with"] == {"persist-credentials": False, "fetch-depth": 0}
+
+    _, actionlint = _step(job, "lint workflows (actionlint + shellcheck)")
+    _, zizmor = _step(job, "audit workflow security (zizmor)")
+    _, gitleaks = _step(job, "scan the full history for secrets (gitleaks, gated)")
+    for step, image in (
+        (actionlint, "rhysd/actionlint:"),
+        (zizmor, "ghcr.io/zizmorcore/zizmor:"),
+        (gitleaks, "ghcr.io/gitleaks/gitleaks:"),
+    ):
+        assert "if" not in step
+        assert image in step["run"]
+        pinned = _DIGEST_PINNED_IMAGE.search(step["run"])
+        assert pinned is not None and pinned.group(0).startswith(image), step["run"]
+
+    # zizmor audits the whole .github tree (dependabot.yml too) with the online audits enabled.
+    assert zizmor["run"].rstrip().endswith("--no-progress .github")
+    assert zizmor["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    # gitleaks scans git history (not just the tree) and fails the job on any finding.
+    # Scoped to what HEAD reaches: `--all` (the default) would let a leak on an unrelated branch
+    # fail every pull request.
+    assert (
+        ' git --redact --no-banner --exit-code 1 --log-opts="--full-history HEAD" .'
+        in (gitleaks["run"])
+    )
+    assert "--exit-code 0" not in gitleaks["run"]
+    assert "--baseline-path" not in gitleaks["run"]
+
+
+def test_the_secret_scan_config_extends_the_default_rules_and_allowlists_narrowly() -> None:
+    config = (_ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
+    assert "[extend]\nuseDefault = true" in config
+    # One path allowlist, for the pinned audit vectors only; everything else is by fingerprint.
+    assert "'''^apps/api/tests/fixtures/audit_[a-z0-9_]+_vectors\\.json$'''" in config
+    assert config.count("paths = [") == 1
+    assert "[[rules]]" not in config, "never replace the upstream rules"
+
+    fingerprints = [
+        line
+        for line in (_ROOT / ".gitleaksignore").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert fingerprints
+    for line in fingerprints:
+        commit, path, rule, lineno = line.rsplit(":", 3)
+        assert re.fullmatch(r"[0-9a-f]{40}", commit), line
+        assert rule in {"generic-api-key", "private-key"}, line
+        assert lineno.isdigit(), line
+        assert not path.startswith("apps/api/tests/fixtures/"), "fixtures are path-allowlisted"
+
+
+def test_dependency_review_gates_high_severity_on_pull_requests_only() -> None:
+    job = _jobs()["dependency-review"]
+    assert job["if"] == "github.event_name == 'pull_request'"
+    (step,) = job["steps"]
+    assert step["uses"].startswith("actions/dependency-review-action@")
+    assert step["with"] == {"fail-on-severity": "high", "comment-summary-in-pr": "never"}

@@ -11,8 +11,8 @@ web_tests: 2357
 contract_tests: 285
 integration_passed: 1262
 integration_skipped: 2
-ci_jobs: 13
-ci_checks: 15
+ci_jobs: 15
+ci_checks: 17
 ---
 
 # Current execution snapshot
@@ -1218,11 +1218,14 @@ executable truth. Contributor workflow and evidence expectations live in [`../AG
 and [`dev-workflow.md`](dev-workflow.md).
 
 The dependency-light `contracts` job runs repository-authority, site-data, doctor, disabled
-PostgreSQL MCP, CI-hardening and Compose-image-lock guards before dependency hydration. These
+PostgreSQL MCP, CI-hardening and Compose-image-lock-harness guards before dependency hydration; the
+lock check itself is the separate `compose-images-lock` job. The `workflow-and-secrets` guard runs
+actionlint, zizmor and a gated gitleaks scan of the history the checked-out commit reaches. These
 checks prove tracked interfaces and failure propagation; they do not emulate a developer host or
 live application stack. The retired Fedora bootstrap/proof is not part of the current pipeline.
 
-`.github/workflows/ci.yml` defines **13** jobs (R86). Pull requests run on the **merge commit** of
+`.github/workflows/ci.yml` defines **15** jobs (R86; `workflow-and-secrets` and
+`dependency-review` were added by #585 on 2026-09-22). Pull requests run on the **merge commit** of
 the head onto main, and the `main` ruleset requires the branch to be up to date and squash-only
 merging, so the PR's final check run on its head SHA tests the exact tree main receives and **it is
 the merge evidence**; plain branch pushes run nothing. `gate` is the single required status check:
@@ -1233,16 +1236,21 @@ said it should run, so a path-conditional suite is never listed as a required ch
 `integration-shards` and `contract-responses` run when API-side inputs differ from main,
 `web-shards` and `web-browser` when `apps/web` or the contract differs, and `api`, `security` and
 `migrations` when anything outside `docs/**` and root `*.md` differs; editing `.github/**` runs every
-suite. A docs-only PR runs the guards (`contracts`, `compose-images-lock`) plus `docs-tests`, the unit
-tests that read documentation (selected by content). The workflow defines **13** jobs. A manually
-started run on main executes **15** instances (`integration-shards` expands to four, `web-shards` to
-two, and both `docs-tests` — the run is not docs-only — and tag-only `release-gate` are skipped); a
-`v*` tag run adds the release gate for **16**. A pull
-request runs the subset its changed paths select plus `changes`, `gate` and the unconditional guards;
-a post-merge push to main runs `changes`, `gate`, `contracts`, `compose-images-lock`, `migrations` and
-`security`. A newer commit cancels an in-flight run of the same pull request (`concurrency` keyed on
-the PR ref); main, tag and manual runs are never auto-cancelled. There is no scheduled pipeline:
-Dependabot opens its own pull requests, which run the same gate. `web-browser` runs the Chromium suite
+suite. A docs-only PR runs the guards (`contracts`, `compose-images-lock`, `workflow-and-secrets`)
+plus `docs-tests`, the unit tests that read documentation (selected by content), and
+`dependency-review`, which runs on every pull request and on no other event. The workflow defines
+**15** jobs. A manually started or weekly scheduled run on main executes **16** instances
+(`integration-shards` expands to four, `web-shards` to two, and `docs-tests` — the run is not
+docs-only — `dependency-review` and tag-only `release-gate` are skipped); a `v*` tag run adds the
+release gate for **17**, and a pull request that owes every suite also runs **17** (the sixteen plus
+`dependency-review`). A pull request runs the subset its changed paths select plus `changes`,
+`gate`, `dependency-review` and the unconditional guards; a post-merge push to main runs `changes`,
+`gate`, `contracts`, `compose-images-lock`, `workflow-and-secrets`, `migrations` and `security`. A
+newer commit cancels an in-flight run of the same pull request (`concurrency` keyed on the PR ref);
+main, tag, manual and scheduled runs are never auto-cancelled. The weekly scheduled run (Mondays
+06:17 UTC) re-runs every suite against an unchanged `main`, so a newly published advisory turns
+`main` red without a push. Dependabot opens its own pull requests, which run the same gate. Every
+action is pinned to a full commit SHA and no checkout persists the job token. `web-browser` runs the Chromium suite
 and retains failure diagnostics as an artifact for seven days.
 
 The `security` job must finish successfully. It enforces the npm policy and blocks HIGH/CRITICAL
