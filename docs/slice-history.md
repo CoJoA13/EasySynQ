@@ -46,6 +46,91 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## TEST HARNESS RELIABILITY
 
+### S-ci-github-primary — primary hosting returns to GitHub, and one required check gates `main` (R86)
+
+**2026-09-21/22; shipped in PR [#552](https://github.com/CoJoA13/EasySynQ/pull/552) (squash
+`98b7005`, merged 2026-09-22 03:36 UTC); the GitLab-only `!64` docs record followed in PR
+[#554](https://github.com/CoJoA13/EasySynQ/pull/554).** CI configuration, repository guards,
+dependency automation and documentation only; no application code, migration (head stays `0093`),
+contract or permission change. The owner approved R86 as written in session on 2026-09-22, after
+the merge.
+
+**What shipped.** The owner reversed the 2026-09-08 GitLab-only decision (compute usage and
+preference); the approved design is
+[`2026-09-21-github-primary-hosting-design.md`](superpowers/specs/2026-09-21-github-primary-hosting-design.md).
+`main` was fast-forwarded to `github.com/CoJoA13/EasySynQ` at `c62ce09` (157 GitLab-era commits,
+no rewrite). `.github/workflows/ci.yml` was rebuilt from the GitLab pipeline rather than patched
+from the stale pre-move workflow, which lacked eight guard scripts, the docs lane, the built-image
+scans and the runtime acceptance: the same thirteen jobs; a `changes` job that decides the owed
+suites from `.github/ci-paths.yml` through the stdlib-only `scripts/ci-changed-paths.py`; and
+`gate`, one aggregator that needs every job and fails when any failed, was cancelled, or was skipped
+while its own condition said it should run, because GitHub cannot require a path-conditional job
+directly. `security` builds both images and gates with the pinned `aquasec/trivy:0.74.0` binary.
+The guards flipped from forbidding GitHub to requiring it: `test-ci-hardening.sh` absorbed the
+GitLab hardening test (150 assertions), contributor hosting requires `gh` and the github.com clone
+URL, `refresh-test-durations.sh` reads Actions artifacts, `doctor.sh` checks for `gh`. Dependabot
+replaces self-hosted Renovate, with the images-lock digests and the Dockerfile `uv==`/`npm@` and
+trivy pins accepted as manual. `.gitlab-ci.yml`, the Renovate configuration and jobs and the GitLab
+runbook are removed; historical `gitlab.com` evidence URLs are kept. The `/check-migrations`
+command gains the `pytest tests/migration` step CI runs (it let a head-pin failure through on !63).
+
+**Review.** Codex reviewed the PR once; all seven findings were confirmed in the tree and fixed in
+`fb91496`, each thread replied to and resolved: `git diff --name-only` reported only a rename's
+destination, so `apps/api/x.py` → `docs/x.py` would have ridden the docs lane (`--no-renames`, pinned
+by a test over a real temporary repository); the runbook and R86 omitted the "require a pull
+request" rule; the instance totals were miscounted (15 on a branch, 16 on a tag); the R82
+back-propagation link pointed at the deleted GitLab runbook (now a permalink marked historical);
+`gh` was documented optional while a guard required it; the trivy pin was claimed
+Dependabot-tracked; the triage command's review-thread query was unpaginated.
+
+**Live evidence.** The first PR run (head `2751068`) was cancelled by the superseding push after 22
+minutes with every other job green, and `gate` failed on the cancelled `api`: the required check
+refusing a superseded run, as designed. Run
+[35681656565](https://github.com/CoJoA13/EasySynQ/actions/runs/35681656565) on `fb91496` passed:
+fifteen instances succeeded and `docs-tests` and `release-gate` were skipped as owed. The post-merge
+push run [35683759967](https://github.com/CoJoA13/EasySynQ/actions/runs/35683759967) on `98b7005`
+ran only `changes`, the two guards, `migrations`, `security` and `gate`, all green: the backstop
+policy holding. PR #554 decided `code=true, api_suites=false, web_suites=false, docs_only=false`
+because its one `.claude/rules` line is under `.claude/**`, a `code` path: the first live partial
+selection. **The docs-only lane first ran live on PR #555** (this record; run
+[35703051883](https://github.com/CoJoA13/EasySynQ/actions/runs/35703051883)): `changes` decided
+`docs_only=true`, only the guards and `docs-tests` ran — and `docs-tests` **failed**.
+`compose.yml` declares `env_file: ../../.env`; the deploy-configuration tests render Compose and are
+selected by content, and the ported job never materialized the ignored runner copy the `api` job
+creates (on GitLab `docs-tests` inherited that from the `api` template). `gate` failed the run, as
+designed. PR [#556](https://github.com/CoJoA13/EasySynQ/pull/556) adds the step and pins it in
+both `test_ci_workflow.py` (every job that runs the unit tree or a content selection of it must
+materialize `.env` before pytest) and `test-ci-hardening.sh` (150 → 152), each mutation-checked
+red. Rebased onto #556 (`f42bf57`), #555's
+[run 35717332682](https://github.com/CoJoA13/EasySynQ/actions/runs/35717332682) is the lane's first
+green: `contracts`, `compose-images-lock`, `docs-tests` and `gate` succeeded, every suite skipped as
+owed.
+
+**Test deltas (measured on run 35681656565).** API unit **4,977 → 4,985 passes** with the one
+existing release-only skip (the rewritten `test_ci_workflow.py` carries 32 cases, each policy
+mutated in place seven ways; the GitLab and Renovate pins are gone). Integration **1,262 passes /
+2 skips** unchanged (272 + 238 + 388 + 364 across the four shards); 285 response contracts
+unchanged; web **2,357** unchanged (1,199 + 1,158 across the two shards) and the Chromium suite
+green; doctor 77 checks.
+
+**Honest deferrals.** The rulesets from
+[`github-repository-setup.md`](runbooks/github-repository-setup.md) were applied on 2026-09-22 with
+the owner's go-ahead (`main`: pull request required, `gate` the one required check, up to date,
+conversation resolution, squash only, no force push or deletion; `v*` tags: creation restricted to
+administrators, no force push or deletion; squash message = pull-request body); between #552's
+merge and that moment `gate` was not enforced on `main`. With #554 merged the two `main` tips
+agreed in content and the GitLab project was **archived on 2026-09-22** with the owner's go-ahead
+(read-only; every historical URL still resolves). The owner's pre-move PR #476 was closed as
+superseded. No AI review replaces Duo; no merge queue; the images-lock refresh stays manual; the
+twelve carried-over GitHub issues are untouched. The eight open Dependabot pull requests are
+**not** superseded — Dependabot refreshed them after the move, so they are live proposals under
+the adopted updater (two already green on `gate`; the Compose image ones redden
+`compose-images-lock` exactly as R86 predicts); their review is the one live obligation this slice
+leaves, registered as
+[`RES-DEPENDABOT-BACKLOG-TRIAGE`](open-residuals.md#res-dependabot-backlog-triage) with a
+closure contract. The Renovate GitHub-metadata record left the ledger as superseded inside #552
+itself.
+
 ### S-ci-compute-policy — merge-request evidence, path-selected suites, a docs lane
 
 **2026-09-19/20; shipped in MR [!53](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/53)
