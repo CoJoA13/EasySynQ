@@ -338,6 +338,12 @@ jobs:
           cache-dependency-glob: "apps/api/uv.lock"
       - working-directory: apps/api
         run: uv sync --frozen
+      - name: materialize the env file the Compose renderers need
+        # The documentation-reading tests include the deploy-configuration tests, which render the
+        # Compose files, and compose.yml's env_file entry requires the repo-root .env to exist even
+        # for `config`. The api job materializes the same ignored runner copy before its Compose
+        # validation; this lane runs no Compose step of its own, so it does it here.
+        run: cp .env.example .env
       - name: unit tests that read documentation
         working-directory: apps/api
         run: |

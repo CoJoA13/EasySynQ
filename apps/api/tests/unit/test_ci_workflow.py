@@ -450,6 +450,34 @@ def test_the_docs_lane_selection_keeps_its_documentation_pinning_tests() -> None
     assert "uv run pytest $files -m unit" in script
 
 
+def test_every_job_that_runs_unit_tests_materializes_the_env_file_first() -> None:
+    """compose.yml declares `env_file: ../../.env`, so any unit test that renders the Compose files
+    (the deploy-configuration tests, which the docs lane selects by content) fails on a runner
+    without the ignored repo-root copy. The api job materializes it before its Compose validation;
+    the docs lane inherited that on GitLab and lost it in the port — the first live docs-only run
+    (PR #555) caught it. Pin it for every job that runs the unit tree or a content selection of it;
+    release-gate runs one named file (the images-lock pin) that renders nothing and is excluded."""
+    jobs = _jobs()
+    running_unit = {
+        name
+        for name, job in jobs.items()
+        if any(
+            "uv run pytest" in step.get("run", "")
+            and ("pytest tests/unit " in step["run"] or "pytest $files" in step["run"])
+            for step in job["steps"]
+        )
+    }
+    assert running_unit == {"api", "docs-tests"}
+    release_steps = jobs["release-gate"]["steps"]
+    assert "test_images_lock_pinned.py" in release_steps[-1]["run"]
+    for name in sorted(running_unit):
+        runs = [step.get("run", "") for step in jobs[name]["steps"]]
+        materialize = [i for i, run in enumerate(runs) if "cp .env.example .env" in run]
+        pytest_steps = [i for i, run in enumerate(runs) if "uv run pytest" in run]
+        assert materialize, f"{name} never materializes .env"
+        assert materialize[0] < pytest_steps[0], f"{name} materializes .env after its unit tests"
+
+
 def test_the_decision_script_sees_both_sides_of_a_rename(tmp_path: Path) -> None:
     """`git diff --name-only` reports only a rename's destination, so moving code into docs/ would
     read as docs-only while production code was removed. Both paths must take part."""
