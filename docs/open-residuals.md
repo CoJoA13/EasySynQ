@@ -1092,20 +1092,3 @@ optional `--bound-scope` is omitted): either refuse an unbound parameterized rol
 collect the binding in both UIs and require it in the CLI. Prove that no path can silently create an
 unbound Author or Approver.
 Last reviewed: 2026-09-22
-
-## RES-CI-CHANGES-SHALLOW-FETCH-RACE
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ci-hardening follow-up, 2026-09-22. Pull request run 35793274749 (a Dependabot branch)
-failed in `changes` five seconds after `main` moved; the defect dates from the R86 workflow (#552).
-Reason: `scripts/ci-changed-paths.py` re-fetches the base with `git fetch --no-tags --depth=1 origin
-main` although the `changes` checkout is already full-depth. When `main` advances between the
-checkout and that fetch, the new tip arrives as a shallow commit with no reachable parent, so
-`git diff --name-only --no-renames origin/main...HEAD` finds no merge base and exits 128. `changes`
-then fails and `gate` refuses a pull request whose content is fine; a re-run passes, which hides the
-cause.
-Closure contract: Fetch the base without `--depth` (or diff against the merge commit's first parent,
-which is the base the run actually tested), and prove with a test over a real temporary repository
-that a base advanced after checkout still yields the correct changed-path set. Do not add a retry.
-Last reviewed: 2026-09-22

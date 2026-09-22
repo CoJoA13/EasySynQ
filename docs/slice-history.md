@@ -46,6 +46,33 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## TEST HARNESS RELIABILITY
 
+### S-ci-changes-merge-parent — `changes` diffs from the merge commit's first parent
+
+**2026-09-22; follow-up to S-ci-hardening.** CI tooling only; no application code, migration (head
+stays `0093`), contract or permission change. Closes `RES-CI-CHANGES-SHALLOW-FETCH-RACE` (issue
+#588), which was registered the same day.
+
+**What shipped.** `scripts/ci-changed-paths.py` no longer runs `git fetch --no-tags --depth=1
+origin <base>` in a pull-request run. A `pull_request` checkout is GitHub's merge commit, and its
+first parent is the base the run actually tested, so the owed suites now come from
+`git diff --name-only --no-renames HEAD^1...HEAD`: no network, no race. The old fetch failed when
+`main` advanced between checkout and the `changes` step, which happened live on Dependabot run
+[35793274749](https://github.com/CoJoA13/EasySynQ/actions/runs/35793274749), five seconds after
+#586 merged. The new tip arrived shallow, with no reachable parent, so `origin/main...HEAD` had no
+merge base and exited 128. The old fetch could also have keyed the selection on a base the run
+never tested. A checkout that is not a two-parent merge commit now fails closed with a named
+`RuntimeError` instead of guessing a base.
+
+**Proof.** `test_changed_paths_survive_a_base_that_moves_after_checkout` builds a bare origin, a
+runner at a PR merge commit, and then advances `main` behind it. **Mutation-checked:** with the old
+depth-1 fetch restored in place, the test fails with the production symptom (`git diff ...
+origin/main...HEAD` exit status 128). With the fix, the selection is exactly the PR's own path.
+`test_changed_paths_refuse_a_checkout_that_is_not_the_merge_commit` pins the fail-closed branch.
+The rename test and the path-policy tests are unchanged and green.
+
+**Test delta (measured).** API unit collected **4,997 → 4,999** (`pytest tests/unit -m unit
+--collect-only`); `test_ci_workflow.py` 42 → 44 cases.
+
 ### S-ci-hardening — a repository audit pins the supply chain, gates the secret scan, and gives the ledger a board
 
 **2026-09-22; shipped in PR [#585](https://github.com/CoJoA13/EasySynQ/pull/585) (squash

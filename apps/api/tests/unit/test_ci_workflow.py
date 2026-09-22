@@ -529,6 +529,80 @@ def test_the_decision_script_sees_both_sides_of_a_rename(tmp_path: Path) -> None
     assert flags["code"] is True and flags["docs_only"] is False
 
 
+def _git_runner(tmp_path: Path) -> Any:
+    git = shutil.which("git")
+    assert git is not None
+
+    def run(cwd: Path, *args: str) -> str:
+        return subprocess.run(  # noqa: S603 - resolved binary, fixed arguments in a temp repo
+            [git, *args],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            env={
+                "GIT_AUTHOR_NAME": "t",
+                "GIT_AUTHOR_EMAIL": "t@example.test",
+                "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@example.test",
+                "HOME": str(tmp_path),
+                "PATH": "/usr/bin:/bin",
+            },
+        ).stdout
+
+    return run
+
+
+def test_changed_paths_survive_a_base_that_moves_after_checkout(tmp_path: Path) -> None:
+    """The 2026-09-22 shallow-fetch race: `main` advanced between the runner's checkout and the
+    `changes` step. The old `git fetch --depth=1 origin main` pulled the new tip as a shallow commit
+    with no reachable parent, `origin/main...HEAD` had no merge base, and `changes` exited 128.
+    The selection must come from the merge commit's first parent: what the run actually tested."""
+    run = _git_runner(tmp_path)
+    origin, seed, runner = tmp_path / "origin.git", tmp_path / "seed", tmp_path / "runner"
+    run(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    run(tmp_path, "clone", "-q", origin.as_uri(), str(seed))
+    (seed / "apps" / "api").mkdir(parents=True)
+    (seed / "apps" / "api" / "x.py").write_text("x = 1\n", encoding="utf-8")
+    run(seed, "add", ".")
+    run(seed, "commit", "-q", "-m", "base")
+    run(seed, "push", "-q", "origin", "HEAD:main")
+
+    # The runner: a full clone at the base, a PR commit, and GitHub's merge ref (base first).
+    run(tmp_path, "clone", "-q", origin.as_uri(), str(runner))
+    run(runner, "switch", "-q", "-c", "pr")
+    (runner / "apps" / "web").mkdir(parents=True)
+    (runner / "apps" / "web" / "a.ts").write_text("export {};\n", encoding="utf-8")
+    run(runner, "add", ".")
+    run(runner, "commit", "-q", "-m", "pr change")
+    run(runner, "switch", "-q", "--detach", "origin/main")
+    run(runner, "merge", "-q", "--no-ff", "-m", "Merge pr into main", "pr")
+
+    # main moves on after the checkout, touching a path the PR never did.
+    (seed / "docs").mkdir()
+    (seed / "docs" / "later.md").write_text("later\n", encoding="utf-8")
+    run(seed, "add", ".")
+    run(seed, "commit", "-q", "-m", "main moved")
+    run(seed, "push", "-q", "origin", "HEAD:main")
+
+    module = _filter_module()
+    assert module.changed_files("main", cwd=runner) == ["apps/web/a.ts"]
+
+
+def test_changed_paths_refuse_a_checkout_that_is_not_the_merge_commit(tmp_path: Path) -> None:
+    """Without the merge ref there is no tested base to diff from; guessing one could select the
+    docs lane for a code change, so the decision fails closed instead."""
+    run = _git_runner(tmp_path)
+    repo = tmp_path / "repo"
+    run(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "x.py").write_text("x = 1\n", encoding="utf-8")
+    run(repo, "add", ".")
+    run(repo, "commit", "-q", "-m", "only commit")
+    module = _filter_module()
+    with pytest.raises(RuntimeError, match="merge commit"):
+        module.changed_files("main", cwd=repo)
+
+
 # --- supply-chain hardening ----------------------------------------------------------------------
 
 _FULL_SHA_PIN = re.compile(r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
