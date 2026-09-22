@@ -92,7 +92,16 @@ push run [35683759967](https://github.com/CoJoA13/EasySynQ/actions/runs/35683759
 ran only `changes`, the two guards, `migrations`, `security` and `gate`, all green: the backstop
 policy holding. PR #554 decided `code=true, api_suites=false, web_suites=false, docs_only=false`
 because its one `.claude/rules` line is under `.claude/**`, a `code` path: the first live partial
-selection. **The docs-only lane has not yet been exercised live.**
+selection. **The docs-only lane first ran live on PR #555** (this record; run
+[35703051883](https://github.com/CoJoA13/EasySynQ/actions/runs/35703051883)): `changes` decided
+`docs_only=true`, only the guards and `docs-tests` ran — and `docs-tests` **failed**.
+`compose.yml` declares `env_file: ../../.env`; the deploy-configuration tests render Compose and are
+selected by content, and the ported job never materialized the ignored runner copy the `api` job
+creates (on GitLab `docs-tests` inherited that from the `api` template). `gate` failed the run, as
+designed. PR [#556](https://github.com/CoJoA13/EasySynQ/pull/556) adds the step and pins it in
+both `test_ci_workflow.py` (every job that runs the unit tree or a content selection of it must
+materialize `.env` before pytest) and `test-ci-hardening.sh` (150 → 152), each mutation-checked
+red; #555 was rebased onto it to prove the lane green.
 
 **Test deltas (measured on run 35681656565).** API unit **4,977 → 4,985 passes** with the one
 existing release-only skip (the rewritten `test_ci_workflow.py` carries 32 cases, each policy
@@ -106,11 +115,15 @@ green; doctor 77 checks.
 the owner's go-ahead (`main`: pull request required, `gate` the one required check, up to date,
 conversation resolution, squash only, no force push or deletion; `v*` tags: creation restricted to
 administrators, no force push or deletion; squash message = pull-request body); between #552's
-merge and that moment `gate` was not enforced on `main`. GitLab is archived only once both `main` tips agree (after #554). No AI review
-replaces Duo; no merge queue; the images-lock refresh stays manual; the twelve carried-over GitHub
-issues are untouched; the eight superseded Dependabot pull requests and #476 are still to be
-closed. The residual ledger did not change here: the Renovate GitHub-metadata record left it as
-superseded inside #552 itself.
+merge and that moment `gate` was not enforced on `main`. With #554 merged the two `main` tips
+agreed in content and the GitLab project was **archived on 2026-09-22** with the owner's go-ahead
+(read-only; every historical URL still resolves). The owner's pre-move PR #476 was closed as
+superseded. No AI review replaces Duo; no merge queue; the images-lock refresh stays manual; the
+twelve carried-over GitHub issues are untouched. The eight open Dependabot pull requests are
+**not** superseded — Dependabot refreshed them after the move, so they are live proposals under
+the adopted updater, to be triaged one by one (two already green on `gate`; the Compose image ones
+redden `compose-images-lock` exactly as R86 predicts). The residual ledger did not change here: the
+Renovate GitHub-metadata record left it as superseded inside #552 itself.
 
 ### S-ci-compute-policy — merge-request evidence, path-selected suites, a docs lane
 
