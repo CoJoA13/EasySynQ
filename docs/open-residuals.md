@@ -99,8 +99,14 @@ the archive still carries no object bytes, restore stays source-dependent and no
 service-capability separation, complete encrypted generations (still whole-archive-in-memory),
 certified destinations, fresh role-preserving targets and the source-denied boot-and-read proof all
 remain required. See the
-[design](superpowers/specs/2026-09-20-recovery-exact-version-binding-design.md). Last reviewed:
-2026-09-20.
+[design](superpowers/specs/2026-09-20-recovery-exact-version-binding-design.md).
+Delivery, 2026-09-22: merged in
+[!63](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/63) (squash `909fef6`); its
+[merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2869629501) passed
+all eleven jobs it ran, including the migration suite and eleven mandatory runtime cases. Review
+added the manifest-version input to the generation state (a v2 archive now reports `absent`, a
+never-backfilled v3 generation `partial`) and closed the backfill command's never-raise contract.
+The contract above is untouched by the merge; this record stays OPEN. Last reviewed: 2026-09-22.
 
 ## RES-CONTAINER-SECURITY-TRIAGE
 

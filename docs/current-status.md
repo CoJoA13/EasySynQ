@@ -1,15 +1,15 @@
 ---
 easysynq_status_schema: 1
-as_of: "2026-09-20"
-baseline_commit: "7f6174b854c7a5c02047266cb068bb6abeb61e2c"
-last_shipped_slice: "S-runtime-trixie-hardening"
-migration_head: "0092"
-next_migration: "0093"
-api_unit_tests: 4957
+as_of: "2026-09-22"
+baseline_commit: "c62ce09d0442b6b3d5df0ebb57ee0efb60dd3e52"
+last_shipped_slice: "S-recovery-exact-version-binding"
+migration_head: "0093"
+next_migration: "0094"
+api_unit_tests: 4977
 web_test_files: 283
 web_tests: 2357
 contract_tests: 285
-integration_passed: 1259
+integration_passed: 1262
 integration_skipped: 2
 ci_jobs: 13
 ci_checks: 15
@@ -22,27 +22,30 @@ authority and it is not runtime discovery: binding decisions live in
 [`decisions-register.md`](decisions-register.md), while current deferred work lives only in
 [`open-residuals.md`](open-residuals.md).
 
-The verified shipped baseline is MR !54's merged main `7f6174b854c7a5c02047266cb068bb6abeb61e2c` (merged 2026-09-20). Under the
-pipeline policy that same merge request shipped, **an MR's merged-results pipeline is the merge
-evidence**: with the semi-linear merge method it tests the exact tree main receives, and the
-post-merge main pipeline keeps only the cheap backstops. !54's
-[merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2864107244)
-passed all fourteen jobs, including all eleven mandatory runtime cases. Its `contracts` and
-`security` jobs first failed inside an npm registry maintenance window, which made `npm audit`
-return a maintenance page instead of a report; both passed on retry after the window closed, and
-nothing else was restarted. Frontmatter counts are read from that pipeline's job logs: **4,957 API
-passes** with one existing release-only skip, **2,357 web tests across 283 files**, 285
-response-contract tests and **1,259 integration passes / 2 skips**.
+The verified shipped baseline is MR !63's merged main `c62ce09d0442b6b3d5df0ebb57ee0efb60dd3e52` (merged 2026-09-22
+01:48 UTC). Its [merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2869629501)
+passed all eleven jobs it ran — the web suites were path-skipped because no web file changed —
+including all eleven mandatory runtime cases. Frontmatter counts are read from that pipeline's job
+logs: **4,977 API passes** with one existing release-only skip, **1,262 integration passes / 2
+skips**, 285 response-contract tests, five migration tests; web (283 files / 2,357 tests) is
+carried from the local gate. Between S-runtime-trixie-hardening and this baseline, `main` also
+received Redis 8 (!43), the js-yaml major refusal (!57), the TypeScript 7 residual (!58) and the
+CI compute policy (!53, !54, !56); none changed a migration or contract.
 
-**Also shipped, 2026-09-19/20: the pipeline compute policy (!53, !54).** September had consumed the
-whole monthly compute allowance, about 40% of it re-running on main what a merge request had just
-proved. Merge requests now run merged-results pipelines and plain branch pushes run none; suites are
-selected by the paths an MR changes; a docs-only merge request runs the guards plus `docs-tests`;
-main keeps the guards, `migrations` and `security`; schedules run Renovate, the security scan and
-the guards; and tags or a manually started pipeline still run everything. See the CI topology
-section below. Between R85 and this baseline, `main` also received the R85 status
-record (!49), an `anyio` 4.14.2 lock fix (!50), Renovate 44.85.0 (!48) and Redocly 2.53.0 (!47).
-None of them changed a migration or contract.
+**Shipped: S-recovery-exact-version-binding, September 20–22 (!63).** Migration `0093` binds every
+`blob` row to the exact object version it was sealed as, written by the WORM promotion that already
+read it back; renditions record `unversioned` because their bucket has no versions. Manifest v3
+carries the binding and a generation state (`sealed` / `observed` / `partial` / `absent`); restore
+resolves the bound version and now also checks recorded length; `backup bind-versions` binds older
+rows as `backfill`. The motivating case — an object overwritten after its generation was written
+restores from the sealed version — is proven against real MinIO with the version-aware copy
+mutated red. **Nothing in the recovery contract closes:** the archive still carries no object
+bytes, restore stays source-dependent and non-cutover, and `RES-SOURCE-INDEPENDENT-RECOVERY` and
+issue #3 stay OPEN. See [dated evidence](slice-history.md#s-recovery-exact-version-binding--every-blob-bound-to-the-version-it-was-sealed-as).
+
+The previous shipped baseline was MR !54's merged main `7f6174b854c7a5c02047266cb068bb6abeb61e2c`
+(merged 2026-09-20), whose [merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2864107244)
+passed all fourteen jobs after two retries inside an npm maintenance window.
 
 **Shipped: S-runtime-trixie-hardening, September 19 (!51, !52).** The API image now uses Debian 13
 (trixie), like the web image. Both images clear setuid/setgid bits, and the five application services
@@ -581,6 +584,17 @@ enforced by the executable catalog assertion in `apps/api/tests/unit/test_authz.
 set is defined by the headings and self-range declarations in [`decisions-register.md`](decisions-register.md).
 
 ## Verification baseline
+
+Fresh 2026-09-22 evidence for S-recovery-exact-version-binding (!63), read from its
+[merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2869629501) job
+logs. It moves `api_unit_tests` 4,957 → **4,977**: one from !57's js-yaml refusal pin, which landed
+between baselines, and nineteen from this slice (seventeen binding tests, two never-raise tests;
+a manifest assertion re-pinned from v2 to v3 adds none), and `integration_passed` 1,259 →
+**1,262** (three restore cases), `migration_head` `0092` → **`0093`** and `next_migration` to
+**`0094`** (`uv run alembic heads` reports `0093_blob_object_version_binding (head)`). Contracts
+(285), the eleven runtime cases and the migration suite (5) were measured again at the same values;
+web was path-skipped in that pipeline and is carried at 283 files / 2,357 tests from the local
+gate. CI topology is unchanged (13 defined jobs, 14 on a tag or manual run).
 
 Fresh 2026-09-20 evidence for the pipeline compute policy (!53, !54), read from !54's
 [merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2864107244) job

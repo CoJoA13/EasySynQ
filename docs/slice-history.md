@@ -311,6 +311,91 @@ deployment, recovery, upgrade, or risk-acceptance conclusion follows from these 
 
 ## RECOVERY AND UPGRADE SAFETY
 
+### S-recovery-exact-version-binding — every blob bound to the version it was sealed as
+
+**2026-09-20/22; shipped in MR
+[!63](https://gitlab.com/synqsuite-group/EasySynQ/-/merge_requests/63) (squash `909fef6`, merge
+`c62ce09`, merged 2026-09-22 01:48 UTC).** The first bounded step of
+[`RES-SOURCE-INDEPENDENT-RECOVERY`](open-residuals.md#res-source-independent-recovery) and
+[issue #3](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/3) acceptance item 4, against the
+approved [design](superpowers/specs/2026-09-20-recovery-exact-version-binding-design.md). Migration
+head `0092` → **`0093`**; no permission key, endpoint or contract change.
+
+**The gap.** A recovery generation recorded which object it referenced (bucket and key) but not
+which version. Every restore path resolved whatever version was current, and because blobs are
+content-addressed and only the digest was checked, an object overwritten after the generation was
+written was indistinguishable from the sealed one. The value already existed: WORM promotion pins the
+exact source version and reads back the sealed `target_version_id`, which was discarded when the
+`blob` row was written.
+
+**What shipped.**
+- `0093_blob_object_version_binding` adds `blob.object_version_id` and `object_version_source`
+  under `ck_blob_object_version_binding`. The four WORM write paths (`vault/service.py` ×2,
+  `records/service.py`, `ingestion/commit.py`) bind the promotion read-back as `promotion`; the
+  four renditions paths (`vault/mirror.py`, `records/render.py`, `packs/portfolio.py`,
+  `diff/visual.py`) record `unversioned`. `storage.put_bytes` now returns the put's `VersionId`
+  (or `None`) instead of discarding the response. One pure module, `vault/version_binding.py`,
+  holds the only mapping from a write outcome to the two columns.
+- Manifest v3 carries the binding and a generation state — `sealed`, `observed`, `partial`,
+  `absent` — read by `archive.blob_refs_from_manifest`; a v2 manifest reads back unbound and restores
+  exactly as before.
+- `drill._copy_blobs` and `_rehash_stored_blob_locators` resolve the bound version, and the latter
+  now also asserts `size_bytes`, which rode the row and was never checked. A bound version that
+  cannot be resolved is a FAIL, never a fall back to current. `run_restore` reports
+  `version_binding`, `bound_blobs` and `unversioned_blobs`.
+- `easysynq backup bind-versions` binds pre-0093 rows as `backfill`, one-way (never overwriting a
+  binding) and printing every run that it attests the version observed then, not the sealed one.
+- The runbook gains the binding-state table, a `bind-versions` section and a corrected PASS
+  description.
+
+**Load-bearing decisions and traps.**
+- **`unversioned` is a design amendment, not in the approved spec.** The `renditions` bucket is
+  created without versioning, so four of eight write sites can never bind; without an explicit
+  source for "no version exists" every generation would report `partial` forever. Recorded at
+  write time, never inferred at restore.
+- **`binding_state` needs the manifest version** (Codex/Duo finding). A genuine v2 archive and a v3
+  generation whose rows were never backfilled are both all-unbound; judged by the blob list alone
+  the v2 archive reported `partial`, contradicting the runbook's `absent`. The suggested collapse
+  of "all unbound" to `absent` would have erased the v3 case, so the caller passes the version it
+  read instead, and a test pins the distinction.
+- **`drop_constraint` re-tokenizes through the naming convention too.** Passing `ck_blob_<token>`
+  produced `ck_blob_ck_blob_…` on the DOWNGRADE only, which an upgrade-only check never runs; the
+  round-trip caught it.
+- **A CHECK admits NULL.** Written as an OR-chain of `IS NULL` tests, a NULL source made every
+  branch NULL and "version id with no source" was accepted. Rewritten as a `CASE` over `COALESCE`
+  and proven case by case — five accepted, four rejected — against live PostgreSQL.
+- **My first integration assertion read the whole shared database.** Other files seed `blob` rows
+  directly with no binding (which no production path does), so the generation was legitimately
+  `partial`; the assertion is scoped to the blob the test creates, and the mutation still reddens it.
+- **The local migration check did not run `pytest tests/migration`.** CI does, and
+  `test_migration_coherence.py` pins the single head by name; the `migrations` job reddened while
+  the local round-trip was green. The pin is bumped and the `/check-migrations` command gains that
+  step in the next code change.
+
+**Verification.** Migration round-trip and `alembic check` clean on PG16. Three integration cases
+against real PostgreSQL and MinIO, each with mutation evidence: an object overwritten after the
+generation restores from the sealed version (dropping `VersionId` from the copy → "blob SHA-256
+re-hash failed"); an unresolvable bound version FAILs (dropping it from the stored-locator read);
+a size disagreement FAILs (dropping the length check). Two further mutations cover the review fixes.
+!63's [merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2869629501)
+passed all eleven jobs it ran (web suites path-skipped): **4,977 API unit tests / one release-only
+skip** (4,958 → 4,977, +19: seventeen binding tests and two never-raise tests; !57's js-yaml refusal
+pin had already moved the count from 4,957), eleven mandatory runtime cases, **1,262 integration passes / 2 skips**
+(1,259 → 1,262), 285 contract responses, five migration tests, security unchanged at API 47 /
+web 43 no-fix. Web was not run in that pipeline and is carried at 2,357 from the local gate.
+
+**Found in passing, not this slice's.** A full single-process integration run fails
+`test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment`; it fails
+identically on a clean `main` worktree (`bdfdf95`, 1,258 passed / 1 failed) and CI's four-way
+sharding never places it where it fails. Left for its own change.
+
+**Deferred, honestly.** The archive still carries no object bytes, so restore stays
+source-dependent and non-cutover; every limit block, CLI warning and the `post_cutover_actions: []`
+compatibility key are unchanged. Service-capability separation, complete encrypted generations
+(encryption is still whole-archive in memory, `services/backup/crypto.py`), certified
+destinations, fresh role-preserving targets and the source-denied boot-and-read proof remain open.
+`RES-SOURCE-INDEPENDENT-RECOVERY` and issue #3 stay OPEN.
+
 ### S-audit-global-history-reconciliation — bounded global closure
 
 **2026-09-12; full local repository and eleven-case image acceptance verified; reviewed GitLab
