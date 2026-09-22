@@ -8,6 +8,10 @@ Reproduce the `migrations` CI job locally — the project's most error-prone are
 1. `alembic upgrade head` (apply the whole tree to the current head reported by `alembic heads`; never hard-code a head number here).
 2. `alembic downgrade base` then `alembic upgrade head` again (prove the round-trip).
 3. `alembic check` must be **clean** — no phantom-DROP / phantom-create.
+4. `uv run pytest tests/migration` — the CI job runs this too, and the round-trip alone does not.
+   `test_migration_coherence.py` pins the **single head by name**, so every migration slice must
+   bump that pin or the job reddens (!63 shipped green locally and failed exactly here); it also
+   replays populated historical transitions the up↔down of an empty database never exercises.
 
 Common failure modes to check against `.claude/rules/engineering-patterns.md` (Migrations section):
 - a new model module not imported in `db/models/__init__.py` → phantom-DROP;

@@ -19,4 +19,4 @@ release or deployment work is required separately.
 - [ ] Documentation and current residuals reflect the change where needed.
 - [ ] No credentials, installation records, customer data, or unredacted logs are included.
 
-See [the contribution guide](https://gitlab.com/synqsuite-group/EasySynQ/-/blob/main/CONTRIBUTING.md).
+See [the contribution guide](https://github.com/CoJoA13/EasySynQ/blob/main/CONTRIBUTING.md).

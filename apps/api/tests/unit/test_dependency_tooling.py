@@ -56,19 +56,43 @@ def test_locked_contract_toolchain_manifest_and_resolution_are_exact() -> None:
     )
 
 
+def _dependabot_updates() -> list[dict[str, Any]]:
+    config = yaml.safe_load((_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    updates: list[dict[str, Any]] = config["updates"]
+    return updates
+
+
+def _dependabot_entry(ecosystem: str, directory: str) -> dict[str, Any]:
+    matches = [
+        entry
+        for entry in _dependabot_updates()
+        if entry["package-ecosystem"] == ecosystem and entry["directory"] == directory
+    ]
+    assert len(matches) == 1, f"expected one {ecosystem} entry for {directory}, got {matches}"
+    return matches[0]
+
+
+_JS_YAML_MAJOR_REFUSAL = {
+    "dependency-name": "js-yaml",
+    "update-types": ["version-update:semver-major"],
+}
+
+
 def test_js_yaml_majors_stay_refused_until_redocly_supports_them() -> None:
     """js-yaml 5 removed `types.merge`, which @redocly/openapi-core calls at module load.
 
     Forcing it through the override leaves contract generation dead while `redocly lint` still
-    passes, so the refusal is pinned here as well as explained in the config (closed MR !7).
+    passes, so the refusal is pinned here as well as explained in the config (closed GitLab MR !7
+    under Renovate). Dependabot is the only updater since R86; it does not edit `overrides`, so
+    the `ignore` entry documents the intent and the package.json override (asserted above at
+    4.3.2) is the mechanism that actually holds the pin.
     """
-    renovate = _read_json(_ROOT / "renovate.json")
-    refusal = next(
-        rule for rule in renovate["packageRules"] if rule.get("matchPackageNames") == ["js-yaml"]
-    )
-    assert refusal["matchUpdateTypes"] == ["major"]
-    assert refusal["enabled"] is False
-    assert "types.merge" in refusal["description"]
+    contracts = _dependabot_entry("npm", "/packages/contracts")
+    assert _JS_YAML_MAJOR_REFUSAL in contracts["ignore"]
+
+    raw = (_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    assert "types.merge" in raw
+    assert not (_ROOT / "renovate.json").exists(), "Renovate was removed by R86; one updater only"
 
 
 def test_locked_python_security_group_and_resolution_are_exact() -> None:
@@ -91,10 +115,9 @@ def test_locked_python_security_group_and_resolution_are_exact() -> None:
 
 
 def test_dependabot_tracks_only_version_updates_for_the_locked_contract_toolchain() -> None:
-    dependabot = yaml.safe_load((_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
     contract_entries = [
         entry
-        for entry in dependabot["updates"]
+        for entry in _dependabot_updates()
         if entry["package-ecosystem"] == "npm" and entry["directory"] == "/packages/contracts"
     ]
 
@@ -110,6 +133,7 @@ def test_dependabot_tracks_only_version_updates_for_the_locked_contract_toolchai
                     "update-types": ["minor", "patch"],
                 }
             },
+            "ignore": [_JS_YAML_MAJOR_REFUSAL],
         }
     ]
     contract_entry = contract_entries[0]
@@ -166,27 +190,11 @@ def test_api_image_python_major_matches_requires_python() -> None:
 
     # Keep the updater from re-proposing the bump every week. Unlike the reportlab/Mantine majors,
     # this ceiling has a proven RUNTIME consequence, so the refusal is pinned here as well as
-    # commented in the config.
-    #
-    # Pinned in BOTH updaters during the GitHub->GitLab transition: renovate.json is the live one
-    # (Dependabot does not run on GitLab), and .github/dependabot.yml is retired in its own slice.
-    # ⚠ Renovate expresses this as an allowedVersions CEILING rather than an ignore rule, because
-    # 3.12 -> 3.14 is a semver MINOR update on a `3`-major tag: a major-only refusal never matches.
-    renovate = _read_json(_ROOT / "renovate.json")
-    ceiling = next(
-        rule
-        for rule in renovate["packageRules"]
-        if rule.get("matchDatasources") == ["docker"]
-        and rule.get("matchPackageNames") == ["python"]
-    )
-    assert ceiling["allowedVersions"] == f"<{high[0]}.{high[1]}"
-
-    dependabot = yaml.safe_load((_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
-    api_docker = next(
-        entry
-        for entry in dependabot["updates"]
-        if entry["package-ecosystem"] == "docker" and entry["directory"] == "/apps/api"
-    )
+    # commented in the config. Dependabot is the ONLY updater since R86 (Renovate ran on GitLab
+    # 2026-09-08..21 and is removed). ⚠ It is a `versions` ceiling rather than a semver-major
+    # ignore, because 3.12 -> 3.14 is a semver MINOR update on a `3`-major tag: a major-only
+    # refusal never matches.
+    api_docker = _dependabot_entry("docker", "/apps/api")
     assert {"dependency-name": "python", "versions": [f">={high[0]}.{high[1]}"]} in api_docker[
         "ignore"
     ]
@@ -194,7 +202,6 @@ def test_api_image_python_major_matches_requires_python() -> None:
 
 def test_vulnerable_postgres_mcp_connector_is_disabled() -> None:
     mcp_config = _read_json(_ROOT / ".mcp.json")
-    dependabot = yaml.safe_load((_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
     justfile = (_ROOT / "justfile").read_text(encoding="utf-8")
 
     assert mcp_config == {"mcpServers": {}}
@@ -204,15 +211,14 @@ def test_vulnerable_postgres_mcp_connector_is_disabled() -> None:
     assert not (_ROOT / "tools" / "mcp-postgres" / "package-lock.json").exists()
     assert not (_ROOT / "scripts" / "run-postgres-mcp.sh").exists()
     assert not (_ROOT / "infra" / "compose" / "compose.mcp.yml").exists()
+    # Dependabot is pointed at directories, so the only way the connector comes back is an entry
+    # naming it here; the manifests it would need stay absent (asserted above).
     assert not [
         entry
-        for entry in dependabot["updates"]
+        for entry in _dependabot_updates()
         if entry["package-ecosystem"] == "npm" and entry["directory"] == "/tools/mcp-postgres"
     ]
-    # The live updater must not resurrect it either: Renovate DETECTS manifests rather than being
-    # pointed at directories, so the guarantee here is that no rule re-enables that path and the
-    # manifests it would detect stay absent (asserted above).
-    assert "mcp-postgres" not in (_ROOT / "renovate.json").read_text(encoding="utf-8")
+    assert "mcp-postgres" not in (_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
 
 
 def test_local_contract_entry_points_use_the_locked_launcher() -> None:

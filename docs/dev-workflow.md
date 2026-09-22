@@ -5,12 +5,15 @@
 
 ## Branch + PR flow
 
-GitLab protects `main`: direct pushes and force pushes are disabled, and Maintainers merge reviewed
-merge requests after the pipeline succeeds and all discussions are resolved. A skipped pipeline does
-not satisfy the gate. Do slice work on a scoped branch → open a merge request → review and check →
-merge through GitLab. Release tags matching `v*` may be created only by Maintainers. See
-[`runbooks/gitlab-repository-setup.md`](runbooks/gitlab-repository-setup.md) for the hosting settings,
-[`current-status.md`](current-status.md) for the dated CI topology, and `.gitlab-ci.yml` for executable truth.
+GitHub rulesets protect `main` (R86): direct pushes, force pushes and deletion are refused, the single
+required status check is `gate`, the branch must be up to date with `main`, every review conversation
+must be resolved, and squash is the only merge method. A pull-request run tests the merge commit of
+the head onto `main`, so the PR's final check run on its head SHA is the merge evidence; a skipped or
+stale run does not satisfy the gate. Do slice work on a scoped branch → open a pull request → review
+and check → squash-merge on GitHub. Release tags matching `v*` are protected by ruleset. See
+[`runbooks/github-repository-setup.md`](runbooks/github-repository-setup.md) for the hosting settings,
+[`current-status.md`](current-status.md) for the dated CI topology, and `.github/workflows/ci.yml` for
+executable truth.
 
 ## Toolchain (Linux CI / a Linux dev host)
 
@@ -31,11 +34,11 @@ Alternatively, use `UV_PYTHON_DOWNLOADS=never` with CPython 3.12 already install
 project-locked Ruff, pinned PyPI text/YAML hooks, and native Gitleaks 8.x (minimum 8.18.4). Missing Gitleaks fails
 the staged secret check; installing hooks no longer clones remote hook repositories.
 
-Optional hosting commands use authenticated `glab` against the GitLab repository remote. To refresh
-integration timing data, run `bash scripts/refresh-test-durations.sh [pipeline-id]`. It selects one
-successful `main` pipeline (latest by default), requires its four successful integration shards,
-downloads their timing artifacts, and rejects overlap or incomplete data before replacing the local
-file. Artifacts expire after seven days. Review the timing diff before committing it.
+Optional hosting commands use authenticated `gh` against the GitHub repository remote. To refresh
+integration timing data, run `bash scripts/refresh-test-durations.sh [run-id]`. It selects one
+successful `ci` workflow run on `main` (latest by default), requires its four successful integration
+shards, downloads their timing artifacts from Actions by name, and rejects overlap, expired artifacts
+or incomplete data before replacing the local file. Review the timing diff before committing it.
 
 Run the dependency-light, read-only doctor directly before setup so it can diagnose a missing `just`:
 

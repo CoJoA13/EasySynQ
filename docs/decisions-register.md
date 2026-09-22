@@ -1,11 +1,14 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R85) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector. R82 adopts PolyForm Shield for original project materials and permits paid consulting for customer-owned instances. R83 adds inactive isolated original version-page transport and a bounded DeleteMarker metadata compatibility extension; that R83 boundary left required-witness collection and recovery open.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R86) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector. R82 adopts PolyForm Shield for original project materials and permits paid consulting for customer-owned instances. R83 adds inactive isolated original version-page transport and a bounded DeleteMarker metadata compatibility extension; that R83 boundary left required-witness collection and recovery open.
 
 R84 adds inactive required-witness namespace traversal with a fresh bounded private spool and
 post-cleanup diagnostics. It authenticates no history and activates no operational consumer.
 R85 adds inactive global bootstrap/lineage reconciliation within one fresh owned lifetime, with
 entire-path coverage at every required witness and compact output only after complete closure.
+R86 returns primary hosting to GitHub (`CoJoA13/EasySynQ`) behind a ruleset-required `gate`
+check with Dependabot updates, supersedes the 2026-09-08 no-GitHub instruction, and archives
+the GitLab project so dated evidence keeps resolving.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -117,7 +120,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R85
+## Part 3 — Resolutions R1–R86
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -3215,7 +3218,7 @@ original submissions; the license does not require upstream merge requests.
 
 **Back-propagation:** [`README.md`](../README.md), [`LICENSING.md`](../LICENSING.md),
 [`CONTRIBUTING.md`](../CONTRIBUTING.md), the
-[GitLab setup runbook](runbooks/gitlab-repository-setup.md), package metadata and license files,
+[GitLab setup runbook](runbooks/github-repository-setup.md), package metadata and license files,
 API image packaging, and the OpenAPI source with its regenerated bundle and checksum.
 
 Bumps the resolutions range **R1–R81 → R1–R82**.
@@ -3503,6 +3506,60 @@ and the related residuals remain open; no live enrollment, IAM, deployment or re
 [approved design](superpowers/specs/2026-09-12-audit-global-history-reconciliation-design.md).
 
 Bumps the resolutions range **R1–R84 → R1–R85**.
+
+---
+
+### R86 — GitHub is primary hosting again; the GitLab project is archived — 2026-09-21
+
+**Decision.** Primary repository hosting returns to the existing public repository
+[`github.com/CoJoA13/EasySynQ`](https://github.com/CoJoA13/EasySynQ). The 2026-09-08 instruction
+that repository hosting and automation must not use GitHub services, recorded only narratively in
+slice history, current status and the Renovate GitHub-metadata residual, and never as a register entry, is
+superseded. The GitLab project `gitlab.com/synqsuite-group/EasySynQ` is **archived, not deleted**,
+once the migration has merged and the two `main` tips agree, so every dated pipeline, job,
+merge-request and issue URL in the authority documents keeps resolving. Those historical URLs are
+not rewritten; new evidence cites GitHub check runs. The
+[approved design](superpowers/specs/2026-09-21-github-primary-hosting-design.md) defines the
+migration sequence and its acceptance.
+
+**Merge gate.** `main` is governed by GitHub rulesets, not by settings in Git: the single required
+status check is `gate`, the aggregator job that needs every job in `.github/workflows/ci.yml` and
+fails when any job failed, was cancelled, or was skipped while its own path condition said it should
+run; branches must be up to date with `main` before merging; squash is the only merge method; force
+pushes and branch deletion are refused; every review conversation must be resolved. A pull-request
+run tests the merge commit of the head onto `main`, so with the up-to-date rule and squash-only
+merging **the pull request's final check run on its head SHA is the merge evidence**, and the
+post-merge run on `main` keeps only the cheap backstops (the guards, `migrations` and `security`),
+exactly as the GitLab pipeline did. Release tags `v*` are protected by ruleset; protection is not
+release acceptance, which stays with `release-gate`. `.gitlab-ci.yml` is deleted in the same change:
+keeping two gates is how the retained workflow went stale.
+
+**Dependency updates.** Dependabot, configured by the tracked `.github/dependabot.yml`, replaces
+self-hosted Renovate; it refreshes lockfiles itself, so the unrefreshed-lockfile concern in
+the Renovate GitHub-metadata residual no longer applies; that record leaves the ledger as superseded. The
+losses are accepted and manual: `infra/images.lock` digests are not tracked, so a Compose image
+update reddens `compose-images-lock` until the maintainer runs `just images-update`
+(`scripts/images-update.sh`, which re-resolves every lock entry and fails on a partial result)
+before merging; the `uv==` pin in `apps/api/Dockerfile` and the `npm@` pin in the web Dockerfile
+are not tracked and are bumped by hand under the existing version guards; `overrides` are not
+edited, so a `js-yaml` advisory is a manual action. Renovate's configuration, its CI jobs,
+`scripts/run-renovate.sh`, `scripts/tests/test-renovate-images.mjs` and the Renovate-specific guard
+assertions are removed rather than kept as a second updater.
+
+**Out of scope.** AI review of pull requests: GitLab Duo has no like-for-like replacement, none is
+adopted here, and it is a separate decision. A merge queue, automation of the images-lock refresh,
+rewriting historical `gitlab.com` evidence links, and closing the twelve GitHub issues carried over
+from before the 2026-09-08 move are likewise not part of this decision.
+
+**Back-propagation:** [`README.md`](../README.md), [`CONTRIBUTING.md`](../CONTRIBUTING.md),
+[dev workflow](dev-workflow.md), the [GitHub setup runbook](runbooks/github-repository-setup.md)
+(replacing the GitLab one), [fresh Linux setup](runbooks/fresh-linux-setup.md), the
+[installation guide](manuals/installation-guide.md) and
+[Ubuntu server runbook](runbooks/install-ubuntu-server.md), the `.github/` issue and pull-request
+templates, [current status](current-status.md) (CI topology), [open residuals](open-residuals.md),
+[slice history](slice-history.md), and the contributor command and pattern files under `.claude/`.
+
+Bumps the resolutions range **R1–R85 → R1–R86**.
 
 ---
 

@@ -74,8 +74,9 @@ policy:
 The `security` job keeps its exact script, including both built-image scans and the fixed-version
 threshold. Its **required** status is the change the retained file got wrong.
 
-`scripts/tests/test-gitlab-ci-hardening.sh` becomes `test-github-ci-hardening.sh` with the same
-58 assertions re-targeted (the `continue-on-error` ban stays; it is the GitHub escape hatch).
+`scripts/tests/test-gitlab-ci-hardening.sh` is folded into `test-ci-hardening.sh` — one workflow,
+one structural guard — with its ported policy assertions re-targeted and its GitLab-only traps
+dropped (the `continue-on-error` ban stays; it is the GitHub escape hatch).
 `apps/api/tests/unit/test_ci_workflow.py` keeps the policy tests — rule ordering, the code-path
 coverage walk over `git ls-files`, the docs-lane selection pin, the unconditional jobs, cancellation
 exempting `main` — re-expressed against the workflow's `if:` conditions and the filter job's
@@ -97,8 +98,10 @@ file went stale.
 | `uv==` pin in `apps/api/Dockerfile` | **not tracked**; manual |
 | **`infra/images.lock` digests** | **not tracked.** Renovate's custom manager updated the compose tag and the lock digest together, and `scripts/tests/test-renovate-images.mjs` proved it. Dependabot's `docker-compose` ecosystem bumps `compose.yml` tags only, so **every compose image PR reddens `compose-images-lock` until the lock is refreshed by hand.** |
 
-The last row is the material cost of the Dependabot decision. The mitigation in this change is
-mechanical: a documented `just refresh-images-lock <service>` recipe (or `scripts/refresh-images-lock.sh`) that resolves the tag to its current digest and rewrites the lock line, run by the maintainer on each such PR before merging. The alternative — keeping Renovate for images only — was rejected as two updaters. Renovate's files, its two CI jobs, `scripts/run-renovate.sh`, `scripts/tests/test-renovate-images.mjs` and the Renovate-specific assertions in the guards are removed; `RES-RENOVATE-GITHUB-METADATA` is closed as **superseded by R86**, with its lockfile-refresh concern restated as a Dependabot fact (Dependabot updates lockfiles itself).
+The last row is the material cost of the Dependabot decision. The mitigation already exists:
+`just images-update` (`scripts/images-update.sh`) re-resolves every lock entry to its current
+digest and fails loudly on a partial result, so a compose image PR needs one command run by the
+maintainer before merging, and `compose-images-lock` stays red until it has been. The alternative — keeping Renovate for images only — was rejected as two updaters. Renovate's files, its two CI jobs, `scripts/run-renovate.sh`, `scripts/tests/test-renovate-images.mjs` and the Renovate-specific assertions in the guards are removed; `RES-RENOVATE-GITHUB-METADATA` is closed as **superseded by R86**, with its lockfile-refresh concern restated as a Dependabot fact (Dependabot updates lockfiles itself).
 
 ## Guards that flip
 
@@ -153,5 +156,5 @@ project is archived; and `current-status.md` names the GitHub check run as the b
 
 ## Deliberately not in scope
 
-AI review of PRs. Merge queue. Renovate's images.lock automation (replaced by the manual recipe).
+AI review of PRs. Merge queue. Renovate's images.lock automation (replaced by running `just images-update` per compose image PR).
 Rewriting historical gitlab.com evidence links. Closing any of the twelve carried-over issues.

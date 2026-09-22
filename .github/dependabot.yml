@@ -1,8 +1,16 @@
-# Dependency-update automation (Phase-1 tech-debt: I-5). Air-gap-safe — Dependabot only opens PRs
-# against this GitHub repo; the self-hosted prod host never phones home. Minor/patch are grouped to
-# keep PR noise low; majors come as individual PRs (they usually need a human migration). Tune the
-# limits/cadence freely. NOTE: Dependabot updates the manifests + lockfiles, but CI (uv sync --frozen
-# / npm ci) still gates every bump, and the `security` CI job surfaces advisories independently.
+# Dependency-update automation (Phase-1 tech-debt: I-5). LIVE AGAIN as of R86 (2026-09-21): GitHub is
+# the primary host once more and Dependabot is the ONLY updater. Between 2026-09-08 and 2026-09-21 the
+# repository lived on GitLab and dependency updates ran through a self-hosted Renovate; that
+# configuration (renovate.json, renovate-self-hosted.cjs, scripts/run-renovate.sh) is removed, and the
+# Renovate rules that survive re-expression are folded in below. Two things Dependabot does NOT track
+# and that are therefore manual: the `npm install --global npm@X` pin in apps/web/Dockerfile (guarded
+# `<12` by test_deploy_configuration) and the `uv==` pin in apps/api/Dockerfile. Its `docker-compose`
+# ecosystem bumps compose tags only, so every compose image PR needs infra/images.lock refreshed by
+# hand before `compose-images-lock` goes green. Air-gap-safe — Dependabot only opens PRs against this
+# GitHub repo; the self-hosted prod host never phones home. Minor/patch are grouped to keep PR noise
+# low; majors come as individual PRs (they usually need a human migration). Tune the limits/cadence
+# freely. NOTE: Dependabot updates the manifests + lockfiles, but CI (uv sync --frozen / npm ci) still
+# gates every bump, and the `security` CI job surfaces advisories independently.
 version: 2
 updates:
   # Python API (uv — updates pyproject.toml + uv.lock together)
@@ -47,6 +55,17 @@ updates:
       contract-tools-minor-patch:
         applies-to: version-updates
         update-types: ["minor", "patch"]
+    ignore:
+      # js-yaml majors are refused. js-yaml reaches this toolchain through openapi-typescript ->
+      # @redocly/openapi-core, which calls js_yaml.types.merge at module load; that export is gone in
+      # js-yaml 5, so the module throws, contract generation produces nothing, and `redocly lint`
+      # still passes (closed GitLab MR !7 under Renovate). The `overrides` in
+      # packages/contracts/package.json pins js-yaml at 4.3.2 (a patched 4.x, keeping Redocly off the
+      # vulnerable 4.3.0). Dependabot does NOT edit `overrides`, so this entry is documentation of
+      # intent rather than the mechanism: the pin never moves on its own, and a js-yaml advisory is a
+      # manual action. Revisit when @redocly/openapi-core itself supports js-yaml 5.
+      - dependency-name: "js-yaml"
+        update-types: ["version-update:semver-major"]
 
   # CI action pins (keeps astral-sh/setup-uv, actions/*, trivy fresh — supply-chain hygiene)
   - package-ecosystem: "github-actions"

@@ -1,0 +1,54 @@
+# Path lists that decide which CI jobs a pull request runs. Read by the `changes` job in
+# .github/workflows/ci.yml and pinned by apps/api/tests/unit/test_ci_workflow.py, which walks
+# `git ls-files` and fails if any tracked path outside docs/** and root *.md is missing from
+# `code` — so a new top-level file can never fall into the docs-only lane by accident.
+#
+# Only two entry shapes are allowed, `<dir>/**` and an exact root file name, so that coverage test
+# can check the list exactly. main, tag and manually started runs ignore these lists entirely.
+
+# Every tracked path outside the docs-only lane (docs/** and root-level *.md).
+code:
+  - .claude/**
+  - .github/**
+  - .impeccable/**
+  - .superpowers/**
+  - apps/**
+  - infra/**
+  - migrations/**
+  - mockup/**
+  - packages/**
+  - scripts/**
+  - .dockerignore
+  - .editorconfig
+  - .env.example
+  - .gitattributes
+  - .gitignore
+  - .mcp.json
+  - .node-version
+  - .pre-commit-config.yaml
+  - LICENSE
+  - VERSION
+  - justfile
+  - ruff.toml
+
+# Everything the API-side suites read. Integration and contract tests reach outside apps/api only
+# for packages/contracts, infra (images.lock, compose) and VERSION; scripts/ is included because
+# the suites shell out to repository tooling. Err wide: a stray match costs minutes, a miss costs
+# a gate. The workflow itself is listed so a pipeline edit exercises every suite.
+api_suites:
+  - .github/**
+  - .dockerignore
+  - .env.example
+  - VERSION
+  - apps/api/**
+  - migrations/**
+  - infra/**
+  - packages/contracts/**
+  - scripts/**
+
+# The SPA is self-contained under apps/web (its generated API types are committed there, and the
+# contracts job proves they match the contract), so web suites follow apps/web and the contract.
+web_suites:
+  - .github/**
+  - apps/web/**
+  - packages/contracts/**

@@ -1,3 +1,9 @@
+---
+name: Bug report
+about: Report observed behavior that differs from the documented or expected result
+labels: bug
+---
+
 ## Problem
 
 What happened, and what should have happened?
@@ -19,5 +25,5 @@ Include sanitized errors or screenshots, affected workflows, and any known worka
 Link existing issues or a stable residual if this overlaps known work.
 
 Do not include credentials, installation addresses, customer records, or unredacted logs. For a
-suspected vulnerability, select **confidential** before submitting and follow the
-[security-reporting instructions](https://gitlab.com/synqsuite-group/EasySynQ/-/blob/main/CONTRIBUTING.md#report-a-security-concern).
+suspected vulnerability, do not open an issue; use private vulnerability reporting and follow the
+[security-reporting instructions](https://github.com/CoJoA13/EasySynQ/blob/main/CONTRIBUTING.md#report-a-security-concern).

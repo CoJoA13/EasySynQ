@@ -11,7 +11,7 @@
 ## 1. Clone + toolchain
 
 ```bash
-git clone https://gitlab.com/synqsuite-group/EasySynQ.git ~/Documents/EasySynQ
+git clone https://github.com/CoJoA13/EasySynQ.git ~/Documents/EasySynQ
 cd ~/Documents/EasySynQ
 
 # Read-only inventory. Names every missing tool and the exact command that installs it.
@@ -74,8 +74,8 @@ pre-commit hook runs the same staged, redacted secret scan and fails if the nati
 Ruff uses the project lock; the standard text/YAML hooks
 install `pre-commit-hooks==5.0.0` from PyPI. Commits do not require a Docker daemon.
 
-For optional GitLab merge-request and artifact commands, install `glab` from Ubuntu's package
-repository (`sudo apt-get install glab`) and run `glab auth login`. Do not put tokens in command
+For optional GitHub pull-request and Actions-artifact commands, install `gh` from Ubuntu's package
+repository (`sudo apt-get install gh`) and run `gh auth login`. Do not put tokens in command
 arguments or tracked files.
 
 ⚠ **`pg_dump` must be major 18**, matching the PostgreSQL server in `infra/images.lock`.

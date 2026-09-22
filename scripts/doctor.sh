@@ -603,6 +603,7 @@ check_node
 check_python
 check_simple_tool just JUST_MISSING just just JUST_AVAILABLE
 check_simple_tool pre-commit PRECOMMIT_MISSING pre-commit pre-commit PRECOMMIT_AVAILABLE
+check_simple_tool gh GH_MISSING gh gh TOOL_GH_AVAILABLE
 check_gitleaks
 check_pg_dump
 check_docker

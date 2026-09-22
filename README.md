@@ -2,7 +2,7 @@
 
 A self-hosted quality management system for controlled documents, approvals, records, and audit evidence.
 
-[![CI](https://gitlab.com/synqsuite-group/EasySynQ/badges/main/pipeline.svg)](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines)
+[![CI](https://github.com/CoJoA13/EasySynQ/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CoJoA13/EasySynQ/actions/workflows/ci.yml?query=branch%3Amain)
 
 EasySynQ helps a quality team track which document version governs, who approved it, and which
 records belong to it. PostgreSQL and WORM object storage hold the controlled master copy. A
@@ -56,7 +56,7 @@ architecture, not supported deployment artifacts.
 Operational diagnostics include `/healthz`, dependency readiness at `/readyz`, structured JSON logs,
 Compose health, and configured out-of-band alarm channels. See the
 [monitoring procedures](docs/manuals/administrator-it-manual.md#8-health-logs-and-monitoring).
-GitLab CI status is separate from the health of an installed EasySynQ instance.
+GitHub Actions status is separate from the health of an installed EasySynQ instance.
 
 ## Quick start (developer)
 
@@ -124,18 +124,19 @@ infra/compose/        Compose stack, Caddy, Keycloak, and MinIO configuration
 infra/appliance/      Hyper-V appliance packaging
 scripts/              Contributor, operator, validation, and release commands
 docs/                 Product authority, current status, manuals, and runbooks
-.gitlab/              Issue and merge request templates
+.github/              CI workflow, Dependabot, issue and pull request templates
 ```
 
 ## Project workflow
 
-Development, issues, merge requests, CI, and release publishing use
-[GitLab](https://gitlab.com/synqsuite-group/EasySynQ). Renovate proposes dependency changes through
-reviewed merge requests; major upgrades remain deliberate. The
-[GitLab setup runbook](docs/runbooks/gitlab-repository-setup.md) explains the branch gates, update bot,
-security checks, and optional project services.
+Development, issues, pull requests, CI, and release publishing use
+[GitHub](https://github.com/CoJoA13/EasySynQ) (R86). Rulesets on `main` require the single `gate`
+check, an up-to-date branch, and squash merges; the pull request's final check run is the merge
+evidence. Dependabot proposes dependency changes through reviewed pull requests; major upgrades
+remain deliberate. The [GitHub setup runbook](docs/runbooks/github-repository-setup.md) explains
+the branch gates, update bot, security checks, and the archived GitLab project.
 
-Use [issues](https://gitlab.com/synqsuite-group/EasySynQ/-/issues) for sanitized bug reports and feature
+Use [issues](https://github.com/CoJoA13/EasySynQ/issues) for sanitized bug reports and feature
 requests. For a suspected vulnerability, follow the confidential-reporting instructions in
 [CONTRIBUTING.md](CONTRIBUTING.md#report-a-security-concern). Do not include credentials or installation data.
 

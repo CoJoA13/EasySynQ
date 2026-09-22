@@ -1,3 +1,9 @@
+---
+name: Feature request
+about: Propose a change to a quality workflow or an operator capability
+labels: enhancement
+---
+
 ## Need
 
 Who needs this, and what task are they trying to complete?
