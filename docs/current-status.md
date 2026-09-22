@@ -12,7 +12,7 @@ contract_tests: 285
 integration_passed: 1259
 integration_skipped: 2
 ci_jobs: 13
-ci_checks: 14
+ci_checks: 15
 ---
 
 # Current execution snapshot
@@ -705,8 +705,8 @@ and the updated independent exact-version guards passed. Reviewed head
 **2830246394**, and !6 merged as `d07570448ce53ff0e9fb82e71a996947394dda9b`.
 
 Actual npm write proof is complete. Real uv lock refresh remains unverified until a suitable Python
-update exists; the residual remains open in
-[`RES-RENOVATE-GITHUB-METADATA`](open-residuals.md#res-renovate-github-metadata). Four existing
+update exists; the residual recorded for the Renovate GitHub-metadata gap remained open at that
+date (closed as superseded by R86 on 2026-09-21, when Renovate was retired). Four existing
 OpenAPI composition warnings and the unchanged Python generator's formatter FutureWarning remain;
 this is not a warning-free toolchain claim. Major MRs !7–!9 remain Draft for their separate
 compatibility/teardown gates. The planned rotation date is **2026-09-30**, ahead of the current
@@ -719,7 +719,7 @@ and distribution guards passed, `AUTHORITY_OK`, and a clean site-data scan.
 Fresh 2026-09-08 repository setup audit. GitLab now protects `main` against direct and force
 pushes, limits merging to Maintainers, requires a successful pipeline and resolved discussions,
 and rejects skipped pipelines as merge evidence. Release tags matching `v*` are protected for
-Maintainer creation. The [hosting runbook](runbooks/gitlab-repository-setup.md) records the setup.
+Maintainer creation. The [GitLab setup runbook](https://github.com/CoJoA13/EasySynQ/blob/c62ce09/docs/runbooks/gitlab-repository-setup.md) (historical; superseded by R86) records the setup.
 
 The Renovate credential failure is now reproduced rather than inferred from a generic error.
 The audit first found a protected token on unprotected `main`. Protecting the branch corrected
@@ -741,8 +741,8 @@ Final branch pipeline `2828291882` passed all **14** jobs at `c4889eb2` and MR `
 extracted **134** dependencies from **17** files and opened MRs `!5` through `!9`. It exited
 successfully but reported missing GitHub authentication, tool/version lookup failures and
 unrefreshed lockfile artifacts. Automation is therefore only partially configured; the remaining
-credential and verification work is `RES-RENOVATE-GITHUB-METADATA` in
-[`open-residuals.md`](open-residuals.md), not a clean updater claim.
+credential and verification work was recorded as the Renovate GitHub-metadata residual in
+[`open-residuals.md`](open-residuals.md) (superseded by R86 on 2026-09-21), not a clean updater claim.
 
 The successful main pipeline `2828169447` at `66675359` supplied fresh audit evidence: API unit
 **2,011 passed / 1 release-only skip**, integration **1,231 passed / 2 skipped**, **285** contracts,
@@ -1180,21 +1180,28 @@ PostgreSQL MCP, CI-hardening and Compose-image-lock guards before dependency hyd
 checks prove tracked interfaces and failure propagation; they do not emulate a developer host or
 live application stack. The retired Fedora bootstrap/proof is not part of the current pipeline.
 
-`.gitlab-ci.yml` defines **13** jobs. Merge requests run **merged-results pipelines**, and the
-project's semi-linear merge method requires a rebase onto main before merging. The MR pipeline
-therefore tests the exact tree main receives, and **it is the merge evidence**; plain branch pushes
-run no pipeline. In an MR, `integration-shards` and `contract-responses` run when API-side inputs
-differ from main, `web-tests` and `web-browser` when `apps/web` or the contract differs, and `api`,
-`security` and `migrations` when anything outside `docs/**` and root `*.md` differs. Editing
-`.gitlab-ci.yml` runs every suite. A docs-only MR runs the three guards plus `docs-tests`, the unit
-tests that read documentation (selected by content). A main pipeline after a merge runs the
-guards, `migrations` and `security`. Tag and manually started pipelines run every suite, which is
-**14** instances plus the release gate on a `v*` tag; start a pipeline on main by hand for a full
-check. A scheduled pipeline runs Renovate, `security` and the guards. A newer commit cancels an
-older MR pipeline; main pipelines are never auto-cancelled. There are no GitHub-style aggregator jobs:
-GitLab's successful-pipeline merge requirement gates the entire pipeline. `web-browser` runs the
-Chromium suite and retains ignored failure diagnostics for seven days. `renovate-config` runs
-strict repository configuration validation on every branch using the same image as the updater.
+`.github/workflows/ci.yml` defines **13** jobs (R86). Pull requests run on the **merge commit** of
+the head onto main, and the `main` ruleset requires the branch to be up to date and squash-only
+merging, so the PR's final check run on its head SHA tests the exact tree main receives and **it is
+the merge evidence**; plain branch pushes run nothing. `gate` is the single required status check:
+it needs every job and fails if any job failed, was cancelled, or was skipped while its own condition
+said it should run, so a path-conditional suite is never listed as a required check of its own. The
+`changes` job decides which suites a run owes from the path lists in `.github/ci-paths.yml` (`code`,
+`api_suites`, `web_suites`), and every conditional job keys off its outputs. In a pull request,
+`integration-shards` and `contract-responses` run when API-side inputs differ from main,
+`web-shards` and `web-browser` when `apps/web` or the contract differs, and `api`, `security` and
+`migrations` when anything outside `docs/**` and root `*.md` differs; editing `.github/**` runs every
+suite. A docs-only PR runs the guards (`contracts`, `compose-images-lock`) plus `docs-tests`, the unit
+tests that read documentation (selected by content). The workflow defines **13** jobs. A manually
+started run on main executes **15** instances (`integration-shards` expands to four, `web-shards` to
+two, and both `docs-tests` — the run is not docs-only — and tag-only `release-gate` are skipped); a
+`v*` tag run adds the release gate for **16**. A pull
+request runs the subset its changed paths select plus `changes`, `gate` and the unconditional guards;
+a post-merge push to main runs `changes`, `gate`, `contracts`, `compose-images-lock`, `migrations` and
+`security`. A newer commit cancels an in-flight run of the same pull request (`concurrency` keyed on
+the PR ref); main, tag and manual runs are never auto-cancelled. There is no scheduled pipeline:
+Dependabot opens its own pull requests, which run the same gate. `web-browser` runs the Chromium suite
+and retains failure diagnostics as an artifact for seven days.
 
 The `security` job must finish successfully. It enforces the npm policy and blocks HIGH/CRITICAL
 vulnerabilities with a reported fixed version in either built application image. No-fix image

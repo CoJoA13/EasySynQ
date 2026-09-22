@@ -97,6 +97,7 @@ make_dispatcher() {
     "  openssl) printf 'OpenSSL 3.2.4\\n' ;;" \
     "  just) printf 'just 1.40.0\\n' ;;" \
     "  pre-commit) printf 'pre-commit 4.2.0\\n' ;;" \
+    "  gh) printf 'gh version 2.46.0\\n' ;;" \
     "  gitleaks) read_state gitleaks_version 8.18.4; printf '\\n' ;;" \
     '  *) exit 2 ;;' \
     'esac' >"$target"
@@ -135,7 +136,7 @@ new_fixture() {
 
   make_dispatcher "$CASE_BIN/stub"
   local tool
-  for tool in uname getenforce stat id git curl openssl node uv just pre-commit gitleaks pg_dump docker; do
+  for tool in uname getenforce stat id git curl openssl node uv just pre-commit gh gitleaks pg_dump docker; do
     cp "$CASE_BIN/stub" "$CASE_BIN/$tool"
   done
 }
@@ -202,6 +203,11 @@ configure_case() {
     python_missing) set_state python_312 missing ;;
     just_missing) rm "$CASE_BIN/just" ;;
     precommit_missing) rm "$CASE_BIN/pre-commit" ;;
+    gh_missing) rm "$CASE_BIN/gh" ;;
+    ubuntu_gh_missing)
+      printf 'ID=ubuntu\nVERSION_ID="24.04"\n' >"$CASE_ROOT/etc/os-release"
+      rm "$CASE_BIN/gh"
+      ;;
     gitleaks_missing) rm "$CASE_BIN/gitleaks" ;;
     gitleaks_older) set_state gitleaks_version 8.16.0 ;;
     gitleaks_newer) set_state gitleaks_version 8.29.1 ;;
@@ -322,6 +328,8 @@ assert_case uv_download_policy_unsupported contributor 1 'FAIL UV_DOWNLOAD_POLIC
 assert_case python_missing contributor 1 'FAIL PYTHON_312_MISSING '
 assert_case just_missing contributor 1 'FAIL JUST_MISSING '
 assert_case precommit_missing contributor 1 'FAIL PRECOMMIT_MISSING '
+assert_case gh_missing contributor 1 'FAIL GH_MISSING '
+assert_case ubuntu_gh_missing contributor 1 'FAIL GH_MISSING Run: sudo apt-get install gh'
 assert_case gitleaks_missing contributor 1 'FAIL GITLEAKS_MISSING '
 assert_case gitleaks_older contributor 1 'FAIL GITLEAKS_UNSUPPORTED_VERSION '
 assert_case gitleaks_newer contributor 0 'PASS GITLEAKS_SUPPORTED_VERSION '

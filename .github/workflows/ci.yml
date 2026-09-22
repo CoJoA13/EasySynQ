@@ -1,33 +1,82 @@
 name: ci
 
+# The gate for this repository (R86). Rebuilt from the GitLab pipeline it replaces, not patched
+# from the pre-2026-09-08 workflow, which had drifted: it lacked eight guard scripts, the docs
+# lane, the built-image scans and the runtime acceptance, and still called `security`
+# non-required. Policy, in one place:
+#
+#  * A pull request runs on the MERGE COMMIT of its head onto main. With the ruleset's "require
+#    branches to be up to date" and squash-only merging, the final check run on the PR head is
+#    the tree main receives, and it is the merge evidence. Plain branch pushes run nothing.
+#  * In a pull request, a suite runs only when a path it reads differs from main. The lists live
+#    in .github/ci-paths.yml, and a unit test walks `git ls-files` to prove every non-docs path is
+#    in `code`. A docs-only PR (docs/** and root *.md) runs the guards plus `docs-tests`.
+#  * A push to main (post-merge) re-runs only the cheap backstops: the guards, migrations and the
+#    security scan. Tags and manually started runs execute every suite.
+#  * `gate` is the ONLY required status check. It needs every job and fails if any job failed, was
+#    cancelled, or was skipped while its own condition said it should run. GitHub cannot require
+#    a path-conditional job directly — a skipped required check blocks merging forever — so the
+#    aggregator the GitLab port dropped comes back as one job over all of them.
+#  * A newer commit cancels an in-flight run of the same pull request; main runs never cancel.
+
 on:
   push:
     branches: [main]
-    # A version tag is what makes the release gate below fire. Without this trigger the digest-pin
+    # A version tag is what makes the release gate fire. Without this trigger the digest-pin
     # guard had nothing to run on and a release shipped floating image tags on a green CI run.
     tags: ['v*']
   pull_request:
+  workflow_dispatch:
 
-# A newer push to the same PR supersedes the in-flight run — cancel it. Push (main) runs each get
-# a unique group (run_id) so back-to-back merges never queue-cancel each other (GitHub allows only
-# one running + one pending run per group, regardless of cancel-in-progress).
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.12.13"
+  UV_PYTHON_DOWNLOADS: never
+
 jobs:
+  # ------------------------------------------------------------------ what changed
+  # Every conditional job keys off these outputs. Outside a pull request they are all "true"
+  # for a tag or manual run and all "false" for a main push, so the policy above is decided here
+  # once rather than in thirteen `if:` expressions that could drift.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      api_suites: ${{ steps.filter.outputs.api_suites }}
+      web_suites: ${{ steps.filter.outputs.web_suites }}
+      docs_only: ${{ steps.filter.outputs.docs_only }}
+      full: ${{ steps.filter.outputs.full }}
+      main_push: ${{ steps.filter.outputs.main_push }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: decide which suites this run owes
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REF: ${{ github.ref }}
+        run: python3 scripts/ci-changed-paths.py
+
+  # ------------------------------------------------------------------ guards (every run)
   contracts:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Run the R61 backstop before hydrating dependencies. The site-data backstop is separate
+      # from the vulnerability gates in the security job.
       - name: Agent authority and Claude compatibility contracts
         run: |
           bash scripts/tests/test-agent-authority.sh
           bash scripts/tests/test-claude-hooks.sh
           ./scripts/check-repo-authority.sh
-      # R61 backstop lives in THIS job because contracts IS in branch protection's required
-      # checks — `security` remains outside that required-check set, so a site-data match there
-      # would not block a merge.
       - name: R61 backstop regression harness
         run: bash scripts/tests/test-check-no-site-data.sh
       - name: R61 site-data backstop (check-no-site-data)
@@ -59,27 +108,26 @@ jobs:
       - name: generated contract lock
         run: bash scripts/gen-contracts.sh --check
 
-  # Required authenticated live-response contract gate. D-9 operations retained as future contract
-  # shapes must be explicitly marked deferred and exactly excluded; every mounted operation runs.
-  contract-responses:
+  compose-images-lock:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
-        with:
-          enable-cache: true
-          cache-dependency-glob: "apps/api/uv.lock"
-      - working-directory: apps/api
-        run: uv sync --frozen
-      - name: validate authenticated operational responses (disposable testcontainers only)
-        working-directory: apps/api
-        run: uv run pytest tests/integration/test_contract_response_schemas.py -m contract --tb=short
+      # Digest-aware (audit C15): the release ceremony rewrites images.lock to `name:tag@sha256:…`
+      # refs; the script strips digests before comparing, and its harness runs in `contracts`.
+      - name: every deployed/base image must be pinned in infra/images.lock
+        run: bash scripts/check-compose-images-lock.sh
 
+  # ------------------------------------------------------------------ code (any non-docs change)
   api:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: hosting and tooling contracts
+        run: |
+          bash scripts/tests/test-contributor-hosting.sh
+          python3 scripts/tests/test-refresh-test-durations.py
       - name: validate dev, online-production, and appliance Compose overlays
         run: |
           # --env-file supplies interpolation values; the services' env_file entries still require
@@ -127,9 +175,9 @@ jobs:
             }
           done < <(bash scripts/app-images.sh)
       - name: install uv
-        # exact pin — setup-uv stopped publishing floating major tags at v8
         uses: astral-sh/setup-uv@v10.0.1
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
       - name: sync
@@ -147,19 +195,24 @@ jobs:
       - name: types
         working-directory: apps/api
         run: uv run mypy src
+      # EASYSYNQ_IMAGE_PROOF un-skips the built-image runtime proof: it BUILDS the API image and
+      # runs it (uid 10001, `uv run` with NO network). The security scans inspect findings and do
+      # not prove that the built image can start; this is the only gate that starts the artifact,
+      # and it lives here, in a job that can fail a merge. The runner is unprivileged, so the six
+      # fail-closed permission tests run as written, with no privilege drop needed.
       - name: unit tests
         working-directory: apps/api
-        run: uv run pytest tests/unit -m unit
-        # Un-skips test_the_built_api_image_is_unprivileged_and_starts_offline, which BUILDS the
-        # API image and runs it: uid 10001, and `uv run` working with NO network. Every other gate
-        # here reads source; this is the only one that starts the artifact. It lives in `api`
-        # rather than `security` because `security` is deliberately non-required, and a guard that
-        # cannot redden a PR is the gap it was meant to close (S-image-proof-enabled, and the
-        # EASYSYNQ_RELEASE precedent at the release-gate job below).
         env:
           EASYSYNQ_IMAGE_PROOF: "1"
+        run: uv run pytest tests/unit -m unit
+      # The external-trust acceptance builds the exact checkout for its public-CLI custody proof
+      # and the eleven mandatory runtime cases. Both must succeed before merging.
+      - name: mandatory runtime acceptance (built image)
+        run: python3 scripts/run-audit-external-acceptance.py
 
   migrations:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.main_push == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -175,10 +228,13 @@ jobs:
     env:
       DATABASE_URL_SYNC: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
       DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
+      # The suite creates and drops its own scratch DB on this disposable CI-only PG18 service.
+      MIGRATION_TEST_DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
       - working-directory: apps/api
@@ -186,26 +242,137 @@ jobs:
       - name: upgrade head then downgrade base (reversible) then back to head
         working-directory: apps/api
         run: uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head
+      # The whole tree, not one file: the coherence test pins the single head by name and replays
+      # populated historical transitions the empty round-trip above never exercises.
       - name: populated migration coherence regressions
         working-directory: apps/api
-        env:
-          # The test creates and drops its own scratch DB on this disposable CI-only PG18 service.
-          MIGRATION_TEST_DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
-        run: uv run pytest tests/migration/test_migration_coherence.py
+        run: uv run pytest tests/migration
       - name: autogenerate drift check (models == migrations)
         working-directory: apps/api
         run: uv run alembic check
 
-  # The integration suite is sharded across N parallel runners (pytest-split, balanced by the
-  # committed apps/api/.test_durations). Each shard is its own process spinning its own testcontainers
-  # → the single-DB / single-org contract holds per shard. ~45 min serial → ~13 min wall.
-  #
-  # Each green shard also re-times exactly the tests it ran (--store-durations --clean-durations
-  # replaces the workspace file with this shard's fresh timings; the *split* still reads the
-  # committed file) and publishes them as an artifact. scripts/refresh-test-durations.sh merges the
-  # four into apps/api/.test_durations — re-run it whenever shard wall-clocks drift apart.
-  integration-shards:
+  security:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.main_push == 'true'
     runs-on: ubuntu-latest
+    # npm high/critical findings and built-image fix-available HIGH/CRITICAL findings are GATED.
+    # No-fix image findings remain OPEN; pip-audit, filesystem and image secrets stay advisory.
+    # Operational failures fail the job and block merging; a never-ran scan cannot read green.
+    steps:
+      - uses: actions/checkout@v7
+      - name: install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "apps/api/uv.lock"
+      - name: pip-audit runner regressions
+        run: bash scripts/tests/test-pip-audit-runner.sh
+      - name: pip-audit (Python deps, resolved from uv.lock)
+        run: bash scripts/run-pip-audit.sh
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: install frozen web dependencies for npm policy
+        working-directory: apps/web
+        run: npm ci --ignore-scripts
+      - name: npm advisory policy regressions
+        run: |
+          node --test \
+            scripts/tests/test-web-security-lock.mjs \
+            scripts/tests/test-npm-audit-runner.mjs \
+            scripts/tests/test-check-npm-audit.mjs \
+            scripts/tests/test-npm-audit-policy.mjs \
+            scripts/tests/test-router-rsc-policy.mjs
+      - name: npm advisory policy (web lock)
+        run: node scripts/check-npm-audit.mjs
+      # The pinned trivy binary, copied out of its image so the scan runs with exactly the
+      # environment we control. ⚠ Manual pin (R86): no updater reads an image name in a shell step.
+      # environment scripts/check-built-image-security.sh controls (it unsets every TRIVY_* it
+      # does not own). Databases come from the same Docker Hub mirrors the images.lock uses.
+      - name: install the pinned trivy
+        run: |
+          trivy_container=$(docker create aquasec/trivy:0.74.0)
+          docker cp "$trivy_container:/usr/local/bin/trivy" /tmp/trivy
+          docker rm "$trivy_container" >/dev/null
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          echo "TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2" >> "$GITHUB_ENV"
+          echo "TRIVY_JAVA_DB_REPOSITORY=docker.io/aquasec/trivy-java-db:1" >> "$GITHUB_ENV"
+          echo "TRIVY_CHECKS_BUNDLE_REPOSITORY=docker.io/aquasec/trivy-checks:1" >> "$GITHUB_ENV"
+          echo "TRIVY_SKIP_VERSION_CHECK=true" >> "$GITHUB_ENV"
+      - name: trivy filesystem scan (vuln + secret + IaC misconfig; HIGH/CRITICAL; advisory)
+        run: trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --exit-code 0 --format table .
+      - name: built-image gate regressions
+        run: bash scripts/tests/test-built-image-security.sh
+      # The filesystem scan cannot see base-image/apt/copied-stage findings. Build both actual
+      # artifacts with their production contexts and gate their private, validated image reports.
+      - name: build both application images (scan targets = exactly what ships)
+        run: |
+          docker build -f apps/api/Dockerfile -t easysynq-api:scan .
+          docker build -f apps/web/Dockerfile -t easysynq-web:scan apps/web
+      - name: built-image fixed-version threshold (gated)
+        run: bash scripts/check-built-image-security.sh
+
+  # ------------------------------------------------------------------ docs-only lane
+  # Selection is by content, not a list: every unit test file that names a documentation path
+  # runs, so a new docs-reading test joins the lane automatically. An empty selection fails the
+  # job rather than passing it vacuously. Docker is present because some selected files assert
+  # its presence rather than skipping.
+  docs-tests:
+    needs: changes
+    if: needs.changes.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # Two alternatives are quote-anchored on purpose: `"docs"` matches a quoted path segment
+      # (ROOT / "docs" / ...) without matching every identifier containing "docs", and `\.md"`
+      # matches any quoted *.md path. Do not "balance" the quotes; a unit test pins the selection.
+      DOCS_TEST_PATTERN: '"docs"|docs/|README|AGENTS|CLAUDE|CONTRIBUTING|LICENSING|PRODUCT\.md|\.md"'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "apps/api/uv.lock"
+      - working-directory: apps/api
+        run: uv sync --frozen
+      - name: unit tests that read documentation
+        working-directory: apps/api
+        run: |
+          files="$(grep -rlE "$DOCS_TEST_PATTERN" tests/unit --include="test_*.py" | sort)"
+          test -n "$files"
+          uv run pytest $files -m unit
+
+  # ------------------------------------------------------------------ API-side suites
+  contract-responses:
+    needs: changes
+    if: needs.changes.outputs.api_suites == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "apps/api/uv.lock"
+      - working-directory: apps/api
+        run: uv sync --frozen
+      - name: validate authenticated operational responses (disposable testcontainers only)
+        working-directory: apps/api
+        run: uv run pytest tests/integration/test_contract_response_schemas.py -m contract --tb=short
+
+  # The integration suite is sharded across four runners (pytest-split, balanced by the committed
+  # apps/api/.test_durations). Each shard is its own process spinning its own testcontainers, so
+  # the single-DB / single-org contract holds per shard. Each green shard re-times exactly the
+  # tests it ran and publishes them; scripts/refresh-test-durations.sh merges the four.
+  integration-shards:
+    needs: changes
+    if: needs.changes.outputs.api_suites == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -214,14 +381,14 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
       - working-directory: apps/api
         run: uv sync --frozen
       # The runner image preinstalls postgresql-client-16. pg_dump REFUSES a newer server, so a 16
       # client against the postgres:18 testcontainer aborts every backup/restore test with
-      # `server version mismatch` -- 19 failures naming a version, not a cause. PGDG is already
-      # configured on the runner, so this is an install, not a repository add.
+      # `server version mismatch` — 19 failures naming a version, not a cause.
       - name: install the postgres client matching the testcontainer major
         run: |
           set -euo pipefail
@@ -233,13 +400,10 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client-18
-          # Installing 18 is NOT enough: the runner also ships postgresql-client-16, and pg_wrapper
-          # keeps resolving a bare `pg_dump` to 16. Pin the versioned bin dir ahead of it.
+          # Installing 18 is NOT enough: pg_wrapper keeps resolving a bare `pg_dump` to 16. Pin the
+          # versioned bin dir ahead of it.
           echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
-          /usr/lib/postgresql/18/bin/pg_dump --version | grep -qE '\) 18\.' \
-            || { /usr/lib/postgresql/18/bin/pg_dump --version; exit 1; }
       # $GITHUB_PATH applies to LATER steps, so the resolution itself is asserted in its own step.
-      # Failing here beats 19 backup/restore failures naming a server version mismatch.
       - name: confirm pg_dump 18 wins PATH
         run: pg_dump --version | grep -qE '\) 18\.' || { pg_dump --version; exit 1; }
       - name: integration tests (shard ${{ matrix.group }}/4, testcontainers spin their own Postgres)
@@ -253,32 +417,19 @@ jobs:
         with:
           name: test-durations-${{ matrix.group }}
           path: apps/api/.test_durations
-          # dotfile: v4 excludes hidden files by default → without this the upload silently
-          # matches zero files; error (not the default warn) keeps that failure loud.
+          # dotfile: excluded by default → without this the upload silently matches zero files.
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
-  # Aggregator gate: keeps the required-status-check name "integration" stable (no branch-protection
-  # change needed) and passes iff EVERY shard passed.
-  integration:
-    needs: integration-shards
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: gate on the shard results
-        run: |
-          result='${{ needs.integration-shards.result }}'
-          if [ "$result" != "success" ]; then
-            echo "integration shards did not all pass (result=$result)"; exit 1
-          fi
-          echo "all integration shards passed"
-
-  # Preserve one worker per process (the suite's jsdom teardown contract) while distributing the full
-  # file set across two isolated runners. Static checks run on shard 2's already-hydrated workspace;
-  # !cancelled() keeps those checks visible even if that shard's Vitest step fails.
+  # ------------------------------------------------------------------ web suites
+  # One worker per process (the suite's jsdom teardown contract) across two isolated runners.
+  # Static checks run on shard 2's already-hydrated workspace; !cancelled() keeps them visible
+  # even if that shard's Vitest step fails.
   web-shards:
     name: web tests (${{ matrix.shard }}/2)
+    needs: changes
+    if: needs.changes.outputs.web_suites == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -303,6 +454,8 @@ jobs:
 
   web-browser:
     name: web browser (Chromium)
+    needs: changes
+    if: needs.changes.outputs.web_suites == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -330,119 +483,21 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # Stable aggregate gate: passes iff both complete Vitest partitions (including shard 2's
-  # lint/type/build step) and the Chromium browser suite passed. Keep this job name stable for the
-  # convention-only required-check set and a future branch-protection ruleset.
-  web:
-    name: web
-    needs: [web-shards, web-browser]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: gate on the shard results
-        run: |
-          shards_result='${{ needs.web-shards.result }}'
-          browser_result='${{ needs.web-browser.result }}'
-          if [ "$shards_result" != "success" ] || [ "$browser_result" != "success" ]; then
-            echo "web checks did not all pass (web-shards=$shards_result, web-browser=$browser_result)"
-            exit 1
-          fi
-          echo "all web checks passed"
-
-  # Dependency + filesystem + base-image vulnerability scan (Phase-1 tech-debt: I-1).
-  # npm high/critical findings are GATED; pip-audit and Trivy FINDINGS remain REPORT-ONLY.
-  # Operational failures fail the job so a never-ran scan cannot read green (Codex #153). NOT in
-  # branch protection's required checks. RATCHET the remaining report-only findings once their
-  # baselines are clean: gate pip-audit findings, set trivy `exit-code: "1"`, and add `security` to
-  # the required checks.
-  security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: install uv
-        uses: astral-sh/setup-uv@v10.0.1
-        with:
-          enable-cache: true
-          cache-dependency-glob: "apps/api/uv.lock"
-      - name: pip-audit runner regressions
-        run: bash scripts/tests/test-pip-audit-runner.sh
-      - name: pip-audit (Python deps, resolved from uv.lock)
-        run: bash scripts/run-pip-audit.sh
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "26"
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
-      - name: install frozen web dependencies for npm policy
-        working-directory: apps/web
-        run: npm ci --ignore-scripts
-      - name: npm advisory policy regressions
-        run: |
-          node --test \
-            scripts/tests/test-web-security-lock.mjs \
-            scripts/tests/test-npm-audit-runner.mjs \
-            scripts/tests/test-check-npm-audit.mjs \
-            scripts/tests/test-npm-audit-policy.mjs \
-            scripts/tests/test-router-rsc-policy.mjs
-      - name: npm advisory policy (web lock)
-        run: node scripts/check-npm-audit.mjs
-      - name: trivy filesystem scan (vuln + secret + IaC misconfig; HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: HIGH,CRITICAL
-          exit-code: "0"
-          format: table
-      # The fs scan above does NOT detect base-image / apt / copied-stage CVEs (Trivy needs an image
-      # target). BUILD the API image and scan THAT so it covers exactly what ships — the python base +
-      # the apt layer (postgresql-client, libmagic) + the /uv binary copied from the `uv` stage (Codex
-      # #153). The web image has no apt/COPY-from, so its base ref (derived from the Dockerfile FROM so
-      # it tracks Dependabot bumps) + npm-audit suffice. No `continue-on-error`: a build/scan failure
-      # should SURFACE (the job is non-required, so it never blocks a merge).
-      - name: build the API image (scan target = exactly what ships)
-        run: docker build -f apps/api/Dockerfile -t easysynq-api:scan .
-      - name: trivy image scan — built API image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: easysynq-api:scan
-          severity: HIGH,CRITICAL
-          exit-code: "0"
-          format: table
-      - name: resolve the web base ref (tracks the Dockerfile FROM Dependabot bumps)
-        id: webbase
-        run: echo "ref=$(grep -E '^FROM ' apps/web/Dockerfile | tail -1 | awk '{print $2}')" >> "$GITHUB_OUTPUT"
-      - name: trivy image scan — web base
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: ${{ steps.webbase.outputs.ref }}
-          severity: HIGH,CRITICAL
-          exit-code: "0"
-          format: table
-
-  # The air-gap bundle (scripts/airgap-bundle.sh) collects image refs from infra/images.lock, so a
-  # Dependabot bump to compose.yml (the new `docker-compose` ecosystem) must ALSO land in images.lock,
-  # or the offline bundle ships the stale ref while Compose asks for the new one (Codex #153). Assert
-  # every Compose `image:` ref plus the optimized Keycloak Dockerfile base is pinned in images.lock.
-  # The RELEASE gate. test_images_lock_pinned.py refuses a floating tag on any non-dev image, but
-  # it SKIPS unless EASYSYNQ_RELEASE=1 — and nothing set it, so the check was inert and a release
-  # could ship unpinned third-party images with every check green (audit follow-up). Tag-only,
+  # ------------------------------------------------------------------ release
+  # test_images_lock_pinned.py SKIPS unless EASYSYNQ_RELEASE=1; nothing set it and the guard was
+  # inert, so a release could ship floating third-party tags with every check green. Tag-only,
   # because floating tags stay legal during ordinary development.
   release-gate:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: install uv
-        uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
-      - name: sync
-        working-directory: apps/api
+      - working-directory: apps/api
         run: uv sync --frozen
       - name: every non-dev image must be digest-pinned
         working-directory: apps/api
@@ -450,13 +505,77 @@ jobs:
           EASYSYNQ_RELEASE: "1"
         run: uv run pytest tests/unit/test_images_lock_pinned.py -q
 
-  compose-images-lock:
+  # ------------------------------------------------------------------ the one required check
+  gate:
+    needs:
+      - changes
+      - contracts
+      - compose-images-lock
+      - api
+      - migrations
+      - security
+      - docs-tests
+      - contract-responses
+      - integration-shards
+      - web-shards
+      - web-browser
+      - release-gate
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      # Digest-aware (audit C15): the release ceremony rewrites images.lock to `name:tag@sha256:…`
-      # refs, which the previous exact-string comparison read as "missing" — making a green gate
-      # and a digest-pinned release lock mutually exclusive. The extracted script strips digests
-      # before comparing; its regression harness runs in the contracts job.
-      - name: every deployed/base image must be pinned in infra/images.lock
-        run: bash scripts/check-compose-images-lock.sh
+      - name: every job that owed a result delivered a success
+        env:
+          CODE: ${{ needs.changes.outputs.code }}
+          API_SUITES: ${{ needs.changes.outputs.api_suites }}
+          WEB_SUITES: ${{ needs.changes.outputs.web_suites }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          MAIN_PUSH: ${{ needs.changes.outputs.main_push }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          R_CHANGES: ${{ needs.changes.result }}
+          R_CONTRACTS: ${{ needs.contracts.result }}
+          R_COMPOSE_LOCK: ${{ needs.compose-images-lock.result }}
+          R_API: ${{ needs.api.result }}
+          R_MIGRATIONS: ${{ needs.migrations.result }}
+          R_SECURITY: ${{ needs.security.result }}
+          R_DOCS: ${{ needs.docs-tests.result }}
+          R_CONTRACT_RESPONSES: ${{ needs.contract-responses.result }}
+          R_INTEGRATION: ${{ needs.integration-shards.result }}
+          R_WEB_SHARDS: ${{ needs.web-shards.result }}
+          R_WEB_BROWSER: ${{ needs.web-browser.result }}
+          R_RELEASE: ${{ needs.release-gate.result }}
+        run: |
+          set -u
+          failed=0
+          # owed <job> <result> <expected-to-run: true|false>
+          owed() {
+            local job="$1" result="$2" expected="$3"
+            if [ "$expected" = "true" ]; then
+              if [ "$result" != "success" ]; then
+                echo "::error::$job owed a result and reported $result"; failed=1
+              else
+                echo "ok   $job: success"
+              fi
+            else
+              if [ "$result" = "skipped" ]; then
+                echo "skip $job: not owed by this run"
+              elif [ "$result" = "success" ]; then
+                echo "ok   $job: success (ran although not owed)"
+              else
+                echo "::error::$job reported $result"; failed=1
+              fi
+            fi
+          }
+          owed changes            "$R_CHANGES"            true
+          owed contracts          "$R_CONTRACTS"          true
+          owed compose-images-lock "$R_COMPOSE_LOCK"      true
+          owed api                "$R_API"                "$CODE"
+          if [ "$CODE" = "true" ] || [ "$MAIN_PUSH" = "true" ]; then backstops=true; else backstops=false; fi
+          owed migrations         "$R_MIGRATIONS"         "$backstops"
+          owed security           "$R_SECURITY"           "$backstops"
+          owed docs-tests         "$R_DOCS"               "$DOCS_ONLY"
+          owed contract-responses "$R_CONTRACT_RESPONSES" "$API_SUITES"
+          owed integration-shards "$R_INTEGRATION"        "$API_SUITES"
+          owed web-shards         "$R_WEB_SHARDS"         "$WEB_SUITES"
+          owed web-browser        "$R_WEB_BROWSER"        "$WEB_SUITES"
+          owed release-gate       "$R_RELEASE"            "$IS_TAG"
+          exit "$failed"

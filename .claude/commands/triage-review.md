@@ -1,22 +1,36 @@
 ---
-description: Triage GitLab merge-request review findings — verify each in code, fix or file, reply on every discussion, resolve only what you addressed
+description: Triage GitHub pull-request review findings — verify each in code, fix or file, reply on every thread, resolve only what you addressed
 disable-model-invocation: true
 ---
 
-Triage the review findings on an open GitLab merge request (Codex, or any automated reviewer). The goal is an honest
+Triage the review findings on an open GitHub pull request (Codex, or any automated reviewer). The goal is an honest
 record: every finding assessed, every thread answered, and the thread state matching reality.
 
 ## 1. Fetch everything, including what arrived while you worked
 
 ```bash
-glab api 'projects/:id/merge_requests/<iid>/discussions?per_page=100' --paginate \
-  | jq '.[] | select(any(.notes[]; .resolvable == true and .resolved == false))
-        | {id, notes: [.notes[] | {id, body, position, resolvable, resolved}]}'
+gh api graphql --paginate -F owner='{owner}' -F repo='{repo}' -F number=<N> -f query='
+  query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $endCursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id isResolved isOutdated
+            comments(first: 50) { nodes { id databaseId body path line author { login } } }
+          }
+        }
+      }
+    }
+  }' | jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)'
 ```
 
-The repository remote selects the GitLab project; `:id` is expanded by `glab`. Keep each discussion ID
-and its note IDs distinct. A reviewer may post a **new round while you are working** — re-fetch before
-resolving anything. Authenticate with `glab auth login`; never put a token in a command argument.
+The repository remote selects the GitHub repository; `{owner}`/`{repo}` are expanded by `gh`.
+`--paginate` with the `$endCursor` variable and `pageInfo` walks every page — a query without them
+silently drops every thread after the first hundred, and "every finding assessed" would be false. Keep
+each thread's GraphQL `id` (used to resolve) distinct from its comments' `databaseId` (used to reply).
+A reviewer may post a **new round while you are working** — re-fetch before resolving anything.
+Authenticate with `gh auth login`; never put a token in a command argument.
 
 ## 2. Verify each finding in the code
 
@@ -29,7 +43,7 @@ genuine account-takeover path, a stale-comment-driven false claim, and two contr
 could see.
 
 For each, decide:
-- **Introduced by this merge request** → fix it.
+- **Introduced by this pull request** → fix it.
 - **Pre-existing** (the same defect exists on `main`) → file it, and say so on the thread with evidence.
   Check with `git show main:<file>` rather than asserting it.
 - **Not valid** → say why, concretely.
@@ -38,10 +52,10 @@ For each, decide:
 
 Fixing: one subagent per coherent group, not per finding. Mutation-verify every fix (`/mutation-verify`).
 
-Filing: a GitLab issue per coherent change, grouped where several findings are genuinely **one** fix
-(three surfaces describing the same stale rule = one issue). Each issue needs the failure scenario, the
-affected paths, a suggested fix, and a link back to the thread. Run the R61 check over issue bodies
-before publishing — they are public prose.
+Filing: a GitHub issue (`gh issue create`) per coherent change, grouped where several findings are
+genuinely **one** fix (three surfaces describing the same stale rule = one issue). Each issue needs the
+failure scenario, the affected paths, a suggested fix, and a link back to the thread. Run the R61 check
+over issue bodies before publishing — they are public prose.
 
 ⚠ **When rounds stop converging** — a round finding variants rather than new classes — say so plainly
 and propose filing the remainder. Do not chase indefinitely; that is the owner's call to make with real
@@ -51,8 +65,11 @@ information.
 
 ```bash
 # Write the exact reply to this local text file first, preserving newlines.
-glab api -X POST 'projects/:id/merge_requests/<iid>/discussions/<discussion_id>/notes' \
+# <comment_id> is the thread's first comment `databaseId` from step 1.
+gh api -X POST 'repos/{owner}/{repo}/pulls/<N>/comments/<comment_id>/replies' \
   -F body=@/tmp/review-reply.txt
+# A top-level (non-thread) reply instead:
+gh pr comment <N> --body-file /tmp/review-reply.txt
 ```
 
 State what changed and where (commit SHA), or why it was not changed. End each with the automation
@@ -62,8 +79,11 @@ reader — name the mechanism.
 ## 5. Resolve ONLY what you addressed
 
 ```bash
-glab api -X PUT 'projects/:id/merge_requests/<iid>/discussions/<discussion_id>' \
-  -F resolved=true
+# <thread_id> is the thread's GraphQL `id` from step 1 — one explicit id per call.
+gh api graphql -F thread=<thread_id> -f query='
+  mutation($thread: ID!) {
+    resolveReviewThread(input: {threadId: $thread}) { thread { id isResolved } }
+  }'
 ```
 
 ⚠ **The trap, hit in this repo:** a loop written over an earlier thread list swept up five threads from a
@@ -73,8 +93,8 @@ that a human can rely on.
 - Re-fetch the unresolved list immediately before resolving.
 - Resolve by **explicit id list** of what you triaged — never "everything currently unresolved".
 - Leave open anything you deferred to the owner, and say on the thread that you left it open.
-- If you resolve something in error, repeat the same GitLab update with `-F resolved=false` and
-  correct the record out loud.
+- If you resolve something in error, run the same mutation with `unresolveReviewThread` in place of
+  `resolveReviewThread` and correct the record out loud.
 
 ## 6. Report
 

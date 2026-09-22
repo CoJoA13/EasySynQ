@@ -478,21 +478,20 @@ def test_the_release_gate_runs_on_a_version_tag() -> None:
     """test_images_lock_pinned.py SKIPS unless EASYSYNQ_RELEASE=1, and nothing set it — the guard
     was inert, so a release could ship floating third-party tags with every check green.
 
-    Asserted against .gitlab-ci.yml, which is the gate. The identical assertion used to read
-    .github/workflows/ci.yml; retiring that workflow without moving this would have returned the
-    guard to the exact inertness it was written to end.
+    Asserted against .github/workflows/ci.yml, which is the gate again (R86). The identical
+    assertion read .gitlab-ci.yml between 2026-09-08 and 2026-09-21; retiring a gate file without
+    moving this would return the guard to the exact inertness it was written to end.
     """
-    pipeline = yaml.safe_load(_read(".gitlab-ci.yml"))
-    gate = pipeline["release-gate"]
+    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
+    gate = workflow["jobs"]["release-gate"]
 
-    rules = gate["rules"]
-    assert any("$CI_COMMIT_TAG" in str(rule.get("if", "")) for rule in rules), (
-        "no tag rule means the gate never fires"
+    assert "startsWith(github.ref, 'refs/tags/v')" in str(gate.get("if", "")), (
+        "no tag condition means the gate never fires"
     )
-    assert gate.get("variables", {}).get("EASYSYNQ_RELEASE") == "1", (
+    pin = next(step for step in gate["steps"] if "test_images_lock_pinned" in step.get("run", ""))
+    assert pin.get("env", {}).get("EASYSYNQ_RELEASE") == "1", (
         "the gate must actually set EASYSYNQ_RELEASE=1"
     )
-    assert any("test_images_lock_pinned" in line for line in gate["script"])
 
 
 def test_images_update_refuses_to_emit_a_partial_pin(tmp_path: Path) -> None:

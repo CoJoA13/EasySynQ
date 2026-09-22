@@ -1,10 +1,10 @@
 # Recurring engineering patterns (read on demand)
 
 > The deep per-slice rationale lives in the squash-merge commits + `docs/slice-history.md`.
-> ⚠ On GitLab the squash message defaults to the MERGE-REQUEST TITLE ALONE, so a merge that does
-> not set it explicitly lands a two-line commit and this file is the only surviving record. Set
-> the squash commit message at merge time; the failure is silent and unrecoverable afterwards
-> without rewriting `main`. These are the
+> ⚠ On GitHub the squash commit message is the PULL-REQUEST BODY (a repository setting), so the
+> PR body IS the permanent record: write it as the slice's rationale, not a one-liner, or a
+> two-line commit lands and this file is the only surviving record. A thin body is silent and
+> unrecoverable afterwards without rewriting `main`. These are the
 > patterns that keep recurring — apply them by default on the next slice. Grep by section heading for the relevant cluster.
 
 ## Migrations / Alembic / ORM

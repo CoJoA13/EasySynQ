@@ -21,9 +21,9 @@ assert 'pre-commit-hooks==5.0.0' in config
 assert '--allow-multiple-documents' in config
 for path in ['.claude/commands/pr.md', '.claude/commands/triage-review.md']:
     text = (root / path).read_text()
-    assert not re.search(r'(?m)^gh |`gh ', text), f'retired hosting CLI in {path}'
-    assert 'glab ' in text, f'GitLab workflow missing from {path}'
+    assert not re.search(r'(?m)^glab |`glab ', text), f'retired hosting CLI in {path}'
+    assert re.search(r'(?m)^gh |`gh ', text), f'GitHub workflow missing from {path}'
 for path in ['docs/manuals/installation-guide.md', 'docs/runbooks/install-ubuntu-server.md']:
-    assert 'git clone https://gitlab.com/synqsuite-group/EasySynQ.git' in (root / path).read_text()
+    assert 'git clone https://github.com/CoJoA13/EasySynQ.git' in (root / path).read_text()
 print('contributor hosting contracts: passed')
 PY

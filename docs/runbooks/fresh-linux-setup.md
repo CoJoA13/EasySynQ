@@ -11,7 +11,7 @@
 ## 1. Clone + toolchain
 
 ```bash
-git clone https://gitlab.com/synqsuite-group/EasySynQ.git ~/Documents/EasySynQ
+git clone https://github.com/CoJoA13/EasySynQ.git ~/Documents/EasySynQ
 cd ~/Documents/EasySynQ
 
 # Read-only inventory. Names every missing tool and the exact command that installs it.
@@ -34,6 +34,7 @@ The tools it requires, and the way each is installed on Ubuntu 26.04 without nee
 | Gitleaks | Native version 8.18.4, installed through the Go module proxy as shown below |
 | `pg_dump` **major 18** | `sudo apt-get install postgresql-client-18` — Ubuntu 26.04 ships 18 |
 | Docker Engine + Compose v2 | Distribution packages or Docker's official apt repository |
+| `gh` (GitHub CLI) | `sudo apt-get install gh`, then `gh auth login` — the doctor's contributor profile requires it |
 
 Persist the following environment setting in the shell configuration used by your terminal and editor,
 and export it in the current session before installing Python or running `just setup`:
@@ -74,9 +75,10 @@ pre-commit hook runs the same staged, redacted secret scan and fails if the nati
 Ruff uses the project lock; the standard text/YAML hooks
 install `pre-commit-hooks==5.0.0` from PyPI. Commits do not require a Docker daemon.
 
-For optional GitLab merge-request and artifact commands, install `glab` from Ubuntu's package
-repository (`sudo apt-get install glab`) and run `glab auth login`. Do not put tokens in command
-arguments or tracked files.
+`gh` is a required contributor tool: `scripts/doctor.sh contributor` fails with `GH_MISSING` without
+it, because pull requests, review triage and `scripts/refresh-test-durations.sh` (Actions artifacts)
+all go through it. Install it from Ubuntu's package repository (`sudo apt-get install gh`) and run
+`gh auth login`. Do not put tokens in command arguments or tracked files.
 
 ⚠ **`pg_dump` must be major 18**, matching the PostgreSQL server in `infra/images.lock`.
 `test_backup`/`test_restore` shell out to `pg_dump`/`pg_restore`, and **pg_dump refuses a newer server

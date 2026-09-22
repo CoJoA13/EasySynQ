@@ -527,7 +527,7 @@ def test_web_image_uses_lockfile_and_excludes_host_artifacts() -> None:
     assert {"node_modules", "dist", "coverage", ".vite"}.issubset(dockerignore)
 
 
-def test_web_image_package_manager_is_pinned_and_tracked_within_supported_major() -> None:
+def test_web_image_package_manager_is_pinned_within_supported_major() -> None:
     dockerfile = _read("apps/web/Dockerfile")
     instructions = "\n".join(
         line for line in dockerfile.splitlines() if not line.lstrip().startswith("#")
@@ -540,31 +540,10 @@ def test_web_image_package_manager_is_pinned_and_tracked_within_supported_major(
     assert (11, 19, 1) <= version < (12, 0, 0)
     assert instructions.index("npm install --global") < instructions.index("USER node")
     assert instructions.index("USER node") < instructions.index("RUN npm ci")
-
-    renovate = json.loads(_read("renovate.json"))
-    manager = next(
-        (item for item in renovate["customManagers"] if item.get("depNameTemplate") == "npm"),
-        None,
-    )
-    assert manager is not None, "Renovate must discover the image's package-manager pin"
-    assert manager["datasourceTemplate"] == "npm"
-    assert "/^apps/web/Dockerfile$/" in manager["managerFilePatterns"]
-    matches = [
-        match.group("currentValue")
-        for pattern in manager["matchStrings"]
-        for match in re.finditer(
-            pattern.replace("(?<currentValue>", "(?P<currentValue>"), dockerfile
-        )
-    ]
-    assert matches == pins
-    rule = next(
-        (item for item in renovate["packageRules"] if item.get("matchPackageNames") == ["npm"]),
-        None,
-    )
-    assert rule is not None
-    assert rule["matchManagers"] == ["custom.regex"]
-    assert rule["matchFileNames"] == ["apps/web/Dockerfile"]
-    assert rule["allowedVersions"] == "<12"
+    # The pin is MANUAL now (R86). Renovate's custom regex manager used to discover this
+    # `npm install --global npm@X` line and hold it `<12`; Dependabot's `docker` ecosystem tracks
+    # only `FROM` lines, so no updater tracks the pin and the `<12` ceiling above is the whole
+    # guard. Bumps are a reviewed edit to apps/web/Dockerfile.
 
 
 def test_web_image_excludes_browser_harness_and_removes_playwright_from_runtime() -> None:
