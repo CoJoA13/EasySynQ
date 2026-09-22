@@ -900,9 +900,10 @@ durable backup path produces the AES-256-GCM `*.tar.enc` operators expect there.
 operator-triggered drill therefore places the complete database in plaintext on the backup target for
 the drill's duration, and a cleanup failure strands it. Where that target is itself swept by other
 backup tooling, the plaintext copy can leave the host.
-Closure contract: Make the drill write no plaintext database bytes to the destination, either by
-encrypting the transient archive with the backup key or by proving the destination round-trip with a
-non-database probe while restoring from a private scratch path. Prove it with a pg_dump-gated
+Closure contract: Make the drill write no plaintext database bytes to the destination while it
+still proves the destination can hold and return a full-size archive, for example by encrypting
+the transient archive with the backup key. A small non-database probe does not satisfy this: a
+destination whose quota is below the real archive size would pass it. Prove it with a pg_dump-gated
 integration test that finds no plaintext `easysynq-backup-*.tar` in the destination during or after
 both a passing and a failing drill.
 Last reviewed: 2026-09-22
@@ -1021,8 +1022,10 @@ Reason: After creating a Keycloak user, `keycloak_provisioning.py` trusts any no
 segment of the `Location` header as the new subject. The exact-lookup fallback runs only when the
 header is absent, so a malformed `.../users/` yields the subject `users`, and `provision_user`
 commits an `app_user` bound to an account that does not exist.
-Closure contract: Accept the segment only when it is a well-formed subject identifier, otherwise use
-the exact username lookup, and test the `.../users/` case.
+Closure contract: Validate the `Location` path itself rather than subject syntax (the repository
+treats `keycloak_subject` as opaque): accept it only when it is the expected
+`.../admin/realms/<realm>/users/<id>` shape with a non-empty final segment, otherwise use the exact
+username lookup, and test the `.../users/` and foreign-path cases.
 Last reviewed: 2026-09-22
 
 ## RES-PROVISION-POST-COMMIT-READ-FAILURE
@@ -1083,8 +1086,9 @@ that, and the roster's Manage drawer posts only `role_id`. Provisioning has the 
 `CreateUserModal` submits `role_ids` to `/users/provision`, which creates each assignment without a
 `bound_scope`. The user appears to hold the role and receives none of its access. Only the
 process-owner flow binds a scope.
-Closure contract: Enforce the rule at the server for every assignment path (post-creation
-assignment and provisioning): either refuse an unbound parameterized role with a named 422, or
-collect the binding in both UIs and require it. Prove that an unbound Author or Approver can be
-created silently by neither path.
+Closure contract: Enforce the rule for every assignment path (post-creation assignment,
+provisioning, and the `grant-role` break-glass CLI, which also inserts `bound_scope=None` when its
+optional `--bound-scope` is omitted): either refuse an unbound parameterized role with a named 422, or
+collect the binding in both UIs and require it in the CLI. Prove that no path can silently create an
+unbound Author or Approver.
 Last reviewed: 2026-09-22
