@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-09-22"
-baseline_commit: "c62ce09d0442b6b3d5df0ebb57ee0efb60dd3e52"
-last_shipped_slice: "S-recovery-exact-version-binding"
+baseline_commit: "98b700558627884d45fa4006465cd629f3c3e694"
+last_shipped_slice: "S-ci-github-primary"
 migration_head: "0093"
 next_migration: "0094"
-api_unit_tests: 4977
+api_unit_tests: 4985
 web_test_files: 283
 web_tests: 2357
 contract_tests: 285
@@ -22,15 +22,34 @@ authority and it is not runtime discovery: binding decisions live in
 [`decisions-register.md`](decisions-register.md), while current deferred work lives only in
 [`open-residuals.md`](open-residuals.md).
 
-The verified shipped baseline is MR !63's merged main `c62ce09d0442b6b3d5df0ebb57ee0efb60dd3e52` (merged 2026-09-22
-01:48 UTC). Its [merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2869629501)
-passed all eleven jobs it ran — the web suites were path-skipped because no web file changed —
-including all eleven mandatory runtime cases. Frontmatter counts are read from that pipeline's job
-logs: **4,977 API passes** with one existing release-only skip, **1,262 integration passes / 2
-skips**, 285 response-contract tests, five migration tests; web (283 files / 2,357 tests) is
-carried from the local gate. Between S-runtime-trixie-hardening and this baseline, `main` also
-received Redis 8 (!43), the js-yaml major refusal (!57), the TypeScript 7 residual (!58) and the
-CI compute policy (!53, !54, !56); none changed a migration or contract.
+The verified shipped baseline is PR [#552](https://github.com/CoJoA13/EasySynQ/pull/552)'s squash
+`98b700558627884d45fa4006465cd629f3c3e694` (merged 2026-09-22 03:36 UTC). Under R86 the merge
+evidence is the pull request's final check run on its head SHA:
+[run 35681656565](https://github.com/CoJoA13/EasySynQ/actions/runs/35681656565) on `fb91496` passed
+every job it owed — fifteen instances, with `docs-tests` and `release-gate` skipped as owed — and
+the post-merge [backstop run 35683759967](https://github.com/CoJoA13/EasySynQ/actions/runs/35683759967)
+on `98b7005` (the guards, `migrations`, `security`, `gate`) is green. Frontmatter counts are read
+from the head run's job logs: **4,985 API passes** with one existing release-only skip, **1,262
+integration passes / 2 skips** (272 + 238 + 388 + 364), 285 response-contract tests, and web 283
+files / 2,357 tests from the two web shards (1,199 + 1,158).
+
+**Shipped: S-ci-github-primary, September 21–22 (#552; R86).** Primary hosting returned to
+`github.com/CoJoA13/EasySynQ`; `main` was fast-forwarded there at `c62ce09` with no rewrite. The
+workflow described under CI topology below replaces `.gitlab-ci.yml`; `gate` is the single required
+check; Dependabot replaces Renovate; the guards require `gh` and the GitHub clone URL. The owner
+approved R86 on 2026-09-22. Still owed after this snapshot: the rulesets (runbook
+[`github-repository-setup.md`](runbooks/github-repository-setup.md)), archiving the GitLab project
+once both `main` tips agree, and closing the superseded Dependabot pull requests. The docs-only CI
+lane has not yet run live. See
+[dated evidence](slice-history.md#s-ci-github-primary--primary-hosting-returns-to-github-and-one-required-check-gates-main-r86).
+
+The previous shipped baseline was MR !63's merged main `c62ce09d0442b6b3d5df0ebb57ee0efb60dd3e52`
+(merged 2026-09-22 01:48 UTC), whose
+[merged-results pipeline](https://gitlab.com/synqsuite-group/EasySynQ/-/pipelines/2869629501) passed
+all eleven jobs it ran (the web suites were path-skipped) at **4,977 API passes**, 1,262 integration
+passes / 2 skips and 285 response contracts. Between S-runtime-trixie-hardening and that baseline,
+`main` also received Redis 8 (!43), the js-yaml major refusal (!57), the TypeScript 7 residual (!58)
+and the CI compute policy (!53, !54, !56); none changed a migration or contract.
 
 **Shipped: S-recovery-exact-version-binding, September 20–22 (!63).** Migration `0093` adds the
 binding columns, and every `blob` row written from this slice on carries the exact object version
