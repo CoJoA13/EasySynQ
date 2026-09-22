@@ -448,3 +448,43 @@ def test_the_docs_lane_selection_keeps_its_documentation_pinning_tests() -> None
     assert 'grep -rlE "$DOCS_TEST_PATTERN" tests/unit --include="test_*.py"' in script
     assert 'test -n "$files"' in script
     assert "uv run pytest $files -m unit" in script
+
+
+def test_the_decision_script_sees_both_sides_of_a_rename(tmp_path: Path) -> None:
+    """`git diff --name-only` reports only a rename's destination, so moving code into docs/ would
+    read as docs-only while production code was removed. Both paths must take part."""
+    git = shutil.which("git")
+    assert git is not None
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def run(*args: str) -> None:
+        subprocess.run(  # noqa: S603 - resolved binary, fixed arguments in a temp repo
+            [git, *args],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            env={
+                "GIT_AUTHOR_NAME": "t",
+                "GIT_AUTHOR_EMAIL": "t@example.test",
+                "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@example.test",
+                "HOME": str(tmp_path),
+                "PATH": "/usr/bin:/bin",
+            },
+        )
+
+    run("init", "-q", "-b", "main")
+    (repo / "apps" / "api").mkdir(parents=True)
+    (repo / "apps" / "api" / "x.py").write_text("print('x')\n" * 20, encoding="utf-8")
+    run("add", ".")
+    run("commit", "-q", "-m", "base")
+    (repo / "docs").mkdir()
+    run("mv", "apps/api/x.py", "docs/x.py")
+    run("commit", "-q", "-m", "move code into docs")
+
+    module = _filter_module()
+    names = set(module.diff_names("HEAD~1", "HEAD", cwd=repo))
+    assert names == {"apps/api/x.py", "docs/x.py"}
+    flags = module.decide("pull_request", "refs/pull/1/merge", "main", files=sorted(names))
+    assert flags["code"] is True and flags["docs_only"] is False

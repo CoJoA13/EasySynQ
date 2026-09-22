@@ -9,11 +9,12 @@ record: every finding assessed, every thread answered, and the thread state matc
 ## 1. Fetch everything, including what arrived while you worked
 
 ```bash
-gh api graphql -F owner='{owner}' -F repo='{repo}' -F number=<N> -f query='
-  query($owner: String!, $repo: String!, $number: Int!) {
+gh api graphql --paginate -F owner='{owner}' -F repo='{repo}' -F number=<N> -f query='
+  query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $number) {
-        reviewThreads(first: 100) {
+        reviewThreads(first: 100, after: $endCursor) {
+          pageInfo { hasNextPage endCursor }
           nodes {
             id isResolved isOutdated
             comments(first: 50) { nodes { id databaseId body path line author { login } } }
@@ -24,7 +25,9 @@ gh api graphql -F owner='{owner}' -F repo='{repo}' -F number=<N> -f query='
   }' | jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)'
 ```
 
-The repository remote selects the GitHub repository; `{owner}`/`{repo}` are expanded by `gh`. Keep
+The repository remote selects the GitHub repository; `{owner}`/`{repo}` are expanded by `gh`.
+`--paginate` with the `$endCursor` variable and `pageInfo` walks every page — a query without them
+silently drops every thread after the first hundred, and "every finding assessed" would be false. Keep
 each thread's GraphQL `id` (used to resolve) distinct from its comments' `databaseId` (used to reply).
 A reviewer may post a **new round while you are working** — re-fetch before resolving anything.
 Authenticate with `gh auth login`; never put a token in a command argument.

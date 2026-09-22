@@ -12,7 +12,7 @@ contract_tests: 285
 integration_passed: 1259
 integration_skipped: 2
 ci_jobs: 13
-ci_checks: 16
+ci_checks: 15
 ---
 
 # Current execution snapshot
@@ -719,7 +719,7 @@ and distribution guards passed, `AUTHORITY_OK`, and a clean site-data scan.
 Fresh 2026-09-08 repository setup audit. GitLab now protects `main` against direct and force
 pushes, limits merging to Maintainers, requires a successful pipeline and resolved discussions,
 and rejects skipped pipelines as merge evidence. Release tags matching `v*` are protected for
-Maintainer creation. The [hosting runbook](runbooks/github-repository-setup.md) records the setup.
+Maintainer creation. The [GitLab setup runbook](https://github.com/CoJoA13/EasySynQ/blob/c62ce09/docs/runbooks/gitlab-repository-setup.md) (historical; superseded by R86) records the setup.
 
 The Renovate credential failure is now reproduced rather than inferred from a generic error.
 The audit first found a protected token on unprotected `main`. Protecting the branch corrected
@@ -1193,8 +1193,9 @@ said it should run, so a path-conditional suite is never listed as a required ch
 `migrations` when anything outside `docs/**` and root `*.md` differs; editing `.github/**` runs every
 suite. A docs-only PR runs the guards (`contracts`, `compose-images-lock`) plus `docs-tests`, the unit
 tests that read documentation (selected by content). The workflow defines **13** jobs. A manually
-started run on main executes **16** instances (`integration-shards` expands to four, `web-shards` to
-two, and tag-only `release-gate` is omitted); a `v*` tag run adds the release gate for **17**. A pull
+started run on main executes **15** instances (`integration-shards` expands to four, `web-shards` to
+two, and both `docs-tests` — the run is not docs-only — and tag-only `release-gate` are skipped); a
+`v*` tag run adds the release gate for **16**. A pull
 request runs the subset its changed paths select plus `changes`, `gate` and the unconditional guards;
 a post-merge push to main runs `changes`, `gate`, `contracts`, `compose-images-lock`, `migrations` and
 `security`. A newer commit cancels an in-flight run of the same pull request (`concurrency` keyed on

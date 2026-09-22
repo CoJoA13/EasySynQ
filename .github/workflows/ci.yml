@@ -289,6 +289,7 @@ jobs:
       - name: npm advisory policy (web lock)
         run: node scripts/check-npm-audit.mjs
       # The pinned trivy binary, copied out of its image so the scan runs with exactly the
+      # environment we control. ⚠ Manual pin (R86): no updater reads an image name in a shell step.
       # environment scripts/check-built-image-security.sh controls (it unsets every TRIVY_* it
       # does not own). Databases come from the same Docker Hub mirrors the images.lock uses.
       - name: install the pinned trivy

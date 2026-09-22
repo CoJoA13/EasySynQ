@@ -3218,7 +3218,7 @@ original submissions; the license does not require upstream merge requests.
 
 **Back-propagation:** [`README.md`](../README.md), [`LICENSING.md`](../LICENSING.md),
 [`CONTRIBUTING.md`](../CONTRIBUTING.md), the
-[GitLab setup runbook](runbooks/github-repository-setup.md), package metadata and license files,
+[GitLab setup runbook](https://github.com/CoJoA13/EasySynQ/blob/c62ce09/docs/runbooks/gitlab-repository-setup.md) (historical; superseded by R86), package metadata and license files,
 API image packaging, and the OpenAPI source with its regenerated bundle and checksum.
 
 Bumps the resolutions range **R1–R81 → R1–R82**.
@@ -3525,7 +3525,8 @@ migration sequence and its acceptance.
 **Merge gate.** `main` is governed by GitHub rulesets, not by settings in Git: the single required
 status check is `gate`, the aggregator job that needs every job in `.github/workflows/ci.yml` and
 fails when any job failed, was cancelled, or was skipped while its own path condition said it should
-run; branches must be up to date with `main` before merging; squash is the only merge method; force
+run; every change to `main` must arrive through a pull request (a green check on a directly pushed
+SHA is not a merge); branches must be up to date with `main` before merging; squash is the only merge method; force
 pushes and branch deletion are refused; every review conversation must be resolved. A pull-request
 run tests the merge commit of the head onto `main`, so with the up-to-date rule and squash-only
 merging **the pull request's final check run on its head SHA is the merge evidence**, and the
@@ -3541,7 +3542,9 @@ losses are accepted and manual: `infra/images.lock` digests are not tracked, so 
 update reddens `compose-images-lock` until the maintainer runs `just images-update`
 (`scripts/images-update.sh`, which re-resolves every lock entry and fails on a partial result)
 before merging; the `uv==` pin in `apps/api/Dockerfile` and the `npm@` pin in the web Dockerfile
-are not tracked and are bumped by hand under the existing version guards; `overrides` are not
+are not tracked and are bumped by hand under the existing version guards; the `aquasec/trivy:0.74.0`
+scanner pin in the workflow's `security` job is likewise untracked (Dependabot reads `uses:` lines and
+listed Dockerfile directories, not image names in shell steps) and is bumped by hand; `overrides` are not
 edited, so a `js-yaml` advisory is a manual action. Renovate's configuration, its CI jobs,
 `scripts/run-renovate.sh`, `scripts/tests/test-renovate-images.mjs` and the Renovate-specific guard
 assertions are removed rather than kept as a second updater.

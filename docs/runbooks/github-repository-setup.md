@@ -9,6 +9,10 @@ the project or diagnosing a green check that did not exercise the intended job.
 Rulesets, not classic branch protection, govern `main` (Settings > Rules > Rulesets). The `main`
 ruleset carries:
 
+- **Require a pull request before merging.** Status checks alone are not enough: a writer could
+  start a `workflow_dispatch` run on a branch, obtain a green `gate` for that commit, and push the
+  same SHA straight to `main`. With this rule every change to `main` arrives through a reviewed
+  pull request, and the merge-method and conversation rules below apply to it.
 - **Require status checks to pass**, with exactly one required check: **`gate`**, from the `ci`
   workflow. `gate` needs every other job and fails when any job failed, was cancelled, or was skipped
   while its own path condition said it should run. Never add a path-conditional job (`api`,

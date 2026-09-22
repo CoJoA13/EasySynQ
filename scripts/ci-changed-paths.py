@@ -15,6 +15,7 @@ has no PyYAML, and the lists file uses a deliberately tiny subset (top-level key
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LISTS = ROOT / ".github" / "ci-paths.yml"
 FLAGS = ("code", "api_suites", "web_suites", "docs_only", "full", "main_push")
+
+
+def _git() -> str:
+    resolved = shutil.which("git")
+    if resolved is None:
+        raise RuntimeError("git is required to decide changed paths")
+    return resolved
 
 
 def read_lists(path: Path = LISTS) -> dict[str, list[str]]:
@@ -70,23 +78,34 @@ def is_docs(path: str) -> bool:
     return path.startswith("docs/") or ("/" not in path and path.endswith(".md"))
 
 
-def changed_files(base_ref: str) -> list[str]:
-    # The PR run checks out the merge commit; `origin/<base>...HEAD` lists what the PR itself
-    # changes relative to the base, which is exactly what merge evidence should key on.
-    subprocess.run(
-        ["git", "fetch", "--no-tags", "--depth=1", "origin", base_ref],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-    )
-    out = subprocess.run(
-        ["git", "diff", "--name-only", f"origin/{base_ref}...HEAD"],
-        cwd=ROOT,
+def diff_names(base: str, head: str = "HEAD", *, cwd: Path = ROOT) -> list[str]:
+    """Every path a change touches, on BOTH sides of a rename.
+
+    `git diff --name-only` reports only the destination of a detected rename, so moving
+    `apps/api/x.py` to `docs/x.py` would read as a docs-only change while production code was
+    removed. `--no-renames` makes the source appear as a deletion and the destination as an
+    addition, and both then take part in suite selection.
+    """
+    out = subprocess.run(  # noqa: S603 - resolved binary, fixed arguments
+        [_git(), "diff", "--name-only", "--no-renames", f"{base}...{head}"],
+        cwd=cwd,
         check=True,
         capture_output=True,
         text=True,
     ).stdout
     return [line for line in out.splitlines() if line]
+
+
+def changed_files(base_ref: str) -> list[str]:
+    # The PR run checks out the merge commit; `origin/<base>...HEAD` lists what the PR itself
+    # changes relative to the base, which is exactly what merge evidence should key on.
+    subprocess.run(  # noqa: S603 - resolved binary, fixed arguments
+        [_git(), "fetch", "--no-tags", "--depth=1", "origin", base_ref],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    return diff_names(f"origin/{base_ref}")
 
 
 def decide(event: str, ref: str, base_ref: str, files: list[str] | None = None) -> dict[str, bool]:
