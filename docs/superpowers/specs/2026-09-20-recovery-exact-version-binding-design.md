@@ -135,14 +135,13 @@ targets, streaming encryption (the envelope is still whole-archive in memory,
 `services/backup/crypto.py:66-74`) and the source-denied boot-and-read proof all stay open under the
 same record. `RES-SOURCE-INDEPENDENT-RECOVERY` and issue #3 do not close here.
 
-## Amendment 1 — two further provenance values (2026-09-22; approval requested)
+## Amendment 1 — two further provenance values (approved by the owner 2026-09-22)
 
 Implementation found the model above too narrow at two of the eight write sites, and shipped in
 !63 (`c62ce09`) with two additional `object_version_source` literals. This amendment records them
 so the design, the database CHECK (`ck_blob_object_version_binding`, migration `0093`) and
-`services/vault/version_binding.py` say the same thing. It is presented to the owner for approval
-as an amendment to the approved design; until approved, the shipped behaviour is recorded here as
-fact, not as policy.
+`services/vault/version_binding.py` say the same thing. The owner approved it as written on
+2026-09-22, so the shipped behaviour is design policy, not only recorded fact.
 
 | Value | Meaning | Effect on the generation state |
 |---|---|---|
