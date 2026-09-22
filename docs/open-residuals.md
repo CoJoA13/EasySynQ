@@ -3,6 +3,9 @@
 This is the sole current, owner-visible ledger for deliberately deferred work. Each stable `RES-*` record
 stays open until its closure contract ships with linked evidence. Dated `Named residuals` prose in
 [`slice-history.md`](slice-history.md) is historical snapshot evidence, not a second live ledger.
+Each record is mirrored by a GitHub issue labelled `residual` (title `[RES-…]`) so the project board
+can track it; the record here, not the issue, is authoritative, and the issue closes when the record
+is removed with its closure evidence.
 
 ## RES-SOURCE-INDEPENDENT-RECOVERY
 
@@ -15,7 +18,8 @@ the [current recovery runbook](runbooks/backup-restore.md), pinned
 [restore](https://gitlab.com/synqsuite-group/EasySynQ/-/blob/6077e8a45b5942daf803220765b326f82ddd4417/apps/api/src/easysynq_api/services/backup/restore.py)
 source; historical
 [C-01/C-01b/M-01 contracts](superpowers/plans/2026-08-04-audit-remediation-v2.md#11-integrity-and-recovery).
-Current execution is tracked by [GitLab issue #3](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/3).
+Current execution is tracked by [GitHub issue #557](https://github.com/CoJoA13/EasySynQ/issues/557);
+the archived [GitLab issue #3](https://gitlab.com/synqsuite-group/EasySynQ/-/issues/3) keeps its history.
 Reason: Current archives contain the database and an object locator/hash manifest, but not the referenced
 object bytes; restore verification reads and copies those bytes from the configured source store. The
 shipped integrity path is therefore useful but source-dependent, and no closed recovered stack has been
@@ -112,7 +116,8 @@ The contract above is untouched by the merge; this record stays OPEN. Last revie
 
 Status: OPEN
 Owner: Repository owner
-Source: GitLab repository setup audit, 2026-09-08
+Source: GitLab repository setup audit, 2026-09-08. Tracked since 2026-09-22 by
+[GitHub issue #558](https://github.com/CoJoA13/EasySynQ/issues/558); archived GitLab issue #4 keeps its history.
 Reason: Actual built-image scans still contain high/critical OS findings without a reported fixed
 version. Their package-level applicability, alternative remediation and disposition remain open.
 The required security job now scans both built application images and blocks HIGH/CRITICAL findings
@@ -881,3 +886,191 @@ prevent. Prove the result with an executable assertion per changed surface, and 
 against the current output. `formatTimestamp`'s missing `timeZone` should be fixed first and can be
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
+
+## RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #420](https://github.com/CoJoA13/EasySynQ/issues/420), filed 2026-08-03 and
+deferred by owner decision; verified against `3d8613a` on 2026-09-22.
+Reason: `run_drill()` in `apps/api/src/easysynq_api/services/backup/drill.py` proves that the backup
+destination round-trips by packing an unencrypted `easysynq-backup-{stamp}.tar` holding the full
+`pg_dump` into the policy destination, restoring from it, then deleting it best-effort. Only the
+durable backup path produces the AES-256-GCM `*.tar.enc` operators expect there. Every setup-gate and
+operator-triggered drill therefore places the complete database in plaintext on the backup target for
+the drill's duration, and a cleanup failure strands it. Where that target is itself swept by other
+backup tooling, the plaintext copy can leave the host.
+Closure contract: Make the drill write no plaintext database bytes to the destination, either by
+encrypting the transient archive with the backup key or by proving the destination round-trip with a
+non-database probe while restoring from a private scratch path. Prove it with a pg_dump-gated
+integration test that finds no plaintext `easysynq-backup-*.tar` in the destination during or after
+both a passing and a failing drill.
+Last reviewed: 2026-09-22
+
+## RES-SITE-DATA-GUARD-GAPS
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #421](https://github.com/CoJoA13/EasySynQ/issues/421), a deferred review batch
+from 2026-08-03; verified against `3d8613a` on 2026-09-22.
+Reason: `scripts/check-no-site-data.sh` (the R61 mechanical backstop) still misses four shapes: IPv6
+addresses that begin with `::` compression (deliberately unmatched because Python slice syntax such
+as `a[::2]` has the same shape), textual lockfiles (skipped by the `\.lock$` exclusion), lowercase
+MD5 fingerprints (the pattern is uppercase-only), and file names beginning with `-` (most matchers
+pass the file list without a `--` separator).
+Closure contract: Close all four with a context-aware rule for leading `::` that keeps the slice
+false positive out, an evidence-backed lockfile policy, a case-insensitive fingerprint match, and
+`--` on every matcher. Prove each with a failing fixture in `scripts/tests/test-check-no-site-data.sh`
+and a clean run over the full tree.
+Last reviewed: 2026-09-22
+
+## RES-KEYCLOAK-SCRIPT-DOTENV-ESCAPES
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #422](https://github.com/CoJoA13/EasySynQ/issues/422), filed 2026-08-03;
+verified against `3d8613a` on 2026-09-22.
+Reason: The `env_val` helper copied into `scripts/new-keycloak-user.sh` and
+`scripts/clear-keycloak-lockout.sh` ends a double-quoted value at the first `"`, escaped or not.
+Compose resolves `KEYCLOAK_ADMIN_PASSWORD="abc\"def"` to `abc"def`; the helper returns `abc\`, so
+after a rotation to such a value both scripts authenticate with the wrong password. This is the third
+dotenv production the `sed` approximation has had to chase.
+Closure contract: Read the value Compose itself resolves (for example from `docker compose config`)
+or implement the escape grammar once in a shared helper, and extend the extraction test matrix with
+escaped-quote and trailing-backslash cases run against both scripts.
+Last reviewed: 2026-09-22
+
+## RES-SITE-ARTIFACT-GITIGNORE
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #423](https://github.com/CoJoA13/EasySynQ/issues/423) item 3, filed
+2026-08-03; items 1 and 2 were mooted when the deployment record they corrected was removed. Verified
+against `3d8613a` on 2026-09-22.
+Reason: The install runbooks tell operators to create site-specific Compose overlays and to export the
+installation root CA as `easysynq-root-ca.crt` inside the working tree, but `.gitignore` covers
+neither. A routine `git add -A` on an operator checkout can therefore stage site data that R61
+forbids in the repository.
+Closure contract: Add `.gitignore` rules for site-specific Compose overlays and the exported root CA
+without hiding the tracked overlays, and prove both with `git check-ignore` plus a check that every
+tracked `infra/compose/compose.*.yml` stays tracked.
+Last reviewed: 2026-09-22
+
+## RES-BACKUP-CRON-IGNORED
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #425](https://github.com/CoJoA13/EasySynQ/issues/425), filed 2026-08-03;
+verified against `3d8613a` on 2026-09-22.
+Reason: The setup wizard stores `backup_policy.cron`, but the Beat entry `backup-nightly` in
+`apps/api/src/easysynq_api/tasks/app.py` runs on a hardcoded `86400.0` interval and nothing reads the
+stored cron. Backups fire 24 hours after Beat last started, so the configured time is never honoured
+and each container recreation moves it.
+Closure contract: Drive the backup schedule from `backup_policy.cron` evaluated in the organization
+timezone (`resolve_org_tz`, R56), fall back safely with a warning on a malformed value, keep the task
+idempotent under redelivery, and prove with a test that the schedule follows the stored cron rather
+than process start time.
+Last reviewed: 2026-09-22
+
+## RES-CREDENTIAL-RESET-R64-ALIGNMENT
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #430](https://github.com/CoJoA13/EasySynQ/issues/430), deferred from PR #429 on
+2026-08-04; the contract text (item 3) has since been aligned. Verified against `3d8613a` on 2026-09-22.
+Reason: R64 rule 5 requires a system-tier caller to reset another user's credential. The roster still
+offers "Issue new temp password" to any caller holding `user.create` (`UsersAdmin.tsx`), so a
+granular-override holder sees an action that always returns `422 two_tier_violation`. The PEP check
+in `services/authz/pep.py` has no self exception, while its denial message and doc 07 still say
+"another user", which no longer matches the contract.
+Closure contract: Gate the roster action on the same system-tier rule the server enforces, with a
+component test for a granular `user.create` holder, and make the self-reset behaviour, its denial
+text and doc 07 agree with R64 rule 5.
+Last reviewed: 2026-09-22
+
+## RES-KEYCLOAK-ERROR-CLASSIFICATION
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #431](https://github.com/CoJoA13/EasySynQ/issues/431), deferred from PR #429 on
+2026-08-04; verified against `3d8613a` on 2026-09-22.
+Reason: `KeycloakProvisioningClient` turns every 4xx on create, including admin-credential 401/403,
+into `KeycloakRejected` (reported as invalid operator input), and turns a 404 from
+`set_temporary_password` into `KeycloakUnavailable` (reported as an outage). A stale identity link
+therefore reads as Keycloak being down, and a broken admin credential reads as a typo.
+Closure contract: Classify a missing subject distinctly so the stale link can be repaired, route
+401/403 to the configuration/availability path, and unit-test each status class.
+Last reviewed: 2026-09-22
+
+## RES-KEYCLOAK-LOCATION-SUBJECT
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #432](https://github.com/CoJoA13/EasySynQ/issues/432), deferred from PR #429 on
+2026-08-04; verified against `3d8613a` on 2026-09-22.
+Reason: After creating a Keycloak user, `keycloak_provisioning.py` trusts any non-empty last path
+segment of the `Location` header as the new subject. The exact-lookup fallback runs only when the
+header is absent, so a malformed `.../users/` yields the subject `users`, and `provision_user`
+commits an `app_user` bound to an account that does not exist.
+Closure contract: Accept the segment only when it is a well-formed subject identifier, otherwise use
+the exact username lookup, and test the `.../users/` case.
+Last reviewed: 2026-09-22
+
+## RES-PROVISION-POST-COMMIT-READ-FAILURE
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #433](https://github.com/CoJoA13/EasySynQ/issues/433), deferred from PR #429 on
+2026-08-04; verified against `3d8613a` on 2026-09-22.
+Reason: In `provision_user` (`apps/api/src/easysynq_api/api/users.py`), the `session.refresh(user)`
+and role-name reads run after the first commit with no error handling. If either fails, the account
+and `app_user` exist without a credential and the caller receives a bare 500 without the "user
+created; reissue rather than retry" guidance the credential path gives.
+Closure contract: Map a failure of those reads to the same recoverable response, or build the
+response from values already held, and prove it with a fault-injection test.
+Last reviewed: 2026-09-22
+
+## RES-CREATE-USER-PENDING-EDITS
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #434](https://github.com/CoJoA13/EasySynQ/issues/434), deferred from PR #429 on
+2026-08-04; verified against `3d8613a` on 2026-09-22.
+Reason: `CreateUserModal.tsx` leaves the identity fields editable while the create request is
+pending, and the collision-recovery link reads the live form instead of the submitted values. An
+operator who edits the name or email while waiting can link an existing Keycloak identity to another
+person's metadata.
+Closure contract: Snapshot the submitted values when the create starts and have the link request use
+the snapshot (or disable the fields while pending), with a test that edits during a pending create and
+asserts the link payload.
+Last reviewed: 2026-09-22
+
+## RES-ROLE-PICKER-ROLE-READ
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #435](https://github.com/CoJoA13/EasySynQ/issues/435), deferred from PR #429 on
+2026-08-04; verified against `3d8613a` on 2026-09-22.
+Reason: The Create user role picker is gated on `permission.grant`, but its data comes from
+`GET /api/v1/roles`, which requires `role.read`. A granular-override caller without `role.read` sees
+an enabled, silently empty dropdown. The seeded System Administrator holds all three keys, so a
+default install does not hit this.
+Closure contract: Include `role.read` in the picker's gate or render the denied query as a calm
+no-access state (`forbidden` flag, `retry: false`), with a component test for the denied case.
+Last reviewed: 2026-09-22
+
+## RES-UNBOUND-SCOPE-TEMPLATE-ROLES
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #436](https://github.com/CoJoA13/EasySynQ/issues/436), filed 2026-08-04;
+verified against `3d8613a` on 2026-09-22.
+Reason: Five of the eight seeded roles carry parameterized scope templates (`:assignment_process`,
+`:assigned_folder`, `:assigned_doc_class`). `_grant_from_role` in `services/authz/repository.py`
+falls back to the raw template when an assignment has no `bound_scope`, the assignment API accepts
+that, and the roster's Manage drawer posts only `role_id`. The user appears to hold the role and
+receives none of its access. Only the process-owner flow binds a scope.
+Closure contract: Either refuse an unbound assignment of a parameterized role with a named 422, or
+collect the binding in the assignment UI, and prove that an unbound Author or Approver assignment can
+no longer be created silently.
+Last reviewed: 2026-09-22
