@@ -37,9 +37,10 @@ files / 2,357 tests from the two web shards (1,199 + 1,158).
 `github.com/CoJoA13/EasySynQ`; `main` was fast-forwarded there at `c62ce09` with no rewrite. The
 workflow described under CI topology below replaces `.gitlab-ci.yml`; `gate` is the single required
 check; Dependabot replaces Renovate; the guards require `gh` and the GitHub clone URL. The owner
-approved R86 on 2026-09-22. Still owed after this snapshot: the rulesets (runbook
-[`github-repository-setup.md`](runbooks/github-repository-setup.md)), archiving the GitLab project
-once both `main` tips agree, and closing the superseded Dependabot pull requests. The docs-only CI
+approved R86 on 2026-09-22. The rulesets from
+[`github-repository-setup.md`](runbooks/github-repository-setup.md) were applied on 2026-09-22.
+Still owed after this snapshot: archiving the GitLab project once both `main` tips agree, and
+closing the superseded Dependabot pull requests. The docs-only CI
 lane has not yet run live. See
 [dated evidence](slice-history.md#s-ci-github-primary--primary-hosting-returns-to-github-and-one-required-check-gates-main-r86).
 

@@ -101,9 +101,12 @@ mutated in place seven ways; the GitLab and Renovate pins are gone). Integration
 unchanged; web **2,357** unchanged (1,199 + 1,158 across the two shards) and the Chromium suite
 green; doctor 77 checks.
 
-**Honest deferrals.** The rulesets are applied by the owner after merge from
-[`github-repository-setup.md`](runbooks/github-repository-setup.md); until they are, `gate` is not
-enforced on `main`. GitLab is archived only once both `main` tips agree (after #554). No AI review
+**Honest deferrals.** The rulesets from
+[`github-repository-setup.md`](runbooks/github-repository-setup.md) were applied on 2026-09-22 with
+the owner's go-ahead (`main`: pull request required, `gate` the one required check, up to date,
+conversation resolution, squash only, no force push or deletion; `v*` tags: creation restricted to
+administrators, no force push or deletion; squash message = pull-request body); between #552's
+merge and that moment `gate` was not enforced on `main`. GitLab is archived only once both `main` tips agree (after #554). No AI review
 replaces Duo; no merge queue; the images-lock refresh stays manual; the twelve carried-over GitHub
 issues are untouched; the eight superseded Dependabot pull requests and #476 are still to be
 closed. The residual ledger did not change here: the Renovate GitHub-metadata record left it as
