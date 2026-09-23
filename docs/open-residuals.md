@@ -1092,3 +1092,24 @@ optional `--bound-scope` is omitted): either refuse an unbound parameterized rol
 collect the binding in both UIs and require it in the CLI. Prove that no path can silently create an
 unbound Author or Approver.
 Last reviewed: 2026-09-22
+
+## RES-TIKA-4-OCR-CONTROL
+
+Status: OPEN
+Owner: Repository owner
+Source: Dependabot PR #478 (Tika 3.3.1 → 4.0.0), closed after a measured comparison on
+2026-09-22 against real 3.3.1 and 4.0.0 `-full` sidecars using the extractor's exact request shape.
+Reason: The import OCR ladder (`services/ingestion/extractor_tika.py`, doc 09 §5.2) sends
+`X-Tika-PDFOcrStrategy` (`no_ocr` for the native pass, `ocr_only` for the OCR pass) and
+`X-Tika-OCRLanguage`. Tika 4.0.0 silently ignores both: a `no_ocr` request OCRs a scanned PDF, so
+OCR cannot be switched off for an import and `ocr_used` would report `False` for OCR-derived text,
+and a `deu` request OCRs a German scan as English (`Ma&nahme: GréBenprufung` instead of
+`Maßnahme: Größenprüfung`). Nothing errors, and no CI job runs a real Tika (the unit suite mocks
+the transport; the integration suite substitutes a fake extractor), so the upgrade would pass
+`gate`. Tika majors are refused in `.github/dependabot.yml` until this closes.
+Closure contract: Move per-request OCR strategy and language to the mechanism Tika 4 supports
+(per-request parse context or server configuration), keep the OCR-off contract and truthful
+`ocr_used` provenance, and add a real-Tika test (a pinned sidecar image) that fails on the current
+headers against 4.x: a native PDF, a scanned PDF with OCR off and on, and a non-English scan. Then
+upgrade the pinned sidecar and remove the Dependabot refusal and its test.
+Last reviewed: 2026-09-22

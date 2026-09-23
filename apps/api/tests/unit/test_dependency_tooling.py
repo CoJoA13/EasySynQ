@@ -40,13 +40,13 @@ def test_locked_contract_toolchain_manifest_and_resolution_are_exact() -> None:
         "license": "SEE LICENSE IN LICENSE",
         "overrides": {"@redocly/openapi-core": {"js-yaml": "4.3.2"}},
         "devDependencies": {
-            "@redocly/cli": "2.53.0",
+            "@redocly/cli": "2.53.2",
             "openapi-typescript": "7.13.0",
         },
     }
     assert lock["lockfileVersion"] == 3
     assert lock["packages"][""]["devDependencies"] == manifest["devDependencies"]
-    assert lock["packages"]["node_modules/@redocly/cli"]["version"] == "2.53.0"
+    assert lock["packages"]["node_modules/@redocly/cli"]["version"] == "2.53.2"
     assert lock["packages"]["node_modules/openapi-typescript"]["version"] == "7.13.0"
     assert lock["packages"]["node_modules/js-yaml"]["version"] == "4.3.2"
     assert all(
@@ -320,3 +320,17 @@ def test_every_dependabot_entry_waits_out_a_seven_day_cooldown() -> None:
         cooldown = entry.get("cooldown", {})
         where = (entry["package-ecosystem"], entry["directory"])
         assert cooldown.get("default-days", 0) >= 7, where
+
+
+def test_tika_majors_stay_refused_until_the_ocr_ladder_moves_to_tika_4_config() -> None:
+    """Tika 4.0.0 silently ignores the ``X-Tika-PDFOcrStrategy`` and ``X-Tika-OCRLanguage``
+    headers the import OCR ladder sends (measured 2026-09-22, closed PR #478). No CI job runs a
+    real Tika, so a major bump would ship green while OCR could no longer be turned off and
+    non-English scans OCR'd as English. The refusal holds until RES-TIKA-4-OCR-CONTROL closes."""
+    compose = _dependabot_entry("docker-compose", "/infra/compose")
+    assert {
+        "dependency-name": "apache/tika",
+        "update-types": ["version-update:semver-major"],
+    } in compose["ignore"]
+    lock = (_ROOT / "infra" / "images.lock").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^tika\s+apache/tika:3\.", lock), "the pinned sidecar must stay on 3.x"
