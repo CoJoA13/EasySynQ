@@ -64,6 +64,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/easysynq_api"]
 
+[tool.uv]
+# Never resolve a pre-release into the lock. uv's default ("if-necessary-or-explicit") silently
+# accepts one when it is the only way to satisfy a bump: Dependabot PR #593 pulled kombu 5.7.0a1,
+# Celery's transport, to fit redis-py 8. An explicit pre-release pin would have to change this.
+prerelease = "disallow"
+
 [tool.ruff]
 extend = "../../ruff.toml"
 src = ["src", "tests"]

@@ -1134,3 +1134,23 @@ meta spec's exact-outcome assertions (a length check relaxed to "at least one" i
 Prove it by forcing the losing order (delay the event) and showing the meta spec still passes, and
 show that removing the fix reproduces the two-error result.
 Last reviewed: 2026-09-23
+
+## RES-REDIS-8-UPGRADE
+
+Status: OPEN
+Owner: Repository owner
+Source: Dependabot PR #593 (redis-py 6.4.0 → 8.1.0), closed 2026-09-23 after review.
+Reason: The latest stable kombu (5.6.2, Celery's transport) requires `redis<6.5`. The proposed lock
+therefore moved kombu to the pre-release 5.7.0a1, which no CI job exercises because no test runs a
+Celery worker. redis-py 8 also changes defaults this code relies on: socket timeouts default to 5s
+while the SSE stream waits up to 20s on `get_message`, the wire protocol defaults to RESP3 (pub/sub
+is its most-changed path), and its new type overloads make the two `# type: ignore` comments in
+`redis_client.py` fail mypy. redis-py is capped below 6.5 in `.github/dependabot.yml`, and
+`[tool.uv] prerelease = "disallow"` refuses the alpha outright.
+Closure contract: Once a stable kombu (and Celery) release accepts redis-py 8: lift the Dependabot
+ceiling; remove the stale `# type: ignore` comments; set the SSE client's `socket_timeout`
+explicitly, or prove with an integration test that a subscription idle past 5s still receives
+events; decide RESP2 versus RESP3 deliberately; pin the integration `RedisContainer` image to the
+Compose major; and pass a live check of Beat, a worker consuming a task, and an SSE stream held
+open for over a minute.
+Last reviewed: 2026-09-23
