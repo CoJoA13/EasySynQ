@@ -22,7 +22,7 @@ mc    quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb849
 redis    redis:8@sha256:298e5b3bc566bade82f46ad5511777a4a07a294097ce16ada2f6a42be5239df5
 keycloak    quay.io/keycloak/keycloak:26.7@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
 caddy    caddy:2@sha256:13ba145cba2f3e28fa801994876e4c086d1b95d5aa2a520a734765ffb6b12017
-renderer    gotenberg/gotenberg:8.36@sha256:87c16b9f364279d321bc9772d31fa58aa6abe036423c270698bd636c3a8e9466
+renderer    gotenberg/gotenberg:8.37@sha256:f29984bd1e226bf1b93ba90af06000afa8b315853e99d27b9aaa41b93f15c769
 tika    apache/tika:3.3.1.0-full@sha256:d8e6ed96260ad89307a93195a1b856102987a818ac648502f8efbaf313d32470
 # mailpit: dev profile only (was :latest)
 # NOT digest-pinned: this dev-profile-only image is excluded from the release guard,
