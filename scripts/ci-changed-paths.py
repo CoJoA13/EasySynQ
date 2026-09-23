@@ -96,16 +96,29 @@ def diff_names(base: str, head: str = "HEAD", *, cwd: Path = ROOT) -> list[str]:
     return [line for line in out.splitlines() if line]
 
 
-def changed_files(base_ref: str) -> list[str]:
-    # The PR run checks out the merge commit; `origin/<base>...HEAD` lists what the PR itself
-    # changes relative to the base, which is exactly what merge evidence should key on.
-    subprocess.run(  # noqa: S603 - resolved binary, fixed arguments
-        [_git(), "fetch", "--no-tags", "--depth=1", "origin", base_ref],
-        cwd=ROOT,
+def changed_files(base_ref: str, *, cwd: Path = ROOT) -> list[str]:
+    """What the pull request itself changes, measured against the base the run actually tested.
+
+    A pull_request run checks out GitHub's merge commit (refs/pull/N/merge), whose FIRST parent
+    is the base tip it was merged onto. Diffing from that parent needs no network and cannot race:
+    the previous `git fetch --depth=1 origin <base>` pulled a base that had moved since checkout as
+    a shallow commit with no reachable parent, `origin/<base>...HEAD` then had no merge base, and
+    `changes` failed with exit 128 (first seen 2026-09-22, run 35793274749). It could also have
+    keyed the selection on a base the run never tested.
+    """
+    parents = subprocess.run(  # noqa: S603 - resolved binary, fixed arguments
+        [_git(), "rev-list", "--parents", "-n", "1", "HEAD"],
+        cwd=cwd,
         check=True,
         capture_output=True,
-    )
-    return diff_names(f"origin/{base_ref}")
+        text=True,
+    ).stdout.split()
+    if len(parents) != 3:
+        raise RuntimeError(
+            f"expected the merge commit of the pull request onto {base_ref!r} "
+            f"(two parents); HEAD has {len(parents) - 1}"
+        )
+    return diff_names("HEAD^1", "HEAD", cwd=cwd)
 
 
 def decide(event: str, ref: str, base_ref: str, files: list[str] | None = None) -> dict[str, bool]:

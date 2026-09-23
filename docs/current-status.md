@@ -46,8 +46,9 @@ dismissed with reasons in issue #584, leaving none open), and recorded
 them in the [GitHub setup runbook](runbooks/github-repository-setup.md). The GitHub wiki is now a
 navigation index. The project board mirrors every `RES-*` record as a `residual` issue; the ledger
 stays authoritative. #586 registered issues #420–#436 as twelve ledger records, and the first
-Dependabot run after the merges exposed a pre-existing shallow-fetch race in `changes`, registered
-as [`RES-CI-CHANGES-SHALLOW-FETCH-RACE`](open-residuals.md#res-ci-changes-shallow-fetch-race). See
+Dependabot run after the merges exposed a pre-existing shallow-fetch race in `changes`; it was
+registered and then closed by S-ci-changes-merge-parent, which diffs from the merge commit's first
+parent instead of re-fetching the base. See
 [dated evidence](slice-history.md#s-ci-hardening--a-repository-audit-pins-the-supply-chain-gates-the-secret-scan-and-gives-the-ledger-a-board).
 
 The previous shipped baseline was PR #552's squash
