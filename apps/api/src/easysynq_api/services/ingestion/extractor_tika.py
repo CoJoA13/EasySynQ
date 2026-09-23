@@ -33,11 +33,13 @@ logger = logging.getLogger("easysynq.ingestion.extract")
 _EXTRACTOR_VERSION = "tika-rmeta-1"
 _HEADER_BLOCK_CHARS = 1500  # the §5.1 high-signal header slice fed to the classifier
 # Tika 4.0 renamed the whole ``X-TIKA:`` metadata namespace to ``tk:`` (and underscores to
-# hyphens elsewhere), so the text moved from ``X-TIKA:content`` to ``tk:content``. Both are
-# accepted because the key is the ONLY part of this client's contract the major changed --
-# verified against real 3.3.1 and 4.0.0 sidecars: dc:creator, dc:title, dcterms:created,
-# dcterms:modified, Content-Type, xmpTPg:NPages and the X-Tika-OCRLanguage request header all
-# behave identically. ⚠ Reading only the old key against a 4.x sidecar does NOT raise: the
+# hyphens elsewhere), so the text moved from ``X-TIKA:content`` to ``tk:content``. Both keys are
+# accepted, but the key is NOT the only part of this client's contract the major changed: measured
+# on 2026-09-22 against real 3.3.1 and 4.0.0 sidecars, 4.0.0 silently IGNORES the
+# ``X-Tika-PDFOcrStrategy`` and ``X-Tika-OCRLanguage`` request headers this ladder depends on (a
+# ``no_ocr`` pass OCRs a scanned PDF; a ``deu`` scan OCRs as English). Tika majors are refused in
+# .github/dependabot.yml until RES-TIKA-4-OCR-CONTROL moves the ladder to Tika 4's configuration
+# mechanism. ⚠ Reading only the old key against a 4.x sidecar does NOT raise: the
 # lookup simply misses, every document extracts as EMPTY text, and the ``except Exception``
 # below never fires. No test can see it either -- the unit suite mocks the HTTP transport and
 # the integration suite substitutes a fake extractor, so neither runs a real Tika.

@@ -144,3 +144,12 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
+    ignore:
+      # Tika majors are refused until the OCR ladder moves to Tika 4's configuration mechanism
+      # (RES-TIKA-4-OCR-CONTROL). Measured on 2026-09-22 against real 3.3.1 and 4.0.0 sidecars
+      # (closed PR #478): 4.0.0 SILENTLY IGNORES `X-Tika-PDFOcrStrategy` (a `no_ocr` pass OCRs
+      # scanned PDFs, so import OCR cannot be turned off and `ocr_used` misreports) and
+      # `X-Tika-OCRLanguage` (a German scan OCRs as English). Nothing errors and no CI job runs a
+      # real Tika, so the upgrade would ship green. Minor/patch within 3.x still flow.
+      - dependency-name: "apache/tika"
+        update-types: ["version-update:semver-major"]
