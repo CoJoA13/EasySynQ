@@ -46,6 +46,117 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## TEST HARNESS RELIABILITY
 
+### S-ci-hardening — a repository audit pins the supply chain, gates the secret scan, and gives the ledger a board
+
+**2026-09-22; shipped in PR [#585](https://github.com/CoJoA13/EasySynQ/pull/585) (squash
+`1f4e573`, merged 22:34 UTC) and PR [#586](https://github.com/CoJoA13/EasySynQ/pull/586) (squash
+`a4e853a`, merged 22:36 UTC).** CI configuration, repository guards, GitHub settings and
+documentation only; no application code, migration (head stays `0093`), contract or permission
+change.
+
+**What shipped.** An owner-requested audit of the repository, its CI/CD and its GitHub features.
+The owner chose each change in session.
+
+- **Workflow (#585).** Every action is pinned to a full commit SHA with a `# vX.Y.Z` comment,
+  keeping its version. Every checkout sets `persist-credentials: false`. Every job has
+  `timeout-minutes`; two jobs had one before, and the rest inherited the six-hour default. A new
+  guard, `workflow-and-secrets`, runs on every run and `gate` owes it. It runs three tools, each
+  from an upstream image pinned by tag and digest. These are manual pins, like trivy's.
+  - actionlint, with shellcheck over each `run:` script.
+  - zizmor over `.github/`, using its online audits.
+  - gitleaks, gated, over the history `HEAD` reaches.
+
+  Until this slice, secret scanning ran only in the staged pre-commit hook, and Trivy's secret scan
+  is `--exit-code 0`. A commit that skipped hooks therefore reached `main` unscanned.
+  - `.gitleaks.toml` extends the default rules and path-allowlists only the pinned
+    `audit_*_vectors.json` hex fixtures.
+  - `.gitleaksignore` holds 20 fingerprints, reviewed across both the pinned CI gitleaks (8.30.1)
+    and the 8.18.4 pre-commit floor. All 149 historical hits were read, and none is a credential.
+  - The pre-commit hook reads the same two files.
+
+  A PR-only `dependency-review` job fails on a newly introduced high or critical advisory. A weekly
+  scheduled run (Mondays 06:17 UTC) owes every suite. Dependabot waits out a seven-day `cooldown`;
+  security updates are exempt. The Playwright browser cache is keyed on the web lock.
+- **Docs (#585).** Corrects `dev-workflow.md`'s "pip-audit and Trivy findings are report-only": the
+  built-image fixed-version threshold has been gated since before the move. Records the new jobs,
+  manual pins, cooldown and Code security settings in the GitHub setup runbook. Adds `SECURITY.md`
+  and `.github/ISSUE_TEMPLATE/config.yml` (no blank issues; links to private reporting and the
+  ledger). Points the README at the GitHub wiki and the repo's Projects tab.
+- **Ledger (#586).** Issues #420–#436 had been deferred by owner decision but never entered the
+  ledger. Each was re-verified against `3d8613a`: ten still open, #423 and #430 partly resolved.
+  All twelve are now registered with closure contracts and without their bodies' site specifics
+  (R61). The ledger header says each record is mirrored by a `residual` issue that never replaces
+  it. The two records tracked by archived GitLab issues #3/#4 now name GitHub #557/#558.
+- **Outside Git (recorded in the runbook).** Turned on private vulnerability reporting, Dependabot
+  alerts and security updates, CodeQL default setup, and "suggest updating PR branches". Secret
+  scanning's non-provider patterns and validity checks were refused without Secret Protection. The
+  GitHub wiki now holds an eight-page navigation index. User project #2 "EasySynQ" has Status,
+  Priority and Ledger-record fields. There is a type/area/blocked label taxonomy. Issues #557–#583
+  mirror the 27 records open at the start. #584 triaged CodeQL's first nine alerts with the owner
+  (one intended CLI output, two confined-path false positives whose guard tests were mutation-checked
+  red, and six in test harnesses); all nine were dismissed with reasons, and #584 is closed.
+
+**Traps.**
+- The mutation run on a throwaway clone caught `.gitleaksignore`'s own header comment ("…a
+  credential: Ed25519PrivateKey…") matching `generic-api-key`. It was reworded before commit.
+- A fresh clone was needed for that mutation run, because an earlier test commit's history still
+  held the old comment.
+- Gitleaks' default `--all` would let a leak on any fetched branch fail every PR. The scan is
+  scoped with `--log-opts="--full-history HEAD"`.
+- R61's owner-token guard rejects the owner handle in any non-`…/EasySynQ` URL, so the board is
+  linked through the repository's Projects tab.
+
+**Review.**
+- On #585, Codex raised one P1: the topology snapshot must move with the jobs. It was fixed in
+  `8f78673`: `ci_jobs` 13 → 15, `ci_checks` 15 → 17, and the prose now names the new jobs. The same
+  commit corrected an older claim that `contracts` runs the Compose-image-lock check itself (it runs
+  the harness).
+- On #586, Codex raised eight contract refinements over two rounds. All were confirmed in the tree
+  and folded in:
+  - The unbound-role record also covers provisioning and the `grant-role` break-glass CLI.
+  - The role-read record also covers the Manage drawer.
+  - The credential-reset record keeps the unconditional system-tier guard; a self-reset exception
+    needs its own amendment.
+  - The Keycloak-error record needs a supported stale-subject repair path.
+  - The Location record validates the header path, not the opaque subject.
+  - The drill record keeps full-size destination verification.
+  - The gitignore record names the overlay path first.
+
+  Every thread was replied to and resolved.
+
+**Live evidence.**
+- #585's final head run
+  [35784930413](https://github.com/CoJoA13/EasySynQ/actions/runs/35784930413) on `8f78673` passed
+  every owed instance. `workflow-and-secrets` and `dependency-review` passed on their first live run.
+- #586's run 35793145113 on `97e4744` took the docs lane: guards, `docs-tests`, `dependency-review`,
+  `gate`.
+- The post-merge push runs 35793095138 (`1f4e573`) and 35793278443 (`a4e853a`) were green. The
+  second ran `workflow-and-secrets` alongside the backstops.
+- Locally: actionlint clean and zizmor "no findings". gitleaks exits 0 on the clean history, exits 1
+  on a planted AWS/GitHub token, and exits 0 when the leak exists only on another branch.
+- The first weekly scheduled run had not yet fired when this was recorded.
+
+**Test deltas (measured).**
+- API unit, collected: **4,987 → 4,997**, measured on `3d8613a` vs `a4e853a` with
+  `pytest tests/unit -m unit --collect-only`. The 4,985 recorded for #552 predates #556's +2.
+- CI: **4,996 passes** and one release-only skip on run 35784930413. The +10 comes from nine new
+  CI-workflow cases and one Dependabot-cooldown case.
+- `test-ci-hardening.sh`: 152 → 172 assertions.
+- Integration 1,262 / 2 (272 + 238 + 388 + 364), response contracts 285, web 2,357 (1,199 + 1,158)
+  and Chromium 80 are all unchanged.
+
+**Honest deferrals.**
+- There is still no release pipeline: a `v*` tag builds and publishes nothing, and the owner did not
+  select one.
+- The digest-pinned tool images and the `postgres:18` service image are manual pins.
+- A secret inside a path-allowlisted audit vector is not caught by gitleaks.
+- CodeQL is advisory and not part of `gate`.
+- The audit surfaced a pre-existing race. The first Dependabot run after the merges failed in
+  `changes`: `ci-changed-paths.py` re-fetches the base with `--depth=1`, so a `main` that moved
+  after checkout arrives shallow and `git diff origin/main...HEAD` has no merge base (exit 128). It
+  is registered as
+  [`RES-CI-CHANGES-SHALLOW-FETCH-RACE`](open-residuals.md#res-ci-changes-shallow-fetch-race).
+
 ### S-ci-github-primary — primary hosting returns to GitHub, and one required check gates `main` (R86)
 
 **2026-09-21/22; shipped in PR [#552](https://github.com/CoJoA13/EasySynQ/pull/552) (squash

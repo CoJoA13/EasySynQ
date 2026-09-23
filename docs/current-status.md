@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-09-22"
-baseline_commit: "98b700558627884d45fa4006465cd629f3c3e694"
-last_shipped_slice: "S-ci-github-primary"
+baseline_commit: "a4e853a0344fa62aa4af5473af343b3f663360ad"
+last_shipped_slice: "S-ci-hardening"
 migration_head: "0093"
 next_migration: "0094"
-api_unit_tests: 4985
+api_unit_tests: 4996
 web_test_files: 283
 web_tests: 2357
 contract_tests: 285
@@ -22,7 +22,35 @@ authority and it is not runtime discovery: binding decisions live in
 [`decisions-register.md`](decisions-register.md), while current deferred work lives only in
 [`open-residuals.md`](open-residuals.md).
 
-The verified shipped baseline is PR [#552](https://github.com/CoJoA13/EasySynQ/pull/552)'s squash
+The verified shipped baseline is PR [#586](https://github.com/CoJoA13/EasySynQ/pull/586)'s squash
+`a4e853a0344fa62aa4af5473af343b3f663360ad` (merged 2026-09-22 22:36 UTC), directly on PR
+[#585](https://github.com/CoJoA13/EasySynQ/pull/585)'s squash `1f4e573` (22:34 UTC). The code
+evidence is #585's final head run,
+[run 35784930413](https://github.com/CoJoA13/EasySynQ/actions/runs/35784930413) on `8f78673`, which
+passed every instance it owed (`docs-tests` and `release-gate` skipped as owed). #586 changed only
+`docs/open-residuals.md`, and its docs-lane run 35793145113 is green. The post-merge backstop runs
+35793095138 (`1f4e573`) and 35793278443 (`a4e853a`) are green; the latter ran the guards (now
+including `workflow-and-secrets`), `migrations`, `security` and `gate`. Frontmatter counts come from
+run 35784930413's job logs: **4,996 API passes** with one release-only skip (4,997 collected, against
+4,987 on `3d8613a`), **1,262 integration passes / 2 skips** (272 + 238 + 388 + 364), 285 response
+contracts, and web 283 files / 2,357 tests (1,199 + 1,158), plus the Chromium suite (80).
+
+**Shipped: S-ci-hardening, September 22 (#585, #586).** A repository audit pinned every action to a
+commit SHA and dropped persisted checkout credentials. It added a timeout to every job and a new
+`workflow-and-secrets` guard: actionlint, zizmor, and a **gated** full-history gitleaks scan sharing
+`.gitleaks.toml`/`.gitleaksignore` with the pre-commit hook. It also added a PR-only
+`dependency-review` job, a weekly scheduled full run, and a seven-day Dependabot cooldown. Outside
+Git, the audit turned on private vulnerability reporting, Dependabot alerts and security updates,
+and CodeQL default setup (advisory; its first nine alerts were triaged with the owner and
+dismissed with reasons in issue #584, leaving none open), and recorded
+them in the [GitHub setup runbook](runbooks/github-repository-setup.md). The GitHub wiki is now a
+navigation index. The project board mirrors every `RES-*` record as a `residual` issue; the ledger
+stays authoritative. #586 registered issues #420–#436 as twelve ledger records, and the first
+Dependabot run after the merges exposed a pre-existing shallow-fetch race in `changes`, registered
+as [`RES-CI-CHANGES-SHALLOW-FETCH-RACE`](open-residuals.md#res-ci-changes-shallow-fetch-race). See
+[dated evidence](slice-history.md#s-ci-hardening--a-repository-audit-pins-the-supply-chain-gates-the-secret-scan-and-gives-the-ledger-a-board).
+
+The previous shipped baseline was PR #552's squash
 `98b700558627884d45fa4006465cd629f3c3e694` (merged 2026-09-22 03:36 UTC). Under R86 the merge
 evidence is the pull request's final check run on its head SHA:
 [run 35681656565](https://github.com/CoJoA13/EasySynQ/actions/runs/35681656565) on `fb91496` passed
