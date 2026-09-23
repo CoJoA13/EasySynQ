@@ -1,11 +1,11 @@
 ---
 easysynq_status_schema: 1
 as_of: "2026-09-22"
-baseline_commit: "a4e853a0344fa62aa4af5473af343b3f663360ad"
-last_shipped_slice: "S-ci-hardening"
+baseline_commit: "55fef931611091c8b5d2e410f92a441fd7b7f8b6"
+last_shipped_slice: "S-dependabot-triage"
 migration_head: "0093"
 next_migration: "0094"
-api_unit_tests: 4996
+api_unit_tests: 4999
 web_test_files: 283
 web_tests: 2357
 contract_tests: 285
@@ -22,7 +22,36 @@ authority and it is not runtime discovery: binding decisions live in
 [`decisions-register.md`](decisions-register.md), while current deferred work lives only in
 [`open-residuals.md`](open-residuals.md).
 
-The verified shipped baseline is PR [#586](https://github.com/CoJoA13/EasySynQ/pull/586)'s squash
+The verified shipped baseline is `55fef931611091c8b5d2e410f92a441fd7b7f8b6` (PR
+[#594](https://github.com/CoJoA13/EasySynQ/pull/594), docs only, merged 2026-09-23), directly on
+PR [#587](https://github.com/CoJoA13/EasySynQ/pull/587)'s squash `3b7b263`. The code evidence is
+#587's final head run [35822550793](https://github.com/CoJoA13/EasySynQ/actions/runs/35822550793)
+on `0549b5b`, whose tree is identical to `3b7b263`. The run was based on `main` after #591, so it
+covers every change in this batch. Its first attempt failed only in the Chromium harness
+self-test (the timing race registered as
+[`RES-HARNESS-PROBE-REQUESTFAILED-RACE`](open-residuals.md#res-harness-probe-requestfailed-race)),
+and the re-run of the failed jobs passed. The post-merge push runs 35825291412 (`3b7b263`) and
+35825457050 (`55fef93`) are green. Frontmatter counts come from that run's job logs:
+**4,999 API passes** with one release-only skip (5,000 collected on `55fef93`, against 4,997 on
+`a4e853a`), **1,262 integration passes / 2 skips** (272 + 238 + 388 + 364), 285 response
+contracts, and web 283 files / 2,357 tests (1,199 + 1,158), plus the Chromium suite (80).
+
+**Shipped: S-dependabot-triage, September 22–23.** The eight Dependabot pull requests carried over
+from before the move are resolved.
+- **Merged:** setup-uv 10.1.0 (#548); redocly 2.53.2 with its reviewed pin (#541); the
+  seven-package Python group (#550); the rebuilt keycloak 26.7 digest with its images-lock line
+  (#553); gotenberg 8.37 with its images-lock line (#547); and the web group, react-router 7.18.4
+  with its reviewed security-lock pin (#587, the successor of #551).
+- **Closed:** mailpit #543, superseded by `main`. Tika 4.0 #478, after a measured comparison showed
+  it silently ignores the OCR-ladder headers. #591 refuses Tika majors and registers
+  [`RES-TIKA-4-OCR-CONTROL`](open-residuals.md#res-tika-4-ocr-control).
+- **Operator actions before the next deploy:** rebuild the Keycloak image, and pull gotenberg 8.37
+  then run `./scripts/easysynq mirror rebuild` once. Since 8.34 (2026-06-16) the renderer dropped
+  DOCX equations from controlled copies, and the rendition cache does not re-render on its own.
+- The same window shipped S-ci-changes-merge-parent (#590). See
+  [dated evidence](slice-history.md#s-dependabot-triage--the-pre-move-dependabot-backlog-resolved-one-measured-change-at-a-time).
+
+The previous shipped baseline was PR [#586](https://github.com/CoJoA13/EasySynQ/pull/586)'s squash
 `a4e853a0344fa62aa4af5473af343b3f663360ad` (merged 2026-09-22 22:36 UTC), directly on PR
 [#585](https://github.com/CoJoA13/EasySynQ/pull/585)'s squash `1f4e573` (22:34 UTC). The code
 evidence is #585's final head run,
@@ -73,8 +102,8 @@ first ran live on this record's own PR (#555): [run 35703051883](https://github.
 selected the lane and failed on a port gap — the lane never materialized the `.env` the
 Compose-rendering tests need — fixed and pinned in #556; rebased onto it,
 [run 35717332682](https://github.com/CoJoA13/EasySynQ/actions/runs/35717332682) ran the guards and
-`docs-tests` only, all green, and `gate` passed. The eight pre-move Dependabot pull requests are
-tracked as [`RES-DEPENDABOT-BACKLOG-TRIAGE`](open-residuals.md#res-dependabot-backlog-triage). See
+`docs-tests` only, all green, and `gate` passed. The eight pre-move Dependabot pull requests were
+registered as a residual and resolved on 2026-09-23 by S-dependabot-triage. See
 [dated evidence](slice-history.md#s-ci-github-primary--primary-hosting-returns-to-github-and-one-required-check-gates-main-r86).
 
 The previous shipped baseline was MR !63's merged main `c62ce09d0442b6b3d5df0ebb57ee0efb60dd3e52`
