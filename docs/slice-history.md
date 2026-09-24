@@ -5,6 +5,37 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## S-project-native-automation — verified intake and status lifecycle
+
+2026-09-24, repository baseline `df79772` after reviewed squash merge #602. Resolves
+`RES-PROJECT-BOARD-AUTOMATION` through the native EasySynQ project UI in the owner's signed-in
+browser. The original record reported stale #551/#584 and missing #599/#600; those were reconciled
+in the earlier audit. Five newly enabled workflows now provide repository-scoped auto-add,
+item-added → Todo, item-closed → Done (issues and PRs), PR-merged → Done, and item-reopened → Todo.
+The pre-existing auto-add-sub-issues workflow stays enabled: six enabled workflows total.
+Auto-close issue is confirmed off. No token, Action, webhook or broader permission was introduced.
+
+Acceptance record [#603](https://github.com/CoJoA13/EasySynQ/issues/603) was created without manually
+adding it to the project or setting its initial status. Project API readback showed automatic
+membership and Todo. Closing it produced Done; reopening it produced Todo. Manually moving its card
+to Done left the issue OPEN, confirming the reverse closure safeguard, then the probe was closed
+and retained as evidence. The merged-PR workflow's enabled Done configuration was read back in the
+UI; no new PR was merged solely to test it.
+
+Comparing every open issue and PR with project membership found no missing items. Already-merged
+#602 still showed In review because it predated activation, so it was explicitly reconciled to
+Done. Existing priorities, ledger IDs and blocked labels were preserved; #601's obsolete
+owner-decision label was removed. Reopened items return to triage; ready-for-review PR status and
+any still-applicable blocked reason are reconciled there, as documented in the runbook. The Wiki
+tracking page points to this procedure. Issue #601 remains open until the closure documentation
+merges; live workflow configuration and the probe are already complete.
+
+Verification: the existing documentation-reading selection (11 files) passed **392 tests, one
+image-build opt-in skip**. `just authority-check`, `bash scripts/check-no-site-data.sh` and
+`git diff --check` passed. Before/after project API snapshots confirmed unchanged Priority and Ledger
+record values for every pre-existing item and unchanged labels/statuses outside the intended
+#601/#602 reconciliation. Application and deployment behavior did not change.
+
 ## Repository operations audit — September 24, 2026
 
 Audited source at `985cccf4215826b5fc81b6b8e7324cadbbc35fdb`, the live GitHub settings,
