@@ -46,6 +46,82 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
 
 ## TEST HARNESS RELIABILITY
 
+### S-dependabot-triage — the pre-move Dependabot backlog resolved, one measured change at a time
+
+**2026-09-22/23; closes `RES-DEPENDABOT-BACKLOG-TRIAGE`.** Merged by squash, in order: #548
+`f4ff6af`, #541 `0b4ff2f`, #550 `d0fd179`, #553 `21d4a60`, #547 `2c37e59`, #591 `2f2aefc`, #587
+`3b7b263`, #594 `55fef93`. Dependency, images-lock, test-pin and documentation changes only. There
+is no migration (head stays `0093`), no contract change, and no permission change.
+
+**What shipped.** Each of the eight pull requests open since before the move was either merged
+through `gate` or closed with its reason on the thread. All were first rebased onto `main` so every
+verdict came from the R86 workflow, not a stale run.
+- **#548** setup-uv 10.0.1 → 10.1.0. Dependabot kept the new SHA-pin format with its version
+  comment.
+- **#541** @redocly/cli 2.53.0 → 2.53.2. Two tests pin the toolchain version exactly on purpose, and
+  both were moved after review: the CLI ships bundled, and js-yaml stays on the 4.3.2 override.
+- **#550** Python group: alembic 1.20, ruff 0.16.7, pypdf 6.18.1, datamodel-code-generator 0.81,
+  schemathesis, boto3, aiosmtplib. Regenerated contract models are byte-identical, and
+  ruff/mypy/`alembic check` are clean.
+- **#553** keycloak 26.7, same tag with a rebuilt digest, plus the single-entry images-lock line the
+  Keycloak FROM check requires.
+- **#547** gotenberg 8.36 → 8.37, plus its images-lock line.
+- **#587** web group, the successor of #551: react-router 7.18.4 and vitest 5.0.1. The approved
+  security-lock pin was moved after review.
+- **#543** mailpit was closed by Dependabot because `main` already carried v1.31.1.
+- **#478** Tika 4.0 was closed; see below.
+
+**Load-bearing findings.**
+- **gotenberg** (CI cannot see this: the render tests short-circuit before any live renderer). The
+  three hand-built documents were rendered through the pinned 8.36 and 8.37 images. **8.36 silently
+  drops OMML equations from DOCX controlled copies**, and 8.37 renders them (upstream #1644:
+  8.30 removed `libreoffice-math`). The ODT and ODS output was identical: same text, and pixel
+  deltas of 0 or 58 anti-aliasing pixels.
+  - Because the rendition cache never re-renders on its own, any Effective DOCX with equations
+    cached since the 8.34 adoption (2026-06-16) needs `./scripts/easysynq mirror rebuild` after
+    deploy.
+- **Tika** (CI cannot see this either: the unit suite mocks the transport and the integration suite
+  uses a fake extractor). Real 3.3.1 and 4.0.0 sidecars were driven with the extractor's exact
+  requests. **4.0.0 silently ignores `X-Tika-PDFOcrStrategy`**: a `no_ocr` request OCRs a scanned
+  PDF, so OCR cannot be switched off and `ocr_used` would misreport. **It also ignores
+  `X-Tika-OCRLanguage`**: a `deu` scan OCRs as English.
+  - The extractor's comment claiming the headers were verified identical on 4.0.0 was wrong, and
+    #591 corrects it. #591 also refuses Tika majors (pinned by a test, mutation-checked) and
+    registers `RES-TIKA-4-OCR-CONTROL`.
+- **Digests.** Every new images-lock digest was verified independently: the pulled RepoDigest for
+  both images, plus the registry index for gotenberg.
+  - ⚠ This deviates from the residual's closure contract, which asked for `just images-update` on
+    each branch. That recipe re-resolves every floating tag (`postgres:18`, `redis:8`, `caddy:2`)
+    and would have widened each pull request past its own update, so targeted single-line edits
+    were used instead.
+
+**Traps.**
+- The ruleset's up-to-date rule makes merging strictly sequential: each merge moves `main` and
+  every queued PR re-runs. A scripted chain (update branch → wait for `gate` on the new head → check
+  unresolved threads → squash) merged the batch over about four hours, stopping at the first red.
+- It stopped once. After its update, #587 failed only the Chromium harness self-test. The
+  fail-closed probe's pending `page.waitForEvent("requestfailed")` can reject with "Test ended"
+  after the interceptor's fatal throw, adding a second error that the meta spec's exact-one
+  assertion rejects. It was the only `web-browser` failure in the previous 60 runs, and nothing
+  #587 changed runs in Playwright.
+  - The failed jobs were re-run once to unblock the bump. The race is registered as
+    `RES-HARNESS-PROBE-REQUESTFAILED-RACE` (#594, issue #595) rather than treated as fixed.
+- Pushing a reviewed fix onto a Dependabot branch ends Dependabot's own rebasing of it. GitHub's
+  update-branch endpoint kept those branches current instead.
+
+**Test deltas (measured).**
+- API unit collected: **4,997 → 5,000** on `a4e853a` → `55fef93`. The +3 is two tests from #590 and
+  the Tika refusal test from #591.
+- CI: **4,999 passes** and one release-only skip on run 35822550793.
+- Unchanged: integration 1,262 passed / 2 skipped, response contracts 285, web 2,357 (the vitest
+  5.0.1 bump changed no count), and Chromium 80.
+
+**Honest deferrals.**
+- The Keycloak rebuild, the gotenberg pull and the one-time mirror rebuild are operator actions and
+  have not been performed on any installation.
+- Dependabot PR #593 (redis-py 6.4 → 8.1) opened after this record and is ordinary new work.
+- `RES-TIKA-4-OCR-CONTROL` and `RES-HARNESS-PROBE-REQUESTFAILED-RACE` stay open.
+
 ### S-ci-changes-merge-parent — `changes` diffs from the merge commit's first parent
 
 **2026-09-22; follow-up to S-ci-hardening.** CI tooling only; no application code, migration (head
