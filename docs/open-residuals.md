@@ -399,25 +399,6 @@ ordering that reproduced the failure, and confirm CI sharding is not relied on. 
 run alone does not close this record.
 Last reviewed: 2026-09-22
 
-## RES-DEPENDABOT-BACKLOG-TRIAGE
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ci-github-primary (R86), 2026-09-22, after PR #554 merged
-Reason: Dependabot replaced Renovate on 2026-09-21 and refreshed the eight dependency pull
-requests that were open on GitHub from before the 2026-09-08 GitLab move (#478, #541, #543, #547,
-#548, #550, #551, #553). They are live proposals under the adopted updater, not superseded work,
-and none has been reviewed against the current `main`: two pass `gate`, three fail it (the Compose
-image updates redden `compose-images-lock` because `infra/images.lock` digests are manual under
-R86; the web and Redocly groups need a look), and three have no run on the R86 workflow yet.
-Leaving them unreviewed means the accepted-manual losses in R86 are exercised by nobody.
-Closure contract: Each of the eight pull requests is either merged through the gate (with `just
-images-update` run on the branch where the update touches a Compose image) or closed with the
-reason on the thread; the count of open Dependabot pull requests older than the move is zero;
-and the outcome is recorded in dated slice history. A later Dependabot pull request opened after
-this record is ordinary work, not part of it.
-Last reviewed: 2026-09-22
-
 ## RES-TYPESCRIPT-7-UPGRADE
 
 Status: OPEN
