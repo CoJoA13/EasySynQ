@@ -334,3 +334,19 @@ def test_tika_majors_stay_refused_until_the_ocr_ladder_moves_to_tika_4_config() 
     } in compose["ignore"]
     lock = (_ROOT / "infra" / "images.lock").read_text(encoding="utf-8")
     assert re.search(r"(?m)^tika\s+apache/tika:3\.", lock), "the pinned sidecar must stay on 3.x"
+
+
+def test_the_api_lock_admits_no_pre_release_and_redis_waits_for_a_stable_kombu() -> None:
+    """uv's default pre-release mode silently accepts a pre-release when it is the only way to
+    resolve. Dependabot PR #593 (redis-py 6.4 -> 8.1) pulled kombu 5.7.0a1, Celery's transport,
+    because the latest stable kombu requires `redis<6.5`. Pre-releases are refused in the project
+    config, recorded in the lock, and absent from it; the redis ceiling stops the weekly re-proposal
+    until RES-REDIS-8-UPGRADE closes."""
+    project = _read_toml(_ROOT / "apps" / "api" / "pyproject.toml")
+    lock = _read_toml(_ROOT / "apps" / "api" / "uv.lock")
+    assert project["tool"]["uv"]["prerelease"] == "disallow"
+    assert lock["options"]["prerelease-mode"] == "disallow"
+    pre = re.compile(r"\d(a|b|rc)\d+$|\.dev\d+$")
+    assert [p["name"] for p in lock["package"] if pre.search(p["version"])] == []
+    api = _dependabot_entry("uv", "/apps/api")
+    assert {"dependency-name": "redis", "versions": [">=6.5"]} in api["ignore"]
