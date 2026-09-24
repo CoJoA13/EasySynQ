@@ -5,6 +5,45 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Repository operations audit — September 24, 2026
+
+Audited source at `985cccf4215826b5fc81b6b8e7324cadbbc35fdb`, the live GitHub settings,
+Wiki, issues and project. This is repository-operations and CI coverage evidence, not an exhaustive
+application security audit or production-readiness certification. Repository documentation changes
+remain a candidate until their follow-up PR merges; the settings and tracking changes below were
+applied and read back during the audit.
+
+| Requirement or risk | Evidence and outcome |
+| --- | --- |
+| PR-only, up-to-date, squash-only integration | Active `main` ruleset, no bypass actors, required `gate`, conversation resolution, deletion/force-push protection. Zero required approving reviews: review is a process obligation, not independently enforced. |
+| CI selection and failure handling | Existing workflow plus 172 shell assertions and 44 semantic tests passed. Covers docs/code lanes, merge-parent diffs, conditional jobs, complete aggregate dependencies, immutable action refs, credential handling and timeouts. |
+| Security feature configuration | Private reporting, dependency alerts/updates, secret scanning/push protection and weekly CodeQL default setup verified. Zero open alerts returned by each of the Dependabot, CodeQL and secret-scanning APIs; this does not clear advisory image findings or untested runtime behavior. |
+| Server-side action pin enforcement | Actions permissions API changed `sha_pinning_required` from false to true and returned true on readback. Token default remains read-only, with PR approval by Actions disabled. |
+| Issue/board traceability | Twelve pre-move issue titles and board Ledger record fields now match their existing residuals. Closed #551 and #584 moved to Done; #599 and #600 added for review. After adding #601, all 42 residuals map one-to-one to open issues and board records; all open issues and the two open PRs are present. |
+| Durable board maintenance | Native workflow controls could not be inspected from the signed-out browser. Exact lifecycle/backfill criteria are registered in `RES-PROJECT-BOARD-AUTOMATION` and issue #601; manual reconciliation does not close that record. |
+| Documentation entry points | README gains a Wiki link; Wiki tracking links point directly to the project, clarify closure semantics, and explain CI coverage limits. The runbook records the settings, maintenance procedure and approval/release boundaries. |
+| CD and release claims | Protected `v*` tags run full validation and image-pin checks. No asset publication/deployment job or published GitHub release existed at inspection. No deployment automation was activated. |
+
+Known runtime gaps were retained under existing issues, not duplicated: real Tika OCR (#592),
+live Celery/Beat and long-lived SSE (#598), integration order dependence (#567), the browser
+harness race (#595), and source-independent recovery (#557). CI remains broad but partial evidence
+for these boundaries. CodeQL and pip-audit remain advisory under the existing contract. No
+application behavior, dependencies, schemas, migration tree or security acceptance thresholds changed.
+
+Verification: `bash scripts/tests/test-ci-hardening.sh` **172 passed**;
+`apps/api/.venv/bin/python -m pytest -q apps/api/tests/unit/test_ci_workflow.py` **44 passed**;
+`./scripts/doctor.sh contributor` outside the sandbox **PROFILE_READY** (SELinux observation was
+unverified but not required by this host state). The initial sandbox doctor could not resolve the
+managed Python or access Docker; the host run resolved those environment limitations. Live API
+readbacks and a local comparison of ledger IDs, issue titles, project membership and Ledger record
+fields confirmed the tracking results above. The workflow's documentation-reading selection
+(`apps/api/.venv/bin/python -m pytest -q <11 selected files> -m unit`) passed **392 tests, one skip**;
+the skipped test requires `EASYSYNQ_IMAGE_PROOF=1` and builds the API image. `just authority-check`,
+`bash scripts/check-no-site-data.sh` and `git diff --check` passed. The site-data guard initially
+rejected user-scoped project URLs in repository docs; those docs retain the sanctioned repository
+Projects link while the external Wiki links directly to the board. Full application, integration and browser suites were
+not rerun for this documentation/settings-only audit; baseline counts were not advanced.
+
 ## Current residual index
 
 Current residuals were migrated without reclassification to
