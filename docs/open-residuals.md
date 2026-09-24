@@ -7,6 +7,23 @@ Each record is mirrored by a GitHub issue labelled `residual` (title `[RES-…]`
 can track it; the record here, not the issue, is authoritative, and the issue closes when the record
 is removed with its closure evidence.
 
+## RES-PROJECT-BOARD-AUTOMATION
+
+Status: OPEN
+Owner: Repository owner
+Source: [GitHub issue #601](https://github.com/CoJoA13/EasySynQ/issues/601), repository audit on
+2026-09-24 against `985cccf` and the live GitHub project.
+Reason: Closed PR #551 remained In review, closed issue #584 remained Todo, and open dependency
+PRs #599 and #600 were absent from the project. The audit reconciled these items, but native project
+workflow configuration and future lifecycle behavior could not be verified from the signed-out
+browser. CLI access allows item edits, not these native workflow controls.
+Closure contract: Inspect and enable the project's native auto-add and status workflows within the
+available quota; backfill open items; prove an actual item lifecycle; and document handling of
+reopened issues and closed-unmerged PRs. Reconcile membership with all open issues and PRs, preserve
+blocked reasons/priorities, and never close residual issues from card movement alone. Follow the
+[project maintenance procedure](runbooks/github-repository-setup.md#wiki-and-project-maintenance).
+Last reviewed: 2026-09-24
+
 ## RES-SOURCE-INDEPENDENT-RECOVERY
 
 Status: OPEN

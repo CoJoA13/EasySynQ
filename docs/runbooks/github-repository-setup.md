@@ -52,9 +52,9 @@ sufficient because the gate needs none.
 Every action is pinned to a full commit SHA with a `# vX.Y.Z` comment, and every checkout sets
 `persist-credentials: false`; both are asserted by `test_ci_workflow.py` and
 `scripts/tests/test-ci-hardening.sh`, and zizmor enforces them from the workflow side. The
-repository setting **Require actions to be pinned to a full-length commit SHA** may be turned on
-to enforce the same rule server-side; it is off today, and turning it on is safe because no
-workflow references a tag.
+repository setting **Require actions to be pinned to a full-length commit SHA** is on (enabled and
+read back through the Actions permissions API on 2026-09-24). This enforces the same rule
+server-side; keep action version comments and Dependabot updates alongside the immutable pins.
 
 Two jobs keep the workflow and the history honest on every run:
 
@@ -151,6 +151,54 @@ repository settings, which can silently drift from the reviewed files.
 
 Issues `#420`–`#436` from before the 2026-09-08 move stay open and are only annotated; closing any of
 them is separate work.
+
+### Wiki and project maintenance
+
+The [Wiki](https://github.com/CoJoA13/EasySynQ/wiki) is a navigation index into reviewed repository
+documents. Keep instructions, current facts and closure contracts in their existing authority homes;
+use Wiki links instead of copying them. The actual
+[EasySynQ project](https://github.com/CoJoA13/EasySynQ/projects) holds Status, Priority and Ledger record
+fields. An issue's `RES-*` prefix and Ledger record field identify its authoritative residual.
+
+At triage, reconcile every open issue and pull request with project membership, verify closed items
+are Done, and preserve blocked reasons and owner priorities. Done on a closed, unmerged PR means
+triage is complete, not that the code shipped. Close a residual issue only with its ledger closure
+evidence; moving a card is not sufficient. New dependency PRs still require their own review and gate.
+
+Use GitHub's [native project workflows](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-built-in-automations)
+for auto-add (`repo:CoJoA13/EasySynQ is:open`), item-added → Todo,
+issue-closed → Done and PR-merged → Done. Inspect available workflow quota and backfill existing items;
+auto-add does not backfill old items. Verify reopened issues and closed-unmerged PRs explicitly at
+triage. Do not enable a reverse automation that closes issues merely because a card moves to Done.
+Native workflow configuration and lifecycle verification remain tracked in
+[`RES-PROJECT-BOARD-AUTOMATION`](../open-residuals.md#res-project-board-automation).
+
+### CI coverage and release boundary
+
+The workflow covers API lint/types/unit tests and built-image runtime acceptance; real PostgreSQL,
+MinIO and Redis integration; authenticated response contracts; populated migration transitions and
+model drift; web lint/build/unit tests and Chromium; Compose rendering and image-lock consistency;
+authority, site-data, workflow, secrets and dependency checks. The semantic CI tests also exercise
+changed-path selection and the fail-closed aggregate gate. Consult the executable workflow for exact
+commands, and `current-status.md` for dated counts.
+
+Known coverage gaps retain their existing closure contracts: real Tika OCR behavior
+([#592](https://github.com/CoJoA13/EasySynQ/issues/592)), a live Celery/Beat and long-lived SSE proof
+([#598](https://github.com/CoJoA13/EasySynQ/issues/598)), integration order dependence
+([#567](https://github.com/CoJoA13/EasySynQ/issues/567)), and the browser harness race
+([#595](https://github.com/CoJoA13/EasySynQ/issues/595)). Sharded green runs do not close these gaps.
+
+CI does not publish release assets or deploy a site. Version tags run the full test matrix and the
+digest-pin release check; operators still build the air-gap bundle and follow the release/install
+runbooks. An automatic deployment would not supply the missing source-independent recovery proof
+([#557](https://github.com/CoJoA13/EasySynQ/issues/557)). Release publishing, provenance/attestations and
+environment approval gates need a defined artifact and deployment contract before being enabled.
+
+The live `main` ruleset requires a PR and resolved conversations but **zero approving reviews**.
+Review remains a contributor obligation rather than an enforced independent approval. Requiring an
+approval needs an eligible reviewer other than the PR author; do not silently impose that on a
+single-maintainer repository. CODEOWNERS, a merge queue, Discussions and external webhooks should be
+adopted for a concrete owner/team workflow, not enabled merely because they exist.
 
 ## Optional integrations and observability
 
