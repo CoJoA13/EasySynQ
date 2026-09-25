@@ -165,13 +165,28 @@ are Done, and preserve blocked reasons and owner priorities. Done on a closed, u
 triage is complete, not that the code shipped. Close a residual issue only with its ledger closure
 evidence; moving a card is not sufficient. New dependency PRs still require their own review and gate.
 
-Use GitHub's [native project workflows](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-built-in-automations)
-for auto-add (`repo:CoJoA13/EasySynQ is:open`), item-added → Todo,
-issue-closed → Done and PR-merged → Done. Inspect available workflow quota and backfill existing items;
-auto-add does not backfill old items. Verify reopened issues and closed-unmerged PRs explicitly at
-triage. Do not enable a reverse automation that closes issues merely because a card moves to Done.
-Native workflow configuration and lifecycle verification remain tracked in
-[`RES-PROJECT-BOARD-AUTOMATION`](../open-residuals.md#res-project-board-automation).
+Native project workflows were enabled and verified on 2026-09-24:
+
+| Event | Result |
+| --- | --- |
+| New/updated open issue or PR in this repository | Auto-add to the project (repository selector: EasySynQ; filter: `is:issue,pr is:open`) |
+| Item added (issue or PR) | Status → Todo |
+| Item closed (issue or PR, including unmerged PRs) | Status → Done |
+| PR merged | Status → Done |
+| Issue or PR reopened | Status → Todo for triage |
+
+The pre-existing auto-add-sub-issues workflow remains enabled. Auto-close issue remains **off**:
+card movement cannot substitute for ledger closure evidence. Native intake uses one repository
+filter and was accepted without a quota upgrade or extra credentials. Auto-add is forward-looking;
+backfill existing items explicitly when changing the filter.
+
+At triage, move ready-for-review PRs from Todo to In review; there is no ready-for-review workflow
+configured here. For reopened items, reapply a Blocked status when the retained `blocked:*` label
+still applies, and restore In review for PRs ready for review. Status workflows do not change
+Priority, Ledger record or labels. Closed-unmerged PRs use Done to mean disposition is complete,
+not shipped. The [native workflow documentation](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-built-in-automations)
+and [dated acceptance evidence](../slice-history.md#s-project-native-automation--verified-intake-and-status-lifecycle)
+explain the controls and their verification.
 
 ### CI coverage and release boundary
 
