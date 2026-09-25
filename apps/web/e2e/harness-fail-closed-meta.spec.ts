@@ -77,13 +77,18 @@ const PROBES = [
   },
 ] as const;
 
-function runProbe(probeFile: string, timeoutMs: number): Promise<ChildRun> {
+function runProbe(
+  probeFile: string,
+  timeoutMs: number,
+  delayRequestFailed = false,
+): Promise<ChildRun> {
   const webRoot = resolve(import.meta.dirname, "..");
   const cli = resolve(webRoot, "node_modules/@playwright/test/cli.js");
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
     NO_COLOR: "1",
     NODE_NO_WARNINGS: "1",
+    EASYSYNQ_PROBE_DELAY_REQUESTFAILED: delayRequestFailed ? "1" : "0",
   };
   delete environment.FORCE_COLOR;
 
@@ -200,35 +205,42 @@ function decodeAbortMarker(result: ProbeResult): unknown {
   return JSON.parse(Buffer.from(attachment?.body ?? "", "base64").toString("utf8"));
 }
 
-test("default fail-closed interceptor has exact abort and fatal outcomes", async () => {
-  const child = await runProbe("harness-fail-closed.probe.spec.ts", 10_000);
+for (const delayRequestFailed of [false, true]) {
+  const title = delayRequestFailed
+    ? "delayed requestfailed observation preserves exact abort and fatal outcomes"
+    : "default fail-closed interceptor has exact abort and fatal outcomes";
+  test(title, async () => {
+    const child = await runProbe("harness-fail-closed.probe.spec.ts", 10_000, delayRequestFailed);
 
-  expect(child.signal).toBeNull();
-  expect(child.exitCode).toBe(1);
-  expect(child.stderr).toBe("");
-  expect(child.timedOut).toBe(false);
+    expect(child.signal).toBeNull();
+    expect(child.exitCode).toBe(1);
+    expect(child.stderr).toBe("");
+    expect(child.timedOut).toBe(false);
 
-  const report = JSON.parse(child.stdout) as ProbeReport;
-  expect(report.errors).toEqual([]);
-  expect(report.stats).toMatchObject({ expected: 0, skipped: 0, unexpected: 2, flaky: 0 });
-  expect(report.suites).toHaveLength(1);
-  expect(report.suites[0]?.file).toBe("harness-fail-closed.probe.spec.ts");
-  expect(report.suites[0]?.specs).toHaveLength(2);
+    const report = JSON.parse(child.stdout) as ProbeReport;
+    expect(report.errors).toEqual([]);
+    expect(report.stats).toMatchObject({ expected: 0, skipped: 0, unexpected: 2, flaky: 0 });
+    expect(report.suites).toHaveLength(1);
+    expect(report.suites[0]?.file).toBe("harness-fail-closed.probe.spec.ts");
+    expect(report.suites[0]?.specs).toHaveLength(2);
 
-  for (const [index, probe] of PROBES.entries()) {
-    const spec = report.suites[0]?.specs[index];
-    expect(spec).toMatchObject({ title: probe.title, ok: false });
-    expect(spec?.tests).toHaveLength(1);
-    const probeTest = spec?.tests[0];
-    expect(probeTest).toMatchObject({ expectedStatus: "passed", status: "unexpected" });
-    expect(probeTest?.results).toHaveLength(1);
-    const result = probeTest?.results[0];
-    expect(result).toMatchObject({ status: "failed", retry: 0, stdout: [], stderr: [] });
-    expect(result?.errors).toHaveLength(1);
-    expect(result?.errors.map((error) => error.message?.split("\n", 1)[0])).toEqual([probe.fatal]);
-    expect(decodeAbortMarker(result as ProbeResult)).toEqual(probe.marker);
-  }
-});
+    for (const [index, probe] of PROBES.entries()) {
+      const spec = report.suites[0]?.specs[index];
+      expect(spec).toMatchObject({ title: probe.title, ok: false });
+      expect(spec?.tests).toHaveLength(1);
+      const probeTest = spec?.tests[0];
+      expect(probeTest).toMatchObject({ expectedStatus: "passed", status: "unexpected" });
+      expect(probeTest?.results).toHaveLength(1);
+      const result = probeTest?.results[0];
+      expect(result).toMatchObject({ status: "failed", retry: 0, stdout: [], stderr: [] });
+      expect(result?.errors).toHaveLength(1);
+      expect(result?.errors.map((error) => error.message?.split("\n", 1)[0])).toEqual([
+        probe.fatal,
+      ]);
+      expect(decodeAbortMarker(result as ProbeResult)).toEqual(probe.marker);
+    }
+  });
+}
 
 test("terminates a timed-out probe within the bounded grace period", async () => {
   const child = await runProbe("harness-timeout.probe.spec.ts", 1_000);
