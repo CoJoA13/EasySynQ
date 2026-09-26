@@ -16,9 +16,14 @@
 #
 # service   image:tag                                   # @sha256:... (pin before release)
 postgres    postgres:18@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
-minio    quay.io/minio/minio:RELEASE.2024-09-13T20-26-02Z@sha256:cd04ea408e185cb50076ea1c3988d444119b19aaae15aab45387ccf14b2a2f86
+# minio + mc: the project's own GHCR mirror (2026-09-25). MinIO withdrew its public images (deleted
+# from Docker Hub ~2026-09-11; anonymous Quay pulls refused since ~2026-09-24), so each ref is the
+# linux/amd64 manifest of the previously pinned Quay index (minio sha256:cd04ea40…, mc
+# sha256:a7fe349e…), pushed unmodified from a local pull of that exact index: the digest is the
+# upstream manifest's own. amd64 only and frozen (no upstream fixes): RES-MINIO-UPSTREAM-WITHDRAWN.
+minio    ghcr.io/cojoa13/easysynq/minio:RELEASE.2024-09-13T20-26-02Z@sha256:efba309ba4dc89e48f37304db52a0b854c0e701ba944ca02205c4e292c1a756c
 # mc: minio-init one-shot (was :latest)
-mc    quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+mc    ghcr.io/cojoa13/easysynq/mc:RELEASE.2025-08-13T08-35-41Z@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
 redis    redis:8@sha256:298e5b3bc566bade82f46ad5511777a4a07a294097ce16ada2f6a42be5239df5
 keycloak    quay.io/keycloak/keycloak:26.7@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
 caddy    caddy:2@sha256:13ba145cba2f3e28fa801994876e4c086d1b95d5aa2a520a734765ffb6b12017

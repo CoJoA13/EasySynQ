@@ -58,7 +58,7 @@ services:
     networks: [internal]
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2024-09-13T20-26-02Z
+    image: ghcr.io/cojoa13/easysynq/minio:RELEASE.2024-09-13T20-26-02Z
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -73,7 +73,7 @@ services:
 
   # One-shot: create buckets with object-lock (WORM) + the GOVERNANCE retention default (D-7).
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: ghcr.io/cojoa13/easysynq/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on: [minio]
     entrypoint: ["/bin/sh", "/init/minio-init.sh"]
     environment:
