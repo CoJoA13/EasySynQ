@@ -378,7 +378,19 @@ case passed on trixie, and the isolated bookworm and trixie runs recorded equiva
 memory and elapsed times with the same bundled expat. The runner still withholds the failed
 assertion, so the cause remains unestablished; this occurrence is intermittent, and the retry does
 not close this record.
-Last reviewed: 2026-09-19
+Progress, 2026-09-25: While verifying the GHCR mirror for
+[`RES-MINIO-UPSTREAM-WITHDRAWN`](#res-minio-upstream-withdrawn), local runs of the same case on
+Ubuntu 26.04 with Docker 29.8.1 failed intermittently, and a temporary, uncommitted assertion
+message exposed the failing check. The case's MinIO provider half passed every time. The synthetic
+probe failed in `_routing`'s `wrong-host-tls` fixture: the `127.0.0.2` server recorded a
+`BrokenPipeError` with no request received, which trips `_server`'s `assert server.errors == []`.
+botocore turns off in-handshake hostname checking and matches the hostname after the handshake,
+so the fixture's TLS accept completes; the client then rejects the hostname and closes, and the
+server's first I/O in its handler thread races that close. Unmodified `origin/main` failed with
+that exact signature in one of four direct runs; the mirror branch failed four of five, and every
+run whose message was exposed showed the same signature, so the mechanism predates the mirror.
+Whether it caused the 2026-09-10 or 2026-09-19 CI failures is unproven, so this record stays OPEN.
+Last reviewed: 2026-09-25
 
 ## RES-INTEGRATION-SETUP-ORDER-FAILURE
 
