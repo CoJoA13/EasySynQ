@@ -1107,27 +1107,6 @@ headers against 4.x: a native PDF, a scanned PDF with OCR off and on, and a non-
 upgrade the pinned sidecar and remove the Dependabot refusal and its test.
 Last reviewed: 2026-09-22
 
-## RES-HARNESS-PROBE-REQUESTFAILED-RACE
-
-Status: OPEN
-Owner: Repository owner
-Source: Dependabot PR #587, CI run 35822550793 (2026-09-23): `web browser (Chromium)` failed in
-`e2e/harness-fail-closed-meta.spec.ts` ("default fail-closed interceptor has exact abort and fatal
-outcomes") on a change that touches nothing Playwright executes. It is the only `web-browser`
-failure in the preceding 60 CI runs.
-Reason: The probe (`e2e/harness-fail-closed.probe.spec.ts`) arms
-`page.waitForEvent("requestfailed")` and then triggers a request that the fail-closed interceptor
-aborts and answers with a fatal `throw`. When the fatal ends the test before the pending
-`waitForEvent` settles, Playwright records its "Test ended" rejection as a second error. The meta
-spec then sees two errors instead of exactly one and fails. The interceptor behaves correctly; the
-self-test's exactly-one-error assertion is timing-dependent.
-Closure contract: Make the probe's error set deterministic, for example by settling or explicitly
-handling the pending `requestfailed` wait before the fatal can end the test, without weakening the
-meta spec's exact-outcome assertions (a length check relaxed to "at least one" is not acceptable).
-Prove it by forcing the losing order (delay the event) and showing the meta spec still passes, and
-show that removing the fix reproduces the two-error result.
-Last reviewed: 2026-09-23
-
 ## RES-REDIS-8-UPGRADE
 
 Status: OPEN

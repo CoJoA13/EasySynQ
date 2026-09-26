@@ -28,8 +28,8 @@ PR [#587](https://github.com/CoJoA13/EasySynQ/pull/587)'s squash `3b7b263`. The 
 #587's final head run [35822550793](https://github.com/CoJoA13/EasySynQ/actions/runs/35822550793)
 on `0549b5b`, whose tree is identical to `3b7b263`. The run was based on `main` after #591, so it
 covers every change in this batch. Its first attempt failed only in the Chromium harness
-self-test (the timing race registered as
-[`RES-HARNESS-PROBE-REQUESTFAILED-RACE`](open-residuals.md#res-harness-probe-requestfailed-race)),
+self-test (the timing race tracked in [#595](https://github.com/CoJoA13/EasySynQ/issues/595);
+see the [fix evidence](slice-history.md#s-harness-requestfailed-race--preserve-exact-fail-closed-outcomes)),
 and the re-run of the failed jobs passed. The post-merge push runs 35825291412 (`3b7b263`) and
 35825457050 (`55fef93`) are green. Frontmatter counts come from that run's job logs:
 **4,999 API passes** with one release-only skip (5,000 collected on `55fef93`, against 4,997 on

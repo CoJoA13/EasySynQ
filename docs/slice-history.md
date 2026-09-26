@@ -5,6 +5,27 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## S-harness-requestfailed-race — preserve exact fail-closed outcomes
+
+2026-09-24, based on merged #604 (`65ad5e2`). Closes
+`RES-HARNESS-PROBE-REQUESTFAILED-RACE` (#595) when this fix merges. The probe now owns its
+request-failure observation through a fixture that depends on the page. Its teardown awaits the
+observation before Playwright closes the page, even when the interceptor's intentional fatal has
+already interrupted the test body. The interceptor and its abort/fatal behavior are unchanged.
+
+The meta spec exercises both ordinary timing and a delayed observation. The delayed predicate
+asserts the test is already failed before completing, proving the losing order occurred. Both
+variants retain the exact single fatal error, abort evidence, attachments and report totals.
+Before the fix, the new regression failed with two errors including `page.waitForEvent: Test ended.`;
+removing only the fixture teardown await reproduced that same failure. Restoring it passed all
+three focused meta tests. Independent source review found no material issues.
+
+Fresh local verification: `npm run lint`, `npx tsc -p tsconfig.browser.json --noEmit`,
+`npm run build`, `npm test` (**283 files, 2,357 tests**) and `npm run test:browser`
+(**81 tests**) all passed from `apps/web`. Full web verification was recorded by process job
+`job-mugfrp3g-625ea1e2` with exit 0. This is test-harness-only work; API runtime and deployment
+behavior are unchanged. Issue #595 remains open until the reviewed fix merges.
+
 ## S-project-native-automation — verified intake and status lifecycle
 
 2026-09-24, repository baseline `df79772` after reviewed squash merge #602. Resolves
