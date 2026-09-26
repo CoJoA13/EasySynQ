@@ -115,6 +115,29 @@ assert_contains "Owner-like prefix on line 1 is not exempt" "$RUN_OUTPUT" "ident
 assert_contains "Owner-like prefix on line 2 is not exempt" "$RUN_OUTPUT" "identity.txt:2"
 assert_not_contains "owner-token diagnostic does not echo the identity" "$RUN_OUTPUT" "ExampleOwner"
 
+# The project's own container packages live at the repository path in the lowercase form GHCR
+# requires. Like the repository URL, that coordinate is public repository metadata; the same owner
+# namespace anywhere else, including a project-named package outside the path, is still rejected.
+repo="$TEST_ROOT/ghcr-packages"
+new_repo "$repo"
+git -C "$repo" remote add origin https://github.com/ExampleOwner/EasySynQ.git
+printf 'minio    ghcr.io/%s/easysynq/minio:RELEASE.X\n' "exampleowner" >"$repo/images.lock"
+printf '    image: ghcr.io/%s/easysynq/mc:RELEASE.Y\n' "exampleowner" >"$repo/compose.yml"
+git -C "$repo" add images.lock compose.yml
+run_gate "$repo" "$PATH"
+assert_exit "the project's GHCR package path stays allowed" 0 "$RUN_CODE"
+assert_contains "the GHCR package path reaches the clean verdict" "$RUN_OUTPUT" "check-no-site-data: clean"
+
+printf 'image: ghcr.io/%s/minio:RELEASE.X\n' "exampleowner" >"$repo/outside.txt"
+printf 'image: ghcr.io/%s/easysynq-minio:RELEASE.X\n' "exampleowner" >"$repo/suffix.txt"
+git -C "$repo" add outside.txt suffix.txt
+run_gate "$repo" "$PATH"
+assert_exit "an owner namespace outside the project path still reds" 1 "$RUN_CODE"
+assert_contains "a package directly under the owner is reported" "$RUN_OUTPUT" "outside.txt:1"
+assert_contains "a project-named package outside the path is reported" "$RUN_OUTPUT" "suffix.txt:1"
+assert_not_contains "the exempt package lines stay clean" "$RUN_OUTPUT" "images.lock:1"
+assert_not_contains "the GHCR diagnostic does not echo the identity" "$RUN_OUTPUT" "exampleowner"
+
 # The container-topology widening must stay a single literal. `172.16.0.0` is sanctioned as the
 # pinned `internal` subnet (the shipped TRUSTED_PROXY_CIDRS default); every other address in that
 # space must still red, or the exemption becomes a hiding place for a real one. Both shapes are

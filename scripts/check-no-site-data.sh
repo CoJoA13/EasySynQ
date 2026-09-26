@@ -77,9 +77,11 @@ if [ -n "$repo_owner" ]; then
   # Keep this scan inside the shell toolchain already required by the gate. In particular, the
   # contracts job runs before language setup and Git Bash does not guarantee a global `python3`.
   # First remove legitimate repository-metadata shapes, then match the owner as a complete token;
-  # report only file + line so the diagnostic cannot republish the identity it rejected.
+  # report only file + line so the diagnostic cannot republish the identity it rejected. The
+  # project's own container packages are one such shape: `ghcr.io/<owner>/easysynq/<image>`, the
+  # repository path in the lowercase form GHCR requires. Only that path segment is exempt.
   hits="$(grep -nHIiF -- "$repo_owner" "${FILES[@]}" 2>/dev/null \
-    | sed -E 's#(https://github\.com/|git@github\.com:)[^/[:space:]]+/EasySynQ[^[:space:])>]*##g; s#`?[^/[:space:]`]+/EasySynQ`?##g; s#(^|[^A-Za-z0-9_-])Owner:\*{0,2}[[:space:]]*[A-Za-z0-9_-]+#\1#g' \
+    | sed -E 's#(https://github\.com/|git@github\.com:)[^/[:space:]]+/EasySynQ[^[:space:])>]*##g; s#`?[^/[:space:]`]+/EasySynQ`?##g; s#ghcr\.io/[^/[:space:]]+/easysynq/##g; s#(^|[^A-Za-z0-9_-])Owner:\*{0,2}[[:space:]]*[A-Za-z0-9_-]+#\1#g' \
     | grep -iE "(^|[^A-Za-z0-9_-])${repo_owner}([^A-Za-z0-9_-]|$)" \
     | sed -E 's#^([^:]+:[0-9]+):.*#\1:<redacted-personal-identifier>#' || true)"
   [ -z "$hits" ] || report "Repository-owner token used as a personal identifier (R61):" $hits

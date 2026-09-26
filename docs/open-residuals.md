@@ -378,7 +378,19 @@ case passed on trixie, and the isolated bookworm and trixie runs recorded equiva
 memory and elapsed times with the same bundled expat. The runner still withholds the failed
 assertion, so the cause remains unestablished; this occurrence is intermittent, and the retry does
 not close this record.
-Last reviewed: 2026-09-19
+Progress, 2026-09-25: While verifying the GHCR mirror for
+[`RES-MINIO-UPSTREAM-WITHDRAWN`](#res-minio-upstream-withdrawn), local runs of the same case on
+Ubuntu 26.04 with Docker 29.8.1 failed intermittently, and a temporary, uncommitted assertion
+message exposed the failing check. The case's MinIO provider half passed every time. The synthetic
+probe failed in `_routing`'s `wrong-host-tls` fixture: the `127.0.0.2` server recorded a
+`BrokenPipeError` with no request received, which trips `_server`'s `assert server.errors == []`.
+botocore turns off in-handshake hostname checking and matches the hostname after the handshake,
+so the fixture's TLS accept completes; the client then rejects the hostname and closes, and the
+server's first I/O in its handler thread races that close. Unmodified `origin/main` failed with
+that exact signature in one of four direct runs; the mirror branch failed four of five, and every
+run whose message was exposed showed the same signature, so the mechanism predates the mirror.
+Whether it caused the 2026-09-10 or 2026-09-19 CI failures is unproven, so this record stays OPEN.
+Last reviewed: 2026-09-25
 
 ## RES-INTEGRATION-SETUP-ORDER-FAILURE
 
@@ -1135,3 +1147,33 @@ events; decide RESP2 versus RESP3 deliberately; pin the integration `RedisContai
 Compose major; and pass a live check of Beat, a worker consuming a task, and an SSE stream held
 open for over a minute.
 Last reviewed: 2026-09-23
+
+## RES-MINIO-UPSTREAM-WITHDRAWN
+
+Status: OPEN
+Owner: Repository owner
+Source: PR #605's CI run [36093607718](https://github.com/CoJoA13/EasySynQ/actions/runs/36093607718)
+(2026-09-25): the `api` job's mandatory runtime acceptance failed eight of eleven cases on build and
+proof manifests identical to three runs that passed on 2026-09-24.
+Reason: MinIO no longer distributes community images. `minio/minio` and `minio/mc` were deleted from
+Docker Hub around 2026-09-11 (the reason `1daaf42` moved the pins to Quay), Quay has refused
+anonymous pulls of `quay.io/minio/minio` and `quay.io/minio/mc` since about 2026-09-24, and both
+upstream source repositories are archived. The five cases whose fixtures start the object store
+errored in setup, and the three that look up its already-pulled image failed at that lookup; the
+redacted report withholds the exception text, but the split matches those fixtures exactly. Fresh
+installs, air-gap bundle builds and the integration suite were blocked the same way. This is
+unrelated to the unexplained intermittent failures in
+[`RES-AUDIT-RUNTIME-ACCEPTANCE-FAILURE`](#res-audit-runtime-acceptance-failure).
+`infra/images.lock` now pins the project's own GHCR mirror: the linux/amd64 manifests of the
+previously pinned Quay indexes, pushed unmodified from a local pull of those indexes, so each digest
+is upstream's own. The mirror is amd64 only (no other platform's layers were cached) and frozen:
+MinIO publishes no further community releases, so it receives no security fixes.
+Closure contract: Move the pins to a maintained object-store source (a replacement S3-compatible
+store, a maintained MinIO-compatible distribution, or a reproducible source build with a patch
+intake) that preserves Object Lock retention, exact-version reads and the bucket layout the vault,
+records and audit-checkpoint paths rely on. Prove it with the full integration suite, the mandatory
+runtime acceptance and a live smoke of upload, WORM capture and restore. Alternatively, record an
+owner decision that accepts the frozen mirror with an explicit vulnerability-review cadence. Until
+then, keep both GHCR packages public and never delete their versions: nothing else serves these
+digests.
+Last reviewed: 2026-09-25
