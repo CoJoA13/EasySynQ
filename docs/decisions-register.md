@@ -10,7 +10,7 @@ R86 returns primary hosting to GitHub (`CoJoA13/EasySynQ`) behind a ruleset-requ
 check with Dependabot updates, supersedes the 2026-09-08 no-GitHub instruction, and archives
 the GitLab project so dated evidence keeps resolving.
 R87 records the scoped owner-approved security dependency repairs for PRs #608, #610 and #611
-with live audit evidence, superseding only the affected R72 selections.
+with dated evidence in slice history, superseding only the affected R72 selections.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -3588,26 +3588,13 @@ PyJWT `2.14.0` within its existing compatible manifest range. The web image reta
 and its existing startup command, replacing only npm's vendored `brace-expansion` with `5.0.12`
 and `undici` with `6.28.1`; their dependency requirements match the installed bundled copies.
 
-**Live verification evidence.** On the resulting locks, `node scripts/check-npm-audit.mjs`
-exited 0 with `blocked: 0` for each PR; the actual audit ran without a timeout or registry error.
-All 274 npm policy regressions passed, and the exact installed image versions were checked with
-networking disabled. Both rebuilt images for every PR passed the unchanged built-image
-fixed-version threshold with zero fixable HIGH/CRITICAL findings and zero secret findings.
-The full CI security jobs passed on the corresponding repair commits:
-[#608](https://github.com/CoJoA13/EasySynQ/actions/runs/36659485523/job/109710968077),
-[#610](https://github.com/CoJoA13/EasySynQ/actions/runs/36659493871/job/109711013506), and
-[#611](https://github.com/CoJoA13/EasySynQ/actions/runs/36659503120/job/109711017210).
-These jobs include the live audit and both image scans. The reported no-fix findings remain open;
-passing the fixed-version threshold is not blanket image-security clearance. No audit exception,
-major runtime migration, security-gate change, or application startup change is approved here.
+**Contract-toolchain selection.** The same required-gate repair selects compatible
+`brace-expansion` `2.1.7` in `packages/contracts/package-lock.json`, retaining every exact
+contract-tool version. No audit exception, major runtime migration, security-gate change,
+guard relaxation, or application startup change is approved here.
 
-**Contract-toolchain follow-up.** Newly reported brace-expansion advisories subsequently blocked
-these same PRs' contracts audits. A targeted compatible patch refresh selects `brace-expansion`
-`2.1.7` in `packages/contracts/package-lock.json`, retaining every exact contract-tool version.
-For each resulting contract lock, `npm --prefix packages/contracts audit --package-lock-only
---audit-level=high` exited 0 with zero vulnerabilities; the exact installed-tool guard passed and
-`bash scripts/gen-contracts.sh --check` preserved the committed generated contracts. This is a
-repair of the same required CI gates, with no exception, major upgrade or guard relaxation.
+Dated verification results and immutable CI links are recorded in
+[the unmerged PR verification entry](slice-history.md#dependabot-repair-verification-2026-09-30).
 
 **Back-propagation:** `apps/api/uv.lock`, `packages/contracts/package-lock.json`,
 `apps/web/package-lock.json`,
