@@ -17,9 +17,7 @@ test('web lock selects approved patched dependency versions', () => {
   );
 
   assert.equal(manifest.dependencies['react-router-dom'], '^7.18.4');
-  // ESLint retains 5.0.9; typescript-estree resolves the patched 5.0.12.
-  // Keep the exact set so an unexpected or vulnerable resolution still fails.
-  assert.deepEqual(versions('brace-expansion'), new Set(['1.1.18', '5.0.9', '5.0.12']));
+  assert.deepEqual(versions('brace-expansion'), new Set(['1.1.21', '5.0.12']));
   assert.deepEqual(versions('undici'), new Set(['8.10.2']));
   assert.deepEqual(versions('nanoid'), new Set(['3.3.18']));
   assert.deepEqual(versions('react-router'), new Set(['7.18.4']));
