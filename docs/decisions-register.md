@@ -9,6 +9,8 @@ entire-path coverage at every required witness and compact output only after com
 R86 returns primary hosting to GitHub (`CoJoA13/EasySynQ`) behind a ruleset-required `gate`
 check with Dependabot updates, supersedes the 2026-09-08 no-GitHub instruction, and archives
 the GitLab project so dated evidence keeps resolving.
+R87 records the scoped owner-approved security dependency repairs for PRs #608, #610 and #611
+with live audit evidence, superseding only the affected R72 selections.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -120,7 +122,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R86
+## Part 3 — Resolutions R1–R87
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -2385,6 +2387,9 @@ Bumps the resolutions range **R1–R70 → R1–R71**.
 ---
 
 ### R72 — The web security-lock pins are a review trigger, not a freeze — 2026-09-03
+
+**Later selection update:** R87 supersedes the `brace-expansion` and `undici` selections for its
+scoped PR repairs; this decision's review, live-audit and no-downgrade rules remain binding.
 
 **Context.** `scripts/tests/test-web-security-lock.mjs` pins the exact resolved versions of four web
 dependencies — `brace-expansion`, `undici`, `nanoid` and the React Router pair — which the
