@@ -3601,7 +3601,16 @@ These jobs include the live audit and both image scans. The reported no-fix find
 passing the fixed-version threshold is not blanket image-security clearance. No audit exception,
 major runtime migration, security-gate change, or application startup change is approved here.
 
-**Back-propagation:** `apps/api/uv.lock`, `apps/web/package-lock.json`,
+**Contract-toolchain follow-up.** Newly reported brace-expansion advisories subsequently blocked
+these same PRs' contracts audits. A targeted compatible patch refresh selects `brace-expansion`
+`2.1.7` in `packages/contracts/package-lock.json`, retaining every exact contract-tool version.
+For each resulting contract lock, `npm --prefix packages/contracts audit --package-lock-only
+--audit-level=high` exited 0 with zero vulnerabilities; the exact installed-tool guard passed and
+`bash scripts/gen-contracts.sh --check` preserved the committed generated contracts. This is a
+repair of the same required CI gates, with no exception, major upgrade or guard relaxation.
+
+**Back-propagation:** `apps/api/uv.lock`, `packages/contracts/package-lock.json`,
+`apps/web/package-lock.json`,
 `scripts/tests/test-web-security-lock.mjs`, and `apps/web/Dockerfile` carry these exact repairs.
 Every PR still requires a successful gate on its final head and resolved review conversations.
 
