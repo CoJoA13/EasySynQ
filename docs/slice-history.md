@@ -5,6 +5,42 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Dependabot repair verification (2026-09-30)
+
+This is dated verification for **unmerged** [#608](https://github.com/CoJoA13/EasySynQ/pull/608),
+[#610](https://github.com/CoJoA13/EasySynQ/pull/610), and
+[#611](https://github.com/CoJoA13/EasySynQ/pull/611), not a shipped baseline or merge approval.
+[R87](decisions-register.md#r87--scoped-security-dependency-repairs-for-dependabot-prs-608-610-and-611--2026-09-30)
+records the binding owner-approved scope and selections. The evidence below applies to the tested
+repair commits; each later documentation commit still requires its own successful gate and resolved
+review conversations before completion.
+
+**Live verification evidence.** On the resulting locks, `node scripts/check-npm-audit.mjs`
+exited 0 with `blocked: 0` for each PR; the actual audit ran without a timeout or registry error.
+All 274 npm policy regressions passed, and the exact installed image versions were checked with
+networking disabled. Both rebuilt images for every PR passed the unchanged built-image
+fixed-version threshold with zero fixable HIGH/CRITICAL findings and zero secret findings.
+The full CI security jobs passed on the corresponding repair commits:
+[#608](https://github.com/CoJoA13/EasySynQ/actions/runs/36659485523/job/109710968077),
+[#610](https://github.com/CoJoA13/EasySynQ/actions/runs/36659493871/job/109711013506), and
+[#611](https://github.com/CoJoA13/EasySynQ/actions/runs/36659503120/job/109711017210).
+These jobs include the live audit and both image scans. Those scans also reported no-fix findings;
+passing the fixed-version threshold did not establish blanket image-security clearance.
+
+**Contract-toolchain follow-up.** Newly reported brace-expansion advisories subsequently blocked
+these same PRs' contracts audits. A targeted compatible patch refresh selects `brace-expansion`
+`2.1.7` in `packages/contracts/package-lock.json`, retaining every exact contract-tool version.
+For each resulting contract lock, `npm --prefix packages/contracts audit --package-lock-only
+--audit-level=high` exited 0 with zero vulnerabilities; the exact installed-tool guard passed and
+`bash scripts/gen-contracts.sh --check` preserved the committed generated contracts. This is a
+repair of the same required CI gates, with no exception, major upgrade or guard relaxation.
+
+Earlier complete CI gates passed for the authority repair commits:
+[#608](https://github.com/CoJoA13/EasySynQ/actions/runs/36661450893),
+[#610](https://github.com/CoJoA13/EasySynQ/actions/runs/36661459968), and
+[#611](https://github.com/CoJoA13/EasySynQ/actions/runs/36661466946).
+These historical results do not claim success for a later PR head.
+
 ## S-harness-requestfailed-race — preserve exact fail-closed outcomes
 
 2026-09-24, based on merged #604 (`65ad5e2`). Closes
