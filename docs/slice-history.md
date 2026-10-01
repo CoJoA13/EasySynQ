@@ -6,7 +6,7 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
-## Keycloak admin scripts use Compose-resolved credentials (2026-10-02)
+## Keycloak admin scripts use Compose-resolved credentials (2026-10-01)
 
 Closure candidate for [#422](https://github.com/CoJoA13/EasySynQ/issues/422),
 `RES-KEYCLOAK-SCRIPT-DOTENV-ESCAPES`. The duplicated `env_val` parser in both host break-glass
