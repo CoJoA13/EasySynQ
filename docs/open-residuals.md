@@ -878,22 +878,6 @@ false positive out, an evidence-backed lockfile policy, a case-insensitive finge
 and a clean run over the full tree.
 Last reviewed: 2026-09-22
 
-## RES-KEYCLOAK-SCRIPT-DOTENV-ESCAPES
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #422](https://github.com/CoJoA13/EasySynQ/issues/422), filed 2026-08-03;
-verified against `3d8613a` on 2026-09-22.
-Reason: The `env_val` helper copied into `scripts/new-keycloak-user.sh` and
-`scripts/clear-keycloak-lockout.sh` ends a double-quoted value at the first `"`, escaped or not.
-Compose resolves `KEYCLOAK_ADMIN_PASSWORD="abc\"def"` to `abc"def`; the helper returns `abc\`, so
-after a rotation to such a value both scripts authenticate with the wrong password. This is the third
-dotenv production the `sed` approximation has had to chase.
-Closure contract: Read the value Compose itself resolves (for example from `docker compose config`)
-or implement the escape grammar once in a shared helper, and extend the extraction test matrix with
-escaped-quote and trailing-backslash cases run against both scripts.
-Last reviewed: 2026-09-22
-
 ## RES-SITE-ARTIFACT-GITIGNORE
 
 Status: OPEN

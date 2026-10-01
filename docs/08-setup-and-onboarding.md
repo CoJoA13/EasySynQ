@@ -503,6 +503,14 @@ The **self-grant friction + audit (§10.4) still applies to any QMS→admin cros
 | **Orphan adoption** | subject-based `POST /users`, `user.create` | Exceptional recovery for an identity already created outside the application or left by a failed provision. It is not a normal onboarding flow. |
 | **Host break-glass** | `scripts/new-keycloak-user.sh` or `grant-role` | Controlled incident recovery only. Record the operator, reason, subject, and time outside the normal API audit path. |
 
+The two host Keycloak admin helpers (`new-keycloak-user.sh` and `clear-keycloak-lockout.sh`)
+require Docker Compose and Python 3. Run them from the deployed checkout with its `.env` and active
+Compose files present. They discover the running project's full overlay set and read the resolved
+Keycloak admin environment with Compose's host/.env precedence, retaining quoted escapes and
+whitespace. A missing or inconsistent deployment, foreign checkout, or empty admin password stops
+before authentication. They attach to the existing container and do not recreate services. If the
+files were edited after deployment, reconcile them with the running configuration before recovery.
+
 SMTP, tokenized invitation mail, bulk CSV creation, and asking normal operators to use identity
 subjects are not current user-onboarding behavior.
 

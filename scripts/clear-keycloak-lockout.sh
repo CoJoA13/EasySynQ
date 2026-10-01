@@ -15,34 +15,9 @@ USERNAME="${1:-}"
 [ -n "$USERNAME" ] || { echo "usage: ./scripts/clear-keycloak-lockout.sh <username>" >&2; exit 2; }
 [ -f .env ] || { echo "clear-keycloak-lockout: no .env — run scripts/install.sh first" >&2; exit 1; }
 
-# Read .env the way docker compose does: strip an inline `# comment` from an UNQUOTED value, but
-# treat a quoted body as literal (Compose removes the quotes and keeps a `#` inside them).
-env_val() {
-  local v
-  v="$(grep -m1 "^$1=" .env | cut -d= -f2-)"
-  v="${v%$'\r'}"
-  v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+$//')"
-  case "$v" in
-    \"*\"*) v="${v#\"}"; v="${v%%\"*}" ;;                   # quoted: body literal (`#` included); a comment after the closing quote falls off
-    \'*\'*) v="${v#\'}"; v="${v%%\'*}" ;;
-    *) v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')" ;;
-  esac
-  printf '%s' "$v" | sed -E 's/^[[:space:]]*//'
-}
-
-PROFILE="$(env_val EASYSYNQ_PROFILE)"; PROFILE="${PROFILE:-s}"
-KC_ADMIN="$(env_val KEYCLOAK_ADMIN_USER)"; KC_ADMIN="${KC_ADMIN:-admin}"
-KC_PW="$(env_val KEYCLOAK_ADMIN_PASSWORD)"
-[ -n "$KC_PW" ] || { echo "clear-keycloak-lockout: KEYCLOAK_ADMIN_PASSWORD is empty in .env" >&2; exit 1; }
-
-# `exec` against the running container (never `run`, which would recreate dependencies whose
-# resolved config differs from this file set). MSYS_NO_PATHCONV=1 keeps the container path intact
-# under Git Bash on native Windows; harmless elsewhere.
-kc() {
-  MSYS_NO_PATHCONV=1 docker compose --env-file .env \
-    -f infra/compose/compose.yml -f "infra/compose/compose.${PROFILE}.yml" \
-    exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null
-}
+# Resolve the deployed Compose model once, including all active overlays.
+source scripts/lib/keycloak-admin.sh
+load_keycloak_admin
 
 kc config credentials --server http://localhost:8080 --realm master \
   --user "$KC_ADMIN" --password "$KC_PW" >/dev/null
