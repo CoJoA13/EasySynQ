@@ -289,10 +289,10 @@ with real QMS data. This gate does not prove source-independent host-loss recove
 | Field | Captures | Validation | Default |
 |---|---|---|---|
 | Backup destination | Absolute non-root POSIX filesystem path only; S3/URI destinations are unshipped | Syntax is enforced at the service boundary. Save performs only a preliminary create/write/remove probe in the **API process**; it does not prove the worker sees the same mount or that persistent/off-host storage backs it | (none — must set) |
-| Encryption | Host-configured `BACKUP_ENCRYPTION_KEY` for durable archives | When configured, durable archives are AES-256-GCM `.tar.enc`; unset/placeholder keys produce a plaintext `.tar` and omit secret-bearing legs | Conditional; inspect `encrypted` |
+| Encryption | Host-configured `BACKUP_ENCRYPTION_KEY`; a real key is required by the G-C drill | The drill fails before capture if the key is missing or a placeholder, and writes only AES-256-GCM ciphertext to the destination. Durable backups separately retain their plaintext fallback with secret-bearing legs omitted when no key is configured | Required for G-C; inspect durable archives' `encrypted` value |
 | Schedule | Full-backup cron; WAL/PITR is a reserved field and `true` is rejected | Valid five-field cron; PITR remains unshipped | Nightly full; PITR off |
 | Retention | Record N daily / M weekly / K monthly | Non-negative; at least 1 daily. Automatic pruning is unshipped | 7 daily / 4 weekly / 6 monthly |
-| Scope (display) | PG dump + MinIO **locator/hash manifest**; realm export, config snapshot, and latest audit checkpoint are best-effort legs and may be absent; **object bytes, OpenSearch, and filesystem mirror excluded** | Inspect a newly written manifest's `encrypted` and every `legs` value; older v2 manifests can omit `encrypted`; G-C does not prove optional-leg presence | — |
+| Durable archive scope (display) | PG dump + MinIO **locator/hash manifest**; realm export, config snapshot, and latest audit checkpoint are best-effort legs and may be absent; **object bytes, OpenSearch, and filesystem mirror excluded** | Inspect a newly written manifest's `encrypted` and every `legs` value; older v2 manifests can omit `encrypted`; G-C does not prove optional-leg presence | — |
 | Alerting | Email/webhook on backup failure (uses admin email from Step 1) | Valid sink | Email admin |
 
 ### 8.2 The mandatory restore-test
@@ -301,8 +301,11 @@ The gate is not "an archive was written" but "a transient database archive and s
 references were **restored and verified in scratch**." The worker runs the drill in an isolated
 scratch namespace: a temporary PostgreSQL database plus a unique prefix in the configured shared
 scratch bucket. The archive has no object bytes; the drill reads them from the configured
-source object store. A PASS proves current worker access to the configured path and source store,
-but not that the destination is a persistent mount or survives worker/container recreation.
+source object store. Before capture, a real `BACKUP_ENCRYPTION_KEY` is required. The worker packs
+locally, encrypts the full transient archive into the configured destination, reads those destination
+bytes back, verifies the ciphertext checksum, and authenticates/decrypts them locally before unpacking.
+A PASS proves this full-size destination/key round-trip plus current source-store access, but not
+that the destination is a persistent mount or survives worker/container recreation.
 
 > **Reconciliation (S8b2).** The scratch namespace is implemented as a **temporary database**, not a schema — it is `pg_restore`'s natural unit (a whole-DB custom-format `pg_dump` does not restore cleanly into a renamed schema), gives the strongest isolation, and tears down with one `DROP DATABASE`. "Schema" above is illustrative of "an isolated namespace."
 
@@ -315,25 +318,31 @@ sequenceDiagram
     participant Scratch as Scratch DB + unique object prefix
     Avery->>Wiz: "Run test backup + restore"
     Wiz->>W: enqueue BACKUP_TEST job (progress streamed)
-    W->>Dest: write transient plaintext tar (PG dump + manifest)
-    W->>W: verify checksum; unpack tar
+    W->>W: require real backup key; pack PG dump + manifest locally
+    W->>Dest: write full encrypted transient archive + ciphertext checksum
+    Dest-->>W: return ciphertext bytes
+    W->>W: verify checksum; authenticate/decrypt locally; unpack tar
     W->>Scratch: restore PG dump; copy source-store objects into flattened scratch layout
     W->>Scratch: run integrity assertions (row counts, blob SHA-256 re-hash, FK checks)
+    W->>Dest: remove ciphertext + sidecar (best-effort)
+    W->>Scratch: tear down scratch namespace (best-effort)
     W-->>Wiz: PASS/FAIL + report (timings -> RPO/RTO estimate)
-    Wiz->>Scratch: tear down scratch namespace
     Note over Wiz: G-C turns green ONLY on PASS.<br/>FAIL shows actionable diagnostics; retry allowed.
 ```
 
 | Captures from the drill | Validation |
 |---|---|
-| Transient plaintext test tar written, checksum verified, and unpacked | Checksum match; dump and manifest unpack successfully. No durable-archive encryption or backup-key path is exercised |
+| Full encrypted transient archive round-tripped through the destination | Ciphertext checksum matches; the configured key authenticates/decrypts the returned bytes locally; dump and manifest unpack successfully. This does not validate the separate durable-backup path or its optional legs |
 | Scratch integrity verification succeeded | PG restore exit 0; referenced source-store objects copied; SHA-256 re-hash matches; FK/constraint checks pass |
 | Measured backup & restore timings | Surfaced as estimated **RPO/RTO**; warn if RTO exceeds the M-profile target (≤2h) |
 
-**On completion:** a `BackupPolicy` row + Celery Beat schedule are created; gate **G-C** green only on
-a **PASS**. That PASS confirms current worker path/source access plus transient plaintext
-pack/checksum/unpack and scratch integrity. It is not a durable-encryption/key test, persistent-mount
-proof, DR guarantee, or production-upgrade authorization. Audit: `BACKUP_CONFIGURED`,
+**On completion:** the configured `BackupPolicy` stores the drill result; gate **G-C** is green only
+on **PASS**. This confirms current worker path/source access, the transient archive's encrypted
+destination/key round-trip, and scratch integrity. It does not establish complete durable backup
+legs, exact current-key identity, persistent destination backing, source-independent recovery, or
+production-upgrade authorization. Cleanup is best-effort: a denied unlink can leave ciphertext;
+legacy plaintext residue needs operator cleanup as described in the
+[backup/restore runbook](runbooks/backup-restore.md). Audit: `BACKUP_CONFIGURED`,
 `RESTORE_TEST_PASSED` (or `…_FAILED` with reason). The
 ongoing **Health & Backup dashboard** (§11) inherits this config and shows the last restore-test age,
 nudging periodic re-drills.
@@ -809,7 +818,7 @@ Avery has `system.audit_log.read` (system right) and can search/export the appen
 ## 16. Summary — How Setup & Admin Lock to the Foundation
 
 1. **A strict state machine** (`UNINITIALIZED → IN_SETUP → OPERATIONAL`) makes the wizard the only thing reachable on a virgin instance and guarantees no QMS exists until commissioning is verified.
-2. **Five blocking gates** (admin, vault+WORM, source-dependent archive/scratch integrity, proven non-bootstrap login, org profile + ISO 9001:2015 catalog) verify commissioning before content lands. Gate G-C packs, checksums, unpacks, and restores a transient **plaintext** tar into scratch, then checks object locators and hashes against the configured source store. It does **not** decrypt a durable archive, exercise the backup key, prove optional legs, certify persistent destination backing, or establish recovery after the source store is lost. Self-contained object-byte generation and a role-preserving cutover proof remain open release-blocking work. A **non-blocking soft gate** additionally prompts for an off-host **`audit_checkpoint_sink`** (§8.3): finalize is never blocked, but any install lacking one is loudly flagged as **NOT tamper-evident** until it is configured (reconciled per Decisions Register R13).
+2. **Five blocking gates** (admin, vault+WORM, source-dependent archive/scratch integrity, proven non-bootstrap login, org profile + ISO 9001:2015 catalog) verify commissioning before content lands. The G-C drill requires a real backup key, round-trips the full AES-256-GCM transient archive through the destination, authenticates/decrypts the returned bytes locally, and restores its database into scratch before checking object locators and hashes against the configured source store. It does **not** validate the separate durable-backup path, prove optional legs or exact current-key identity, certify persistent destination backing, or establish recovery after the source store is lost. Self-contained object-byte generation and a role-preserving cutover proof remain open release-blocking work. A **non-blocking soft gate** additionally prompts for an off-host **`audit_checkpoint_sink`** (§8.3): finalize is never blocked, but any install lacking one is loudly flagged as **NOT tamper-evident** until it is configured (reconciled per Decisions Register R13).
 3. **Four deferrable QMS-shell steps** (roles, users, scope, import) reflect that they belong to Mara's domain and can follow go-live; the wizard *scaffolds* them and *hands them off* with concrete tasks.
 4. **The Admin/QMS boundary is structural**: separate surfaces (ADMIN vs. clause spine), a system-only default bundle, friction+visibility on self-granting QMS caps, and two distinct dashboards (machine vs. QMS).
 5. **Permissions stay hybrid RBAC+ABAC, deny-by-default**: the wizard builds bundles + scope templates; per-user overrides and concrete scopes layer on; an effective-permissions explorer makes decisions auditable.
