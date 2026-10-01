@@ -30,8 +30,8 @@ checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy'
 Read the `backup run` result and `manifest.json` before relying on an artifact: newly written
 manifests record `encrypted`; inspect it and every `legs` value (`realm_export`, `config_snapshot`,
 `audit_checkpoint`). Older manifest-v2 artifacts can omit `encrypted`, so identify their envelope
-from the artifact format/magic and do not infer encryption from field absence. Gate G-C establishes
-none of these properties; it uses a separate transient plaintext tar.
+from the artifact format/magic and do not infer encryption from field absence. Gate G-C does not establish
+the completeness of these durable legs; it uses a separate encrypted transient archive.
 
 > ⚠ **Not a self-contained recovery set:** the archive records blob locators and hashes, but contains
 > **no MinIO object bytes**. Restore verification reads those bytes from the currently configured
@@ -125,8 +125,16 @@ The same channel carries **`integrity.alarm`** from the nightly chain verificati
 
 ## The restore-test drill (gate G-C / AC#5)
 
-`./scripts/easysynq backup restore-test` writes a `pg_dump`/manifest test archive, restores the
-database into a throwaway scratch DATABASE, and copies referenced bytes from the configured source
+`./scripts/easysynq backup restore-test` requires a real `BACKUP_ENCRYPTION_KEY`; an unset or
+placeholder key returns FAIL before dumping the database or writing an archive to the destination.
+It packs the full `pg_dump`/manifest locally, writes only an AES-256-GCM `…tar.enc` and checksum
+sidecar to the backup destination, then re-reads, verifies and decrypts that returned archive locally.
+This exercises the destination with the full archive size. Plaintext packing and extraction stay in
+temporary local storage. The encrypted transient artifact and sidecar are removed best-effort even
+on failure; interrupted cleanup can strand ciphertext. Older plaintext drill residues are not swept
+by a new drill and require operator cleanup. Durable backups' keyless fallback remains unchanged.
+
+The drill restores the database into a throwaway scratch DATABASE and copies referenced bytes from the configured source
 object store into the configured `restore-scratch` bucket. Operators must provision that bucket as
 distinct and non-WORM. The shared guard below checks the destination before any scratch copy.
 It then runs the integrity triad
