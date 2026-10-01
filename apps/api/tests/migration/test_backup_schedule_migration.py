@@ -1,5 +1,6 @@
 """A populated policy survives scheduler-watermark upgrade and downgrade."""
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -37,6 +38,25 @@ def test_populated_backup_watermark_roundtrip(migration_database_factory, monkey
                     ),
                     {"id": policy, "org": org},
                 )
+            # The new image must read the configured pre-upgrade destination BEFORE its new
+            # schema exists. Loading the whole current ORM model breaks this safety boundary.
+            from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+            from easysynq_api.services.upgrade import _backup_destination
+
+            async def before_upgrade():
+                async_engine = create_async_engine(url)
+                try:
+                    async with AsyncSession(async_engine) as session:
+                        assert await _backup_destination(session, org) == "/synthetic/backup"
+                        assert (
+                            await _backup_destination(session, uuid.uuid4())
+                            == get_settings().backup_path
+                        )
+                finally:
+                    await async_engine.dispose()
+
+            asyncio.run(before_upgrade())
             command.upgrade(config, "head")
             with engine.begin() as conn:
                 assert (

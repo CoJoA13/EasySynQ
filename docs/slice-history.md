@@ -31,6 +31,10 @@ preserves existing archives, including stale/invalid candidates. Shared filesyst
 support remains an operator prerequisite, not a claim certified for every mount. Existing encrypted
 and keyless fallback contracts, source dependence, optional legs, WORM and retention scope remain.
 
+The pre-upgrade archive lookup reads only the established destination column rather than loading
+new model columns before Alembic has installed them. A populated pre-0094 policy and the existing
+real migration-lock-timeout upgrade proof cover that compatibility boundary.
+
 Regression evidence includes clock/DST/parser cases, real tar/encryption replay, two PostgreSQL
 workers, database-lock loss with a still-running archive writer, delayed post-file/pre-commit
 recovery, long capture, malformed config, failure alarms, manual compatibility, timezone precedence,
