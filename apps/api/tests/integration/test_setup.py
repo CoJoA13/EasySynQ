@@ -466,6 +466,17 @@ async def test_authenticated_setup_surface_requires_credential_acknowledgment(
     mutate, enqueue, or finalize until the active password receipt is acknowledged."""
     from easysynq_api.tasks import backup as backup_tasks
 
+    # Exercise a real earlier setup mutation: resetting the install must preserve its append-only
+    # audit history. This makes the order-dependence regression reproducible even in isolation.
+    prior_secret = await _reset_uninitialized()
+    prior_headers, _ = await _bootstrap(app_client, token_factory, prior_secret, "prior-setup")
+    prior_profile = await app_client.patch(
+        "/api/v1/setup/org-profile",
+        headers=prior_headers,
+        json={"legal_name": "Prior Setup", "short_code": "PRIOR", "timezone": "UTC"},
+    )
+    assert prior_profile.status_code == 200, prior_profile.text
+
     secret = await _reset_uninitialized()
     username = _sub("pre-ack-setup")
     provisioned = await _provision(app_client, secret, username)
@@ -502,6 +513,22 @@ async def test_authenticated_setup_surface_requires_credential_acknowledgment(
     )
     monkeypatch.setattr(setup_service.auth_check, "probe_oidc_discovery", observed_auth_probe)
     monkeypatch.setattr(backup_tasks.backup_restore_test, "delay", observed_restore_enqueue)
+
+    setup_audit_ids = select(AuditEvent.id).where(
+        AuditEvent.event_type.in_(
+            (
+                EventType.ORG_PROFILE_SET,
+                EventType.WORM_VERIFIED,
+                EventType.BACKUP_CONFIGURED,
+                EventType.AUTH_CONFIGURED,
+                EventType.AUTH_TEST_LOGIN_OK,
+                EventType.SETUP_FINALIZED,
+            )
+        )
+    )
+    async with get_sessionmaker()() as session:
+        setup_audits_before = set((await session.scalars(setup_audit_ids)).all())
+    assert setup_audits_before  # the prior mutation survived the setup reset
 
     responses = {
         "detail": await app_client.get("/api/v1/setup", headers=headers),
@@ -540,22 +567,7 @@ async def test_authenticated_setup_surface_requires_credential_acknowledgment(
     async with get_sessionmaker()() as session:
         cfg = (await session.execute(select(SystemConfig))).scalar_one()
         org = (await session.execute(select(Organization))).scalar_one()
-        setup_audits = (
-            await session.scalars(
-                select(AuditEvent.id).where(
-                    AuditEvent.event_type.in_(
-                        (
-                            EventType.ORG_PROFILE_SET,
-                            EventType.WORM_VERIFIED,
-                            EventType.BACKUP_CONFIGURED,
-                            EventType.AUTH_CONFIGURED,
-                            EventType.AUTH_TEST_LOGIN_OK,
-                            EventType.SETUP_FINALIZED,
-                        )
-                    )
-                )
-            )
-        ).all()
+        setup_audits_after = set((await session.scalars(setup_audit_ids)).all())
         assert cfg.setup_state is SetupState.UNINITIALIZED
         assert cfg.bootstrap_consumed_at is None
         assert cfg.auth_method is None
@@ -563,7 +575,7 @@ async def test_authenticated_setup_surface_requires_credential_acknowledgment(
         assert org.short_code == "DEFAULT"
         assert await session.scalar(select(StorageConfig.id)) is None
         assert await session.scalar(select(BackupPolicy.id)) is None
-        assert setup_audits == []
+        assert setup_audits_after == setup_audits_before
 
 
 async def test_setup_mutation_rechecks_fresh_state_under_lock_after_probe(
