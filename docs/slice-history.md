@@ -5,6 +5,27 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+
+## Keycloak create Location validation (2026-10-01)
+
+Closure candidate for [#432](https://github.com/CoJoA13/EasySynQ/issues/432),
+`RES-KEYCLOAK-LOCATION-SUBJECT`. The provisioning client previously trusted any non-empty last segment
+of a create response's `Location`; a missing identifier in `.../users/` therefore returned `users`
+instead of resolving the created account. It now accepts only a user resource immediately under the
+actual create collection path, including a deployment context path, with no query or fragment.
+Malformed or foreign paths use the existing verified exact-username lookup and preserve its failure
+behavior. Subjects remain opaque (including percent-encoded values); no UUID restriction is added.
+A differing advertised public origin is supported because the client extracts the ID without following
+the returned URL.
+
+Fresh local evidence: 13 new regression cases failed on `2997ba6`. Review added four failing cases for raw whitespace/control characters and malformed percent escapes,
+which are now rejected before URL parsing. With the fix, 98 affected client and
+identity unit tests and all 27 provisioning integration tests pass. Coverage includes missing IDs,
+foreign realm/resource paths, extra path segments, malformed URLs, query/fragment ambiguity, a failed
+or absent fallback lookup, opaque subjects and a deployment context prefix. Ruff/format and strict
+mypy across 483 source files pass. The associated draft PR reports independent review and exact-head
+CI separately; this candidate has not shipped.
+
 ## Dependabot repair follow-up (2026-10-01)
 
 After [#608](https://github.com/CoJoA13/EasySynQ/pull/608) merged at `acebf627`, the remaining

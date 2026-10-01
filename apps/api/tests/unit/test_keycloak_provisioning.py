@@ -1226,3 +1226,95 @@ async def test_create_user_500_still_raises_unavailable() -> None:
     async with _client(handler) as kc:
         with pytest.raises(KeycloakUnavailable):
             await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "/admin/realms/easysynq/users/",
+        "/admin/realms/easysynq/users",
+        "/admin/realms/another-realm/users/sub-wrong",
+        "/admin/realms/easysynq/groups/sub-wrong",
+        "/unrelated/users/sub-wrong",
+        "/admin/realms/easysynq/users/sub-wrong/extra",
+        "/admin/realms/easysynq/users/sub-wrong?view=details",
+        "/admin/realms/easysynq/users/sub-wrong#details",
+        "not-a-user-location",
+        "http://[malformed",
+        "/admin/realms/easysynq/us\ters/sub-wrong",
+        " /admin/realms/easysynq/users/sub-wrong",
+        "/admin/realms/easysynq/users/sub%GG",
+        "/admin/realms/easysynq/users/sub%2",
+    ],
+)
+async def test_create_user_untrusted_location_uses_exact_lookup(location: str) -> None:
+    lookups: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "POST":
+            return httpx.Response(201, headers={"Location": location})
+        lookups.append(request)
+        assert request.url.path == "/admin/realms/easysynq/users"
+        assert dict(request.url.params) == {"username": "jdoe", "exact": "true"}
+        return httpx.Response(200, json=[{"id": "opaque:actual-subject", "username": "jdoe"}])
+
+    async with _client(handler) as kc:
+        subject = await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
+
+    assert subject == "opaque:actual-subject"
+    assert len(lookups) == 1
+
+
+@pytest.mark.parametrize(
+    ("base_url", "location", "subject"),
+    [
+        ("http://keycloak:8080", "/admin/realms/easysynq/users/opaque:subject", "opaque:subject"),
+        (
+            "http://keycloak:8080",
+            "https://public.example/admin/realms/easysynq/users/opaque%3Asubject",
+            "opaque:subject",
+        ),
+        (
+            "http://keycloak:8080/auth",
+            "https://public.example/auth/admin/realms/easysynq/users/opaque-subject",
+            "opaque-subject",
+        ),
+    ],
+)
+async def test_create_user_expected_location_preserves_opaque_subjects_and_context_path(
+    base_url: str, location: str, subject: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        assert request.method == "POST", "valid Location should not require a fallback lookup"
+        return httpx.Response(201, headers={"Location": location})
+
+    async with KeycloakProvisioningClient(
+        **{**_KWARGS, "base_url": base_url},
+        _transport=httpx.MockTransport(handler),
+    ) as kc:
+        actual = await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
+
+    assert actual == subject
+
+
+@pytest.mark.parametrize("lookup_status", [200, 503])
+async def test_malformed_create_location_with_unresolved_lookup_fails_closed(
+    lookup_status: int,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "POST":
+            return httpx.Response(201, headers={"Location": "/admin/realms/easysynq/users/"})
+        return httpx.Response(lookup_status, json=[])
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable):
+            await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)

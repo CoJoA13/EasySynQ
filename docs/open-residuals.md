@@ -1005,22 +1005,6 @@ stale subject, with authorization and a test, or return a response naming the do
 recovery. An error class alone does not close this record.
 Last reviewed: 2026-09-22
 
-## RES-KEYCLOAK-LOCATION-SUBJECT
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #432](https://github.com/CoJoA13/EasySynQ/issues/432), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: After creating a Keycloak user, `keycloak_provisioning.py` trusts any non-empty last path
-segment of the `Location` header as the new subject. The exact-lookup fallback runs only when the
-header is absent, so a malformed `.../users/` yields the subject `users`, and `provision_user`
-commits an `app_user` bound to an account that does not exist.
-Closure contract: Validate the `Location` path itself rather than subject syntax (the repository
-treats `keycloak_subject` as opaque): accept it only when it is the expected
-`.../admin/realms/<realm>/users/<id>` shape with a non-empty final segment, otherwise use the exact
-username lookup, and test the `.../users/` and foreign-path cases.
-Last reviewed: 2026-09-22
-
 ## RES-PROVISION-POST-COMMIT-READ-FAILURE
 
 Status: OPEN
