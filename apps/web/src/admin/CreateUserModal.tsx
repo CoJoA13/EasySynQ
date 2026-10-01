@@ -15,6 +15,11 @@ interface CreateUserFormState {
   role_ids: string[];
 }
 
+interface UsernameCollision {
+  subject: string;
+  submitted: CreateUserFormState;
+}
+
 const EMPTY_FORM: CreateUserFormState = {
   username: "",
   display_name: "",
@@ -46,7 +51,7 @@ export function CreateUserModal({
   const canGrantRoles = usePermissions().can("permission.grant");
 
   const [form, setForm] = useState<CreateUserFormState>(EMPTY_FORM);
-  const [collision, setCollision] = useState<string | null>(null);
+  const [collision, setCollision] = useState<UsernameCollision | null>(null);
   const [issued, setIssued] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -80,7 +85,8 @@ export function CreateUserModal({
   }
 
   const createMut = useMutation({
-    mutationFn: () => apiSend<ProvisionedUser>("POST", "/api/v1/users/provision", token, form),
+    mutationFn: (submitted: CreateUserFormState) =>
+      apiSend<ProvisionedUser>("POST", "/api/v1/users/provision", token, submitted),
     // TanStack Query's mutation cache retains the FULL response — including temporary_password —
     // as `state.data` until this mutation's observer detaches, and this component never unmounts
     // while the modal is merely closed (UsersAdmin renders it unconditionally, gated only on
@@ -94,7 +100,7 @@ export function CreateUserModal({
       createMut.reset();
       void qc.invalidateQueries({ queryKey: ["users"] });
     },
-    onError: (e: unknown) => {
+    onError: (e: unknown, submitted) => {
       setError(null);
       setEmailError(null);
       // keycloak_unavailable is also returned for the POST-COMMIT failure: the app_user row
@@ -112,7 +118,9 @@ export function CreateUserModal({
       if (e instanceof ApiError && e.code === "keycloak_username_exists_unlinked") {
         const subject = e.problem?.keycloak_subject;
         if (typeof subject === "string") {
-          setCollision(subject);
+          // Bind the returned identity to the request that collided, not edits made while it
+          // was pending. The editable form remains the draft for a later submission.
+          setCollision({ subject, submitted });
           return;
         }
         // Malformed 409 — the code promises a collision subject but didn't include a usable string
@@ -130,11 +138,11 @@ export function CreateUserModal({
   // The link path calls the KEPT invite endpoint with the subject the 409 handed back. It never
   // touches the existing account's password.
   const linkMut = useMutation({
-    mutationFn: () =>
+    mutationFn: ({ subject, submitted }: UsernameCollision) =>
       apiSend<AdminUser>("POST", "/api/v1/users", token, {
-        keycloak_subject: collision,
-        display_name: form.display_name || form.username,
-        email: form.email || null,
+        keycloak_subject: subject,
+        display_name: submitted.display_name || submitted.username,
+        email: submitted.email || null,
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["users"] });
@@ -169,7 +177,7 @@ export function CreateUserModal({
                 already has its own dedicated surface one click away in the Manage drawer, and
                 chaining extra requests here would add a new partial-failure state to a recovery
                 path. */}
-            {form.role_ids.length > 0 && (
+            {collision.submitted.role_ids.length > 0 && (
               <Text size="sm" fw={600}>
                 Selected roles will not be assigned by linking — assign them from Manage after
                 linking.
@@ -181,7 +189,7 @@ export function CreateUserModal({
               </Text>
             )}
             <Group>
-              <Button onClick={() => linkMut.mutate()} loading={linkMut.isPending}>
+              <Button onClick={() => linkMut.mutate(collision)} loading={linkMut.isPending}>
                 Link the existing account
               </Button>
               <Button variant="default" onClick={() => setCollision(null)}>
@@ -261,7 +269,7 @@ export function CreateUserModal({
               Cancel
             </Button>
             <Button
-              onClick={() => createMut.mutate()}
+              onClick={() => createMut.mutate({ ...form, role_ids: [...form.role_ids] })}
               loading={createMut.isPending}
               disabled={!form.username.trim()}
             >
