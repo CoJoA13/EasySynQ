@@ -6,6 +6,28 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Create-user collision submission snapshot (2026-10-01)
+
+Closure candidate for [#434](https://github.com/CoJoA13/EasySynQ/issues/434),
+`RES-CREATE-USER-PENDING-EDITS`. The create-user form remained editable while provisioning was pending,
+but collision recovery combined the returned Keycloak subject with the current form. An operator
+could therefore link the original identity using another person's subsequently entered metadata.
+
+Create now takes an explicit copy of the submitted form, including its role list. A collision binds
+that submission to the returned subject, and link recovery uses the bound display name, username
+fallback and email. Its role-assignment warning uses the same submission. The editable form remains
+the draft for choosing a different username and resubmitting. Password-cache cleanup and server
+permission checks are unchanged; the separate role-picker permission residual remains open.
+
+Fresh local evidence: two delayed-response regressions edit identity fields and roles during a pending
+create, then assert the original link payload (including blank-name/email fallback). Both failed on
+`2997ba6` and passed with the fix. A further case proves a later submission binds its own returned
+identity and metadata. The component suite passed **19 tests**; the complete `npm test` run passed
+**2,360 tests across 283 files**. `npm run lint`, `npm run build` and formatting checks passed.
+Independent review found no actionable findings. The associated draft PR records exact-head CI
+separately; this evidence does not claim the change has shipped.
+
+
 ## Setup acknowledgment audit-history isolation (2026-10-01)
 
 Closure candidate for [#567](https://github.com/CoJoA13/EasySynQ/issues/567),

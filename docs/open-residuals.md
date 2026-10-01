@@ -1004,21 +1004,6 @@ Closure contract: Map a failure of those reads to the same recoverable response,
 response from values already held, and prove it with a fault-injection test.
 Last reviewed: 2026-09-22
 
-## RES-CREATE-USER-PENDING-EDITS
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #434](https://github.com/CoJoA13/EasySynQ/issues/434), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: `CreateUserModal.tsx` leaves the identity fields editable while the create request is
-pending, and the collision-recovery link reads the live form instead of the submitted values. An
-operator who edits the name or email while waiting can link an existing Keycloak identity to another
-person's metadata.
-Closure contract: Snapshot the submitted values when the create starts and have the link request use
-the snapshot (or disable the fields while pending), with a test that edits during a pending create and
-asserts the link payload.
-Last reviewed: 2026-09-22
-
 ## RES-ROLE-PICKER-ROLE-READ
 
 Status: OPEN
