@@ -10,8 +10,11 @@ pruning, and S3 destinations are also unshipped (D-6).
 
 ## The durable backup archive
 
-`./scripts/easysynq backup run` (and the nightly Beat job `easysynq.backup.run`) writes one timestamped,
-checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy's destination):
+`./scripts/easysynq backup run` writes an immediate timestamped, checksum-verified archive per
+configured policy to `BACKUP_PATH` (or the policy's destination). The Beat task
+`easysynq.backup.run` checks due policies each minute using the stored five-field cron and canonical
+organization timezone (default working calendar, organization, environment, then UTC). Container
+recreation does not move the configured time.
 
 > A configured path is not a certified mount. Setup rejects blank, relative, and URI-looking values
 > and performs a preliminary probe in the API process. The mandatory drill proves current worker
@@ -26,6 +29,39 @@ checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy'
 * with a real `BACKUP_ENCRYPTION_KEY`, the archive is AES-256-GCM encrypted to `…tar.enc` and the
   secret-bearing realm/config legs are attempted. With the key unset or still a placeholder, the
   archive is a **plaintext** `.tar` and those secret-bearing legs are deliberately omitted.
+
+### Scheduled attempts and recovery
+
+Cron supports minute/hour/day-of-month/month/day-of-week, lists, ascending ranges and steps on
+ranges or `*`; three-letter month/day names and Sunday `0`/`7` are accepted. When both day fields
+are restricted, either may match; a wildcard in either combines them as constraints. Invalid or
+impossible schedules log a warning and use daily `02:00` in the resolved organization timezone.
+
+The worker persists `last_scheduled_attempt_at` in UTC; a new/existing policy with no marker starts
+from `created_at`. Downtime produces one catch-up attempt for elapsed slots, then resumes the cron.
+A local time skipped by DST runs at the first valid instant after the gap. Repeated local slots
+run once, including catch-up after downtime during the repeated interval. Dispatch and worker
+availability can delay execution beyond the nominal minute.
+
+A successful or handled failed attempt consumes its start time; failure reporting is preserved,
+and the next scheduled slot retries. A long capture does not consume later slots. Busy claims
+consume nothing. The explicit `backup run` command remains immediate and does not advance the
+scheduled marker. Migration downgrade removes the marker, retaining policy configuration and
+archives; re-upgrade starts from `created_at` again and can produce one catch-up.
+
+Concurrent scheduled workers use a database row claim and a persistent policy lock file in the
+destination. The destination must support shared exclusive advisory file locks for all cooperating
+workers; local tests do not certify any particular NFS/SMB mount. Do not remove the lock file while
+workers may be running. A database disconnect cannot let a second scheduled writer bypass a first
+writer that is still finishing its archive. Lock support/permission failures are reported as backup
+failures rather than silently disabling serialization.
+
+After a crash between archive publication and database commit, the next attempt can reuse a
+checksum-verified completed artifact with matching scheduling metadata and encryption mode.
+Encrypted candidates must also authenticate with the current key. Reuse retains its original capture time and is allowed only if no newer slot
+is due. An old artifact never satisfies a later catch-up. Fresh scheduled archives are staged and
+published with unique timestamp/family suffixes; existing artifacts are retained. This adds no
+retention pruning, recovery completeness, or key-history guarantee.
 
 Read the `backup run` result and `manifest.json` before relying on an artifact: newly written
 manifests record `encrypted`; inspect it and every `legs` value (`realm_export`, `config_snapshot`,

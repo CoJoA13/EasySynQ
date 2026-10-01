@@ -547,10 +547,21 @@ def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, A
     realm + config legs (they carry secrets and must never land in cleartext, doc 12 §6.2). No
     restore (that is the encrypted transient drill). Runs as the OWNER role; raises ``BackupError``
     on a dump/pack failure. Retention pruning + S3-destination stay v1.x (D-6)."""
-    owner_dsn = settings.sync_dsn
     stamp = (
         datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ") + f"-{uuid.uuid4().hex[:8]}"
     )
+    return _build_durable_backup(settings, destination=destination, stamp=stamp)
+
+
+def _build_durable_backup(
+    settings: Settings,
+    *,
+    destination: str,
+    stamp: str,
+    scheduled_attempt: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Shared capture; scheduled callers stage publication and attach replay metadata."""
+    owner_dsn = settings.sync_dsn
     dest_dir = Path(destination)
     dest_dir.mkdir(parents=True, exist_ok=True)
     encrypt = crypto.key_is_configured(settings.backup_encryption_key)
@@ -597,6 +608,7 @@ def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, A
             blobs,
             config={
                 "source": "scheduled-backup",
+                **({"scheduled_attempt": scheduled_attempt} if scheduled_attempt else {}),
                 "blob_count": len(blobs),
                 "table_counts": counts,
             },
@@ -780,13 +792,15 @@ def run_drill(
 # '2'-prefixed durable stamp ~13/16 of the time, so a plain lexical-max over both families picks the
 # residue instead of the retained backup (legacy plaintext drill residue could even bypass
 # decryption). Requiring the timestamp stamp excludes both drill shapes structurally.
-_DURABLE_ARCHIVE_RE = re.compile(r"easysynq-backup-\d{8}T\d{6}Z-[0-9a-f]{8}\.tar(?:\.enc)?")
+_DURABLE_ARCHIVE_RE = re.compile(
+    r"easysynq-backup-\d{8}T\d{6}Z-(?:[0-9a-f]{32}-)?[0-9a-f]{8}\.tar(?:\.enc)?"
+)
 
 
 def _newest_retained_archive(destination: str) -> Path | None:
     """The NEWEST *complete* durable archive in ``destination`` (the one an operator would actually
     restore from) — the encrypted ``…tar.enc`` or the plaintext-fallback ``…tar``, restricted to the
-    durable ``YYYYMMDDTHHMMSSZ-<uuid8>`` stamp (so ``.sha256`` sidecars AND a hard-crash drill
+    durable ``YYYYMMDDTHHMMSSZ-[<family32>-]<uuid8>`` stamp (so sidecars AND a hard-crash drill
     residue are excluded; see ``_DURABLE_ARCHIVE_RE``). The stamp sorts chronologically, so the
     lexical-max matching name is the chronologically-newest archive.
 
