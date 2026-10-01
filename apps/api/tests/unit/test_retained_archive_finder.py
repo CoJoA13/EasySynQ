@@ -2,14 +2,16 @@
 restore-drill residue (Phase-1 I-7 / Codex P2 #155).
 
 ``_newest_retained_archive`` runs over ``policy.destination`` — the SAME directory the on-demand
-G-C drill writes its transient ``easysynq-backup-<32-hex-uuid>.tar`` into. The drill unlinks it in
-its ``finally``, but a hard-killed drill can leave one behind; because a bare-uuid stamp lexically
+G-C drill writes its transient ``easysynq-backup-<32-hex-uuid>.tar.enc`` into. The drill unlinks it
+in ``finally``, but a hard-killed drill can leave one behind; because a bare-uuid stamp lexically
 outsorts the year-prefixed durable stamp most of the time, a naive lexical-max over both families
-would pick the (plaintext) residue and ``verify`` it PASS WITHOUT ever decrypting the real encrypted
-backup. The finder must match the durable ``YYYYMMDDTHHMMSSZ-<uuid8>`` stamp EXACTLY.
+would pick residue instead of the retained backup. Legacy plaintext residue could even bypass
+decryption. The finder must match the durable ``YYYYMMDDTHHMMSSZ-<uuid8>`` stamp EXACTLY.
 """
 
 from pathlib import Path
+
+import pytest
 
 from easysynq_api.services.backup.drill import _newest_retained_archive
 
@@ -42,15 +44,18 @@ def test_picks_newest_durable_and_excludes_sidecars(tmp_path: Path) -> None:
     assert newest.name == "easysynq-backup-20260615T120000Z-bbbbbbbb.tar.enc"
 
 
-def test_ignores_a_hard_crash_drill_residue_even_when_it_lexically_outsorts(tmp_path: Path) -> None:
+@pytest.mark.parametrize("suffix", [".tar", ".tar.enc"])
+def test_ignores_a_hard_crash_drill_residue_even_when_it_lexically_outsorts(
+    tmp_path: Path, suffix: str
+) -> None:
     """The regression: a drill residue whose bare-uuid stamp begins with 'f' sorts ABOVE every
     '2'-prefixed durable name, yet must NOT be picked — else the verify validates a plaintext drill
     artifact and never decrypts the real encrypted backup (the exact Codex-P2 gap)."""
     durable = "easysynq-backup-20260615T120000Z-bbbbbbbb.tar.enc"
     _touch(tmp_path, durable)
     _touch(tmp_path, durable + ".sha256")
-    # A hard-killed run_drill leaves a bare-uuid32 plaintext .tar (+ sidecar) in the SAME dir.
-    drill_residue = "easysynq-backup-fdeadbeefdeadbeefdeadbeefdeadbeef.tar"
+    # Both legacy plaintext and new encrypted drill residue must be excluded.
+    drill_residue = f"easysynq-backup-fdeadbeefdeadbeefdeadbeefdeadbeef{suffix}"
     _touch(tmp_path, drill_residue)
     _touch(tmp_path, drill_residue + ".sha256")
     assert "f" > "2"  # the residue WOULD win a naive lexical-max
