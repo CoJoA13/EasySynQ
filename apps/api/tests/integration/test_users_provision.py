@@ -28,6 +28,8 @@ from typing import Any
 import httpx
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from easysynq_api.api import users as users_api
 from easysynq_api.db.models._audit_enums import EventType
@@ -1170,3 +1172,91 @@ async def test_reset_credential_of_an_override_only_privileged_target_requires_s
     assert resp.status_code == 422, resp.text
     assert resp.json()["code"] == "two_tier_violation"
     assert calls["password"] == []
+
+
+@pytest.mark.parametrize("failed_read", ["refresh", "role_names"])
+async def test_post_commit_read_failure_preserves_user_and_guides_credential_recovery(
+    failed_read: str,
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = _sub("readback-failure")
+    calls = _install_kc(monkeypatch, new_subject=subject)
+    headers = await _admin(token_factory)
+    author_id = await _role_id("Author")
+    committed_ids: list[uuid.UUID] = []
+    private_detail = "synthetic private database diagnostic"
+    fault = OperationalError("synthetic read", {}, OSError(private_detail))
+
+    async def fail_after_proving_commit() -> None:
+        # A separate transaction must see the user before the fault fires. This distinguishes
+        # post-commit recovery from a failed create/flush/commit and prevents a false success claim.
+        async with get_sessionmaker()() as session:
+            user_id = await session.scalar(
+                select(AppUser.id).where(AppUser.keycloak_subject == subject)
+            )
+        assert user_id is not None
+        committed_ids.append(user_id)
+        raise fault
+
+    original_refresh = AsyncSession.refresh
+
+    async def failed_refresh(
+        session: AsyncSession, instance: Any, *args: Any, **kwargs: Any
+    ) -> None:
+        if isinstance(instance, AppUser) and instance.keycloak_subject == subject:
+            await fail_after_proving_commit()
+        await original_refresh(session, instance, *args, **kwargs)
+
+    async def failed_role_names(*_args: Any, **_kwargs: Any) -> dict[uuid.UUID, list[str]]:
+        await fail_after_proving_commit()
+        raise AssertionError("fault did not fire")
+
+    with monkeypatch.context() as scoped:
+        if failed_read == "refresh":
+            scoped.setattr(AsyncSession, "refresh", failed_refresh)
+        else:
+            scoped.setattr(users_api, "_role_names_by_user", failed_role_names)
+        response = await app_client.post(
+            "/api/v1/users/provision",
+            headers=headers,
+            json={"username": _sub("readback"), "role_ids": [str(author_id)]},
+        )
+
+    assert response.status_code == 502, response.text
+    assert response.json()["code"] == "keycloak_unavailable"
+    assert "Do not retry create" in response.json()["detail"]
+    assert "reissue" in response.json()["detail"]
+    assert private_detail not in response.text
+    assert "temporary_password" not in response.json()
+    assert len(committed_ids) == 1
+    user_id = committed_ids[0]
+    assert len(calls["created"]) == 1
+    assert calls["password"] == []
+
+    async with get_sessionmaker()() as session:
+        user = await session.get(AppUser, user_id)
+        assert user is not None and user.status is UserStatus.INVITED
+        roles = (
+            await session.scalars(
+                select(RoleAssignment.role_id).where(RoleAssignment.user_id == user_id)
+            )
+        ).all()
+        assert roles == [author_id]
+        events = (
+            await session.scalars(
+                select(AuditEvent.event_type).where(AuditEvent.object_id == user_id)
+            )
+        ).all()
+        assert EventType.USER_CREATED in events
+        assert EventType.USER_CREDENTIAL_ISSUED not in events
+
+    # The advertised recovery works without creating another identity.
+    recovered = await app_client.post(
+        f"/api/v1/users/{user_id}/temporary-password", headers=headers
+    )
+    assert recovered.status_code == 200, recovered.text
+    assert len(recovered.json()["temporary_password"]) >= MIN_LENGTH
+    assert len(calls["created"]) == 1
+    assert len(calls["password"]) == 1

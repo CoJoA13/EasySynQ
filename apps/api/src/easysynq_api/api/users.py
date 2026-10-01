@@ -25,6 +25,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
@@ -385,12 +386,27 @@ async def _provision_user(
         # running them after the credential goes live would mean a failure here (pool exhaustion,
         # connection reset) 500s the caller while a live, credentialed account sits unreported —
         # exactly the state the ordering property forbids.
-        await session.refresh(user)
-        names = await _role_names_by_user(session, caller.org_id, [user.id])
-        response: dict[str, Any] = {
-            "user": _represent(user, names.get(user.id, [])),
-            "password_delivery": "shown_once",
-        }
+        try:
+            await session.refresh(user)
+            names = await _role_names_by_user(session, caller.org_id, [user.id])
+            response: dict[str, Any] = {
+                "user": _represent(user, names.get(user.id, [])),
+                "password_delivery": "shown_once",
+            }
+        except SQLAlchemyError as exc:
+            # The first commit succeeded, but no credential has been issued. Reuse the existing
+            # recovery code so the UI refreshes the roster; never expose database diagnostics or
+            # turn a committed user into advice to retry create.
+            raise ProblemException(
+                status=502,
+                code="keycloak_unavailable",
+                title="User created but the account details could not be read",
+                detail=(
+                    "The Keycloak account and EasySynQ user were created, but their details could "
+                    "not be read back. No temporary password was set. Do not retry create — "
+                    "reload the user list and reissue a temporary password for this user instead."
+                ),
+            ) from exc
 
         # Only now does the account become usable. A failure here leaves a real app_user whose
         # account has no credential — repaired by POST /users/{id}/temporary-password, never by
