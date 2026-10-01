@@ -1,6 +1,7 @@
 # Design — audit remediation execution order after PR #443
 
-> **Status:** proposed for owner review; documentation only
+> **Historical pre-merge status:** proposed for owner review; documentation only
+> **Ratification:** merged in [#444](https://github.com/CoJoA13/EasySynQ/pull/444); the dated coordination update below narrows only #420 sequencing.
 > **Date:** 2026-08-06 · **Baseline:** `main` at `1e35a21` (PR #443) · **Migration head:** `0085`
 > **Authority:** the finding ledger, slice contracts, and historical evidence remain in
 > [`2026-08-04-audit-remediation-v2.md`](../plans/2026-08-04-audit-remediation-v2.md).
