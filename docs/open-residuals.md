@@ -390,7 +390,16 @@ server's first I/O in its handler thread races that close. Unmodified `origin/ma
 that exact signature in one of four direct runs; the mirror branch failed four of five, and every
 run whose message was exposed showed the same signature, so the mechanism predates the mirror.
 Whether it caused the 2026-09-10 or 2026-09-19 CI failures is unproven, so this record stays OPEN.
-Last reviewed: 2026-09-25
+Progress, 2026-10-01 (unmerged candidate): A synthetic local reproduction on unchanged `2997ba6`
+observed 20 correct hostname rejections and 13 fixture failures, all `BrokenPipeError` in the server's
+first buffered read with zero HTTP requests. A deterministic regression reproduces that read-boundary
+failure. The candidate handles only `BrokenPipeError` before any HTTP request line or recorded request
+in explicitly negative TLS fixtures; ordinary fixtures and other TLS/I/O errors still fail. Real
+trusted, untrusted and wrong-host TLS cases and acceptance-runner guards pass (262 focused tests).
+No production transport, diagnostic disclosure, resource limit or mandatory assertion changed.
+Exact-head mandatory acceptance is reported in the associated PR. This fixes the identified local
+fixture mechanism; it does not establish the cause of the historical CI failures or close this record.
+Last reviewed: 2026-10-01
 
 ## RES-INTEGRATION-SETUP-ORDER-FAILURE
 
