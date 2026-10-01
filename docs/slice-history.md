@@ -26,6 +26,11 @@ or absent fallback lookup, opaque subjects and a deployment context prefix. Ruff
 mypy across 483 source files pass. The associated draft PR reports independent review and exact-head
 CI separately; this candidate has not shipped.
 
+Integration review also identified an exact-username fallback returning an empty string ID. Two
+regressions (missing and malformed Location) reproduced acceptance of that unusable binding. The
+fallback now requires a non-empty subject too; both cases and all 100 affected client/identity unit
+tests pass, as do the 27 provisioning integration cases. Non-empty opaque subjects remain supported.
+
 
 ## Create-user collision submission snapshot (2026-10-01)
 

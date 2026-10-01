@@ -1318,3 +1318,21 @@ async def test_malformed_create_location_with_unresolved_lookup_fails_closed(
     async with _client(handler) as kc:
         with pytest.raises(KeycloakUnavailable):
             await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
+
+
+@pytest.mark.parametrize("location", ["", "/admin/realms/easysynq/users/"])
+async def test_create_location_fallback_rejects_empty_lookup_subject(location: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        if request.method == "POST":
+            return httpx.Response(201, headers={"Location": location})
+        assert request.method == "GET"
+        assert request.url.path == "/admin/realms/easysynq/users"
+        assert dict(request.url.params) == {"username": "jdoe", "exact": "true"}
+        return httpx.Response(200, json=[{"id": "", "username": "jdoe"}])
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable, match="its id could not be read"):
+            await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)

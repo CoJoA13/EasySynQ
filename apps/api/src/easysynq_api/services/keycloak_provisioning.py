@@ -420,7 +420,7 @@ class KeycloakProvisioningClient:
             return subject
         # Missing/malformed Location is not an identity; use the verified exact username lookup.
         lookup = await self.find_user_by_username(username)
-        if not lookup.found or lookup.subject is None:
+        if not lookup.found or not lookup.subject:
             raise KeycloakUnavailable("Keycloak created the account but its id could not be read")
         return lookup.subject
 
