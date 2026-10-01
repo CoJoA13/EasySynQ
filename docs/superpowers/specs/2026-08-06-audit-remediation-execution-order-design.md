@@ -10,6 +10,14 @@
 > migration-reservation table; v2's later-stage ordering, hard dependencies, release gates, finding
 > ledger, and slice contracts remain authoritative.
 
+
+> **#420 coordination update (2026-10-01):** this design was ratified on merge in #444.
+> The later owner-authorized residual contract permits the bounded encrypted transient-drill
+> closure in #616 before the full `S-backup-legs` slice. See the
+> [dated scope reconciliation](../../slice-history.md#restore-drill-scope-reconciliation-2026-10-01)
+> for the pinned contract and owner evidence. This exception does not complete `M-01`/`S-backup-legs`,
+> waive D-B4, or alter the broader recovery requirements below.
+
 ---
 
 ## 1. Why this document exists
