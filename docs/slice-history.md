@@ -27,6 +27,81 @@ identity and metadata. The component suite passed **19 tests**; the complete `np
 Independent review found no actionable findings. The associated draft PR records exact-head CI
 separately; this evidence does not claim the change has shipped.
 
+
+## Setup acknowledgment audit-history isolation (2026-10-01)
+
+Closure candidate for [#567](https://github.com/CoJoA13/EasySynQ/issues/567),
+`RES-INTEGRATION-SETUP-ORDER-FAILURE`. The setup acknowledgment test formerly expected no setup audit
+rows anywhere in the shared database. `_reset_uninitialized` correctly preserves append-only audit
+history, so a preceding backup-configuration test made that assertion fail despite all denied
+requests behaving correctly. On pristine `2997ba6`, running
+`test_backup.py::test_configure_backup_requires_permission` followed by
+`test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment` reproduces the
+failure (one passed, one failed). The complete backup module followed by that setup test also
+reproduces it (20 passed, one failed).
+
+The test now creates a legitimate earlier profile mutation through the authenticated API, resets
+setup, and snapshots the matching setup audit IDs before issuing the unacknowledged requests. It
+requires the same set afterward, so earlier history is accepted while any newly appended setup event
+still fails. The seeded history makes the old empty-list assertion fail even when this test runs
+alone. All seven HTTP/status-code checks and the state/configuration/probe/enqueue assertions remain;
+no production code, audit deletion, fixture reset, shard boundary or duration file changes.
+
+Fresh local evidence: the seeded standalone regression failed before the assertion change; the
+original two-test order and its reverse each pass both cases after the change. The full single-process
+`pytest tests/integration -m integration -q` run passed **1,262 tests**, with two existing
+management-review shared-state skips and 285 contract tests deselected, in 977.56 seconds. Collection
+confirmed that no integration-marked tests live outside that directory. Sharding was not used.
+Independent review found no actionable issue. The associated PR reports exact-head CI separately.
+
+## Encrypted restore-drill destination archive (2026-10-01)
+
+Closure candidate for [#420](https://github.com/CoJoA13/EasySynQ/issues/420),
+`RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE`. The drill packs locally and writes only the full AES-256-GCM
+archive and ciphertext checksum to the policy destination. It authenticates and decrypts the returned
+destination bytes before restoring locally. Missing/placeholder `BACKUP_ENCRYPTION_KEY` returns FAIL
+before capture; deterministic-stamp cleanup covers interrupted ciphertext/sidecar writes. Cleanup
+remains best-effort, so a denied unlink can leave ciphertext. Legacy plaintext residue requires
+operator cleanup. OWNER-role execution, the integrity triad, scratch-target WORM protection,
+source-store dependence and durable backups' separate keyless fallback are unchanged.
+
+Fresh local proof against `2997ba6`: nine new unit cases failed before the fix and passed afterward;
+both pg_dump-backed destination cases failed before the fix and passed afterward. The complete backup
+integration module passed all 22 cases, including success/failure destination inspection, full dump
+round-trip, real blob corruption and scratch cleanup. The nine unit cases cover absent/placeholder
+keys, success and post-restore failure, interrupted ciphertext/sidecar writes, checksum/authentication
+failure and unlink denial. Existing scratch-guard tests now use real packing/encryption instead of
+returning a nonexistent packed path. Retained-archive selection excludes both legacy and encrypted
+drill residue. The runbook describes the new key requirement and artifact lifecycle.
+
+The combined backup/setup run passed 106 cases and failed
+`test_authenticated_setup_surface_requires_credential_acknowledgment` on prior audit rows.
+The same ordering fails on pristine `2997ba6` (20 passed, one failed), independently confirming the
+open `RES-INTEGRATION-SETUP-ORDER-FAILURE` / #567; this slice does not change that test or weaken it.
+The historical deployment documents named in #420 were already replaced by redaction records;
+no removed site-specific document was restored. CI and merge status belong to the linked PR.
+
+### Restore-drill scope reconciliation (2026-10-01)
+
+[#616](https://github.com/CoJoA13/EasySynQ/pull/616) implements only the bounded
+`RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE` closure. The August execution-order design was ratified
+by #444 and assigned #420 to `S-backup-legs`. The later
+[September 22 residual contract](https://github.com/CoJoA13/EasySynQ/blob/2997ba60100059f7186025402c966e92b08fdb67/docs/open-residuals.md#L883),
+explicitly identified as authoritative in the
+[owner's #420 comment](https://github.com/CoJoA13/EasySynQ/issues/420#issuecomment-5783603360),
+permits encrypting the full transient archive with the backup key and requires passing/failing
+pg_dump-backed destination checks. The owner's October 1 approval of the prepared bounded draft
+permits this narrow closure before the larger recovery programme.
+
+This is a sequencing exception for the drill's plaintext-destination exposure, not completion of
+`M-01`/`S-backup-legs` or a waiver of D-B4. Exact current-key identity and bounded key history,
+mandatory realm/config/checkpoint legs, shared typed backup verdicts, and source-independent
+recovery remain unfulfilled broader requirements. The existing static envelope identifier
+`BACKUP_ENCRYPTION_KEY:sha256-v1` supplies format compatibility, not proof of exact current-key
+identity. Durable keyless/partial fallback remains a documented limitation, not a recovery guarantee.
+The [open recovery contract](open-residuals.md#res-source-independent-recovery) remains open.
+The setup manual now describes the encrypted transient round-trip and these limits consistently.
+
 ## Dependabot repair follow-up (2026-10-01)
 
 After [#608](https://github.com/CoJoA13/EasySynQ/pull/608) merged at `acebf627`, the remaining

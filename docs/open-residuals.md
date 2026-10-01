@@ -392,25 +392,6 @@ run whose message was exposed showed the same signature, so the mechanism predat
 Whether it caused the 2026-09-10 or 2026-09-19 CI failures is unproven, so this record stays OPEN.
 Last reviewed: 2026-09-25
 
-## RES-INTEGRATION-SETUP-ORDER-FAILURE
-
-Status: OPEN
-Owner: Repository owner
-Source: S-recovery-exact-version-binding verification, 2026-09-22, clean `main` worktree `bdfdf95`
-Reason: A full single-process run of the integration suite (`pytest -m integration`) fails
-`tests/integration/test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment`
-while every other case passes (1,258 passed / 1 failed on `bdfdf95`); the same tree passes the
-case in CI because the four-way duration-balanced sharding never places it after the test whose
-leftover state it trips on. The failure is therefore order-dependent, masked by shard composition,
-and a `.test_durations` refresh that moves the chunk boundary can surface it in CI without any
-code change.
-Closure contract: Identify the earlier test (or fixture) whose shared-database or process state
-the setup case depends on, make the case self-provide or isolate that precondition so it passes
-in any order, prove the fix with a full single-process integration run and with the specific
-ordering that reproduced the failure, and confirm CI sharding is not relied on. A green sharded
-run alone does not close this record.
-Last reviewed: 2026-09-22
-
 ## RES-TYPESCRIPT-7-UPGRADE
 
 Status: OPEN
@@ -879,27 +860,6 @@ prevent. Prove the result with an executable assertion per changed surface, and 
 against the current output. `formatTimestamp`'s missing `timeZone` should be fixed first and can be
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
-
-## RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #420](https://github.com/CoJoA13/EasySynQ/issues/420), filed 2026-08-03 and
-deferred by owner decision; verified against `3d8613a` on 2026-09-22.
-Reason: `run_drill()` in `apps/api/src/easysynq_api/services/backup/drill.py` proves that the backup
-destination round-trips by packing an unencrypted `easysynq-backup-{stamp}.tar` holding the full
-`pg_dump` into the policy destination, restoring from it, then deleting it best-effort. Only the
-durable backup path produces the AES-256-GCM `*.tar.enc` operators expect there. Every setup-gate and
-operator-triggered drill therefore places the complete database in plaintext on the backup target for
-the drill's duration, and a cleanup failure strands it. Where that target is itself swept by other
-backup tooling, the plaintext copy can leave the host.
-Closure contract: Make the drill write no plaintext database bytes to the destination while it
-still proves the destination can hold and return a full-size archive, for example by encrypting
-the transient archive with the backup key. A small non-database probe does not satisfy this: a
-destination whose quota is below the real archive size would pass it. Prove it with a pg_dump-gated
-integration test that finds no plaintext `easysynq-backup-*.tar` in the destination during or after
-both a passing and a failing drill.
-Last reviewed: 2026-09-22
 
 ## RES-SITE-DATA-GUARD-GAPS
 
