@@ -4,7 +4,7 @@ FROM node:26-slim AS build
 # Refresh existing base packages before switching to the unprivileged build/runtime user.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade \
-        gzip libpcre2-8-0 libsqlite3-0 perl-base \
+        gzip libpcre2-8-0 libsqlite3-0 libssl3t64 openssl-provider-legacy perl-base \
     && rm -rf /var/lib/apt/lists/*
 # --- non-root (audit U33) ---
 # node:26-slim ships an unprivileged `node` user (uid 1000). USER is set BEFORE the install so the

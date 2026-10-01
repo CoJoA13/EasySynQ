@@ -3576,15 +3576,20 @@ Bumps the resolutions range **R1–R85 → R1–R86**.
 **Owner approval and scope.** The owner explicitly approved repairing and pushing these three
 existing PRs, then approved the additional application lock updates and patches to npm's bundled
 dependencies after current CI exposed their security failures. This approval is limited to these
-PR repairs. It authorizes no merge, deployment, unrelated pin change, or standing permission for
-future dependency updates. The Redocly PR's web and API security changes are part of this approved
-repair because its required full security job also tests those independently locked dependencies.
+PR repairs. That September 30 approval authorized no merge, deployment, unrelated pin change, or
+standing permission for future dependency updates. The Redocly PR's web and API security changes
+are part of this approved repair because its required full security job also tests those
+independently locked dependencies.
+On October 1 the owner separately authorized sequential squash merges of these PRs under the live
+main rules, and continued compatible security repairs for #610 and #611 after new scan findings.
+This follow-up does not authorize merging other dependency PRs or bypassing required checks.
 
 **Approved selections.** For these repairs, the web security guard selects exactly
 `brace-expansion` `1.1.21` and `5.0.12`, and application `undici` `8.10.2`, superseding R72's
 `brace-expansion` and `undici` selections. R72's review-trigger, live-audit and no-downgrade rules
 remain binding. The `nanoid` and React Router selections are unchanged. The API lock selects
-PyJWT `2.14.0` within its existing compatible manifest range. The web image retains npm `11.19.1`
+PyJWT `2.14.0` initially; the October 1 follow-up selects PyJWT `2.15.0` and urllib3 `2.8.0`
+within the existing compatible manifest ranges. The web image retains npm `11.19.1`
 and its existing startup command, replacing only npm's vendored `brace-expansion` with `5.0.12`
 and `undici` with `6.28.1`; their dependency requirements match the installed bundled copies.
 
@@ -3593,12 +3598,21 @@ and `undici` with `6.28.1`; their dependency requirements match the installed bu
 contract-tool version. No audit exception, major runtime migration, security-gate change,
 guard relaxation, or application startup change is approved here.
 
+**October 1 base-package repair.** Both application images explicitly upgrade their existing
+`libssl3t64` and `openssl-provider-legacy` packages; the API image also upgrades its existing
+`openssl` package. This retains the base distribution and startup/security contracts. The
+historical audit-history tests explicitly seed their fixed September 2026 partition after
+migration, independently of the shared fixture's moving current-month runway; timestamp
+assertions and production partition behavior remain unchanged.
+
 Dated verification results and immutable CI links are recorded in
-[the unmerged PR verification entry](slice-history.md#dependabot-repair-verification-2026-09-30).
+[the September 30 verification entry](slice-history.md#dependabot-repair-verification-2026-09-30)
+and [the October 1 follow-up](slice-history.md#dependabot-repair-follow-up-2026-10-01).
 
 **Back-propagation:** `apps/api/uv.lock`, `packages/contracts/package-lock.json`,
 `apps/web/package-lock.json`,
-`scripts/tests/test-web-security-lock.mjs`, and `apps/web/Dockerfile` carry these exact repairs.
+`scripts/tests/test-web-security-lock.mjs`, both application Dockerfiles, and
+`apps/api/tests/integration/test_audit_history.py` carry these repairs.
 Every PR still requires a successful gate on its final head and resolved review conversations.
 
 Bumps the resolutions range **R1–R86 → R1–R87**.
