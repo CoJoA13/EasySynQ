@@ -59,6 +59,27 @@ open `RES-INTEGRATION-SETUP-ORDER-FAILURE` / #567; this slice does not change th
 The historical deployment documents named in #420 were already replaced by redaction records;
 no removed site-specific document was restored. CI and merge status belong to the linked PR.
 
+### Restore-drill scope reconciliation (2026-10-01)
+
+[#616](https://github.com/CoJoA13/EasySynQ/pull/616) implements only the bounded
+`RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE` closure. The August execution-order design was ratified
+by #444 and assigned #420 to `S-backup-legs`. The later
+[September 22 residual contract](https://github.com/CoJoA13/EasySynQ/blob/2997ba60100059f7186025402c966e92b08fdb67/docs/open-residuals.md#L883),
+explicitly identified as authoritative in the
+[owner's #420 comment](https://github.com/CoJoA13/EasySynQ/issues/420#issuecomment-5783603360),
+permits encrypting the full transient archive with the backup key and requires passing/failing
+pg_dump-backed destination checks. The owner's October 1 approval of the prepared bounded draft
+permits this narrow closure before the larger recovery programme.
+
+This is a sequencing exception for the drill's plaintext-destination exposure, not completion of
+`M-01`/`S-backup-legs` or a waiver of D-B4. Exact current-key identity and bounded key history,
+mandatory realm/config/checkpoint legs, shared typed backup verdicts, and source-independent
+recovery remain unfulfilled broader requirements. The existing static envelope identifier
+`BACKUP_ENCRYPTION_KEY:sha256-v1` supplies format compatibility, not proof of exact current-key
+identity. Durable keyless/partial fallback remains a documented limitation, not a recovery guarantee.
+The [open recovery contract](open-residuals.md#res-source-independent-recovery) remains open.
+The setup manual now describes the encrypted transient round-trip and these limits consistently.
+
 ## Dependabot repair follow-up (2026-10-01)
 
 After [#608](https://github.com/CoJoA13/EasySynQ/pull/608) merged at `acebf627`, the remaining
