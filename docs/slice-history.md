@@ -5,6 +5,33 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+
+## Setup acknowledgment audit-history isolation (2026-10-01)
+
+Closure candidate for [#567](https://github.com/CoJoA13/EasySynQ/issues/567),
+`RES-INTEGRATION-SETUP-ORDER-FAILURE`. The setup acknowledgment test formerly expected no setup audit
+rows anywhere in the shared database. `_reset_uninitialized` correctly preserves append-only audit
+history, so a preceding backup-configuration test made that assertion fail despite all denied
+requests behaving correctly. On pristine `2997ba6`, running
+`test_backup.py::test_configure_backup_requires_permission` followed by
+`test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment` reproduces the
+failure (one passed, one failed). The complete backup module followed by that setup test also
+reproduces it (20 passed, one failed).
+
+The test now creates a legitimate earlier profile mutation through the authenticated API, resets
+setup, and snapshots the matching setup audit IDs before issuing the unacknowledged requests. It
+requires the same set afterward, so earlier history is accepted while any newly appended setup event
+still fails. The seeded history makes the old empty-list assertion fail even when this test runs
+alone. All seven HTTP/status-code checks and the state/configuration/probe/enqueue assertions remain;
+no production code, audit deletion, fixture reset, shard boundary or duration file changes.
+
+Fresh local evidence: the seeded standalone regression failed before the assertion change; the
+original two-test order and its reverse each pass both cases after the change. The full single-process
+`pytest tests/integration -m integration -q` run passed **1,262 tests**, with two existing
+management-review shared-state skips and 285 contract tests deselected, in 977.56 seconds. Collection
+confirmed that no integration-marked tests live outside that directory. Sharding was not used.
+Independent review found no actionable issue. The associated PR reports exact-head CI separately.
+
 ## Dependabot repair follow-up (2026-10-01)
 
 After [#608](https://github.com/CoJoA13/EasySynQ/pull/608) merged at `acebf627`, the remaining
