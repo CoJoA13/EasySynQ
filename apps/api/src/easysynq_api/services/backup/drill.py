@@ -1,6 +1,6 @@
 """The restore-into-scratch drill + integrity triad (slice S8b2, doc 08 §8.2 / AC#5).
 
-``run_drill`` writes a ``pg_dump`` archive and object manifest at the configured destination,
+``run_drill`` encrypts a ``pg_dump`` archive and object manifest before writing to the destination,
 restores the database into a fresh scratch DATABASE, and copies the referenced bytes from the
 configured source object store under a unique prefix in the configured shared scratch bucket. It
 runs the integrity triad on the scratch copy and tears the scratch namespace down —
@@ -545,7 +545,7 @@ def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, A
     ``BACKUP_ENCRYPTION_KEY`` is set — the Keycloak realm export + a config snapshot, AES-256-GCM
     encrypted to ``.tar.enc``. With NO key it falls back to a PLAINTEXT ``.tar`` and OMITS the
     realm + config legs (they carry secrets and must never land in cleartext, doc 12 §6.2). No
-    restore (that is the drill, plaintext-internal). Runs as the OWNER role; raises ``BackupError``
+    restore (that is the encrypted transient drill). Runs as the OWNER role; raises ``BackupError``
     on a dump/pack failure. Retention pruning + S3-destination stay v1.x (D-6)."""
     owner_dsn = settings.sync_dsn
     stamp = (
@@ -637,16 +637,12 @@ def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, A
 
 
 def _unlink_transient_archive(destination: str, stamp: str) -> None:
-    """Remove the drill's TRANSIENT ``easysynq-backup-{stamp}.tar`` (+ its ``.sha256`` sidecar) from
-    ``destination``. Driven by the DETERMINISTIC stamp — NOT the ``pack_archive`` return value — so
-    a ``pack_archive`` that fails partway (a disk-full / NFS error mid-tar or mid-sidecar) leaves a
-    partial PLAINTEXT ``.tar`` but never assigns the path, yet the residue is still cleaned (Codex
-    P2, #155). The drill never encrypts (only ``build_durable_backup`` writes a retained, encrypted
-    archive), so leaving a drill ``.tar`` behind would accumulate plaintext db dumps in the backup
-    directory, bypassing the encryption operators expect for stored backups. Best-effort: a stranded
-    artifact must not fail the drill."""
+    """Remove this drill's encrypted archive and sidecar by deterministic stamp, even if a write
+    failed before returning a path. Also accept the legacy plaintext shape. Cleanup is best-effort;
+    a stranded new artifact contains only ciphertext, never a plaintext database dump."""
     dest = Path(destination)
-    for p in (dest / f"easysynq-backup-{stamp}.tar", dest / f"easysynq-backup-{stamp}.tar.sha256"):
+    for suffix in (".tar.enc", ".tar.enc.sha256", ".tar", ".tar.sha256"):
+        p = dest / f"easysynq-backup-{stamp}{suffix}"
         try:
             p.unlink(missing_ok=True)
         except OSError:  # best-effort cleanup; a stranded artifact must not fail the drill
@@ -661,7 +657,7 @@ def run_drill(
 ) -> DrillResult:
     """Backup → restore-into-scratch → integrity triad → teardown.
 
-    Writes a checksum-verified archive to ``destination`` and restores the database from it while
+    Writes an encrypted, checksum-verified archive to ``destination`` and restores from it while
     copying referenced bytes from the configured source object store (proving those current-source
     integrity operations round-trip, doc 08 §8.2). Never raises — returns PASS/FAIL.
     ``after_restore`` is a TEST-ONLY fault injector run after the restore + blob copy, before the
@@ -671,24 +667,41 @@ def run_drill(
     drill_id = uuid.uuid4().hex
     scratch_db = f"{_SCRATCH_PREFIX}{drill_id}"
     handle: ScratchHandle | None = None
-    archive_path: Path | None = None
     source_buckets: set[str] = set()
     protected_buckets: set[str] = set()
     object_cleanup_allowed = False
     try:
+        if not crypto.key_is_configured(settings.backup_encryption_key):
+            raise BackupCryptoError(
+                "BACKUP_ENCRYPTION_KEY is unset/placeholder — cannot encrypt restore drill"
+            )
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             dump_path = tmp_path / "db.dump"
             counts, blobs = _capture_and_dump(owner_dsn, dump_path)
 
             manifest = archive.build_manifest(
-                blobs, config={"source": "restore-drill", "blob_count": len(blobs)}
+                blobs,
+                config={"source": "restore-drill", "blob_count": len(blobs)},
+                encryption_key_ref=crypto.ENCRYPTION_KEY_REF,
+                encrypted=True,
             )
-            archive_path = archive.pack_archive(
-                dump_path, manifest, Path(destination), stamp=drill_id
+            plain = archive.pack_archive(dump_path, manifest, tmp_path / "pack", stamp=drill_id)
+            dest_dir = Path(destination)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            archive_path = crypto.encrypt_archive(
+                plain,
+                dest_dir / f"easysynq-backup-{drill_id}.tar.enc",
+                secret=settings.backup_encryption_key,
             )
+            archive.write_sidecar(archive_path)
             if not archive.verify_archive(archive_path):
                 return DrillResult("FAIL", "archive checksum verification failed")
+            # Re-read the destination, not the original local tar: this proves the full archive
+            # returned intact and authentic before any database is restored.
+            returned_plain = crypto.decrypt_archive(
+                archive_path, tmp_path / "returned.tar", secret=settings.backup_encryption_key
+            )
 
             source_buckets = {b.bucket for b in blobs}
             _validate_scratch_bucket_name(
@@ -697,7 +710,7 @@ def run_drill(
                 source_buckets=source_buckets,
                 protected_buckets=set(),
             )
-            restore_dump = archive.unpack_dump(archive_path, tmp_path / "restore")
+            restore_dump = archive.unpack_dump(returned_plain, tmp_path / "restore")
             _sweep_stale_scratch(owner_dsn)
             _create_scratch_db(owner_dsn, scratch_db)
             handle = ScratchHandle(
@@ -728,15 +741,15 @@ def run_drill(
                 after_restore(handle)
 
             return run_triad(settings, handle)
-    except BackupError as exc:
+    except (BackupError, BackupCryptoError) as exc:
         return DrillResult("FAIL", str(exc))
     except Exception as exc:
         logger.exception("restore-drill crashed")
         return DrillResult("FAIL", f"drill error: {type(exc).__name__}: {exc}"[:300])
     finally:
         # The drill's archive is a TRANSIENT verification artifact — restored FROM, then removed so
-        # a drill never accumulates PLAINTEXT db dumps in the backup directory. Clean by the
-        # deterministic stamp (covers a pack_archive that failed partway, archive_path still None).
+        # the destination does not accumulate encrypted drill artifacts. Clean by deterministic
+        # stamp, including an interrupted ciphertext or sidecar write that never returned a path.
         _unlink_transient_archive(destination, drill_id)
         if handle is not None:
             try:
@@ -761,12 +774,12 @@ def run_drill(
 # A DURABLE archive (``build_durable_backup``) is named ``easysynq-backup-{stamp}.tar[.enc]`` where
 # the stamp is ``YYYYMMDDTHHMMSSZ-<uuid8>`` — a year-prefixed timestamp + an 8-hex suffix. The match
 # is anchored to that EXACT shape so the on-demand drill's TRANSIENT artifact is never a candidate:
-# ``run_drill`` writes ``easysynq-backup-<32-hex-uuid>.tar`` (a BARE uuid4, NO timestamp) into the
-# SAME ``policy.destination`` and normally unlinks it in its ``finally``, but a HARD-KILLED drill
+# ``run_drill`` writes ``easysynq-backup-<32-hex-uuid>.tar.enc`` (a BARE uuid4, NO timestamp) into
+# the SAME ``policy.destination`` and normally unlinks it in ``finally``. A hard-killed drill
 # can leave one behind. A bare-uuid stamp begins with a hex char that lexically OUTSORTS the
 # '2'-prefixed durable stamp ~13/16 of the time, so a plain lexical-max over both families picks the
-# residue — and being plaintext it would ``verify`` PASS WITHOUT ever decrypting the real encrypted
-# backup (re-opening the Codex-P2 gap #155). Requiring the timestamp stamp excludes it structurally.
+# residue instead of the retained backup (legacy plaintext drill residue could even bypass
+# decryption). Requiring the timestamp stamp excludes both drill shapes structurally.
 _DURABLE_ARCHIVE_RE = re.compile(r"easysynq-backup-\d{8}T\d{6}Z-[0-9a-f]{8}\.tar(?:\.enc)?")
 
 

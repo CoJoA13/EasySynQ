@@ -861,27 +861,6 @@ against the current output. `formatTimestamp`'s missing `timeZone` should be fix
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
 
-## RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #420](https://github.com/CoJoA13/EasySynQ/issues/420), filed 2026-08-03 and
-deferred by owner decision; verified against `3d8613a` on 2026-09-22.
-Reason: `run_drill()` in `apps/api/src/easysynq_api/services/backup/drill.py` proves that the backup
-destination round-trips by packing an unencrypted `easysynq-backup-{stamp}.tar` holding the full
-`pg_dump` into the policy destination, restoring from it, then deleting it best-effort. Only the
-durable backup path produces the AES-256-GCM `*.tar.enc` operators expect there. Every setup-gate and
-operator-triggered drill therefore places the complete database in plaintext on the backup target for
-the drill's duration, and a cleanup failure strands it. Where that target is itself swept by other
-backup tooling, the plaintext copy can leave the host.
-Closure contract: Make the drill write no plaintext database bytes to the destination while it
-still proves the destination can hold and return a full-size archive, for example by encrypting
-the transient archive with the backup key. A small non-database probe does not satisfy this: a
-destination whose quota is below the real archive size would pass it. Prove it with a pg_dump-gated
-integration test that finds no plaintext `easysynq-backup-*.tar` in the destination during or after
-both a passing and a failing drill.
-Last reviewed: 2026-09-22
-
 ## RES-SITE-DATA-GUARD-GAPS
 
 Status: OPEN
