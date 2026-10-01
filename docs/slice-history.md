@@ -5,6 +5,33 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Dependabot repair follow-up (2026-10-01)
+
+After [#608](https://github.com/CoJoA13/EasySynQ/pull/608) merged at `acebf627`, the remaining
+approved repairs continued in [#610](https://github.com/CoJoA13/EasySynQ/pull/610) and
+[#611](https://github.com/CoJoA13/EasySynQ/pull/611). R87 records the follow-up scope and selections.
+The earlier green scans did not establish a permanent clearance: the new
+[#610 run](https://github.com/CoJoA13/EasySynQ/actions/runs/36856752738) reported eight API and
+four web fixed-version blockers. A private rebuild and scan reproduced those counts using
+Trivy `0.74.0` and the CI flags. Reports and package/advisory inventories remain private.
+
+The repair candidate based on #610 head `ce91b7ea` selects compatible PyJWT `2.15.0` and urllib3
+`2.8.0`, plus targeted upgrades of existing base packages in both Dockerfiles. Both rebuilt
+images then passed the unchanged fixed-version gate with zero blocking and zero secret findings;
+47 API and 43 web no-fix findings remained open. Offline inspection confirmed the selected
+packages and retained non-root users. The API's offline startup/image-hardening proof passed
+all 30 tests. Live pip-audit reported no findings, the web npm policy reported zero blockers,
+and the contracts audit reported zero vulnerabilities. All 274 npm-policy, 393 image-gate,
+129 pip-audit-runner regressions and the exact installed contract-tool guard passed.
+
+The same run exposed October rollover in the audit-history tests: their fixed September events
+fell outside both the migration's June–August seeds and the fixture's October–December runway.
+The affected module reproduced two failures and one pass. Its own fixture now idempotently
+creates the historical September partition after migration; all three tests then passed.
+Fixed timestamps, assertions, the shared current-month runway, and production behavior remain
+unchanged. These local results apply to the repair candidate; each final PR head still requires
+the complete CI gate, mandatory runtime acceptance and resolved review conversations before merge.
+
 ## Dependabot repair verification (2026-09-30)
 
 This is dated verification for **unmerged** [#608](https://github.com/CoJoA13/EasySynQ/pull/608),

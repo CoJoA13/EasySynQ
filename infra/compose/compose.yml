@@ -325,7 +325,7 @@ services:
 
   # Dev-only SMTP catcher (email is best-effort in MVP). Enable with --profile dev.
   mailpit:
-    image: axllent/mailpit:v1.31.1
+    image: axllent/mailpit:v1.31.2
     profiles: [dev]
     networks: [internal]
 

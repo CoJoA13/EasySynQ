@@ -30,8 +30,6 @@ caddy    caddy:2@sha256:13ba145cba2f3e28fa801994876e4c086d1b95d5aa2a520a734765ff
 renderer    gotenberg/gotenberg:8.37@sha256:f29984bd1e226bf1b93ba90af06000afa8b315853e99d27b9aaa41b93f15c769
 tika    apache/tika:3.3.1.0-full@sha256:d8e6ed96260ad89307a93195a1b856102987a818ac648502f8efbaf313d32470
 # mailpit: dev profile only (was :latest)
-# NOT digest-pinned: this dev-profile-only image is excluded from the release guard,
-# and its digest could not be independently verified (it is never pulled locally, and
-# Docker Hub was rate-limiting). Pin it during a ceremony that can verify it.
-mailpit     axllent/mailpit:v1.31.1
+# Digest verified against registry inspection and a local pull (2026-09-30).
+mailpit     axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d
 # opensearch — intentionally OMITTED in MVP (R34); v1 drop-in via the Indexer interface.
