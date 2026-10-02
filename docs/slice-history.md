@@ -42,6 +42,12 @@ and populated migration downgrade/re-upgrade/check. Independent review found add
 pre-claim outage-alarm and truncated-envelope cases; each was reproduced and corrected. Exact fresh
 suite counts and CI evidence are recorded in the PR; broader recovery residuals remain open.
 
+Integration review (2026-10-02) found that Celery's current-date shortcut could skip a missed
+late-minute slot when recovery crossed midnight. Eight regressions reproduced the gap across
+date/month/year and timezone boundaries, stale-archive eligibility and the PostgreSQL path. Occurrence
+search is now anchored at the persisted attempt before comparing with recovery time. All 62 focused
+scheduling tests and 2,520 independent DST occurrence comparisons pass after the correction.
+
 
 ## Keycloak admin scripts use Compose-resolved credentials (2026-10-01)
 

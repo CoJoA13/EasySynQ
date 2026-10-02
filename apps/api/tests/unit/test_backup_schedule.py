@@ -38,6 +38,13 @@ import pytest
         ("0 2 * * SUN", "2026-10-03T02:00Z", "2026-10-04T02:00Z", "UTC", True),
         ("*/15 1-3 * jan,oct mon-fri", "2026-10-01T02:14Z", "2026-10-01T02:15Z", "UTC", True),
         ("0 2 29 feb *", "2026-03-01T00:00Z", "2027-03-01T00:00Z", "UTC", False),
+        ("0,30 23 * * *", "2026-10-01T23:00Z", "2026-10-02T00:00Z", "UTC", True),
+        ("0,30 23 * * *", "2026-10-31T23:00Z", "2026-11-01T00:00Z", "UTC", True),
+        ("0,30 23 31 dec *", "2026-12-31T23:00Z", "2027-01-01T00:00Z", "UTC", True),
+        ("0,30 23 29 feb *", "2028-02-29T23:00Z", "2028-03-01T00:00Z", "UTC", True),
+        ("0,30 23 * * thu", "2026-10-01T23:00Z", "2026-10-02T00:00Z", "UTC", True),
+        ("0,30 23 * * *", "2026-10-02T06:00Z", "2026-10-02T07:00Z", "America/Los_Angeles", True),
+        ("0,30 23 * * *", "2026-10-01T23:30Z", "2026-10-02T00:00Z", "UTC", False),
     ],
 )
 def test_calendar_due(cron: str, last: str, now: str, tz: str, expected: bool) -> None:
@@ -54,6 +61,18 @@ def test_calendar_due(cron: str, last: str, now: str, tz: str, expected: bool) -
         )
         is expected
     )
+
+
+def test_archive_before_missed_late_minute_cannot_satisfy_next_day_catch_up() -> None:
+    from easysynq_api.services.backup.schedule import resolve_schedule
+
+    previous = datetime.fromisoformat("2026-10-01T22:00Z")
+    started = datetime.fromisoformat("2026-10-01T23:00Z")
+    now = datetime.fromisoformat("2026-10-02T00:00Z")
+    zone = ZoneInfo("UTC")
+    schedule = resolve_schedule("0,30 23 * * *", now=now, tz=zone)
+    assert not schedule.reusable(previous, started, now, zone)
+    assert schedule.reusable(previous, started.replace(minute=30), now, zone)
 
 
 @pytest.mark.parametrize(

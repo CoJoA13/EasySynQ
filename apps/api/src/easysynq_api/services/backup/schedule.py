@@ -100,8 +100,10 @@ class BackupSchedule:
         if now.astimezone(UTC) <= last.astimezone(UTC):
             return False
         civil_now, civil_last = _civil(now, tz), _civil(last, tz)
+        # Find the first occurrence after the persisted watermark, independent of recovery time.
+        # Celery's same-day shortcut otherwise skips later minutes in that hour after midnight.
         return any(
-            _cron(fields, civil_now).remaining_estimate(civil_last).total_seconds() <= 0
+            civil_last + _cron(fields, civil_last).remaining_estimate(civil_last) <= civil_now
             for fields in self.alternatives
         )
 

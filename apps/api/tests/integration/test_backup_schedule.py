@@ -117,6 +117,23 @@ async def test_concurrent_workers_skip_locked_policy_and_redelivery_does_not_dup
     assert len(list(destination.glob("*.tar*"))) == 2
 
 
+async def test_missed_late_minute_catches_up_once_after_local_midnight(policy, monkeypatch):
+    org_id, policy_id, destination = policy
+    last = datetime.fromisoformat("2026-10-02T06:00Z")  # October 1, 23:00 Los Angeles
+    now = datetime.fromisoformat("2026-10-02T07:00Z")  # October 2, 00:00 Los Angeles
+    async with get_sessionmaker()() as session:
+        row = await session.get(BackupPolicy, policy_id)
+        row.cron = "0,30 23 * * *"
+        row.last_scheduled_attempt_at = last
+        await session.commit()
+    monkeypatch.setattr(service, "_now", lambda: now)
+    caught_up = own(await service.run_scheduled_backups(only_due=True), org_id)
+    assert len(caught_up) == 1 and caught_up[0]["verified"]
+    assert await marker(policy_id) == now
+    assert own(await service.run_scheduled_backups(only_due=True), org_id) == []
+    assert len(list(destination.glob("*.tar*"))) == 2
+
+
 async def test_handled_failure_consumes_attempt_and_reports_without_poisoning_next_run(
     policy, monkeypatch
 ):
