@@ -390,26 +390,16 @@ server's first I/O in its handler thread races that close. Unmodified `origin/ma
 that exact signature in one of four direct runs; the mirror branch failed four of five, and every
 run whose message was exposed showed the same signature, so the mechanism predates the mirror.
 Whether it caused the 2026-09-10 or 2026-09-19 CI failures is unproven, so this record stays OPEN.
-Last reviewed: 2026-09-25
-
-## RES-INTEGRATION-SETUP-ORDER-FAILURE
-
-Status: OPEN
-Owner: Repository owner
-Source: S-recovery-exact-version-binding verification, 2026-09-22, clean `main` worktree `bdfdf95`
-Reason: A full single-process run of the integration suite (`pytest -m integration`) fails
-`tests/integration/test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment`
-while every other case passes (1,258 passed / 1 failed on `bdfdf95`); the same tree passes the
-case in CI because the four-way duration-balanced sharding never places it after the test whose
-leftover state it trips on. The failure is therefore order-dependent, masked by shard composition,
-and a `.test_durations` refresh that moves the chunk boundary can surface it in CI without any
-code change.
-Closure contract: Identify the earlier test (or fixture) whose shared-database or process state
-the setup case depends on, make the case self-provide or isolate that precondition so it passes
-in any order, prove the fix with a full single-process integration run and with the specific
-ordering that reproduced the failure, and confirm CI sharding is not relied on. A green sharded
-run alone does not close this record.
-Last reviewed: 2026-09-22
+Progress, 2026-10-01 (unmerged candidate): A synthetic local reproduction on unchanged `2997ba6`
+observed 20 correct hostname rejections and 13 fixture failures, all `BrokenPipeError` in the server's
+first buffered read with zero HTTP requests. A deterministic regression reproduces that read-boundary
+failure. The candidate handles only `BrokenPipeError` before any HTTP request line or recorded request
+in explicitly negative TLS fixtures; ordinary fixtures and other TLS/I/O errors still fail. Real
+trusted, untrusted and wrong-host TLS cases and acceptance-runner guards pass (262 focused tests).
+No production transport, diagnostic disclosure, resource limit or mandatory assertion changed.
+Exact-head mandatory acceptance is reported in the associated PR. This fixes the identified local
+fixture mechanism; it does not establish the cause of the historical CI failures or close this record.
+Last reviewed: 2026-10-01
 
 ## RES-TYPESCRIPT-7-UPGRADE
 
@@ -880,27 +870,6 @@ against the current output. `formatTimestamp`'s missing `timeZone` should be fix
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
 
-## RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #420](https://github.com/CoJoA13/EasySynQ/issues/420), filed 2026-08-03 and
-deferred by owner decision; verified against `3d8613a` on 2026-09-22.
-Reason: `run_drill()` in `apps/api/src/easysynq_api/services/backup/drill.py` proves that the backup
-destination round-trips by packing an unencrypted `easysynq-backup-{stamp}.tar` holding the full
-`pg_dump` into the policy destination, restoring from it, then deleting it best-effort. Only the
-durable backup path produces the AES-256-GCM `*.tar.enc` operators expect there. Every setup-gate and
-operator-triggered drill therefore places the complete database in plaintext on the backup target for
-the drill's duration, and a cleanup failure strands it. Where that target is itself swept by other
-backup tooling, the plaintext copy can leave the host.
-Closure contract: Make the drill write no plaintext database bytes to the destination while it
-still proves the destination can hold and return a full-size archive, for example by encrypting
-the transient archive with the backup key. A small non-database probe does not satisfy this: a
-destination whose quota is below the real archive size would pass it. Prove it with a pg_dump-gated
-integration test that finds no plaintext `easysynq-backup-*.tar` in the destination during or after
-both a passing and a failing drill.
-Last reviewed: 2026-09-22
-
 ## RES-SITE-DATA-GUARD-GAPS
 
 Status: OPEN
@@ -1003,37 +972,6 @@ replaces a dead `keycloak_subject` today (`POST /users` creates a separate `app_
 user PATCH changes status), the closure must also either ship an audited relink operation for a
 stale subject, with authorization and a test, or return a response naming the documented manual
 recovery. An error class alone does not close this record.
-Last reviewed: 2026-09-22
-
-## RES-KEYCLOAK-LOCATION-SUBJECT
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #432](https://github.com/CoJoA13/EasySynQ/issues/432), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: After creating a Keycloak user, `keycloak_provisioning.py` trusts any non-empty last path
-segment of the `Location` header as the new subject. The exact-lookup fallback runs only when the
-header is absent, so a malformed `.../users/` yields the subject `users`, and `provision_user`
-commits an `app_user` bound to an account that does not exist.
-Closure contract: Validate the `Location` path itself rather than subject syntax (the repository
-treats `keycloak_subject` as opaque): accept it only when it is the expected
-`.../admin/realms/<realm>/users/<id>` shape with a non-empty final segment, otherwise use the exact
-username lookup, and test the `.../users/` and foreign-path cases.
-Last reviewed: 2026-09-22
-
-## RES-CREATE-USER-PENDING-EDITS
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #434](https://github.com/CoJoA13/EasySynQ/issues/434), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: `CreateUserModal.tsx` leaves the identity fields editable while the create request is
-pending, and the collision-recovery link reads the live form instead of the submitted values. An
-operator who edits the name or email while waiting can link an existing Keycloak identity to another
-person's metadata.
-Closure contract: Snapshot the submitted values when the create starts and have the link request use
-the snapshot (or disable the fields while pending), with a test that edits during a pending create and
-asserts the link payload.
 Last reviewed: 2026-09-22
 
 ## RES-ROLE-PICKER-ROLE-READ
