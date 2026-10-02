@@ -6,6 +6,34 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Keycloak admin scripts use Compose-resolved credentials (2026-10-01)
+
+Closure candidate for [#422](https://github.com/CoJoA13/EasySynQ/issues/422),
+`RES-KEYCLOAK-SCRIPT-DOTENV-ESCAPES`. The duplicated `env_val` parser in both host break-glass
+scripts stopped at the first double quote even when escaped, sending a truncated admin password.
+Both now share `scripts/lib/keycloak-admin.sh`: Compose resolves the project name and the final
+Keycloak service credentials using host/.env precedence and the complete active file set recorded
+on the running deployment. Missing, inconsistent or foreign-checkout deployment files fail closed.
+A validation-only Compose extension retains the explicit nonempty source-password requirement;
+no service configuration is changed. NUL-framed validated fields retain whitespace and trailing
+newlines without evaluating dotenv as shell code. Raw parser diagnostics and resolved models are
+never printed. Native Git Bash host paths are converted separately from the container path.
+
+The tools remain incident-recovery helpers, attach with `exec -T` only, and preserve exact-user
+lookup, identity rechecking and existing create/reset/lockout handling. They do not start or
+recreate services. Other dotenv helpers are unchanged. Compose resolves the files as they exist
+now: these scripts do not attest that an edited .env matches a previously started container.
+
+Evidence: the escaped-quote regression failed at the authentication argv in BOTH original scripts.
+The regression suite drives both complete script entry points through the real Compose parser
+using synthetic-only data, intercepting discovery and exec so no real accounts or services are
+changed. It covers escaped quotes/backslashes, trailing backslashes/newlines, literal hashes,
+whitespace, CRLF, interpolation, host precedence, active production/offline overlays, duplicate
+container labels, defaults, malformed/missing/empty credentials, invalid final service values and
+ambiguous/missing/foreign deployments. Native Windows path handling has a synthetic path-conversion
+proof; actual Windows execution is not claimed. Fresh results and exact-head CI are recorded in
+the associated PR.
+
 ## Provisioning post-commit readback recovery (2026-10-01)
 
 Closure candidate for [#433](https://github.com/CoJoA13/EasySynQ/issues/433),
