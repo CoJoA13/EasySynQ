@@ -6,6 +6,32 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Keycloak create Location validation (2026-10-01)
+
+Closure candidate for [#432](https://github.com/CoJoA13/EasySynQ/issues/432),
+`RES-KEYCLOAK-LOCATION-SUBJECT`. The provisioning client previously trusted any non-empty last segment
+of a create response's `Location`; a missing identifier in `.../users/` therefore returned `users`
+instead of resolving the created account. It now accepts only a user resource immediately under the
+actual create collection path, including a deployment context path, with no query or fragment.
+Malformed or foreign paths use the existing verified exact-username lookup and preserve its failure
+behavior. Subjects remain opaque (including percent-encoded values); no UUID restriction is added.
+A differing advertised public origin is supported because the client extracts the ID without following
+the returned URL.
+
+Fresh local evidence: 13 new regression cases failed on `2997ba6`. Review added four failing cases for raw whitespace/control characters and malformed percent escapes,
+which are now rejected before URL parsing. With the fix, 98 affected client and
+identity unit tests and all 27 provisioning integration tests pass. Coverage includes missing IDs,
+foreign realm/resource paths, extra path segments, malformed URLs, query/fragment ambiguity, a failed
+or absent fallback lookup, opaque subjects and a deployment context prefix. Ruff/format and strict
+mypy across 483 source files pass. The associated draft PR reports independent review and exact-head
+CI separately; this candidate has not shipped.
+
+Integration review also identified an exact-username fallback returning an empty string ID. Two
+regressions (missing and malformed Location) reproduced acceptance of that unusable binding. The
+fallback now requires a non-empty subject too; both cases and all 100 affected client/identity unit
+tests pass, as do the 27 provisioning integration cases. Non-empty opaque subjects remain supported.
+
+
 ## Create-user collision submission snapshot (2026-10-01)
 
 Closure candidate for [#434](https://github.com/CoJoA13/EasySynQ/issues/434),
