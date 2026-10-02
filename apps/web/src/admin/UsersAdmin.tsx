@@ -215,6 +215,8 @@ function ManageUser({
   onIssuingChange: (issuing: boolean) => void;
 }) {
   const qc = useQueryClient();
+  const permissions = usePermissions();
+  const canAssignRoles = permissions.can("permission.grant") && permissions.can("role.read");
   const [roleId, setRoleId] = useState<string | null>(null);
   const [ov, setOv] = useState({ permission_key: "", effect: "ALLOW" });
   const [error, setError] = useState<string | null>(null);
@@ -228,7 +230,7 @@ function ManageUser({
   const roles = useQuery({
     queryKey: ["roles"],
     queryFn: () => apiGet<Role[]>("/api/v1/roles", token),
-    enabled: !!token,
+    enabled: canAssignRoles && !!token,
   });
   const assignments = useQuery({
     queryKey: ["user-roles", user.id],
@@ -367,24 +369,26 @@ function ManageUser({
             No roles assigned.
           </Text>
         )}
-        <Group align="flex-end">
-          <Select
-            label="Assign a role"
-            placeholder="Pick a role"
-            data={(roles.data ?? []).map((r) => ({ value: r.id, label: r.name }))}
-            value={roleId}
-            onChange={setRoleId}
-            searchable
-            style={{ flex: 1 }}
-          />
-          <Button
-            onClick={() => assignMut.mutate()}
-            loading={assignMut.isPending}
-            disabled={!roleId}
-          >
-            Assign
-          </Button>
-        </Group>
+        {canAssignRoles && (
+          <Group align="flex-end">
+            <Select
+              label="Assign a role"
+              placeholder="Pick a role"
+              data={(roles.data ?? []).map((r) => ({ value: r.id, label: r.name }))}
+              value={roleId}
+              onChange={setRoleId}
+              searchable
+              style={{ flex: 1 }}
+            />
+            <Button
+              onClick={() => assignMut.mutate()}
+              loading={assignMut.isPending}
+              disabled={!roleId}
+            >
+              Assign
+            </Button>
+          </Group>
+        )}
       </Stack>
 
       <Stack gap="xs">
