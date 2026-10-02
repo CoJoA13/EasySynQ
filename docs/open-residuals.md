@@ -188,29 +188,6 @@ and an optional read-only root filesystem for the application services, which ne
 inventory and is not done.
 Last reviewed: 2026-09-19
 
-## RES-IP-REGISTER-COLUMN-JUMP
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ui-5c, 2026-08-29 (owner-deferred at the S-ui-5 walkthrough close)
-Reason: The interested-parties register's columns change width when the filter selection changes, so
-rows appear to shift sideways between two views of the same data. The cause is
-`table-layout: auto` sizing each enum column to the widest value currently rendered: filtering to a
-subset removes the widest `Category`, `Influence`, `Interest` or `Status` value, the column shrinks,
-and every column after it moves. The known fix is `layout="fixed"` on the register's `Table` with
-pinned pixel widths on those four columns. The adversarial reviewer called pinned widths fragile —
-they rot the moment a label changes or a new enum value is added — and required that the widths be
-harvested LAST, because S-ui-5c's `white-space: nowrap` on `SortableTh` changed the header
-min-content of every register and any width measured before it is stale. The owner reviewed this
-against the other two walkthrough items and deferred it as the lowest-value of the three.
-Closure contract: Either harvest the post-S-ui-5c column widths in a real browser, pin them under
-`layout="fixed"`, and add a Playwright case to `apps/web/e2e/register-table-legibility.spec.ts` that
-measures one column's left edge in two filter states and fails when it moves; or establish that a
-min-width floor per enum column is stable enough without pinning exact widths, and prove that
-instead. jsdom cannot see either, so a Vitest assertion is not acceptable evidence. If neither is
-worth the fragility, record that the columns stay fluid and remove this record.
-Last reviewed: 2026-08-29
-
 ## RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER
 
 Status: OPEN
