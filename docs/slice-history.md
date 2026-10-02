@@ -6,6 +6,28 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Provisioning post-commit readback recovery (2026-10-01)
+
+Closure candidate for [#433](https://github.com/CoJoA13/EasySynQ/issues/433),
+`RES-PROVISION-POST-COMMIT-READ-FAILURE`. The Keycloak account, application user and requested roles
+commit before the response's user refresh and role-name reads. A database failure in either read used
+to produce an unhandled error while the committed account still lacked a credential.
+
+Database errors in that readback block now return the existing `keycloak_unavailable` recovery code,
+which prompts the UI to refresh the roster, with explicit guidance that the user was created, no
+temporary password was set, and the operator should reload and reissue rather than retry create.
+The message identifies a readback failure without exposing database diagnostics. The earlier creation
+commit and later credential issuance/audit boundaries remain unchanged; unrelated exception types
+are not translated into a database recovery response.
+
+Fresh local evidence: both refresh and role-name fault injections failed on `2997ba6`. Each proves a
+separate database transaction sees the committed user before the fault fires, then checks that the
+user, roles and creation audit survive, no credential was issued or audited, and the advertised
+reissue path succeeds without another create. With the fix, all **29 provisioning integration tests**
+pass. The associated draft PR records static checks, independent review and exact-head CI separately;
+this candidate has not shipped.
+
+
 ## Keycloak create Location validation (2026-10-01)
 
 Closure candidate for [#432](https://github.com/CoJoA13/EasySynQ/issues/432),

@@ -974,20 +974,6 @@ stale subject, with authorization and a test, or return a response naming the do
 recovery. An error class alone does not close this record.
 Last reviewed: 2026-09-22
 
-## RES-PROVISION-POST-COMMIT-READ-FAILURE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #433](https://github.com/CoJoA13/EasySynQ/issues/433), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: In `provision_user` (`apps/api/src/easysynq_api/api/users.py`), the `session.refresh(user)`
-and role-name reads run after the first commit with no error handling. If either fails, the account
-and `app_user` exist without a credential and the caller receives a bare 500 without the "user
-created; reissue rather than retry" guidance the credential path gives.
-Closure contract: Map a failure of those reads to the same recoverable response, or build the
-response from values already held, and prove it with a fault-injection test.
-Last reviewed: 2026-09-22
-
 ## RES-ROLE-PICKER-ROLE-READ
 
 Status: OPEN
