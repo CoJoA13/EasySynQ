@@ -21,11 +21,12 @@ Two behaviours are inherited from ``scripts/new-keycloak-user.sh`` and are load-
 from __future__ import annotations
 
 import copy
+import re
 import types
 import uuid
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 
@@ -393,12 +394,33 @@ class KeycloakProvisioningClient:
         if response.status_code not in (200, 201):
             raise KeycloakUnavailable(f"Keycloak user create returned {response.status_code}")
         location = response.headers.get("Location", "")
-        subject = location.rstrip("/").rsplit("/", 1)[-1] if location else ""
-        if subject:
+        try:
+            # urlsplit strips some raw whitespace/control bytes; unquote leaves malformed '%'
+            # escapes untouched. Reject that syntax before either can hide an unusable header.
+            if any(ord(char) <= 0x20 or ord(char) == 0x7F for char in location) or re.search(
+                r"%(?![0-9A-Fa-f]{2})", location
+            ):
+                raise ValueError("malformed Location syntax")
+            parsed = urlsplit(location)
+            parent, _, segment = parsed.path.rpartition("/")
+            # Match the actual collection path, including an optional deployment context path.
+            # A proxy may advertise a different public origin; no request follows this URL.
+            # Subjects remain opaque: validate the resource path, not UUID syntax.
+            subject = (
+                unquote(segment, errors="strict")
+                if parsed.scheme in ("", "http", "https")
+                and not parsed.query
+                and not parsed.fragment
+                and parent == urlsplit(str(response.request.url)).path
+                else ""
+            )
+        except (ValueError, UnicodeError):
+            subject = ""
+        if subject and subject not in (".", ".."):
             return subject
-        # Keycloak normally returns the new id in Location; fall back to an exact re-read.
+        # Missing/malformed Location is not an identity; use the verified exact username lookup.
         lookup = await self.find_user_by_username(username)
-        if not lookup.found or lookup.subject is None:
+        if not lookup.found or not lookup.subject:
             raise KeycloakUnavailable("Keycloak created the account but its id could not be read")
         return lookup.subject
 

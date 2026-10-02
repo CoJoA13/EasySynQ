@@ -346,6 +346,119 @@ describe("CreateUserModal", () => {
     expect(linkBody).toMatchObject({ keycloak_subject: COLLISION_SUBJECT });
   });
 
+  it.each([
+    { displayName: "Original Person", email: "original@example.com" },
+    { displayName: "", email: "" },
+  ])(
+    "links the submitted identity after pending edits: $displayName",
+    async ({ displayName, email }) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let createBody: unknown;
+      let linkBody: unknown;
+      grant(["permission.grant"]);
+      server.use(
+        http.get("/api/v1/roles", () => HttpResponse.json(ROLES)),
+        http.post("/api/v1/users/provision", async ({ request }) => {
+          createBody = await request.json();
+          await gate;
+          return HttpResponse.json(
+            {
+              code: "keycloak_username_exists_unlinked",
+              keycloak_subject: COLLISION_SUBJECT,
+            },
+            { status: 409 },
+          );
+        }),
+        http.post("/api/v1/users", async ({ request }) => {
+          linkBody = await request.json();
+          return HttpResponse.json(PROVISIONED_USER, { status: 201 });
+        }),
+      );
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      renderModal(onClose);
+      await user.type(screen.getByLabelText(/Username/), "original");
+      if (displayName) await user.type(screen.getByLabelText("Display name"), displayName);
+      if (email) await user.type(screen.getByLabelText("Email"), email);
+      await user.click(screen.getByRole("button", { name: "Create" }));
+      await waitFor(() =>
+        expect(createBody).toMatchObject({
+          username: "original",
+          display_name: displayName,
+          email,
+          role_ids: [],
+        }),
+      );
+
+      try {
+        for (const [label, value] of [
+          [/Username/, "edited"],
+          ["Display name", "Another Person"],
+          ["Email", "edited@example.com"],
+        ] as const) {
+          await user.clear(screen.getByLabelText(label));
+          await user.type(screen.getByLabelText(label), value);
+        }
+        await user.click(screen.getByPlaceholderText(/assign roles/i));
+        await user.click(await screen.findByText("Employee"));
+        expect(screen.getByLabelText("Display name")).toHaveValue("Another Person");
+      } finally {
+        act(() => release());
+      }
+      await screen.findByRole("button", { name: "Link the existing account" });
+      const warnedAboutRoles = screen.queryByText(/will not be assigned by linking/) !== null;
+      await user.click(screen.getByRole("button", { name: "Link the existing account" }));
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      expect(linkBody).toEqual({
+        keycloak_subject: COLLISION_SUBJECT,
+        display_name: displayName || "original",
+        email: email || null,
+      });
+      expect(warnedAboutRoles).toBe(false);
+    },
+  );
+
+  it("binds a fresh collision to the new submission after choosing another username", async () => {
+    let linkBody: unknown;
+    server.use(
+      http.post("/api/v1/users/provision", async ({ request }) => {
+        const body = (await request.json()) as { username: string };
+        return HttpResponse.json(
+          {
+            code: "keycloak_username_exists_unlinked",
+            keycloak_subject: `subject-${body.username}`,
+          },
+          { status: 409 },
+        );
+      }),
+      http.post("/api/v1/users", async ({ request }) => {
+        linkBody = await request.json();
+        return HttpResponse.json(PROVISIONED_USER, { status: 201 });
+      }),
+    );
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderModal(onClose);
+    await user.type(screen.getByLabelText(/Username/), "first");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await user.click(await screen.findByRole("button", { name: "Choose a different username" }));
+    await user.clear(screen.getByLabelText(/Username/));
+    await user.type(screen.getByLabelText(/Username/), "second");
+    await user.type(screen.getByLabelText("Display name"), "Second Person");
+    await user.type(screen.getByLabelText("Email"), "second@example.com");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await user.click(await screen.findByRole("button", { name: "Link the existing account" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(linkBody).toEqual({
+      keycloak_subject: "subject-second",
+      display_name: "Second Person",
+      email: "second@example.com",
+    });
+  });
+
   it("Choose a different username returns to the editable form without closing the modal", async () => {
     server.use(
       http.post("/api/v1/users/provision", () =>

@@ -43,6 +43,104 @@ pre-claim outage-alarm and truncated-envelope cases; each was reproduced and cor
 suite counts and CI evidence are recorded in the PR; broader recovery residuals remain open.
 
 
+## Keycloak admin scripts use Compose-resolved credentials (2026-10-01)
+
+Closure candidate for [#422](https://github.com/CoJoA13/EasySynQ/issues/422),
+`RES-KEYCLOAK-SCRIPT-DOTENV-ESCAPES`. The duplicated `env_val` parser in both host break-glass
+scripts stopped at the first double quote even when escaped, sending a truncated admin password.
+Both now share `scripts/lib/keycloak-admin.sh`: Compose resolves the project name and the final
+Keycloak service credentials using host/.env precedence and the complete active file set recorded
+on the running deployment. Missing, inconsistent or foreign-checkout deployment files fail closed.
+A validation-only Compose extension retains the explicit nonempty source-password requirement;
+no service configuration is changed. NUL-framed validated fields retain whitespace and trailing
+newlines without evaluating dotenv as shell code. Raw parser diagnostics and resolved models are
+never printed. Native Git Bash host paths are converted separately from the container path.
+
+The tools remain incident-recovery helpers, attach with `exec -T` only, and preserve exact-user
+lookup, identity rechecking and existing create/reset/lockout handling. They do not start or
+recreate services. Other dotenv helpers are unchanged. Compose resolves the files as they exist
+now: these scripts do not attest that an edited .env matches a previously started container.
+
+Evidence: the escaped-quote regression failed at the authentication argv in BOTH original scripts.
+The regression suite drives both complete script entry points through the real Compose parser
+using synthetic-only data, intercepting discovery and exec so no real accounts or services are
+changed. It covers escaped quotes/backslashes, trailing backslashes/newlines, literal hashes,
+whitespace, CRLF, interpolation, host precedence, active production/offline overlays, duplicate
+container labels, defaults, malformed/missing/empty credentials, invalid final service values and
+ambiguous/missing/foreign deployments. Native Windows path handling has a synthetic path-conversion
+proof; actual Windows execution is not claimed. Fresh results and exact-head CI are recorded in
+the associated PR.
+
+## Provisioning post-commit readback recovery (2026-10-01)
+
+Closure candidate for [#433](https://github.com/CoJoA13/EasySynQ/issues/433),
+`RES-PROVISION-POST-COMMIT-READ-FAILURE`. The Keycloak account, application user and requested roles
+commit before the response's user refresh and role-name reads. A database failure in either read used
+to produce an unhandled error while the committed account still lacked a credential.
+
+Database errors in that readback block now return the existing `keycloak_unavailable` recovery code,
+which prompts the UI to refresh the roster, with explicit guidance that the user was created, no
+temporary password was set, and the operator should reload and reissue rather than retry create.
+The message identifies a readback failure without exposing database diagnostics. The earlier creation
+commit and later credential issuance/audit boundaries remain unchanged; unrelated exception types
+are not translated into a database recovery response.
+
+Fresh local evidence: both refresh and role-name fault injections failed on `2997ba6`. Each proves a
+separate database transaction sees the committed user before the fault fires, then checks that the
+user, roles and creation audit survive, no credential was issued or audited, and the advertised
+reissue path succeeds without another create. With the fix, all **29 provisioning integration tests**
+pass. The associated draft PR records static checks, independent review and exact-head CI separately;
+this candidate has not shipped.
+
+
+## Keycloak create Location validation (2026-10-01)
+
+Closure candidate for [#432](https://github.com/CoJoA13/EasySynQ/issues/432),
+`RES-KEYCLOAK-LOCATION-SUBJECT`. The provisioning client previously trusted any non-empty last segment
+of a create response's `Location`; a missing identifier in `.../users/` therefore returned `users`
+instead of resolving the created account. It now accepts only a user resource immediately under the
+actual create collection path, including a deployment context path, with no query or fragment.
+Malformed or foreign paths use the existing verified exact-username lookup and preserve its failure
+behavior. Subjects remain opaque (including percent-encoded values); no UUID restriction is added.
+A differing advertised public origin is supported because the client extracts the ID without following
+the returned URL.
+
+Fresh local evidence: 13 new regression cases failed on `2997ba6`. Review added four failing cases for raw whitespace/control characters and malformed percent escapes,
+which are now rejected before URL parsing. With the fix, 98 affected client and
+identity unit tests and all 27 provisioning integration tests pass. Coverage includes missing IDs,
+foreign realm/resource paths, extra path segments, malformed URLs, query/fragment ambiguity, a failed
+or absent fallback lookup, opaque subjects and a deployment context prefix. Ruff/format and strict
+mypy across 483 source files pass. The associated draft PR reports independent review and exact-head
+CI separately; this candidate has not shipped.
+
+Integration review also identified an exact-username fallback returning an empty string ID. Two
+regressions (missing and malformed Location) reproduced acceptance of that unusable binding. The
+fallback now requires a non-empty subject too; both cases and all 100 affected client/identity unit
+tests pass, as do the 27 provisioning integration cases. Non-empty opaque subjects remain supported.
+
+
+## Create-user collision submission snapshot (2026-10-01)
+
+Closure candidate for [#434](https://github.com/CoJoA13/EasySynQ/issues/434),
+`RES-CREATE-USER-PENDING-EDITS`. The create-user form remained editable while provisioning was pending,
+but collision recovery combined the returned Keycloak subject with the current form. An operator
+could therefore link the original identity using another person's subsequently entered metadata.
+
+Create now takes an explicit copy of the submitted form, including its role list. A collision binds
+that submission to the returned subject, and link recovery uses the bound display name, username
+fallback and email. Its role-assignment warning uses the same submission. The editable form remains
+the draft for choosing a different username and resubmitting. Password-cache cleanup and server
+permission checks are unchanged; the separate role-picker permission residual remains open.
+
+Fresh local evidence: two delayed-response regressions edit identity fields and roles during a pending
+create, then assert the original link payload (including blank-name/email fallback). Both failed on
+`2997ba6` and passed with the fix. A further case proves a later submission binds its own returned
+identity and metadata. The component suite passed **19 tests**; the complete `npm test` run passed
+**2,360 tests across 283 files**. `npm run lint`, `npm run build` and formatting checks passed.
+Independent review found no actionable findings. The associated draft PR records exact-head CI
+separately; this evidence does not claim the change has shipped.
+
+
 ## Setup acknowledgment audit-history isolation (2026-10-01)
 
 Closure candidate for [#567](https://github.com/CoJoA13/EasySynQ/issues/567),

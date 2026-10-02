@@ -390,7 +390,16 @@ server's first I/O in its handler thread races that close. Unmodified `origin/ma
 that exact signature in one of four direct runs; the mirror branch failed four of five, and every
 run whose message was exposed showed the same signature, so the mechanism predates the mirror.
 Whether it caused the 2026-09-10 or 2026-09-19 CI failures is unproven, so this record stays OPEN.
-Last reviewed: 2026-09-25
+Progress, 2026-10-01 (unmerged candidate): A synthetic local reproduction on unchanged `2997ba6`
+observed 20 correct hostname rejections and 13 fixture failures, all `BrokenPipeError` in the server's
+first buffered read with zero HTTP requests. A deterministic regression reproduces that read-boundary
+failure. The candidate handles only `BrokenPipeError` before any HTTP request line or recorded request
+in explicitly negative TLS fixtures; ordinary fixtures and other TLS/I/O errors still fail. Real
+trusted, untrusted and wrong-host TLS cases and acceptance-runner guards pass (262 focused tests).
+No production transport, diagnostic disclosure, resource limit or mandatory assertion changed.
+Exact-head mandatory acceptance is reported in the associated PR. This fixes the identified local
+fixture mechanism; it does not establish the cause of the historical CI failures or close this record.
+Last reviewed: 2026-10-01
 
 ## RES-TYPESCRIPT-7-UPGRADE
 
@@ -878,22 +887,6 @@ false positive out, an evidence-backed lockfile policy, a case-insensitive finge
 and a clean run over the full tree.
 Last reviewed: 2026-09-22
 
-## RES-KEYCLOAK-SCRIPT-DOTENV-ESCAPES
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #422](https://github.com/CoJoA13/EasySynQ/issues/422), filed 2026-08-03;
-verified against `3d8613a` on 2026-09-22.
-Reason: The `env_val` helper copied into `scripts/new-keycloak-user.sh` and
-`scripts/clear-keycloak-lockout.sh` ends a double-quoted value at the first `"`, escaped or not.
-Compose resolves `KEYCLOAK_ADMIN_PASSWORD="abc\"def"` to `abc"def`; the helper returns `abc\`, so
-after a rotation to such a value both scripts authenticate with the wrong password. This is the third
-dotenv production the `sed` approximation has had to chase.
-Closure contract: Read the value Compose itself resolves (for example from `docker compose config`)
-or implement the escape grammar once in a shared helper, and extend the extraction test matrix with
-escaped-quote and trailing-backslash cases run against both scripts.
-Last reviewed: 2026-09-22
-
 ## RES-SITE-ARTIFACT-GITIGNORE
 
 Status: OPEN
@@ -947,51 +940,6 @@ replaces a dead `keycloak_subject` today (`POST /users` creates a separate `app_
 user PATCH changes status), the closure must also either ship an audited relink operation for a
 stale subject, with authorization and a test, or return a response naming the documented manual
 recovery. An error class alone does not close this record.
-Last reviewed: 2026-09-22
-
-## RES-KEYCLOAK-LOCATION-SUBJECT
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #432](https://github.com/CoJoA13/EasySynQ/issues/432), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: After creating a Keycloak user, `keycloak_provisioning.py` trusts any non-empty last path
-segment of the `Location` header as the new subject. The exact-lookup fallback runs only when the
-header is absent, so a malformed `.../users/` yields the subject `users`, and `provision_user`
-commits an `app_user` bound to an account that does not exist.
-Closure contract: Validate the `Location` path itself rather than subject syntax (the repository
-treats `keycloak_subject` as opaque): accept it only when it is the expected
-`.../admin/realms/<realm>/users/<id>` shape with a non-empty final segment, otherwise use the exact
-username lookup, and test the `.../users/` and foreign-path cases.
-Last reviewed: 2026-09-22
-
-## RES-PROVISION-POST-COMMIT-READ-FAILURE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #433](https://github.com/CoJoA13/EasySynQ/issues/433), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: In `provision_user` (`apps/api/src/easysynq_api/api/users.py`), the `session.refresh(user)`
-and role-name reads run after the first commit with no error handling. If either fails, the account
-and `app_user` exist without a credential and the caller receives a bare 500 without the "user
-created; reissue rather than retry" guidance the credential path gives.
-Closure contract: Map a failure of those reads to the same recoverable response, or build the
-response from values already held, and prove it with a fault-injection test.
-Last reviewed: 2026-09-22
-
-## RES-CREATE-USER-PENDING-EDITS
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #434](https://github.com/CoJoA13/EasySynQ/issues/434), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: `CreateUserModal.tsx` leaves the identity fields editable while the create request is
-pending, and the collision-recovery link reads the live form instead of the submitted values. An
-operator who edits the name or email while waiting can link an existing Keycloak identity to another
-person's metadata.
-Closure contract: Snapshot the submitted values when the create starts and have the link request use
-the snapshot (or disable the fields while pending), with a test that edits during a pending create and
-asserts the link payload.
 Last reviewed: 2026-09-22
 
 ## RES-ROLE-PICKER-ROLE-READ
