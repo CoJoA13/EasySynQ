@@ -5,6 +5,45 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Interested-parties columns remain stable while filtering (2026-10-02)
+
+Closure candidate for [#559](https://github.com/CoJoA13/EasySynQ/issues/559),
+`RES-IP-REGISTER-COLUMN-JUMP`. Four Chromium regressions reproduced the automatic-layout defect:
+selecting Low influence moved Last reviewed by 5.46875px at 320/1000/1115px and 6.0625px at 1280px.
+Eight measurement probes then captured the current five-column table after fonts settled.
+
+The page now uses fixed layout with Type/Influence/Status/Last reviewed widths of 112/152/88/128px.
+The largest measured compact content was the Community badge with glyph (94.546875px), Medium
+influence badge with glyph (135.296875px), Closed badge with glyph (71.796875px), and Last reviewed
+header button with icon (111px). Adding 16px cell padding and rounding up to an 8px step produced
+those allocations. Party receives the remaining width, 400px at the unchanged 880px floor; its
+existing button is capped at the cell width so the existing text clamp contains long names.
+The literal `<Table.ScrollContainer minWidth={880}>` and the page's existing controls remain intact.
+
+`e2e/register-table-legibility.spec.ts` measures column boundaries across nonempty filter, search,
+restoration, and sort states at four viewports. Its companion cases cover every current type,
+influence, and status label/glyph, null influence, date/Never, sortable header icons, and spaced or
+unbroken 4000-character names/expectations. DOM Ranges prove compact text stays whole, while box
+measurements prove content remains inside its column. Narrow cases prove one localized table scroll
+owner, no document overflow, a visible scrollbar, and final-column reachability. Full-page and
+table-focused far-edge screenshots were captured; the 320px and 1280px table views were inspected.
+
+Fresh evidence: the complete legibility spec passed 13 cases. Removing fixed layout and widths
+failed four stability cases on the original movement; rebuilding the restoration passed nine.
+Narrowing Influence to 40px failed four containment cases on header/badge/text bounds; rebuilding
+the second restoration passed nine. Every source state had its own browser build and source/output
+hash manifests. The affected neighboring selection passed four geometry/rhythm cases; it selected
+no separate accessibility or header-geometry cases. The page and responsive source-contract suites
+passed 33 tests. Full web Vitest passed 2360 tests in 283 files in 350.90 seconds (351.254 seconds
+wall), on the same application/test patch used for the browser evidence. Web lint, browser and
+production TypeScript/build, site-data, repository-authority, and diff checks passed.
+
+Independent implementation review approved specification and engineering with no findings.
+Final review, publication, and GitHub PR/merge evidence remain pending; this entry records a tested
+candidate. Browser evidence is Chromium with synthetic fixtures, not Firefox/WebKit or live-site
+acceptance. Shared fonts, theme, layout, APIs, enums, and dependency locks were not changed. If later
+font/scaffold changes affect this page, repeat its geometry/legibility checks on the integrated tree.
+
 
 ## Stored backup cron and replay-safe scheduled attempts (2026-10-01)
 
