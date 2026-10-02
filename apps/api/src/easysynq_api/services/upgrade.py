@@ -103,8 +103,12 @@ def _run_alembic_upgrade() -> None:
 async def _backup_destination(session: AsyncSession, org_id: uuid.UUID) -> str:
     from sqlalchemy import select
 
-    policy = await session.scalar(select(BackupPolicy).where(BackupPolicy.org_id == org_id))
-    return policy.destination if policy is not None else get_settings().backup_path
+    # This runs BEFORE Alembic: the installed schema need not have every column in the new
+    # image's ORM model (e.g. the scheduler watermark). Read only the established destination.
+    destination = await session.scalar(
+        select(BackupPolicy.destination).where(BackupPolicy.org_id == org_id)
+    )
+    return destination if destination is not None else get_settings().backup_path
 
 
 async def _close_session_best_effort(session: AsyncSession, *, context: str) -> None:

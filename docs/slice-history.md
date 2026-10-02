@@ -6,6 +6,49 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Stored backup cron and replay-safe scheduled attempts (2026-10-01)
+
+Closure candidate for [#425](https://github.com/CoJoA13/EasySynQ/issues/425),
+`RES-BACKUP-CRON-IGNORED`. The nightly Beat entry formerly dispatched every 86400 seconds from its
+process lifetime without reading the saved cron. It now dispatches each minute; each fresh locked
+policy transaction reads the stored cron, resolves canonical organization timezone once, and uses a
+persisted UTC attempt watermark. Migration `0094_backup_schedule_attempt` adds that nullable marker;
+initial policies start from `created_at`. Explicit CLI/service backups remain immediate.
+
+Owner-approved timing policy (2026-10-01): one catch-up after downtime, a skipped DST local slot at
+the first valid instant after the gap, and a repeated local slot once. Core five-field cron accepts
+names, lists/ranges/steps and Sunday 0/7; restricted day fields use conventional either-day matching.
+Malformed/impossible configuration warns and falls back to daily local 02:00. The fold arithmetic
+preserves the already elapsed first interval so a restart during the repeated hour neither delays
+catch-up nor duplicates a consumed slot. Handled failures consume the attempt and report; busy
+claims and pre-commit crashes leave the prior marker. Capture start, not completion, owns the marker.
+
+A persistent policy-scoped destination file lock covers continued archive threads after database
+lock loss. Completed artifacts carry checksummed/authenticated family and capture-time metadata;
+replay requires the current encryption mode, key authentication for encrypted candidates, and no
+newer due slot. Staging plus unique publication
+preserves existing archives, including stale/invalid candidates. Shared filesystem advisory-lock
+support remains an operator prerequisite, not a claim certified for every mount. Existing encrypted
+and keyless fallback contracts, source dependence, optional legs, WORM and retention scope remain.
+
+The pre-upgrade archive lookup reads only the established destination column rather than loading
+new model columns before Alembic has installed them. A populated pre-0094 policy and the existing
+real migration-lock-timeout upgrade proof cover that compatibility boundary.
+
+Regression evidence includes clock/DST/parser cases, real tar/encryption replay, two PostgreSQL
+workers, database-lock loss with a still-running archive writer, delayed post-file/pre-commit
+recovery, long capture, malformed config, failure alarms, manual compatibility, timezone precedence,
+and populated migration downgrade/re-upgrade/check. Independent review found additional fold,
+pre-claim outage-alarm and truncated-envelope cases; each was reproduced and corrected. Exact fresh
+suite counts and CI evidence are recorded in the PR; broader recovery residuals remain open.
+
+Integration review (2026-10-02) found that Celery's current-date shortcut could skip a missed
+late-minute slot when recovery crossed midnight. Eight regressions reproduced the gap across
+date/month/year and timezone boundaries, stale-archive eligibility and the PostgreSQL path. Occurrence
+search is now anchored at the persisted attempt before comparing with recovery time. All 62 focused
+scheduling tests and 2,520 independent DST occurrence comparisons pass after the correction.
+
+
 ## Keycloak admin scripts use Compose-resolved credentials (2026-10-01)
 
 Closure candidate for [#422](https://github.com/CoJoA13/EasySynQ/issues/422),

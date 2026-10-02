@@ -905,22 +905,6 @@ tracked files). Then ignore exactly that path and the exported root CA, and prov
 `git check-ignore` plus a check that every tracked `infra/compose/compose.*.yml` stays tracked.
 Last reviewed: 2026-09-22
 
-## RES-BACKUP-CRON-IGNORED
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #425](https://github.com/CoJoA13/EasySynQ/issues/425), filed 2026-08-03;
-verified against `3d8613a` on 2026-09-22.
-Reason: The setup wizard stores `backup_policy.cron`, but the Beat entry `backup-nightly` in
-`apps/api/src/easysynq_api/tasks/app.py` runs on a hardcoded `86400.0` interval and nothing reads the
-stored cron. Backups fire 24 hours after Beat last started, so the configured time is never honoured
-and each container recreation moves it.
-Closure contract: Drive the backup schedule from `backup_policy.cron` evaluated in the organization
-timezone (`resolve_org_tz`, R56), fall back safely with a warning on a malformed value, keep the task
-idempotent under redelivery, and prove with a test that the schedule follows the stored cron rather
-than process start time.
-Last reviewed: 2026-09-22
-
 ## RES-CREDENTIAL-RESET-R64-ALIGNMENT
 
 Status: OPEN
