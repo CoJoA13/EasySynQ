@@ -35,8 +35,8 @@ const EMPTY_FORM: CreateUserFormState = {
 // need distinct handling: an unlinked EXISTING Keycloak username offers "Link the existing account"
 // (POST /users, the kept invite endpoint) rather than retrying create — EasySynQ never deletes a
 // Keycloak account, so retrying would just collide again; an existing email surfaces inline against
-// the Email field. The role picker only renders for a caller holding permission.grant — the API
-// enforces this independently (assert_can_assign_role), but the UI must not offer a control the
+// the Email field. The role picker requires permission.grant for assignment and role.read for
+// catalog access. The API enforces these independently, but the UI must not offer a control the
 // caller cannot exercise (DP-6).
 export function CreateUserModal({
   opened,
@@ -48,7 +48,8 @@ export function CreateUserModal({
   token: string | null;
 }) {
   const qc = useQueryClient();
-  const canGrantRoles = usePermissions().can("permission.grant");
+  const permissions = usePermissions();
+  const canAssignRoles = permissions.can("permission.grant") && permissions.can("role.read");
 
   const [form, setForm] = useState<CreateUserFormState>(EMPTY_FORM);
   const [collision, setCollision] = useState<UsernameCollision | null>(null);
@@ -59,7 +60,7 @@ export function CreateUserModal({
   const roles = useQuery({
     queryKey: ["roles"],
     queryFn: () => apiGet<RoleSummary[]>("/api/v1/roles", token),
-    enabled: opened && canGrantRoles && !!token,
+    enabled: opened && canAssignRoles && !!token,
   });
 
   // Resets every piece of state that must never survive a reopen — most importantly `issued`: the
@@ -242,7 +243,7 @@ export function CreateUserModal({
               onChange={(e) => setForm({ ...form, last_name: e.currentTarget.value })}
             />
           </Group>
-          {canGrantRoles && (
+          {canAssignRoles && (
             <MultiSelect
               label="Roles"
               description="Optional. The account is created without roles if none are picked."
