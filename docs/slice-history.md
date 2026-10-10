@@ -9,7 +9,7 @@
 
 Closure candidate for [#431](https://github.com/CoJoA13/EasySynQ/issues/431),
 `RES-KEYCLOAK-ERROR-CLASSIFICATION`. Provider create400 remains invalid input and create409 remains
-a username conflict; other failures, including admin401/403, use availability/configuration
+a username or email conflict; other failures, including admin401/403, use availability/configuration
 guidance. Password-reset404 has a distinct missing-subject exception and public409
 `keycloak_subject_missing` problem naming administrator manual §5.3.1. Post-commit failures preserve
 the created application user, role assignments and audit, omit credentials, and explicitly require
