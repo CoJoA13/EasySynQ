@@ -52,6 +52,13 @@ class KeycloakUnavailable(KeycloakProvisioningError):
     """Keycloak was unreachable or returned an unusable response."""
 
 
+class KeycloakSubjectMissing(KeycloakUnavailable):
+    """Reset could not find the linked identity; existing setup callers still fail closed."""
+
+    def __init__(self) -> None:
+        super().__init__("The linked Keycloak account could not be found")
+
+
 class KeycloakConflict(KeycloakProvisioningError):
     """Keycloak refused the create as a duplicate. ``field`` is ``username`` or ``email``.
 
@@ -73,7 +80,7 @@ class KeycloakConflict(KeycloakProvisioningError):
 class KeycloakRejected(KeycloakProvisioningError):
     """Keycloak refused profile input that cannot succeed unchanged.
 
-    Create uses this for a 4xx other than 409; exact claimed-profile reconciliation also uses it
+    Create uses this for a 400; exact claimed-profile reconciliation also uses it
     for the provider's 400/409 validation responses. Distinct from ``KeycloakUnavailable``: the
     dependency is reachable. ``detail`` is always bounded and sanitised, never a raw body.
     """
@@ -385,11 +392,10 @@ class KeycloakProvisioningClient:
             raise KeycloakUnavailable(f"Keycloak user create failed: {exc}") from exc
         if response.status_code == 409:
             raise await self._classify_create_conflict(username, response)
-        if 400 <= response.status_code < 500:
-            # Any other 4xx is rejected input, not an outage: the dependency IS reachable, and
-            # retrying the identical form cannot succeed (an invalid email, or a value the realm's
-            # user-profile validation refuses). Never surface the raw body — only a bounded,
-            # sanitised explanation (`_bounded_message`).
+        if response.status_code == 400:
+            # Only attribute validation is submitted-input rejection. Admin-access failures,
+            # throttling and unexpected endpoint responses need dependency/configuration repair.
+            # Keep the provider's input explanation bounded through `_bounded_message`.
             raise KeycloakRejected(_bounded_message(response))
         if response.status_code not in (200, 201):
             raise KeycloakUnavailable(f"Keycloak user create returned {response.status_code}")
@@ -466,10 +472,12 @@ class KeycloakProvisioningClient:
                 headers=headers,
                 json={"type": "password", "value": password, "temporary": True},
             )
+            if response.status_code == 404:
+                raise KeycloakSubjectMissing()
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            # The message must never interpolate `password`.
-            raise KeycloakUnavailable(f"Keycloak set-password failed: {exc}") from exc
+            # Neither credential bytes nor the subject-bearing request URL belongs in the text.
+            raise KeycloakUnavailable("Keycloak set-password failed") from exc
 
 
 def _bootstrap_claim_id(item: dict[str, Any]) -> str | None:

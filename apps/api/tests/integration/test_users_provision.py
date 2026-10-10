@@ -358,6 +358,384 @@ async def test_provision_creates_the_account_the_row_and_the_credential(
         assert body["temporary_password"] not in str(event.after)
 
 
+async def _recovery_snapshot(user_id: uuid.UUID) -> dict[str, Any]:
+    """Read the persisted principal and its own lifecycle/grant audit from another transaction."""
+    async with get_sessionmaker()() as session:
+        user = await session.get(AppUser, user_id)
+        assert user is not None
+        roles = list(
+            await session.scalars(
+                select(RoleAssignment.role_id)
+                .where(RoleAssignment.user_id == user_id)
+                .order_by(RoleAssignment.role_id)
+            )
+        )
+        events = list(
+            await session.scalars(
+                select(AuditEvent).where(
+                    (AuditEvent.object_id == user_id) | (AuditEvent.scope_ref == f"user:{user_id}")
+                )
+            )
+        )
+        return {
+            "subject": user.keycloak_subject,
+            "status": user.status,
+            "email": user.email,
+            "display_name": user.display_name,
+            "roles": roles,
+            "events": {
+                str(event.id): {
+                    "type": event.event_type,
+                    "actor_id": event.actor_id,
+                    "object_id": event.object_id,
+                    "scope_ref": event.scope_ref,
+                    "before": event.before,
+                    "after": event.after,
+                    "occurred_at": event.occurred_at,
+                }
+                for event in events
+            },
+        }
+
+
+async def _invite_recovery_user(
+    app_client: httpx.AsyncClient,
+    headers: dict[str, str],
+    *,
+    subject: str,
+    email: str | None = None,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Give the old principal real, audited history before exercising stale-link recovery."""
+    invited = await app_client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={"keycloak_subject": subject, "display_name": "Recovery Person", "email": email},
+    )
+    assert invited.status_code == 201, invited.text
+    user_id = uuid.UUID(invited.json()["id"])
+    role_id = await _role_id("Author")
+    granted = await app_client.post(
+        f"/api/v1/users/{user_id}/roles", headers=headers, json={"role_id": str(role_id)}
+    )
+    assert granted.status_code == 201, granted.text
+    return user_id, role_id
+
+
+@pytest.mark.parametrize("provider_status", [401, 403, 404, 422, 429, 503])
+async def test_create_provider_non_validation_error_returns_availability_problem(
+    provider_status: int,
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider access failures must not tell the operator to edit the form."""
+    private_detail = "synthetic private provider diagnostic"
+    calls = _install_kc(
+        monkeypatch, create_status=provider_status, create_body={"errorMessage": private_detail}
+    )
+    headers = await _admin(token_factory)
+    before = await _app_user_count()
+
+    response = await app_client.post(
+        "/api/v1/users/provision", headers=headers, json={"username": _sub("provider-failure")}
+    )
+
+    assert response.status_code == 502, response.text
+    problem = response.json()
+    assert problem["code"] == "keycloak_unavailable"
+    assert "detail" in problem, problem
+    assert "admin credentials" in problem["detail"]
+    assert "realm permissions" in problem["detail"]
+    assert private_detail not in response.text
+    assert "temporary_password" not in problem
+    assert await _app_user_count() == before
+    assert len(calls["created"]) == 1
+    assert calls["password"] == []
+
+
+async def test_missing_subject_reset_returns_documented_recovery(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reset404 identifies the dead link and preserves principal history without a false audit."""
+    headers = await _admin(token_factory)
+    subject = _sub("dead-reset")
+    user_id, _ = await _invite_recovery_user(app_client, headers, subject=subject)
+    before = await _recovery_snapshot(user_id)
+    calls = _install_kc(monkeypatch, password_status=404)
+
+    response = await app_client.post(f"/api/v1/users/{user_id}/temporary-password", headers=headers)
+
+    assert response.status_code == 409, response.text
+    problem = response.json()
+    assert problem["code"] == "keycloak_subject_missing"
+    assert "Administrator & IT Manual §5.3.1" in problem["detail"]
+    assert "Retrying this password reset cannot repair the link" in problem["detail"]
+    assert "correct Keycloak realm" in problem["detail"]
+    assert subject not in response.text
+    assert "temporary_password" not in problem
+    assert await _recovery_snapshot(user_id) == before
+    assert calls["created"] == []
+    assert calls["password"] == [f"/admin/realms/easysynq/users/{subject}/reset-password"]
+
+
+async def test_missing_subject_after_provision_preserves_committed_user(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A create/reset404 leaves the durable user/role audit and advertises manual link recovery."""
+    headers = await _admin(token_factory)
+    subject = _sub("dead-after-create")
+    role_id = await _role_id("Author")
+    calls = _install_kc(monkeypatch, new_subject=subject, password_status=404)
+
+    response = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": _sub("dead-created"), "role_ids": [str(role_id)]},
+    )
+
+    assert response.status_code == 409, response.text
+    problem = response.json()
+    assert problem["code"] == "keycloak_subject_missing"
+    assert "no temporary password" in problem["detail"].lower()
+    assert "Do not retry this create request" in problem["detail"]
+    assert "Reload the user list" in problem["detail"]
+    assert "Administrator & IT Manual §5.3.1" in problem["detail"]
+    assert subject not in response.text
+    assert "temporary_password" not in problem
+    async with get_sessionmaker()() as session:
+        user_id = await session.scalar(
+            select(AppUser.id).where(AppUser.keycloak_subject == subject)
+        )
+    assert user_id is not None
+    state = await _recovery_snapshot(user_id)
+    assert state["status"] is UserStatus.INVITED
+    assert state["roles"] == [role_id]
+    event_types = [event["type"] for event in state["events"].values()]
+    assert event_types.count(EventType.USER_CREATED) == 1
+    assert event_types.count(EventType.ROLE_ASSIGN) == 1
+    assert EventType.USER_CREDENTIAL_ISSUED not in event_types
+    assert len(calls["created"]) == 1
+    assert len(calls["password"]) == 1
+
+
+@pytest.mark.parametrize("provider_status", [400, 401, 403])
+@pytest.mark.parametrize("operation", ["reset", "provision"])
+async def test_generated_password_rejection_returns_availability_problem(
+    provider_status: int,
+    operation: str,
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rejected generated credentials produce no issuance audit or form-input error."""
+    headers = await _admin(token_factory)
+    subject = _sub("credential-rejected")
+    calls = _install_kc(monkeypatch, new_subject=subject, password_status=provider_status)
+    if operation == "reset":
+        user_id, _ = await _invite_recovery_user(app_client, headers, subject=subject)
+        before = await _recovery_snapshot(user_id)
+        response = await app_client.post(
+            f"/api/v1/users/{user_id}/temporary-password", headers=headers
+        )
+    else:
+        response = await app_client.post(
+            "/api/v1/users/provision", headers=headers, json={"username": _sub("rejected-create")}
+        )
+        async with get_sessionmaker()() as session:
+            user_id = await session.scalar(
+                select(AppUser.id).where(AppUser.keycloak_subject == subject)
+            )
+        assert user_id is not None
+    assert response.status_code == 502, response.text
+    problem = response.json()
+    assert problem["code"] == "keycloak_unavailable"
+    assert "detail" in problem, problem
+    assert "admin" in problem["detail"]
+    assert "temporary_password" not in problem
+    assert subject not in response.text
+    state = await _recovery_snapshot(user_id)
+    assert all(
+        event["type"] is not EventType.USER_CREDENTIAL_ISSUED for event in state["events"].values()
+    )
+    if operation == "reset":
+        assert state == before
+        assert calls["created"] == []
+    else:
+        assert "Do not retry create" in problem["detail"]
+        assert "reissue" in problem["detail"]
+        assert state["status"] is UserStatus.INVITED
+        assert len(calls["created"]) == 1
+    assert len(calls["password"]) == 1
+
+
+async def test_missing_subject_manual_replacement_preserves_old_principal(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reviewed replacement access can share the old email while all old attribution survives."""
+    headers = await _admin(token_factory)
+    old_subject = _sub("replacement-old")
+    email = f"{_sub('replacement')}@example.local"
+    old_id, role_id = await _invite_recovery_user(
+        app_client, headers, subject=old_subject, email=email
+    )
+    old_state = await _recovery_snapshot(old_id)
+    _install_kc(monkeypatch, password_status=404)
+    failed = await app_client.post(f"/api/v1/users/{old_id}/temporary-password", headers=headers)
+    assert failed.status_code == 409, failed.text
+    assert failed.json()["code"] == "keycloak_subject_missing"
+    replacement_subject = _sub("replacement-new")
+    calls = _install_kc(monkeypatch, new_subject=replacement_subject)
+
+    replacement = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={
+            "username": _sub("replacement"),
+            "display_name": "Recovery Person",
+            "email": email,
+            "role_ids": [str(role_id)],
+        },
+    )
+
+    assert replacement.status_code == 201, replacement.text
+    body = replacement.json()
+    replacement_id = uuid.UUID(body["user"]["id"])
+    assert replacement_id != old_id
+    assert body["password_delivery"] == "shown_once"
+    assert len(body["temporary_password"]) >= MIN_LENGTH
+    assert await _recovery_snapshot(old_id) == old_state
+    replacement_state = await _recovery_snapshot(replacement_id)
+    assert replacement_state["subject"] == replacement_subject
+    assert replacement_state["email"] == old_state["email"] == email
+    assert replacement_state["display_name"] == old_state["display_name"] == "Recovery Person"
+    assert replacement_state["roles"] == [role_id]
+    assert {event["type"] for event in replacement_state["events"].values()} == {
+        EventType.USER_CREATED,
+        EventType.ROLE_ASSIGN,
+        EventType.USER_CREDENTIAL_ISSUED,
+    }
+    assert body["temporary_password"] not in str(replacement_state["events"])
+    reset = await app_client.post(
+        f"/api/v1/users/{replacement_id}/temporary-password", headers=headers
+    )
+    assert reset.status_code == 200, reset.text
+    disabled = await app_client.patch(
+        f"/api/v1/users/{old_id}", headers=headers, json={"status": "DISABLED"}
+    )
+    assert disabled.status_code == 200, disabled.text
+    after = await _recovery_snapshot(old_id)
+    assert after["status"] is UserStatus.DISABLED
+    assert after["subject"] == old_subject
+    assert after["roles"] == old_state["roles"]
+    assert all(after["events"][key] == value for key, value in old_state["events"].items())
+    new_events = [value for key, value in after["events"].items() if key not in old_state["events"]]
+    assert [event["type"] for event in new_events] == [EventType.USER_STATUS_CHANGED]
+    assert len(calls["created"]) == 1
+    assert (
+        calls["password"]
+        == [f"/admin/realms/easysynq/users/{replacement_subject}/reset-password"] * 2
+    )
+
+
+async def test_missing_subject_manual_adoption_requires_explicit_grant_and_reset(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adoption leaves credentials and roles untouched until explicit authorized actions."""
+    headers = await _admin(token_factory)
+    old_subject = _sub("adoption-old")
+    old_id, role_id = await _invite_recovery_user(app_client, headers, subject=old_subject)
+    old_state = await _recovery_snapshot(old_id)
+    _install_kc(monkeypatch, password_status=404)
+    failed = await app_client.post(f"/api/v1/users/{old_id}/temporary-password", headers=headers)
+    assert failed.status_code == 409, failed.text
+    assert failed.json()["code"] == "keycloak_subject_missing"
+    replacement_subject = _sub("verified-orphan")
+    # Start a fresh call record after the old-subject failure so all counts address adoption.
+    calls = _install_kc(monkeypatch, existing=replacement_subject)
+    collision = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": _sub("verified-orphan"), "role_ids": [str(role_id)]},
+    )
+    assert collision.status_code == 409, collision.text
+    assert collision.json()["code"] == "keycloak_username_exists_unlinked"
+    assert collision.json()["keycloak_subject"] == replacement_subject
+    assert calls == {"password": [], "created": []}
+
+    adopted = await app_client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={"keycloak_subject": replacement_subject, "display_name": "Recovery Person"},
+    )
+
+    assert adopted.status_code == 201, adopted.text
+    adopted_id = uuid.UUID(adopted.json()["id"])
+    assert adopted_id != old_id
+    assert "temporary_password" not in adopted.json()
+    assert calls == {"password": [], "created": []}
+    adoption_state = await _recovery_snapshot(adopted_id)
+    assert adoption_state["status"] is UserStatus.INVITED
+    assert adoption_state["roles"] == []
+    assert [event["type"] for event in adoption_state["events"].values()] == [
+        EventType.USER_CREATED
+    ]
+    assert await _recovery_snapshot(old_id) == old_state
+
+    granted = await app_client.post(
+        f"/api/v1/users/{adopted_id}/roles", headers=headers, json={"role_id": str(role_id)}
+    )
+    assert granted.status_code == 201, granted.text
+    grant_state = await _recovery_snapshot(adopted_id)
+    assert grant_state["roles"] == [role_id]
+    assert {event["type"] for event in grant_state["events"].values()} == {
+        EventType.USER_CREATED,
+        EventType.ROLE_ASSIGN,
+    }
+    assert calls == {"password": [], "created": []}
+
+    issued = await app_client.post(
+        f"/api/v1/users/{adopted_id}/temporary-password", headers=headers
+    )
+    assert issued.status_code == 200, issued.text
+    assert issued.json()["password_delivery"] == "shown_once"
+    assert len(issued.json()["temporary_password"]) >= MIN_LENGTH
+    issued_state = await _recovery_snapshot(adopted_id)
+    new_events = [
+        value for key, value in issued_state["events"].items() if key not in grant_state["events"]
+    ]
+    assert [event["type"] for event in new_events] == [EventType.USER_CREDENTIAL_ISSUED]
+    assert new_events[0]["after"] == {"credential_issued": True}
+    assert new_events[0]["occurred_at"] >= max(
+        event["occurred_at"] for event in grant_state["events"].values()
+    )
+    assert issued.json()["temporary_password"] not in str(issued_state["events"])
+    assert calls["created"] == []
+    assert calls["password"] == [
+        f"/admin/realms/easysynq/users/{replacement_subject}/reset-password"
+    ]
+    disabled = await app_client.patch(
+        f"/api/v1/users/{old_id}", headers=headers, json={"status": "DISABLED"}
+    )
+    assert disabled.status_code == 200, disabled.text
+    after = await _recovery_snapshot(old_id)
+    assert after["status"] is UserStatus.DISABLED
+    assert after["subject"] == old_subject
+    assert after["roles"] == old_state["roles"]
+    assert all(after["events"][key] == value for key, value in old_state["events"].items())
+    new_old_events = [
+        value for key, value in after["events"].items() if key not in old_state["events"]
+    ]
+    assert [event["type"] for event in new_old_events] == [EventType.USER_STATUS_CHANGED]
+
+
 async def test_admin_role_provisioning_locks_before_keycloak_identity_creation(
     app_client: httpx.AsyncClient,
     token_factory: Callable[..., str],

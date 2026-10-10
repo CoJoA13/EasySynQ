@@ -803,7 +803,16 @@ paths:
                   temporary_password: { type: string }
                   password_delivery: { type: string, enum: [shown_once] }
         "403": { $ref: "#/components/responses/ProblemResponse" }
-        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: >-
+            A username/email collision, or keycloak_subject_missing if the newly linked identity
+            disappeared before credential issuance. For keycloak_subject_missing, the committed
+            EasySynQ user and role audits remain; no temporary password was issued. Reload the
+            roster and follow Administrator & IT Manual section 5.3.1, Missing linked sign-in
+            account recovery.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
         "502": { $ref: "#/components/responses/ProblemResponse" }
         "503": { $ref: "#/components/responses/ProblemResponse" }
@@ -883,7 +892,14 @@ paths:
                   password_delivery: { type: string, enum: [shown_once] }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
-        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: >-
+            user_not_linked, or keycloak_subject_missing when the linked sign-in account cannot be
+            found. No password was issued. Verify the configured realm, then follow Administrator
+            & IT Manual section 5.3.1, Missing linked sign-in account recovery.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "422":
           description: >-
             two_tier_violation (every existing linked user credential reset unconditionally requires
@@ -7342,6 +7358,7 @@ components:
             - invalid_transition
             - keycloak_email_exists
             - keycloak_not_configured
+            - keycloak_subject_missing
             - keycloak_unavailable
             - keycloak_username_exists_unlinked
             - last_admin

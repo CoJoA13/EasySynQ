@@ -10,6 +10,10 @@ import httpx
 import pytest
 
 from easysynq_api.logging import configure_logging
+from easysynq_api.services.identity.provisioning import (
+    IdentityProfile,
+    ensure_credentialless_identity,
+)
 from easysynq_api.services.keycloak_provisioning import (
     BOOTSTRAP_CLAIM_ATTRIBUTE,
     KeycloakConflict,
@@ -1226,6 +1230,150 @@ async def test_create_user_500_still_raises_unavailable() -> None:
     async with _client(handler) as kc:
         with pytest.raises(KeycloakUnavailable):
             await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
+
+
+@pytest.mark.parametrize(
+    "provider_status", [401, 403, 404, 405, 408, 415, 422, 429, 500, 503, 302, 204]
+)
+async def test_create_user_non_validation_status_raises_unavailable(provider_status: int) -> None:
+    """Only provider400 is submitted input; credentials, policy and availability need IT repair."""
+    private_detail = "synthetic private provider diagnostic"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        assert request.method == "POST" and request.url.path.endswith("/users")
+        return httpx.Response(provider_status, json={"errorMessage": private_detail})
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable) as excinfo:
+            await kc.create_user(username="jdoe", email=None, first_name=None, last_name=None)
+
+    assert not isinstance(excinfo.value, KeycloakRejected)
+    assert private_detail not in str(excinfo.value)
+
+
+async def test_set_temporary_password_404_raises_subject_missing() -> None:
+    """A dead linked subject needs identity recovery rather than repeated password issuance."""
+    subject = "synthetic-private-subject"
+    password = "Synthetic-Secret-Password!"
+    private_detail = "synthetic private provider diagnostic"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        assert request.method == "PUT" and request.url.path.endswith("/reset-password")
+        return httpx.Response(404, json={"errorMessage": private_detail, "value": password})
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable) as excinfo:
+            await kc.set_temporary_password(subject=subject, password=password)
+
+    # Capture the existing base class so the regression collects before the new subtype exists.
+    assert type(excinfo.value).__name__ == "KeycloakSubjectMissing"
+    assert all(value not in str(excinfo.value) for value in (subject, password, private_detail))
+
+
+@pytest.mark.parametrize("provider_status", [400, 401, 403, 409, 429, 500, 503, 302])
+async def test_set_temporary_password_other_failures_remain_unavailable(
+    provider_status: int,
+) -> None:
+    """Generated credentials are never operator profile input or proof of a missing account."""
+    password = "Synthetic-Secret-Password!"
+    private_detail = "synthetic private provider diagnostic"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        assert request.method == "PUT" and request.url.path.endswith("/reset-password")
+        return httpx.Response(provider_status, json={"errorMessage": private_detail})
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable) as excinfo:
+            await kc.set_temporary_password(subject="sub-existing", password=password)
+
+    assert type(excinfo.value).__name__ != "KeycloakSubjectMissing"
+    assert not isinstance(excinfo.value, KeycloakRejected)
+    assert password not in str(excinfo.value)
+    assert private_detail not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("provider_status", [200, 204])
+async def test_set_temporary_password_success_preserves_encoded_subject(
+    provider_status: int,
+) -> None:
+    """Reset succeeds for the addressed opaque subject without changing the resource path."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            return token
+        requests.append(request)
+        return httpx.Response(provider_status)
+
+    async with _client(handler) as kc:
+        await kc.set_temporary_password(subject="subject/opaque ?", password="Synthetic-Secret!")
+
+    assert len(requests) == 1
+    assert requests[0].url.raw_path == (
+        b"/admin/realms/easysynq/users/subject%2Fopaque%20%3F/reset-password"
+    )
+    assert json.loads(requests[0].content) == {
+        "type": "password",
+        "value": "Synthetic-Secret!",
+        "temporary": True,
+    }
+
+
+@pytest.mark.parametrize("provider_status", [401, 403])
+@pytest.mark.parametrize("failed_operation", ["token", "lookup", "profile-read", "profile-write"])
+async def test_admin_access_failure_before_create_fails_closed(
+    provider_status: int, failed_operation: str
+) -> None:
+    """Uncertain admin access never becomes input rejection or proof that a user is absent."""
+    creates: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = _token_ok(request)
+        if token is not None:
+            if failed_operation == "token":
+                return httpx.Response(provider_status, json={"error": "invalid_grant"})
+            return token
+        if request.url.path.endswith("/users/profile"):
+            operation = "profile-read" if request.method == "GET" else "profile-write"
+            if operation == failed_operation:
+                return httpx.Response(provider_status, json={"error": "access denied"})
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "attributes": [
+                            {"name": "email", "required": {"roles": ["user"]}},
+                            {"name": "firstName"},
+                            {"name": "lastName"},
+                        ]
+                    },
+                )
+            return httpx.Response(200)
+        if request.method == "GET" and request.url.path.endswith("/users"):
+            assert failed_operation == "lookup"
+            return httpx.Response(provider_status, json={"error": "access denied"})
+        if request.method == "POST" and request.url.path.endswith("/users"):
+            creates.append(request)
+            return httpx.Response(201, headers={"Location": "/admin/realms/easysynq/users/new"})
+        raise AssertionError(f"unexpected: {request.method} {request.url}")
+
+    async with _client(handler) as kc:
+        with pytest.raises(KeycloakUnavailable):
+            await ensure_credentialless_identity(
+                kc, IdentityProfile(username="jdoe", email=None, first_name=None, last_name=None)
+            )
+
+    assert creates == []
 
 
 @pytest.mark.parametrize(
