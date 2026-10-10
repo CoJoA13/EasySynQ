@@ -6,6 +6,33 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Role picker access requires grant and catalog read (2026-10-02)
+
+Closure candidate for [#435](https://github.com/CoJoA13/EasySynQ/issues/435),
+`RES-ROLE-PICKER-ROLE-READ`. Create user's optional Roles picker and the Users Manage drawer's
+Assign a role controls now require both `permission.grant` and `role.read`. Their catalog queries
+use the same condition, so grant-only callers avoid the denied catalog and its empty selector.
+Account creation without roles and existing-assignment revocation remain available. Administrator
+manual §5.2 names both role-selection permissions.
+
+Fresh component evidence reproduced nine meaningful failures among 42 tests before production
+changes; all 42 passed with the gate change and again after correcting three test query options.
+Coverage includes grant-only, read-only and neither-key callers, cached roles, unresolved permissions,
+zero denied catalog requests, creation with `role_ids: []`, exact existing-assignment revocation, and
+authorized role IDs in both provisioning and assignment requests. Credential, collision, conflict and
+drawer lifecycle regressions also pass.
+
+On the frozen candidate, web lint, typecheck and build passed. The complete web test command,
+`npm --prefix apps/web test`, passed **2,372 tests across 283 files** in 350.76 seconds. Site-data,
+authority and whitespace checks passed before this closure-document update. Independent plan and implementation reviews,
+including scoped re-review of the test-option correction, are accepted. Final documentation guards,
+independent whole-branch review and PR preparation remain pending; this candidate has not shipped.
+
+Permission-cache policy, draft selection state and API authorization/request semantics are preserved.
+Live permission-revocation draft clearing, generic catalog-error presentation, #430 credential-reset
+capability and #436 scope binding are outside this proof. Component tests cover role-picker
+interactions and HTTP requests; no live-backend or real-browser admin role-picker proof is claimed.
+
 ## Community Testcontainers imports for fixtures and runtime acceptance (2026-10-02)
 
 Closure candidate for [#570](https://github.com/CoJoA13/EasySynQ/issues/570),

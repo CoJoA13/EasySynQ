@@ -115,12 +115,13 @@ do not open Keycloak or handle identity subjects.
 
 ### 5.2 Create a user (Admin SPA)
 
-1. Sign in as an administrator holding `user.create` (add `permission.grant` too if you also want
-   to assign a role in the same step).
+1. Sign in as an administrator holding `user.create` (add `permission.grant` and `role.read` if
+   you also want to assign a role in the same step).
 2. Open Account → **Administration → Users** and select **Create user**.
 3. Enter a **username** (required). Display name, email, first name, and last name are optional. A
-   **Roles** picker appears only for a caller holding `permission.grant` — pick zero or more seeded
-   roles to assign immediately, or leave it and assign roles later from **Manage**.
+   **Roles** picker appears only for a caller holding both `permission.grant` and `role.read` —
+   pick zero or more seeded roles to assign immediately, or leave it and assign roles later from
+   **Manage**.
 4. Select **Create**.
 
 Submitting creates the Keycloak sign-in account and the EasySynQ `app_user` row together, in one
