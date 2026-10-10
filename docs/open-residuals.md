@@ -903,22 +903,6 @@ stale subject, with authorization and a test, or return a response naming the do
 recovery. An error class alone does not close this record.
 Last reviewed: 2026-09-22
 
-## RES-ROLE-PICKER-ROLE-READ
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #435](https://github.com/CoJoA13/EasySynQ/issues/435), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: The Create user role picker is gated on `permission.grant`, but its data comes from
-`GET /api/v1/roles`, which requires `role.read`. A granular-override caller without `role.read` sees
-an enabled, silently empty dropdown. The roster's Manage drawer (`UsersAdmin.tsx`) issues the same
-roles query unconditionally for a roster reader, so its "Assign a role" selector fails the same way. The seeded System Administrator holds all three keys, so a
-default install does not hit this.
-Closure contract: In both the Create user modal and the Manage drawer, include `role.read` in the
-role selector's gate or render the denied query as a calm no-access state (`forbidden` flag,
-`retry: false`), with a component test for the denied case on each surface.
-Last reviewed: 2026-09-22
-
 ## RES-UNBOUND-SCOPE-TEMPLATE-ROLES
 
 Status: OPEN
