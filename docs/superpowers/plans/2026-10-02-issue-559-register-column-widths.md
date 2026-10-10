@@ -8,6 +8,11 @@
 
 **Tech stack:** React 19, TypeScript 6, Mantine 7, Playwright, Vitest, Node 26, frozen npm lock.
 
+> **Amendment, 2026-10-10:** The original observations, numeric-width instructions, and handoff
+> below preserve the 2026-10-02 implementation record. The dated follow-up at the end supersedes
+> the pixel allocations and adds enlarged-text and rendering-variation acceptance. Other scope
+> and behavior constraints remain in force.
+
 **Spec:** The original `RES-IP-REGISTER-COLUMN-JUMP` closure contract required post-header-change browser measurements, fixed column widths or proven stable floors, and a browser assertion that an edge stays fixed across filter states. Its tested candidate evidence is preserved in [the dated history entry](../../slice-history.md#interested-parties-columns-remain-stable-while-filtering-2026-10-02), with [GitHub #559](https://github.com/CoJoA13/EasySynQ/issues/559) tracking publication. Base: `ddfbf400d1c3025515682ccf56e603570f1e8b6c`; branch: `codex/issue-559-register-column-widths`.
 
 ## Global constraints
@@ -135,3 +140,47 @@ bash .superpowers/sdd/2026-10-02-issue-559-register-column-widths/capture-mutati
 ```
 
 `capture-stage.sh` compiles the named source state, hashes source and static output, runs browser checks, and records JSON/attachments under that stage's ignored directory. `capture-mutations.sh` requires the initial GREEN, then captures fluid-column RED, restored GREEN, undersized-Influence RED, and restored GREEN with a separate build at every step. Inspect both mutation failure assertions; exit 1 alone does not prove the intended defect. The original baseline artifacts are retained unchanged. The temporary probe has been archived as ignored evidence and removed from the ordinary test tree.
+
+## Follow-up amendment and evidence, 2026-10-10
+
+Independent plan review approved the bounded follow-up for [PR #630](https://github.com/CoJoA13/EasySynQ/pull/630).
+Hosted Chromium exposed four complete-inventory containment failures (85 other cases passed):
+Type/Influence/Status badges were 97.234375/137.984375/74.484375px, exactly 2.6875px wider than the
+earlier local measurements. The cause of that environment difference remains unproven. External
+review also established that fixed pixel columns do not grow with the existing rem typography.
+
+This amendment supersedes Task 2's numeric/whole-pixel width instructions. The compact columns now
+use `7.5rem / 10rem / 6rem / 8rem` (120/160/96/128px at a 16px root). The first three allocations leave
+6.765625/6.015625/5.515625px beyond the observed CI badges and cell padding. Last reviewed keeps its
+normal-root allocation and scales with text. Preserve fixed layout, flexible Party, existing clamps,
+and the unchanged `minWidth={880}` literal; Mantine converts that floor to 55rem. No shared style,
+font, badge, API, harness, dependency, or lock changes belong in this follow-up.
+
+- [x] Add tests before changing production widths. At 320/1280px, two inventory cases verify
+  a 20px root, 17.5px body text, 12.5px badge text and the 1100px floor. Two separate 16px-root
+  inventory cases add 0.25rem to each left badge-section margin and verify actual 4px margin/width
+  growth. Treat this as synthetic rendering allowance, without assuming a font cause. Keep all
+  current labels/glyphs, the 1px containment tolerance, and the four default inventory cases.
+- [x] Rebuild the unchanged production page and obtain exactly four physical-containment failures,
+  without setup errors, skips, retries, or flaky results. Retain source/build identities and raw
+  evidence under the coordinator's ignored `630-regression-red` directory.
+- [x] Apply only the four rem widths and sizing comment, then rebuild. Add filtering cases with
+  a 20px root at 320/1280px. Check scrollbar visibility whenever the table overflows, including
+  at 1280px; preserve document containment, short-name readability, and final-column reachability.
+- [x] Pass all 19 legibility cases and the complete 95-case Chromium suite, with zero failures,
+  skips, retries, or flaky results (147.298 seconds wall time). Inspect table screenshots with a 20px root
+  at 320/1280px and measured font/floor/gap evidence. Web lint, production/browser TypeScript builds,
+  and 33 affected page/responsive-contract tests also pass on the same source/build identities.
+- [x] Diagnose the initial full run's two harness meta-test failures: a coordinator reporter
+  environment variable redirected nested JSON output. Correct only report capture and rerun the
+  unchanged 95-case suite. The initial 93-pass/two-failure result remains recorded; no repository
+  or harness changes were used to obtain the final complete pass.
+- [ ] Complete independent implementation/final reviews, refreshed documentation guards, and
+  current required GitHub CI before merge. A shared `source-map-js` security dependency gate is
+  being repaired separately; local browser proof does not satisfy that outstanding gate.
+
+The updated source preserves integrated main commit `e0531c9a5501f8aacb9d81fc417e59ef82718279`.
+Ignored coordinator evidence is under `.superpowers/sdd/2026-10-10-approved-integration/`, with
+`630-verification-green` for builds/component checks and `630-browser-capture-corrected` for the
+complete browser pass. These results establish the local candidate, not a merged or deployed
+outcome. Other browsers, locales, live data, and arbitrary text-size settings remain unverified.

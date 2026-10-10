@@ -5,6 +5,45 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Interested-parties columns scale with text and accommodate CI rendering (2026-10-10)
+
+Follow-up candidate for [PR #630](https://github.com/CoJoA13/EasySynQ/pull/630) and
+[#559](https://github.com/CoJoA13/EasySynQ/issues/559). The 2026-10-02 evidence below remains
+historical. Its pixel allocations are superseded by `7.5rem / 10rem / 6rem / 8rem` for
+Type/Influence/Status/Last reviewed: 120/160/96/128px at a 16px root. Fixed layout, the flexible
+Party column, and the literal `minWidth={880}` remain. Mantine already expresses that floor as
+55rem, so it scales with the table's text and padding.
+
+The original hosted Chromium run failed four complete-inventory containment cases, with 85 other
+cases passing. Type/Influence/Status badges measured 97.234375/137.984375/74.484375px, each
+2.6875px wider than the earlier local measurement. The precise rendering cause is unproven.
+The revised allocations reserve room for that observed variation. Independent review also found
+that enlarged browser text could overflow the fixed pixel allocations; root-relative widths
+address that defect without changing shared fonts, badges, theme, dependencies, or the harness.
+
+Fresh regression evidence first produced exactly four intended physical-containment failures
+against the unchanged production page after a fresh browser build: a 20px root at 320/1280px, and a
+separate additive 0.25rem badge-section gap at those viewports. The gap is a deterministic rendering
+allowance, not attribution of the CI discrepancy. Tests verify each injected margin and badge width
+increases by 4px, with the root still 16px. Enlarged-root measurements verify 17.5px body text, 12.5px badge
+text, and a 1100px table floor. The unchanged 1px containment tolerance, complete label/glyph
+inventory, long-text clamps, short-name readability, filtering, localized scrolling, visible
+scrollbar on actual overflow, and final-column reachability all remain covered.
+
+The corrected complete Chromium run passed **95/95 cases**, including all **19 legibility cases**,
+with no skips, retries, or flaky results (147.298 seconds wall time). The same tested source and
+browser build passed web lint, production/browser TypeScript builds, and **33 affected component
+and responsive-contract tests**. The first full run passed 93 cases and failed two unchanged harness
+meta tests because the coordinator's report-output environment redirected their child JSON output.
+Correcting only the coordinator's report capture produced the complete pass; repository and harness
+files were unchanged between those runs. Table screenshots with a 20px root at 320/1280px were inspected.
+
+This records local verification of a follow-up candidate. Independent final review, refreshed
+documentation guards, current required GitHub CI, and merge remain pending. A shared
+`source-map-js` security dependency failure is being addressed separately; these browser results
+do not clear that gate. Evidence remains Chromium with synthetic fixtures, without a claim of
+Firefox/WebKit, other locales, live-site, or arbitrary font-size acceptance.
+
 ## Interested-parties columns remain stable while filtering (2026-10-02)
 
 Closure candidate for [#559](https://github.com/CoJoA13/EasySynQ/issues/559),
@@ -43,6 +82,38 @@ Final review, publication, and GitHub PR/merge evidence remain pending; this ent
 candidate. Browser evidence is Chromium with synthetic fixtures, not Firefox/WebKit or live-site
 acceptance. Shared fonts, theme, layout, APIs, enums, and dependency locks were not changed. If later
 font/scaffold changes affect this page, repeat its geometry/legibility checks on the integrated tree.
+
+
+## Community Testcontainers imports for fixtures and runtime acceptance (2026-10-02)
+
+Closure candidate for [#570](https://github.com/CoJoA13/EasySynQ/issues/570),
+`RES-TESTCONTAINERS-IMPORT-DEPRECATIONS`. PostgreSQL, MinIO and Redis integration fixtures now
+import their existing classes from `testcontainers.community.*`. The two PostgreSQL imports reached
+by mandatory external-audit acceptance use the same namespace: five substitutions across three test
+files, preserving fixture scopes, lazy imports, images, connection handling, cleanup and runtime limits.
+
+The real blob-verification and Redis notification tests first passed with all three deprecated-module
+warnings. Three literal warning-as-error filters then failed collection at the old PostgreSQL import
+(exit 4). With the substitutions, both tests passed in **7.79 seconds**, exercising actual PostgreSQL,
+MinIO and Redis without those warnings. No warning suppression or dependency update was added.
+
+Complete built-image acceptance passed all **eleven mandatory cases** on this candidate in
+**660.045 seconds**, with zero failures/errors/skips and successful owned cleanup. The runner reported
+`runtime_tests=11`, `mandatory_tests=11` and `runtime_acceptance=passed` with the three exact deprecated
+import messages made fatal in child pytest. API Ruff lint/format, strict mypy across **485 source
+files**, site-data, authority and whitespace checks passed before this documentation update.
+Independent final review and GitHub PR checks remain pending; this candidate has not shipped.
+
+Tested source: base `ddfbf400d1c3025515682ccf56e603570f1e8b6c` plus the five-import patch
+SHA-256 `79cfb2688a9a4ff89cae052e3d2ffb43975e654b1597c8e4e060bb6f81f670ee`.
+Dependency lock digest (SHA-256): `67c888c8fc42c6d8800c19057bfa379c31643b1b5740dd39d57c8e2ade76311a`.
+This checksum identifies the frozen `apps/api/uv.lock` used for the verification above.
+Image ID: `sha256:3744ed283b8506e6bc7e73623f334ed039bc027fb9208ab38c3e21a58c1d00c8`.
+Build input SHA-256: `7ac227fda6eb047a7ab4259656e2c18293f9eed2284616176fce091d9a8d4e7f`.
+Proof input SHA-256: `d0f97476f535f8543d54870801dfa9dc9e903bad63b720719645f9b98c104db3`.
+
+Older warning reports remain historical evidence. Other legacy imports outside this fixture/runtime
+graph and historical audit-runtime failures retain their separate scope and closure contracts.
 
 
 ## Stored backup cron and replay-safe scheduled attempts (2026-10-01)

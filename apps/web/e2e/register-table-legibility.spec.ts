@@ -141,8 +141,53 @@ async function measurePartyColumns(page: Page): Promise<PartyColumns> {
   });
 }
 
-for (const width of [320, 1000, 1115, 1280]) {
-  test(`interested-parties keeps column boundaries through filtering at ${width}px`, async ({
+async function applyPartyRootFontSize(page: Page, rootFontSize: number) {
+  const read = () =>
+    page.getByRole("table").evaluate((table) => {
+      const text = table.querySelector("tbody tr td:last-child .mantine-Text-root");
+      const badge = table.querySelector("tbody .mantine-Badge-root");
+      if (!text || !badge || !table.parentElement) throw new Error("Missing party font samples");
+      return {
+        rootFontSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+        textFontSize: parseFloat(getComputedStyle(text).fontSize),
+        badgeFontSize: parseFloat(getComputedStyle(badge).fontSize),
+        tableFloor: parseFloat(getComputedStyle(table.parentElement).minWidth),
+        tableWidth: table.getBoundingClientRect().width,
+      };
+    });
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+  const before = await read();
+  expect(before.rootFontSize).toBe(16);
+  expect(before.textFontSize).toBe(14);
+  await page.evaluate((size) => {
+    document.documentElement.style.fontSize = `${size}px`;
+  }, rootFontSize);
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+  const after = await read();
+  expect(after.rootFontSize).toBe(rootFontSize);
+  expect(after.textFontSize).toBe(rootFontSize === 20 ? 17.5 : 14);
+  expect(after.tableFloor).toBe(rootFontSize === 20 ? 1100 : 880);
+  expect(after.tableWidth).toBeGreaterThanOrEqual(after.tableFloor - 1);
+  if (rootFontSize === 20) {
+    expect(after.badgeFontSize).toBeGreaterThan(before.badgeFontSize);
+    expect(after.badgeFontSize).toBeCloseTo(before.badgeFontSize * 1.25, 2);
+  }
+  return { before, after };
+}
+
+const PARTY_FONT_CASES = [
+  ...[320, 1000, 1115, 1280].map((width) => ({ width, rootFontSize: 16 })),
+  { width: 320, rootFontSize: 20 },
+  { width: 1280, rootFontSize: 20 },
+];
+
+for (const { width, rootFontSize } of PARTY_FONT_CASES) {
+  const fontDescription = rootFontSize === 20 ? " with a 20px root" : "";
+  test(`interested-parties keeps column boundaries through filtering at ${width}px${fontDescription}`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
@@ -151,8 +196,9 @@ for (const width of [320, 1000, 1115, 1280]) {
     const table = page.getByRole("table");
     const rows = table.locator("tbody tr");
     await expect(rows).toHaveCount(6);
-    await page.evaluate(async () => {
-      await document.fonts.ready;
+    await testInfo.attach("party-font-measurements", {
+      body: JSON.stringify(await applyPartyRootFontSize(page, rootFontSize), null, 2),
+      contentType: "application/json",
     });
     await expect(table.getByRole("columnheader")).toHaveText([
       "Party",
@@ -247,7 +293,7 @@ for (const width of [320, 1000, 1115, 1280]) {
 
     // Save every state before asserting: a baseline RED must still explain all observed movement.
     await testInfo.attach("party-column-measurements", {
-      body: JSON.stringify({ width, snapshots }, null, 2),
+      body: JSON.stringify({ width, rootFontSize, snapshots }, null, 2),
       contentType: "application/json",
     });
     const before = snapshots[0]!.geometry;
@@ -400,8 +446,53 @@ const inventoryRows: InterestedParty[] = PARTY_TYPES.map((party_type, index) => 
   last_reviewed_at: index % 2 === 0 ? "2026-06-01T00:00:00+00:00" : null,
 }));
 
-for (const width of [320, 1000, 1115, 1280]) {
-  test(`interested-parties keeps all current labels inside their columns at ${width}px`, async ({
+async function addPartyBadgeGap(page: Page) {
+  const measurements = await page.getByRole("table").evaluate((table) => {
+    const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const badges = Array.from(table.querySelectorAll("tbody .mantine-Badge-root"));
+    const samples = badges.map((badge) => {
+      const section = badge.querySelector('.mantine-Badge-section[data-position="left"]');
+      if (!(section instanceof HTMLElement)) throw new Error("Missing left badge section");
+      const read = () => {
+        const box = badge.getBoundingClientRect();
+        return {
+          marginRight: parseFloat(getComputedStyle(section).marginRight),
+          left: box.left,
+          right: box.right,
+          width: box.width,
+        };
+      };
+      const before = read();
+      // CI badges measured 2.6875px wider than this host. Exercise a larger 4px allowance
+      // without assuming which font caused that difference or changing the label/glyph.
+      // Apply the computed margin to the section itself: Mantine scopes its gap variable there.
+      section.style.marginRight = `calc(${before.marginRight}px + 0.25rem)`;
+      return { label: badge.getAttribute("aria-label"), before, after: read() };
+    });
+    return { rootFontSize, samples };
+  });
+  expect(measurements.rootFontSize).toBe(16);
+  expect(measurements.samples.length).toBeGreaterThan(0);
+  for (const { label, before, after } of measurements.samples) {
+    expect(after.marginRight - before.marginRight, `${label}: added section gap`).toBeCloseTo(4, 2);
+    expect(after.width - before.width, `${label}: added badge width`).toBeCloseTo(4, 2);
+  }
+  return measurements;
+}
+
+const PARTY_INVENTORY_CASES = [
+  ...PARTY_FONT_CASES.map((scenario) => ({ ...scenario, extraBadgeGap: false })),
+  { width: 320, rootFontSize: 16, extraBadgeGap: true },
+  { width: 1280, rootFontSize: 16, extraBadgeGap: true },
+];
+
+for (const { width, rootFontSize, extraBadgeGap } of PARTY_INVENTORY_CASES) {
+  const scenarioDescription = extraBadgeGap
+    ? " with an extra badge gap"
+    : rootFontSize === 20
+      ? " with a 20px root"
+      : "";
+  test(`interested-parties keeps all current labels inside their columns at ${width}px${scenarioDescription}`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
@@ -413,9 +504,16 @@ for (const width of [320, 1000, 1115, 1280]) {
     await page.goto("/interested-parties");
     const table = page.getByRole("table");
     await expect(table.locator("tbody tr")).toHaveCount(inventoryRows.length);
-    await page.evaluate(async () => {
-      await document.fonts.ready;
+    await testInfo.attach("party-font-measurements", {
+      body: JSON.stringify(await applyPartyRootFontSize(page, rootFontSize), null, 2),
+      contentType: "application/json",
     });
+    if (extraBadgeGap) {
+      await testInfo.attach("badge-gap-measurements", {
+        body: JSON.stringify(await addPartyBadgeGap(page), null, 2),
+        contentType: "application/json",
+      });
+    }
     expect(new Set(inventoryRows.map((row) => row.party_type))).toEqual(new Set(PARTY_TYPES));
     expect(new Set(inventoryRows.map((row) => row.influence))).toEqual(
       new Set([...PARTY_INFLUENCES, null]),
@@ -486,10 +584,12 @@ for (const width of [320, 1000, 1115, 1280]) {
     const register = REGISTER_CASES.find((candidate) => candidate.key === "interested-parties")!;
     const geometry = await measureRegister(page, register);
     expect(geometry.documentScrollWidth - geometry.documentClientWidth).toBeLessThanOrEqual(1);
-    expect(geometry.tableWidth).toBeGreaterThanOrEqual(879);
+    expect(geometry.tableWidth).toBeGreaterThanOrEqual(rootFontSize === 20 ? 1099 : 879);
     expect(geometry.farEdgeInsideAfterScroll).toBe(true);
     if (width <= 1115) {
       expect(geometry.containerScrollWidth).toBeGreaterThan(geometry.containerClientWidth);
+    }
+    if (geometry.containerScrollWidth > geometry.containerClientWidth) {
       await expect
         .poll(() =>
           table.evaluate((element) => {

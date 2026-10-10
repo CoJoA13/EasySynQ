@@ -254,15 +254,15 @@ export function InterestedPartiesRegisterPage() {
           ) : (
             <Table.ScrollContainer minWidth={880}>
               <Table striped highlightOnHover mt="md" layout="fixed">
-                {/* Browser-measured label/glyph or header widths plus 16px cell padding, rounded
-                    up to an 8px step: Community, Medium influence, Closed, Last reviewed.
+                {/* Root-relative widths scale with text and reserve room for the wider badges
+                    measured in CI, including cell padding and rendering variation.
                     Party takes the remaining width; filtering must not resize the enum columns. */}
                 <colgroup>
                   <col />
-                  <col style={{ width: 112 }} />
-                  <col style={{ width: 152 }} />
-                  <col style={{ width: 88 }} />
-                  <col style={{ width: 128 }} />
+                  <col style={{ width: "7.5rem" }} />
+                  <col style={{ width: "10rem" }} />
+                  <col style={{ width: "6rem" }} />
+                  <col style={{ width: "8rem" }} />
                 </colgroup>
                 <Table.Thead>
                   <Table.Tr>
