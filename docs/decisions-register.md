@@ -1965,7 +1965,8 @@ implementation prose.
    the safe direction for an append-only chain.
 5. **Credential-reset authority (extends R35 to a non-grant operation).** Resetting an existing
    identity's credential is an account-takeover capability, unlike creating a permission-less one.
-   A caller may reset another user's credential **only if the caller is system-tier — full stop**;
+   A caller may reset any existing user's credential, including their own,
+   **only if the caller is system-tier — full stop**;
    the target's own authority is never inspected. `user.create` alone is insufficient, because it is
    grantable independently through a per-user override. An earlier draft of this rule instead
    permitted the reset whenever the target held no *system-domain* permission — that form was

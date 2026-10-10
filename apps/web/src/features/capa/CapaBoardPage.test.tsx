@@ -227,6 +227,7 @@ test("shows the Raise CAPA button for a purely-PROCESS-scoped capa.create holder
       const level = new URL(request.url).searchParams.get("scope_level");
       return HttpResponse.json({
         scope: { level: level ?? "SYSTEM", selector: null },
+        system_tier: false,
         permissions:
           level === "PROCESS" ? [{ key: "capa.create", effect: "ALLOW", source: null }] : [],
       } satisfies MePermissions);
@@ -245,6 +246,7 @@ test("opens the Raise modal with a required process picker for a PROCESS-only cr
       const level = new URL(request.url).searchParams.get("scope_level");
       return HttpResponse.json({
         scope: { level: level ?? "SYSTEM", selector: null },
+        system_tier: false,
         permissions:
           level === "PROCESS" ? [{ key: "capa.create", effect: "ALLOW", source: null }] : [],
       } satisfies MePermissions);
@@ -268,6 +270,7 @@ test("re-opening the Raise modal discards the previous draft", async () => {
       HttpResponse.json({
         scope: { level: "SYSTEM", selector: null },
         permissions: [{ key: "capa.create", effect: "ALLOW", source: null }],
+        system_tier: false,
       } satisfies MePermissions),
     ),
   );
@@ -290,6 +293,7 @@ test("hides the Raise CAPA button for a read-only caller with no capa.create", a
       HttpResponse.json({
         scope: { level: "SYSTEM", selector: null },
         permissions: [{ key: "capa.read", effect: "ALLOW", source: null }],
+        system_tier: false,
       } satisfies MePermissions),
     ),
   );
