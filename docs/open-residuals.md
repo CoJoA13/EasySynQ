@@ -885,24 +885,6 @@ rule 5, the denial text and doc 07 to say every reset needs system tier; a self-
 out of scope for this record and needs its own owner-approved register amendment first.
 Last reviewed: 2026-09-22
 
-## RES-KEYCLOAK-ERROR-CLASSIFICATION
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #431](https://github.com/CoJoA13/EasySynQ/issues/431), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: `KeycloakProvisioningClient` turns every 4xx on create, including admin-credential 401/403,
-into `KeycloakRejected` (reported as invalid operator input), and turns a 404 from
-`set_temporary_password` into `KeycloakUnavailable` (reported as an outage). A stale identity link
-therefore reads as Keycloak being down, and a broken admin credential reads as a typo.
-Closure contract: Classify a missing subject distinctly, route 401/403 to the
-configuration/availability path, and unit-test each status class. Because no supported operation
-replaces a dead `keycloak_subject` today (`POST /users` creates a separate `app_user`, and the only
-user PATCH changes status), the closure must also either ship an audited relink operation for a
-stale subject, with authorization and a test, or return a response naming the documented manual
-recovery. An error class alone does not close this record.
-Last reviewed: 2026-09-22
-
 ## RES-UNBOUND-SCOPE-TEMPLATE-ROLES
 
 Status: OPEN

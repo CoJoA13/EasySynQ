@@ -5,6 +5,47 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Provider failures name the supported identity recovery (2026-10-10)
+
+Closure candidate for [#431](https://github.com/CoJoA13/EasySynQ/issues/431),
+`RES-KEYCLOAK-ERROR-CLASSIFICATION`. Provider create400 remains invalid input and create409 remains
+a username conflict; other failures, including admin401/403, use availability/configuration
+guidance. Password-reset404 has a distinct missing-subject exception and public409
+`keycloak_subject_missing` problem naming administrator manual §5.3.1. Post-commit failures preserve
+the created application user, role assignments and audit, omit credentials, and explicitly require
+reload rather than retrying creation.
+
+The manual first requires realm/identity verification. Recovery uses a separate replacement
+principal through existing authorized create or adoption operations; adoption itself grants no
+roles and issues no credential. Operators explicitly review/grant access, issue a password when
+needed, verify sign-in and disable the old principal through its audited status operation. Old
+attribution remains intact. There is no direct database relink or generic ownership/work migration.
+Live sign-in remains an operator step, not an automated-test claim.
+
+The unchanged provider failed nine new classification assertions with 22 controls passing; real
+PostgreSQL/API tests produced 16 intended failures before route changes. Focused green passed 31
+provider and 16 recovery cases. Broader verification passed 5,180 API units, 285 response contracts,
+149 affected provisioning/admin/authz/setup integrations and 42 existing admin web cases. Two API
+skips are explicitly release-image and opt-in built-image proofs. Ruff, format, mypy, web lint/build,
+canonical contract check, authority and site-data guards passed.
+
+Commands include `uv run pytest tests/unit -m unit -q`, the contract-marked
+`tests/integration/test_contract_response_schemas.py`, and the integration-marked users provisioning,
+users admin, authz and setup suites in `apps/api`; `npm test -- src/admin/CreateUserModal.test.tsx
+src/admin/UsersAdmin.test.tsx`, `npm run lint` and `npm run build` in `apps/web`; and
+`bash scripts/gen-contracts.sh --check`, `bash scripts/check-repo-authority.sh` and
+`bash scripts/check-no-site-data.sh` from the repository.
+
+The isolated combination with #430 and #421 passed 147 focused API units, 285 response contracts,
+157 affected integrations, 77 web cases, 591 scanner assertions and the full-tree scan after canonical
+contract regeneration. Independent plan and implementation reviews approved both axes. A stale
+provision docstring was corrected and independently re-reviewed; comparison proved its executable
+AST and every other file unchanged, and fresh lint/format checks passed.
+This dated entry records the tested closure candidate; final independent review and PR CI belong
+to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
+Four existing OpenAPI date/date-time warnings and a generator FutureWarning remain recorded.
+Live provider, sign-in and built-image acceptance are not claimed.
+
 ## Interested-parties columns scale with text and accommodate CI rendering (2026-10-10)
 
 Follow-up candidate for [PR #630](https://github.com/CoJoA13/EasySynQ/pull/630) and
