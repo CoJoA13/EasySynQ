@@ -8,7 +8,9 @@
 
 **Tech Stack:** React 19, TypeScript 6, Mantine 7, TanStack Query 5, Vitest 5, Testing Library, MSW, Playwright Chromium; committed npm lock, Node 26.
 
-**Spec:** Adopted `RES-ROLE-PICKER-ROLE-READ` closure contract, now recorded in [dated candidate evidence](../../slice-history.md#role-picker-access-requires-grant-and-catalog-read-2026-10-02), [GitHub issue #435](https://github.com/CoJoA13/EasySynQ/issues/435), and repository `AGENTS.md`. Issue snapshot inspected at `/tmp/easysynq-issue-plan/final-issues.json`. Base: `ddfbf400d1c3025515682ccf56e603570f1e8b6c`; branch: `codex/issue-435-role-picker-access`.
+**Closure contract:** Adopted `RES-ROLE-PICKER-ROLE-READ` from the [residual record at the planning base](https://github.com/CoJoA13/EasySynQ/blob/ddfbf400d1c3025515682ccf56e603570f1e8b6c/docs/open-residuals.md#L945-L959). [GitHub issue #435](https://github.com/CoJoA13/EasySynQ/issues/435) mirrors that work; [dated candidate evidence](../../slice-history.md#role-picker-access-requires-grant-and-catalog-read-2026-10-02) records its implementation history. Repository workflow and authority precedence are defined in [AGENTS.md](../../../AGENTS.md#authority-and-precedence).
+
+Issue snapshot inspected at `/tmp/easysynq-issue-plan/final-issues.json`. Base: `ddfbf400d1c3025515682ccf56e603570f1e8b6c`; branch: `codex/issue-435-role-picker-access`.
 
 ## Global Constraints
 

@@ -422,22 +422,6 @@ the measured evidence. Do not disable or downgrade the lint job, pin a second co
 passing type-check and build as closure while lint is skipped.
 Last reviewed: 2026-09-20
 
-## RES-TESTCONTAINERS-IMPORT-DEPRECATIONS
-
-Status: OPEN
-Owner: Project maintainer
-Source: [S-audit-required-witness-collection runtime evidence](slice-history.md#s-audit-required-witness-collection--fresh-bounded-traversal-diagnostics),
-2026-09-11
-Reason: `apps/api/tests/integration/conftest.py` still imports PostgreSQL, MinIO and Redis fixtures
-from deprecated `testcontainers.postgres`, `testcontainers.minio` and `testcontainers.redis` paths.
-The dated ten-case mandatory runtime evidence reports the three inherited deprecation warnings; there
-is no evidence that the required-witness collection branch introduced them.
-Closure contract: Migrate the three fixture imports to `testcontainers.community.postgres`,
-`testcontainers.community.minio` and `testcontainers.community.redis`, then verify the affected
-PostgreSQL, MinIO and Redis fixtures and mandatory runtime paths complete without those warnings.
-Do not suppress the warnings or treat an unaffected subset as closure evidence.
-Last reviewed: 2026-09-11
-
 ## RES-INGEST-PROGRESS
 
 Status: OPEN

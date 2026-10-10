@@ -33,6 +33,38 @@ Live permission-revocation draft clearing, generic catalog-error presentation, #
 capability and #436 scope binding are outside this proof. Component tests cover role-picker
 interactions and HTTP requests; no live-backend or real-browser admin role-picker proof is claimed.
 
+## Community Testcontainers imports for fixtures and runtime acceptance (2026-10-02)
+
+Closure candidate for [#570](https://github.com/CoJoA13/EasySynQ/issues/570),
+`RES-TESTCONTAINERS-IMPORT-DEPRECATIONS`. PostgreSQL, MinIO and Redis integration fixtures now
+import their existing classes from `testcontainers.community.*`. The two PostgreSQL imports reached
+by mandatory external-audit acceptance use the same namespace: five substitutions across three test
+files, preserving fixture scopes, lazy imports, images, connection handling, cleanup and runtime limits.
+
+The real blob-verification and Redis notification tests first passed with all three deprecated-module
+warnings. Three literal warning-as-error filters then failed collection at the old PostgreSQL import
+(exit 4). With the substitutions, both tests passed in **7.79 seconds**, exercising actual PostgreSQL,
+MinIO and Redis without those warnings. No warning suppression or dependency update was added.
+
+Complete built-image acceptance passed all **eleven mandatory cases** on this candidate in
+**660.045 seconds**, with zero failures/errors/skips and successful owned cleanup. The runner reported
+`runtime_tests=11`, `mandatory_tests=11` and `runtime_acceptance=passed` with the three exact deprecated
+import messages made fatal in child pytest. API Ruff lint/format, strict mypy across **485 source
+files**, site-data, authority and whitespace checks passed before this documentation update.
+Independent final review and GitHub PR checks remain pending; this candidate has not shipped.
+
+Tested source: base `ddfbf400d1c3025515682ccf56e603570f1e8b6c` plus the five-import patch
+SHA-256 `79cfb2688a9a4ff89cae052e3d2ffb43975e654b1597c8e4e060bb6f81f670ee`.
+Dependency lock digest (SHA-256): `67c888c8fc42c6d8800c19057bfa379c31643b1b5740dd39d57c8e2ade76311a`.
+This checksum identifies the frozen `apps/api/uv.lock` used for the verification above.
+Image ID: `sha256:3744ed283b8506e6bc7e73623f334ed039bc027fb9208ab38c3e21a58c1d00c8`.
+Build input SHA-256: `7ac227fda6eb047a7ab4259656e2c18293f9eed2284616176fce091d9a8d4e7f`.
+Proof input SHA-256: `d0f97476f535f8543d54870801dfa9dc9e903bad63b720719645f9b98c104db3`.
+
+Older warning reports remain historical evidence. Other legacy imports outside this fixture/runtime
+graph and historical audit-runtime failures retain their separate scope and closure contracts.
+
+
 ## Stored backup cron and replay-safe scheduled attempts (2026-10-01)
 
 Closure candidate for [#425](https://github.com/CoJoA13/EasySynQ/issues/425),
