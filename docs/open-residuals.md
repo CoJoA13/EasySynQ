@@ -831,23 +831,6 @@ against the current output. `formatTimestamp`'s missing `timeZone` should be fix
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
 
-## RES-SITE-DATA-GUARD-GAPS
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #421](https://github.com/CoJoA13/EasySynQ/issues/421), a deferred review batch
-from 2026-08-03; verified against `3d8613a` on 2026-09-22.
-Reason: `scripts/check-no-site-data.sh` (the R61 mechanical backstop) still misses four shapes: IPv6
-addresses that begin with `::` compression (deliberately unmatched because Python slice syntax such
-as `a[::2]` has the same shape), textual lockfiles (skipped by the `\.lock$` exclusion), lowercase
-MD5 fingerprints (the pattern is uppercase-only), and file names beginning with `-` (most matchers
-pass the file list without a `--` separator).
-Closure contract: Close all four with a context-aware rule for leading `::` that keeps the slice
-false positive out, an evidence-backed lockfile policy, a case-insensitive fingerprint match, and
-`--` on every matcher. Prove each with a failing fixture in `scripts/tests/test-check-no-site-data.sh`
-and a clean run over the full tree.
-Last reviewed: 2026-09-22
-
 ## RES-SITE-ARTIFACT-GITIGNORE
 
 Status: OPEN

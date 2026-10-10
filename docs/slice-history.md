@@ -5,6 +5,39 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Site-data guard covers all four deferred shapes (2026-10-10)
+
+Closure candidate for [#421](https://github.com/CoJoA13/EasySynQ/issues/421),
+`RES-SITE-DATA-GUARD-GAPS`. The scanner detects leading-compression IPv6 while masking only bounded
+indexed-slice spans. It preserves neighboring addresses and whole-token checks, including prose
+punctuation and mapped dotted forms. Default scanning includes textual locks and retains binary
+skipping. The observed public package version is allowed only in its exact reviewed metadata
+contexts. Legacy colon-hex fingerprints accept both byte cases at the existing length, and every
+file-consuming matcher terminates options before filenames.
+
+Against the unchanged scanner, the expanded harness had 275 passing assertions and 316 intended
+failures covering the four gaps and narrow metadata allowance. Existing controls remained green.
+The implementation passed all 591 assertions, shell syntax, the full tracked-tree scan and explicit
+selection of all eight inspected locks. No application or lock content changed.
+
+Commands were `bash -n scripts/check-no-site-data.sh scripts/tests/test-check-no-site-data.sh`,
+`bash scripts/tests/test-check-no-site-data.sh`, `bash scripts/check-no-site-data.sh`, and an explicit
+scan of `apps/api/uv.lock`, `apps/web/package-lock.json`, `infra/images.lock`,
+`packages/contracts/.contract.lock`, `packages/contracts/package-lock.json`, the npm-audit lock
+fixture, and both uv-lock-provenance fixtures. `git diff --check` and the repository authority guard
+passed. On the isolated combined candidate with #430/#431 and canonically regenerated contracts,
+the 591-assertion harness and complete tracked-tree scan passed again. Four separately staged
+synthetic probes in a disposable copy of that complete candidate each failed the real gate with
+the expected rule and file diagnostic: leading IPv6, textual lock, lowercase fingerprint and
+option filename. Removing those probes restored the clean verdict; raw diagnostics were inspected.
+
+Independent plan and implementation reviews approved specification and engineering quality.
+This dated entry records the tested closure candidate; final independent review and PR CI belong
+to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
+Native Git Bash and ShellCheck were unavailable and remain unverified. Constrained GNU shell PATH
+fixtures prove the dependency boundary separately. Slice recognition is intentionally lexical and
+bounded; the mechanical scanner remains a backstop to R61 human review.
+
 ## Interested-parties columns scale with text and accommodate CI rendering (2026-10-10)
 
 Follow-up candidate for [PR #630](https://github.com/CoJoA13/EasySynQ/pull/630) and
