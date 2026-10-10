@@ -5,6 +5,39 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Credential reset affordance follows server system tier (2026-10-10)
+
+Closure candidate for [#430](https://github.com/CoJoA13/EasySynQ/issues/430),
+`RES-CREDENTIAL-RESET-R64-ALIGNMENT`. The roster now offers password issuance only when the caller
+holds `user.create` and the server reports system tier. `/me/permissions` returns a required
+`system_tier` boolean from the same unchanged PDP helper used by the reset guard. Missing or errored
+permission data hides the action. The admin effective-permissions response keeps its existing schema.
+R64 rule 5, doc 07 and the denial detail now state that every reset, including self-reset, requires
+system tier. The backend still evaluates current authority on every request.
+
+Regression proof against unchanged production produced two intended API unit failures, eight web
+failures and five database/API failures. Existing controls passed. After implementation, focused
+checks passed 15 API unit, 53 web and eight database tests. Broader verification passed 5,162 API
+unit tests, 285 response-contract cases, 56 affected integration cases and all 2,384 web tests in
+283 files. Ruff, format, mypy, web lint/build, canonical contract check, authority and site-data
+guards passed. Two API skips are explicitly release-image and opt-in built-image proofs.
+
+Commands include `uv run pytest tests/unit -m unit -q`, the contract-marked
+`tests/integration/test_contract_response_schemas.py`, and the integration-marked users provisioning,
+users admin, authz, me-permissions and credential-reset-authority suites in `apps/api`; `npm test`,
+`npm run lint` and `npm run build` in `apps/web`; and `bash scripts/gen-contracts.sh --check`,
+`bash scripts/check-repo-authority.sh` and `bash scripts/check-no-site-data.sh` from the repository.
+
+The isolated combination with #431 and #421 passed 147 focused API units, 285 response contracts,
+157 affected integrations, 77 web cases, 591 scanner assertions and the full-tree scan. Its contracts
+were canonically regenerated; this proves the shared helper/fixture and schema changes coexist.
+Independent plan and implementation reviews approved specification and engineering quality.
+This dated entry records the tested closure candidate; final independent review and PR CI belong
+to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
+Four existing OpenAPI date/date-time warnings and a generator FutureWarning remain recorded.
+Live identity-provider and built-image acceptance are not claimed. Permission-cache redesign and
+a self-reset exception remain outside this change.
+
 ## Interested-parties columns scale with text and accommodate CI rendering (2026-10-10)
 
 Follow-up candidate for [PR #630](https://github.com/CoJoA13/EasySynQ/pull/630) and

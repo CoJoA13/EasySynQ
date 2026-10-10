@@ -8,7 +8,7 @@
 
 **Tech stack:** FastAPI, SQLAlchemy, the existing pure authorization PDP, OpenAPI generation, React/TypeScript, TanStack Query, Vitest/Testing Library/MSW, pytest.
 
-**Spec:** [Issue #430](https://github.com/CoJoA13/EasySynQ/issues/430), the [RES-CREDENTIAL-RESET-R64-ALIGNMENT closure contract](../../open-residuals.md#res-credential-reset-r64-alignment), [R64 rule 5](../../decisions-register.md#r64--in-app-identity-provisioning-ordering-non-deletion-and-credential-reset-authority--2026-08-03), and [doc 07 §4.3.1](../../07-authorization-model.md). R64 and doc 07 are binding, subject to this explicitly authorized wording alignment. Independent review approved specification and engineering quality on 2026-10-10.
+**Spec:** [Issue #430](https://github.com/CoJoA13/EasySynQ/issues/430), the [RES-CREDENTIAL-RESET-R64-ALIGNMENT closure contract](https://github.com/CoJoA13/EasySynQ/blob/3d1bb1632502155f2f9bb9c74737e86d8856f6ad/docs/open-residuals.md#res-credential-reset-r64-alignment), [R64 rule 5](../../decisions-register.md#r64--in-app-identity-provisioning-ordering-non-deletion-and-credential-reset-authority--2026-08-03), and [doc 07 §4.3.1](../../07-authorization-model.md). R64 and doc 07 are binding, subject to this explicitly authorized wording alignment. Independent review approved specification and engineering quality on 2026-10-10.
 
 ## Global constraints
 
@@ -16,7 +16,7 @@
 - `user.create` alone is insufficient; the endpoint still requires it in addition to system tier.
 - Do not edit `apps/api/src/easysynq_api/api/users.py` without coordinator agreement. Its current route docstring and guard are already unconditional.
 - Preserve the existing helper's filtering, scope/ABAC checks, deny precedence, request context, audit behavior, and all sibling two-tier guards.
-- Workflow stages: independent plan review and coordinator red execution are complete. Production/API/schema/authority implementation is cleared within the listed ownership. Worker source implementation is ready for coordinator generation and green verification. The coordinator owns all tests, builds, installs, generation, commits and external writes in every stage.
+- Workflow stages: independent plan review and coordinator red execution are complete. Production/API/schema/authority implementation is cleared within the listed ownership. Source implementation, canonical generation and green verification are complete; final independent review and PR handoff remain. The coordinator owns all tests, builds, installs, generation, commits and external writes in every stage.
 - Implementation branch/worktree supplied by coordinator: `codex/issue-430-reset-alignment`, `.worktrees/issue-430`, base `3d1bb16`. Recheck sources there before implementation; do not create another worktree.
 - Coordinator confirmed #430 owns its `/me/permissions` OpenAPI source change; coordinator owns generated artifacts and commands. Report any additional contract delta before editing.
 
@@ -77,7 +77,7 @@ The new reset integration file may import the existing synthetic helpers `_sub`,
 - [x] Add new unit `test_system_tier_uses_effective_non_content_only_grants`, parametrized with real `ResolvedGrant` objects and a fixed UTC clock. Stub only DB `gather_grants` and the clock; run the real helper/PDP. Expected results: empty false; content-only ALLOW false; live unrestricted SYSTEM ALLOW true; mixed content/system ALLOW in either order true; live SYSTEM ALLOW plus applicable SYSTEM DENY false; expired false; future-valid false; FOLDER scoped false; IP-restricted with no request IP false. Assert the gather call asks for the correct caller/org and `permission.grant`. For the test-only stage, call the existing private `_is_system_tier` helper so collection succeeds and these characterization cases pass on unchanged production. After the semantics-preserving public rename, update only that call to `is_system_tier` and rerun the same cases; HTTP/UI/wording assertions provide behavioral red evidence.
 - [x] Rename/export the helper without altering its body. In `auth.me_permissions`, compute the existing response, append `system_tier = await is_system_tier(session, user)`, return it. Do not change `compute_effective_permissions` or the admin endpoint.
 - [x] Add `MyEffectivePermissions` with `additionalProperties: false`, `required: [scope, permissions, system_tier]`, scope shape and entry reference matching current EffectivePermissions, and boolean field documentation identifying the PEP's SYSTEM tier test. Switch only `getMyPermissions`'s 200 response to it. Do not edit the already aligned reset operation.
-- [ ] Ask coordinator for focused unit and integration green evidence, then coordinator runs `just contracts` and `just contracts-check`. Review generated deltas for only the added self response shape.
+- [x] Ask coordinator for focused unit and integration green evidence, then coordinator runs `just contracts` and `just contracts-check`. Review generated deltas for only the added self response shape.
 
 ## Task 2: Gate the roster on the published tier
 
@@ -89,7 +89,7 @@ The new reset integration file may import the existing synthetic helpers `_sub`,
 - [x] Split test fixtures into granular `grantUserCreate()` (tier false) and reset-authorized helper (user.create plus tier true). Update only reset success/secrecy/drawer lifecycle tests to use the authorized fixture. Preserve the header create test's granular identity. Preserve its show-once secrecy, cache clearing and in-flight closure assertions.
 - [x] Ask coordinator to run `cd apps/web && npm test -- src/admin/UsersAdmin.test.tsx src/app/shell/usePermissions.test.tsx` for intended red evidence before hook/roster source changes.
 - [x] Add the required response field and fail-closed hook boolean specified above, then replace the reset prop expression and stale explanatory comment. Set the shared default MSW response's tier false. Add false to the four typed CAPA fixtures without changing their permission keys or assertions.
-- [ ] Ask coordinator to repeat the focused command for green evidence, then web lint/typecheck/build and affected full web tests, including `src/features/capa/CapaBoardPage.test.tsx` to verify the fixture compatibility edits.
+- [x] Ask coordinator to repeat the focused command for green evidence, then web lint/typecheck/build and affected full web tests, including `src/features/capa/CapaBoardPage.test.tsx` to verify the fixture compatibility edits.
 
 ## Task 3: Align authority and prove unconditional self-reset
 
@@ -99,15 +99,15 @@ The new reset integration file may import the existing synthetic helpers `_sub`,
 - [x] Extend onboarding contract tests to check R64 rule 5 and doc 07 §4.3.1 include every existing user and self, and no normative “another user” restriction remains in those bounded passages or the reset guard docstring. Add `test_self_permission_contract_requires_system_tier`: self 200 references `MyEffectivePermissions`, its boolean is required, and the admin response still references `EffectivePermissions`. Ask coordinator for red evidence; do not assert historical narrative elsewhere is absent.
 - [x] Update reset guard docstring to every existing user's credential including self, and use exact detail above. Keep guard execution/target handling/audit call intact; do not change the shared `_two_tier_deny` title, status or sibling details.
 - [x] In R64 rule 5, use: `A caller may reset any existing user's credential, including their own, **only if the caller is system-tier — full stop**;` followed by the existing target-authority explanation. In doc 07 use: `**Every existing linked user's credential reset, including the caller's own, requires the caller to be system-tier.**` Keep new-user provisioning exemption and historical rationale intact.
-- [ ] Ask coordinator to run `cd apps/api && uv run pytest tests/unit/test_identity_onboarding_contract.py tests/unit/test_authz_system_tier.py -m unit -q` and `cd apps/api && uv run pytest tests/integration/test_credential_reset_authority.py tests/integration/test_me_permissions.py tests/integration/test_users_provision.py tests/integration/test_authz.py -m integration -q`. Existing target-independent refusal and System Administrator reset positive controls must remain green.
+- [x] Ask coordinator to run `cd apps/api && uv run pytest tests/unit/test_identity_onboarding_contract.py tests/unit/test_authz_system_tier.py -m unit -q` and `cd apps/api && uv run pytest tests/integration/test_credential_reset_authority.py tests/integration/test_me_permissions.py tests/integration/test_users_provision.py tests/integration/test_authz.py -m integration -q`. Existing target-independent refusal and System Administrator reset positive controls must remain green.
 
 ## Coordinator verification and closure evidence
 
 - [ ] Independently review final source diff for unconditional enforcement and the same tier helper used by UI probe and reset PEP; verify no new permission key, self carve-out, target inspection, shared users-route edit, migration or unrelated cleanup.
-- [ ] Record actual focused red/green commands, exit statuses, failing assertion reason, and fresh final results. If any test cannot execute, mark that criterion unverified; source reading alone is not closure.
-- [ ] Run affected API lint/format/mypy and unit suite plus web lint/build/tests using repository commands. Run `just contracts-check`; run the affected response contract case or `just test-contract` as environment permits to prove the self response shape.
-- [ ] Run `just authority-check`, `bash scripts/check-no-site-data.sh`, and final `git diff --check`; inspect generated artifacts after all source changes. Coordinator owns execution, not the worker.
-- [ ] Map closure: granular UI denial -> component red/green; true-tier allowed reset -> existing show-once component and API positive controls; exact server rule -> shared helper plus real PDP and real DB self response proofs; every reset/self -> denial/audit/no-Keycloak proof; authority alignment -> contract guard plus R64/doc07 diff; generated compatibility -> fresh contract check.
+- [x] Record actual focused red/green commands, exit statuses, failing assertion reason, and fresh final results. If any test cannot execute, mark that criterion unverified; source reading alone is not closure.
+- [x] Run affected API lint/format/mypy and unit suite plus web lint/build/tests using repository commands. Run `just contracts-check`; run the affected response contract case or `just test-contract` as environment permits to prove the self response shape.
+- [x] Run `just authority-check`, `bash scripts/check-no-site-data.sh`, and final `git diff --check`; inspect generated artifacts after all source changes. Coordinator owns execution, not the worker.
+- [x] Map closure: granular UI denial -> component red/green; true-tier allowed reset -> existing show-once component and API positive controls; exact server rule -> shared helper plus real PDP and real DB self response proofs; every reset/self -> denial/audit/no-Keycloak proof; authority alignment -> contract guard plus R64/doc07 diff; generated compatibility -> fresh contract check.
 - [ ] Coordinator closes RES-CREDENTIAL-RESET-R64-ALIGNMENT only after independent implementation review and fresh integrated evidence, and links the reviewed PR/commit/test evidence in the authority homes. Preserve historical evidence and do not fabricate status/baseline counts.
 
 ## Risks and remaining limits
@@ -118,4 +118,8 @@ The new reset integration file may import the existing synthetic helpers `_sub`,
 - #431 may modify shared synthetic provisioning helpers and reset response documentation. Coordinator must reconcile interface/contract deltas and rerun both issues' proofs on the integrated tree.
 - Generated outputs and closure ledger are serialized coordinator surfaces. Their execution and review remain required before completion.
 
-**Workflow status (2026-10-10):** Independent plan review approved both axes. The coordinator verified red against unchanged production: unit 13 pass / 2 intended failures; web 24 pass / 8 intended failures; CAPA fixture control 21 pass; real PostgreSQL/API integration 3 pass / 5 intended failures (CPJ `job-mv2jion8-16d24d96`). Production implementation was then cleared and the source changes are now written. Checked steps reflect source/test creation or the supplied red evidence. Green verification, canonical contract generation, independent implementation review and integrated closure evidence remain pending; the worker has executed no tests/builds/codegen.
+**Workflow status (2026-10-10):** Independent plan and implementation reviews approved both axes.
+The coordinator verified intended red before implementation, generated contracts canonically, and
+completed focused, broad and combined green verification. The dated closure evidence and limits are
+recorded in [slice history](../../slice-history.md#credential-reset-affordance-follows-server-system-tier-2026-10-10).
+Unchecked final-review/PR steps remain pending; worker execution was not used as evidence.
