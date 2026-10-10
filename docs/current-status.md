@@ -475,7 +475,9 @@ breadcrumb and document-title map to one string per destination, which is the gu
 the breadcrumb disagree with the rail for a whole slice. And the risk-matrix legend is capped to the
 grid it keys.
 
-What remains deferred is [`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred).
+The interested-parties column shift was owner-deferred at that walkthrough; the
+[2026-10-02 tested candidate](slice-history.md#interested-parties-columns-remain-stable-while-filtering-2026-10-02)
+records its local fix and closure evidence. CI and merge evidence remain pending.
 S-rulepack-audit-program closed the rule-pack half of the spelling standard and left a narrower
 predicate behind it; S-rulepack-approval-block has now closed that too, and opened nothing in its
 place, so the classifier carries no known spelling gap. S-ui-6 closed the CAPA board's

@@ -253,7 +253,17 @@ export function InterestedPartiesRegisterPage() {
             </Alert>
           ) : (
             <Table.ScrollContainer minWidth={880}>
-              <Table striped highlightOnHover mt="md">
+              <Table striped highlightOnHover mt="md" layout="fixed">
+                {/* Root-relative widths scale with text and reserve room for the wider badges
+                    measured in CI, including cell padding and rendering variation.
+                    Party takes the remaining width; filtering must not resize the enum columns. */}
+                <colgroup>
+                  <col />
+                  <col style={{ width: "7.5rem" }} />
+                  <col style={{ width: "10rem" }} />
+                  <col style={{ width: "6rem" }} />
+                  <col style={{ width: "8rem" }} />
+                </colgroup>
                 <Table.Thead>
                   <Table.Tr>
                     <Table.Th scope="col">Party</Table.Th>
@@ -301,6 +311,7 @@ export function InterestedPartiesRegisterPage() {
                           onClick={() => setSelected(r.id)}
                           data-rownav
                           ta="left"
+                          maw="100%"
                         >
                           <Text lineClamp={1}>{r.party_name}</Text>
                         </Anchor>

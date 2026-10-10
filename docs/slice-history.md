@@ -5,6 +5,84 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Interested-parties columns scale with text and accommodate CI rendering (2026-10-10)
+
+Follow-up candidate for [PR #630](https://github.com/CoJoA13/EasySynQ/pull/630) and
+[#559](https://github.com/CoJoA13/EasySynQ/issues/559). The 2026-10-02 evidence below remains
+historical. Its pixel allocations are superseded by `7.5rem / 10rem / 6rem / 8rem` for
+Type/Influence/Status/Last reviewed: 120/160/96/128px at a 16px root. Fixed layout, the flexible
+Party column, and the literal `minWidth={880}` remain. Mantine already expresses that floor as
+55rem, so it scales with the table's text and padding.
+
+The original hosted Chromium run failed four complete-inventory containment cases, with 85 other
+cases passing. Type/Influence/Status badges measured 97.234375/137.984375/74.484375px, each
+2.6875px wider than the earlier local measurement. The precise rendering cause is unproven.
+The revised allocations reserve room for that observed variation. Independent review also found
+that enlarged browser text could overflow the fixed pixel allocations; root-relative widths
+address that defect without changing shared fonts, badges, theme, dependencies, or the harness.
+
+Fresh regression evidence first produced exactly four intended physical-containment failures
+against the unchanged production page after a fresh browser build: a 20px root at 320/1280px, and a
+separate additive 0.25rem badge-section gap at those viewports. The gap is a deterministic rendering
+allowance, not attribution of the CI discrepancy. Tests verify each injected margin and badge width
+increases by 4px, with the root still 16px. Enlarged-root measurements verify 17.5px body text, 12.5px badge
+text, and a 1100px table floor. The unchanged 1px containment tolerance, complete label/glyph
+inventory, long-text clamps, short-name readability, filtering, localized scrolling, visible
+scrollbar on actual overflow, and final-column reachability all remain covered.
+
+The corrected complete Chromium run passed **95/95 cases**, including all **19 legibility cases**,
+with no skips, retries, or flaky results (147.298 seconds wall time). The same tested source and
+browser build passed web lint, production/browser TypeScript builds, and **33 affected component
+and responsive-contract tests**. The first full run passed 93 cases and failed two unchanged harness
+meta tests because the coordinator's report-output environment redirected their child JSON output.
+Correcting only the coordinator's report capture produced the complete pass; repository and harness
+files were unchanged between those runs. Table screenshots with a 20px root at 320/1280px were inspected.
+
+This records local verification of a follow-up candidate. Independent final review, refreshed
+documentation guards, current required GitHub CI, and merge remain pending. A shared
+`source-map-js` security dependency failure is being addressed separately; these browser results
+do not clear that gate. Evidence remains Chromium with synthetic fixtures, without a claim of
+Firefox/WebKit, other locales, live-site, or arbitrary font-size acceptance.
+
+## Interested-parties columns remain stable while filtering (2026-10-02)
+
+Closure candidate for [#559](https://github.com/CoJoA13/EasySynQ/issues/559),
+`RES-IP-REGISTER-COLUMN-JUMP`. Four Chromium regressions reproduced the automatic-layout defect:
+selecting Low influence moved Last reviewed by 5.46875px at 320/1000/1115px and 6.0625px at 1280px.
+Eight measurement probes then captured the current five-column table after fonts settled.
+
+The page now uses fixed layout with Type/Influence/Status/Last reviewed widths of 112/152/88/128px.
+The largest measured compact content was the Community badge with glyph (94.546875px), Medium
+influence badge with glyph (135.296875px), Closed badge with glyph (71.796875px), and Last reviewed
+header button with icon (111px). Adding 16px cell padding and rounding up to an 8px step produced
+those allocations. Party receives the remaining width, 400px at the unchanged 880px floor; its
+existing button is capped at the cell width so the existing text clamp contains long names.
+The literal `<Table.ScrollContainer minWidth={880}>` and the page's existing controls remain intact.
+
+`e2e/register-table-legibility.spec.ts` measures column boundaries across nonempty filter, search,
+restoration, and sort states at four viewports. Its companion cases cover every current type,
+influence, and status label/glyph, null influence, date/Never, sortable header icons, and spaced or
+unbroken 4000-character names/expectations. DOM Ranges prove compact text stays whole, while box
+measurements prove content remains inside its column. Narrow cases prove one localized table scroll
+owner, no document overflow, a visible scrollbar, and final-column reachability. Full-page and
+table-focused far-edge screenshots were captured; the 320px and 1280px table views were inspected.
+
+Fresh evidence: the complete legibility spec passed 13 cases. Removing fixed layout and widths
+failed four stability cases on the original movement; rebuilding the restoration passed nine.
+Narrowing Influence to 40px failed four containment cases on header/badge/text bounds; rebuilding
+the second restoration passed nine. Every source state had its own browser build and source/output
+hash manifests. The affected neighboring selection passed four geometry/rhythm cases; it selected
+no separate accessibility or header-geometry cases. The page and responsive source-contract suites
+passed 33 tests. Full web Vitest passed 2360 tests in 283 files in 350.90 seconds (351.254 seconds
+wall), on the same application/test patch used for the browser evidence. Web lint, browser and
+production TypeScript/build, site-data, repository-authority, and diff checks passed.
+
+Independent implementation review approved specification and engineering with no findings.
+Final review, publication, and GitHub PR/merge evidence remain pending; this entry records a tested
+candidate. Browser evidence is Chromium with synthetic fixtures, not Firefox/WebKit or live-site
+acceptance. Shared fonts, theme, layout, APIs, enums, and dependency locks were not changed. If later
+font/scaffold changes affect this page, repeat its geometry/legibility checks on the integrated tree.
+
 
 ## Role picker access requires grant and catalog read (2026-10-02)
 
