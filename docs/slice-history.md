@@ -5,6 +5,39 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Public package version allowance checks lock context (2026-10-11)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The public click-plugins version assignment is now allowed only in an exact `uv.lock` basename
+with the ordered package header, exact package name, exact public version and public PyPI source.
+Qualification waits until the package closes. Duplicate ownership fields, incomplete declarations,
+multiline examples and unsupported array contexts deny the allowance. Supported dependency and
+wheel arrays remain accepted. This is a bounded recognizer for observed lock formatting, not a
+complete TOML parser; an unobserved spelling can require review rather than silently widening the
+allowance.
+
+Only the qualified assignment occurrence is masked. Other version-shaped endpoints, same-line
+neighbors and the rest of every selected lock remain scanned. The independent exact public
+artifact-URL rule and the indexed-slice helper remain unchanged, with no new runtime dependency.
+
+The unchanged published scanner reproduced false clean results for a standalone assignment in
+another file and an unrelated package in a lockfile. The first context regression run recorded
+640 passing assertions and 231 intended failures. Independent review then identified premature
+qualification at array rows; focused red evidence covered nested boolean/numeric arrays, partial
+openers, apparent comment closers and unclosed arrays before the final correction.
+
+The final expanded harness passed all **952 assertions** in 28.403 seconds, including genuine
+root/nested metadata, constrained-PATH, inline/multiline artifact and neighboring-token controls.
+All eight explicitly selected locks passed. The complete tracked-tree scan passed in **7.522
+seconds**, within the fixed 30-second bound. Syntax, repository-authority and whitespace checks
+passed; source identity was unchanged throughout verification.
+
+Independent plan, implementation and final evidence reviews are required before publication.
+The earlier 4.45-fold helper comparison below remains historical evidence for its recorded scanner
+hash. That helper and its progress probes are byte-identical in this follow-up; the new full-tree
+duration above measures the amended scanner. Native Git Bash and ShellCheck remain unverified.
+R61 still requires human review beyond these mechanical checks.
+
 ## Site-data slice masking avoids per-character scans (2026-10-11)
 
 Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).

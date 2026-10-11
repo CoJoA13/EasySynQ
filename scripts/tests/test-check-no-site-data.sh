@@ -491,6 +491,10 @@ run_gate "$repo" "$PATH" binary.lock
 expect_clean "binary-lock explicit"
 
 public_version="$(printf '%s.%s.%s.%s' '1' '1' '1' '2')"
+package_head=$'[[package]]\nname = "click-plugins"'
+package_version="version = \"$public_version\""
+package_source='source = { registry = "https://pypi.org/simple" }'
+qualified_package="$(printf '%s\n%s\n%s' "$package_head" "$package_version" "$package_source")"
 digest_hex="$(printf '%064d' 0)"
 public_artifact="https://files.pythonhosted.org/packages/aa/bb/$digest_hex/click_plugins-${public_version}.tar.gz"
 public_wheel="https://files.pythonhosted.org/packages/aa/bb/$digest_hex/click_plugins-${public_version}-py2.py3-none-any.whl"
@@ -512,11 +516,11 @@ for context in endpoint host; do
   run_gate "$repo" "$PATH"
   expect_rejection "version-not-global-$context" "$ipv4_rule" "uv.lock:1"
 done
-new_text_case "lock-version-neighbor" "version = \"$public_version\" # endpoint=$unsafe_ipv4" uv.lock
+new_text_case "lock-version-neighbor" "$(printf '%s\n%s # endpoint=%s\n%s' "$package_head" "$package_version" "$unsafe_ipv4" "$package_source")" uv.lock
 run_gate "$repo" "$PATH"
-expect_rejection "lock-version-neighbor" "$ipv4_rule" "uv.lock:1"
-assert_contains "version sanction preserves neighboring address" "$RUN_OUTPUT" "uv.lock:1:$unsafe_ipv4"
-assert_not_contains "version sanction removes only metadata occurrence" "$RUN_OUTPUT" "uv.lock:1:$public_version"
+expect_rejection "lock-version-neighbor" "$ipv4_rule" "uv.lock:3"
+assert_contains "version sanction preserves neighboring address" "$RUN_OUTPUT" "uv.lock:3:$unsafe_ipv4"
+assert_not_contains "version sanction removes only metadata occurrence" "$RUN_OUTPUT" "uv.lock:3:$public_version"
 new_text_case "lock-artifact-neighbor" "sdist = { url = \"$public_artifact\", endpoint = \"$unsafe_ipv4\" }" uv.lock
 run_gate "$repo" "$PATH"
 expect_rejection "lock-artifact-neighbor" "$ipv4_rule" "uv.lock:1"
@@ -538,6 +542,211 @@ expect_rejection "lock-metadata-and-unsafe-line" "$ipv4_rule" "uv.lock:7"
 new_text_case "lowercase-image-digest" "image=registry.example.com/image:tag@sha256:$digest_hex" images.lock
 run_gate "$repo" "$PATH" images.lock
 expect_clean "lowercase-image-digest"
+
+# Assignment sanctions require actual uv package identity and public registry ownership.
+# These helpers change only fixture setup: expected diagnostic locations are declared by each case.
+new_version_case() {
+  local label="$1" content="$2" filename="${3:-uv.lock}"
+  repo="$TEST_ROOT/$label"
+  new_repo "$repo"
+  mkdir -p "$repo/$(dirname "$filename")"
+  printf '%s\n' "$content" >"$repo/$filename"
+  git -C "$repo" add -- "$filename"
+}
+
+reject_public_version() {
+  local label="$1" content="$2" filename="$3" line="$4"
+  new_version_case "$label" "$content" "$filename"
+  run_gate "$repo" "$PATH"
+  expect_rejection "$label" "$ipv4_rule" "$filename:$line"
+  assert_contains "$label retains the assignment token" "$RUN_OUTPUT" "$filename:$line:$public_version"
+}
+
+for filename in deployment.ini uv.lock apps/api/uv.lock; do
+  label="package-bare-${filename//\//-}"
+  reject_public_version "$label" "$package_version" "$filename" 1
+  run_gate "$repo" "$PATH" "$filename"
+  expect_rejection "$label explicit" "$ipv4_rule" "$filename:1"
+  assert_contains "$label explicit retains the token" "$RUN_OUTPUT" "$filename:1:$public_version"
+done
+
+# A copied public stanza is insufficient in any filename outside the exact uv.lock component.
+for filename in deployment.ini other.lock uv.lock.bak myuv.lock .uv.lock \
+  scripts/tests/fixtures/uv-lock-provenance/uv.lock.pypdf-6.13.2 \
+  scripts/tests/fixtures/uv-lock-provenance/uv.lock.pypdf-6.14.2; do
+  reject_public_version "package-wrong-path-${filename//\//-}" "$qualified_package" "$filename" 3
+done
+
+for filename in uv.lock apps/api/uv.lock; do
+  label="package-qualified-${filename//\//-}"
+  new_version_case "$label" "$benign_lock" "$filename"
+  run_gate "$repo" "$PATH"
+  expect_clean "$label default"
+  run_gate "$repo" "$PATH" "$filename"
+  expect_clean "$label explicit"
+  run_gate "$repo" "$fake_bin" "$filename"
+  expect_clean "$label shell-only"
+done
+
+for wrong_name in unrelated-package Click-plugins click_plugins; do
+  content="$(printf '[[package]]\nname = "%s"\n%s\n%s' "$wrong_name" "$package_version" "$package_source")"
+  reject_public_version "package-wrong-name-$wrong_name" "$content" uv.lock 3
+  if [ "$wrong_name" = unrelated-package ]; then
+    run_gate "$repo" "$PATH" uv.lock
+    expect_rejection "package-wrong-name explicit" "$ipv4_rule" "uv.lock:3"
+    assert_contains "package-wrong-name explicit retains the token" "$RUN_OUTPUT" "uv.lock:3:$public_version"
+  fi
+done
+
+reject_public_version "package-missing-header" "$(printf 'name = "click-plugins"\n%s\n%s' "$package_version" "$package_source")" uv.lock 2
+reject_public_version "package-missing-name" "$(printf '[[package]]\n%s\n%s' "$package_version" "$package_source")" uv.lock 2
+reject_public_version "package-name-comment" "$(printf '[[package]]\n# name = "click-plugins"\n%s\n%s' "$package_version" "$package_source")" uv.lock 3
+reject_public_version "package-name-dependency-object" "$(printf '[[package]]\n{ name = "click-plugins" }\n%s\n%s' "$package_version" "$package_source")" uv.lock 3
+reject_public_version "package-wrong-table" "$(printf '[tool.metadata]\nname = "click-plugins"\n%s\n%s' "$package_version" "$package_source")" uv.lock 3
+reject_public_version "package-wrong-header-shape" "$(printf '[package]\nname = "click-plugins"\n%s\n%s' "$package_version" "$package_source")" uv.lock 3
+reject_public_version "package-source-before-version" "$(printf '%s\n%s\n%s' "$package_head" "$package_source" "$package_version")" uv.lock 4
+reject_public_version "package-source-before-name" "$(printf '[[package]]\n%s\nname = "click-plugins"\n%s' "$package_source" "$package_version")" uv.lock 4
+reject_public_version "package-missing-source" "$(printf '%s\n%s' "$package_head" "$package_version")" uv.lock 3
+reject_public_version "package-source-comment" "$(printf '%s\n%s\n# %s' "$package_head" "$package_version" "$package_source")" uv.lock 3
+
+source_number=0
+for source in \
+  'source = { registry = "https://example.com/simple" }' \
+  'source = { registry = "https://pypi.org/simple/" }' \
+  'source = { editable = "." }' \
+  'source = { path = "." }' \
+  'source = { git = "https://example.com/package.git" }' \
+  'source = { registry = "https://pypi.org/simple", path = "." }'; do
+  source_number=$((source_number + 1))
+  reject_public_version "package-unowned-source-$source_number" "$(printf '%s\n%s\n%s' "$package_head" "$package_version" "$source")" uv.lock 3
+done
+
+# Approval is deferred until the package closes; conflicting or repeated ownership is ambiguous.
+for key in name version source; do
+  case "$key" in
+    name) duplicate='name = "unrelated-package"' ;;
+    version) duplicate="$package_version" ;;
+    source) duplicate='source = { editable = "." }' ;;
+  esac
+  reject_public_version "package-duplicate-$key" "$(printf '%s\n%s' "$qualified_package" "$duplicate")" uv.lock 3
+  if [ "$key" = version ]; then
+    assert_contains "duplicate version remains rejected on its own line" "$RUN_OUTPUT" "uv.lock:5:$public_version"
+  fi
+done
+reject_public_version "package-duplicate-identical-name" "$(printf '%s\nname = "click-plugins"' "$qualified_package")" uv.lock 3
+reject_public_version "package-duplicate-identical-source" "$(printf '%s\n%s' "$qualified_package" "$package_source")" uv.lock 3
+
+# A bracket in package data is not a table boundary and cannot approve ownership prematurely.
+matrix=$'matrix = [\n    ["a", "b"],\n]'
+for key in name version source; do
+  case "$key" in
+    name) duplicate='name = "unrelated-package"' ;;
+    version) duplicate="$package_version" ;;
+    source) duplicate='source = { editable = "." }' ;;
+  esac
+  reject_public_version "package-array-before-duplicate-$key" "$(printf '%s\n%s\n%s' "$qualified_package" "$matrix" "$duplicate")" uv.lock 3
+done
+for row in true 1; do
+  reject_public_version "package-array-closed-$row-before-duplicate-name" "$(printf '%s\nmatrix = [\n    [%s]\n]\nname = "unrelated-package"' "$qualified_package" "$row")" uv.lock 3
+done
+for key in matrix '"matrix"' matrix.rows; do
+  case "$key" in
+    matrix) label=bare ;;
+    '"matrix"') label=quoted ;;
+    matrix.rows) label=dotted ;;
+  esac
+  reject_public_version "package-array-partial-$label" "$(printf '%s\n%s = [[true],\n    [1]\n]\nname = "unrelated-package"' "$qualified_package" "$key")" uv.lock 3
+done
+reject_public_version "package-array-comment-fake-close" "$(printf '%s\nmatrix = [true # ]\n    [1]\n]\nname = "unrelated-package"' "$qualified_package")" uv.lock 3
+reject_public_version "package-array-unclosed-eof" "$(printf '%s\nmatrix = [\n    { value = true },' "$qualified_package")" uv.lock 3
+for key in name version source; do
+  reject_public_version "package-duplicate-array-$key" "$(printf '%s\n%s = [\n]' "$qualified_package" "$key")" uv.lock 3
+done
+reject_public_version "package-malformed-open-bracket" "$(printf '%s\n[' "$qualified_package")" uv.lock 3
+reject_public_version "package-malformed-bracket-before-duplicate" "$(printf '%s\n[\nname = "unrelated-package"' "$qualified_package")" uv.lock 3
+
+for boundary in package tool subtable; do
+  case "$boundary" in
+    package)
+      tail="$(printf '[[package]]\nname = "unrelated-package"\n%s\n%s' "$package_version" "$package_source")"
+      version_line=7
+      ;;
+    tool) tail="$(printf '[tool.metadata]\n%s' "$package_version")"; version_line=6 ;;
+    subtable) tail="$(printf '[package.optional-dependencies]\n%s' "$package_version")"; version_line=6 ;;
+  esac
+  reject_public_version "package-reset-$boundary" "$(printf '%s\n%s' "$qualified_package" "$tail")" uv.lock "$version_line"
+  assert_not_contains "$boundary reset retains preceding legitimate metadata" "$RUN_OUTPUT" "uv.lock:3:$public_version"
+done
+reject_public_version "package-reset-missing-identity" "$(printf '%s\n[[package]]\n%s\n%s' "$qualified_package" "$package_version" "$package_source")" uv.lock 6
+assert_not_contains "incomplete next package cannot spoil the preceding public entry" "$RUN_OUTPUT" "uv.lock:3:$public_version"
+
+new_version_case "package-reset-file" "$qualified_package" a/uv.lock
+mkdir -p "$repo/z"
+printf '%s\n' "$package_version" >"$repo/z/uv.lock"
+git -C "$repo" add -- z/uv.lock
+run_gate "$repo" "$PATH"
+expect_rejection "package-reset-file default" "$ipv4_rule" "z/uv.lock:1"
+assert_contains "file reset retains the unqualified assignment" "$RUN_OUTPUT" "z/uv.lock:1:$public_version"
+assert_not_contains "file reset preserves the qualified file" "$RUN_OUTPUT" "a/uv.lock:3:$public_version"
+run_gate "$repo" "$PATH" z/uv.lock
+expect_rejection "package-reset-file explicit" "$ipv4_rule" "z/uv.lock:1"
+assert_contains "explicit file selection retains the unqualified assignment" "$RUN_OUTPUT" "z/uv.lock:1:$public_version"
+
+quote_number=0
+for quote in '"""' "'''"; do
+  quote_number=$((quote_number + 1))
+  reject_public_version "package-multiline-$quote_number" "$(printf 'example = %s\n%s\n%s' "$quote" "$qualified_package" "$quote")" uv.lock 4
+done
+
+# Repeating the same public token in a comment must produce one diagnostic, not zero or two.
+new_version_case "package-comment-same-token" "$(printf '%s\n%s # endpoint=%s\n%s' "$package_head" "$package_version" "$public_version" "$package_source")" uv.lock
+run_gate "$repo" "$PATH"
+expect_rejection "package-comment-same-token" "$ipv4_rule" "uv.lock:3"
+public_hits=0
+while IFS= read -r diagnostic; do
+  if [ "$diagnostic" = "  uv.lock:3:$public_version" ]; then public_hits=$((public_hits + 1)); fi
+done <<< "$RUN_OUTPUT"
+assert_exit "same-token comment reports only the neighbor" 1 "$public_hits"
+
+for context in endpoint host; do
+  case "$context" in
+    endpoint) tail="endpoint = \"$public_version\"" ;;
+    host) tail="registry = \"https://$public_version/simple\"" ;;
+  esac
+  reject_public_version "package-body-$context" "$(printf '%s\n%s' "$qualified_package" "$tail")" uv.lock 5
+  assert_not_contains "body $context retains legitimate version masking" "$RUN_OUTPUT" "uv.lock:3:$public_version"
+done
+new_version_case "package-wrong-version" "$(printf '%s\nversion = "%s"\n%s' "$package_head" "$unsafe_ipv4" "$package_source")" uv.lock
+run_gate "$repo" "$PATH"
+expect_rejection "package-wrong-version" "$ipv4_rule" "uv.lock:3"
+assert_contains "package name cannot approve a different token" "$RUN_OUTPUT" "uv.lock:3:$unsafe_ipv4"
+
+whitespace_package="$(printf ' \t[[package]] # public package\n\n# identity\n\tname\t=\t"click-plugins" # public\n\tversion\t=\t"%s" # release\n\tsource\t=\t{ \tregistry\t=\t"https://pypi.org/simple" \t} # registry' "$public_version")"
+new_version_case "package-positive-whitespace" "$whitespace_package" uv.lock
+run_gate "$repo" "$PATH"
+expect_clean "package-positive-whitespace"
+run_gate "$repo" "$fake_bin" uv.lock
+expect_clean "package-positive-whitespace shell-only"
+
+other_package=$'[[package]]\nname = "another-package"\nversion = "2.0"\nsource = { registry = "https://pypi.org/simple" }'
+new_version_case "package-positive-surrounded" "$(printf '%s\n%s\n%s' "$other_package" "$qualified_package" "$other_package")" uv.lock
+run_gate "$repo" "$PATH"
+expect_clean "package-positive-surrounded"
+new_version_case "package-positive-no-final-newline" "$qualified_package" apps/api/uv.lock
+printf '%s' "$qualified_package" >"$repo/apps/api/uv.lock"
+git -C "$repo" add -- apps/api/uv.lock
+run_gate "$repo" "$PATH"
+expect_clean "package-positive-no-final-newline default"
+run_gate "$repo" "$PATH" apps/api/uv.lock
+expect_clean "package-positive-no-final-newline explicit"
+multiline_public_lock="$(printf '%s\ndependencies = [\n    { name = "click" },\n]\nsdist = { url = "%s", hash = "sha256:%s" }\nwheels = [\n    { url = "%s", hash = "sha256:%s" },\n]' "$qualified_package" "$public_artifact" "$digest_hex" "$public_wheel" "$digest_hex")"
+new_version_case "package-positive-multiline-artifacts" "$multiline_public_lock" apps/api/uv.lock
+run_gate "$repo" "$PATH"
+expect_clean "package-positive-multiline-artifacts default"
+run_gate "$repo" "$PATH" apps/api/uv.lock
+expect_clean "package-positive-multiline-artifacts explicit"
+run_gate "$repo" "$fake_bin" apps/api/uv.lock
+expect_clean "package-positive-multiline-artifacts shell-only"
 
 # Case widening must retain the 16-byte minimum independently of MAC and IPv6 diagnostics.
 legacy_lower="$(printf 'ab:%.0s' {1..15})ab"

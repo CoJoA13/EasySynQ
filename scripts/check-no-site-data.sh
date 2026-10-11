@@ -102,18 +102,118 @@ fi
 # TRUSTED_PROXY_CIDRS default — repo-defined container topology, not a site address; it sits below
 # the daemon's own allocation pool so it cannot collide). Only that exact base is sanctioned: any
 # other 172.16.x.y still reds, so a real address cannot ride in. The public click-plugins
-# four-part version is sanctioned only in a TOML version declaration or its exact public Python
-# distribution URL. Mask only that occurrence, not a line, endpoint, host, or whole lockfile.
+# four-part version is sanctioned only in a uv.lock package declaration with its exact name and
+# public PyPI source, or its exact public Python distribution URL. Mask only that occurrence,
+# not a line, endpoint, host, or whole lockfile.
+qualified_public_version_lines() {
+  local path="$1" text number=0 state=0 version_line=0 multiline=0 array_open=0 unsupported=0
+  local blank='^[[:blank:]]*(#.*)?$' bracket='^[[:blank:]]*\['
+  local table='^[[:blank:]]*(\[[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\]|\[\[[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\]\])[[:blank:]]*(#.*)?$'
+  local header='^[[:blank:]]*\[\[package\]\][[:blank:]]*(#.*)?$'
+  local name='^[[:blank:]]*name[[:blank:]]*=[[:blank:]]*"click-plugins"[[:blank:]]*(#.*)?$'
+  local version='^[[:blank:]]*version[[:blank:]]*=[[:blank:]]*"1\.1\.1\.2"[[:blank:]]*(#.*)?$'
+  local source='^[[:blank:]]*source[[:blank:]]*=[[:blank:]]*\{[[:blank:]]*registry[[:blank:]]*=[[:blank:]]*"https://pypi\.org/simple"[[:blank:]]*\}[[:blank:]]*(#.*)?$'
+  local identity="^[[:blank:]]*['\"]?(name|version|source)['\"]?[[:blank:]]*="
+  local opener='^[[:blank:]]*[A-Za-z0-9_-]+[[:blank:]]*=[[:blank:]]*\[[[:blank:]]*(#.*)?$'
+  local closer='^[[:blank:]]*\][[:blank:]]*(#.*)?$'
+  local plain='[A-Za-z0-9_.[:blank:],:=+*/%<>!()-]'
+  local double='"[^][#"\\]*"'
+  local single="'[^][#'\\\\]*'"
+  local object="\{(${plain}|${double}|${single})*\}"
+  local inline="^[[:blank:]]*[A-Za-z0-9_-]+[[:blank:]]*=[[:blank:]]*\[(${plain}|${double}|${single}|${object})*\][[:blank:]]*(#.*)?$"
+  local -a approved=()
+  [ -f "$path" ] && [ -r "$path" ] || return 0
+  # Read context once. Defer qualification until the table closes so duplicate identity/source
+  # keys cannot borrow an earlier public declaration. Multiline examples are conservatively denied.
+  while IFS= read -r text || [ -n "$text" ]; do
+    number=$((number + 1))
+    if [[ "$text" == *'"""'* || "$text" == *"'''"* ]]; then multiline=1; fi
+    if [[ "$text" =~ $blank ]]; then continue; fi
+    # Ownership checks precede array permission, including duplicate-looking rows in an array.
+    if [ "$state" -eq 4 ] && [[ "$text" =~ $identity ]]; then state=0; fi
+    if [ "$array_open" -eq 1 ]; then
+      if [[ "$text" =~ $closer ]]; then
+        array_open=0
+      elif [[ "$text" =~ $bracket ]]; then
+        state=0
+        unsupported=1
+      fi
+      # Observed dependency/wheel object rows may contain inline fields. They are never headers.
+      continue
+    fi
+    if [[ "$text" =~ $table ]]; then
+      if [ "$state" -eq 4 ]; then approved+=("$version_line"); fi
+      state=0
+      if [[ "$text" =~ $header ]]; then state=1; fi
+      continue
+    elif [[ "$text" =~ $bracket ]]; then
+      # Array elements and malformed/unsupported headers cannot publish pending approval.
+      state=0
+      unsupported=1
+      continue
+    fi
+    if [[ "$text" =~ $opener ]]; then
+      array_open=1
+      if [ "$state" -ne 4 ]; then state=0; fi
+      continue
+    fi
+    if [[ "$text" =~ $inline ]]; then
+      if [ "$state" -ne 4 ]; then state=0; fi
+      continue
+    fi
+    if [[ "$text" == *'['* ]]; then
+      # Partially filled, quoted/dotted-key or otherwise unsupported array forms fail closed.
+      state=0
+      unsupported=1
+      continue
+    fi
+    case "$state" in
+      1)
+        if [[ "$text" =~ $name ]]; then state=2; else state=0; fi
+        ;;
+      2)
+        if [[ "$text" =~ $version ]]; then
+          version_line="$number"
+          state=3
+        else
+          state=0
+        fi
+        ;;
+      3)
+        if [[ "$text" =~ $source ]]; then state=4; else state=0; fi
+        ;;
+    esac
+  done < "$path"
+  if [ "$state" -eq 4 ] && [ "$array_open" -eq 0 ]; then approved+=("$version_line"); fi
+  if [ "$multiline" -eq 0 ] && [ "$unsupported" -eq 0 ] && [ "$array_open" -eq 0 ] \
+    && [ "${#approved[@]}" -gt 0 ]; then
+    printf '%s ' "${approved[@]}"
+  fi
+  # An empty approved set is a normal result; other IPv4 candidates still need scanning.
+  return 0
+}
+
 scan_ipv4() {
   local record path line text remainder token
   local pattern='\b([0-9]{1,3}\.){3}[0-9]{1,3}\b'
+  local -A public_versions=()
+  for path in "${FILES[@]}"; do
+    if [[ "$path" == uv.lock || "$path" == */uv.lock ]]; then
+      public_versions["$path"]=" $(qualified_public_version_lines "$path") "
+    fi
+  done
   while IFS= read -r record; do
     path="${record%%:*}"
     remainder="${record#*:}"
     line="${remainder%%:*}"
     text="${remainder#*:}"
+    if [[ "$path" == uv.lock || "$path" == */uv.lock ]]; then
+      if [[ "${public_versions["$path"]:-}" == *" $line "* ]]; then
+        text="$(printf '%s\n' "$text" | sed -E \
+          -e 's@^([[:blank:]]*version[[:blank:]]*=[[:blank:]]*")1\.1\.1\.2("[[:blank:]]*(#|$))@\1<public-version>\2@')"
+      fi
+    fi
     text="$(printf '%s\n' "$text" | sed -E \
-      -e 's@^([[:blank:]]*version[[:blank:]]*=[[:blank:]]*")1\.1\.1\.2("[[:blank:]]*(#|$))@\1<public-version>\2@' \
       -e 's#(https://files\.pythonhosted\.org/packages/[0-9A-Fa-f/]+/click_plugins-)1\.1\.1\.2((\.tar\.gz|-py2\.py3-none-any\.whl)([^A-Za-z0-9._-]|$))#\1<public-version>\2#g')"
     while IFS= read -r token; do
       printf '%s:%s:%s\n' "$path" "$line" "$token"
