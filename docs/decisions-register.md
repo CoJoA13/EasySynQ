@@ -2067,7 +2067,8 @@ The owner selected one no-SMTP browser flow for every fresh installation.
    credential, bootstrap secret, claim marker, or Keycloak subject enters an audit payload.
 6. **Post-setup separation is unchanged.** `user.create` creates accounts, `user.update` edits them,
    `permission.grant` separately gates role assignment, and R64’s system-tier guard remains mandatory
-   for resetting another existing user’s credential. No new permission key is introduced.
+   for resetting every existing linked user’s credential, including the caller’s own. No new permission
+   key is introduced.
 7. **Install-path convergence.** New install paths create no fixed human Keycloak account and write no
    human password to a setup sheet. Internal Keycloak service credentials remain installation
    secrets. Existing `OPERATIONAL` and legitimately `IN_SETUP` installations do not re-enter

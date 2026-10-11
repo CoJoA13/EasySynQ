@@ -51,6 +51,9 @@ def test_reset_authority_describes_every_existing_user_including_self() -> None:
     rule = r64.split("5. **Credential-reset authority", 1)[1].split("**No new permission key**", 1)[
         0
     ]
+    r66 = register.split("### R66 —", 1)[1].split("### R67 —", 1)[0]
+    post_setup = r66.split("6. **Post-setup separation", 1)[1].split("\n7. ", 1)[0]
+    post_setup = " ".join(post_setup.lower().replace("\u2019", "'").split())
     model = (ROOT / "docs/07-authorization-model.md").read_text(encoding="utf-8")
     reset_section = model.split("#### 4.3.1 Credential reset", 1)[1].split("\n###", 1)[0]
     guard_doc = (inspect.getdoc(assert_can_reset_credential) or "").lower()
@@ -63,6 +66,10 @@ def test_reset_authority_describes_every_existing_user_including_self() -> None:
     assert "another user" not in reset_section.lower()
     assert "another user" not in guard_doc
     assert "own" in guard_doc
+    assert (
+        "system-tier guard remains mandatory for resetting every existing linked user's "
+        "credential, including the caller's own"
+    ) in post_setup
 
 
 def test_self_permission_contract_requires_system_tier() -> None:

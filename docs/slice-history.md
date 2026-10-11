@@ -5,6 +5,18 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Credential-reset authority cross-reference aligned (2026-10-11)
+
+Follow-up candidate for [PR #640](https://github.com/CoJoA13/EasySynQ/pull/640).
+R66 rule 6 now explicitly retains the mandatory system-tier guard for every existing linked
+user's credential, including the caller's own. Review found that this cross-reference still said
+"another existing user" after R64 and doc 07 were aligned. No runtime or permission policy changes.
+
+The existing identity-onboarding authority test now checks R66 rule 6 separately from R64 and
+stops before rule 7. Against the unchanged sentence it failed at the new assertion; after the
+correction all four identity-onboarding contract tests passed. Independent review and current-head
+GitHub CI remain part of the merge handoff.
+
 ## Credential reset affordance follows server system tier (2026-10-10)
 
 Closure candidate for [#430](https://github.com/CoJoA13/EasySynQ/issues/430),
