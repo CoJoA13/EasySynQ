@@ -5,6 +5,105 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Site-data slice masking avoids per-character scans (2026-10-11)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The indexed-slice helper now scans bracket events and emits unchanged chunks, using byte offsets
+inside the helper. A bounded expression check replaces the character-by-character step loop.
+Receiver rules, mask boundaries, diagnostics, lock coverage and all other matchers remain unchanged.
+This removes the measured long-prefix and long-step stalls without adding a production dependency.
+
+Before the repair, the small control passed in 0.166 seconds while both the 64 KiB no-bracket and
+long-step cases exceeded the fixed five-second deadline. After repair, all eight progress workloads
+passed their expected decisions within that deadline; the slowest recorded case took 3.022 seconds.
+The unchanged default harness passed all 591 assertions, and all eight explicitly selected locks
+passed. The full tracked-tree scan passed in 6.197 seconds after two fixture-source literals were
+assembled from the existing numeric variable; their generated test payloads remained unchanged.
+
+After #640 merged with required CI passing, the integrated-tree comparison changed only this helper
+between two isolated snapshots with identical tracked inputs, tools and locale. One warmup per
+variant and three alternating pairs all returned complete clean verdicts within the fixed
+30-second deadline. The median fell from 28.003 to 6.289 seconds, a 4.45-fold speedup. Both fixture
+manifests and the original source/index remained unchanged. Fresh integrated checks passed all
+eight locks, the full tracked tree, repository authority and staged/unstaged whitespace checks.
+
+Independent plan and implementation reviews approved the helper and fixtures. Independent actual
+integration review verified every inherited main history section, the original #421 entry and all
+unrelated residual records were preserved. All inherited application/contracts/browser sources
+match accepted main. Final evidence review and current-head CI remain acceptance gates. Earlier
+test evidence is reused only where source is unchanged. Native Git Bash and ShellCheck remain
+unverified; slice recognition remains lexical and bounded, and the scanner remains a backstop to
+R61 human review.
+
+## Table baseline waits for root-font shell padding (2026-10-11)
+
+Follow-up candidate for [PR #640](https://github.com/CoJoA13/EasySynQ/pull/640), also addressing
+the same browser failure on [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642). The enlarged-text
+table test could record its baseline while the shell's 200ms padding transition was still running.
+Hosted failures measured table-left differences of 4.875px and 1.078125px with stable internal
+columns. The setup helper now flushes layout and waits, with a five-second bound, until the main
+element has no unfinished padding transitions. Existing physical assertions and their 1px limits
+remain unchanged.
+
+A controlled two-second transition reproduced a 52.953125px baseline error. The exact baseline
+contained four running padding transitions; the table then settled before any filter changed.
+With the helper repair, the same controlled setup passed with no unfinished transition at baseline.
+Removing fixed layout and compact column allocations still failed the original Last reviewed
+boundary assertion by 6.0625px. Restoring the production page and rebuilding passed **95/95 Chromium
+cases**, including all **19 legibility cases**, with zero skips, retries or flaky results
+(191.629 seconds wall time). Source and build identities were recorded for each state.
+
+Browser TypeScript/build and web lint passed. The first lint invocation included temporary report
+assets; removing those already archived coordinator files produced a pass on unchanged source.
+Independent plan, placement and implementation reviews approved the bounded setup correction.
+Final review and current-head GitHub CI remain merge gates. This evidence covers Chromium with
+synthetic fixtures; production layout, theme and dependencies were unchanged.
+
+## Credential-reset authority cross-reference aligned (2026-10-11)
+
+Follow-up candidate for [PR #640](https://github.com/CoJoA13/EasySynQ/pull/640).
+R66 rule 6 now explicitly retains the mandatory system-tier guard for every existing linked
+user's credential, including the caller's own. Review found that this cross-reference still said
+"another existing user" after R64 and doc 07 were aligned. No runtime or permission policy changes.
+
+The existing identity-onboarding authority test now checks R66 rule 6 separately from R64 and
+stops before rule 7. Against the unchanged sentence it failed at the new assertion; after the
+correction all four identity-onboarding contract tests passed. Independent review and current-head
+GitHub CI remain part of the merge handoff.
+
+## Credential reset affordance follows server system tier (2026-10-10)
+
+Closure candidate for [#430](https://github.com/CoJoA13/EasySynQ/issues/430),
+`RES-CREDENTIAL-RESET-R64-ALIGNMENT`. The roster now offers password issuance only when the caller
+holds `user.create` and the server reports system tier. `/me/permissions` returns a required
+`system_tier` boolean from the same unchanged PDP helper used by the reset guard. Missing or errored
+permission data hides the action. The admin effective-permissions response keeps its existing schema.
+R64 rule 5, doc 07 and the denial detail now state that every reset, including self-reset, requires
+system tier. The backend still evaluates current authority on every request.
+
+Regression proof against unchanged production produced two intended API unit failures, eight web
+failures and five database/API failures. Existing controls passed. After implementation, focused
+checks passed 15 API unit, 53 web and eight database tests. Broader verification passed 5,162 API
+unit tests, 285 response-contract cases, 56 affected integration cases and all 2,384 web tests in
+283 files. Ruff, format, mypy, web lint/build, canonical contract check, authority and site-data
+guards passed. Two API skips are explicitly release-image and opt-in built-image proofs.
+
+Commands include `uv run pytest tests/unit -m unit -q`, the contract-marked
+`tests/integration/test_contract_response_schemas.py`, and the integration-marked users provisioning,
+users admin, authz, me-permissions and credential-reset-authority suites in `apps/api`; `npm test`,
+`npm run lint` and `npm run build` in `apps/web`; and `bash scripts/gen-contracts.sh --check`,
+`bash scripts/check-repo-authority.sh` and `bash scripts/check-no-site-data.sh` from the repository.
+
+The isolated combination with #431 and #421 passed 147 focused API units, 285 response contracts,
+157 affected integrations, 77 web cases, 591 scanner assertions and the full-tree scan. Its contracts
+were canonically regenerated; this proves the shared helper/fixture and schema changes coexist.
+Independent plan and implementation reviews approved specification and engineering quality.
+This dated entry records the tested closure candidate; final independent review and PR CI belong
+to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
+Four existing OpenAPI date/date-time warnings and a generator FutureWarning remain recorded.
+Live identity-provider and built-image acceptance are not claimed. Permission-cache redesign and
+a self-reset exception remain outside this change.
+
 ## Site-data guard covers all four deferred shapes (2026-10-10)
 
 Closure candidate for [#421](https://github.com/CoJoA13/EasySynQ/issues/421),

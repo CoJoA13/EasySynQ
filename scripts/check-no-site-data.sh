@@ -130,46 +130,51 @@ hits="$(scan_ipv4 \
 # bracket span, never the line, before matching additional leading-compression candidates.
 # Sanctioned: RFC 3849 documentation prefix, expanded loopback, and exact bare loopback/unspecified.
 mask_leading_slice_spans() {
-  local text="$1" result='' before inside step rest char
-  local index=0 step_index depth valid
+  # Only ASCII bracket/step syntax is interpreted. Pass other bytes through in chunks; keeping
+  # byte offsets local avoids repeatedly walking UTF-8 prose and leaves the caller's locale intact.
+  local LC_ALL=C
+  local rest="$1" prefix before inside step previous=''
   local receiver='(^|[^A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*)$'
   local slice='^[[:blank:]]*:[[:blank:]]*:[[:blank:]]*(.+)$'
   local step_chars='^[A-Za-z0-9_.[:blank:]+*/%,()-]+$'
-  while [ "$index" -lt "${#text}" ]; do
-    char="${text:index:1}"
-    if [ "$char" = '[' ]; then
-      before="${text:0:index}"
-      while [[ "$before" == *' ' || "$before" == *$'\t' ]]; do before="${before%?}"; done
-      rest="${text:index+1}"
-      if [[ ( "$before" =~ $receiver || "$before" == *')' || "$before" == *']' ) && "$rest" == *']'* ]]; then
-        inside="${rest%%]*}"
-        if [[ "$inside" =~ $slice ]]; then
-          step="${BASH_REMATCH[1]}"
-          valid=0
-          if [[ "$step" =~ $step_chars && "$step" =~ [^[:blank:]] ]]; then
-            valid=1
-            depth=0
-            for ((step_index=0; step_index<${#step}; step_index++)); do
-              case "${step:step_index:1}" in
-                '(') depth=$((depth + 1)) ;;
-                ')') depth=$((depth - 1)) ;;
-              esac
-              if [ "$depth" -lt 0 ] || [ "$depth" -gt 2 ]; then valid=0; break; fi
-            done
-            [ "$depth" -eq 0 ] || valid=0
-          fi
-          if [ "$valid" -eq 1 ]; then
-            result+='[<python-slice>]'
-            index=$((index + ${#inside} + 2))
-            continue
-          fi
+  local plain='[A-Za-z0-9_.[:blank:]+*/%,-]'
+  local one_level="\(${plain}*\)"
+  local two_levels="\((${plain}|${one_level})*\)"
+  local balanced="^(${plain}|${two_levels})*$"
+  while [[ "$rest" == *'['* ]]; do
+    prefix="${rest%%\[*}"
+    rest="${rest:$((${#prefix}+1))}"
+    printf '%s' "$prefix"
+    if [[ "$rest" != *']'* ]]; then
+      printf '[%s\n' "$rest"
+      return
+    fi
+    # Remove a whitespace suffix in one operation. Empty/spaced chains reuse the original last
+    # delimiter rather than losing the receiver context when a prior slice was already emitted.
+    if [[ "$prefix" =~ ^(.*[^[:blank:]])[[:blank:]]*$ ]]; then
+      before="${BASH_REMATCH[1]}"
+    else
+      before="$previous"
+    fi
+    if [[ ( "$before" =~ $receiver || "$before" == *')' || "$before" == *']' ) && "$rest" == *']'* ]]; then
+      inside="${rest%%]*}"
+      if [[ "$inside" =~ $slice ]]; then
+        step="${BASH_REMATCH[1]}"
+        # The fixed-depth grammar admits exactly balanced groups up to depth two. Keep the
+        # separate whitelist/non-whitespace predicates, including their empty-step behavior.
+        if [[ "$step" =~ $step_chars && "$step" =~ [^[:blank:]] && "$step" =~ $balanced ]]; then
+          printf '%s' '[<python-slice>]'
+          rest="${rest:$((${#inside}+1))}"
+          previous=']'
+          continue
         fi
       fi
     fi
-    result+="$char"
-    index=$((index + 1))
+    # An invalid outer bracket may contain a valid inner slice, so consume only its opener.
+    printf '%s' '['
+    previous='['
   done
-  printf '%s\n' "$result"
+  printf '%s\n' "$rest"
 }
 
 scan_leading_ipv6() {

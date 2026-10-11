@@ -60,6 +60,126 @@ run_gate() {
     || RUN_CODE=$?
 }
 
+# Optional progress probes exercise the public gate one fixture at a time. The caller supplies
+# the safe deadline; the scanner itself needs no timeout command or additional runtime tool.
+# Default invocation continues to run the existing behavioral cohort below without alterations.
+run_progress_case() {
+  local name="$1" progress_repo="$TEST_ROOT/progress-$1"
+  local padding='' payload='' repeated='' unicode='' fragment='' iteration
+  local first second numeric mapped malformed_mapped long_step want=1
+  first="$(printf '%s%s' '::' 'abcd')"
+  second="$(printf '%s%s' '::' 'def0')"
+  numeric="$(printf '%s%s' '::' '2')"
+  mapped="$(printf '%s%s:%s.%s.%s.%s' '::' 'ffff' '192' '0' '2' '1')"
+  malformed_mapped="${mapped}.1"
+  printf -v padding '%65536s' ''
+
+  case "$name" in
+    small-control)
+      printf -v padding '%1024s' ''
+      payload="${padding}values[::f()]; endpoint='$first'."
+      ;;
+    long-no-bracket)
+      payload="${padding}endpoint='$first'"
+      ;;
+    long-sparse)
+      payload="$first. values[::f()]${padding}[$numeric] $second. "
+      ;;
+    unicode-sparse)
+      unicode='λ'
+      for ((iteration=0; iteration<15; iteration++)); do unicode+="$unicode"; done
+      payload="$first. values[::f()] ${unicode} values[::2 + 1] $second. "
+      ;;
+    all-slices)
+      repeated='values[0][::2][::f()] [::(2 + 1)] + f()[::2]; '
+      # Four recognized spans per group, doubled to 512 groups: exactly 2,048 slice spans.
+      for ((iteration=0; iteration<9; iteration++)); do repeated+="$repeated"; done
+      payload="$repeated"
+      want=0
+      ;;
+    long-step)
+      long_step="${padding// /x}"
+      payload="values[$first + $long_step + f((2 + 1))]; endpoint='$second'"
+      ;;
+    malformed-dense)
+      fragment="values[$numeric + (((1)))]; "
+      repeated="$fragment"
+      for ((iteration=0; iteration<9; iteration++)); do repeated+="$repeated"; done
+      repeated="${repeated#"$fragment"}"
+      repeated="${repeated%"$fragment"}"
+      payload="values[$first + (((1)))]; $repeated outer[bad + inner[::f()]]; values[$second + (1]"
+      ;;
+    malformed-long-step)
+      long_step="${padding// /x}"
+      payload="values[$first + $long_step + (((1)))]; $malformed_mapped; unmatched[ endpoint='$second'"
+      ;;
+    *) printf 'Unknown progress case: %s\n' "$name" >&2; return 2 ;;
+  esac
+
+  new_repo "$progress_repo"
+  printf '%s\n' "$payload" >"$progress_repo/probe.txt"
+  git -C "$progress_repo" add -- probe.txt
+  run_gate "$progress_repo" "$PATH"
+  assert_exit "progress $name completes with its expected decision" "$want" "$RUN_CODE"
+  if [ "$want" -eq 0 ]; then
+    assert_contains "progress $name reaches the clean verdict" "$RUN_OUTPUT" 'check-no-site-data: clean'
+    assert_not_contains "progress $name does not report slices" "$RUN_OUTPUT" 'IPv6 address outside'
+    # A successful all-slice pass cannot hide an eligible address appended to the same line.
+    printf '%s endpoint=%s\n' "$payload" "$first" >"$progress_repo/probe.txt"
+    git -C "$progress_repo" add -- probe.txt
+    run_gate "$progress_repo" "$PATH"
+    assert_exit "progress $name still rejects its same-line neighbor" 1 "$RUN_CODE"
+    assert_contains "progress $name keeps its neighbor token" "$RUN_OUTPUT" "probe.txt:1:$first"
+  else
+    assert_contains "progress $name reports the IPv6 rule" "$RUN_OUTPUT" 'IPv6 address outside'
+    assert_contains "progress $name reports its source line" "$RUN_OUTPUT" 'probe.txt:1:'
+    assert_not_contains "progress $name has no clean verdict" "$RUN_OUTPUT" 'check-no-site-data: clean'
+    case "$name" in
+      long-step)
+        assert_contains "progress long-step preserves the neighbor" "$RUN_OUTPUT" "probe.txt:1:$second"
+        assert_not_contains "progress long-step masks only its approved step" "$RUN_OUTPUT" "probe.txt:1:$first"
+        ;;
+      *) assert_contains "progress $name preserves its first address" "$RUN_OUTPUT" "probe.txt:1:$first" ;;
+    esac
+    case "$name" in
+      long-sparse|unicode-sparse|malformed-dense|malformed-long-step)
+        assert_contains "progress $name preserves its last address" "$RUN_OUTPUT" "probe.txt:1:$second"
+        ;;
+    esac
+  fi
+  case "$name" in
+    small-control|long-sparse|unicode-sparse|all-slices)
+      assert_not_contains "progress $name has no numeric-slice diagnostic" "$RUN_OUTPUT" "probe.txt:1:$numeric"
+      ;;
+  esac
+  case "$name" in
+    small-control|long-sparse|unicode-sparse)
+      assert_not_contains "progress $name omits sentence periods" "$RUN_OUTPUT" "probe.txt:1:${first}."
+      ;;
+  esac
+  if [ "$name" = malformed-long-step ]; then
+    local partial_mapped
+    partial_mapped="$(printf '%s%s:%s' '::' 'ffff' '192')"
+    assert_not_contains 'progress malformed mapped token has no shortened match' "$RUN_OUTPUT" "probe.txt:1:$partial_mapped"
+  fi
+  if [ "$name" = malformed-dense ]; then
+    local inner_candidate
+    inner_candidate="$(printf '%s%s' '::' 'f')"
+    assert_not_contains 'progress rejected outer span still permits its inner slice' "$RUN_OUTPUT" "probe.txt:1:$inner_candidate"
+  fi
+}
+
+if [ "$#" -gt 0 ]; then
+  if [ "$#" -ne 2 ] || [ "$1" != '--progress-case' ]; then
+    printf 'Usage: %s [--progress-case NAME]\n' "$0" >&2
+    exit 2
+  fi
+  run_progress_case "$2" || exit $?
+  printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ]
+  exit $?
+fi
+
 printf '== check-no-site-data.sh ==\n'
 
 # The repository-owner scan is optional. A local worktree without an origin must still execute every

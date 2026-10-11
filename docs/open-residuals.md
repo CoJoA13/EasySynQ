@@ -849,25 +849,6 @@ tracked files). Then ignore exactly that path and the exported root CA, and prov
 `git check-ignore` plus a check that every tracked `infra/compose/compose.*.yml` stays tracked.
 Last reviewed: 2026-09-22
 
-## RES-CREDENTIAL-RESET-R64-ALIGNMENT
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #430](https://github.com/CoJoA13/EasySynQ/issues/430), deferred from PR #429 on
-2026-08-04; the contract text (item 3) has since been aligned. Verified against `3d8613a` on 2026-09-22.
-Reason: R64 rule 5 requires a system-tier caller to reset another user's credential. The roster still
-offers "Issue new temp password" to any caller holding `user.create` (`UsersAdmin.tsx`), so a
-granular-override holder sees an action that always returns `422 two_tier_violation`. The PEP check
-in `services/authz/pep.py` is unconditional (no self exception), while R64 rule 5, its denial
-message and doc 07 §351 say "another user"; doc 07 then justifies system tier for "every reset", and
-the published contract describes the guard as unconditional. The authorities disagree, and choosing
-the weaker reading would change a security boundary.
-Closure contract: Gate the roster action on the same system-tier rule the server enforces, with a
-component test for a granular `user.create` holder. Keep the unconditional guard and correct R64
-rule 5, the denial text and doc 07 to say every reset needs system tier; a self-reset exception is
-out of scope for this record and needs its own owner-approved register amendment first.
-Last reviewed: 2026-09-22
-
 ## RES-KEYCLOAK-ERROR-CLASSIFICATION
 
 Status: OPEN
