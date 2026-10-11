@@ -132,3 +132,16 @@ full tracked-tree scan. Independent implementation review approved both axes. Th
 passed the harness and complete scan again, plus four staged real-gate rejection probes followed by
 a clean restored tree. Dated [closure evidence](../../slice-history.md#site-data-guard-covers-all-four-deferred-shapes-2026-10-10)
 records commands and limits. Final independent review and PR handoff remain pending. Native Git Bash and ShellCheck are unavailable in the current environment. Constrained GNU shell PATH fixtures prove the dependency boundary separately and do not establish native Git Bash compatibility. Parent owns execution, review, integration, shared closure documents, commits, and PRs; this worker claims no new passing command result.
+
+
+## Receiver-context amendment (2026-10-11)
+
+A later PR review reproduced ordinary prose being classified as an indexed slice, including call-shaped and indexed prose receivers. This amendment narrows the receiver-discovery rule above; the original plan and its execution evidence remain historical. Optional spaces/tabs and the original step alphabet/balance limit remain supported.
+
+- A fresh identifier/dotted identifier, bounded call or bounded parenthesized receiver needs an original-line start or an explicit source expression delimiter. An arbitrary whitespace boundary between prose words is insufficient. Supported delimiters are assignment, container/call punctuation, comma, semicolon, arithmetic/bitwise/comparison punctuation, and opening quote/backtick cues used by source examples.
+- Every receiver kind uses the same framing rule. A closing call/index character alone grants no allowance. Chained indexing carries the qualification of its original receiver, including across spaces/tabs; starting a new emitted chunk never invents a line-start cue.
+- A nonnested ordinary index is emitted unchanged with its provenance. Nested unsupported outer content remains available for inner inspection, and every unmasked address remains available for token extraction.
+- The existing 17 slice positives and all 952 earlier assertions remain required. New prose/call/index/two-token controls assert each complete address diagnostic, while framed source controls preserve valid slicing.
+- Two sparse progress fixtures gain explicit semicolon framing without reducing their long padding, Unicode content, token inventory, diagnostic assertions or five-second limits. The small control uses byte-equivalent string assembly so the raw fixture source also has a recognized source cue.
+
+This is a bounded lexical recognizer, not a Python parser. Prose deliberately spelling an accepted source expression remains ambiguous; unsupported receiver spellings may require review. The package-context qualifier and other scanner rules are unchanged. Fresh expanded harness, all eight bounded progress cases, eight-lock and full-tree checks must verify the changed helper. The earlier 4.45-fold comparison remains historical for its exact source pair; no current speedup is inferred from it.

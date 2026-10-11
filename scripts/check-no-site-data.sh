@@ -234,13 +234,19 @@ mask_leading_slice_spans() {
   # byte offsets local avoids repeatedly walking UTF-8 prose and leaves the caller's locale intact.
   local LC_ALL=C
   local rest="$1" prefix before inside step previous=''
-  local receiver='(^|[^A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*)$'
+  local first_chunk=1 previous_qualified=0 root_qualified
   local slice='^[[:blank:]]*:[[:blank:]]*:[[:blank:]]*(.+)$'
   local step_chars='^[A-Za-z0-9_.[:blank:]+*/%,()-]+$'
   local plain='[A-Za-z0-9_.[:blank:]+*/%,-]'
   local one_level="\(${plain}*\)"
   local two_levels="\((${plain}|${one_level})*\)"
   local balanced="^(${plain}|${two_levels})*$"
+  local identifier='[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*'
+  local root="(${identifier}([[:blank:]]*${two_levels})?|${two_levels})"
+  local witness='[=({,;+*/%&|^~<>"`-]|\['
+  witness="${witness}|'"
+  local initial_receiver="^[[:blank:]]*${root}[[:blank:]]*$"
+  local framed_receiver="(${witness})[[:blank:]]*${root}[[:blank:]]*$"
   while [[ "$rest" == *'['* ]]; do
     prefix="${rest%%\[*}"
     rest="${rest:$((${#prefix}+1))}"
@@ -249,15 +255,28 @@ mask_leading_slice_spans() {
       printf '[%s\n' "$rest"
       return
     fi
-    # Remove a whitespace suffix in one operation. Empty/spaced chains reuse the original last
-    # delimiter rather than losing the receiver context when a prior slice was already emitted.
+    # A whitespace boundary between prose words is not a source witness. Identify the complete
+    # root after indentation or explicit expression punctuation, including call/group receivers.
+    # Only the first original chunk can use line start; emitted chunks cannot invent that cue.
     if [[ "$prefix" =~ ^(.*[^[:blank:]])[[:blank:]]*$ ]]; then
       before="${BASH_REMATCH[1]}"
     else
-      before="$previous"
+      before=''
     fi
-    if [[ ( "$before" =~ $receiver || "$before" == *')' || "$before" == *']' ) && "$rest" == *']'* ]]; then
-      inside="${rest%%]*}"
+    root_qualified=0
+    if [[ -z "$before" ]]; then
+      # An original closed bracket carries receiver provenance through adjacent/spaced chains.
+      if [[ "$previous" == ']' && "$previous_qualified" == 1 ]]; then
+        root_qualified=1
+      fi
+    elif [[ "$before" =~ $framed_receiver ]] \
+      || [[ "$first_chunk" == 1 && "$before" =~ $initial_receiver ]] \
+      || [[ "$previous" == '[' && "$previous_qualified" == 1 && "$before" =~ $initial_receiver ]]; then
+      root_qualified=1
+    fi
+    first_chunk=0
+    inside="${rest%%]*}"
+    if [[ "$root_qualified" == 1 ]]; then
       if [[ "$inside" =~ $slice ]]; then
         step="${BASH_REMATCH[1]}"
         # The fixed-depth grammar admits exactly balanced groups up to depth two. Keep the
@@ -266,13 +285,25 @@ mask_leading_slice_spans() {
           printf '%s' '[<python-slice>]'
           rest="${rest:$((${#inside}+1))}"
           previous=']'
+          previous_qualified=1
           continue
         fi
       fi
     fi
+    # Preserve a nonnested ordinary index verbatim and carry only its original root's proof.
+    # Addresses inside it remain visible to the consumer, including unqualified prose chains.
+    if [[ "$inside" != *'['* ]]; then
+      printf '[%s]' "$inside"
+      rest="${rest:$((${#inside}+1))}"
+      previous=']'
+      previous_qualified="$root_qualified"
+      continue
+    fi
     # An invalid outer bracket may contain a valid inner slice, so consume only its opener.
+    # That unresolved opener is a container cue only when its own root was source-qualified.
     printf '%s' '['
     previous='['
+    previous_qualified="$root_qualified"
   done
   printf '%s\n' "$rest"
 }

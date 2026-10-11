@@ -5,6 +5,36 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+
+## Slice masking requires a framed source receiver (2026-10-11)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+Leading-compression addresses in prose brackets remain visible even when the preceding word
+resembles a call or an indexed receiver. Every accepted receiver now needs the original line
+start or an explicit source expression delimiter. Chained slices and ordinary indexes preserve
+that receiver's qualification; emitting a new chunk does not create a new line-start cue.
+Optional spaces/tabs, bounded calls and the existing step syntax remain supported.
+
+This remains a bounded lexical recognizer. Prose that deliberately spells an accepted source
+expression is ambiguous, and unsupported receiver spellings may require review. The package
+qualifier, IPv4 rules and all scanner code outside the slice helper are unchanged.
+
+The test-only regression run recorded **982 passing assertions and 72 intended failures**
+against the unchanged published guard. After repair, all **1054 assertions passed** in 29.870
+seconds, including all 952 earlier assertions and the original 17 slice positives. All eight
+progress probes returned the expected decisions within their fixed five-second deadlines
+(range 0.115–2.813 seconds). Two sparse fixtures gained explicit expression framing while
+preserving padding, Unicode content, token checks and deadlines; the small control's runtime
+payload is byte-identical. An additional public-gate probe with a 65,536-character ASCII call
+argument correctly masked its numeric slice and reported its neighboring address in 0.379 seconds.
+
+All eight explicit locks passed. The full tracked tree scanned clean in **6.597 seconds**, below
+the fixed 30-second bound. Syntax, authority and whitespace checks passed, with source identity
+unchanged. Independent plan, implementation and final evidence reviews are required before
+publication. The earlier 4.45-fold comparison is historical for its recorded source pair and is
+not a measurement of this follow-up. Native Git Bash and ShellCheck remain unverified; R61
+continues to require human review.
+
 ## Public package version allowance checks lock context (2026-10-11)
 
 Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).

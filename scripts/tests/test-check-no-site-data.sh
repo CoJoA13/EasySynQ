@@ -77,18 +77,18 @@ run_progress_case() {
   case "$name" in
     small-control)
       printf -v padding '%1024s' ''
-      payload="${padding}values[::f()]; endpoint='$first'."
+      payload="$(printf '%s%s' "$padding" "values[::f()]; endpoint='$first'.")"
       ;;
     long-no-bracket)
       payload="${padding}endpoint='$first'"
       ;;
     long-sparse)
-      payload="$first. values[::f()]${padding}[$numeric] $second. "
+      payload="$first. ; values[::f()]${padding}[$numeric] $second. "
       ;;
     unicode-sparse)
       unicode='λ'
       for ((iteration=0; iteration<15; iteration++)); do unicode+="$unicode"; done
-      payload="$first. values[::f()] ${unicode} values[::2 + 1] $second. "
+      payload="$first. ; values[::f()] ${unicode}; values[::2 + 1] $second. "
       ;;
     all-slices)
       repeated='values[0][::2][::f()] [::(2 + 1)] + f()[::2]; '
@@ -351,6 +351,85 @@ for slice in "${slice_cases[@]}"; do
   expect_rejection "$label" "$ipv6_rule"
   assert_contains "$label preserves the address token" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
   assert_not_contains "$label does not report the numeric slice" "$RUN_OUTPUT" "probe.txt:1:$leading_numeric"
+done
+
+# A prose word is not a source receiver, even with compact/call/index spelling.
+prose_second="$(printf '%s%s' '::' 'def0')"
+prose_number=0
+for separator in '' ' ' $'\t'; do
+  for padded in no yes; do
+    prose_number=$((prose_number + 1))
+    if [ "$padded" = yes ]; then
+      bracket="[ $leading_hex ]"
+    else
+      bracket="[$leading_hex]"
+    fi
+    label="prose-bracket-$prose_number"
+    new_text_case "$label" "DNS server${separator}${bracket}"
+    run_gate "$repo" "$PATH"
+    expect_rejection "$label" "$ipv6_rule"
+    assert_contains "$label retains the address token" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+  done
+done
+for receiver_kind in call index; do
+  case "$receiver_kind" in
+    call) prose_receiver='DNS server()' ;;
+    index) prose_receiver='DNS server[0]' ;;
+  esac
+  for separator in '' ' '; do
+    prose_number=$((prose_number + 1))
+    label="prose-$receiver_kind-$prose_number"
+    new_text_case "$label" "${prose_receiver}${separator}[$leading_hex]"
+    run_gate "$repo" "$PATH"
+    expect_rejection "$label" "$ipv6_rule"
+    assert_contains "$label retains the original token" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+  done
+done
+for content in "DNS server[$leading_hex] DNS backup[$prose_second]" \
+  "DNS server[$leading_hex][$prose_second]"; do
+  prose_number=$((prose_number + 1))
+  label="prose-two-addresses-$prose_number"
+  new_text_case "$label" "$content"
+  run_gate "$repo" "$PATH"
+  expect_rejection "$label" "$ipv6_rule"
+  assert_contains "$label preserves the first address" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+  assert_contains "$label preserves the second address" "$RUN_OUTPUT" "probe.txt:1:$prose_second"
+done
+for content in "values[$leading_numeric]; DNS server[$leading_hex]" \
+  "values[0][$leading_numeric] server[$leading_hex]"; do
+  prose_number=$((prose_number + 1))
+  label="prose-after-source-$prose_number"
+  new_text_case "$label" "$content"
+  run_gate "$repo" "$PATH"
+  expect_rejection "$label" "$ipv6_rule"
+  assert_contains "$label retains the prose address" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+  assert_not_contains "$label still masks the source slice" "$RUN_OUTPUT" "probe.txt:1:$leading_numeric"
+done
+
+# Explicit source framing applies uniformly to identifiers, calls and proven index chains.
+framed_slice_cases=(
+  "    values [$leading_hex]"
+  "$(printf '\tvalues\t[%s]' "$leading_numeric")"
+  "result = values [$leading_hex]"
+  "consume(0, values [$leading_numeric])"
+  "consume(values [$leading_hex])"
+  "result = 1 + values [$leading_hex]"
+  "result = 1; values [$leading_hex]"
+  "result = f() [$leading_hex]"
+  "result = (values + other) [$leading_numeric]"
+  "result = object.values [$leading_hex]"
+  "result = values[\"key\"] [$leading_hex]"
+  "values[0][$leading_numeric] [$leading_hex][$leading_numeric]"
+  'outer[bad + inner[::f()]]'
+  "$(printf '`values[%s]`' "$leading_hex")"
+)
+case_number=0
+for slice in "${framed_slice_cases[@]}"; do
+  case_number=$((case_number + 1))
+  label="framed-slice-control-$case_number"
+  new_text_case "$label" "$slice"
+  run_gate "$repo" "$PATH"
+  expect_clean "$label"
 done
 
 new_text_case "slice-uri-neighbor" "values[::f()]; endpoint=http://[$leading_hex]:443"
