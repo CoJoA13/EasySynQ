@@ -3658,7 +3658,7 @@ export const handlers = [
   // ---- S-web-3 authoring (default happy-path; per-test overrides for error cases) ----
   // Default: the caller holds no coarse affordances (so existing tests render no "New" entry).
   http.get("/api/v1/me/permissions", () =>
-    HttpResponse.json({ scope: { level: "SYSTEM", selector: null }, permissions: [] }),
+    HttpResponse.json({ scope: { level: "SYSTEM", selector: null }, permissions: [], system_tier: false }),
   ),
   http.get("/api/v1/documents/:id/clause-mappings", () => HttpResponse.json([])),
   http.post("/api/v1/documents", () => HttpResponse.json(createdDocFixture, { status: 201 })),

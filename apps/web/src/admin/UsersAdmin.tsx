@@ -44,7 +44,8 @@ interface Override {
 // CreateUserModal's "link the existing account" path still calls on a username collision).
 export function UsersAdmin({ token }: { token: string | null }) {
   const qc = useQueryClient();
-  const canCreate = usePermissions().can("user.create");
+  const permissions = usePermissions();
+  const canCreate = permissions.can("user.create");
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [manage, setManage] = useState<AdminUser | null>(null);
@@ -185,7 +186,7 @@ export function UsersAdmin({ token }: { token: string | null }) {
               user={manage}
               token={token}
               onChange={refresh}
-              canIssuePassword={canCreate}
+              canIssuePassword={canCreate && permissions.isSystemTier}
               onIssuingChange={setIssuingPassword}
             />
           )}
@@ -205,9 +206,8 @@ function ManageUser({
   user: AdminUser;
   token: string | null;
   onChange: () => void;
-  // Threaded from UsersAdmin, which already resolves `user.create` to gate the Create-user
-  // button/modal — reuse that single value instead of a second usePermissions() call for the
-  // same key.
+  // Requires both user.create and the server's system-tier result; a granular account creator
+  // can provision a new identity but cannot reset any existing credential, including their own.
   canIssuePassword: boolean;
   // Reports resetMut's pending state up to UsersAdmin (P1, PR #429 review), which uses it to keep
   // the Drawer from closing mid-issuance. Set in resetMut's onMutate/onSettled so it is true for

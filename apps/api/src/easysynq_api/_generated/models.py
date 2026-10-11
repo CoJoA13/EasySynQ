@@ -610,6 +610,22 @@ class EffectivePermissions(BaseModel):
     permissions: list[EffectivePermissionEntry]
 
 
+class MyEffectivePermissions(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    scope: Annotated[
+        dict[str, Any], Field(description="The scope the permissions were resolved at.")
+    ]
+    permissions: list[EffectivePermissionEntry]
+    system_tier: Annotated[
+        bool,
+        Field(
+            description="Whether the caller satisfies the server's effective non-content-only permission.grant tier rule at SYSTEM scope, including scope, predicates and deny precedence. Evaluated independently of the scope requested for permission keys; user.create alone does not confer this tier."
+        ),
+    ]
+
+
 class TargetType(StrEnum):
     user = "user"
     org_role = "org_role"
