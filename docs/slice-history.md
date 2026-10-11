@@ -5,6 +5,30 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+## Table baseline waits for root-font shell padding (2026-10-11)
+
+Follow-up candidate for [PR #640](https://github.com/CoJoA13/EasySynQ/pull/640), also addressing
+the same browser failure on [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642). The enlarged-text
+table test could record its baseline while the shell's 200ms padding transition was still running.
+Hosted failures measured table-left differences of 4.875px and 1.078125px with stable internal
+columns. The setup helper now flushes layout and waits, with a five-second bound, until the main
+element has no unfinished padding transitions. Existing physical assertions and their 1px limits
+remain unchanged.
+
+A controlled two-second transition reproduced a 52.953125px baseline error. The exact baseline
+contained four running padding transitions; the table then settled before any filter changed.
+With the helper repair, the same controlled setup passed with no unfinished transition at baseline.
+Removing fixed layout and compact column allocations still failed the original Last reviewed
+boundary assertion by 6.0625px. Restoring the production page and rebuilding passed **95/95 Chromium
+cases**, including all **19 legibility cases**, with zero skips, retries or flaky results
+(191.629 seconds wall time). Source and build identities were recorded for each state.
+
+Browser TypeScript/build and web lint passed. The first lint invocation included temporary report
+assets; removing those already archived coordinator files produced a pass on unchanged source.
+Independent plan, placement and implementation reviews approved the bounded setup correction.
+Final review and current-head GitHub CI remain merge gates. This evidence covers Chromium with
+synthetic fixtures; production layout, theme and dependencies were unchanged.
+
 ## Credential-reset authority cross-reference aligned (2026-10-11)
 
 Follow-up candidate for [PR #640](https://github.com/CoJoA13/EasySynQ/pull/640).
