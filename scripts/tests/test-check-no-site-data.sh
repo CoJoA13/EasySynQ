@@ -895,6 +895,157 @@ run_punctuation_cases() {
 }
 run_punctuation_cases
 
+# General mixed addresses retain the complete IPv6 token independently of the IPv4 tail policy.
+run_mixed_ipv6_cases() {
+  local doc_quad mixed_zero mixed_one mixed_five mixed_unsafe token content context label
+  local case_index=0 malformed legacy_second legacy_interior structural
+  doc_quad="$(printf '%s.%s.%s.%s' '192' '0' '2' '1')"
+  mixed_zero="${slice_prefix}${doc_quad}"
+  mixed_one="${slice_prefix}abcd:${doc_quad}"
+  mixed_five="${slice_prefix}0:1:a:Bc:ABCD:${doc_quad}"
+  mixed_unsafe="${slice_prefix}abcd:${unsafe_ipv4}"
+
+  for token in "$mixed_zero" "$mixed_one" "$mixed_five"; do
+    for context in bare quoted uri period ellipsis; do
+      case_index=$((case_index + 1))
+      label="mixed-ipv6-shape-$case_index-$context"
+      case "$context" in
+        bare) content="$token" ;;
+        quoted) content="endpoint=\"$token\"" ;;
+        uri) content="endpoint=\"http://[$token]:443\"" ;;
+        period) content="The endpoint is $token. " ;;
+        ellipsis) content="note=\"The endpoint is ${token}...\"" ;;
+      esac
+      new_text_case "$label" "$content"
+      run_gate "$repo" "$PATH"
+      expect_rejection "$label" "$ipv6_rule"
+      assert_contains "$label retains the complete token" "$RUN_OUTPUT" "probe.txt:1:$token"$'\n'
+      assert_not_contains "$label omits terminal periods" "$RUN_OUTPUT" "probe.txt:1:${token}."
+    done
+  done
+
+  local -a mixed_edges=(
+    "${slice_prefix}a:$(printf '%s.%s.%s.%s' '0' '9' '10' '99')"
+    "${slice_prefix}a:$(printf '%s.%s.%s.%s' '100' '199' '200' '249')"
+    "${slice_prefix}a:$(printf '%s.%s.%s.%s' '250' '255' '0' '1')"
+    "${slice_prefix}$(printf '%s.%s.%s.%s' '0' '0' '0' '0')"
+    "${slice_prefix}$(printf '%s.%s.%s.%s' '0' '0' '0' '1')"
+    "${slice_prefix}0:ffff:${doc_quad}"
+  )
+  for token in "${mixed_edges[@]}"; do
+    case_index=$((case_index + 1))
+    label="mixed-ipv6-octet-or-alias-$case_index"
+    new_text_case "$label" "endpoint=\"${token}...\""
+    run_gate "$repo" "$PATH"
+    expect_rejection "$label" "$ipv6_rule"
+    assert_contains "$label retains the complete token" "$RUN_OUTPUT" "probe.txt:1:$token"$'\n'
+    assert_not_contains "$label omits terminal periods" "$RUN_OUTPUT" "probe.txt:1:${token}."
+  done
+
+  new_text_case "mixed-ipv6-unsafe-tail" "endpoint=\"http://[$mixed_unsafe]:443\""
+  run_gate "$repo" "$PATH"
+  expect_rejection "mixed-ipv6-unsafe-tail" "$ipv6_rule"
+  assert_contains "mixed unsafe tail retains the complete IPv6 token" "$RUN_OUTPUT" \
+    "probe.txt:1:$mixed_unsafe"$'\n'
+  assert_contains "mixed unsafe tail retains the independent IPv4 token" "$RUN_OUTPUT" \
+    "probe.txt:1:$unsafe_ipv4"$'\n'
+
+  new_text_case "mixed-ipv6-two-neighbors" \
+    "values[$leading_numeric]; note=\"${mixed_one}...\"; endpoint='$leading_hex'"
+  run_gate "$repo" "$PATH"
+  expect_rejection "mixed-ipv6-two-neighbors" "$ipv6_rule"
+  assert_contains "mixed neighbor remains complete" "$RUN_OUTPUT" "probe.txt:1:$mixed_one"$'\n'
+  assert_contains "pure hex neighbor remains complete" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"$'\n'
+  assert_not_contains "mixed neighbors preserve the genuine slice mask" "$RUN_OUTPUT" \
+    "probe.txt:1:$leading_numeric"$'\n'
+
+  for token in "$mapped_doc" "$mapped_doc_upper" "$mapped_doc_invalid_octet"; do
+    case_index=$((case_index + 1))
+    label="mixed-ipv6-exact-mapped-control-$case_index"
+    new_text_case "$label" "endpoint=\"http://[$token]:443\""
+    run_gate "$repo" "$PATH"
+    expect_clean "$label"
+    assert_not_contains "$label delegates the whole mapped token" "$RUN_OUTPUT" "$ipv6_rule"
+  done
+  new_text_case "mixed-ipv6-exact-mapped-unsafe" "endpoint=\"${mapped_unsafe}...\""
+  run_gate "$repo" "$PATH"
+  expect_rejection "mixed-ipv6-exact-mapped-unsafe" "$ipv4_rule"
+  assert_contains "exact mapped unsafe retains the IPv4 token" "$RUN_OUTPUT" \
+    "probe.txt:1:$unsafe_ipv4"$'\n'
+  assert_not_contains "exact mapped unsafe still delegates IPv6" "$RUN_OUTPUT" "$ipv6_rule"
+
+  new_text_case "mixed-ipv6-pure-hex-control" "endpoint='$leading_hex'"
+  run_gate "$repo" "$PATH"
+  expect_rejection "mixed-ipv6-pure-hex-control" "$ipv6_rule"
+  assert_contains "mixed pure hex control retains its complete token" "$RUN_OUTPUT" \
+    "probe.txt:1:$leading_hex"$'\n'
+  for structural in "$slice_prefix" "${slice_prefix}1"; do
+    case_index=$((case_index + 1))
+    label="mixed-ipv6-exact-structural-control-$case_index"
+    new_text_case "$label" "endpoint='$structural'"
+    run_gate "$repo" "$PATH"
+    expect_clean "$label"
+    assert_not_contains "$label retains the exact structural sanction" "$RUN_OUTPUT" "$ipv6_rule"
+  done
+
+  local -a mixed_malformed=(
+    "${slice_prefix}0:1:a:Bc:ABCD:2:${doc_quad}"
+    "${slice_prefix}abcde:${doc_quad}"
+    "${slice_prefix}abcd:$(printf '%s.%s.%s' '192' '0' '2')"
+    "${mixed_one}.1"
+    "${slice_prefix}abcd:$(printf '%s..%s.%s.%s' '192' '0' '2' '1')"
+    "${slice_prefix}abcd:$(printf '%s.%s.%s.%s' '256' '0' '2' '1')"
+    "${slice_prefix}abcd:$(printf '%s.%s.%s.%s' '192' '0' '2' '999')"
+    "${slice_prefix}abcd:$(printf '%s.%s.%s.%s' '192' '0' '2' '01')"
+    "${slice_prefix}abcd:$(printf '%s.%s.%s.%s' '192' '0' '' '1')"
+  )
+  for malformed in "${mixed_malformed[@]}"; do
+    for context in bare ellipsis; do
+      case_index=$((case_index + 1))
+      label="mixed-ipv6-malformed-$case_index-$context"
+      case "$context" in
+        bare) content="$malformed" ;;
+        ellipsis) content="note=\"${malformed}...\"" ;;
+      esac
+      new_text_case "$label" "$content"
+      run_gate "$repo" "$PATH"
+      assert_not_contains "$label never extracts a shorter IPv6 token" "$RUN_OUTPUT" "$ipv6_rule"
+    done
+  done
+
+  legacy_second="${slice_prefix}abcd${slice_prefix}${doc_quad}"
+  legacy_interior="abcd${slice_prefix}192"
+  new_text_case "mixed-ipv6-second-marker-legacy" "$legacy_second"
+  run_gate "$repo" "$PATH"
+  expect_rejection "mixed-ipv6-second-marker-legacy" "$ipv6_rule"
+  assert_contains "second marker preserves the characterized legacy interior token" "$RUN_OUTPUT" \
+    "probe.txt:1:$legacy_interior"$'\n'
+  assert_not_contains "second marker never reports the full leading candidate" "$RUN_OUTPUT" \
+    "probe.txt:1:$legacy_second"$'\n'
+  assert_not_contains "second marker never reports a shortened leading token" "$RUN_OUTPUT" \
+    "probe.txt:1:$leading_hex"$'\n'
+  new_text_case "mixed-ipv6-second-marker-no-legacy" "${slice_prefix}${slice_prefix}${doc_quad}"
+  run_gate "$repo" "$PATH"
+  expect_clean "mixed-ipv6-second-marker-no-legacy"
+  assert_not_contains "adjacent markers never extract an IPv6 token" "$RUN_OUTPUT" "$ipv6_rule"
+
+  for content in "prefix${mixed_one}" "_${mixed_one}" "${mixed_one}x" \
+    "${mixed_one}_" "${mixed_one}:" "${mixed_one}.x"; do
+    case_index=$((case_index + 1))
+    label="mixed-ipv6-continuation-$case_index"
+    new_text_case "$label" "note=\"$content\""
+    run_gate "$repo" "$PATH"
+    assert_not_contains "$label preserves whole-token boundaries" "$RUN_OUTPUT" "$ipv6_rule"
+  done
+
+  new_text_case "mixed-ipv6-shell-only" "values[$leading_numeric]; endpoint='$mixed_one'"
+  run_gate "$repo" "$fake_bin"
+  expect_rejection "mixed-ipv6-shell-only" "$ipv6_rule"
+  assert_contains "mixed shell-only control retains the complete token" "$RUN_OUTPUT" \
+    "probe.txt:1:$mixed_one"$'\n'
+}
+run_mixed_ipv6_cases
+
 # Dotted mapped endpoints are whole tokens; the IPv4 policy decides sanctioned and unsafe endpoints.
 case_number=0
 for token in "$mapped_doc" "$mapped_doc_upper" "$mapped_doc_invalid_octet"; do

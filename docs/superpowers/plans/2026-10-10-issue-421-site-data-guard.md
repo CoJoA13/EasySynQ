@@ -213,3 +213,32 @@ independent byte-identity review; those timings are not new measurements of the 
 Fresh evidence must cover the expanded harness, new dot-run probe, eight locks, full tracked tree
 under 30 seconds, syntax, authority and diff guards. Independent plan, test, implementation and
 final reviews, normal hooks and fresh current-head CI remain publication and merge requirements.
+
+## General leading-compression mixed-address amendment (2026-10-12 UTC)
+
+The later review of PR #641 identified complete leading-compression addresses whose dotted
+IPv4 tail belongs to a sanctioned documentation range but whose IPv6 prefix is not sanctioned.
+The original whole-token classification above covered only pure hex and the exact mapped
+spelling. This dated amendment extends that consumer to complete general mixed spellings;
+it preserves the original plan and prior evidence as historical records.
+
+The added anchored shape permits zero through five explicit groups of one to four hexadecimal
+digits before four canonical decimal octets. Each octet is zero through 255 without a multidigit
+leading zero, following [RFC 4291 section 2.2](https://www.rfc-editor.org/rfc/rfc4291.html#section-2.2)
+and [RFC 3986 section 3.2.2](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.2.2). The original
+exact mapped predicate still delegates to IPv4 first, including its historical invalid-octet example. Other
+mixed spellings do not inherit permission from the dotted suffix. This is a mechanical spelling
+rule: it adds no semantic normalization or new exception for zero-expanded mapped or dotted
+unspecified/loopback aliases. Existing exact structural sanctions remain unchanged.
+
+The existing lexical boundary guard and original-candidate cursor advancement remain intact.
+The terminal-period normalizer also recognizes the complete new mixed core; malformed candidates
+cannot be rescued by a shorter prefix. After the mapped delegation, the existing pure-hex check
+still runs before the mixed fallback. The separate legacy leading-group matcher is unchanged,
+including its independent diagnostics for some malformed multiple-compression inputs.
+
+No prior fixture, expectation or progress workload changes. New cases must require complete
+LF-bounded IPv6 diagnostics even when an unsafe IPv4 suffix independently rejects. Fresh full
+behavior, locks, tracked-tree and source/authority/whitespace evidence remain required. Existing
+helper and progress proofs may be reused only after independent preservation review; their old
+timings do not measure the amended whole scanner. Native Git Bash and ShellCheck remain unverified.

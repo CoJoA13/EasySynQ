@@ -586,6 +586,8 @@ scan_leading_ipv6() {
   local candidate='::[0-9A-Fa-f:.]+'
   local hex='^::[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6}$'
   local mapped='^::[Ff]{4}:([0-9]{1,3}\.){3}[0-9]{1,3}$'
+  local octet='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])'
+  local mixed="^::([0-9A-Fa-f]{1,4}:){0,5}${octet}(\.${octet}){3}$"
   local continuation='^[A-Za-z0-9_.:]$'
   local trailing_periods='^(.*[^.])\.+$'
   while IFS= read -r record; do
@@ -606,12 +608,13 @@ scan_leading_ipv6() {
       # Normalize trailing prose periods only when their full core is a known shape.
       if [[ "$token" == *'.' && "$token" =~ $trailing_periods ]]; then
         core="${BASH_REMATCH[1]}"
-        if [[ "$core" =~ $hex || "$core" =~ $mapped ]]; then token="$core"; fi
+        if [[ "$core" =~ $hex || "$core" =~ $mapped || "$core" =~ $mixed ]]; then token="$core"; fi
       fi
       # The full dotted mapped token belongs to the IPv4 policy, including documentation octets.
       # Malformed/overlong dotted candidates never fall back to a shorter pure-hex prefix.
       [[ "$token" =~ $mapped ]] && continue
-      if [[ "$token" =~ $hex && "$token" != '::1' ]]; then
+      # Other leading mixed spellings require canonical octets and retain the full IPv6 token.
+      if [[ "$token" =~ $hex && "$token" != '::1' || "$token" =~ $mixed ]]; then
         printf '%s:%s:%s\n' "$path" "$line" "$token"
       fi
     done

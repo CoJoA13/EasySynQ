@@ -6,6 +6,42 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Leading mixed addresses retain their complete IPv6 diagnostic (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The leading-address consumer now recognizes a complete mixed spelling with zero through five
+explicit hex groups and a four-octet decimal tail. New decimal octets use canonical values from
+zero through 255 without multidigit leading zeros. The complete IPv6 token is reported even when
+its IPv4 suffix is independently sanctioned or rejected. The exact mapped rule still delegates
+to IPv4 first, including its historical invalid-octet fixture; successful pure-hex handling precedes
+the generic fallback. Semantic aliases receive no new exemption. A dated original-plan amendment
+records the grammar and sources while preserving all previous plan bytes.
+
+Only adjacent consumer declarations and classification predicates changed. Candidate boundaries,
+original-length cursor advancement and complete-core terminal-period normalization are preserved.
+Malformed cores cannot become shortened leading matches. The separate legacy matcher retains its
+existing interior diagnostics for some malformed multiple-compression text. Slice masking,
+package qualification and every other scanner rule are unchanged.
+
+The reviewed test-only regression recorded **103 passes and 101 intended failures** in 6.723 seconds
+against the unchanged scanner. All preservation controls passed. The new 57-fixture cohort adds
+204 assertions with complete line-ending-bounded diagnostics, canonical octet edges, aliases,
+malformed forms, mapped ownership, genuine slices and independent neighboring addresses. Removing
+only that cohort restores every prior harness byte; no existing expectation changed.
+
+The final expanded harness passed **1744 assertions in 43.230 seconds**. All eight explicit locks
+passed, and the complete tracked tree scanned clean in **11.447 seconds**, below the unchanged
+30-second limit. Separate scanner/harness syntax, authority and working/index whitespace checks
+passed with identical before/after source identities. Independent plan, test and implementation
+reviews approved the correction. Final documentation guards and complete final review remain
+required before publication, followed by current-head CI.
+
+Independent byte comparison supports reuse of the ten prior five-second progress results, exact
+raw UTF-8 helper output and archived long-root proof for the unchanged helper and existing paths.
+Those are prior measurements, not new timings of this scanner; the expanded harness and full-tree
+duration above are fresh. Native Git Bash and ShellCheck remain unverified. The existing physical-
+line and bounded-source limitations still apply, and R61 continues to require human review.
+
 ## Leading addresses retain detection before prose punctuation (2026-10-12 UTC)
 
 Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
