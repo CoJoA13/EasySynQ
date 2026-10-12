@@ -142,6 +142,13 @@ Forgot a password, or need to reissue one later? Open **Manage** on the user's r
 **Issue new temp password** — it generates and displays a fresh show-once temporary password the
 same way, and is now the normal password-reset path.
 
+If Keycloak rejects submitted account details with `validation_error`, correct the profile fields.
+An admin-access failure returns `keycloak_unavailable`: check Keycloak availability and the install's
+configured admin credentials and realm permissions. Editing the account form cannot repair rejected
+admin access. If the user was already created before credential issuance failed, follow the response's
+reissue guidance after restoring access. A `keycloak_subject_missing` response instead requires the
+missing-account recovery procedure in §5.3.1.
+
 Never use a shared generic login for approval or acknowledgement work.
 
 ### 5.3 Break-glass and orphan adoption
@@ -181,6 +188,57 @@ and resume the normal `/setup` browser flow.
 This pre-authentication host action cannot use the normal application audit actor. Before running
 it, open an independent incident or change record; record the command, operator, reason, exact
 subject, organization, and time. Retain the command result with that record.
+
+#### 5.3.1 Missing linked sign-in account recovery
+
+A `409 keycloak_subject_missing` from temporary-password issuance means the linked account could
+not be found. Repeating the reset cannot repair that link. If provisioning already committed the
+EasySynQ user before this failure, close the Create dialog and reload the roster; preserve that row.
+This procedure restores access through a separate principal and preserves the old user's history.
+
+1. Use another authenticated System Administrator and open an independent incident record. Identify
+   the affected EasySynQ row and verify the deployed Keycloak realm and admin configuration. Resolve
+   a wrong realm or configuration first; a provider404 alone is insufficient reason to retire a user.
+2. Verify the person's identity. Review their necessary roles, direct ALLOW and DENY entries with
+   their scopes, recorded process ownership, and outstanding work. Have the authorized QMS owner
+   decide which content responsibilities the replacement should receive.
+3. Choose the replacement identity. For an absent sign-in identity, use **Create user** /
+   `POST /users/provision`. The old application row reserves neither username nor email: it stores
+   no username and its email is not unique. Reuse those values only if Keycloak permits them. If a
+   username is occupied, use a different username or verify that the existing unlinked account
+   belongs to this person before choosing **Link the existing account** / `POST /users`. If an
+   email is occupied in Keycloak, omit the optional email or use an approved different one. An
+   account already linked to another EasySynQ user must not be adopted or reset as this replacement.
+4. Follow the branch actually completed. A **created replacement** receives the shown-once
+   temporary password from successful provisioning and only the ordinary roles explicitly selected
+   for that request. An **adopted replacement** receives no credential and none of the roles
+   selected in the Create form; linking does not change its provider password. After verified
+   adoption, explicitly assign the reviewed roles through **Manage** /
+   `POST /users/{replacement_id}/roles`. A linked row alone does not establish usable sign-in access.
+5. Complete the reviewed access through authorized operations. Role changes require
+   `permission.grant` and remain subject to the existing authority and separation-of-duties guards.
+   Scoped roles require the reviewed `bound_scope` through the roles API. Recreate necessary direct
+   ALLOW and DENY entries through the overrides API; preserve DENYs and their scopes. Managed Process
+   Owner grants use **Administration → Processes → Manage owners** or the process-owner APIs under
+   `process.assign_owner`; do not copy the managed role marker through the generic roles API.
+6. For a **created replacement**, deliver the returned shown-once credential. For an **adopted
+   replacement** without a usable credential, including an orphan from interrupted provisioning,
+   have the verified administrator holding `user.create` and system-tier authority explicitly choose
+   **Manage → Issue new temp password** / `POST /users/{replacement_id}/temporary-password`, then
+   deliver that shown-once credential. Preserve a working existing credential; adoption alone is
+   no reason to reset it. Credential issuance is a separate authorized action, audited only after
+   provider acceptance. Confirm replacement sign-in, then use **Manage** /
+   `PATCH /users/{old_user_id}` with status `DISABLED` under `user.deactivate`. Keep another active
+   administrator; the last-active-administrator guard applies. Record the relationship between the
+   separate principals in the incident record.
+7. Review pending approvals, assignments and process ownership with their authorized workflows.
+   User lifecycle operations do not migrate these references, and no general outstanding-work
+   transfer operation exists. Historical actions, signatures, old grants and attribution remain
+   attached to the old disabled row. Do not edit database keys, subjects, signatures or audit history.
+
+If no authenticated administrator remains, use the existing controlled host break-glass and orphan
+adoption procedure in §5.3, including its independent incident record, before continuing here.
+The `UNINITIALIZED`-only first-administrator blocker command does not apply to a completed install.
 
 ### 5.4 Disable, re-enable, and retire access
 

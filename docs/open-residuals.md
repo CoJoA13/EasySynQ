@@ -849,24 +849,6 @@ tracked files). Then ignore exactly that path and the exported root CA, and prov
 `git check-ignore` plus a check that every tracked `infra/compose/compose.*.yml` stays tracked.
 Last reviewed: 2026-09-22
 
-## RES-KEYCLOAK-ERROR-CLASSIFICATION
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #431](https://github.com/CoJoA13/EasySynQ/issues/431), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: `KeycloakProvisioningClient` turns every 4xx on create, including admin-credential 401/403,
-into `KeycloakRejected` (reported as invalid operator input), and turns a 404 from
-`set_temporary_password` into `KeycloakUnavailable` (reported as an outage). A stale identity link
-therefore reads as Keycloak being down, and a broken admin credential reads as a typo.
-Closure contract: Classify a missing subject distinctly, route 401/403 to the
-configuration/availability path, and unit-test each status class. Because no supported operation
-replaces a dead `keycloak_subject` today (`POST /users` creates a separate `app_user`, and the only
-user PATCH changes status), the closure must also either ship an audited relink operation for a
-stale subject, with authorization and a test, or return a response naming the documented manual
-recovery. An error class alone does not close this record.
-Last reviewed: 2026-09-22
-
 ## RES-UNBOUND-SCOPE-TEMPLATE-ROLES
 
 Status: OPEN

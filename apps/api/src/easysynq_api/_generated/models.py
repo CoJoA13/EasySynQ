@@ -189,6 +189,7 @@ class Code(StrEnum):
     invalid_transition = "invalid_transition"
     keycloak_email_exists = "keycloak_email_exists"
     keycloak_not_configured = "keycloak_not_configured"
+    keycloak_subject_missing = "keycloak_subject_missing"
     keycloak_unavailable = "keycloak_unavailable"
     keycloak_username_exists_unlinked = "keycloak_username_exists_unlinked"
     last_admin = "last_admin"
