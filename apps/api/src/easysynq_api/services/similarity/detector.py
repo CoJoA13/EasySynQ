@@ -75,27 +75,31 @@ class InProcessMinHashDetector:
         # Eligible = files whose normalized text yields ≥1 shingle (≥ SHINGLE_K tokens). Sub-k /
         # empty texts are excluded (a fallback whole-text shingle would cluster all empties).
         shingle_by_id: dict[uuid.UUID, frozenset[str]] = {}
-        for n, item in enumerate(items):
+        for n, item in enumerate(items, start=1):
             sh = minhash.shingles(normalize_text(item.text))
             if sh:
                 shingle_by_id[item.file_id] = sh
             if heartbeat is not None and n % _HEARTBEAT_EVERY == 0:
                 await heartbeat()
+        if heartbeat is not None and len(items) % _HEARTBEAT_EVERY:
+            await heartbeat()
         if len(shingle_by_id) < 2:
             return []
 
         sigs: dict[uuid.UUID, tuple[int, ...]] = {}
-        for n, (fid, sh) in enumerate(shingle_by_id.items()):
+        for n, (fid, sh) in enumerate(shingle_by_id.items(), start=1):
             sigs[fid] = minhash.signature(sh)
             if heartbeat is not None and n % _HEARTBEAT_EVERY == 0:
                 await heartbeat()
+        if heartbeat is not None and len(shingle_by_id) % _HEARTBEAT_EVERY:
+            await heartbeat()
 
         candidates = minhash.lsh_candidate_pairs(sigs)
         # Exact-Jaccard re-verify each candidate pair (the deterministic §7.1 decision). Keep the
         # confirmed pairwise scores so a cluster can report its most-conservative (min) similarity.
         confirmed: list[frozenset[uuid.UUID]] = []
         pair_jaccard: dict[frozenset[uuid.UUID], float] = {}
-        for n, pair in enumerate(candidates):
+        for n, pair in enumerate(candidates, start=1):
             a, b = tuple(pair)
             j = minhash.exact_jaccard(shingle_by_id[a], shingle_by_id[b])
             if j >= threshold:
@@ -103,6 +107,8 @@ class InProcessMinHashDetector:
                 pair_jaccard[pair] = j
             if heartbeat is not None and n % _HEARTBEAT_EVERY == 0:
                 await heartbeat()
+        if heartbeat is not None and len(candidates) % _HEARTBEAT_EVERY:
+            await heartbeat()
 
         clusters: list[NearDupCluster] = []
         for members in minhash.connected_components(sigs.keys(), confirmed):

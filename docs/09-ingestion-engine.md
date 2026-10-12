@@ -158,6 +158,9 @@ Every run is an `ImportRun` row (status, source root, who created, counts, class
 
 ### 3.3 Concurrency & locks
 - A given **source root** may have only **one active run** at a time (Redis lock `import:src:{hash(root)}`); a re-import waits or is offered "resume existing run."
+- Worker batch heartbeats renew the run's owned source lock (default TTL **1,800 seconds**) and persist completed work in the internal, nullable `import_run.last_batch_progress_at` timestamp. This covers Scanning, Extracting, Classifying, and computation batches in Deduping/Proposing, including a replayed scan that updates existing inventory without creating new rows. Startup or lock renewal alone does not advance progress; there is no background timer that makes idle work appear productive.
+- The pipeline reaper fails a run with `stage_timeout` if its source lock is absent or belongs to another token, even with fresh progress. Separately, an owned live lock does not prevent failure when the latest progress is **older than six hours** (default backstop). The anchor is the latest batch timestamp, legacy stage-row timestamp, or scan start; exactly at the cutoff is still live. A NULL batch timestamp uses the legacy evidence. Cleanup releases only the failed run's token, preserving any replacement owner's lock.
+- Progress is committed separately from stage results. Dedup/proposal replacement and their stage transitions remain atomic; review-time proposal rebuilds write no pipeline heartbeat and retain the caller's transaction. The timestamp is internal execution metadata and adds no API field.
 - Per-file extraction/classification tasks are bounded by a Celery concurrency cap so a 50k-file import does not starve interactive `render`/`index` jobs (separate Celery **queue** `import` with its own worker concurrency, so imports never block check-in pipelines).
 
 ### 3.4 Pluggable providers (extensibility, reserved not built)
@@ -593,10 +596,12 @@ These four properties are what make the engine safe to point at the same messy s
 > **Safe re-import scenario:** the org adds 30 new procedures to the share and re-runs the importer against the same root. The engine inventories everything, but the **already-imported** detector (by content hash + provenance) means only the **30 net-new** files surface for review; the 1,000 previously committed files are shown as "already in vault, unchanged" and are not re-proposed. A file that *changed* since last import (same path, new hash) is surfaced as a **"revise existing document?"** candidate that, if accepted, becomes a **new Version (Rev B+)** via the normal check-in path — not a second document.
 
 ### 11.2 Partial-import resume
-- Run state and per-stage checkpoints live in PG; the `worker` can crash and the **Beat** scheduler / a `resume_run` task picks up from the **last completed stage** for incomplete files only (each stage is keyed per file).
+- Run state and result checkpoints live in PostgreSQL. Re-delivered pipeline tasks use existing per-file upserts or whole-stage replacement; the batch progress timestamp (§3.3) records completed work without publishing partial dedup/proposal results. Beat's pipeline reaper marks a run Failed after lost source-lock ownership or the no-progress backstop. Commit recovery uses a separate reaper that re-enqueues Committing runs through the per-item ledger, preserving successful items.
 - **Commit** specifically is **per-item**: if it dies after 600 of 1,000 items, status becomes **`PartiallyCommitted`**; resuming commits only the remaining 400 (the 600 are recognized via idempotency keys and skipped). No rollback of good work.
 - Resume validates only failed/remaining materialization inputs (not already-committed identifiers, which now collide with the vault by design). A legacy unresolved owner or blank identifier returns a repairable blocker while the run stays `PartiallyCommitted`; a per-file `CORRECT` decision is accepted only for a failed/unattempted item, never one already committed.
 - A run can also be **paused** by Avery/Mara and resumed later (e.g., turn OCR on overnight, finish review tomorrow).
+
+For the batch-progress schema change, use **stop writers → migrate → start updated writers**. Existing runs receive a NULL timestamp without a backfill that invents fresh progress; legacy evidence remains available. Old workers can use the new schema but do not produce batch progress, while new code requires the new schema. Mixed versions do not provide the new progress guarantee. Before downgrade, stop updated writers; downgrade removes only this operational timestamp. Re-upgrade recreates it as NULL and uses surviving legacy evidence until another batch completes.
 
 ### 11.3 Conflict handling matrix
 

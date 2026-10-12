@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +37,7 @@ from ...domain.ingestion.version_family import FileForPick, order_members
 from ..similarity import NearDupItem, get_dedup_detector
 from . import locks
 from . import repository as repo
+from .progress import PipelineProgressStopped, heartbeat_batch
 from .service import _fail_run, emit_import_event_system
 
 logger = logging.getLogger("easysynq.ingestion.dedup")
@@ -65,7 +67,7 @@ async def _compute(
     rows: list[_FileCtx],
     detector_threshold: float,
     *,
-    hb: object,
+    hb: Callable[[], Awaitable[None]],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """The pure §7.1 cascade over a run's included files → (clusters, families). ``hb`` is an async
     heartbeat the near-dup detector calls back on its own cadence."""
@@ -77,25 +79,32 @@ async def _compute(
 
     # 1. EXACT — group included files with a sha256 by content; >1 = a cluster.
     by_sha: dict[str, list[uuid.UUID]] = defaultdict(list)
-    for f, _e, _c in rows:
+    for n, (f, _e, _c) in enumerate(rows, start=1):
         if f.sha256 is not None:
             by_sha[f.sha256].append(f.id)
+        if n % 256 == 0:
+            await hb()
+    if len(rows) % 256:
+        await hb()
     clusters: list[dict[str, object]] = []
     redundant: set[uuid.UUID] = set()
-    for group in by_sha.values():
-        if len(group) < 2:
-            continue
-        ordered = pick(group)
-        clusters.append(
-            {
-                "method": ImportDupeMethod.EXACT,
-                "member_file_ids": ordered,
-                "canonical_file_id": ordered[0],
-                "jaccard": 1.0,
-                "evidence": {},
-            }
-        )
-        redundant.update(ordered[1:])
+    for n, group in enumerate(by_sha.values(), start=1):
+        if len(group) >= 2:
+            ordered = pick(group)
+            clusters.append(
+                {
+                    "method": ImportDupeMethod.EXACT,
+                    "member_file_ids": ordered,
+                    "canonical_file_id": ordered[0],
+                    "jaccard": 1.0,
+                    "evidence": {},
+                }
+            )
+            redundant.update(ordered[1:])
+        if n % 256 == 0:
+            await hb()
+    if len(by_sha) % 256:
+        await hb()
 
     # 2. NEAR — MinHash over the survivors (exact redundants removed) WITH extract text.
     items = [
@@ -103,9 +112,9 @@ async def _compute(
         for f, e, _c in rows
         if f.id not in redundant and e is not None and e.full_text
     ]
-    near = await get_dedup_detector().detect_near(items, threshold=detector_threshold, heartbeat=hb)  # type: ignore[arg-type]
+    near = await get_dedup_detector().detect_near(items, threshold=detector_threshold, heartbeat=hb)
     truncated_by_id = {f.id: bool(e is not None and e.text_truncated) for f, e, _c in rows}
-    for cluster in near:
+    for n, cluster in enumerate(near, start=1):
         ordered = pick(list(cluster.member_file_ids))
         truncated = any(truncated_by_id.get(i) for i in ordered)
         clusters.append(
@@ -118,38 +127,47 @@ async def _compute(
             }
         )
         redundant.update(ordered[1:])
+        if n % 256 == 0:
+            await hb()
+    if len(near) % 256:
+        await hb()
 
     # 3. VERSION FAMILY — over what remains (no exact/near redundants), grouped by doc-code else
     #    normalized base-name; ≥2 members.
     fam: dict[str, list[uuid.UUID]] = defaultdict(list)
     fam_doc_code: dict[str, str | None] = {}
-    for f, e, _c in rows:
-        if f.id in redundant:
-            continue
-        doc_code = extract_doc_code(f.filename, e.header_block if e is not None else None)
-        key = doc_code or normalize_base_name(f.filename)
-        if not key:
-            continue
-        fam[key].append(f.id)
-        if doc_code and key not in fam_doc_code:
-            fam_doc_code[key] = doc_code
+    for n, (f, e, _c) in enumerate(rows, start=1):
+        if f.id not in redundant:
+            doc_code = extract_doc_code(f.filename, e.header_block if e is not None else None)
+            key = doc_code or normalize_base_name(f.filename)
+            if key:
+                fam[key].append(f.id)
+                if doc_code and key not in fam_doc_code:
+                    fam_doc_code[key] = doc_code
+        if n % 256 == 0:
+            await hb()
+    if len(rows) % 256:
+        await hb()
     families: list[dict[str, object]] = []
-    for key, file_ids in fam.items():
-        if len(file_ids) < 2:
-            continue
-        ordered = pick(file_ids)
-        obsolete = [str(i) for i in ordered if is_obsolete_filename(ctx_by_id[i][0].filename)]
-        rep = ctx_by_id[ordered[0]][0]
-        families.append(
-            {
-                "family_key": key,
-                "base_name": normalize_base_name(rep.filename),
-                "doc_code": fam_doc_code.get(key),
-                "ordered_member_file_ids": ordered,
-                "effective_file_id": ordered[0],
-                "evidence": {"obsolete_candidates": obsolete} if obsolete else {},
-            }
-        )
+    for n, (key, file_ids) in enumerate(fam.items(), start=1):
+        if len(file_ids) >= 2:
+            ordered = pick(file_ids)
+            obsolete = [str(i) for i in ordered if is_obsolete_filename(ctx_by_id[i][0].filename)]
+            rep = ctx_by_id[ordered[0]][0]
+            families.append(
+                {
+                    "family_key": key,
+                    "base_name": normalize_base_name(rep.filename),
+                    "doc_code": fam_doc_code.get(key),
+                    "ordered_member_file_ids": ordered,
+                    "effective_file_id": ordered[0],
+                    "evidence": {"obsolete_candidates": obsolete} if obsolete else {},
+                }
+            )
+        if n % 256 == 0:
+            await hb()
+    if len(fam) % 256:
+        await hb()
     return clusters, families
 
 
@@ -176,17 +194,26 @@ async def run_dedup(session: AsyncSession, run_id: uuid.UUID) -> None:
     await session.commit()
 
     async def _hb() -> None:
-        if token:
-            await locks.heartbeat(src_hash, token, ttl=settings.import_lock_ttl_seconds)
+        await heartbeat_batch(
+            session,
+            run_id,
+            source_root_hash=src_hash,
+            token=token,
+            expected_status=ImportRunStatus.DEDUPING,
+            ttl=settings.import_lock_ttl_seconds,
+        )
 
     try:
         rows = list(await repo.included_files_with_context(session, run_id, version))
-        await _hb()
-        # A cancel/reaper while we loaded → stop before recomputing (the classify stop-check).
-        if await repo.get_status(session, run_id) is not ImportRunStatus.DEDUPING:
-            if token:
-                await locks.release(src_hash, token)
-            return
+        await heartbeat_batch(
+            session,
+            run_id,
+            source_root_hash=src_hash,
+            token=token,
+            expected_status=ImportRunStatus.DEDUPING,
+            ttl=settings.import_lock_ttl_seconds,
+            advanced=False,
+        )
         clusters, families = await _compute(rows, settings.import_near_dup_threshold, hb=_hb)
         # Atomic full-replace; committed together with the Proposing transition below.
         await repo.replace_dedup(
@@ -194,10 +221,15 @@ async def run_dedup(session: AsyncSession, run_id: uuid.UUID) -> None:
         )
 
         final = await repo.get_run(session, run_id, for_update=True)
-        if final is None or final.status is not ImportRunStatus.DEDUPING:
-            await session.rollback()  # a late cancel won → discard the staged replace
-            if final is not None and final.status is ImportRunStatus.CANCELLED and token:
-                await locks.release(src_hash, token)
+        if (
+            final is None
+            or final.status is not ImportRunStatus.DEDUPING
+            or final.source_root_hash != src_hash
+            or final.lock_token != token
+            or not token
+            or not await locks.is_owned(src_hash, token)
+        ):
+            await session.rollback()  # discard the staged replace; never read expired final
             return
         final.status = ImportRunStatus.PROPOSING
         emit_import_event_system(
@@ -210,6 +242,8 @@ async def run_dedup(session: AsyncSession, run_id: uuid.UUID) -> None:
         )
         await session.commit()
         _enqueue_propose(run_id)  # chain to Stage 5 (lock still held)
+    except PipelineProgressStopped:
+        await session.rollback()
     except Exception as exc:
         await session.rollback()
         await _fail_run(session, run_id, repr(exc)[:500])

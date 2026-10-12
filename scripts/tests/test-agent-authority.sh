@@ -526,7 +526,6 @@ run_neutral_document_contract() {
     'current status contains no residual records'
 
   for residual_id in \
-    RES-INGEST-PROGRESS \
     RES-INGEST-PARTIAL-OPTIN \
     RES-R10-RECONSTRUCTION \
     RES-CAPA-REJECT \
@@ -538,6 +537,10 @@ run_neutral_document_contract() {
     require_live_text docs/open-residuals.md "^## ${residual_id}$" \
       "open residuals registers ${residual_id}"
   done
+  reject_live_text docs/open-residuals.md '^## RES-INGEST-PROGRESS$' \
+    'closed ingestion progress is absent from the open ledger'
+  require_live_text docs/slice-history.md 'RES-INGEST-PROGRESS is CLOSED' \
+    'slice history preserves ingestion progress closure evidence'
   reject_live_text docs/open-residuals.md '^## RES-UPGRADE-LOCK-TIMEOUT$' \
     'closed upgrade lock wait is absent from the open ledger'
   require_live_text docs/slice-history.md 'RES-UPGRADE-LOCK-TIMEOUT is CLOSED' \
