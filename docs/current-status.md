@@ -1198,9 +1198,9 @@ S-ui-5a hash by an authority-document spelling sweep, and is restored: `git show
 2626ba9:packages/contracts/.contract.lock` is `e66fa80c…`, and the lock's history shows `041da029…` first
 appearing at `030c89d`.)
 
-`docs/11-ui-ux-design-system.md` was not updated by this program and now disagrees with the shipped
-tokens on typography, accent, focus ring and shell metrics; that gap is recorded as
-`RES-DOC11-TOKEN-DRIFT` in [`open-residuals.md`](open-residuals.md).
+The August program left `docs/11-ui-ux-design-system.md` unchanged, with typography, accent,
+focus-ring and shell-metric drift from the shipped tokens. The later documentation correction is
+recorded in [slice history (2026-10-12)](slice-history.md#doc-11-follows-implemented-design-tokens-2026-10-12-utc).
 
 The integration and response-contract suites were NOT run locally for this program; their counts above
 are taken from that CI run rather than from a local execution, because the local Docker-backed fixtures

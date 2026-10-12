@@ -6,6 +6,28 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Doc 11 follows implemented design tokens (2026-10-12 UTC)
+
+Closes `RES-DOC11-TOKEN-DRIFT` ([#562](https://github.com/CoJoA13/EasySynQ/issues/562)).
+[Doc 11](11-ui-ux-design-system.md) now cites the shipped typography, accent, focus and shell
+sources. It describes Archivo and system monospace, all seven type roles, the separate accent
+fill/text/focus roles, the solid focus shadow and forced-colors outline, and the actual shell and
+drawer consumers. Token names replace the stale copied values. Product decisions remain binding;
+`tokens.css` supplies implemented token values, and consumers establish actual use.
+
+The same documentation rewrite carries R69 account/scheme semantics and R70's organization-zone,
+US-date and 24-hour display standard. Existing date/time convergence remains open, as do #563 font
+glyph acceptance and #561 page structure. Responsive icon-rail behavior remains a target.
+No runtime code, token values, fonts, contrast settings or layout behavior changed.
+
+Independent plan and implementation reviews approved the correction and its bounded closure
+pointers. The source-based content proof checked **61 declared token references** and **seven
+exact typography rows**, with stale font/accent/shell claims absent. Repository-authority and
+whitespace checks passed; the implementation tree's site-data scan passed in **14.667 seconds**.
+These are documentation checks; no new browser or contrast-suite result is claimed. The August
+implementation history is preserved, with its former open pointer linked to this dated correction.
+
+
 ## First-administrator recovery retains provider validation semantics (2026-10-12 UTC)
 
 Follow-up candidate for [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642).
